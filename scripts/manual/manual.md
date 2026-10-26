@@ -1348,6 +1348,22 @@ played**, **Notes**, **Timers**, **Logs**, and **Settings** (the gear).
 - A room moved to new hardware: **Reset pairing** (also under
   **maintenance**), then approve the new device.
 
+**Quiet hours**
+
+Quiet hours: Domovoi won't speak announcements in a room, like low
+battery or printer problems. Alarms, timers and reminders still ring, and
+it still answers when you ask it something.
+
+- The house's hours: [Settings → Advanced](#settings/advanced) → **Voice & speech** →
+  **Quiet hours** (on, 10 pm to 7 am), **Quiet hours start** and **Quiet
+  hours end**. They use the server's clock.
+- One room: its **Settings** tab → **quiet hours**: **Same as the
+  house**, **Custom hours** (pick the times, then **Save**), or **Off for
+  this room**.
+
+What isn't spoken then isn't said later. A low battery still shows on
+Home and on your phones.
+
 **App:** [Settings → Rooms & devices → Rooms](#settings/rooms) shows the
 same rooms.
 
@@ -1460,6 +1476,21 @@ screen lock, and while it's a room, the rest of the app is locked.
 
 To leave, hold **exit room mode**, unlock, then choose **Keep this room**
 or **Forget this room**.
+
+**Battery**
+
+Keep the phone on its charger: rooms are always on. The room's card shows
+its battery and whether it's charging. Off its charger, at 20% and again
+at 10%:
+
+- Home shows a notice, and the Domovoi app on your phones says "Pako is
+  at 15%. Plug it in."
+- The room itself says "This is Pako. My battery is low. Please plug me
+  in." Not during the room's quiet hours.
+
+Each warning comes once per charge. A room that went offline nearly empty
+says **probably out of battery**. The room's **Settings** tab has **Say
+when the battery is low** and **Notify when the battery is low**, both on.
 
 **If something's wrong**
 

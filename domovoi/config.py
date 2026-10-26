@@ -803,6 +803,33 @@ class Settings(BaseSettings):
         return "piper"
 
     tts_speed: float = 1.0
+    # Quiet hours (2026-10-25, owner request; domovoi/quiet_hours.py): between
+    # these two clock times on the house's clock (the server's zone, the one
+    # reminders use: domovoi/household_time.py) a room speaks no unprompted
+    # announcement (a low battery, a printer problem, a voice that
+    # finished downloading, a plugin's). Alarms, timers and reminders still ring; answers
+    # and "say this in the kitchen" still speak. Each room may follow these,
+    # keep its own hours, or turn them off (satellites.quiet_mode, V040).
+    # "HH:MM", 24-hour; start after end crosses midnight. A value that is
+    # not a clock time reads as the default, with a log line. Live: read at
+    # each announcement.
+    quiet_hours_enabled: bool = True
+    quiet_hours_start: str = "22:00"
+    quiet_hours_end: str = "07:00"
+
+    @field_validator("quiet_hours_start", "quiet_hours_end", mode="before")
+    @classmethod
+    def _quiet_clock_time(cls, value: object, info) -> str:  # noqa: ANN001 - pydantic ValidationInfo
+        from domovoi.quiet_hours import normalize_clock
+
+        default = "22:00" if info.field_name == "quiet_hours_start" else "07:00"
+        out = normalize_clock(value)
+        if out is None:
+            if value not in (None, ""):
+                _log.warning("%s=%r is not a clock time (HH:MM); using %s",
+                             info.field_name.upper(), value, default)
+            return default
+        return out
     # Wall-clock cap on the `system` engine's subprocess (espeak-ng / say on
     # non-Windows; the Windows SAPI path is in-process and unaffected). This
     # is the last rung of the fallback chain, so a wedged binary must not

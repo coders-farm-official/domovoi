@@ -9,6 +9,7 @@ import android.util.Log
 import androidx.compose.runtime.staticCompositionLocalOf
 import com.domovoi.app.net.ReportUpload
 import com.domovoi.app.alerts.HelpAlerts
+import com.domovoi.app.alerts.RoomBatteryAlerts
 import com.domovoi.app.alerts.IncidentAlerts
 import com.domovoi.app.assistant.AppActionHost
 import com.domovoi.app.assistant.AssistantBench
@@ -145,6 +146,10 @@ class AppContainer(context: Context) {
     /** Help steps sent by voice to this phone's owner: one notification
      *  each (alerts/HelpAlerts.kt). Started by DomovoiApplication. */
     val helpAlerts = HelpAlerts(context, api, bus, prefs)
+
+    /** A phone room's battery running low: one notification per room
+     *  (alerts/RoomBatteryAlerts.kt). Started by DomovoiApplication. */
+    val batteryAlerts = RoomBatteryAlerts(context, api, bus, prefs)
 
     /** The home-server chat a help notification's tap asked for (thread
      *  id, title); Chat opens it and clears it. */

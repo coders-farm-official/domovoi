@@ -46,6 +46,67 @@ a way that would otherwise get reported as a bug.
   next time the guard reports "The music player image was replaced
   outside Domovoi" for it, clear that incident to keep the image.
 
+## 2026-10-25 — Quiet hours
+
+Core, web, dashboard and Android app. Quiet hours: Domovoi won't speak
+announcements in a room, like low battery or printer problems. Alarms,
+timers and reminders still ring, and answers, intercom ("tell the kitchen
+dinner's ready") and the dashboard's Broadcast still speak.
+
+* **House-wide:** Settings → Advanced → Voice & speech → **Quiet hours**, on by
+  default, **22:00 to 07:00** (`QUIET_HOURS_ENABLED`, `QUIET_HOURS_START`,
+  `QUIET_HOURS_END` in `.env`; applies at once). The times are on the
+  server's clock, the zone the installer set (the one reminders use).
+  **Every server gets quiet hours on upgrade:** a room that used to say a
+  printer problem at night no longer does. Turn them off there to keep the
+  old behaviour.
+* **Per room** (every room's Settings tab, dashboard and app): **Same as
+  the house** (default), **Custom hours**, or **Off for this room**
+  (`satellites.quiet_mode` / `quiet_start` / `quiet_end`, in V040 below).
+* Held back: low-battery warnings, printer failures, a voice that
+  finished downloading, song
+  recognition finishing, and every plugin announcement (`sdk.speech`
+  cannot ask otherwise). Nothing held back is spoken later; a plugin's
+  `announce` returns the rooms it reached, so a quiet room is not in the
+  list.
+* New routes: `GET`/`PUT /api/satellites/{room}/quiet-hours`
+  (docs/API_REFERENCE.md). `StreamSession.announce` takes `kind`
+  (`notice`, the default; `alarm`; `user`).
+
+## 2026-10-25 — A phone room warns before its battery runs out
+
+Core, web, dashboard and Android app. **Migration V040** (Flyway): two
+columns on `satellites` (`battery_say`, `battery_notify`, both default
+on) and two tables, `room_battery` (each phone room's last battery report)
+and `room_battery_warnings`. Without it nothing warns and the switches read
+on.
+
+A phone in room mode already sent its battery once a minute; it now also
+sends it when its charger goes on or off and when the level moves 5 % (1 % under 20 %), and
+says which charger (`battery.plugged`: `ac`, `usb`, `wireless`, `dock`).
+Update the app on the room phone for those; an older one still warns, a
+minute late at most. Off its charger, at 20 % and again at 10 %, once per
+charge:
+
+* Home's "needs attention" and Settings → System → Health → Rooms show
+  "Pako's battery is low (15%) · plug it in".
+* The Domovoi app on the household's phones notifies: "Pako is at 15%.
+  Plug it in." (a new **Room batteries** notification channel; the 10 %
+  one replaces the 20 % one, and it goes away once the room charges).
+* The room itself says "This is Pako. My battery is low. Please plug me
+  in.", except during its quiet hours (below); the notice and the
+  notification still go, and it is not said later.
+
+Each phone room's **Settings** tab (the dashboard's room drawer) has **Say
+when the battery is low** and **Notify when the battery is low**, both on,
+kept on the server and read at each warning (no restart). The room card
+and the drawer show the battery and % with a charging marker; a phone room
+that went offline after a last report at 5 % or less, off its charger,
+reads **probably out of battery**. Pis and laptops show none of this. New
+routes: `GET /api/satellites/battery-warnings`, `GET`/`PUT
+/api/satellites/{room}/battery-alerts`; the roster row's `battery`; the
+`room_battery` socket channel (docs/API_REFERENCE.md).
+
 ## 2026-10-23 — It's a room now, everywhere people read it
 
 Android app, dashboard, join page, the room device's setup portal and

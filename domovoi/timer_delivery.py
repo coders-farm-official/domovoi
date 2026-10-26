@@ -1298,7 +1298,7 @@ class TimerDelivery:
                     # recording that began after the check above (the claim
                     # is a database round trip) makes announce() step aside
                     # instead of talking over it.
-                    await sess.announce(line, defer_to_capture=True)
+                    await sess.announce(line, defer_to_capture=True, kind="alarm")
                 except AnnounceNotStarted as e:
                     if e.reason == "unsupported":
                         # The room's device never declared announcements:

@@ -202,4 +202,7 @@ def test_an_android_room_greys_what_it_left_out_with_a_reason(driven):
     assert not _button(r, "Reset pairing")["disabled"], "pairing is the core's, always offered"
     assert "this Android room restarts and updates itself" in r["overview"]
     assert "mic blocked" in r["overview"] and "64%" in r["overview"]
-    assert "settings stay on the device" in r["settings"]
+    # 2026-10-25: a phone room's Settings tab has its battery switches (kept
+    # on the server, test_web_room_battery.py); the rest stays on the phone.
+    assert "Say when the battery is low" in r["settings"]
+    assert "other settings stay on the phone itself" in r["settings"]

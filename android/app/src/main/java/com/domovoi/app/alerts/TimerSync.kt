@@ -447,6 +447,8 @@ class TimerSyncReceiver : BroadcastReceiver() {
                         val incidents = app.container.containerAlerts.onBackgroundTick()
                         Log.i(TAG, "container incidents: ${incidents.name.lowercase()}")
                     }
+                    // A phone room's low battery (RoomBatteryAlerts); never throws.
+                    launch { app.container.batteryAlerts.onBackgroundTick() }
                     val result = app.container.alerts.sync.onTick()
                     Log.i(TAG, "background sync: ${result.name.lowercase()}")
                 }

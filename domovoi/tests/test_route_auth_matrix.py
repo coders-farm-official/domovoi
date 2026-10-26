@@ -458,6 +458,17 @@ HOUSEHOLD_STATE_READS: dict[tuple[str, str], str] = {
         "a room's latest health sample, 24 h summary and outage reports"
     ),
     ("web", "/api/satellites/{room_id}/health"): "proxy of the core read above (credential forwarded)",
+    # Phone rooms' batteries (V040, 2026-10-25): a level and whether it is
+    # on its charger say whether someone is home to plug it in.
+    ("web", "/api/satellites/battery-warnings"): (
+        "the phone rooms' open low-battery warnings (room, level, when)"
+    ),
+    ("web", "/api/satellites/{room_id}/battery-alerts"): (
+        "a phone room's two low-battery switches, beside its household-tier row"
+    ),
+    ("web", "/api/satellites/{room_id}/quiet-hours"): (
+        "a room's quiet-hours choice, beside its household-tier row"
+    ),
     # Voice history (2026-10-17): no words, but how many turns are kept and
     # since when is a measure of how much the house talks.
     ("web", "/api/voice-history"): (

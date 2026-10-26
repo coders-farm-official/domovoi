@@ -1198,7 +1198,7 @@ async def test_the_coordinator_asks_announce_to_defer_to_a_capture() -> None:
     h = House("garage")
     await h.fire(due(1))
     await h.idle()
-    assert h.room("garage").kwargs == [{"defer_to_capture": True}]
+    assert h.room("garage").kwargs == [{"defer_to_capture": True, "kind": "alarm"}]
 
 
 @pytest.mark.asyncio

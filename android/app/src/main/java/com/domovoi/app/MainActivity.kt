@@ -112,6 +112,7 @@ class MainActivity : ComponentActivity() {
         // opened or closed off screen, and its banner should say so now.
         (application as DomovoiApplication).container.containerAlerts.onAppResumed()
         (application as DomovoiApplication).container.helpAlerts.onAppResumed()
+        (application as DomovoiApplication).container.batteryAlerts.onAppResumed()
     }
 
     /** True (and on its way to the room screen) while room mode is on.

@@ -43,7 +43,9 @@ class SpeechAPI:
         target isn't connected. Never raises for delivery problems:
         an announcement is best-effort by nature (the Pi may drop WiFi
         between the check and the play), so callers branch on the
-        returned list, not on exceptions."""
+        returned list, not on exceptions. A room in its quiet hours
+        (domovoi/quiet_hours.py) is not reached: nothing is spoken there,
+        then or later."""
         if not (text or "").strip():
             return []
         if _active_sessions_provider is None:
@@ -59,7 +61,10 @@ class SpeechAPI:
         reached: list[str] = []
         for sess in targets:
             try:
-                await sess.announce(text)
+                # Always a notice: quiet hours (domovoi/quiet_hours.py) hold
+                # a plugin's announcement back, and no plugin can say
+                # otherwise.
+                await sess.announce(text, kind="notice")
                 reached.append(sess.room_id)
             except Exception as e:  # noqa: BLE001 — per-room isolation
                 log.warning(

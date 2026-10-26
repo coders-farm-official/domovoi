@@ -206,6 +206,11 @@ private fun NeedsLock(onSetLock: () -> Unit, onCancel: () -> Unit) {
     }
 }
 
+/** The one line the room code screen (and the dashboard's "a phone" card)
+ *  says about power. The core still warns at 20 % and 10 % off the charger
+ *  (domovoi/room_battery.py); this is how a room never gets there. */
+internal const val CHARGER_TIP = "Keep the phone on its charger: rooms are always on."
+
 /** The owner's six points (assessment §4.2), in the app's words. */
 internal val EXPLAINER: List<Pair<String, String>> = listOf(
     "Always listening" to
@@ -326,6 +331,7 @@ private fun RoomCode(initialPayload: String?, onDone: (Enrolment) -> Unit, onCan
                 "and paste it here.",
             style = MaterialTheme.typography.bodyLarge,
         )
+        Text(CHARGER_TIP, style = MaterialTheme.typography.bodyMedium, color = Domovoi.colors.fgMuted)
         if (scanning) {
             RoomScanner(
                 Modifier.fillMaxWidth().aspectRatio(1f)

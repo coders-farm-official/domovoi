@@ -616,6 +616,84 @@ class Satellite(BaseModel):
     # registry (null for the built-in words). The user manual says these.
     wake_word: str | None = None
     wake_phrase: str | None = None
+    # A phone room's battery (domovoi/room_battery.py, V040): its last
+    # report, kept after it goes offline. Null for every other room (a Pi
+    # has no battery; a laptop's stays on its Health card).
+    battery: RoomBattery | None = None
+
+
+class RoomBattery(BaseModel):
+    """A phone room's last battery report and what the dashboard makes of
+    it. ``low``: a low-battery warning is open and the room's "Notify when
+    the battery is low" is on. ``probably_out``: the room is offline and its
+    last report was at 5 % or less, off its charger."""
+
+    percent: int | None = None
+    charging: bool | None = None
+    on_power: bool | None = None
+    reported_at: datetime | None = None
+    low: bool = False
+    probably_out: bool = False
+
+
+Satellite.model_rebuild()
+
+
+class RoomBatteryWarning(BaseModel):
+    """An open low-battery warning: what the phones' notification says."""
+
+    id: int
+    room_id: str
+    name: str
+    threshold: int
+    percent: int
+    text: str
+    created_at: datetime | None = None
+
+
+class RoomBatteryWarnings(BaseModel):
+    warnings: list[RoomBatteryWarning] = Field(default_factory=list)
+
+
+class RoomBatteryAlerts(BaseModel):
+    """A phone room's two switches. ``say``: "Say when the battery is low"
+    (the room says it out loud). ``notify``: "Notify when the battery is
+    low" (the dashboard's notice and the phones' notification). Both on by
+    default."""
+
+    room_id: str
+    say: bool = True
+    notify: bool = True
+
+
+class RoomBatteryAlertsUpdate(BaseModel):
+    """``PUT /api/satellites/{room_id}/battery-alerts`` body: either or both."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    say: bool | None = Field(None, strict=True)
+    notify: bool | None = Field(None, strict=True)
+
+
+class RoomQuietHours(BaseModel):
+    """A room's quiet-hours choice (domovoi/quiet_hours.py): ``house``
+    (the house's hours, Settings → Voice & speech), ``custom`` (``start``
+    to ``end``, "HH:MM") or ``off``."""
+
+    room_id: str
+    mode: str = "house"
+    start: str | None = None
+    end: str | None = None
+
+
+class RoomQuietHoursUpdate(BaseModel):
+    """``PUT /api/satellites/{room_id}/quiet-hours`` body."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["house", "custom", "off"]
+    start: str | None = Field(None, max_length=5)
+    end: str | None = Field(None, max_length=5)
 
 
 # ─── Notes / Timers ───────────────────────────────────────────────────────

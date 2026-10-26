@@ -14,7 +14,10 @@ import kotlinx.serialization.json.put
  * `_battery`, the same one a laptop sends): `battery` = {percent 0-100,
  * charging, on_power}. `charging` while the level goes up; `on_power`
  * while the charger is plugged in (a battery held full counts, not
- * charging).
+ * charging). Since 2026-10-25 also `plugged`, which charger, when on one.
+ * Besides the minute's frame, a room sends one when the charger goes on or
+ * off or the level moves 5 % (1 % when low; [BatteryReporter]), for the core's
+ * low-battery warnings (domovoi/room_battery.py).
  */
 object HealthSample {
     data class Facts(
@@ -42,6 +45,8 @@ object HealthSample {
         val micBlocked: Boolean,
         val wakeLoopAgeS: Double?,
         val threads: Int?,
+        /** Which charger (`battery.plugged`: "ac", "usb", "wireless", "dock"). */
+        val plugged: String? = null,
     )
 
     fun build(f: Facts): JsonObject = buildJsonObject {
@@ -75,6 +80,7 @@ object HealthSample {
                 pct?.let { put("percent", it) }
                 f.batteryCharging?.let { put("charging", it) }
                 f.onPower?.let { put("on_power", it) }
+                f.plugged?.let { put("plugged", it) }
             })
         }
         put("mic_blocked", f.micBlocked)
