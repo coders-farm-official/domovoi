@@ -945,9 +945,14 @@ _LAST_UPDATE_MAX_BYTES = 256 * 1024
 _LAST_UPDATE_FIELDS = (
     "status", "mode", "from_sha", "to_sha", "prev_source", "bad_sha",
     "started_at", "finished_at", "duration_sec", "deps_changed",
-    "mpd_changed", "migrations_before", "migrations_after", "db_restored",
+    "mpd_changed", "mpd_record", "migrations_before", "migrations_after", "db_restored",
     "error", "signature",
 )
+# mpd_record: what the run's rebuild-mpd did with the music player image's
+# record for the container guard ("recorded", or "unconfirmed": the
+# build's image ID and root's look at the tag didn't agree); absent or null
+# when it built nothing.
+_MPD_RECORD_STATES = frozenset({"recorded", "unconfirmed"})
 _STEP_FIELDS = ("name", "status", "duration_sec")
 # A `warn` step of these keeps its detail, trimmed the way the signature
 # object is: the script writes these details itself ("lock not applied:
@@ -1083,6 +1088,8 @@ def load_last_update() -> tuple[dict | None, str | None]:
     for k in ("from_sha", "to_sha", "bad_sha"):
         if k in out and not (isinstance(out[k], str) and _FULL_SHA_RE.match(out[k])):
             out[k] = None
+    if "mpd_record" in out and out["mpd_record"] not in _MPD_RECORD_STATES:
+        out["mpd_record"] = None
     if isinstance(out.get("error"), str):
         out["error"] = out["error"][:_ERROR_MAX_CHARS]
     if "signature" in out:

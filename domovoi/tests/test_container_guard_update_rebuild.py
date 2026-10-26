@@ -636,3 +636,35 @@ async def test_a_hand_build_after_a_recorded_update_gets_no_hint(guard_env, reco
     rows = await _open()
     assert len(rows) == 2
     assert all("Domovoi's update at" not in r["summary"] for r in rows)
+
+
+def test_the_hint_when_the_update_could_not_confirm_its_build(records) -> None:
+    """The run built, but the ID its build wrote and root's look at the tag
+    didn't agree, so it withheld its record (mpd_record: unconfirmed): it
+    doesn't say it built without recording, it says it couldn't confirm."""
+    records["last"]["doc"] = dict(RUN, mpd_record="unconfirmed")
+    hint = cg_engine.rebuild_hint(NEW, BASELINE_AT)
+    assert hint is not None
+    assert hint.startswith(
+        "Domovoi's update at 2026-10-25 01:10 UTC couldn't confirm which image it built, so this "
+        "may be that rebuild: check that nobody built or tagged domovoi-mpd:latest by hand"
+    )
+    assert "without recording" not in hint and "safe" not in hint and hint.endswith("then clear.")
+    # A run that recorded its build keeps the plain words for any other image.
+    records["last"]["doc"] = dict(RUN, mpd_record="recorded")
+    assert cg_engine.rebuild_hint(NEW, BASELINE_AT).startswith(HINT)
+
+
+def test_the_update_result_carries_mpd_record(tmp_path, monkeypatch) -> None:
+    from domovoi.config import settings
+
+    path = tmp_path / "last-result.json"
+    monkeypatch.setattr(settings, "update_result_file", str(path))
+    for value, want in (("unconfirmed", "unconfirmed"), ("recorded", "recorded"),
+                        (None, None), ("something else", None), (["x"], None)):
+        path.write_text(json.dumps(dict(RUN, mpd_record=value)), encoding="utf-8")
+        last, problem = git_version.load_last_update()
+        assert problem is None and last["mpd_record"] == want, value
+    path.write_text(json.dumps(dict(RUN)), encoding="utf-8")
+    last, _ = git_version.load_last_update()
+    assert "mpd_record" not in last, "a run from before the field"

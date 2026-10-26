@@ -224,9 +224,9 @@ case "${1-}" in
     if [ -f "$SHIM_STATE/fail-docker-build" ]; then echo "build failed" >&2; exit 1; fi
     # The wake-word trainer's build (--label org.domovoi.wake-trainer.src=TREE
     # -t NAME DIR) leaves an image with that label.
-    lbl="" tag="" file="" quiet=0
+    lbl="" tag="" file="" iid=""
     while [ $# -gt 0 ]; do
-      case $1 in --label) lbl=$2; shift 2 ;; -t) tag=$2; shift 2 ;; -f) file=$2; shift 2 ;; -q) quiet=1; shift ;; *) shift ;; esac
+      case $1 in --label) lbl=$2; shift 2 ;; -t) tag=$2; shift 2 ;; -f) file=$2; shift 2 ;; --iidfile) iid=$2; shift 2 ;; *) shift ;; esac
     done
     case $lbl in
       org.domovoi.wake-trainer.src=*)
@@ -236,12 +236,14 @@ case "${1-}" in
         # Any other build (the music player's) leaves an image under its
         # tag, in image-<tag>: the ID in mpd-build-id, else the SHA-256 of
         # the Dockerfile (another Dockerfile, another image). Nothing while
-        # mpd-build-no-id says the ID can't be read. -q prints the ID (what
+        # mpd-build-no-id says the ID can't be read. It prints its progress
+        # (what the journal keeps), and --iidfile gets the ID (what
         # mpd-build-prints says instead, when it exists: a CLI that lies).
         # Under mpd-store-containerd the image is kept the way Docker's
-        # containerd image store keeps it: -q prints the config digest,
-        # and the image's ID (image-<tag>) is another digest, the config
-        # one in its Descriptor (image-<tag>.config).
+        # containerd image store keeps it: the iidfile holds the config
+        # digest, and the image's ID (image-<tag>) is another digest, the
+        # config one in its Descriptor (image-<tag>.config).
+        echo "#1 [internal] load build definition from Dockerfile.mpd (shim)"
         if [ -n "$tag" ] && [ ! -f "$SHIM_STATE/mpd-build-no-id" ]; then
           img=$SHIM_STATE/image-${tag//[\/:]/_}
           if [ -f "$SHIM_STATE/mpd-build-id" ]; then
@@ -255,7 +257,10 @@ case "${1-}" in
             echo "sha256:$(printf 'index-%s' "$printed" | sha256sum | cut -c1-64)" >"$img"
           fi
           if [ -f "$SHIM_STATE/mpd-build-prints" ]; then printed=$(cat "$SHIM_STATE/mpd-build-prints"); fi
-          if [ "$quiet" = 1 ]; then echo "$printed"; fi
+          # mpd-iid-link: the iidfile is a link to a file holding the ID.
+          if [ -n "$iid" ] && [ -f "$SHIM_STATE/mpd-iid-link" ]; then
+            printf '%s' "$printed" >"$SHIM_STATE/iid-target" && ln -s "$SHIM_STATE/iid-target" "$iid"
+          elif [ -n "$iid" ]; then printf '%s' "$printed" >"$iid"; fi
         fi ;;
     esac
     exit 0
@@ -1082,7 +1087,8 @@ case_mpd_changed() {
   check "status ok" eq "$(field status)" '"ok"'
   check "mpd_changed" eq "$(field mpd_changed)" true
   check "deps not changed" eq "$(field deps_changed)" false
-  check "builds like mpd_provisioner" called "docker build -q -t domovoi-mpd:latest -f $REPO/domovoi/Dockerfile.mpd $REPO/domovoi"
+  check "builds like mpd_provisioner" called " -t domovoi-mpd:latest -f $REPO/domovoi/Dockerfile.mpd $REPO/domovoi"
+  check "with an iidfile" called "docker build --iidfile "
   check "removes room kitchen" called "docker rm -f domovoi-mpd-kitchen"
   check "removes room office" called "docker rm -f domovoi-mpd-office"
   check "leaves postgres alone" not_called "docker rm -f domovoi-postgres"
@@ -1117,7 +1123,11 @@ case_mpd_record_written() {
   check "a UTC stamp" grep -Eq '^  "built_at": "[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z",$' "$UPD/mpd-image.json"
   check "readable by everyone, written by its owner only" eq "$(stat -c %a "$UPD/mpd-image.json")" 644
   check "no temp file left" eq "$(ls -a "$UPD" | grep -c '^\.mpd-image')" 0
-  check "the ID read after the build" before "docker build -q -t domovoi-mpd:latest" "docker image inspect -f {{.Id}} domovoi-mpd:latest"
+  check "the ID read after the build" before "docker build --iidfile" "docker image inspect -f {{.Id}} domovoi-mpd:latest"
+  check "the build's output reaches the journal" said "load build definition from Dockerfile.mpd (shim)"
+  local iiddir; iiddir=$(sed -n 's/^docker build --iidfile \([^ ]*\)\/iid .*/\1/p' "$STATE/calls.log" | head -n 1)
+  check "the iidfile's directory is gone" test -n "$iiddir" -a ! -e "$iiddir"
+  check "mpd_record says recorded" eq "$(field mpd_record)" '"recorded"'
   check "by root's own docker, not the service user's" not_called "runuser -u tester -- docker image inspect"
   check "recorded before a room's player goes" before "docker image inspect -f {{.Id}} domovoi-mpd:latest" "docker rm -f domovoi-mpd-kitchen"
   check "recorded before the core starts" before "docker image inspect -f {{.Id}} domovoi-mpd:latest" "systemctl start domovoi-core.service"
@@ -1161,8 +1171,25 @@ case_mpd_record_refused_when_the_build_and_root_disagree() {
   run_update
   check "status ok" eq "$(field status)" '"ok"'
   check "no record" test ! -e "$UPD/mpd-image.json"
+  check "mpd_record says unconfirmed" eq "$(field mpd_record)" '"unconfirmed"'
   check "says why" grep -qF "not recorded for the container guard" "$CASE/output.log"
   check "the rooms still go" called "docker rm -f domovoi-mpd-kitchen"
+  end_case
+}
+
+# The iidfile is the service user's: root reads it only as a regular file,
+# never through a link (which could point it at a file of root's).
+case_mpd_record_refused_through_a_link() {
+  new_case mpd_record_refused_through_a_link
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf 'FROM debian:trixie-slim\n' >"$REPO/domovoi/Dockerfile.mpd"
+  commit_all "B: mpd" >/dev/null
+  touch "$STATE/mpd-iid-link"
+  run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  check "no record" test ! -e "$UPD/mpd-image.json"
+  check "mpd_record says unconfirmed" eq "$(field mpd_record)" '"unconfirmed"'
+  check "says what it read: nothing" grep -qF "the build wrote no image ID" "$CASE/output.log"
   end_case
 }
 
@@ -1178,8 +1205,28 @@ case_mpd_record_stale_one_removed_by_a_failed_build() {
   run_update
   # (The shim's builds all fail, the rollback's too.)
   check "the update failed" eq "$(field status)" '"rollback_failed"'
-  check "the build was tried" called "docker build -q -t domovoi-mpd:latest"
+  check "the build was tried" called "docker build --iidfile"
+  check "no mpd_record for a build that failed" eq "$(field mpd_record)" null
   check "no record left" test ! -e "$UPD/mpd-image.json"
+  end_case
+}
+
+# As root (the unit's own run): the build, and the directory its iidfile
+# goes in, are the service user's; root reads the file and makes the record.
+case_mpd_record_as_root() {
+  new_case mpd_record_as_root
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf 'FROM debian:trixie-slim\n' >"$REPO/domovoi/Dockerfile.mpd"
+  commit_all "B: mpd" >/dev/null
+  write_root_shims "$CASE/rootbin"
+  run_update "$CASE/rootbin"
+  check "status ok" eq "$(field status)" '"ok"'
+  check "the directory is the service user's own" called "runuser -u tester -- mktemp -d"
+  check "the build is the service user's" called "runuser -u tester -- docker build --iidfile "
+  check "and so is the clean-up" called "runuser -u tester -- rm -rf -- "
+  check "root's own look at the tag" not_called "runuser -u tester -- docker image inspect"
+  check "recorded" eq "$(rec_field image_id)" "\"$(dockerfile_id 'FROM debian:trixie-slim\n')\""
+  check "mpd_record says recorded" eq "$(field mpd_record)" '"recorded"'
   end_case
 }
 
@@ -1196,6 +1243,7 @@ case_mpd_record_unreadable_id() {
   check "status ok" eq "$(field status)" '"ok"'
   check "mpd_changed" eq "$(field mpd_changed)" true
   check "no record" test ! -e "$UPD/mpd-image.json"
+  check "mpd_record says unconfirmed" eq "$(field mpd_record)" '"unconfirmed"'
   check "says why" grep -qF "not recorded for the container guard" "$CASE/output.log"
   check "the rooms still go" called "docker rm -f domovoi-mpd-kitchen"
   end_case
@@ -1212,7 +1260,7 @@ case_mpd_record_follows_the_rollback() {
   echo "$sha_b" >"$STATE/curl-fail-when-head"
   run_update
   check "rolled back" eq "$(field status)" '"rolled_back"'
-  check "built twice" eq "$(grep -c '^docker build -q -t domovoi-mpd:latest' "$STATE/calls.log")" 2
+  check "built twice" eq "$(grep -c '^docker build --iidfile [^ ]* -t domovoi-mpd:latest' "$STATE/calls.log")" 2
   check "the record names the rollback's image" eq "$(rec_field image_id)" "\"$(dockerfile_id 'FROM debian:bookworm-slim\n')\""
   check "under the same run" eq "$(rec_field run_started_at)" "$(field started_at)"
   end_case
@@ -2706,6 +2754,7 @@ case_never_mpd_conf_only_keeps_the_image() {
   check "rooms recreated for the new conf" called "docker rm -f domovoi-mpd-kitchen"
   check "says why" eq "$(grep -c 'keeping the domovoi-mpd:latest image' "$CASE/output.log")" 1
   check "no image recorded (none built)" test ! -e "$UPD/mpd-image.json"
+  check "no mpd_record (no build)" eq "$(field mpd_record)" null
   check "applied_sha moves to B" file_is "$UPD/applied_sha" "$sha_b"
   end_case
 }
@@ -4199,7 +4248,7 @@ case_dotenv_is_read_the_way_the_core_reads_it() {
   check "the music player image never looked up as the trainer" not_called "docker image inspect domovoi-mpd:latest"
   check "never built under the trainer's label" not_called "--label org.domovoi.wake-trainer.src"
   check "no wake-trainer step" eq "$(step_names | grep -c wake-trainer)" 0
-  check "MPD_IMAGE_TAG: quoted, the last one" called "docker build -q -t my-mpd:5 -f $REPO/domovoi/Dockerfile.mpd $REPO/domovoi"
+  check "MPD_IMAGE_TAG: quoted, the last one" called " -t my-mpd:5 -f $REPO/domovoi/Dockerfile.mpd $REPO/domovoi"
   check "MPD_CONTAINER_PREFIX: up to its comment" called "docker rm -f domovoi-mpd-kitchen"
   check "and only those rooms" not_called "docker rm -f domovoi-mpd-office"
   check "nothing read line by line" not_said "read line by line"
@@ -5065,9 +5114,11 @@ CASES=(
   case_mpd_changed
   case_mpd_record_written
   case_mpd_record_unreadable_id
+  case_mpd_record_as_root
   case_mpd_record_containerd_store
   case_mpd_record_refused_when_the_build_and_root_disagree
   case_mpd_record_stale_one_removed_by_a_failed_build
+  case_mpd_record_refused_through_a_link
   case_mpd_record_follows_the_rollback
   case_mpd_record_untouched_without_a_build
   case_mpd_conf_only

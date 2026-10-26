@@ -1127,9 +1127,15 @@ def rebuild_hint(found_id: str, recorded_at: Any) -> str | None:
     if start is None:
         return None
     at = start.strftime("%Y-%m-%d %H:%M UTC")
+    if last.get("mpd_record") == "unconfirmed":
+        # It built, but the ID its build wrote and root's look at the tag
+        # didn't agree (apply-update.sh record_mpd_image): it can't say.
+        said = f"Domovoi's update at {at} couldn't confirm which image it built"
+    else:
+        said = (f"Domovoi's update at {at} rebuilt the music player image without "
+                "recording which image it built")
     return (
-        f"Domovoi's update at {at} rebuilt the music player image without recording which "
-        "image it built, so this may be that rebuild: check that nobody built or tagged "
+        f"{said}, so this may be that rebuild: check that nobody built or tagged "
         "domovoi-mpd:latest by hand (docs/CONTAINER_GUARD.md, \"Reviewing and clearing\"), "
         "then clear."
     )
