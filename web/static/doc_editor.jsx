@@ -76,7 +76,17 @@
     { family: 'Inter', label: 'Inter', category: 'sans-serif', css: '"Inter", "Inter var", system-ui, sans-serif' },
     { family: 'JetBrains Mono', label: 'JetBrains Mono', category: 'monospace', css: '"JetBrains Mono", ui-monospace, monospace' },
   ];
-  const fontCss = (f) => f.css || `"${f.family}", ${GENERIC[(f.category || '').toLowerCase()] || 'sans-serif'}`;
+  // The registry (builder C, web/static/fonts.jsx) writes the CSS value
+  // itself (stack: the family, then its group's generic), so a document
+  // names a font the same way whichever editor set it.
+  let activeRegistry = null;
+  const fontCss = (f) => {
+    if (f.css) return f.css;
+    if (activeRegistry && typeof activeRegistry.stack === 'function') {
+      try { return activeRegistry.stack(f.family); } catch (e) { /* below */ }
+    }
+    return `"${f.family}", ${GENERIC[(f.category || '').toLowerCase()] || 'sans-serif'}`;
+  };
   const firstFamily = (css) => String(css || '').split(',')[0].trim().replace(/^['"]|['"]$/g, '');
   const normaliseFonts = (list) => (list || [])
     .filter((f) => f && f.family && /^[A-Za-z0-9 _-]{1,80}$/.test(f.family))
@@ -85,6 +95,8 @@
   const fontsFrom = async (registry) => {
     try {
       if (registry && typeof registry.list === 'function') {
+        // fonts.jsx: list() is empty until load() has read /api/fonts
+        if (typeof registry.load === 'function') await registry.load();
         const got = normaliseFonts(await registry.list());
         if (got.length) return got;
       }
@@ -94,6 +106,14 @@
   const ensureFont = (registry, family) => {
     try { if (registry && typeof registry.ensure === 'function') return Promise.resolve(registry.ensure(family)); } catch (e) { /* the font just falls back */ }
     return Promise.resolve();
+  };
+  // The families a document names (its text styles), for the picker.
+  const documentFamilies = (editor) => {
+    const used = new Set();
+    editor.state.doc.descendants((n) => n.marks.forEach((m) => {
+      if (m.type.name === 'textStyle' && m.attrs.fontFamily) used.add(firstFamily(m.attrs.fontFamily));
+    }));
+    return Array.from(used);
   };
   const FONT_SIZES = [8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 32, 36, 48, 60, 72];
 
@@ -1035,7 +1055,7 @@
     const curFont = fonts.find((f) => fontCss(f) === curFamily || f.family === firstFamily(curFamily));
     const setFont = (family) => {
       if (!family) { c().unsetFontFamily().run(); return; }
-      const f = fonts.find((x) => x.family === family);
+      const f = fonts.find((x) => x.family === family) || (registry ? { family, category: 'sans' } : null);
       if (!f) return;
       ensureFont(registry, f.family);
       c().setFontFamily(fontCss(f)).run();
@@ -1107,12 +1127,20 @@
           <option value="h3">Subheading</option>
           <option value="h4">Small heading</option>
         </select>
+        {window.DomovoiFontPicker ? (
+          // builder C's picker: every family previewed in its own face, the
+          // families this document names but the house lacks listed first
+          <window.DomovoiFontPicker value={curFont ? curFont.family : firstFamily(curFamily)}
+                                   onChange={(family) => setFont(family)} disabled={md} disabledNote={NEEDS_FORMATTED}
+                                   documentFamilies={env.documentFamilies ? env.documentFamilies() : []}/>
+        ) : (
         <select className="de-select" aria-label="Font" disabled={md} title={md ? NEEDS_FORMATTED : 'Font'}
                 value={curFont ? curFont.family : ''} onChange={(e) => setFont(e.target.value)}>
           <option value="">Default font</option>
           {fonts.map((f) => <option key={f.family} value={f.family}>{f.label}</option>)}
           {curFamily && !curFont && <option value={firstFamily(curFamily)} disabled>{firstFamily(curFamily)}</option>}
         </select>
+        )}
         <TB icon="minus" label="Smaller text" disabled={md} title={md ? NEEDS_FORMATTED : 'Smaller'} onClick={() => stepSize(-1)}/>
         <select className="de-select" aria-label="Text size" disabled={md} title={md ? NEEDS_FORMATTED : 'Text size'}
                 style={{ width: 62 }} value={String(curSize)} onChange={(e) => setSize(Number(e.target.value))}>
@@ -1224,8 +1252,15 @@
     React.useEffect(() => { bridge.setFonts = (r) => setRegistry(r || null); }, []);
     React.useEffect(() => {
       let live = true;
-      fontsFrom(registry).then((list) => { if (live) setFonts(list); });
-      return () => { live = false; };
+      activeRegistry = registry;
+      const refresh = () => fontsFrom(registry).then((list) => { if (live) setFonts(list); });
+      refresh();
+      // fonts.jsx tells its listeners when a family is added for the house
+      let off = null;
+      if (registry && typeof registry.onChange === 'function') {
+        try { off = registry.onChange(() => refresh()); } catch (e) { off = null; }
+      }
+      return () => { live = false; if (typeof off === 'function') off(); };
     }, [registry]);
 
     React.useEffect(() => {
@@ -1296,7 +1331,8 @@
 
     return (
       <div className="de-shell">
-        {editor && editable && <Toolbar editor={editor} env={{ markdown, insertPictures: (f, at) => bridge.insertPictures(f, at), notice: opts.onNotice }}
+        {editor && editable && <Toolbar editor={editor} env={{ markdown, insertPictures: (f, at) => bridge.insertPictures(f, at), notice: opts.onNotice,
+                                                              documentFamilies: () => documentFamilies(editor) }}
                                               fonts={fonts} registry={registry}/>}
         {markdown && editable && editor && (
           <div className="de-note">
