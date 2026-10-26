@@ -1457,6 +1457,32 @@ row's `category` tells the UI how to open it
 | `POST /api/documents/drawings/read` | **Device** · `DrawingReadRequest` | Read a drawing document. |
 | `POST /api/documents/drawings/write` | **Device** · `DrawingWriteRequest` (optional `device_id`) | Save a drawing. `400` for anything outside .excalidraw/.svg. |
 
+### 3.14a Co-editing (several people in one document)
+
+Documents (and spreadsheets) can be edited by several household devices at
+once. Browsers and the app run Yjs; the web process runs pycrdt and speaks
+the standard y-websocket sync and awareness protocol, so the stock
+`y-websocket` client provider works. The shared state lives in Postgres
+(V042), never in the file: the file in Documents stays the clean latest
+version, written by the last active editor's client through the ordinary
+save route (see `web/backend/collab/__init__.py`). The tiers are exactly
+the Documents tiers (§3.14).
+
+| Route | Tier | What |
+|---|---|---|
+| `GET /api/collab/doc?path=` | Device read | The document's co-editing id (made on first use; the same path checks as `GET /api/documents/text`, `415` for a type that isn't co-edited), its `epoch`, whether this caller's session would be `readonly`, the caller's `user` `{name, color}` (the person who owns the device, else the device's name), and the socket path `ws`. |
+| `WS /api/collab/{doc_id}?epoch=` | Device read to join; device tier to edit | y-websocket protocol (0 sync, 1 awareness, 3 query awareness) plus message type 100: small JSON control messages (`hello`, `seed`, `ready`, `save`, `saved`, `reset`, `restored`). Credentials: `X-Device-Token`, an admin Bearer, the `domovoi.device-token-b64.` subprotocol (echoed back), the dashboard cookie or `?device_token=` (both **read-only sessions**: edits from them are dropped), or the pre-setup grace. A session that rests only on the cookie or the grace must come from a page on this server's origin or port (`Origin`). The device tier also needs the Files write policy (a blocked device reads only). Refusals close the socket with a 44xx code, which the stock client does not retry: `4401` no credential, `4403` wrong origin, `4404` unknown or deleted document, `4413` message or document too large, `4415` not co-edited, `4429` too many wrong tokens; `4409` means the file changed outside the editor and the shared document was rebuilt from it (reopen). Transient: `4503` too many people or documents open, `4508` too fast. Limits: 8 MiB a message, 48 MiB a document, 16 people a document, 64 documents open, 60 messages a second (bursts of 300), 24 MiB per 10 s. |
+| `GET /api/collab/history?path=` | Device read | Versions, newest first: `{id, at, kind, label, editors, size}`. A version is kept every 5 minutes while someone edits, when the last editor leaves, when it is first opened from the file, and before a restore or a rebuild. Retention: everything from the last 2 hours, then one an hour for a week, one a day for 90 days, one a week after that (the survivor keeps the names), at most 200 versions or 256 MiB a document. |
+| `GET /api/collab/history/{id}?path=` | Device read | One version: its Yjs state (`update`, base64) for an editor to render read-only, and its plain `text`. `404` unless the version belongs to that path. |
+| `POST /api/collab/restore` | Device (+ Files write policy) | `{path, version_id}`: the version comes back as a NEW change everyone connected receives; what the document said just before is kept as a version too. |
+
+A save through a Documents save route that carries `X-Domovoi-Collab:
+<doc_id>;<epoch>;<rev>` is recorded as the clean file of that revision.
+A save without it, an upload over the file or another program changing it
+makes the server rebuild the shared document from the file (the co-edited
+state is kept in history first). Deleting a document deletes its shared
+state and history; moving it inside Documents keeps them.
+
 ### 3.15 Podcasts and audiobooks
 
 Reads are **Open**, except the directory search and an audiobook's resume

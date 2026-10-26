@@ -149,6 +149,12 @@ household.
   (ISC), marked 12.0.2 (MIT), x-spreadsheet (MIT), qrcode-generator 1.4.4
   by Kazuhiko Arase (MIT) and Excalidraw 0.17.6 (MIT; it carries DOMPurify
   3.0.3 under Apache-2.0 or MPL-2.0, used here under Apache-2.0).
+- **Co-editing** (several people editing one document at once): on the
+  server, pycrdt 0.14.10 (MIT), installed with it; in the dashboard and
+  the app's editors, the one Yjs bundle in `web/static/vendor/yjs/` (Yjs
+  13.6.33, y-websocket 3.1.0's client provider, y-indexeddb 9.0.12,
+  y-protocols 1.0.7, lib0 0.2.119, all MIT, with their licence texts in
+  `licenses/` there).
 - **The dashboard's fonts**, all under the SIL Open Font License 1.1, each
   with its licence text beside it: Inter and JetBrains Mono (through
   fontsource 5.2.8, in `web/static/vendor/fonts/`), the three fonts
