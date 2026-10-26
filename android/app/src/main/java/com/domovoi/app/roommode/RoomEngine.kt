@@ -1,10 +1,14 @@
 package com.domovoi.app.roommode
 
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.media.AudioManager
 import android.os.Process
 import android.os.SystemClock
 import android.util.Log
+import androidx.core.content.ContextCompat
 import com.domovoi.app.audio.MicArbiter
 import com.domovoi.app.audio.MicOwnership
 import com.domovoi.app.diagnostics.SpokenLog
@@ -166,7 +170,13 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
     // health facts
     @Volatile private var lastFrameAt = 0L
     private val framesThisMinute = AtomicInteger(0)
-    private var healthSeq = 0
+    private val healthSeq = AtomicInteger(0)
+    /** The last minute's facts: a battery frame between two minutes reuses
+     *  them with the battery's own fields fresh (so mic_fps and the CPU
+     *  average stay the minute's). */
+    @Volatile private var lastFacts: HealthSample.Facts? = null
+    private val batteryReporter = BatteryReporter()
+    private var batteryReceiver: BroadcastReceiver? = null
     // CPU time since the last sample; the first one averages since the
     // process started.
     private var lastCpu = 0L
@@ -196,6 +206,7 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
             connectLoop(enrol)
         }
         healthJob = scope.launch { healthLoop() }
+        watchBattery()
         listenThread = Thread({
             Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
             listenLoop()
@@ -208,6 +219,8 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
         running = false
         connectJob?.cancel()
         healthJob?.cancel()
+        batteryReceiver?.let { runCatching { context.unregisterReceiver(it) } }
+        batteryReceiver = null
         runCatching { ws?.close(1000, "room mode stopped") }
         ws = null
         listenThread?.interrupt()
@@ -392,6 +405,9 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
         outcome?.complete("ready")
         send(RoomProtocol.volumeStatus(volume.level()))
         background { syncSounds() }
+        // The core hears the battery now, not at the end of the first minute.
+        batteryReporter.reset()
+        scope.launch { onBattery(RoomDevice.battery(context)) }
     }
 
     /** Work off the socket's thread; dropped once the room has stopped. */
@@ -953,9 +969,66 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
             // A room stays connected for days: the release check rides this tick (it waits its hours).
             if (ready) http?.let { c -> store.enrolment?.let { e -> checkAppOffer(c, e) } }
             if (!ready || "health" !in features) continue
-            runCatching { send(HealthSample.build(healthFacts())) }
+            runCatching {
+                val f = healthFacts()
+                lastFacts = f
+                if (send(HealthSample.build(f))) batteryReporter.sent(batteryOf(f), SystemClock.elapsedRealtime())
+            }
         }
     }
+
+    // ── battery (domovoi/room_battery.py warns at 20 % and 10 %) ────────
+
+    /** Android's battery broadcast, no permission needed: the charger going
+     *  on or off, or the level moving 5 %, sends a frame between minutes. */
+    private fun watchBattery() {
+        val r = object : BroadcastReceiver() {
+            override fun onReceive(c: Context?, intent: Intent?) {
+                if (intent?.action != Intent.ACTION_BATTERY_CHANGED) return
+                val b = RoomDevice.battery(intent, capacity())
+                // Not the room worker: a model download there must not hold it up.
+                scope.launch { onBattery(b) }
+            }
+        }
+        batteryReceiver = r
+        runCatching {
+            ContextCompat.registerReceiver(context, r, IntentFilter(Intent.ACTION_BATTERY_CHANGED), ContextCompat.RECEIVER_NOT_EXPORTED)
+        }.onFailure { Log.w(TAG, "battery broadcast: ${it.message}"); batteryReceiver = null }
+    }
+
+    private fun capacity(): Int? = runCatching {
+        context.getSystemService(android.os.BatteryManager::class.java)
+            ?.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY)
+    }.getOrNull()
+
+    private fun onBattery(b: RoomDevice.Battery) {
+        if (!running || !ready || "health" !in features) return
+        // One decision at a time: two broadcasts landing together send once.
+        synchronized(batteryReporter) {
+            val now = SystemClock.elapsedRealtime()
+            if (!batteryReporter.onChange(b, now)) return
+            sendBattery(b, now)
+        }
+    }
+
+    private fun sendBattery(b: RoomDevice.Battery, now: Long) {
+        runCatching {
+            val base = lastFacts ?: healthFacts().also { lastFacts = it }
+            val f = base.copy(
+                seq = healthSeq.incrementAndGet(),
+                ts = System.currentTimeMillis() / 1000.0,
+                batteryPercent = b.percent,
+                batteryCharging = b.charging,
+                onPower = b.onPower,
+                plugged = b.plugged,
+                tempC = b.tempC ?: base.tempC,
+            )
+            if (send(HealthSample.build(f))) batteryReporter.sent(b, now)
+        }
+    }
+
+    private fun batteryOf(f: HealthSample.Facts) =
+        RoomDevice.Battery(f.batteryPercent, f.batteryCharging, f.onPower, f.tempC, f.plugged)
 
     private fun healthFacts(): HealthSample.Facts {
         val now = SystemClock.elapsedRealtime()
@@ -967,7 +1040,7 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
         val wifi = RoomDevice.wifi(context)
         val frames = framesThisMinute.getAndSet(0)
         return HealthSample.Facts(
-            seq = ++healthSeq,
+            seq = healthSeq.incrementAndGet(),
             ts = System.currentTimeMillis() / 1000.0,
             rssKb = RoomDevice.rssKb(),
             cpuPct = cpuPct,
@@ -987,6 +1060,7 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
             batteryPercent = battery.percent,
             batteryCharging = battery.charging,
             onPower = battery.onPower,
+            plugged = battery.plugged,
             micBlocked = _status.value.micBlocked,
             wakeLoopAgeS = if (lastFrameAt > 0) (now - lastFrameAt) / 1000.0 else null,
             threads = RoomDevice.threads(),
