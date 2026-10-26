@@ -265,6 +265,25 @@ const DomovoiFontsModule = (() => {
     await load(true);
   };
 
+  /* Admin: which of these missing families could be added (the open-licence
+   * collection has them)? { name: {available, family?, licence?} }. Kept for
+   * the page's life; a refusal (internet off, not an admin) answers {}. */
+  const known = new Map();
+  const lookup = async (names) => {
+    const ask = (names || []).filter((n) => n && !known.has(norm(n))).slice(0, 12);
+    if (ask.length) {
+      try {
+        const q = ask.map((n) => `family=${encodeURIComponent(n)}`).join('&');
+        const body = await apiGet(`/api/fonts/lookup?${q}`, { quiet: true });
+        const got = (body && body.families) || {};
+        ask.forEach((n) => { if (got[n]) known.set(norm(n), got[n]); });
+      } catch { /* unknown stays unknown: no add button */ }
+    }
+    const out = {};
+    (names || []).forEach((n) => { if (known.has(norm(n))) out[n] = known.get(norm(n)); });
+    return out;
+  };
+
   // Keep the list current: the realtime channel when a page has the
   // socket, a slow re-read otherwise, and a re-read when the tab returns.
   try {
@@ -282,7 +301,7 @@ const DomovoiFontsModule = (() => {
   const api = {
     CATEGORIES, CATEGORY_LABELS, list, load, ready: () => load(), ensure, onChange, status,
     has: (n) => status(n) === 'installed', get: (n) => { const f = get(n); return f ? list().find((x) => x.slug === f.slug) : null; },
-    substituteFor, stack, firstFamily, familiesInHTML, missingInHTML, recent, markUsed, add, remove,
+    substituteFor, stack, firstFamily, familiesInHTML, missingInHTML, recent, markUsed, add, remove, lookup,
     isLoaded: () => loaded,
   };
   return api;
@@ -347,6 +366,7 @@ const DomovoiFontPickerUI = (() => {
     const [cat, setCat] = React.useState('all');
     const [adding, setAdding] = React.useState('');
     const [err, setErr] = React.useState('');
+    const [avail, setAvail] = React.useState({});
     const wrapRef = React.useRef(null);
     const searchRef = React.useRef(null);
 
@@ -359,6 +379,16 @@ const DomovoiFontPickerUI = (() => {
       setTimeout(() => { try { searchRef.current && searchRef.current.focus(); } catch { /* gone */ } }, 0);
       return () => { document.removeEventListener('mousedown', onDoc); document.removeEventListener('keydown', onKey); };
     }, [open]);
+
+    const missingKey = (documentFamilies || []).join('|');
+    React.useEffect(() => {
+      if (!open || !admin || net.off) return undefined;
+      let dead = false;
+      const names = (documentFamilies || []).concat(value ? [F.firstFamily(value)] : [])
+        .filter((n) => F.status(n) === 'missing' && !F.substituteFor(n));
+      if (names.length) F.lookup(names).then((got) => { if (!dead) setAvail(got); });
+      return () => { dead = true; };
+    }, [open, admin, net.off, missingKey, value]);
 
     const current = value ? F.firstFamily(value) : '';
     const currentStatus = current ? F.status(current) : 'generic';
@@ -427,19 +457,26 @@ const DomovoiFontPickerUI = (() => {
             </div>
             <div className="font-pick-list">
               {missing.length > 0 && <div className="font-pick-head">in this document, not installed</div>}
-              {missing.map((n) => (
-                <div key={`m-${n}`} className="font-pick-row missing">
-                  <span className="font-face-name">{n}</span>
-                  {F.substituteFor(n) ? <span className="font-pick-meta">shown in {F.substituteFor(n)}</span>
-                    : admin
-                      ? (net.off
-                        ? <NeedsInternetNote compact/>
-                        : <Button disabled={!!adding} onClick={() => addForHouse(n)}>
-                            {adding === n ? 'adding…' : 'add for the house'}
-                          </Button>)
-                      : <span className="font-pick-meta">not installed · an admin can add it</span>}
-                </div>
-              ))}
+              {missing.map((n) => {
+                const a = avail[n];
+                let side;
+                if (F.substituteFor(n)) side = <span className="font-pick-meta">shown in {F.substituteFor(n)}</span>;
+                else if (admin && net.off) side = <NeedsInternetNote compact/>;
+                else if (admin && a && a.available) {
+                  side = (
+                    <Button disabled={!!adding} onClick={() => addForHouse(a.family || n)}>
+                      {adding === (a.family || n) ? 'adding…' : 'add for the house'}
+                    </Button>
+                  );
+                } else if (admin && a) side = <span className="font-pick-meta">not in the free collection</span>;
+                else side = <span className="font-pick-meta">shown in a similar font</span>;
+                return (
+                  <div key={`m-${n}`} className="font-pick-row missing">
+                    <span className="font-face-name">{n}</span>
+                    {side}
+                  </div>
+                );
+              })}
               {err && <div className="font-pick-err" role="alert">{err}</div>}
               {recents.length > 0 && <div className="font-pick-head">recently used</div>}
               {recents.map((f) => row(f, `r-${f.slug}`))}
@@ -611,6 +648,12 @@ const DomovoiFontsSettings = (() => {
                   </span>
                 )}>
             {browsing && !net.off && <Catalogue/>}
+            {!browsing && !net.off && (
+              <div className="fonts-note">
+                About two thousand families. One you add is ready in documents and spreadsheets on every
+                device in the house, and works without internet from then on.
+              </div>
+            )}
             {net.off && <div className="fonts-note">{INTERNET_OFF_MESSAGE}: adding fonts needs it. The fonts already here keep working.</div>}
           </Card>
         )}

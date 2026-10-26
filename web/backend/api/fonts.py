@@ -37,6 +37,8 @@ font signature; the family at :data:`fonts_store.MAX_FAMILY_BYTES`.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import contextvars
 import json
 import logging
 import os
@@ -48,7 +50,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+import httpx
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import text
@@ -99,6 +102,29 @@ class FontsUnavailable(Exception):
 # ─── the network (one function, so tests can stand in for GitHub) ───────
 
 
+# One pooled client for a whole catalogue build or add (set by
+# :func:`_session`): two thousand reads over one set of kept-alive TLS
+# connections, rather than a handshake each.
+_session_client: contextvars.ContextVar[Any] = contextvars.ContextVar("fonts_http", default=None)
+
+
+@contextlib.asynccontextmanager
+async def _session():
+    if _session_client.get() is not None:
+        yield
+        return
+    async with egress.async_client(
+        timeout=HTTP_TIMEOUT_SEC, follow_redirects=True,
+        limits=httpx.Limits(max_connections=CATALOGUE_CONCURRENCY,
+                            max_keepalive_connections=CATALOGUE_CONCURRENCY),
+    ) as client:
+        token = _session_client.set(client)
+        try:
+            yield
+        finally:
+            _session_client.reset(token)
+
+
 async def _http_get(url: str, max_bytes: int, accept: str | None = None) -> tuple[int, bytes]:
     """(status, body) for a GET, read up to ``max_bytes`` (more is an
     error, not a truncation). Goes through the egress client: under
@@ -106,7 +132,8 @@ async def _http_get(url: str, max_bytes: int, accept: str | None = None) -> tupl
     headers = {"User-Agent": "Domovoi-fonts"}
     if accept:
         headers["Accept"] = accept
-    async with egress.async_client(timeout=HTTP_TIMEOUT_SEC, follow_redirects=True) as client:
+    async with _session():
+        client = _session_client.get()
         async with client.stream("GET", url, headers=headers) as r:
             if r.status_code != 200:
                 return r.status_code, b""
@@ -119,6 +146,24 @@ async def _http_get(url: str, max_bytes: int, accept: str | None = None) -> tupl
                 if len(buf) > max_bytes:
                     raise _TooLarge(len(buf))
             return 200, bytes(buf)
+
+
+class _QuietFontReads(logging.Filter):
+    """httpx logs every request at INFO; a catalogue build is two thousand
+    of them. Keep them out of the journal unless the operator runs at
+    DEBUG (the same rule main.py applies to the snapshot poll)."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if logging.getLogger().getEffectiveLevel() <= logging.DEBUG:
+            return True
+        try:
+            msg = record.getMessage()
+        except Exception:  # noqa: BLE001
+            return True
+        return "raw.githubusercontent.com/google/fonts/" not in msg
+
+
+logging.getLogger("httpx").addFilter(_QuietFontReads())
 
 
 class _TooLarge(Exception):
@@ -224,6 +269,11 @@ def _fresh(cat: dict[str, Any] | None) -> bool:
 
 
 async def build_catalogue() -> dict[str, Any]:
+    async with _session():
+        return await _build_catalogue()
+
+
+async def _build_catalogue() -> dict[str, Any]:
     """Read every family folder's METADATA.pb at the newest commit and keep
     the OFL and Apache ones. About two thousand small reads from
     raw.githubusercontent.com, 24 at a time: tens of seconds, once a week."""
@@ -412,6 +462,45 @@ async def catalogue(refresh: bool = False) -> dict[str, Any]:
     }
 
 
+LOOKUP_MAX = 12
+
+
+@router.get("/api/fonts/lookup", dependencies=ADMIN)
+async def lookup(family: list[str] = Query(default=[])) -> dict[str, Any]:
+    """Can these families be added? For the picker's "not installed" rows:
+    an admin is offered "add for the house" only for a family the
+    open-licence collection has (no button that can only fail). Answers
+    from the cached catalogue when there is one, else reads each family's
+    METADATA.pb (``ofl/`` then ``apache/``). ``{families: {<asked>:
+    {available, family?, licence?}}}``; at most 12 names a call."""
+    _refuse_if_offline("font lookup")
+    names = [n.strip() for n in family if n and n.strip()][:LOOKUP_MAX]
+    out: dict[str, Any] = {}
+    cat = _read_cached_catalogue()
+    try:
+        async with _session():
+            commit: str | None = None
+            for name in names:
+                hit = _find_in_catalogue(name) if cat else None
+                if hit is None and not cat:
+                    slug = fs.slugify(name)
+                    if fs.valid_slug(slug):
+                        commit = commit or await _latest_commit()
+                        for top in fs.ALLOWED_DIRS:
+                            meta = await _metadata(commit, f"{top}/{slug}")
+                            spdx = fs.ALLOWED_LICENCES.get((meta or {}).get("license", "").upper())
+                            if meta and spdx:
+                                hit = {"family": meta["name"], "licence": spdx}
+                                break
+                out[name] = ({"available": True, "family": hit["family"], "licence": hit["licence"]}
+                             if hit else {"available": False})
+    except FontsUnavailable:
+        raise _unavailable()
+    except egress.InternetTurnedOff:
+        raise egress.http_exception("font lookup")
+    return {"families": out}
+
+
 class FetchBody(BaseModel):
     family: str = Field(..., min_length=1, max_length=100)
 
@@ -458,7 +547,7 @@ async def fetch_family(body: FetchBody) -> dict[str, Any]:
     slug_guess = fs.slugify(family)
     if slug_guess in fs.bundled_slugs(_manifest()) or family.lower() in fs.bundled_names(_manifest()):
         raise HTTPException(status_code=409, detail=f"{family} already comes with Domovoi.")
-    async with _add_lock:
+    async with _add_lock, _session():
         try:
             cat = _read_cached_catalogue()
             commit = cat["commit"] if cat else await _latest_commit()

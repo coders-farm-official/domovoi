@@ -309,6 +309,7 @@ async def test_the_list_is_a_household_read(auth, no_rows, github):
     ("GET", "/api/fonts/catalogue", None),
     ("POST", "/api/fonts/fetch", {"family": "Gloock"}),
     ("DELETE", "/api/fonts/gloock", None),
+    ("GET", "/api/fonts/lookup?family=Gloock", None),
 ])
 async def test_catalogue_fetch_and_remove_are_admin_bearer_only(auth, no_rows, github, method, path, body):
     async with web_client() as c:
@@ -388,6 +389,25 @@ async def test_the_catalogue_lists_only_ofl_and_apache(auth, no_rows, github):
     assert got["Kosugi"]["licence"] == "Apache-2.0" and got["Gloock"]["category"] == "serif"
     assert not any("/ufl/" in u for u in github.asked), "the ufl/ folder was read"
     assert (Path(core_settings.fonts_dir) / "catalogue.json").is_file()
+
+
+async def test_lookup_says_which_missing_families_can_be_added(auth, no_rows, github):
+    github.family("ofl", "gloock", _meta("Gloock"), None, {})
+    github.family("ufl", "ubuntu", _meta("Ubuntu", licence="UFL"), None, {})
+    async with web_client() as c:
+        device = await c.get("/api/fonts/lookup?family=Gloock", headers={HEADER: DEVICE})
+        r = await c.get("/api/fonts/lookup?family=Gloock&family=Comic%20Sans%20MS&family=Ubuntu",
+                        headers=bearer(ADMIN))
+        with egress.override_policy("never"):
+            off = await c.get("/api/fonts/lookup?family=Gloock", headers=bearer(ADMIN))
+    assert device.status_code in (401, 403) and off.status_code == 409
+    assert r.status_code == 200, r.text
+    assert r.json()["families"] == {
+        "Gloock": {"available": True, "family": "Gloock", "licence": "OFL-1.1"},
+        "Comic Sans MS": {"available": False},
+        "Ubuntu": {"available": False},
+    }
+    assert not any("/ufl/" in u for u in github.asked)
 
 
 async def test_github_down_is_a_plain_error(auth, no_rows, github, monkeypatch):
