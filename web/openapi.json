@@ -4618,6 +4618,28 @@
         }
       }
     },
+    "/api/satellites/battery-warnings": {
+      "get": {
+        "tags": [
+          "satellites"
+        ],
+        "summary": "List Battery Warnings",
+        "description": "The open low-battery warnings of the phone rooms whose \"Notify when\nthe battery is low\" is on, oldest first: what the phones' notification\nand the dashboard's notice say (\"Pako is at 15%. Plug it in.\"). A\nwarning closes when its room goes on its charger. Household tier, like\nthe room list it summarises. Empty when V040 is missing.",
+        "operationId": "list_battery_warnings_api_satellites_battery_warnings_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoomBatteryWarnings"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/satellites/pending": {
       "get": {
         "tags": [
@@ -5666,6 +5688,103 @@
           },
           "503": {
             "description": "V018 not applied"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/satellites/{room_id}/battery-alerts": {
+      "get": {
+        "tags": [
+          "satellites"
+        ],
+        "summary": "Get Battery Alerts",
+        "description": "A phone room's \"Say when the battery is low\" (``say``) and \"Notify\nwhen the battery is low\" (``notify``), both on by default. Household\ntier, like the room's row. 404 for a room this server has never known;\nboth read as on when V040 is missing.",
+        "operationId": "get_battery_alerts_api_satellites__room_id__battery_alerts_get",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Room Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoomBatteryAlerts"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "satellites"
+        ],
+        "summary": "Set Battery Alerts",
+        "description": "Turn a room's \"Say when the battery is low\" and/or \"Notify when the\nbattery is low\" on or off. Written straight to the shared database; the\ncore reads both at each warning, so it counts at once (no restart), and\nthe notice and the phones' notification follow ``notify`` at once too.\nWorks for an offline room. 404 unknown room, 422 bad id or body, 503\nwhen V040 is missing.",
+        "operationId": "set_battery_alerts_api_satellites__room_id__battery_alerts_put",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Room Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RoomBatteryAlertsUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoomBatteryAlerts"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "V040 not applied"
           },
           "422": {
             "description": "Validation Error",
@@ -22346,6 +22465,186 @@
         "type": "object",
         "title": "ReportBody"
       },
+      "RoomBattery": {
+        "properties": {
+          "percent": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Percent"
+          },
+          "charging": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Charging"
+          },
+          "on_power": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "On Power"
+          },
+          "reported_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reported At"
+          },
+          "low": {
+            "type": "boolean",
+            "title": "Low",
+            "default": false
+          },
+          "probably_out": {
+            "type": "boolean",
+            "title": "Probably Out",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "RoomBattery",
+        "description": "A phone room's last battery report and what the dashboard makes of\nit. ``low``: a low-battery warning is open and the room's \"Notify when\nthe battery is low\" is on. ``probably_out``: the room is offline and its\nlast report was at 5 % or less, off its charger."
+      },
+      "RoomBatteryAlerts": {
+        "properties": {
+          "room_id": {
+            "type": "string",
+            "title": "Room Id"
+          },
+          "say": {
+            "type": "boolean",
+            "title": "Say",
+            "default": true
+          },
+          "notify": {
+            "type": "boolean",
+            "title": "Notify",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "room_id"
+        ],
+        "title": "RoomBatteryAlerts",
+        "description": "A phone room's two switches. ``say``: \"Say when the battery is low\"\n(the room says it out loud). ``notify``: \"Notify when the battery is\nlow\" (the dashboard's notice and the phones' notification). Both on by\ndefault."
+      },
+      "RoomBatteryAlertsUpdate": {
+        "properties": {
+          "say": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Say"
+          },
+          "notify": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notify"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "RoomBatteryAlertsUpdate",
+        "description": "``PUT /api/satellites/{room_id}/battery-alerts`` body: either or both."
+      },
+      "RoomBatteryWarning": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "room_id": {
+            "type": "string",
+            "title": "Room Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "threshold": {
+            "type": "integer",
+            "title": "Threshold"
+          },
+          "percent": {
+            "type": "integer",
+            "title": "Percent"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "room_id",
+          "name",
+          "threshold",
+          "percent",
+          "text"
+        ],
+        "title": "RoomBatteryWarning",
+        "description": "An open low-battery warning: what the phones' notification says."
+      },
+      "RoomBatteryWarnings": {
+        "properties": {
+          "warnings": {
+            "items": {
+              "$ref": "#/components/schemas/RoomBatteryWarning"
+            },
+            "type": "array",
+            "title": "Warnings"
+          }
+        },
+        "type": "object",
+        "title": "RoomBatteryWarnings"
+      },
       "RoomBody": {
         "properties": {
           "room_id": {
@@ -22885,6 +23184,16 @@
               }
             ],
             "title": "Wake Phrase"
+          },
+          "battery": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RoomBattery"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",

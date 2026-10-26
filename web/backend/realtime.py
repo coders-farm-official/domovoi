@@ -54,6 +54,13 @@ Channels emitted (core; enabled plugins add their own via manifest
   the words are household-tier HTTP reads (web/backend/api/lyrics.py); this
   only tells the Jobs card and a player that is still "looking for
   lyrics…" to read again
+* ``room_battery`` — the phone rooms' batteries (V040,
+  domovoi/room_battery.py): ``warnings``, the open low-battery warnings
+  (``{id, room_id, name, threshold, percent, text, created_at}``, oldest
+  first) of the rooms whose "Notify when the battery is low" is on, and
+  ``rooms``, each phone room's last report (``{room_id, percent, charging,
+  on_power}``); fires when a level, a warning or a room's switch changes.
+  The phones' notification and the room cards ride it
 
 Snapshot diffs are coarse: we emit the full new value rather than a
 field-level patch. The frontend rerenders on receipt; payloads are
@@ -197,6 +204,11 @@ NOTIFY_CHANNEL_TO_REALTIME: dict[str, str] = {
     # domovoi/help_desk/delivery.py). The app's notification rides the
     # resulting `help_deliveries.changed` event.
     "help_deliveries_changed": "help_deliveries",
+    # A phone room's battery (V040, domovoi/room_battery.py): a new report
+    # the core kept, a low-battery warning opening or closing, a room's
+    # switches changing. The app's notification and the dashboard's room
+    # list ride the resulting `room_battery.changed` event.
+    "room_battery_changed": "room_battery",
 }
 
 # Plugin NOTIFY → realtime channel entries, replaced wholesale on every
@@ -990,6 +1002,30 @@ async def _snapshot_help_deliveries() -> list[dict[str, Any]]:
     ]
 
 
+async def _snapshot_room_battery() -> dict[str, Any]:
+    """``room_battery.changed``: the open low-battery warnings to show,
+    oldest first (``warnings``, what the phones' notification says), and
+    each phone room's last report (``rooms``: ``{room_id, percent,
+    charging, on_power}``) so a room card follows its level. Empty lists
+    when V040 is missing."""
+    from domovoi import room_battery
+
+    try:
+        async with session_scope() as s:
+            rows = await room_battery.open_warnings(s, notify_only=True)
+            reports = await room_battery.last_reports(s)
+    except Exception:  # noqa: BLE001 — table missing (run Flyway, V040)
+        return {"warnings": [], "rooms": []}
+    return {
+        "warnings": [room_battery.warning_json(r) for r in rows],
+        "rooms": [
+            {"room_id": room, "percent": rep["percent"], "charging": rep["charging"],
+             "on_power": rep["on_power"]}
+            for room, rep in sorted(reports.items())
+        ],
+    }
+
+
 # Bind the snapshot helpers to the StatePollLoop so emit_for_channel
 # can resolve them by channel name. Done outside the class body
 # because the helpers themselves are defined further down in the
@@ -1024,6 +1060,8 @@ StatePollLoop._CHANNEL_HELPERS = {
     "containers": _snapshot_containers,
     # Help steps sent by voice to a person's phones (V035).
     "help_deliveries": _snapshot_help_deliveries,
+    # Phone rooms' open low-battery warnings (V040).
+    "room_battery": _snapshot_room_battery,
     # The filesystem libraries (Videos, Pictures, Documents, any Files
     # library): their change counts (listing_cache), pushed as
     # `files.changed` so a page on screen shows an upload, a delete or a

@@ -89,6 +89,40 @@ const remainingFromExpiresAt = (iso) => {
  * every card of a frozen core read "offline · 19d ago" (incident 2026-10-14). */
 const satLastSeen = (s) => s.last_seen_at || s.last_connected_at || null;
 
+/* ---- A phone room's battery (V040, domovoi/room_battery.py) ---------
+ * `s.battery` = {percent, charging, on_power, reported_at, low,
+ * probably_out} on a phone room once it has reported; null on every other
+ * room (a Pi has no battery, a laptop's stays on its Health card). Kept
+ * after the room goes offline: the card shows the last level, muted. */
+const satRoomBatteryIcon = (b) => (b.charging ? 'battery-charging'
+  : b.percent == null ? 'battery'
+  : b.percent <= 20 ? 'battery-low'
+  : b.percent <= 60 ? 'battery-medium' : 'battery-full');
+const satRoomBatteryTone = (b, online) => (!online ? 'idle'
+  : (b.charging || b.on_power) ? 'ok'
+  : b.percent != null && b.percent <= 10 ? 'err'
+  : b.percent != null && b.percent <= 20 ? 'warn' : 'idle');
+const satRoomBatteryWords = (b) => {
+  const pct = b.percent == null ? '—' : `${Math.round(b.percent)}%`;
+  return b.charging ? `${pct} · charging` : b.on_power ? `${pct} · on the charger` : pct;
+};
+const SatRoomBattery = ({ s, online }) => {
+  const b = s && s.battery;
+  if (!b) return null;
+  const tone = satRoomBatteryTone(b, online);
+  const color = tone === 'idle' ? 'var(--fg-muted)' : `var(--${tone}-ink, var(--${tone}))`;
+  const title = online
+    ? (b.charging ? 'battery · charging' : b.on_power ? 'battery · on its charger' : 'battery · not on its charger')
+    : 'battery · the last level it reported';
+  return (
+    <span className="sat-battery" data-tone={tone} title={title}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color, whiteSpace: 'nowrap' }}>
+      <Icon name={satRoomBatteryIcon(b)} size={13}/>
+      <span className="mono" style={{ fontSize: 12 }}>{satRoomBatteryWords(b)}</span>
+    </span>
+  );
+};
+
 /* ---- Satellite card --------------------------------------- */
 /* `coreDown`: the server's core isn't answering (/api/health), so nothing
  * here is live: no room can connect, and "offline" would say the
@@ -186,9 +220,11 @@ const SatCard = ({ s, onOpen, tick, coreDown = false }) => {
             <span className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)', whiteSpace: 'nowrap' }}>· {wText.sub}</span>
           )}
         </div>
+        <SatRoomBattery s={s} online={online}/>
         <span style={{ flex: 1 }}/>
         <span className="mono sat-card-seen" style={{ fontSize: 11, color: online ? 'var(--ok-ink)' : 'var(--fg-faint)' }}>
-          {online ? 'active now' : satLastSeen(s) ? `last heard ${relTime(satLastSeen(s))}` : 'never heard'}
+          {online ? 'active now'
+            : `${s.battery && s.battery.probably_out && !coreDown ? 'probably out of battery · ' : ''}${satLastSeen(s) ? `last heard ${relTime(satLastSeen(s))}` : 'never heard'}`}
         </span>
       </div>
     </button>
@@ -300,12 +336,13 @@ const satBattery = (s) => {
   const b = s && s.battery;
   if (!b) return null;
   const onCharger = b.charging ? true : b.on_power == null ? null : !!b.on_power;
-  return { percent: b.percent == null ? null : b.percent, onCharger, charging: !!b.charging };
+  return { percent: b.percent == null ? null : b.percent, onCharger, charging: !!b.charging,
+           plugged: typeof b.plugged === 'string' ? b.plugged : null };
 };
 const satBatteryView = (b) => {
   const pct = b.percent;
   const value = pct == null ? '—' : `${Math.round(pct)}%`;
-  const plugged = b.charging ? 'charging' : 'on the charger';
+  const plugged = (b.charging ? 'charging' : 'on the charger') + (b.plugged ? ` (${b.plugged})` : '');
   const sub = b.onCharger === true
     ? (pct != null && pct >= 98 ? `${plugged} · set a charge limit if it stays here for weeks` : plugged)
     : b.onCharger === false ? 'on battery' : 'power unknown';
@@ -1787,6 +1824,60 @@ const SatelliteSettingNeedsUpgrade = ({ f }) => (
   </div>
 );
 
+/* ---- A phone room's battery switches (V040) ------------------------
+ * Kept on the server (PUT /api/satellites/{room}/battery-alerts, household
+ * tier), so they work while the phone is offline and count at the next
+ * warning, no restart. Phone rooms only. */
+const SAT_BATTERY_SWITCHES = [
+  { key: 'say', label: 'Say when the battery is low',
+    help: 'At 20% and again at 10%, when it is not on its charger, this room says so out loud. Never between 10 pm and 7 am.' },
+  { key: 'notify', label: 'Notify when the battery is low',
+    help: 'At the same times, Home shows a notice and the Domovoi app on your phones sends a notification.' },
+];
+const RoomBatterySettings = ({ room, fire }) => {
+  const path = `/api/satellites/${encodeURIComponent(room)}/battery-alerts`;
+  const { data, error, refresh } = useApiObject(path, { quiet: true });
+  const [busy, setBusy] = React.useState(null);
+  const [justSet, setJustSet] = React.useState({});
+  // What the last change here set, until the read agrees.
+  React.useEffect(() => { setJustSet({}); }, [room, data && data.say, data && data.notify]);
+  const value = (k) => (k in justSet ? justSet[k] : !!(data ? data[k] : true));
+
+  const onChange = (key) => async (e) => {
+    if (busy) return;
+    const next = !!(e && e.target && e.target.checked);
+    setBusy(key);
+    try {
+      const res = await apiFetch(path, { method: 'PUT', body: JSON.stringify({ [key]: next }) });
+      setJustSet((p) => ({ ...p, [key]: res && key in res ? !!res[key] : next }));
+      fire(key === 'say'
+        ? (next ? `${room} will say when its battery is low` : `${room} won't say when its battery is low`)
+        : (next ? `you'll be told when ${room}'s battery is low` : `no more low-battery notices for ${room}`));
+      refresh && refresh();
+    } catch (err) {
+      reportMutationFailure(fire, 'change the battery setting', err);
+    } finally { setBusy(null); }
+  };
+
+  return (
+    <div className="sat-battery-settings" style={{ padding: '12px 16px', borderBottom: '1px solid var(--border-soft)' }}>
+      <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--fg-muted)', fontWeight: 600, marginBottom: 6 }}>battery</div>
+      {error && !data && <div style={{ fontSize: 12, color: 'var(--fg-muted)', marginBottom: 6 }}>couldn’t read these settings: {error}</div>}
+      {SAT_BATTERY_SWITCHES.map((sw) => (
+        <div key={sw.key} style={{ padding: '6px 0' }}>
+          <label className="sat-timer-scope" style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13,
+                          cursor: busy ? 'default' : 'pointer' }}>
+            <input type="checkbox" checked={value(sw.key)} disabled={!!busy || (!data && !error)}
+                   onChange={onChange(sw.key)}/>
+            {sw.label}
+          </label>
+          <div className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)', marginTop: 4 }}>{sw.help}</div>
+        </div>
+      ))}
+    </div>
+  );
+};
+
 // Per-satellite config editor. Reuses the global ConfigField + _groupBy
 // from components.jsx (same field UI as the server gear). Saving
 // pushes edits to the Pi, which rewrites config.toml and restarts.
@@ -2024,6 +2115,10 @@ const SatDrawer = ({ s, sats, onClose, fire, refresh }) => {
           <StatusDot tone={s.status === 'online' ? 'ok' : 'idle'} live={s.status === 'online'}/>
           <div style={{ fontSize: 18, fontWeight: 600, letterSpacing: '-0.01em' }}>{s.room_id}</div>
           <Pill tone={s.status === 'online' ? 'live' : 'idle'} live={s.status === 'online'}>{s.status}</Pill>
+          <SatRoomBattery s={s} online={s.status === 'online'}/>
+          {s.status !== 'online' && s.battery && s.battery.probably_out && (
+            <span style={{ fontSize: 12, color: 'var(--fg-muted)' }}>probably out of battery</span>
+          )}
           <div style={{ marginLeft: 'auto' }}><IconButton name="x" onClick={onClose}/></div>
         </div>
         <Tabs tabs={tabs} value={tab} onChange={setTab} padX={16}/>
@@ -2036,10 +2131,15 @@ const SatDrawer = ({ s, sats, onClose, fire, refresh }) => {
           {tab === 'notes'         && <RoomNotesBody room={s.room_id}/>}
           {tab === 'timers'        && <RoomTimersBody room={s.room_id} fire={fire}/>}
           {tab === 'logs'          && <RoomLogsBody room={s.room_id} online={s.status === 'online'}/>}
+          {tab === 'settings'      && s.board === 'android_room' && <RoomBatterySettings room={s.room_id} fire={fire}/>}
           {tab === 'settings'      && (satCan(s, 'config')
             ? <RoomSettingsBody room={s.room_id} fire={fire}/>
-            : <Empty glyph="sleeping" title="settings stay on the device"
-                     sub={`${satBoardLabel(s) ? `this ${satBoardLabel(s)}` : 'this device'} didn't offer remote settings — change them on the device itself`}/>)}
+            : s.board === 'android_room'
+              ? <div style={{ padding: '12px 16px', fontSize: 12, color: 'var(--fg-muted)' }}>
+                  The phone’s other settings stay on the phone itself.
+                </div>
+              : <Empty glyph="sleeping" title="settings stay on the device"
+                       sub={`${satBoardLabel(s) ? `this ${satBoardLabel(s)}` : 'this device'} didn't offer remote settings — change them on the device itself`}/>)}
         </div>
       </aside>
     </>
@@ -2916,6 +3016,7 @@ const SparePhone = ({ res }) => {
   return (
     <div className="spare-phone" style={{ flex: '0 1 260px', minWidth: 216, display: 'flex', flexDirection: 'column', gap: 8 }}>
       <div className="label">phone or tablet (android 8 or newer)</div>
+      <div className="spare-phone-charger" style={muted}>Keep the phone on its charger: rooms are always on.</div>
       {ready ? (
         <>
           <div className="spare-phone-qr"><SpareQr text={code}/></div>
@@ -3314,7 +3415,7 @@ const SatellitesPage = ({ embedded = false } = {}) => {
   const [fire, toastNode] = useToast();
 
   const { items: sats, loading, refresh } = useApiList('/api/satellites', {
-    eventTypes: ['satellites.presence.changed', 'satellites.wifi.changed', 'satellites.dropins.changed', 'satellites.display.changed', 'satellites.pending.changed', 'music.now_playing.changed'],
+    eventTypes: ['satellites.presence.changed', 'satellites.wifi.changed', 'satellites.dropins.changed', 'satellites.display.changed', 'satellites.pending.changed', 'music.now_playing.changed', 'room_battery.changed'],
   });
   // Whether the server's core answers (the web's /api/health pings it):
   // while it doesn't, no satellite can connect, and the page says that

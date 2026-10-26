@@ -243,9 +243,32 @@ const healthChecks = ({ viewer, health, rooms, plugins, pluginErrors, acq,
             (xs) => xs.filter((s) => s.status === 'offline'),
             (off) => (off.length === 1
               ? { tone: 'warn', at: off[0].last_connected_at,
-                  text: `${off[0].room_id} is offline · it can't hear anyone right now` }
-              : { tone: 'warn', text: `${off.length} rooms offline` }),
+                  text: off[0].battery && off[0].battery.probably_out
+                    ? `${off[0].room_id} is offline · probably out of battery`
+                    : `${off[0].room_id} is offline · it can't hear anyone right now` }
+              : { tone: 'warn',
+                  text: off.every((s) => s.battery && s.battery.probably_out)
+                    ? `${off.length} rooms offline · probably out of battery`
+                    : `${off.length} rooms offline` }),
             'none');
+  // A phone room's battery (V040): only when the house has one, so a house
+  // of Pis never sees a "battery" row. `low` is the server's: a warning at
+  // 20 % or 10 % is open, the phone isn't on its charger and the room's
+  // "Notify when the battery is low" is on.
+  if (list && list.some((s) => s.board === 'android_room')) {
+    roomCheck({ key: 'battery', part: 'rooms', label: 'battery', scope: 'open', order: 4,
+                fix: '#settings/rooms', fixLabel: 'rooms' },
+              (xs) => xs.filter((s) => s.status === 'online' && s.battery && s.battery.low),
+              (low) => {
+                const pct = (s) => (s.battery.percent == null ? '' : ` (${Math.round(s.battery.percent)}%)`);
+                const worst = low.some((s) => s.battery.percent != null && s.battery.percent <= 10);
+                return { tone: worst ? 'err' : 'warn',
+                         text: low.length === 1
+                           ? `${low[0].room_id}'s battery is low${pct(low[0])} · plug it in`
+                           : `${low.length} rooms' batteries are low · plug them in` };
+              },
+              'no phone room is low');
+  }
   roomCheck({ key: 'waiting', part: 'rooms', label: 'set up, not connected yet', scope: 'open', order: 6,
               fix: '#settings/rooms', fixLabel: 'rooms' },
             (xs) => xs.filter((s) => s.status === 'waiting'),
@@ -415,7 +438,7 @@ const healthAudience = ({ viewer, visibility, shared }) => {
 
 const HEALTH_QUIET = { quiet: true };
 const HEALTH_ROOM_EVENTS = [
-  'satellites.presence.changed', 'satellites.display.changed', 'satellites.pending.changed',
+  'satellites.presence.changed', 'satellites.display.changed', 'satellites.pending.changed', 'room_battery.changed',
 ];
 
 const HealthRow = ({ c }) => {

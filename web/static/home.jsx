@@ -59,7 +59,7 @@ const HOME_MANUAL_MS = 30 * 60 * 1000;     // the manual's words hardly change
 const HOME_SOON_SEC = 600;                 // countdowns turn warn under 10 min
 const HOME_ROOM_EVENTS = [
   'satellites.presence.changed', 'satellites.wifi.changed', 'satellites.dropins.changed',
-  'satellites.display.changed', 'satellites.pending.changed', 'music.now_playing.changed',
+  'satellites.display.changed', 'satellites.pending.changed', 'music.now_playing.changed', 'room_battery.changed',
 ];
 const HOME_WEEKDAYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
 const HOME_MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
