@@ -17,16 +17,20 @@
        the dashboard. -->
   <script>
   (function () {
-    var b = window.DomovoiAppBridge;
+    // DomovoiAppBridge: SheetWebEditor.kt. DomovoiApp: the documents
+    // editor's host (WebDocEditor.kt, wf/doc-editor), which may end up
+    // hosting this page too; it has deviceToken() and close() only.
+    var b = window.DomovoiAppBridge || window.DomovoiApp;
     if (!b) return;
+    window.DomovoiSheetHost = b;
     try {
-      var token = b.deviceToken();
+      var token = b.deviceToken && b.deviceToken();
       if (token) localStorage.setItem('domovoi-device-token', token);
-      var id = b.deviceId();
+      var id = b.deviceId && b.deviceId();
       if (id) localStorage.setItem('domovoi-client-id', id);
       // Same origin as the server the app is on: never a remembered other one.
       localStorage.removeItem('domovoi-server');
-      document.documentElement.setAttribute('data-theme', b.darkTheme() ? 'dark' : 'light');
+      if (b.darkTheme) document.documentElement.setAttribute('data-theme', b.darkTheme() ? 'dark' : 'light');
     } catch (e) { /* the page still opens; a save will say what is missing */ }
   })();
   </script>
@@ -57,7 +61,7 @@
         try { return m ? decodeURIComponent(m[1]) : ''; } catch (e) { return ''; }
       };
       const close = () => {
-        const b = window.DomovoiAppBridge;
+        const b = window.DomovoiSheetHost;
         if (b && b.close) b.close();
         else window.history.back();
       };
@@ -67,7 +71,7 @@
         return (
           <React.Fragment>
             {path
-              ? <window.SheetEditor rel_path={path} onClose={close} fire={fire} inApp={!!window.DomovoiAppBridge}/>
+              ? <window.SheetEditor rel_path={path} onClose={close} fire={fire} inApp={!!window.DomovoiSheetHost}/>
               : <div style={{ padding: 24, color: 'var(--fg-muted)', fontSize: 13 }}>No sheet was named.</div>}
             {toastNode}
           </React.Fragment>
