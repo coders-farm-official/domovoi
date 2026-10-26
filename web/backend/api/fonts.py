@@ -30,8 +30,12 @@ and serving fonts never needs the internet.
 **Files.** An added family's files are stored as fetched, unchanged (no
 subsetting or conversion: browsers read TrueType and OpenType directly,
 and an unchanged file keeps any Reserved Font Name usable). Each file is
-capped at :data:`fonts_store.MAX_FILE_BYTES` and must start with a real
-font signature; the family at :data:`fonts_store.MAX_FAMILY_BYTES`.
+capped at :data:`fonts_store.MAX_FILE_BYTES` and must be a font whose
+structure holds together (:func:`fonts_store.sniff_font`: signature, table
+directory, WOFF2 length); the family at :data:`fonts_store.MAX_FAMILY_BYTES`;
+the house at :data:`fonts_store.MAX_ADDED_FAMILIES` families and
+:data:`fonts_store.MAX_ADDED_BYTES`. No redirect is followed, and an add and
+a catalogue build each have a total deadline.
 """
 
 from __future__ import annotations
@@ -51,7 +55,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import text
@@ -79,6 +83,13 @@ CATALOGUE_CONCURRENCY = 24
 METADATA_MAX_BYTES = 512 * 1024
 LICENCE_MAX_BYTES = 256 * 1024
 TREE_MAX_BYTES = 8 * 1024 * 1024
+#: Whole-job deadlines, so a server that trickles bytes can't hold the add
+#: lock (or a catalogue build) for ever: each read has HTTP_TIMEOUT_SEC
+#: between bytes, these bound the total.
+ADD_DEADLINE_SEC = 180.0
+CATALOGUE_DEADLINE_SEC = 240.0
+#: ``?refresh=true`` rebuilds the catalogue at most this often.
+REFRESH_MIN_SEC = 600.0
 HTTP_TIMEOUT_SEC = 30.0
 FILE_CACHE_CONTROL = "public, max-age=86400"
 NOTIFY_CHANNEL = "fonts_changed"
@@ -114,7 +125,10 @@ async def _session():
         yield
         return
     async with egress.async_client(
-        timeout=HTTP_TIMEOUT_SEC, follow_redirects=True,
+        # No redirects: the reads are pinned URLs on two GitHub hosts, and a
+        # redirect could point anywhere, a machine in the house included.
+        # A 3xx is an answer we don't use (FontsUnavailable).
+        timeout=HTTP_TIMEOUT_SEC, follow_redirects=False,
         limits=httpx.Limits(max_connections=CATALOGUE_CONCURRENCY,
                             max_keepalive_connections=CATALOGUE_CONCURRENCY),
     ) as client:
@@ -322,13 +336,18 @@ async def _build_catalogue() -> dict[str, Any]:
 
 async def _catalogue(refresh: bool = False) -> dict[str, Any]:
     cat = _read_cached_catalogue()
+    if refresh and cat and time.time() - float(cat.get("built_at", 0)) < REFRESH_MIN_SEC:
+        refresh = False  # rebuilt moments ago: two thousand reads again buy nothing
     if _fresh(cat) and not refresh:
         return cat  # type: ignore[return-value]
     async with _catalogue_lock:
         cat = _read_cached_catalogue()
         if _fresh(cat) and not refresh:
             return cat  # type: ignore[return-value]
-        return await build_catalogue()
+        try:
+            return await asyncio.wait_for(build_catalogue(), CATALOGUE_DEADLINE_SEC)
+        except asyncio.TimeoutError as e:
+            raise FontsUnavailable("catalogue deadline") from e
 
 
 # ─── the bundled set and the added rows ─────────────────────────────────
@@ -450,7 +469,7 @@ async def catalogue(refresh: bool = False) -> dict[str, Any]:
     _refuse_if_offline("font catalogue")
     try:
         cat = await _catalogue(refresh=refresh)
-    except FontsUnavailable:
+    except (FontsUnavailable, _TooLarge):
         raise _unavailable()
     except egress.InternetTurnedOff:
         raise egress.http_exception("font catalogue")
@@ -460,45 +479,6 @@ async def catalogue(refresh: bool = False) -> dict[str, Any]:
         "built_at": datetime.fromtimestamp(float(cat["built_at"]), timezone.utc).isoformat(),
         "families": [{**f, "installed": f["slug"] in have} for f in cat["families"]],
     }
-
-
-LOOKUP_MAX = 12
-
-
-@router.get("/api/fonts/lookup", dependencies=ADMIN)
-async def lookup(family: list[str] = Query(default=[])) -> dict[str, Any]:
-    """Can these families be added? For the picker's "not installed" rows:
-    an admin is offered "add for the house" only for a family the
-    open-licence collection has (no button that can only fail). Answers
-    from the cached catalogue when there is one, else reads each family's
-    METADATA.pb (``ofl/`` then ``apache/``). ``{families: {<asked>:
-    {available, family?, licence?}}}``; at most 12 names a call."""
-    _refuse_if_offline("font lookup")
-    names = [n.strip() for n in family if n and n.strip()][:LOOKUP_MAX]
-    out: dict[str, Any] = {}
-    cat = _read_cached_catalogue()
-    try:
-        async with _session():
-            commit: str | None = None
-            for name in names:
-                hit = _find_in_catalogue(name) if cat else None
-                if hit is None and not cat:
-                    slug = fs.slugify(name)
-                    if fs.valid_slug(slug):
-                        commit = commit or await _latest_commit()
-                        for top in fs.ALLOWED_DIRS:
-                            meta = await _metadata(commit, f"{top}/{slug}")
-                            spdx = fs.ALLOWED_LICENCES.get((meta or {}).get("license", "").upper())
-                            if meta and spdx:
-                                hit = {"family": meta["name"], "licence": spdx}
-                                break
-                out[name] = ({"available": True, "family": hit["family"], "licence": hit["licence"]}
-                             if hit else {"available": False})
-    except FontsUnavailable:
-        raise _unavailable()
-    except egress.InternetTurnedOff:
-        raise egress.http_exception("font lookup")
-    return {"families": out}
 
 
 class FetchBody(BaseModel):
@@ -538,38 +518,78 @@ async def _locate(family: str, commit: str) -> tuple[str, dict[str, Any]]:
     raise HTTPException(status_code=404, detail="There's no font family by that name in the open-licence collection.")
 
 
+def sweep_staging() -> int:
+    """Remove ``.adding-*`` folders an add left behind (a crash or a
+    restart mid-download). Run at start-up and before each add, under the
+    add lock, when no add can be running. Returns how many went."""
+    root = fs.fonts_dir()
+    gone = 0
+    try:
+        for p in root.iterdir():
+            if p.is_dir() and p.name.startswith(".adding-"):
+                shutil.rmtree(p, ignore_errors=True)
+                gone += 1
+    except OSError:
+        return gone
+    return gone
+
+
 @router.post("/api/fonts/fetch", dependencies=ADMIN)
 async def fetch_family(body: FetchBody) -> dict[str, Any]:
     """Add one family for the whole house: check its licence, download its
-    files, store them with the licence file, record it."""
+    files, store them with the licence file, record it. One add at a time,
+    within :data:`ADD_DEADLINE_SEC`, and only while the house is under its
+    caps (:data:`fonts_store.MAX_ADDED_FAMILIES` families,
+    :data:`fonts_store.MAX_ADDED_BYTES` in all)."""
     family = body.family.strip()
     _refuse_if_offline("font download")
     slug_guess = fs.slugify(family)
     if slug_guess in fs.bundled_slugs(_manifest()) or family.lower() in fs.bundled_names(_manifest()):
         raise HTTPException(status_code=409, detail=f"{family} already comes with Domovoi.")
     async with _add_lock, _session():
+        sweep_staging()
         try:
-            cat = _read_cached_catalogue()
-            commit = cat["commit"] if cat else await _latest_commit()
-            path, meta = await _locate(family, commit)
-            slug = path.split("/", 1)[1]
-            if slug in fs.bundled_slugs(_manifest()):
-                raise HTTPException(status_code=409, detail=f"{meta['name']} already comes with Domovoi.")
-            existing = {r["slug"]: r for r in await _added_rows()}
-            if slug in existing:
-                return {"added": False, "family": _added_entry(existing[slug])}
-            entry = await _download(commit, path, meta)
+            result = await asyncio.wait_for(_add(family), ADD_DEADLINE_SEC)
+        except asyncio.TimeoutError:
+            raise HTTPException(status_code=504, detail="Adding that font took too long. Try again later.")
         except FontsUnavailable:
             raise _unavailable()
         except egress.InternetTurnedOff:
             raise egress.http_exception("font download")
         except _TooLarge:
             raise HTTPException(status_code=422, detail="That font family is too large to add.")
-    await _notify(entry["slug"])
+    if result["added"]:
+        await _notify(result["family"]["slug"])
+    return result
+
+
+async def _add(family: str) -> dict[str, Any]:
+    cat = _read_cached_catalogue()
+    commit = cat["commit"] if cat else await _latest_commit()
+    path, meta = await _locate(family, commit)
+    slug = path.split("/", 1)[1]
+    if slug in fs.bundled_slugs(_manifest()):
+        raise HTTPException(status_code=409, detail=f"{meta['name']} already comes with Domovoi.")
+    rows = await _added_rows()
+    existing = {r["slug"]: r for r in rows}
+    if slug in existing:
+        return {"added": False, "family": _added_entry(existing[slug])}
+    if len(rows) >= fs.MAX_ADDED_FAMILIES:
+        raise HTTPException(status_code=409, detail=(
+            f"This house already has {fs.MAX_ADDED_FAMILIES} added font families. "
+            "Remove one in Settings → Documents → Fonts first."))
+    used = sum(int(r.get("bytes") or 0) for r in rows)
+    room = fs.MAX_ADDED_BYTES - used
+    if room <= 0:
+        raise HTTPException(status_code=409, detail=(
+            "The fonts added for this house already take all the space allowed for them. "
+            "Remove one in Settings → Documents → Fonts first."))
+    entry = await _download(commit, path, meta, budget=min(fs.MAX_FAMILY_BYTES, room))
     return {"added": True, "family": entry}
 
 
-async def _download(commit: str, path: str, meta: dict[str, Any]) -> dict[str, Any]:
+async def _download(commit: str, path: str, meta: dict[str, Any], budget: int | None = None) -> dict[str, Any]:
+    budget = fs.MAX_FAMILY_BYTES if budget is None else budget
     slug = path.split("/", 1)[1]
     name = meta.get("name") or slug
     licence_name = fs.LICENCE_FILES.get((meta.get("license") or "").upper())
@@ -595,14 +615,15 @@ async def _download(commit: str, path: str, meta: dict[str, Any]) -> dict[str, A
             fname = pick["filename"]
             if not fs.valid_filename(fname):
                 raise HTTPException(status_code=422, detail=f"Can't add {name}: a file has an odd name.")
-            data = await _get(f"{RAW_BASE}/{commit}/{path}/{_quote(fname)}", fs.MAX_FILE_BYTES)
+            data = await _get(f"{RAW_BASE}/{commit}/{path}/{_quote(fname)}",
+                              max(min(fs.MAX_FILE_BYTES, budget - total), 0))
             if data is None:
                 raise HTTPException(status_code=422, detail=f"Can't add {name}: a font file is missing.")
             fmt = fs.sniff_font(data)
             if fmt is None:
                 raise HTTPException(status_code=422, detail=f"Can't add {name}: a file is not a font.")
             total += len(data)
-            if total > fs.MAX_FAMILY_BYTES:
+            if total > budget:
                 raise HTTPException(status_code=422, detail="That font family is too large to add.")
             lo, hi = fs.weight_range(meta, pick)
             ext = {"ttf": ".ttf", "otf": ".otf", "woff2": ".woff2", "woff": ".woff"}[fmt]

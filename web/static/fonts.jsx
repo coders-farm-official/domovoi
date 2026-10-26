@@ -274,25 +274,6 @@ const DomovoiFontsModule = (() => {
     await load(true);
   };
 
-  /* Admin: which of these missing families could be added (the open-licence
-   * collection has them)? { name: {available, family?, licence?} }. Kept for
-   * the page's life; a refusal (internet off, not an admin) answers {}. */
-  const known = new Map();
-  const lookup = async (names) => {
-    const ask = (names || []).filter((n) => n && !known.has(norm(n))).slice(0, 12);
-    if (ask.length) {
-      try {
-        const q = ask.map((n) => `family=${encodeURIComponent(n)}`).join('&');
-        const body = await apiGet(`/api/fonts/lookup?${q}`, { quiet: true });
-        const got = (body && body.families) || {};
-        ask.forEach((n) => { if (got[n]) known.set(norm(n), got[n]); });
-      } catch { /* unknown stays unknown: no add button */ }
-    }
-    const out = {};
-    (names || []).forEach((n) => { if (known.has(norm(n))) out[n] = known.get(norm(n)); });
-    return out;
-  };
-
   // Keep the list current: the realtime channel when a page has the
   // socket, a slow re-read otherwise, and a re-read when the tab returns.
   try {
@@ -311,7 +292,7 @@ const DomovoiFontsModule = (() => {
     setFetcher,
     CATEGORIES, CATEGORY_LABELS, list, load, ready: () => load(), ensure, onChange, status,
     has: (n) => status(n) === 'installed', get: (n) => { const f = get(n); return f ? list().find((x) => x.slug === f.slug) : null; },
-    substituteFor, stack, firstFamily, familiesInHTML, missingInHTML, recent, markUsed, add, remove, lookup,
+    substituteFor, stack, firstFamily, familiesInHTML, missingInHTML, recent, markUsed, add, remove,
     isLoaded: () => loaded,
   };
   return api;
@@ -390,16 +371,6 @@ const DomovoiFontPickerUI = (() => {
       return () => { document.removeEventListener('mousedown', onDoc); document.removeEventListener('keydown', onKey); };
     }, [open]);
 
-    const missingKey = (documentFamilies || []).join('|');
-    React.useEffect(() => {
-      if (!open || !admin || net.off) return undefined;
-      let dead = false;
-      const names = (documentFamilies || []).concat(value ? [F.firstFamily(value)] : [])
-        .filter((n) => F.status(n) === 'missing' && !F.substituteFor(n));
-      if (names.length) F.lookup(names).then((got) => { if (!dead) setAvail(got); });
-      return () => { dead = true; };
-    }, [open, admin, net.off, missingKey, value]);
-
     const current = value ? F.firstFamily(value) : '';
     const currentStatus = current ? F.status(current) : 'generic';
     const words = q.trim().toLowerCase();
@@ -420,12 +391,19 @@ const DomovoiFontPickerUI = (() => {
       if (onChange) onChange(family);
     };
 
+    /* Nothing leaves the house until the admin clicks: opening a document
+     * never asks the font collection anything. A family the collection
+     * doesn't have answers 404, and its row then says so. */
     const addForHouse = async (family) => {
       setErr('');
       setAdding(family);
       try {
         await F.add(family);
       } catch (e) {
+        if (e && e.status === 404) {
+          setAvail((cur) => Object.assign({}, cur, { [family]: { available: false } }));
+          return;
+        }
         const msg = (typeof isInternetOffError === 'function' && isInternetOffError(e))
           ? INTERNET_OFF_MESSAGE
           : ((e && e.detail && typeof e.detail.detail === 'string' && e.detail.detail) || 'Couldn’t add that font.');
@@ -472,13 +450,14 @@ const DomovoiFontPickerUI = (() => {
                 let side;
                 if (F.substituteFor(n)) side = <span className="font-pick-meta">shown in {F.substituteFor(n)}</span>;
                 else if (admin && net.off) side = <NeedsInternetNote compact/>;
-                else if (admin && a && a.available) {
+                else if (admin && a && !a.available) side = <span className="font-pick-meta">not in the free collection</span>;
+                else if (admin) {
                   side = (
-                    <Button disabled={!!adding} onClick={() => addForHouse(a.family || n)}>
-                      {adding === (a.family || n) ? 'adding…' : 'add for the house'}
+                    <Button disabled={!!adding} onClick={() => addForHouse(n)}>
+                      {adding === n ? 'adding…' : 'add for the house'}
                     </Button>
                   );
-                } else if (admin && a) side = <span className="font-pick-meta">not in the free collection</span>;
+                }
                 else side = <span className="font-pick-meta">shown in a similar font</span>;
                 return (
                   <div key={`m-${n}`} className="font-pick-row missing">

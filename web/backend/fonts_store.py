@@ -29,6 +29,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import struct
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -60,6 +61,9 @@ MAX_FAMILY_BYTES = 40 * 1024 * 1024
 #: How many files one added family may have (static families keep four:
 #: regular, bold, italic, bold italic; variable ones two).
 MAX_FILES = 4
+#: The house-wide caps on added families: how many, and their files in all.
+MAX_ADDED_FAMILIES = 200
+MAX_ADDED_BYTES = 1536 * 1024 * 1024
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BUNDLED_DIR = REPO_ROOT / "web" / "static" / "fonts"
@@ -222,20 +226,60 @@ def reserved_font_names(ofl_text: str) -> list[str]:
 # ─── Files ───────────────────────────────────────────────────────────────
 
 
+_SFNT_MAX_TABLES = 128
+
+
+def _sfnt_ok(data: bytes) -> bool:
+    """A TrueType/OpenType table directory that holds together: a sane
+    table count, printable tags, every table inside the file, and the
+    tables a font can't do without (head, cmap, and outlines)."""
+    if len(data) < 12:
+        return False
+    (num,) = struct.unpack(">H", data[4:6])
+    if not 1 <= num <= _SFNT_MAX_TABLES or len(data) < 12 + 16 * num:
+        return False
+    tags = set()
+    for i in range(num):
+        tag, _check, offset, length = struct.unpack(">4sIII", data[12 + 16 * i: 28 + 16 * i])
+        if not all(0x20 <= b <= 0x7E for b in tag):
+            return False
+        if offset < 12 + 16 * num or offset + length > len(data):
+            return False
+        tags.add(tag)
+    return b"head" in tags and b"cmap" in tags and bool(tags & {b"glyf", b"CFF ", b"CFF2"})
+
+
+def _woff_ok(data: bytes) -> bool:
+    """WOFF/WOFF2 header: the file's own length field matches the file,
+    and it says it holds some tables."""
+    if len(data) < 44:
+        return False
+    (length,) = struct.unpack(">I", data[8:12])
+    (num,) = struct.unpack(">H", data[12:14])
+    return length == len(data) and 1 <= num <= _SFNT_MAX_TABLES
+
+
 def sniff_font(data: bytes) -> str | None:
-    """The font format from the first bytes, or None when the bytes are not
-    a font: ``ttf`` (0x00010000 or ``true``), ``otf`` (``OTTO``), ``woff2``
-    (``wOF2``), ``woff`` (``wOFF``). A ``ttcf`` collection is refused: a
-    browser cannot pick a face out of one."""
-    head = bytes(data[:4])
-    if head in (b"\x00\x01\x00\x00", b"true"):
-        return "ttf"
-    if head == b"OTTO":
-        return "otf"
-    if head == b"wOF2":
-        return "woff2"
-    if head == b"wOFF":
-        return "woff"
+    """The font format, or None when the bytes are not a font that holds
+    together: ``ttf`` (0x00010000 or ``true``), ``otf`` (``OTTO``) with a
+    table directory that fits the file (:func:`_sfnt_ok`), ``woff2``
+    (``wOF2``) / ``woff`` (``wOFF``) whose header length is the file's
+    (:func:`_woff_ok`). A ``ttcf`` collection is refused: a browser cannot
+    pick a face out of one. Four signature bytes are not enough: a page
+    that merely starts with ``true`` is refused."""
+    data = bytes(data)
+    head = data[:4]
+    try:
+        if head in (b"\x00\x01\x00\x00", b"true"):
+            return "ttf" if _sfnt_ok(data) else None
+        if head == b"OTTO":
+            return "otf" if _sfnt_ok(data) else None
+        if head == b"wOF2":
+            return "woff2" if _woff_ok(data) else None
+        if head == b"wOFF":
+            return "woff" if _woff_ok(data) else None
+    except struct.error:
+        return None
     return None
 
 

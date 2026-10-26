@@ -202,6 +202,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     image_safety.configure_pillow()
 
+    # Fonts: a download a restart cut short leaves a staging folder behind.
+    try:
+        from web.backend.api import fonts as _fonts_api
+
+        _fonts_api.sweep_staging()
+    except Exception as e:  # never fatal
+        log.warning("fonts staging sweep raised: %s", e)
+
     # Household device token (device tier): the web boots the same hook as
     # the core so a web-only throwaway has a token row and
     # ~/.domovoi/device-token.txt (0600) too. Whichever process boots first

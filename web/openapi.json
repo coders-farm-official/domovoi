@@ -10833,62 +10833,13 @@
         }
       }
     },
-    "/api/fonts/lookup": {
-      "get": {
-        "tags": [
-          "fonts"
-        ],
-        "summary": "Lookup",
-        "description": "Can these families be added? For the picker's \"not installed\" rows:\nan admin is offered \"add for the house\" only for a family the\nopen-licence collection has (no button that can only fail). Answers\nfrom the cached catalogue when there is one, else reads each family's\nMETADATA.pb (``ofl/`` then ``apache/``). ``{families: {<asked>:\n{available, family?, licence?}}}``; at most 12 names a call.",
-        "operationId": "lookup_api_fonts_lookup_get",
-        "parameters": [
-          {
-            "name": "family",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              },
-              "default": [],
-              "title": "Family"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Lookup Api Fonts Lookup Get"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/fonts/fetch": {
       "post": {
         "tags": [
           "fonts"
         ],
         "summary": "Fetch Family",
-        "description": "Add one family for the whole house: check its licence, download its\nfiles, store them with the licence file, record it.",
+        "description": "Add one family for the whole house: check its licence, download its\nfiles, store them with the licence file, record it. One add at a time,\nwithin :data:`ADD_DEADLINE_SEC`, and only while the house is under its\ncaps (:data:`fonts_store.MAX_ADDED_FAMILIES` families,\n:data:`fonts_store.MAX_ADDED_BYTES` in all).",
         "operationId": "fetch_family_api_fonts_fetch_post",
         "requestBody": {
           "content": {

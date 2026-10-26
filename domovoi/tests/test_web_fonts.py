@@ -21,13 +21,16 @@ internet gate, the file checks and the browser registry.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import re
+import struct
 import shutil
 import subprocess
 from pathlib import Path
 
+import httpx
 import pytest
 from sqlalchemy import text
 
@@ -55,8 +58,28 @@ OFL_TEXT = (
 OFL_RFN = OFL_TEXT.replace("Authors\n", "Authors with Reserved Font Name \"Lantern\".\n")
 APACHE_TEXT = "                                 Apache License\n                           Version 2.0, January 2004\n"
 UFL_TEXT = "UBUNTU FONT LICENCE Version 1.0\n\nPreamble\n"
-TTF = b"\x00\x01\x00\x00" + b"\x00" * 60
-OTF = b"OTTO" + b"\x00" * 60
+
+
+def _sfnt(version: bytes, tables=(b"head", b"cmap", b"glyf"), body: int = 32) -> bytes:
+    """A minimal font file whose table directory holds together."""
+    n = len(tables)
+    out = bytearray(version + struct.pack(">HHHH", n, 16, 0, 0))
+    offset = 12 + 16 * n
+    for tag in tables:
+        out += struct.pack(">4sIII", tag, 0, offset, body)
+        offset += body
+    out += b"\x00" * (body * n)
+    return bytes(out)
+
+
+def _woff2(length_delta: int = 0) -> bytes:
+    data = bytearray(b"wOF2" + b"\x00\x01\x00\x00" + b"\x00" * 4 + struct.pack(">H", 3) + b"\x00" * 50)
+    data[8:12] = struct.pack(">I", len(data) + length_delta)
+    return bytes(data)
+
+
+TTF = _sfnt(b"\x00\x01\x00\x00")
+OTF = _sfnt(b"OTTO", tables=(b"head", b"cmap", b"CFF "))
 
 
 def _meta(name: str, licence: str = "OFL", category: str = "SERIF", files=None, axes=None) -> str:
@@ -115,12 +138,34 @@ def test_reserved_font_names_come_from_the_header_only():
 # ─── size and magic bytes ─────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("head,kind", [
-    (b"\x00\x01\x00\x00", "ttf"), (b"true", "ttf"), (b"OTTO", "otf"), (b"wOF2", "woff2"), (b"wOFF", "woff"),
-    (b"ttcf", None), (b"<!DO", None), (b"PK\x03\x04", None), (b"\x89PNG", None), (b"", None),
+@pytest.mark.parametrize("data,kind", [
+    (_sfnt(b"\x00\x01\x00\x00"), "ttf"), (_sfnt(b"true"), "ttf"),
+    (_sfnt(b"OTTO", tables=(b"head", b"cmap", b"CFF ")), "otf"),
+    (_woff2(), "woff2"), (b"wOFF" + _woff2()[4:], "woff"),
+    (b"ttcf" + b"\x00" * 60, None), (b"<!DOCTYPE html>", None), (b"PK\x03\x04" + b"\x00" * 60, None),
+    (b"\x89PNG" + b"\x00" * 60, None), (b"", None),
 ])
-def test_only_real_font_signatures_are_fonts(head, kind):
-    assert fs.sniff_font(head + b"\x00" * 16) == kind
+def test_only_real_font_signatures_are_fonts(data, kind):
+    assert fs.sniff_font(data) == kind
+
+
+@pytest.mark.parametrize("data", [
+    b"true<html><script>alert(document.domain)</script></html>",   # four magic bytes and a page
+    b"\x00\x01\x00\x00" + b"\x00" * 60,                            # no tables
+    _sfnt(b"\x00\x01\x00\x00")[:-1],                                # last table runs past the end
+    _sfnt(b"\x00\x01\x00\x00", tables=(b"head", b"glyf")),         # no cmap
+    _sfnt(b"\x00\x01\x00\x00", tables=(b"head", b"cmap")),         # no outlines
+    _sfnt(b"\x00\x01\x00\x00", tables=(b"he\x00d", b"cmap", b"glyf")),  # a tag that isn't text
+    b"\x00\x01" + b"\xff\xff" + b"\x00" * 60,                        # an absurd table count
+    _woff2(length_delta=1), _woff2(length_delta=-1),               # WOFF2 header length lies
+])
+def test_a_file_that_only_starts_like_a_font_is_refused(data):
+    assert fs.sniff_font(data) is None
+
+
+def test_the_bundled_and_drafts_fonts_pass_the_structure_check():
+    for p in list(FONTS.rglob("*.woff2"))[:40] + list((REPO / "domovoi" / "drafts" / "fonts").glob("*.ttf")):
+        assert fs.sniff_font(p.read_bytes()) in ("woff2", "ttf"), p
 
 
 @pytest.mark.parametrize("name,ok", [
@@ -309,7 +354,6 @@ async def test_the_list_is_a_household_read(auth, no_rows, github):
     ("GET", "/api/fonts/catalogue", None),
     ("POST", "/api/fonts/fetch", {"family": "Gloock"}),
     ("DELETE", "/api/fonts/gloock", None),
-    ("GET", "/api/fonts/lookup?family=Gloock", None),
 ])
 async def test_catalogue_fetch_and_remove_are_admin_bearer_only(auth, no_rows, github, method, path, body):
     async with web_client() as c:
@@ -391,23 +435,73 @@ async def test_the_catalogue_lists_only_ofl_and_apache(auth, no_rows, github):
     assert (Path(core_settings.fonts_dir) / "catalogue.json").is_file()
 
 
-async def test_lookup_says_which_missing_families_can_be_added(auth, no_rows, github):
-    github.family("ofl", "gloock", _meta("Gloock"), None, {})
-    github.family("ufl", "ubuntu", _meta("Ubuntu", licence="UFL"), None, {})
+async def test_redirects_are_not_followed_off_github(monkeypatch):
+    """A 302 from raw.githubusercontent.com to a machine in the house is an
+    answer we don't use, never a second request (review round 1)."""
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        if request.url.host == "raw.githubusercontent.com":
+            return httpx.Response(302, headers={"Location": "http://192.168.1.1/cgi-bin/luci?x=1"})
+        return httpx.Response(200, content=b"router admin page")
+
+    real = egress.async_client
+
+    def patched(**kw):
+        kw["transport"] = httpx.MockTransport(handler)
+        return real(**kw)
+
+    monkeypatch.setattr(fonts_api.egress, "async_client", patched)
+    with egress.override_policy("always"):
+        status, body = await fonts_api._http_get(f"{fonts_api.RAW_BASE}/{COMMIT}/ofl/x/METADATA.pb", 1024)
+        with pytest.raises(fonts_api.FontsUnavailable):
+            await fonts_api._get(f"{fonts_api.RAW_BASE}/{COMMIT}/ofl/x/METADATA.pb", 1024)
+    assert status == 302 and body == b""
+    assert all("192.168.1.1" not in u for u in seen), seen
+
+
+async def test_an_oversize_github_answer_is_the_plain_error_not_a_500(auth, no_rows, github, monkeypatch):
+    github.trees({"ofl": ["gloock"]})
+    monkeypatch.setattr(fonts_api, "TREE_MAX_BYTES", 10)
     async with web_client() as c:
-        device = await c.get("/api/fonts/lookup?family=Gloock", headers={HEADER: DEVICE})
-        r = await c.get("/api/fonts/lookup?family=Gloock&family=Comic%20Sans%20MS&family=Ubuntu",
-                        headers=bearer(ADMIN))
-        with egress.override_policy("never"):
-            off = await c.get("/api/fonts/lookup?family=Gloock", headers=bearer(ADMIN))
-    assert device.status_code in (401, 403) and off.status_code == 409
-    assert r.status_code == 200, r.text
-    assert r.json()["families"] == {
-        "Gloock": {"available": True, "family": "Gloock", "licence": "OFL-1.1"},
-        "Comic Sans MS": {"available": False},
-        "Ubuntu": {"available": False},
-    }
-    assert not any("/ufl/" in u for u in github.asked)
+        r = await c.get("/api/fonts/catalogue", headers=bearer(ADMIN))
+    assert r.status_code == 502 and "GitHub" in r.json()["detail"]
+
+
+async def test_refresh_rebuilds_at_most_every_ten_minutes(auth, no_rows, github):
+    github.trees({"ofl": ["gloock"]})
+    github.family("ofl", "gloock", _meta("Gloock"), None, {})
+    async with web_client() as c:
+        first = await c.get("/api/fonts/catalogue", headers=bearer(ADMIN))
+        asked = len(github.asked)
+        again = await c.get("/api/fonts/catalogue?refresh=true", headers=bearer(ADMIN))
+    assert first.status_code == again.status_code == 200
+    assert len(github.asked) == asked, "a refresh minutes after a build asked GitHub again"
+
+
+async def test_a_catalogue_build_has_a_deadline(auth, no_rows, github, monkeypatch):
+    async def slow(url, max_bytes, accept=None):
+        await asyncio.sleep(5)
+        return 404, b""
+
+    monkeypatch.setattr(fonts_api, "_http_get", slow)
+    monkeypatch.setattr(fonts_api, "CATALOGUE_DEADLINE_SEC", 0.2)
+    async with web_client() as c:
+        r = await c.get("/api/fonts/catalogue", headers=bearer(ADMIN))
+    assert r.status_code == 502
+
+
+def test_the_picker_asks_nothing_when_a_document_opens():
+    """Opening a document must cause no egress (review round 1): the
+    registry and picker have no lookup, and the only routes fonts.jsx
+    calls by itself are the list; the catalogue and an add need a click."""
+    src = (REPO / "web" / "static" / "fonts.jsx").read_text(encoding="utf-8")
+    assert "/api/fonts/lookup" not in src and "lookup" not in src
+    picker = src.split("const Picker = (", 1)[1].split("return { Picker", 1)[0]
+    # The picker's only network call is the admin's click: F.add.
+    assert not re.search(r"\bapi(Get|Post|Delete|Fetch)\(|\bfetch\(", picker)
+    assert picker.count("F.add(") == 1 and "const addForHouse" in picker
 
 
 async def test_github_down_is_a_plain_error(auth, no_rows, github, monkeypatch):
@@ -511,6 +605,85 @@ async def test_an_oversize_file_is_refused(auth, github, fonts_table, monkeypatc
 
 
 @requires_db
+async def test_a_page_that_starts_with_true_is_not_a_font(auth, github, fonts_table):
+    html = b"true<html><script>alert(document.domain)</script></html>"
+    _gloock(github, fonts={"Gloock-Regular.ttf": html, "Gloock-Bold.ttf": TTF})
+    async with web_client() as c:
+        r = await c.post("/api/fonts/fetch", json={"family": "Gloock"}, headers=bearer(ADMIN))
+    assert r.status_code == 422 and "not a font" in r.json()["detail"]
+    assert [p.name for p in Path(core_settings.fonts_dir).iterdir()] == []
+
+
+def _faces(github, n):
+    for i in range(n):
+        name = f"Face{chr(97 + i)}"
+        github.family("ofl", name.lower(), _meta(name), ("OFL.txt", OFL_TEXT),
+                      {f"{name}-Regular.ttf": TTF, f"{name}-Bold.ttf": TTF})
+
+
+@requires_db
+async def test_the_house_has_a_cap_on_added_families(auth, github, fonts_table, monkeypatch):
+    monkeypatch.setattr(fs, "MAX_ADDED_FAMILIES", 2)
+    _faces(github, 3)
+    async with web_client() as c:
+        codes = [(await c.post("/api/fonts/fetch", json={"family": f"Face{c_}"}, headers=bearer(ADMIN))).status_code
+                 for c_ in "abc"]
+        third = await c.post("/api/fonts/fetch", json={"family": "Facec"}, headers=bearer(ADMIN))
+    assert codes == [200, 200, 409]
+    assert "2 added font families" in third.json()["detail"]
+    assert not (Path(core_settings.fonts_dir) / "facec").exists()
+
+
+@requires_db
+async def test_the_house_has_a_cap_on_added_bytes(auth, github, fonts_table, monkeypatch):
+    monkeypatch.setattr(fs, "MAX_ADDED_BYTES", 3 * len(TTF))
+    _faces(github, 2)
+    async with web_client() as c:
+        a = await c.post("/api/fonts/fetch", json={"family": "Facea"}, headers=bearer(ADMIN))
+        b = await c.post("/api/fonts/fetch", json={"family": "Faceb"}, headers=bearer(ADMIN))
+    assert a.status_code == 200
+    # One file's room is left: the second family's two files don't fit.
+    assert b.status_code == 422 and "too large" in b.json()["detail"]
+    assert not (Path(core_settings.fonts_dir) / "faceb").exists()
+
+
+@requires_db
+async def test_stale_staging_folders_are_swept(auth, github, fonts_table):
+    root = Path(core_settings.fonts_dir)
+    (root / ".adding-gloock-deadbeef").mkdir(parents=True)
+    (root / ".adding-gloock-deadbeef" / "x.ttf").write_bytes(b"half")
+    assert fonts_api.sweep_staging() == 1 and not (root / ".adding-gloock-deadbeef").exists()
+    (root / ".adding-old-0000").mkdir()
+    _gloock(github)
+    async with web_client() as c:
+        r = await c.post("/api/fonts/fetch", json={"family": "Gloock"}, headers=bearer(ADMIN))
+    assert r.status_code == 200
+    assert sorted(p.name for p in root.iterdir()) == ["gloock"]
+
+
+@requires_db
+async def test_an_add_has_a_deadline_and_frees_the_lock(auth, github, fonts_table, monkeypatch):
+    _gloock(github)
+    real = github.__call__
+
+    async def trickle(url, max_bytes, accept=None):
+        if url.endswith(".ttf"):
+            await asyncio.sleep(5)
+        return await real(url, max_bytes, accept)
+
+    monkeypatch.setattr(fonts_api, "_http_get", trickle)
+    monkeypatch.setattr(fonts_api, "ADD_DEADLINE_SEC", 0.3)
+    async with web_client() as c:
+        r = await c.post("/api/fonts/fetch", json={"family": "Gloock"}, headers=bearer(ADMIN))
+        assert r.status_code == 504
+        assert not fonts_api._add_lock.locked()
+        monkeypatch.setattr(fonts_api, "_http_get", github)
+        ok = await c.post("/api/fonts/fetch", json={"family": "Gloock"}, headers=bearer(ADMIN))
+    assert ok.status_code == 200
+    assert [p.name for p in Path(core_settings.fonts_dir).iterdir()] == ["gloock"]
+
+
+@requires_db
 async def test_an_unknown_family_is_a_404(auth, github, fonts_table):
     async with web_client() as c:
         r = await c.post("/api/fonts/fetch", json={"family": "No Such Face"}, headers=bearer(ADMIN))
@@ -560,7 +733,7 @@ def _registry() -> dict:
 def test_the_registry_compiles_and_keeps_its_interface():
     r = _registry()
     for name in ("list", "ensure", "onChange", "load", "status", "familiesInHTML", "missingInHTML",
-                 "recent", "markUsed", "add", "remove", "lookup", "setFetcher", "Picker"):
+                 "recent", "markUsed", "add", "remove", "setFetcher", "Picker"):
         assert name in r["exports"], name
     assert r["pickerIsFunction"] and r["settingsPanel"]
     assert r["listBeforeLoad"] == 0
