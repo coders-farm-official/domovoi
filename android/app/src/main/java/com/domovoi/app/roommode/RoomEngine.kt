@@ -177,6 +177,7 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
     @Volatile private var lastFacts: HealthSample.Facts? = null
     private val batteryReporter = BatteryReporter()
     private var batteryReceiver: BroadcastReceiver? = null
+    @Volatile private var batteryRetry = false
     // CPU time since the last sample; the first one averages since the
     // process started.
     private var lastCpu = 0L
@@ -1006,8 +1007,18 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
         // One decision at a time: two broadcasts landing together send once.
         synchronized(batteryReporter) {
             val now = SystemClock.elapsedRealtime()
-            if (!batteryReporter.onChange(b, now)) return
-            sendBattery(b, now)
+            val wait = batteryReporter.decide(b, now) ?: return
+            if (wait == 0L) {
+                sendBattery(b, now)
+            } else if (!batteryRetry) {
+                // Inside the gap: look again when it ends (one look pending).
+                batteryRetry = true
+                scope.launch {
+                    delay(wait)
+                    batteryRetry = false
+                    onBattery(RoomDevice.battery(context))
+                }
+            }
         }
     }
 

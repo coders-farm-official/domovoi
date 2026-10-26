@@ -51,16 +51,20 @@ object RoomDevice {
     /** The broadcast's extras -> [Battery]; pure, for the JVM tests. -1 (or
      *  [Int.MIN_VALUE] for the temperature) is "not said". */
     fun batteryFrom(capacity: Int?, level: Int, scale: Int, status: Int, plugged: Int, tempTenths: Int): Battery {
-        val pct = capacity?.takeIf { it in 0..100 }
-            ?: if (level >= 0 && scale > 0) (level * 100 / scale).coerceIn(0, 100) else null
+        // The broadcast's own level first: it and its status/plugged are one
+        // reading (a phone may keep a capacity property that lags it).
+        val pct = (if (level >= 0 && scale > 0) (level * 100 / scale).coerceIn(0, 100) else null)
+            ?: capacity?.takeIf { it in 0..100 }
+        val onPower = if (plugged < 0) null else plugged != 0
         // Charging only while the level goes up; a full battery on its
         // charger is on_power, not charging (the core's battery shape).
-        val charging = when (status) {
-            BATTERY_STATUS_CHARGING -> true
-            -1 -> null
+        // Unplugged is never charging, whatever the status still says.
+        val charging = when {
+            onPower == false -> false
+            status == BATTERY_STATUS_CHARGING -> true
+            status == -1 -> null
             else -> false
         }
-        val onPower = if (plugged < 0) null else plugged != 0
         val temp = tempTenths.takeIf { it != Int.MIN_VALUE }?.let { it / 10.0 }
         return Battery(pct, charging, onPower, temp, pluggedName(plugged))
     }

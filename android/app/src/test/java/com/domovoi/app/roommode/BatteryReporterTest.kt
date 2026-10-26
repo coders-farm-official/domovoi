@@ -57,6 +57,22 @@ class BatteryReporterTest {
         assertTrue("unplugged", r.onChange(b(19, charging = false, onPower = false), 400))
     }
 
+    @Test fun lowAndOffTheChargerEveryPercentCountsAndTheGapSaysWhen() {
+        val r = BatteryReporter()
+        r.sent(b(9), 0)
+        assertEquals("1 % at 8, inside the gap: when it ends", 12_000L, r.decide(b(8), 3_000))
+        assertEquals(0L, r.decide(b(8), 15_000))
+        r.sent(b(8), 15_000)
+        assertNull("no change", r.decide(b(8), 40_000))
+        assertEquals(0L, r.decide(b(4), 40_000))
+        // On the charger, low or not, the 5 % step again.
+        r.sent(b(4, charging = true, onPower = true), 50_000)
+        assertNull(r.decide(b(6, charging = true, onPower = true), 80_000))
+        // Above 20 % off the charger: the 5 % step.
+        r.sent(b(30), 100_000)
+        assertNull(r.decide(b(27), 200_000))
+    }
+
     @Test fun theMinutesFrameMovesTheStep() {
         val r = BatteryReporter()
         r.sent(b(50), 0)
@@ -75,9 +91,16 @@ class BatteryReporterTest {
         val unplugged = RoomDevice.batteryFrom(capacity = null, level = 15, scale = 100, status = 3, plugged = 0, tempTenths = 315)
         assertEquals(RoomDevice.Battery(15, false, false, 31.5, null), unplugged)
         assertEquals(false, unplugged.onCharger)
-        // On USB, charging (2); BatteryManager's capacity wins over level/scale.
+        // On USB, charging (2); the broadcast's level/scale is the reading,
+        // BatteryManager's capacity only when it has none.
         val usb = RoomDevice.batteryFrom(capacity = 16, level = 30, scale = 200, status = 2, plugged = 2, tempTenths = Int.MIN_VALUE)
-        assertEquals(RoomDevice.Battery(16, true, true, null, "usb"), usb)
+        assertEquals(RoomDevice.Battery(15, true, true, null, "usb"), usb)
+        assertEquals(16, RoomDevice.batteryFrom(16, -1, -1, 2, 2, Int.MIN_VALUE).percent)
+        // Unplugged is never charging, even while the status still says so
+        // (`dumpsys battery unplug` on an emulator).
+        val unpluggedCharging = RoomDevice.batteryFrom(capacity = 100, level = 15, scale = 100, status = 2, plugged = 0, tempTenths = 300)
+        assertEquals(RoomDevice.Battery(15, false, false, 30.0, null), unpluggedCharging)
+        assertEquals(false, unpluggedCharging.onCharger)
         // Full (5) on AC: on power, not charging.
         val full = RoomDevice.batteryFrom(capacity = Int.MIN_VALUE, level = 100, scale = 100, status = 5, plugged = 1, tempTenths = 300)
         assertEquals(100, full.percent)
