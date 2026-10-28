@@ -114,9 +114,9 @@ import com.domovoi.app.ui.components.Pill
 import com.domovoi.app.ui.components.Tone
 import com.domovoi.app.ui.components.fmtBytes
 import com.domovoi.app.ui.screens.documents.SheetEditorOverlay
-import com.domovoi.app.ui.screens.documents.SheetWebEditor
 import com.domovoi.app.ui.screens.documents.TextEditorOverlay
-import com.domovoi.app.ui.screens.documents.WebDocEditor
+import com.domovoi.app.ui.screens.documents.WebEditorHost
+import com.domovoi.app.ui.screens.documents.WebEditorKind
 import com.domovoi.app.ui.screens.documents.opensInDocEditor
 import com.domovoi.app.ui.screens.documents.relFromEpochSec
 import com.domovoi.app.ui.screens.local.UploadButtonState
@@ -699,7 +699,7 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
             }
         }
         docEditorRel?.let { rel ->
-            WebDocEditor(app, rel) {
+            WebEditorHost(app, rel, WebEditorKind.Document) {
                 docEditorRel = null
                 pager.reload()
             }
@@ -713,7 +713,7 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
             // (formulas, formatting, sheets, autosave) in a WebView. A
             // phone folder has no server behind it: the plain grid editor.
             if (!source.onPhone && selectedId == DOCUMENTS_LIBRARY_ID) {
-                SheetWebEditor(app, rel, close)
+                WebEditorHost(app, rel, WebEditorKind.Sheet, close)
             } else {
                 SheetEditorOverlay(source, selectedId ?: "", rel, close)
             }

@@ -6,7 +6,7 @@
   <title>Domovoi sheet</title>
   <!-- The spreadsheet editor on its own page, for the phone app: it opens
        a Documents .xlsx/.csv here, in a WebView, instead of loading the
-       whole dashboard (android/.../documents/SheetWebEditor.kt). Same
+       whole dashboard (android/.../documents/WebEditorHost.kt). Same
        editor (sheet_editor.jsx), same routes, same rules; the address is
        sheet.html#path=<documents-relative path>.
 
@@ -17,9 +17,9 @@
        the dashboard. -->
   <script>
   (function () {
-    // DomovoiAppBridge: SheetWebEditor.kt. DomovoiApp: the documents
-    // editor's host (WebDocEditor.kt, wf/doc-editor), which may end up
-    // hosting this page too; it has deviceToken() and close() only.
+    // DomovoiAppBridge: the app's one editor host (WebEditorHost.kt).
+    // DomovoiApp: that bridge's first name on the documents side, still
+    // accepted; it has deviceToken() and close() only.
     var b = window.DomovoiAppBridge || window.DomovoiApp;
     if (!b) return;
     window.DomovoiSheetHost = b;
@@ -36,6 +36,7 @@
   </script>
   <link rel="stylesheet" href="colors_and_type.css">
   <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="font_picker.css">
   <style>
     html, body { height: 100%; margin: 0; overflow: hidden; background: var(--canvas); }
     #root { height: 100%; }
@@ -52,6 +53,7 @@
   <script type="text/babel" data-presets="react" src="auth.js"></script>
   <script type="text/babel" data-presets="react" src="data.js"></script>
   <script type="text/babel" data-presets="react" src="components.jsx"></script>
+  <script type="text/babel" data-presets="react" src="fonts.jsx"></script>
   <script type="text/babel" data-presets="react" src="sheet_editor.jsx"></script>
 
   <script type="text/babel" data-presets="react">

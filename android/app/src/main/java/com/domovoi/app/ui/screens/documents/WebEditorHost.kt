@@ -57,55 +57,114 @@ import java.io.ByteArrayInputStream
 import java.io.File
 
 /**
- * The server's Documents documents (formatted documents, Markdown, Word)
- * open in the SAME editor as the dashboard's (web/static/doc_editor.jsx),
- * on its own page `doc.html?path=…`, in a WebView: fonts, pictures, tables,
- * co-editing and autosave all come with it. A phone folder's files (no
- * server) keep the on-phone text editor ([TextEditorOverlay]).
+ * What differs between the two editors the shared host carries: which page
+ * of the server it opens, how Back asks that page to close, and whether the
+ * page may use the phone's photo picker, share sheet and print service.
+ */
+internal enum class WebEditorKind(
+    /** The page on the server (web/static/doc.html or sheet.html). */
+    val pagePath: String,
+    /** "documents" / "sheets", for the refusal messages. */
+    val noun: String,
+    /** JS run on Back; it answers "1" when the page took over the close. */
+    val backScript: String,
+    /** The photo picker for pictures in a document. */
+    val pickPictures: Boolean,
+    /** saveFile (Word / Markdown downloads through the share sheet). */
+    val share: Boolean,
+    /** print (PDF through Android's print service). */
+    val print: Boolean,
+) {
+    /** Formatted documents, Markdown and Word (web/static/doc_editor.jsx). */
+    Document(
+        pagePath = "/doc.html",
+        noun = "documents",
+        backScript = "(function(){if(window.DomovoiDocPage){window.DomovoiDocPage.back();return 1}return 0})()",
+        pickPictures = true,
+        share = true,
+        print = true,
+    ),
+
+    /** Spreadsheets (.xlsx / .csv; web/static/sheet_editor.jsx, Univer). */
+    Sheet(
+        pagePath = "/sheet.html",
+        noun = "sheets",
+        backScript = "(function(){window.dispatchEvent(new Event('domovoi-sheet-close'));return 1})()",
+        pickPictures = false,
+        share = false,
+        print = false,
+    );
+
+    /** The page for one file: doc.html takes `?path=`, sheet.html `#path=`. */
+    fun page(base: HttpUrl, relPath: String): HttpUrl = when (this) {
+        Document -> base.newBuilder().encodedPath(pagePath).addQueryParameter("path", relPath).build()
+        Sheet -> base.newBuilder().encodedPath(pagePath).encodedFragment("path=" + encodeFragmentPath(relPath)).build()
+    }
+}
+
+/** Percent-encodes a path for sheet.html's `#path=` the way android.net.Uri.encode(rel, "/")
+ *  does (letters, digits, `-_.!~*'()` and `/` stay; everything else is UTF-8 %XX), in plain
+ *  Kotlin so the JVM tests can check it. */
+internal fun encodeFragmentPath(rel: String): String {
+    val keep = "-_.!~*'()/"
+    val sb = StringBuilder()
+    for (b in rel.toByteArray(Charsets.UTF_8)) {
+        val c = (b.toInt() and 0xFF)
+        val ch = c.toChar()
+        if (c < 0x80 && (ch.isLetterOrDigit() || keep.indexOf(ch) >= 0)) sb.append(ch)
+        else sb.append('%').append("0123456789ABCDEF"[c shr 4]).append("0123456789ABCDEF"[c and 0xF])
+    }
+    return sb.toString()
+}
+
+/**
+ * The server's Documents documents (formatted documents, Markdown, Word) and
+ * spreadsheets (.xlsx / .csv) open in the SAME editors as the dashboard's,
+ * on their own pages (`doc.html?path=…`, `sheet.html#path=…`), in this one
+ * WebView host: fonts, pictures, co-editing, formulas, autosave, the "someone
+ * else is editing" notice and the stale-save choice all come with the page.
+ * A phone folder's files (no server) keep the on-phone editors
+ * ([TextEditorOverlay], [SheetEditorOverlay]).
  *
- * Built like the spreadsheet host ([SheetWebEditor]), which it is meant to
- * merge with. The household token is the one thing this hands over, and
- * it is handed over the way every other request of the app gets it:
+ * The household token is the one thing this hands over, and it is handed
+ * over the way every other request of the app gets it:
  *  - only after the active server has proved itself on this network
  *    ([com.domovoi.app.net.ApiClient.tokenForDownload]: the identity gate,
- *    the refused/throttled rules, room mode); a failed or empty check
- *    means the editor does not open at all;
- *  - only to that server's own origin: the WebView may not navigate
- *    anywhere else, and every request it makes is checked again: not the
- *    active server, plain http where [CleartextPolicy] refuses it, or a
- *    server that no longer proves itself (the network changed under an
- *    open document) is answered here with a refusal and never leaves the
- *    phone;
- *  - once (the bridge gives it a single time) and into the page's memory
- *    only (doc_page.jsx never stores it); and the page's storage is wiped
- *    when the editor closes all the same.
+ *    the refused/throttled rules, room mode); a failed or empty check means
+ *    the editor does not open at all;
+ *  - only to that server's own origin: the WebView may not navigate anywhere
+ *    else, and every request it makes is checked again: not the active
+ *    server, plain http where [CleartextPolicy] refuses it, or a server that
+ *    no longer proves itself (the network changed under an open file) is
+ *    answered here with a refusal and never leaves the phone;
+ *  - once (the bridge gives it a single time) and into the page's memory;
+ *    the page's storage is wiped when the editor closes all the same.
  */
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-internal fun WebDocEditor(app: AppContainer, relPath: String, onClose: () -> Unit) {
+internal fun WebEditorHost(app: AppContainer, relPath: String, kind: WebEditorKind, onClose: () -> Unit) {
     val dark = Domovoi.colors.isDark
     val closeNow by rememberUpdatedState(onClose)
-    var handoff by remember { mutableStateOf<DocHandoff?>(null) }
+    var handoff by remember { mutableStateOf<EditorHandoff?>(null) }
     var failure by remember { mutableStateOf<String?>(null) }
     var webView by remember { mutableStateOf<WebView?>(null) }
     var pendingPick by remember { mutableStateOf<ValueCallback<Array<Uri>>?>(null) }
 
-    LaunchedEffect(relPath) {
+    LaunchedEffect(relPath, kind) {
         val base = app.api.baseUrl.trimEnd('/').toHttpUrlOrNull()
         if (base == null) {
             failure = "No server is set up on this phone."
             return@LaunchedEffect
         }
-        val page = base.newBuilder().encodedPath("/doc.html")
-            .addQueryParameter("path", relPath).build()
+        val page = kind.page(base, relPath)
         if (!CleartextPolicy.permits(page)) {
             failure = CleartextPolicy.refusalMessage(page.host)
             return@LaunchedEffect
         }
         val token = runCatching { app.api.tokenForDownload(page) }
         token.onSuccess { t ->
-            if (t == null) failure = "This phone isn't paired with the home server, so it can't open documents."
-            else handoff = DocHandoff(base, page, t)
+            if (t == null) failure = "This phone isn't paired with the home server, so it can't open ${kind.noun}."
+            else handoff = EditorHandoff(base, page, t)
         }.onFailure {
             failure = "Couldn't reach the home server safely: ${it.message ?: "not verified"}"
         }
@@ -116,14 +175,12 @@ internal fun WebDocEditor(app: AppContainer, relPath: String, onClose: () -> Uni
         pendingPick = null
     }
 
-    // Back is the editor's Close: it saves what's pending, then asks the
-    // app to close (DocBridge.close).
+    // Back is the editor's Close: it saves what's pending, then asks the app
+    // to close (EditorBridge.close).
     BackHandler {
         val wv = webView
         if (wv != null && handoff != null) {
-            wv.evaluateJavascript(
-                "(function(){if(window.DomovoiDocPage){window.DomovoiDocPage.back();return 1}return 0})()"
-            ) { r -> if (r != "1") closeNow() }
+            wv.evaluateJavascript(kind.backScript) { r -> if (r != "1") closeNow() }
         } else {
             closeNow()
         }
@@ -134,7 +191,7 @@ internal fun WebDocEditor(app: AppContainer, relPath: String, onClose: () -> Uni
             pendingPick?.onReceiveValue(null)
             webView?.let { wv ->
                 wv.stopLoading()
-                wv.removeJavascriptInterface(DocBridge.NAME)
+                wv.removeJavascriptInterface(EditorBridge.NAME)
                 wv.destroy()
             }
             // Nothing the page kept stays behind.
@@ -159,24 +216,26 @@ internal fun WebDocEditor(app: AppContainer, relPath: String, onClose: () -> Uni
                     WebView(ctx).apply {
                         lockDown(settings)
                         setBackgroundColor(android.graphics.Color.TRANSPARENT)
-                        webViewClient = DocWebClient(app, h.base)
-                        webChromeClient = object : WebChromeClient() {
-                            override fun onShowFileChooser(
-                                view: WebView,
-                                callback: ValueCallback<Array<Uri>>,
-                                params: FileChooserParams,
-                            ): Boolean {
-                                pendingPick?.onReceiveValue(null)
-                                pendingPick = callback
-                                return runCatching { pickPictures.launch("image/*"); true }.getOrElse {
-                                    pendingPick = null
-                                    false
+                        webViewClient = EditorWebClient(app, h.base)
+                        if (kind.pickPictures) {
+                            webChromeClient = object : WebChromeClient() {
+                                override fun onShowFileChooser(
+                                    view: WebView,
+                                    callback: ValueCallback<Array<Uri>>,
+                                    params: FileChooserParams,
+                                ): Boolean {
+                                    pendingPick?.onReceiveValue(null)
+                                    pendingPick = callback
+                                    return runCatching { pickPictures.launch("image/*"); true }.getOrElse {
+                                        pendingPick = null
+                                        false
+                                    }
                                 }
                             }
                         }
                         addJavascriptInterface(
-                            DocBridge(ctx, app, h.base, h.token, app.prefs.deviceId, dark) { closeNow() },
-                            DocBridge.NAME,
+                            EditorBridge(ctx, app, h.base, kind, h.token, app.prefs.deviceId, dark) { closeNow() },
+                            EditorBridge.NAME,
                         )
                         loadUrl(h.page.toString())
                         webView = this
@@ -187,9 +246,9 @@ internal fun WebDocEditor(app: AppContainer, relPath: String, onClose: () -> Uni
     }
 }
 
-private data class DocHandoff(val base: HttpUrl, val page: HttpUrl, val token: String)
+private data class EditorHandoff(val base: HttpUrl, val page: HttpUrl, val token: String)
 
-/** The same settings for the editor and for its print copy. */
+/** The same settings for the editor and for a document's print copy. */
 @SuppressLint("SetJavaScriptEnabled")
 private fun lockDown(s: WebSettings, javaScript: Boolean = true) {
     s.javaScriptEnabled = javaScript
@@ -209,18 +268,18 @@ internal fun sameOrigin(a: HttpUrl, b: HttpUrl): Boolean =
     a.scheme == b.scheme && a.host.equals(b.host, ignoreCase = true) && a.port == b.port
 
 /** Keeps the WebView on the active server and re-checks every request. */
-private open class DocWebClient(private val app: AppContainer, private val base: HttpUrl) : WebViewClient() {
+private open class EditorWebClient(private val app: AppContainer, private val base: HttpUrl) : WebViewClient() {
 
     override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
         val url = request.url.toString().toHttpUrlOrNull() ?: return true
-        // The editor's own pages stay; anything else is refused rather than
-        // opened in here.
+        // The editor's own pages (and the server's downloads) stay; anything
+        // else is refused rather than opened in here.
         return !sameOrigin(base, url)
     }
 
     override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
         val scheme = request.url.scheme.orEmpty()
-        // The page's own data: URIs (embedded pictures) never touch the network.
+        // The page's own data: and blob: URIs (embedded pictures) never touch the network.
         if (scheme == "data" || scheme == "blob") return null
         val url = request.url.toString().toHttpUrlOrNull() ?: return refused()
         if (!sameOrigin(base, url) || !CleartextPolicy.permits(url)) return refused()
@@ -234,16 +293,17 @@ private open class DocWebClient(private val app: AppContainer, private val base:
 }
 
 /**
- * What doc.html reads before it renders (window.DomovoiAppBridge). The
- * token is handed over ONCE: doc_page.jsx takes it on load, and nothing that
+ * What doc.html / sheet.html read before they render (window.DomovoiAppBridge).
+ * The token is handed over ONCE: the page takes it on load, and nothing that
  * runs later in the page (or a page it is navigated to) can ask again. The
  * rest is the page asking the phone for things a browser would do itself:
- * close, the share sheet, the print service.
+ * close, and for documents the share sheet and the print service.
  */
-private class DocBridge(
+private class EditorBridge(
     private val context: Context,
     private val app: AppContainer,
     private val base: HttpUrl,
+    private val kind: WebEditorKind,
     token: String,
     private val deviceId: String?,
     private val dark: Boolean,
@@ -251,8 +311,8 @@ private class DocBridge(
 ) {
     private val main = Handler(Looper.getMainLooper())
     private val pending = java.util.concurrent.atomic.AtomicReference<String?>(token)
-    // The print copy, while Android's print service is using it; destroyed
-    // when the print job ends (or the next one starts).
+    // A document's print copy, while Android's print service is using it;
+    // destroyed when the print job ends (or the next one starts).
     private var printing: WebView? = null
 
     @JavascriptInterface fun deviceToken(): String = pending.getAndSet(null).orEmpty()
@@ -263,6 +323,7 @@ private class DocBridge(
     /** Download → Word / Markdown: the file, through the share sheet. */
     @JavascriptInterface
     fun saveFile(name: String, mime: String, base64: String) {
+        if (!kind.share) return
         if (base64.length > MAX_SHARE_BYTES / 3 * 4 + 4) return
         val bytes = runCatching { Base64.decode(base64, Base64.DEFAULT) }.getOrNull() ?: return
         main.post { shareDocumentFile(context, safeFileName(name), shareMime(mime), bytes) }
@@ -271,6 +332,7 @@ private class DocBridge(
     /** Download → PDF: the page the editor built, to Android's print service. */
     @JavascriptInterface
     fun print(html: String, title: String) {
+        if (!kind.print) return
         if (html.length > MAX_PRINT_CHARS) return
         main.post {
             printing?.destroy()
@@ -278,7 +340,7 @@ private class DocBridge(
             lockDown(w.settings, javaScript = false)
             printing = w
             val name = safeFileName(title).ifBlank { "Document" }
-            w.webViewClient = object : DocWebClient(app, base) {
+            w.webViewClient = object : EditorWebClient(app, base) {
                 override fun onPageFinished(view: WebView, url: String?) {
                     val pm = context.getSystemService(Context.PRINT_SERVICE) as? PrintManager
                     if (pm == null) { release(view); return }

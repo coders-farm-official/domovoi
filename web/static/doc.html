@@ -6,9 +6,10 @@
   <title>Document</title>
   <link rel="stylesheet" href="colors_and_type.css">
   <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="font_picker.css">
   <!-- One document, full screen: the Documents editor without the dashboard
        around it. The phone app opens this in its own in-app view
-       (android: ui/screens/documents/WebDocEditor.kt, through window.DomovoiAppBridge); a browser can open
+       (android: ui/screens/documents/WebEditorHost.kt, through window.DomovoiAppBridge); a browser can open
        it too: /doc.html?path=<path inside Documents>. Only what the editor
        needs is loaded (no player, no shell, no service worker); the
        Tiptap / Yjs / mammoth bundles load when the document does. -->
@@ -29,6 +30,9 @@
   <script type="text/babel" data-presets="react" src="sanitize_html.js"></script>
   <script type="text/babel" data-presets="react" src="data.js"></script>
   <script type="text/babel" data-presets="react" src="components.jsx"></script>
+  <script type="text/babel" data-presets="react" src="fonts.jsx"></script>
+  <script src="/collab.js"></script>
+  <script type="text/babel" data-presets="react" src="collab_ui.jsx"></script>
   <script type="text/babel" data-presets="react" src="doc_editor.jsx"></script>
   <script type="text/babel" data-presets="react" src="doc_page.jsx"></script>
 </body>

@@ -1,7 +1,7 @@
 /* /doc.html: one document in the Documents editor, full screen.
  *
  * The phone app opens this page in its own in-app view to edit a document
- * (android: ui/screens/documents/WebDocEditor.kt), and a browser can open
+ * (android: ui/screens/documents/WebEditorHost.kt), and a browser can open
  * it directly: /doc.html?path=<path inside Documents>.
  *
  * Credentials: inside the app, the household token comes from the app
@@ -22,7 +22,7 @@
 (() => {
   const params = new URLSearchParams(window.location.search);
   const path = (params.get('path') || '').trim();
-  // The app's bridge (WebDocEditor.kt). DomovoiApp is its first name, kept
+  // The app's bridge (WebEditorHost.kt). DomovoiApp is its first name, kept
   // for builds that still use it.
   const app = window.DomovoiAppBridge || window.DomovoiApp || null;
   window.DomovoiDocHost = app;

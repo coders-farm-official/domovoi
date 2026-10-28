@@ -4,6 +4,56 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-27 — Documents and spreadsheets: the new editors
+
+Web, dashboard and Android app. Database migrations **V041** (fonts) and
+**V042** (co-editing); one new Python dependency, **pycrdt** (MIT, in the
+lock files with hashes). Nothing to set up: the update applies both.
+
+* **A new document editor.** Documents → **New** → **Document** opens a
+  word processor in the page: headings, lists, checklists, tables, links,
+  colours, alignment, fonts and sizes, with Markdown shortcuts and paste
+  from Word and the web. New documents are formatted documents, one file
+  each with its pictures inside, shown in Files as "Document" with the
+  name and no extension. They save by themselves.
+* **Photos:** paste, drag in or pick one; resize, align, caption, crop
+  and rotate. Big photos are scaled down to about 2000 px before they go
+  in.
+* **Fonts:** 73 open-licence families come with Domovoi, served by the
+  server, so they work with no internet. An admin can add more for the
+  whole house in Settings → Documents → **Fonts** from the google/fonts
+  open-source collection (only OFL and Apache-licensed families; each
+  family's licence is checked first). That is a new outside request, and
+  it follows the internet setting: under **No** the button is greyed.
+* **Co-editing and history.** Several household devices can edit one
+  document at once, with names and cursors; a phone's offline edits join
+  in when it reconnects. **History** keeps versions (every few minutes
+  while people edit, and when the last one leaves) to open and restore.
+  This state lives in the database, never in the file: the file on disk
+  is always the clean latest version.
+* **Word, Markdown, PDF.** Download offers PDF (print or save as PDF),
+  Word and Markdown. Markdown files open in the same editor with font
+  and colour controls greyed (**Save as formatted document** makes a copy
+  that keeps them). Word files open in it too; saving one asks: keep it
+  as Word (complex layouts may shift) or save as a Document beside it.
+* **Spreadsheets** now open in a new sheet editor (Univer, Apache-2.0),
+  which keeps formulas, formatting, several sheets, merges, sizes and
+  frozen panes, saving into the same `.xlsx` file in place. Its limits:
+  * a workbook with charts, pictures, pivot tables or other parts the
+    editor can't keep opens **read-only**, so a save can never strip them;
+  * a sheet shows its first 5,000 rows and 100 columns; the rest of the
+    file is kept as it is;
+  * **no live co-editing for sheets.** A sheet says who else has it open,
+    and if two people save, the second chooses **Keep mine** or **Load
+    their version**: nobody is overwritten without knowing.
+  The old grid editor (x-spreadsheet) is gone from the dashboard; the
+  app's grid editor stays for sheets in a phone folder.
+* **The app** opens documents and sheets in the server's Documents in
+  the same editors (one in-app host for both). It hands the household
+  token to that page only after the server's identity check, checks every
+  request the page makes, and wipes the page's storage on close. Update
+  the app to get it.
+
 ## 2026-10-25 — A new room after a rebuilt music player no longer trips the container guard
 
 * **"The music player for <room> is running a different image than the

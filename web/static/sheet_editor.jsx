@@ -509,7 +509,7 @@ const SheetEditorOverlay = ({ rel_path, onClose, fire, blockedReason = null, inA
     onClose();
   };
 
-  // The phone's Back button asks for Close (sheet.html / SheetWebEditor.kt).
+  // The phone's Back button asks for Close (sheet.html / WebEditorHost.kt).
   const requestCloseRef = React.useRef(requestClose);
   requestCloseRef.current = requestClose;
   React.useEffect(() => {

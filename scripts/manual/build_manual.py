@@ -69,6 +69,7 @@ ROUTES: dict[str, dict] = {
     "settings/chat": {"dashboard": "#settings/chat", "app": {"screen": "Settings", "tab": "chat"}},
     "settings/internet": {"dashboard": "#settings/internet", "app": {"screen": "Settings", "tab": "internet"}},
     "settings/search": {"dashboard": "#settings/search", "app": {"dashboard": True}},
+    "settings/fonts": {"dashboard": "#settings/fonts", "app": {"dashboard": True}},
     "settings/voice-history": {"dashboard": "#settings/voice-history", "app": {"screen": "Settings", "tab": "voice-history"}},
     "settings/health": {"dashboard": "#settings/health", "app": {"screen": "Settings", "tab": "health"}},
     "settings/advanced": {"dashboard": "#settings/advanced", "app": {"screen": "Settings", "tab": "advanced"}},
@@ -146,7 +147,7 @@ PIECES: dict[str, tuple] = {
     "Read it to me": ("read-aloud", "a document read out in a room", ["read me", "read aloud", "read it back", "continue reading", "stop reading", "lease"], {}),
     # Files, printing and calendar
     "Files and photos": ("files", "every library, one place", ["files", "upload", "photos", "pictures", "move", "delete", "usb drive", "from chat", "scans"], {}),
-    "Documents, sheets and drawings": ("documents", "write and edit in the browser", ["document", "spreadsheet", "sheet", "drawing", "text file", "markdown", "xlsx", "editor"], {}),
+    "Documents and spreadsheets": ("documents", "write, edit and share, together", ["document", "spreadsheet", "sheet", "drawing", "text file", "markdown", "xlsx", "editor", "word", "docx", "pdf", "fonts", "photo", "picture", "caption", "crop", "co-editing", "together", "version history", "restore", "read-only"], {}),
     "Printers and scanners": ("printers", "print and scan, by voice too", ["print", "printer", "scan", "scanner", "ink", "toner", "paper", "airprint", "mopria", "test page", "print a draft", "print it"], {}),
     "Calendar": ("calendar", "the household's events", ["calendar", "event", "appointment", "what's on"], {}),
     # Your phone

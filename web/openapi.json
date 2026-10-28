@@ -9970,6 +9970,145 @@
         }
       }
     },
+    "/api/documents/workbook/{rel_path}": {
+      "get": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "Read Workbook",
+        "description": "The whole workbook for the Univer sheet editor (every sheet, values,\nformulas, formatting, merges, sizes, frozen panes), its ``version`` for\nthe save's stale check, and whether it may be saved here\n(``editable``/``why``). At most ``MAX_OPEN_CELLS`` cells in all; a\nbigger workbook opens read-only. 415 for types it can't open.",
+        "operationId": "read_workbook_api_documents_workbook__rel_path__get",
+        "parameters": [
+          {
+            "name": "rel_path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Rel Path"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "Write Workbook",
+        "description": "Save the editor's workbook into the file in place: only what changed\nis written, so what the editor doesn't show survives (see\nsheet_workbook). Body ``{workbook, base_version, force?, device_id?}``,\nparsed and checked off the event loop before openpyxl sees it (400 for\na malformed snapshot, 413 past the size limits). 409 ``{reason:\n\"changed\"}`` when someone else saved since ``base_version`` (send\n``force`` to overwrite), 409 for files with parts openpyxl can't keep\nand for a rename that would break references, 415 for non-sheet\ntargets.",
+        "operationId": "write_workbook_api_documents_workbook__rel_path__put",
+        "parameters": [
+          {
+            "name": "rel_path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Rel Path"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Write Workbook Api Documents Workbook  Rel Path  Put"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/documents/presence/{rel_path}": {
+      "post": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "Sheet Presence",
+        "description": "Heartbeat from an open sheet editor (every ~15 s; ``leaving`` on\nclose). Answers who ELSE has the same file open, by device name. 404\nfor a file that isn't there (or isn't readable here); 429 when too\nmany sheets or sessions are open to track.",
+        "operationId": "sheet_presence_api_documents_presence__rel_path__post",
+        "parameters": [
+          {
+            "name": "rel_path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Rel Path"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PresenceRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Sheet Presence Api Documents Presence  Rel Path  Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/documents/export/doc/{rel_path}": {
       "get": {
         "tags": [
@@ -10409,6 +10548,197 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/DocumentRow"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/collab/doc": {
+      "get": {
+        "tags": [
+          "collab"
+        ],
+        "summary": "Open Doc",
+        "description": "Map a Documents path to its co-editing id (made on first use) and say\nwhat this caller may do with it. ``ws`` is the socket path for the\ny-websocket provider (server URL ``/api/collab``, room = ``doc_id``).",
+        "operationId": "open_doc_api_collab_doc_get",
+        "parameters": [
+          {
+            "name": "path",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 1024,
+              "title": "Path"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Open Doc Api Collab Doc Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/collab/history": {
+      "get": {
+        "tags": [
+          "collab"
+        ],
+        "summary": "History",
+        "description": "The versions of a document, newest first: when, and who edited.",
+        "operationId": "history_api_collab_history_get",
+        "parameters": [
+          {
+            "name": "path",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 1024,
+              "title": "Path"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response History Api Collab History Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/collab/history/{version_id}": {
+      "get": {
+        "tags": [
+          "collab"
+        ],
+        "summary": "Version",
+        "description": "One version, for the preview: its Yjs state (base64, for an editor to\nrender read-only) and its plain text. The path must be the document the\nversion belongs to.",
+        "operationId": "version_api_collab_history__version_id__get",
+        "parameters": [
+          {
+            "name": "version_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Version Id"
+            }
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 1024,
+              "title": "Path"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Version Api Collab History  Version Id  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/collab/restore": {
+      "post": {
+        "tags": [
+          "collab"
+        ],
+        "summary": "Restore",
+        "description": "Restore a version as a NEW change (nothing in history is lost: the\nversion just before it is kept too). Device tier and the Files write\npolicy, as for a save. Everyone with the document open sees it arrive;\nthe editor that made the restore is then asked to save the file.",
+        "operationId": "restore_api_collab_restore_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RestoreRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Restore Api Collab Restore Post"
                 }
               }
             }
@@ -22409,6 +22739,26 @@
         "type": "object",
         "title": "PrepareRequest"
       },
+      "PresenceRequest": {
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 8,
+            "title": "Session Id"
+          },
+          "leaving": {
+            "type": "boolean",
+            "title": "Leaving",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "session_id"
+        ],
+        "title": "PresenceRequest"
+      },
       "PreviewBody": {
         "properties": {
           "word": {
@@ -23038,6 +23388,38 @@
         },
         "type": "object",
         "title": "ReportBody"
+      },
+      "RestoreRequest": {
+        "properties": {
+          "path": {
+            "type": "string",
+            "maxLength": 1024,
+            "title": "Path"
+          },
+          "version_id": {
+            "type": "integer",
+            "title": "Version Id"
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64,
+                "minLength": 3
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "path",
+          "version_id"
+        ],
+        "title": "RestoreRequest"
       },
       "RoomBattery": {
         "properties": {

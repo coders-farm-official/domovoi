@@ -1722,6 +1722,35 @@ the other:
     (deeply nested, all markup) still takes about 20 seconds of the
     documents pool on load or save; a real document takes about a second.
     Word copies run in their own time-limited process instead.
+- **Co-editing keeps the Documents tiers and its own state apart from the
+  file.** The co-editing socket (`/api/collab/{doc_id}`,
+  `web/backend/api/collab.py`) admits the same household devices the
+  Documents routes do; a session that rests only on the dashboard cookie,
+  a `?device_token=` link or a blocked device is view-only (its edits are
+  dropped), and the `Host` and `Origin` checks guard against DNS
+  rebinding. The shared state and version history live in Postgres
+  (V042: `collab_docs`, `collab_updates`, `collab_snapshots`), never in
+  the file, and go when the document is deleted. Each open document is
+  held by its own worker subprocess, the only place pycrdt runs, behind
+  a pre-filter that refuses malformed or deeply nested updates; a worker
+  that crashes costs only the update that did it, and a document whose
+  stored state breaks the worker twice opens single-editor from its file.
+  Sizes, rates and the number of open documents, editors and viewers are
+  capped (API reference §3.14a). People editing together see each other's
+  names and cursors: the presence name is the one the server gives the
+  device, never one a client sets.
+- **Spreadsheets are checked on the server and never co-edited.** The
+  sheet editor's whole-workbook save (`PUT /api/documents/workbook/…`,
+  `web/backend/api/sheet_workbook.py`) is parsed and validated in the
+  documents pool, not the web process: 400 for a malformed snapshot, 413
+  past 50 sheets, 250,000 cells or 5,000 merges, and a 32 MiB transport
+  limit. A workbook with parts openpyxl would drop on a load-and-save
+  (charts, pictures, pivot tables, slicers, embedded objects, …) opens
+  read-only and both sheet save routes refuse it, so a save never strips
+  them. A save from a stale copy is refused (409) unless the person
+  chooses to keep theirs. "Also open" presence (`POST
+  /api/documents/presence/…`) is kept in memory only, names the other
+  devices that have the sheet open, and is capped per sheet and in all.
 - **Rendered markdown is sanitised before it reaches the page.** Chat
   replies and other markdown previews run `marked` output through
   `web/static/sanitize_html.js`, an allowlist-and-escape pass that keeps
