@@ -91,14 +91,74 @@ final class Ed25519VerifyTests: XCTestCase {
         )
     }
 
+    /// A non-canonical scalar is refused, the way `Ed25519.kt:55` refuses it.
+    ///
+    /// The band that matters is `L <= s < 2^253`, and nothing else in this
+    /// file reaches it: the all-0xff signature below has `s` near 2^256, which
+    /// every implementation refuses for other reasons, so it proves nothing.
+    /// This case is RFC 8032 vector 2's own signature with L added to its `s`
+    /// — the same signature, re-encoded — which lands inside the band. It
+    /// verifies as mathematics and must still be refused as a signature.
+    ///
+    /// The bytes were computed once, offline, as
+    /// `s + L` over the vector's little-endian scalar; the assertions below
+    /// re-establish the two facts that make the case meaningful, so a typo in
+    /// the hex cannot turn this into a test that passes for the wrong reason.
+    func testASignatureWhoseScalarIsNotBelowTheGroupOrderIsRefused() throws {
+        let canonical = try hex(vectors[1].signature)
+        let nonCanonical = try hex(
+            "92a009a9f0d4cab8720e820b5f642540a2b27b5416503f8fb3762223ebdb69da"
+                + "f52db7415978abc61b2c2eb6aeebfca0387b2eaeb4302aeeb00d291612bb0c10"
+        )
+        // Same R: only the scalar half differs.
+        XCTAssertEqual(nonCanonical.prefix(32), canonical.prefix(32))
+        XCTAssertNotEqual(nonCanonical.suffix(32), canonical.suffix(32))
+        // In the band: at or above L, and below 2^253 — so the top three bits
+        // of the little-endian scalar's last byte are `000`, and the byte
+        // itself is 0x10, which is exactly L's most significant byte.
+        XCTAssertEqual(nonCanonical[nonCanonical.startIndex + 63], 0x10)
+
+        XCTAssertTrue(Ed25519Verify.isCanonicalScalar(canonical))
+        XCTAssertFalse(Ed25519Verify.isCanonicalScalar(nonCanonical))
+        XCTAssertFalse(
+            Ed25519Verify.verify(
+                publicKey: try hex(vectors[1].publicKey),
+                message: try hex(vectors[1].message),
+                signature: nonCanonical
+            )
+        )
+    }
+
+    /// The scalar check at its edges: `s = L - 1` passes, `s = L` and
+    /// `s = L + 1` do not. Built from L's own bytes rather than from a
+    /// vector, so it pins the comparison and not a signature.
+    func testTheScalarCheckIsExclusiveAtTheGroupOrder() {
+        func signature(scalarBigEndian: [UInt8]) -> Data {
+            Data(repeating: 0, count: 32) + Data(scalarBigEndian.reversed())
+        }
+        var belowOrder = Ed25519Verify.orderBigEndian
+        belowOrder[31] -= 1                                 // L's last byte is 0xed
+        var aboveOrder = Ed25519Verify.orderBigEndian
+        aboveOrder[31] += 1
+        XCTAssertTrue(Ed25519Verify.isCanonicalScalar(signature(scalarBigEndian: belowOrder)))
+        XCTAssertFalse(Ed25519Verify.isCanonicalScalar(signature(scalarBigEndian: Ed25519Verify.orderBigEndian)))
+        XCTAssertFalse(Ed25519Verify.isCanonicalScalar(signature(scalarBigEndian: aboveOrder)))
+        XCTAssertTrue(Ed25519Verify.isCanonicalScalar(Data(repeating: 0, count: 64)))
+        XCTAssertFalse(Ed25519Verify.isCanonicalScalar(Data(repeating: 0xff, count: 64)))
+        // Not 64 bytes is not a canonical scalar either, so `verify`'s own
+        // length guard is never the only thing standing between the two.
+        XCTAssertFalse(Ed25519Verify.isCanonicalScalar(Data()))
+        XCTAssertFalse(Ed25519Verify.isCanonicalScalar(Data(repeating: 0, count: 63)))
+    }
+
     /// Malformed input is an answer, not an exception — a phone that threw
     /// here would crash on a server that answers rubbish.
     ///
-    /// TODO(verify-at-mac): the all-zero key and the all-0xff signature are
-    /// where CryptoKit's documented behaviour runs out (see
-    /// `Ed25519Verify`). If one of these fails on the Mac, read what Apple
-    /// actually does and decide whether the Kotlin's explicit `s >= L` check
-    /// has to be added back in Swift.
+    /// The all-0xff signature is refused by the scalar check before CryptoKit
+    /// sees it; the all-zero key is where CryptoKit's documented behaviour
+    /// still runs out. TODO(verify-at-mac): if the all-zero key case fails on
+    /// the Mac, read what Apple actually does with a low-order public key and
+    /// decide whether an explicit point check is needed (see `Ed25519Verify`).
     func testMalformedInputIsAnAnswerNotAnException() throws {
         let message = Data("m".utf8)
         XCTAssertFalse(Ed25519Verify.verify(publicKey: Data(), message: message, signature: Data()))
