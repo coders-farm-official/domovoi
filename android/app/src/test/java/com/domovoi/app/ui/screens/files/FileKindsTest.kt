@@ -145,4 +145,36 @@ class FileKindsTest {
         assertEquals(false, isFormattedDocument("a.md"))
         assertEquals(false, isFormattedDocument("site.html", isDir = true))
     }
+
+    private fun verb(
+        name: String,
+        isDir: Boolean = false,
+        editsInApp: Boolean = false,
+        docEditor: Boolean = false,
+        downloadOnly: Boolean = false,
+        opensByDownload: Boolean = false,
+    ) = primaryVerb(name, fileKind(name, isDir), isDir, editsInApp, docEditor, downloadOnly, opensByDownload)
+
+    /** The row's tap label says what onEntryPrimary does, library by library. */
+    @Test fun primaryVerbMatchesTheTap() {
+        // Folders always open, even in Other.
+        assertEquals("Open", verb("Taxes", isDir = true, downloadOnly = true, opensByDownload = true))
+        // Server Documents: the document editor, the sheet editor, the raw file.
+        assertEquals("Edit", verb("letter.docx", editsInApp = true, docEditor = true))
+        assertEquals("Edit", verb("budget.xlsx", editsInApp = true))
+        assertEquals("Open", verb("scan.pdf", editsInApp = true))
+        // Other: everything downloads, images too.
+        assertEquals("Download", verb("archive.zip", downloadOnly = true, opensByDownload = true))
+        assertEquals("Download", verb("photo.jpg", downloadOnly = true, opensByDownload = true))
+        // Pictures / Music / plugin libraries on the server.
+        assertEquals("View", verb("photo.jpg", opensByDownload = true))
+        assertEquals("Download", verb("song.flac", opensByDownload = true))
+        // A phone folder: editors in the app, media in the phone's player.
+        assertEquals("Edit", verb("notes.md", editsInApp = true))
+        assertEquals("Play", verb("song.mp3", editsInApp = true))
+        assertEquals("Play", verb("clip.mkv"))
+        assertEquals("Open", verb("letter.docx", editsInApp = true))
+        // Without in-app editing a text file opens in another app.
+        assertEquals("Open", verb("notes.md"))
+    }
 }

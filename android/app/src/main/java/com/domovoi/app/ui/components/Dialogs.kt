@@ -50,6 +50,14 @@ fun PromptDialog(
     placeholder: String = "",
     initial: String = "",
     confirmLabel: String = "create",
+    /** A line under the field (what will happen, where the file goes). */
+    note: String? = null,
+    /** Shown under the field in the error colour; the dialog stays open so the name can be fixed. */
+    error: String? = null,
+    /** While true the confirm button waits (a request is in flight). */
+    working: Boolean = false,
+    /** False: the caller closes the dialog itself (after the request succeeded). */
+    dismissOnConfirm: Boolean = true,
     onConfirm: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -67,11 +75,29 @@ fun PromptDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
                 )
+                note?.let {
+                    Text(
+                        it, style = MaterialTheme.typography.bodySmall, color = Domovoi.colors.fgMuted,
+                        modifier = Modifier.padding(top = 6.dp),
+                    )
+                }
+                error?.let {
+                    Text(
+                        it, style = MaterialTheme.typography.bodySmall, color = Domovoi.colors.err,
+                        modifier = Modifier.padding(top = 6.dp),
+                    )
+                }
             }
         },
         confirmButton = {
             TextButton(
-                onClick = { if (value.isNotBlank()) { onConfirm(value.trim()); onDismiss() } },
+                enabled = !working,
+                onClick = {
+                    if (value.isNotBlank()) {
+                        onConfirm(value.trim())
+                        if (dismissOnConfirm) onDismiss()
+                    }
+                },
             ) { Text(confirmLabel, color = Domovoi.colors.brand) }
         },
         dismissButton = {
