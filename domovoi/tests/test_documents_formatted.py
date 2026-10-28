@@ -543,3 +543,18 @@ def test_without_co_editing_the_seam_is_a_no_op():
             return "wrote"
 
     assert asyncio.run(go()) == "wrote"
+
+
+def test_the_editor_opens_on_its_own_when_co_editing_is_off():
+    """wf/doc-collab round 2: open() rejects with err.unavailable, or the
+    'unavailable' event (close 4416) arrives while open. The editor then
+    opens the file on its own with a plain notice, and (while open) saves
+    what is on screen first. Checked in a browser against a stand-in
+    DomovoiCollab; pinned here in the source."""
+    from pathlib import Path
+
+    jsx = (Path(__file__).resolve().parents[2] / "web" / "static" / "doc_editor.jsx").read_text(encoding="utf-8")
+    assert "Live co-editing is off for this document; you can still edit it here." in jsx
+    assert "e && e.unavailable ?" in jsx
+    assert "collab.on('unavailable'" in jsx
+    assert "!soloRef.current.has(rel)" in jsx and "soloRef.current.add(rel)" in jsx

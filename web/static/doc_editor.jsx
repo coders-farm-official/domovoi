@@ -1699,6 +1699,7 @@ img { max-width: 100%; height: auto; }
   /* ═════════════════════ the full-screen surface ═════════════════════ */
 
   const FORMAT_WORDS = { md: 'Markdown', docx: 'Word' };
+  const COLLAB_OFF_TEXT = 'Live co-editing is off for this document; you can still edit it here.';
   const extOf = (p) => { const m = /\.[^./\\]+$/.exec(p || ''); return m ? m[0].toLowerCase() : ''; };
   const baseName = (p) => String(p || '').split('/').pop().replace(/\.[^.]+$/, '');
   const AUTOSAVE_MS = 1200;
@@ -1731,11 +1732,15 @@ img { max-width: 100%; height: auto; }
     const [collabOn, setCollabOn] = React.useState(false);
     const [history, setHistory] = React.useState(false);
     const [reload, setReload] = React.useState(0);
+    // Documents whose co-editing switched off this session: opened on their own.
+    const soloRef = React.useRef(new Set());
+    const blockedRef = React.useRef(null);
     const hostRef = React.useRef(null);
     const edRef = React.useRef(null);
     const collabRef = React.useRef(null);
     const seq = React.useRef({ change: 0, saved: 0, timer: 0, inflight: null });
     const blocked = refused || blockedReason;
+    blockedRef.current = blocked;
     const fmt = state.doc ? state.doc.format : null;
     const notice = React.useCallback((m) => { if (fire) fire(m); }, [fire]);
 
@@ -1755,13 +1760,17 @@ img { max-width: 100%; height: auto; }
             content = await r.arrayBuffer();
           }
           let collab = null;
-          if (window.DomovoiCollab && typeof window.DomovoiCollab.open === 'function' && doc.format !== 'docx') {
+          if (window.DomovoiCollab && typeof window.DomovoiCollab.open === 'function' && doc.format !== 'docx'
+              && !soloRef.current.has(rel)) {
             try {
               await loadYjs();
               collab = await window.DomovoiCollab.open(rel, { format: doc.format });
             } catch (e) {
               collab = null;
-              notice("Live co-editing isn't available right now; you're editing on your own.");
+              // Co-editing is off for this document (wf/doc-collab: its shared
+              // state failed twice); the file opens on its own, the ordinary
+              // way, and saving it turns co-editing back on later.
+              notice(e && e.unavailable ? (e.message || COLLAB_OFF_TEXT) : "Live co-editing isn't available right now; you're editing on your own.");
             }
           }
           let viewOnly = false;
@@ -1777,6 +1786,24 @@ img { max-width: 100%; height: auto; }
             // The file was changed outside the editor and the shared copy
             // was rebuilt from it: open it again.
             collab.on('reset', () => { notice('This document was changed elsewhere; it has been reopened.'); setReload((n) => n + 1); });
+            // Co-editing switched off while open (event "unavailable", close
+            // 4416): keep what is on screen by saving it as the file, then
+            // reopen the file on its own for the rest of this session.
+            collab.on('unavailable', async (ev) => {
+              soloRef.current.add(rel);
+              notice((ev && ev.message) || COLLAB_OFF_TEXT);
+              const ed = edRef.current;
+              const d = doc;
+              if (ed && d && !blockedRef.current) {
+                const body = { html: ed.getHTML() };
+                if (d.format === 'md') body.markdown = ed.getMarkdown();
+                try {
+                  await apiFetch(`/api/documents/doc/${encodeURIComponent(rel)}`,
+                    { method: 'PUT', body: JSON.stringify(body), noPrompt: true });
+                } catch (e) { /* the shared copy was saved on idle; the file stands */ }
+              }
+              setReload((n) => n + 1);
+            });
             // Renamed or moved in Documents (close code 4410 + "moved"): the
             // same document at its new path. Saving to the old one stops.
             collab.on('moved', (ev) => {
