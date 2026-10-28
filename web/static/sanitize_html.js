@@ -162,16 +162,130 @@ const SanitizeHtml = (() => {
   // out-rank it (FE-4).
   const LINK_REL = 'rel="noopener noreferrer nofollow"';
 
-  const renderTag = (name, attrs) => {
-    const allowed = PER_ELEMENT_ATTRS[name];
+  /* ── The DOCUMENT policy (formatted documents, doc_editor.jsx) ──────
+   * What the live editor produces and nothing more: its tags, a few
+   * data-* attributes with fixed values, `style` cut down to the
+   * properties the editor writes on that element (each value matched
+   * whole; anything that could reach outside or hide from this check —
+   * url(), expression(), escapes, comments — drops the whole attribute),
+   * and pictures only as embedded rasters. The SERVER applies the same
+   * allowlist (domovoi/richdoc/sanitize.py) on every load and save; this
+   * copy keeps a pasted or opened file from ever reaching the page raw. */
+  const DOC_ALLOWED = new Set([
+    'p', 'br', 'hr', 'div', 'span', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+    'strong', 'b', 'em', 'i', 'u', 's', 'del', 'strike', 'mark', 'sub', 'sup', 'code', 'pre',
+    'blockquote', 'ul', 'ol', 'li', 'table', 'thead', 'tbody', 'tfoot', 'tr', 'th', 'td',
+    'colgroup', 'col', 'a', 'img', 'figure', 'figcaption', 'label', 'input',
+  ]);
+  const DOC_ATTRS = {
+    a: new Set(['href', 'target', 'title']),
+    // data-pending: the web address of a pasted picture the editor is still
+    // copying in (doc_editor.jsx); kept as text only, never loaded, and
+    // never in a saved file (the server's allowlist has no such attribute).
+    img: new Set(['src', 'alt', 'title', 'width', 'height', 'data-pending']),
+    figure: new Set(['data-align', 'data-width']),
+    mark: new Set(['data-color']),
+    ul: new Set(['data-type']),
+    li: new Set(['data-type', 'data-checked']),
+    input: new Set(['type', 'checked', 'disabled']),
+    ol: new Set(['start', 'type']),
+    td: new Set(['colspan', 'rowspan', 'colwidth']),
+    th: new Set(['colspan', 'rowspan', 'colwidth']),
+    code: new Set(['class']),
+  };
+  const DOC_GLOBAL = new Set(['dir']);
+  const ALIGN_ONLY = new Set(['text-align']);
+  const DOC_STYLE = {
+    p: ALIGN_ONLY, h1: ALIGN_ONLY, h2: ALIGN_ONLY, h3: ALIGN_ONLY,
+    h4: ALIGN_ONLY, h5: ALIGN_ONLY, h6: ALIGN_ONLY,
+    span: new Set(['color', 'background-color', 'font-family', 'font-size']),
+    mark: new Set(['background-color', 'color']),
+    table: new Set(['width', 'min-width']),
+    col: new Set(['width', 'min-width']),
+    td: new Set(['background-color']),
+    th: new Set(['background-color']),
+    figure: new Set(['width']),
+  };
+  const COLOUR = /^(#[0-9a-f]{3,8}|rgba?\(\s*\d{1,3}%?\s*,\s*\d{1,3}%?\s*,\s*\d{1,3}%?\s*(,\s*(0|1|0?\.\d+|\d{1,3}%)\s*)?\)|[a-z]{3,24})$/i;
+  const STYLE_CHECK = {
+    color: (v) => COLOUR.test(v),
+    'background-color': (v) => COLOUR.test(v),
+    'font-family': (v) => /^[A-Za-z0-9 ,'"_-]{1,200}$/.test(v),
+    'font-size': (v) => /^\d{1,3}(\.\d{1,2})?(px|pt|em|rem|%)$/i.test(v),
+    width: (v) => /^\d{1,5}(\.\d{1,3})?(px|%)$/i.test(v),
+    'min-width': (v) => /^\d{1,5}(\.\d{1,3})?(px|%)$/i.test(v),
+    'text-align': (v) => ['left', 'center', 'right', 'justify', 'start', 'end'].includes(v.toLowerCase()),
+  };
+  const CSS_REFUSED = /(url|expression|image|var|attr|calc|env|import)\s*\(|\\|\/\*|[<>@{}]/i;
+  const cleanStyle = (name, raw) => {
+    const allowed = DOC_STYLE[name];
+    const value = decodeEntities(raw || '');
+    if (!allowed || !value || CSS_REFUSED.test(value)) return null;
+    const kept = [];
+    const seenProps = new Set();
+    for (const decl of value.split(';')) {
+      const at = decl.indexOf(':');
+      if (at === -1) continue;
+      const prop = decl.slice(0, at).trim().toLowerCase();
+      let v = decl.slice(at + 1).trim().replace(/!important$/i, '').trim();
+      if (!allowed.has(prop) || seenProps.has(prop) || !v) continue;
+      if (!STYLE_CHECK[prop] || !STYLE_CHECK[prop](v)) continue;
+      seenProps.add(prop);
+      kept.push(`${prop}: ${v}`);
+    }
+    return kept.length ? kept.join('; ') : null;
+  };
+  const DOC_VALUE = {
+    'data-type': (v, name) => (v === ({ ul: 'taskList', li: 'taskItem' })[name] ? v : null),
+    'data-checked': (v) => (v === 'true' || v === 'false' ? v : null),
+    'data-align': (v) => (['left', 'center', 'right'].includes(v) ? v : null),
+    'data-width': (v) => (/^\d{1,3}$/.test(v) && +v >= 1 && +v <= 100 ? v : null),
+    'data-color': (v) => (COLOUR.test(v) ? v : null),
+    'data-pending': (v) => (v.length <= 2048 && /^https?:\/\/[^\s"'<>]+$/i.test(v) ? v : null),
+    colwidth: (v) => (/^\d{1,5}(,\d{1,5}){0,50}$/.test(v) ? v : null),
+    colspan: (v) => (/^\d{1,3}$/.test(v) ? v : null),
+    rowspan: (v) => (/^\d{1,3}$/.test(v) ? v : null),
+    width: (v) => (/^\d{1,5}$/.test(v) ? v : null),
+    height: (v) => (/^\d{1,5}$/.test(v) ? v : null),
+    start: (v) => (/^\d{1,6}$/.test(v) ? v : null),
+    type: (v, name) => (name === 'input' ? (v.toLowerCase() === 'checkbox' ? 'checkbox' : null)
+      : (['1', 'a', 'A', 'i', 'I'].includes(v) ? v : null)),
+    class: (v, name) => (name === 'code' && /^language-[A-Za-z0-9_+-]{1,40}$/.test(v) ? v : null),
+    dir: (v) => (['ltr', 'rtl', 'auto'].includes(v.toLowerCase()) ? v.toLowerCase() : null),
+  };
+  const DOC_RENAME = { b: 'strong', i: 'em', del: 's', strike: 's' };
+
+  const PREVIEW_POLICY = { allowed: ALLOWED, global: GLOBAL_ATTRS, perElement: PER_ELEMENT_ATTRS, doc: false };
+  const DOCUMENT_POLICY = { allowed: DOC_ALLOWED, global: DOC_GLOBAL, perElement: DOC_ATTRS, doc: true };
+
+  const renderTag = (name, attrs, policy) => {
+    const pol = policy || PREVIEW_POLICY;
+    const allowed = pol.perElement[name];
     const parts = [name];
     if (name === 'a') parts.push(LINK_REL);
     const seen = new Set();
-    for (const [attr, value] of attrs) {
+    for (const [attr, rawValue] of attrs) {
+      let value = rawValue;
       // Every event handler is spelled on*, and nothing else here needs a
       // name that starts that way.
       if (attr.startsWith('on')) continue;
-      if (!GLOBAL_ATTRS.has(attr) && !(allowed && allowed.has(attr))) continue;
+      if (pol.doc && attr === 'style') {
+        if (seen.has(attr)) continue;
+        const style = cleanStyle(name, value);
+        if (style === null) continue;
+        seen.add(attr);
+        parts.push(`style="${escapeAttr(style)}"`);
+        continue;
+      }
+      if (!pol.global.has(attr) && !(allowed && allowed.has(attr))) continue;
+      if (pol.doc && DOC_VALUE[attr]) {
+        if (seen.has(attr)) continue;
+        if (attr === 'checked' || attr === 'disabled') { seen.add(attr); parts.push(attr); continue; }
+        const v = DOC_VALUE[attr](decodeEntities(value).trim(), name);
+        if (v === null) continue;
+        value = v;
+      }
+      if (pol.doc && attr === 'src' && !DATA_IMAGE.test(decodeEntities(value).replace(/[\u0000- \u007f- ]/g, ''))) continue;
       // One of each, the first as written — what the browser would keep.
       if (seen.has(attr)) continue;
       seen.add(attr);
@@ -187,7 +301,9 @@ const SanitizeHtml = (() => {
       parts.push(value === '' ? attr : `${attr}="${escapeAttr(value)}"`);
     }
     const open = parts.join(' ');
-    return VOID.has(name) ? `<${open}/>` : `<${open}>`;
+    if (pol.doc && name === 'img' && !seen.has('src')) return '';
+    if (pol.doc && name === 'input' && !seen.has('type')) return '';
+    return (VOID.has(name) || (pol.doc && name === 'col')) ? `<${open}/>` : `<${open}>`;
   };
 
   /* Skip a raw-text element's content: everything up to its end tag (or
@@ -199,7 +315,14 @@ const SanitizeHtml = (() => {
     return close === -1 ? html.length : close + 1;
   };
 
-  const sanitize = (html) => {
+  // Elements HTML gives no end tag: dropping one never means "skip to its
+  // end tag" (there is none, and waiting for it would eat the document).
+  const VOID_DROP = new Set(['embed', 'source', 'track', 'param', 'link', 'meta',
+    'base', 'area', 'frame', 'keygen']);
+
+  const sanitize = (html, policy) => {
+    const pol = policy || PREVIEW_POLICY;
+    const isVoid = (n) => VOID.has(n) || (pol.doc && n === 'col');
     const input = String(html == null ? '' : html);
     let out = '';
     let i = 0;
@@ -231,8 +354,9 @@ const SanitizeHtml = (() => {
         i = lt + 1;
         continue;
       }
-      const name = nameMatch[0].toLowerCase();
-      const parsed = readAttributes(input, lt + (closing ? 2 : 1) + name.length);
+      const tagName = nameMatch[0].toLowerCase();
+      const name = (pol.doc && DOC_RENAME[tagName]) || tagName;
+      const parsed = readAttributes(input, lt + (closing ? 2 : 1) + tagName.length);
       if (parsed === null) {
         // An unterminated tag: everything after it is suspect, so the
         // rest of the input becomes text rather than markup.
@@ -240,28 +364,35 @@ const SanitizeHtml = (() => {
         break;
       }
 
+      if (VOID_DROP.has(name)) {
+        i = parsed.end;
+        continue;
+      }
       if (DROP_WITH_CONTENT.has(name)) {
         i = closing ? parsed.end : skipContent(input, parsed.end, name);
         continue;
       }
-      if (!ALLOWED.has(name)) {
+      if (!pol.allowed.has(name)) {
         i = parsed.end;           // drop the tag, keep the text inside it
         continue;
       }
       if (closing) {
-        out += VOID.has(name) ? '' : `</${name}>`;
+        out += isVoid(name) ? '' : `</${name}>`;
       } else {
-        out += renderTag(name, parsed.attrs);
+        out += renderTag(name, parsed.attrs, pol);
       }
       i = parsed.end;
     }
     return out;
   };
 
-  return { sanitize };
+  const sanitizeDocument = (html) => sanitize(html, DOCUMENT_POLICY);
+  return { sanitize: (html) => sanitize(html, PREVIEW_POLICY), sanitizeDocument };
 })();
 
 window.sanitizeHtml = SanitizeHtml.sanitize;
+// The formatted-document allowlist (doc_editor.jsx): what the editor makes.
+window.sanitizeDocumentHtml = SanitizeHtml.sanitizeDocument;
 
 /* Node (the test harness) loads this file in a plain vm context, where
  * `module` exists only when it is required as a CommonJS module. */

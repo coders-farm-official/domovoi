@@ -249,6 +249,12 @@ UPLOAD_LIMITS: tuple[tuple[str, int], ...] = (
     ("/api/documents/drawings/write", 64 * 1024 * 1024),
     ("/api/documents/text", 64 * 1024 * 1024),
     ("/api/documents/sheet", 64 * 1024 * 1024),
+    # The document editor's saves and conversions: a formatted document
+    # with its pictures embedded (documents.py _DOC_MAX_BYTES, 32 MiB),
+    # as a JSON string, plus its markdown twin.
+    ("/api/documents/doc", 48 * 1024 * 1024),
+    ("/api/documents/doc-save-as", 48 * 1024 * 1024),
+    ("/api/documents/convert", 48 * 1024 * 1024),
     ("/api/chat/uploads", 64 * 1024 * 1024),
     # A document for a chat, and one a phone hands over to be read
     # (chat_documents.py caps the file itself at 100 MB, as it streams).

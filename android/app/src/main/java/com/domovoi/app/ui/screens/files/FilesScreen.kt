@@ -115,6 +115,8 @@ import com.domovoi.app.ui.components.Tone
 import com.domovoi.app.ui.components.fmtBytes
 import com.domovoi.app.ui.screens.documents.SheetEditorOverlay
 import com.domovoi.app.ui.screens.documents.TextEditorOverlay
+import com.domovoi.app.ui.screens.documents.WebDocEditor
+import com.domovoi.app.ui.screens.documents.opensInDocEditor
 import com.domovoi.app.ui.screens.documents.relFromEpochSec
 import com.domovoi.app.ui.screens.local.UploadButtonState
 import com.domovoi.app.ui.screens.local.UploadDest
@@ -260,6 +262,7 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
 
     var textEditorRel by remember { mutableStateOf<String?>(null) }
     var sheetEditorRel by remember { mutableStateOf<String?>(null) }
+    var docEditorRel by remember { mutableStateOf<String?>(null) }
     var imageEntry by remember { mutableStateOf<FileEntry?>(null) }
     var confirmDelete by remember { mutableStateOf<FileEntry?>(null) }
     var moveEntry by remember { mutableStateOf<FileEntry?>(null) }
@@ -375,6 +378,13 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
         // folder): text/markdown in the text editor, .xlsx/.csv in the sheet
         // editor; everything else opens with the system viewer.
         val how = openWith(e.name, e.kind)
+        // Documents on the server (formatted documents, markdown, Word) open
+        // in the server's own document editor, in the app; a phone folder
+        // has no server to edit on, so its files keep the on-phone editors.
+        if (inAppEditing && !source.onPhone && id == DOCUMENTS_LIBRARY_ID && opensInDocEditor(e.name)) {
+            docEditorRel = e.rel
+            return
+        }
         when {
             inAppEditing && how == OpenWith.SheetEditor -> sheetEditorRel = e.rel
             inAppEditing && how == OpenWith.TextEditor -> textEditorRel = e.rel
@@ -684,6 +694,12 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
         textEditorRel?.let { rel ->
             TextEditorOverlay(source, selectedId ?: "", rel) {
                 textEditorRel = null
+                pager.reload()
+            }
+        }
+        docEditorRel?.let { rel ->
+            WebDocEditor(app, rel) {
+                docEditorRel = null
                 pager.reload()
             }
         }

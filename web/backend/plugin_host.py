@@ -191,6 +191,12 @@ _WEB_BACKEND_CORE_IMPORTS = (
     "domovoi.help_desk.answer",
     "domovoi.help_desk.diagnostics",
     "domovoi.help_desk.delivery",
+    # The Documents editor's formatted documents (web/backend/api/
+    # documents.py): the allowlist, the file wrapper, the readers' text,
+    # and the Word conversion, which documents.py imports lazily.
+    "domovoi.richdoc",
+    "domovoi.richdoc.word",
+    "domovoi.richdoc.runner",
 )
 
 

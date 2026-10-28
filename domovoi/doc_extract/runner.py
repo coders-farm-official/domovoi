@@ -83,10 +83,13 @@ async def _extract_now(path: Path, kind: str, timeout: float, single_pass: int |
         try:
             _out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         except asyncio.TimeoutError:
-            proc.kill()
-            await proc.wait()
             log.warning("document read of %s took over %.0f s; stopped", Path(path).name, timeout)
             raise ExtractFailed("Reading that document took too long, so Domovoi stopped.")
+        finally:
+            # Timed out, or the read was cancelled: the worker never outlives it.
+            if proc.returncode is None:
+                proc.kill()
+                await asyncio.shield(proc.wait())
         out = work / "result.json"
         try:
             if out.stat().st_size > MAX_RESULT_BYTES:

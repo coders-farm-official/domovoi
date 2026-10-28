@@ -77,6 +77,9 @@ _MEDIA = {
     "csv": "text/csv",
     "txt": "text/plain",
     "md": "text/markdown",
+    # served as an attachment with the sandbox headers (inline_serve), never
+    # rendered on the dashboard's origin
+    "html": "text/html",
 }
 _META_KEYS = ("token", "name", "kind", "pages", "words", "parts", "scanned_pages", "garbled_pages",
               "summary", "notes", "size")

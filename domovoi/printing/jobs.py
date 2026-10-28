@@ -43,6 +43,10 @@ KIND_BY_EXT = {
     ".jpg": "image", ".jpeg": "image", ".png": "image", ".webp": "image", ".gif": "image",
     ".bmp": "image", ".tif": "image", ".tiff": "image",
     ".txt": "text", ".md": "markdown",
+    # A formatted document (the Documents editor's .html) prints as its
+    # text, headings and lists kept; its own Download → PDF keeps fonts and
+    # pictures.
+    ".html": "document", ".htm": "document",
     ".csv": "table", ".xlsx": "table",
 }
 PDF_FIRST_EXTS = (".docx", ".odt", ".doc", ".rtf")

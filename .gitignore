@@ -272,3 +272,7 @@ allowed_signers
 
 # stray PowerShell module cache left by test_windows_installer
 /Microsoft/
+
+# The editor bundles' npm sources install here only to build them
+# (scripts/vendor/editors/build.mjs); the bundles themselves are committed.
+scripts/vendor/editors/node_modules/

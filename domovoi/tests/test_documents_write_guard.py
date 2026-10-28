@@ -231,6 +231,9 @@ SAVES = [
     ("put", "/api/documents/sheet/data.csv", {"json": {"rows": []}}),
     ("post", "/api/documents/drawings/write",
      {"json": {"rel_path": "plan.excalidraw", "content": "{}"}}),
+    ("put", "/api/documents/doc/letter.html", {"json": {"html": "<p>hi</p>"}}),
+    ("post", "/api/documents/doc-save-as",
+     {"json": {"from_path": "notes.md", "format": "html", "html": "<p>hi</p>"}}),
 ]
 SAVE_IDS = [f"{m.upper()} {p}" for m, p, _ in SAVES]
 

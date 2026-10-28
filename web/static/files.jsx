@@ -6,7 +6,9 @@
  * OnlyOffice/Collabora iframe engines are retired. Rows inside
  * `core:documents` route their open-action BY TYPE (client-derived
  * `category`, mirroring the backend's _doc_category):
- *   * 'doc'      → markdown editor overlay (doc_editor.jsx · window.DocEditor)
+ *   * 'doc'      → the live document editor (doc_editor.jsx · window.DocEditor):
+ *                  formatted documents (.html, shown as "Document" with no
+ *                  extension), markdown (.md) and Word (.docx)
  *   * 'sheet'    → spreadsheet editor overlay (sheet_editor.jsx · window.SheetEditor)
  *   * 'drawing'  → in-page Excalidraw editor (.excalidraw)
  *   * 'newtab'   → open the /raw endpoint in a NEW TAB (pdf/images)
@@ -273,6 +275,8 @@ const DocRow = ({ doc, selected, onToggleSelect,
                   onOpenDoc, onOpenSheet, onOpenText, onOpenDrawing, onDelete,
                   onDragStartEntry }) => {
   const cat = doc.category || 'text';
+  // A formatted document is a "Document": its name, never ".html".
+  const formatted = FILES_FORMATTED_EXTS.has(doc.ext);
   const icon = cat === 'newtab' ? (doc.ext === '.pdf' ? 'file-text' : 'image')
     : cat === 'drawing' ? 'pen-tool'
     : cat === 'sheet' ? 'table'
@@ -280,7 +284,7 @@ const DocRow = ({ doc, selected, onToggleSelect,
 
   let primary;
   if (cat === 'doc') {
-    primary = { label: 'Edit', icon: 'edit', title: 'edit markdown',
+    primary = { label: 'Edit', icon: 'edit', title: 'open in the document editor',
       onClick: () => onOpenDoc(doc.rel_path) };
   } else if (cat === 'sheet') {
     primary = { label: 'Edit', icon: 'edit', title: 'edit spreadsheet',
@@ -312,10 +316,10 @@ const DocRow = ({ doc, selected, onToggleSelect,
       <Icon name={icon} size={18}/>
       <div className="files-row-main">
         <div className="files-row-name">
-          {doc.name}<span style={{ color: 'var(--fg-faint)' }}>{doc.ext}</span>
+          {doc.name}{!formatted && <span style={{ color: 'var(--fg-faint)' }}>{doc.ext}</span>}
         </div>
         <div style={{ fontSize: 11, color: 'var(--fg-faint)' }} className="mono">
-          {fmtBytes(doc.size)} · {liveRelTime(new Date(doc.modified_at * 1000).toISOString())}
+          {formatted ? 'Document · ' : ''}{fmtBytes(doc.size)} · {liveRelTime(new Date(doc.modified_at * 1000).toISOString())}
         </div>
       </div>
       <div className="files-row-acts">
@@ -340,7 +344,7 @@ const DocRow = ({ doc, selected, onToggleSelect,
 
 /* ---- "+ New" create menu (Documents library only) ---------- */
 const NEW_KINDS = [
-  { kind: 'doc',     label: 'Document',      icon: 'file-text', hint: 'Markdown document · .md' },
+  { kind: 'doc',     label: 'Document',      icon: 'file-text', hint: 'Fonts, pictures, tables' },
   { kind: 'sheet',   label: 'Spreadsheet',   icon: 'table',     hint: 'Workbook · .xlsx' },
   { kind: 'drawing', label: 'Drawing',       icon: 'edit-3',    hint: 'Excalidraw whiteboard' },
   { kind: 'text',    label: 'Text file',     icon: 'file',      hint: 'Plain text · name as typed' },
@@ -463,12 +467,19 @@ const NewMenu = ({ disabled, onPick }) => (
 
 /* Client mirror of the backend _doc_category (documents.py). Drives the
  * per-row editing affordance for the Documents library only. */
-const _FILES_OFFICE_WP = new Set(['.docx', '.doc', '.odt', '.rtf']);
+const _FILES_OFFICE_WP = new Set(['.doc', '.odt', '.rtf']);
+// Formatted documents (the editor's own .html files): listed as "Document",
+// by name, without the extension.
+const FILES_FORMATTED_EXTS = new Set(['.html', '.htm']);
+const filesDisplayName = (name) => {
+  const i = name.lastIndexOf('.');
+  return i > 0 && FILES_FORMATTED_EXTS.has(name.slice(i).toLowerCase()) ? name.slice(0, i) : name;
+};
 const _FILES_SHEET_EDIT = new Set(['.xlsx', '.csv']);
 const _FILES_IMAGE = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.ico', '.avif', '.svg']);
 const extOf = (name) => { const i = name.lastIndexOf('.'); return i >= 0 ? name.slice(i).toLowerCase() : ''; };
 const docCategory = (ext) => {
-  if (ext === '.md' || ext === '.markdown') return 'doc';
+  if (ext === '.md' || ext === '.markdown' || ext === '.docx' || FILES_FORMATTED_EXTS.has(ext)) return 'doc';
   if (_FILES_SHEET_EDIT.has(ext)) return 'sheet';
   if (_FILES_OFFICE_WP.has(ext) || ext === '.xls' || ext === '.ods' || ext === '.odg') return 'download';
   if (ext === '.excalidraw') return 'drawing';
@@ -773,14 +784,14 @@ const BrowserRow = ({ entry, libraryId, selected, onToggleSelect, editable, remo
       <input type="checkbox" checked={selected} title="select"
              onChange={() => onToggleSelect(entry.rel)}
              style={{ cursor: 'pointer', width: 15, height: 15, flexShrink: 0 }}/>
-      <Icon name={entryIcon(entry.kind)} size={18}/>
+      <Icon name={FILES_FORMATTED_EXTS.has(extOf(entry.name)) ? 'file-text' : entryIcon(entry.kind)} size={18}/>
       <div className="files-row-main" style={{ cursor: isDir ? 'pointer' : 'default' }}
            onClick={isDir ? onOpen : undefined}>
         <div className="files-row-name">
-          {entry.name}
+          {isDir ? entry.name : filesDisplayName(entry.name)}
         </div>
         <div style={{ fontSize: 11, color: 'var(--fg-faint)' }} className="mono">
-          {isDir ? 'folder' : fmtBytes(entry.size)}{iso ? ` · ${liveRelTime(iso)}` : ''}
+          {isDir ? 'folder' : `${FILES_FORMATTED_EXTS.has(extOf(entry.name)) ? 'Document · ' : ''}${fmtBytes(entry.size)}`}{iso ? ` · ${liveRelTime(iso)}` : ''}
         </div>
       </div>
       <div className="files-row-acts">

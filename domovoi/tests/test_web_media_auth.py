@@ -226,6 +226,7 @@ DOC_READS = [
     "/api/documents/text/notes.md",
     "/api/documents/raw/notes.md",
     "/api/documents/export/doc/notes.md",
+    "/api/documents/doc/notes.md",
 ]
 
 
