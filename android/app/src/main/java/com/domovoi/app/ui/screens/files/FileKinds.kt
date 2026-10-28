@@ -32,6 +32,19 @@ internal fun extOf(name: String): String {
     return name.substring(i + 1).lowercase()
 }
 
+/** Formatted documents: the document editor's own files (.html, and .htm,
+ *  the same format). Lists show them as "Document", by name only, with the
+ *  document icon, as the dashboard does (web/static/files.jsx
+ *  FILES_FORMATTED_EXTS / filesDisplayName): people never see "HTML". */
+private val FORMATTED_DOC_EXTS = setOf("html", "htm")
+
+internal fun isFormattedDocument(name: String, isDir: Boolean = false): Boolean =
+    !isDir && extOf(name) in FORMATTED_DOC_EXTS
+
+/** The name a list shows: a formatted document without its extension. */
+internal fun displayName(name: String, isDir: Boolean = false): String =
+    if (isFormattedDocument(name, isDir)) name.substring(0, name.lastIndexOf('.')) else name
+
 /** kind ∈ folder | audio | video | doc-office | doc-text | image | pdf | other. */
 internal fun fileKind(name: String, isDir: Boolean): String {
     if (isDir) return "folder"

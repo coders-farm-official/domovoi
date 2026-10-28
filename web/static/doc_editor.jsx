@@ -1560,6 +1560,11 @@
       },
       setContent: (html) => { if (bridge.editor) bridge.editor.commands.setContent(sanitizeDoc(html), true); },
       isEmpty: () => (bridge.editor ? bridge.editor.isEmpty : !initial),
+      // The editor is up and showing the document (not still loading, not
+      // destroyed). Only a live editor's content may be saved: getHTML()
+      // falls back to the content it was OPENED with, which a save must
+      // never write back over what has been edited since.
+      isLive: () => !!(bridge.editor && !bridge.editor.isDestroyed),
       focus: () => { if (bridge.editor) bridge.editor.commands.focus(); },
       setFonts: (registry) => { if (bridge.setFonts) bridge.setFonts(registry); },
       setReadOnly: (v) => { bridge.readOnly = !!v; if (bridge.applyEditable) bridge.applyEditable(); },
@@ -1757,6 +1762,9 @@ img { max-width: 100%; height: auto; }
     const hostRef = React.useRef(null);
     const edRef = React.useRef(null);
     const collabRef = React.useRef(null);
+    // The co-editing close in progress (it may save on the way out): the
+    // editor it saves from stays alive until it is done.
+    const closingRef = React.useRef(null);
     const seq = React.useRef({ change: 0, saved: 0, timer: 0, inflight: null });
     const blocked = refused || blockedReason;
     blockedRef.current = blocked;
@@ -1813,9 +1821,10 @@ img { max-width: 100%; height: auto; }
               notice((ev && ev.message) || COLLAB_OFF_TEXT);
               const ed = edRef.current;
               const d = doc;
-              if (ed && d && !blockedRef.current) {
+              if (ed && d && !blockedRef.current && (typeof ed.isLive !== 'function' || ed.isLive())) {
                 const body = { html: ed.getHTML() };
                 if (d.format === 'md') body.markdown = ed.getMarkdown();
+                if (collab.synced && ed.isEmpty()) body.allow_empty = true;
                 try {
                   await apiFetch(`/api/documents/doc/${encodeURIComponent(rel)}`,
                     { method: 'PUT', body: JSON.stringify(body), noPrompt: true });
@@ -1843,7 +1852,9 @@ img { max-width: 100%; height: auto; }
         dead = true;
         const c = collabRef.current;
         collabRef.current = null;
-        if (c && typeof c.close === 'function') { try { c.close(); } catch (e) { /* gone */ } }
+        if (c && typeof c.close === 'function') {
+          try { closingRef.current = Promise.resolve(c.close()).catch(() => {}); } catch (e) { /* gone */ }
+        }
       };
     }, [rel, reload]);
 
@@ -1857,14 +1868,31 @@ img { max-width: 100%; height: auto; }
       const ed = edRef.current;
       const d = state.doc;
       if (!ed || !d) return false;
+      // Co-editing writes the file through the saver below, with the
+      // revision it holds. A plain save here (Ctrl+S, the tab going to the
+      // background, "Try again") would look like a change made outside the
+      // editor: the shared document would be rebuilt from whatever this
+      // tab showed and everyone sent back to reopen it. Ask for a co-editing
+      // save instead.
+      if (coSaves()) {
+        const c = collabRef.current;
+        if (c && typeof c.saveNow === 'function') c.saveNow();
+        return true;
+      }
       if (d.format === 'docx' && docxChoice !== 'docx' && !(opts && opts.asWord)) { setAskDocx(true); setSave('choose'); return false; }
       if (blocked) return false;
+      // Never save an editor that isn't showing the document (still
+      // starting, or already closed): its getHTML() is what was opened.
+      if (typeof ed.isLive === 'function' && !ed.isLive()) return false;
       const s = seq.current;
       const target = s.change;
       if (s.inflight) { await s.inflight; if (s.saved >= target) return true; }
       setSave('saving');
       const body = { html: ed.getHTML() };
       if (d.format === 'md') body.markdown = ed.getMarkdown();
+      // An empty document from a live editor on its own is the person's
+      // doing (they deleted everything): the server lets it replace the file.
+      if (ed.isEmpty()) body.allow_empty = true;
       s.inflight = (async () => {
         try {
           await apiFetch(`/api/documents/doc/${encodeURIComponent(rel)}`, { method: 'PUT', body: JSON.stringify(body) });
@@ -1937,8 +1965,22 @@ img { max-width: 100%; height: auto; }
       const collab = collabRef.current;
       if (collab && typeof collab.setSaver === 'function') {
         collab.setSaver(async ({ headers }) => {
+          // The editor must be live and bound to a synced shared document.
+          // On the way out (the overlay unmounting, a page change) the
+          // editor is destroyed before the server's save request arrives,
+          // and getHTML() would hand back the content as it was OPENED:
+          // written with this revision's header, the file would silently
+          // lose every edit since (and a document opened blank would be
+          // emptied). Refusing lets the server ask another editor.
+          if (!ed.isLive() || collab.ready === false || !collab.synced) {
+            throw new Error('this editor is not showing the document');
+          }
           const body = { html: ed.getHTML() };
           if (d.format === 'md') body.markdown = ed.getMarkdown();
+          // The synced shared document is the truth: if it is empty, the
+          // emptiness is real (everything deleted, or an empty version
+          // restored), not a passing state.
+          if (ed.isEmpty()) body.allow_empty = true;
           try {
             await apiFetch(`/api/documents/doc/${encodeURIComponent(rel)}`, {
               method: 'PUT', headers: headers || {}, body: JSON.stringify(body), noPrompt: true });
@@ -1953,7 +1995,17 @@ img { max-width: 100%; height: auto; }
         });
       }
       ed.ready.then(() => ed.focus()).catch(() => {});
-      return () => { clearTimeout(seq.current.timer); ed.destroy(); edRef.current = null; };
+      return () => {
+        clearTimeout(seq.current.timer);
+        edRef.current = null;
+        // Leaving with co-editing on: close() may still be saving through
+        // this editor (the server answers save-now with a save request).
+        // Destroying it first would leave nothing live to save from.
+        const closing = closingRef.current;
+        closingRef.current = null;
+        if (closing) closing.then(() => ed.destroy());
+        else ed.destroy();
+      };
     }, [state.status, state.doc, state.content]);
 
     // ── keyboard, leaving ──

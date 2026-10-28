@@ -206,6 +206,45 @@ def is_empty(doc: Doc) -> bool:
     return doc.get_state() in (b"", b"\x00")
 
 
+# Blocks that hold nothing a person would miss when they hold no text: an
+# empty paragraph or heading, a line break. Anything else in an XML root (a
+# picture, a table, a rule, a list item, a checklist) counts as content.
+_HOLLOW_TAGS = frozenset({"paragraph", "heading", "hardBreak", "doc"})
+
+
+def has_content(doc: Doc) -> bool:
+    """Whether a document says anything: visible text, or a block that is
+    content in itself (a picture, a table...). A brand-new document's first
+    version (one empty paragraph) has none; restoring it clears the
+    document, so the restore route asks before it does."""
+    names = set(doc.keys())
+    for name, kind in ROOTS.items():
+        if name not in names:
+            continue
+        root = doc.get(name, type=kind)
+        if kind is XmlFragment:
+            stack: list[tuple[Any, int]] = [(root, 0)]
+            while stack:
+                node, depth = stack.pop()
+                if depth > _MAX_DEPTH:
+                    return True        # too deep to judge: assume it says something
+                for child in node.children:
+                    if isinstance(child, XmlText):
+                        if str(child).strip():
+                            return True
+                    elif isinstance(child, XmlElement):
+                        if (child.tag or "") not in _HOLLOW_TAGS:
+                            return True
+                        stack.append((child, depth + 1))
+        elif kind is Text:
+            if str(root).strip():
+                return True
+        elif kind in (Map, Array):
+            if len(root):
+                return True
+    return False
+
+
 def doc_from_update(update: bytes | None) -> Doc:
     doc = Doc()
     if update:

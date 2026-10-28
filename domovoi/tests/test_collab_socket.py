@@ -512,3 +512,61 @@ def test_a_move_tells_editors_and_their_old_path_saves_are_refused(client, docs)
         assert not (docs / "plan.md").exists()
     finally:
         cm.__exit__(None, None, None)
+
+
+# ─── wf/editors-followups: .htm, and restoring an empty version ─────────
+
+
+def test_htm_is_co_edited_like_html(client, docs):
+    (docs / "Old letter.htm").write_text("<p>Dear Ana</p>", encoding="utf-8")
+    r = client.get("/api/collab/doc", params={"path": "Old letter.htm"}, headers={HEADER: TOKEN})
+    assert r.status_code == 200, r.text
+    assert r.json()["doc_id"]
+
+
+def _blank_version_state() -> bytes:
+    """A brand-new document's first version: one empty paragraph."""
+    from pycrdt import Doc, XmlElement, XmlFragment, XmlText
+
+    d = Doc()
+    frag = d.get("default", type=XmlFragment)
+    frag.children.append(XmlElement("paragraph")).children.append(XmlText())
+    return d.get_update()
+
+
+def test_an_empty_version_is_said_to_be_empty_and_restored_only_on_purpose(client):
+    """2026-10-27: a restore of a new document's only version ("Opened from
+    the file", the blank file) emptied the document and its file. The
+    preview now says the version is empty, and the restore route refuses it
+    unless the person confirmed clearing the document (allow_empty)."""
+    did = doc_id(client)
+    import asyncio
+
+    blank = asyncio.run(store.add_snapshot(did, 1, "from_file", _blank_version_state(), []))
+    pv = client.get(f"/api/collab/history/{blank}", params={"path": "plan.md"},
+                    headers={HEADER: TOKEN}).json()
+    assert pv["blank"] is True
+    body = {"path": "plan.md", "version_id": blank}
+    r = client.post("/api/collab/restore", json=body, headers={HEADER: TOKEN, **RW})
+    assert r.status_code == 409, r.text
+    assert r.json()["detail"]["reason"] == "empty_version"
+    r = client.post("/api/collab/restore", json={**body, "allow_empty": True},
+                    headers={HEADER: TOKEN, **RW})
+    assert r.status_code == 200, r.text
+
+
+def test_a_version_with_content_restores_without_asking(client):
+    did = doc_id(client)
+    import asyncio
+
+    from pycrdt import Doc, Text
+
+    d = Doc()
+    d.get("text", type=Text).insert(0, "# Plan\nmilk\n")
+    sid = asyncio.run(store.add_snapshot(did, 1, "auto", d.get_update(), ["A"]))
+    pv = client.get(f"/api/collab/history/{sid}", params={"path": "plan.md"},
+                    headers={HEADER: TOKEN}).json()
+    assert pv["blank"] is False
+    r = client.post("/api/collab/restore", json={"path": "plan.md", "version_id": sid},
+                    headers={HEADER: TOKEN, **RW})
+    assert r.status_code == 200, r.text

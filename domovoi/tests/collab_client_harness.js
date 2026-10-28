@@ -79,6 +79,18 @@ const until = async (pred, what, ms = 10000) => {
     await until(() => saves.length >= 1, 'a save request', 15000);
     out.saves = saves.slice();
 
+    // saveNow() (the editor's Ctrl+S / tab-hidden path since
+    // wf/editors-followups): a co-editing save with the header, at once,
+    // not after the idle wait, and never a plain one.
+    const before = saves.length;
+    B.ydoc.getText('text').insert(0, 'now ');
+    await new Promise((r) => setTimeout(r, 100));
+    const t0 = Date.now();
+    out.saveNowSent = B.saveNow();
+    await until(() => saves.length > before, 'a save after saveNow', 2000);
+    out.saveNowMs = Date.now() - t0;
+    out.saveNowSave = saves[saves.length - 1];
+
     // Leaving with an unsaved edit saves on close().
     out.savedMsgs = [];
     B.on('saved', (m) => out.savedMsgs.push(m));

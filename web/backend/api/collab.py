@@ -69,7 +69,9 @@ DEVICE = [Depends(require_device)]
 # still saves through its own Documents route. Spreadsheets are not co-edited
 # in v1 (builder D); .xlsx comes back here, with its own Yjs root registered
 # in collab.content, when they are.
-COLLAB_EXTS = frozenset({".html", ".md", ".markdown", ".docx"})
+# .htm is the same formatted document as .html (documents._FORMATTED_EXTS,
+# richdoc.HTML_EXTS): it opens in the same editor and is co-edited the same way.
+COLLAB_EXTS = frozenset({".html", ".htm", ".md", ".markdown", ".docx"})
 
 COLLAB_HEADER = "x-domovoi-collab"
 
@@ -480,6 +482,9 @@ async def version(version_id: int, path: str = Query(..., max_length=1024)) -> d
         **_version_json(sn),
         "update": base64.b64encode(sn.state).decode("ascii"),
         "text": text_,
+        # Says nothing at all (a new document's first version): the panel
+        # says so, and restoring it needs allow_empty.
+        "blank": bool(result.get("blank")),
     }
 
 
@@ -487,6 +492,9 @@ class RestoreRequest(BaseModel):
     path: str = Field(..., max_length=1024)
     version_id: int
     device_id: Optional[str] = Field(None, min_length=3, max_length=64)
+    # Restoring a version that says nothing (a brand-new document's first
+    # version) clears the document; the person has to have said so.
+    allow_empty: bool = False
 
 
 @router.post("/restore", dependencies=DEVICE)
@@ -503,6 +511,16 @@ async def restore(request: Request, req: RestoreRequest) -> dict[str, Any]:
     sn = await store.get_snapshot(row.doc_id, req.version_id) if row is not None else None
     if row is None or sn is None or sn.state is None:
         raise HTTPException(status_code=404, detail="no such version")
+    if not req.allow_empty:
+        try:
+            result, _ = await workers.scratch_call("preview", [sn.state])
+        except (workers.WorkerFailed, workers.WorkerRefused):
+            raise HTTPException(status_code=409, detail="that version could not be restored") from None
+        if result.get("blank"):
+            raise HTTPException(status_code=409, detail={
+                "reason": "empty_version",
+                "message": "That version is empty: restoring it would clear the document.",
+            })
     user = await resolve_user(request)
     try:
         room = await rooms.MANAGER.open(row, target)

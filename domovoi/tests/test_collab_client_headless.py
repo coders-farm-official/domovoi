@@ -118,7 +118,12 @@ def test_two_browser_helpers_converge_save_and_leave_cleanly(server):
     assert out["status"] == "Saved"
     first = out["saves"][0]
     assert first["status"] == 200 and first["header"].count(";") == 2
+    # saveNow(): saved through co-editing (header) well before the idle wait.
+    assert out["saveNowSent"] is True
+    assert out["saveNowSave"]["status"] == 200 and out["saveNowSave"]["header"].count(";") == 2
+    assert out["saveNowSave"]["text"].startswith("now B: ")
+    assert out["saveNowMs"] < 2000
     # close() saved the edit made just before leaving, and the file is it.
     assert out["savesAfterClose"] >= 2
-    assert out["lastSaved"].startswith("last B: ")
+    assert out["lastSaved"].startswith("last now B: ")
     assert (docs / "plan.md").read_text(encoding="utf-8") == out["lastSaved"]

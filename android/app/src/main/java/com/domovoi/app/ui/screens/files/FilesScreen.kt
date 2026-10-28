@@ -739,7 +739,7 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
             body = if (e.isDir) {
                 "Delete \"${e.name}\" and everything inside it? This can't be undone."
             } else {
-                "Delete \"${e.name}\"? This can't be undone."
+                "Delete \"${displayName(e.name)}\"? This can't be undone."
             },
             confirmLabel = "delete",
             destructive = true,
@@ -974,7 +974,7 @@ private fun FileRow(
             )
             Column(Modifier.weight(1f)) {
                 Text(
-                    entry.name,
+                    displayName(entry.name, entry.isDir),
                     style = MaterialTheme.typography.titleSmall,
                     color = Domovoi.colors.fg,
                     maxLines = 1,
@@ -988,7 +988,8 @@ private fun FileRow(
                         if (entry.isDir) {
                             "folder · ${relFromEpochSec(entry.mtime)}"
                         } else {
-                            "${fmtBytes(entry.size)} · ${relFromEpochSec(entry.mtime)}"
+                            (if (isFormattedDocument(entry.name)) "Document · " else "") +
+                                "${fmtBytes(entry.size)} · ${relFromEpochSec(entry.mtime)}"
                         },
                         style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFamily),
                         color = Domovoi.colors.fgFaint,
@@ -1118,7 +1119,9 @@ private fun libIcon(name: String): ImageVector = when (name) {
 }
 
 // Entry `kind` → row glyph.
-private fun entryIcon(entry: FileEntry): ImageVector = when (entry.kind) {
+private fun entryIcon(entry: FileEntry): ImageVector = if (isFormattedDocument(entry.name, entry.isDir)) {
+    Icons.Outlined.Description
+} else when (entry.kind) {
     "folder" -> Icons.Filled.Folder
     "audio" -> Icons.Filled.MusicNote
     "doc-office" -> Icons.Outlined.Description

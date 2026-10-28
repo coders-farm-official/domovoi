@@ -48,6 +48,63 @@ const loadSheetUniver = () => {
   return _sheetUniverPromise;
 };
 
+/* Typing on a phone (wf/editors-followups, checked on the emulator with
+ * Gboard). Univer's desktop UI opens a cell's editor on a mouse double-click
+ * or on a keydown that names a printable key. A touch screen gives neither:
+ * a double tap selects the cell but never opens the editor (Univer's own
+ * double-click detection is mouse-only), and a soft keyboard's keydown is
+ * "Unidentified" (keyCode 229) with the text arriving as beforeinput/input.
+ * The text then went into Univer's hidden, closed cell editor: it showed in
+ * the formula bar, and Enter, the tick or another cell "committed" a cell
+ * that was never being edited, so the typing was silently dropped.
+ * This opens the editor the way the desktop would have:
+ *   - a double tap on the grid: edit the cell as it is (Univer's
+ *     startEditing(), the double-click mode, caret at the end);
+ *   - text (or an IME composition) arriving while no cell is open: open the
+ *     selected cell in typing mode (replaces it, as typing on a selected
+ *     cell does on the desktop), before the text lands, so none is lost.
+ * Returns the cleanup. */
+const SHEET_CELL_EDITOR_ID = '__INTERNAL_EDITOR__DOCS_NORMAL';
+const SHEET_EVENT_DBLCLICK = 3;   // Univer's DeviceInputEventType
+const SHEET_EVENT_KEYBOARD = 4;
+const sheetTouchEditing = (holder, univerAPI, fWorkbook) => {
+  if (!holder || !fWorkbook || typeof fWorkbook.isCellEditing !== 'function') return () => {};
+  let touchedAt = 0;
+  const editing = () => { try { return fWorkbook.isCellEditing(); } catch (e) { return true; } };
+  const open = (eventType) => {
+    if (editing()) return;
+    try {
+      if (eventType === SHEET_EVENT_DBLCLICK && typeof fWorkbook.startEditing === 'function') {
+        fWorkbook.startEditing();
+      } else {
+        univerAPI.syncExecuteCommand('sheet.operation.set-cell-edit-visible',
+          { visible: true, eventType, unitId: fWorkbook.getId() });
+      }
+    } catch (e) { /* Univer refused (a protected cell): nothing opens, as on the desktop */ }
+  };
+  const isCellEditor = (t) => !!(t && t.id && t.id.indexOf(SHEET_CELL_EDITOR_ID) >= 0);
+  const onPointer = (e) => { if (e.pointerType === 'touch' || e.pointerType === 'pen') touchedAt = Date.now(); };
+  const onDblclick = (e) => {
+    if (Date.now() - touchedAt > 1500 || !(e.target && e.target.tagName === 'CANVAS')) return;
+    open(SHEET_EVENT_DBLCLICK);
+  };
+  const onText = (e) => {
+    if (!isCellEditor(e.target)) return;
+    if (e.type === 'beforeinput' && !/^insert/.test(e.inputType || '')) return;
+    open(SHEET_EVENT_KEYBOARD);
+  };
+  holder.addEventListener('pointerdown', onPointer, true);
+  holder.addEventListener('dblclick', onDblclick, true);
+  holder.addEventListener('beforeinput', onText, true);
+  holder.addEventListener('compositionstart', onText, true);
+  return () => {
+    holder.removeEventListener('pointerdown', onPointer, true);
+    holder.removeEventListener('dblclick', onDblclick, true);
+    holder.removeEventListener('beforeinput', onText, true);
+    holder.removeEventListener('compositionstart', onText, true);
+  };
+};
+
 /* Univer's palette from the dashboard's tokens: its warm stone greys and
  * the amber accent instead of Univer's blue (colors_and_type.css --brand,
  * --brand-ink for anything drawn as text). */
@@ -414,6 +471,7 @@ const SheetEditorOverlay = ({ rel_path, onClose, fire, blockedReason = null, inA
             }
           }) : null;
         disposeFns.push(() => fontSub && fontSub.dispose && fontSub.dispose());
+        if (j.editable) disposeFns.push(sheetTouchEditing(holderRef.current, univerAPI, fWorkbook));
         if (!cancelled) setState({ status: 'ready' });
       } catch (e) {
         if (!cancelled) setState({ status: 'error', message: String((e && e.message) || e) });
