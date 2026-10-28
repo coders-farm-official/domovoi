@@ -86,6 +86,7 @@ def document_file(body_html: str, title: str = "") -> str:
 
 
 _BODY_OPEN = re.compile(r"<body(?=[\s/>])", re.I)
+_BODY_CLOSE = re.compile(r"</body", re.I)
 
 
 def looks_like_document(text: str) -> bool:
@@ -110,8 +111,12 @@ def document_body(text: str) -> str:
         gt = text.find(">", m.end())
         if gt == -1:
             return ""
-        close = text.lower().rfind("</body")
-        end = close if close > gt else len(text)
+        # the LAST </body, found in the original text (not text.lower(),
+        # whose offsets drift where lowercasing changes a character's length)
+        last = None
+        for last in _BODY_CLOSE.finditer(text, gt + 1):
+            pass
+        end = last.start() if last is not None else len(text)
         return text[gt + 1:end].strip()
     return text.strip()
 

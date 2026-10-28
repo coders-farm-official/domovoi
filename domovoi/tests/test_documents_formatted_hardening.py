@@ -173,3 +173,82 @@ def test_the_word_copy_runs_in_its_own_process_and_is_stopped_when_slow(monkeypa
     with pytest.raises(runner.ConvertFailed, match="too long"):
         asyncio.run(runner.to_docx("<p>x</p>", "t", timeout=1.0))
     assert time.perf_counter() - t < 10
+
+
+# ─── Round 2 lows ────────────────────────────────────────────────────
+
+# Characters whose lower-case form is a different length: offsets taken in
+# s.lower() would point at the wrong place in s.
+LENGTH_CHANGING = ["İ", "ẞ", "Ω", "K", "Ⱥ", "Ⱦ"]
+
+
+@pytest.mark.parametrize("ch", LENGTH_CHANGING)
+def test_raw_text_ends_are_found_in_the_original_text(ch):
+    pad = ch * 20
+    out = sanitize_html(f"<p>{pad}</p><textarea>secret</textarea><p>after</p><script>x()</script><p>end</p>")
+    assert "after" in out and "end" in out
+    assert "secret" not in out and "x()" not in out
+    md = html_to_markdown(f"<p>{pad}</p><noscript>n</noscript><h1>Kept</h1>")
+    assert "# Kept" in md and "n\n" not in md
+
+
+@pytest.mark.parametrize("ch", LENGTH_CHANGING)
+def test_the_body_end_is_found_in_the_original_text(ch):
+    page = f"<html><body><p>{ch * 30}</p><p>tail</p></body><p>outside</p></html>"
+    body = document_body(page)
+    assert body.endswith("<p>tail</p>") and "outside" not in body
+
+
+def _alive(pid: int) -> bool:
+    import psutil
+
+    try:
+        p = psutil.Process(pid)
+        return p.is_running() and p.status() != psutil.STATUS_ZOMBIE
+    except psutil.NoSuchProcess:
+        return False
+
+
+@pytest.mark.parametrize("which", ["richdoc", "doc_extract"])
+def test_a_cancelled_request_takes_its_worker_with_it(which, monkeypatch, tmp_path):
+    """The browser went away mid-conversion: the worker process is killed,
+    not left running to its own timeout."""
+    import importlib
+
+    runner = importlib.import_module(f"domovoi.{which}.runner")
+    pidfile = tmp_path / "pid"
+    code = f"import os, time; open({str(pidfile)!r}, 'w').write(str(os.getpid())); time.sleep(60)"
+    monkeypatch.setattr(runner, "worker_argv", lambda work: [sys.executable, "-c", code])
+
+    async def go():
+        if which == "richdoc":
+            task = asyncio.create_task(runner.to_docx("<p>x</p>", "t", timeout=60))
+        else:
+            doc = tmp_path / "a.txt"
+            doc.write_text("x", encoding="utf-8")
+            task = asyncio.create_task(runner.extract(doc, "txt", timeout=60))
+        for _ in range(100):
+            await asyncio.sleep(0.1)
+            if pidfile.exists() and pidfile.read_text():
+                break
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        return int(pidfile.read_text())
+
+    pid = asyncio.run(go())
+    for _ in range(50):
+        if not _alive(pid):
+            break
+        time.sleep(0.1)
+    assert not _alive(pid)
+
+
+def test_the_editor_checks_marks_on_every_inline_node_and_opens_links_safely():
+    from pathlib import Path
+
+    jsx = (Path(__file__).resolve().parents[2] / "web" / "static" / "doc_editor.jsx").read_text(encoding="utf-8")
+    assert "if (node.isInline) {" in jsx and "if (node.isText) {" not in jsx
+    assert "rel: 'noopener noreferrer nofollow', class: null" in jsx
+    assert "openOnClick: false" in jsx
+    assert "window.open(href, '_blank', 'noopener,noreferrer')" in jsx

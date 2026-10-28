@@ -586,8 +586,12 @@
   const fixedMark = (mark) => {
     const a = mark.attrs;
     switch (mark.type.name) {
-      case 'link':
-        return SAFE.href(a.href) ? mark : null;
+      case 'link': {
+        if (!SAFE.href(a.href)) return null;
+        const fixedLink = { href: a.href, target: '_blank', rel: 'noopener noreferrer nofollow', class: null };
+        const same = Object.keys(fixedLink).every((k) => a[k] === fixedLink[k] || (a[k] == null && fixedLink[k] == null));
+        return same ? mark : mark.type.create(Object.assign({}, a, fixedLink));
+      }
       case 'highlight':
         return a.color == null || SAFE.colour(a.color) ? mark : mark.type.create(Object.assign({}, a, { color: null }));
       case 'textStyle': {
@@ -618,7 +622,9 @@
               tr.setNodeMarkup(tr.mapping.map(pos), undefined, attrs);
               fixes += 1;
             }
-            if (node.isText) {
+            // every inline node's marks (a hard break or a picture can carry
+            // a textStyle from a co-editor's device just as text can)
+            if (node.isInline) {
               node.marks.forEach((m) => {
                 const fixed = fixedMark(m);
                 if (fixed === m) return;
@@ -1050,6 +1056,19 @@
       editorProps: {
         attributes: { spellcheck: 'true', 'aria-label': 'Document', role: 'textbox', 'aria-multiline': 'true' },
         transformPastedHTML: (html) => sanitizeDoc(cleanPastedHtml(html)),
+        // A link is opened only on purpose (Ctrl/Cmd-click, or any click
+        // when the document is read-only), in a new tab with no way back
+        // to this page (noopener: no reverse tabnabbing).
+        handleClick: (view, pos, event) => {
+          const a = event.target && event.target.closest ? event.target.closest('a[href]') : null;
+          if (!a || !view.dom.contains(a)) return false;
+          if (view.editable && !(event.ctrlKey || event.metaKey)) return false;
+          const href = a.getAttribute('href') || '';
+          if (!SAFE.href(href) || href.startsWith('#')) return false;
+          event.preventDefault();
+          window.open(href, '_blank', 'noopener,noreferrer');
+          return true;
+        },
         handlePaste: (view, event) => {
           const dt = event.clipboardData;
           if (!dt) return false;

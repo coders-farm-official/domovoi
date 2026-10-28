@@ -40,6 +40,16 @@ RAW_TEXT = frozenset({
 })
 
 
+_RAW_END: dict[str, "re.Pattern[str]"] = {}
+
+
+def _raw_end(name: str) -> "re.Pattern[str]":
+    pat = _RAW_END.get(name)
+    if pat is None:
+        pat = _RAW_END[name] = re.compile("</" + re.escape(name), re.I)
+    return pat
+
+
 class Token(NamedTuple):
     kind: str                         # "start" | "end" | "text"
     name: str = ""                    # tag name, lower case
@@ -92,7 +102,6 @@ def tokenize(markup: str) -> Iterator[Token]:
     """The tokens of ``markup``, in order (see the module docstring)."""
     s = str(markup or "")
     n = len(s)
-    lower: str | None = None
     i = 0
     while i < n:
         lt = s.find("<", i)
@@ -130,12 +139,14 @@ def tokenize(markup: str) -> Iterator[Token]:
         yield Token("start", name=name, attrs=tuple(attrs), self_closing=self_closing)
         i = after
         if name in RAW_TEXT and not self_closing:
-            if lower is None:
-                lower = s.lower()
-            end = lower.find("</" + name, i)
-            if end == -1:
+            # Searched in the ORIGINAL string, case-insensitively: offsets
+            # into s.lower() are wrong wherever lowercasing changes a
+            # character's length ("İ".lower() is two characters).
+            m_end = _raw_end(name).search(s, i)
+            if m_end is None:
                 body, i = s[i:], n
             else:
+                end = m_end.start()
                 close = s.find(">", end)
                 body, i = s[i:end], (n if close == -1 else close + 1)
             if body:

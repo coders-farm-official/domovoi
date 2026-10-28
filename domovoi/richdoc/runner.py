@@ -73,10 +73,14 @@ async def to_docx(markup: str, title: str = "", *, timeout: float | None = None)
             try:
                 _out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
             except asyncio.TimeoutError:
-                proc.kill()
-                await proc.wait()
                 log.warning("Word conversion took over %.0f s; stopped", timeout)
                 raise ConvertFailed("Making the Word copy took too long, so Domovoi stopped.") from None
+            finally:
+                # Timed out, or the request was cancelled (the browser went
+                # away): the worker never outlives the conversion.
+                if proc.returncode is None:
+                    proc.kill()
+                    await asyncio.shield(proc.wait())
             out = work / "out.docx"
             if out.is_file():
                 if out.stat().st_size > MAX_OUT_BYTES:

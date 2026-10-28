@@ -1712,7 +1712,16 @@ the other:
   page is copied into the document when the site allows it and dropped
   when it doesn't. The raw file is still only ever served as a download
   with the sandbox headers (below). `domovoi/tests/test_documents_formatted.py`
-  holds the cases.
+  holds the cases. Two documented limits:
+  - The phone app's editor checks every request its page makes against
+    the server's verified identity, but Android doesn't show it WebSocket
+    connections, so the co-editing socket opened from that page isn't
+    re-checked on its own. The page itself (and the token it holds, in
+    memory only) was handed over only after the identity check.
+  - Sanitising runs in linear time, but a pathological 32 MB document
+    (deeply nested, all markup) still takes about 20 seconds of the
+    documents pool on load or save; a real document takes about a second.
+    Word copies run in their own time-limited process instead.
 - **Rendered markdown is sanitised before it reaches the page.** Chat
   replies and other markdown previews run `marked` output through
   `web/static/sanitize_html.js`, an allowlist-and-escape pass that keeps
