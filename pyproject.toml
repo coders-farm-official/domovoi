@@ -1,6 +1,6 @@
 [project]
 name = "domovoi"
-version = "1.0.0rc3"
+version = "1.0.0"
 description = "Domovoi — the home computer system that just works: media, files, rooms, voice and optional AI, all at home"
 requires-python = ">=3.11"
 # Floors are the lowest versions the code is known to work with AND, for

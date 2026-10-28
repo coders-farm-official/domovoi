@@ -4,6 +4,46 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-28 — 1.0.0
+
+Version 1.0.0 (the app 1.0.0, versionCode 26102801; the Windows Setup
+1.0.0). The first full release. It holds every entry between this one and
+"1.0.0-rc3: audiobooks on the phone" (2026-10-20), which was the newest in
+1.0.0-rc3; nothing else changed in the release commit itself. The update
+applies ten migrations by itself, **V033** (printing) to **V042**
+(co-editing); there is nothing to run by hand. The plain-language summary
+is `docs/release/v1.0.0.md`.
+
+What a household notices:
+
+* **One Chat**, on the home server or on the phone itself, with history,
+  titles, search, documents, photos, letters and lookups you allow.
+* **Documents in chat:** ask about a PDF or Word file, summarize a long
+  one, write a resume or letter and save it, photograph a letter and ask
+  what to do, have a room read a document aloud or take a letter.
+* **Printing and scanning** on network printers, no drivers.
+* **New Documents and Sheets editors** with co-editing (documents),
+  history, 73 built-in fonts, photos, and Word, Markdown and PDF.
+* **Files:** an Other view, and whole folders can be uploaded.
+* **Rooms:** Wi-Fi setup that works with mesh and WPA2/WPA3 routers, a
+  phone room that warns before its battery runs out, quiet hours, a spare
+  Windows laptop through a double-click Setup.
+* **Windows:** one **Update Domovoi** button updates both halves of an
+  install. An install whose tray is from 1.0.0-rc3 or earlier updates its
+  Windows side once by hand (run the new Setup); from then on the button
+  does it.
+* **Container guard:** a repair by Setup, an update or a new room no
+  longer trips the guard over a rebuilt music player.
+* **Security:** the new editors, co-editing and printing each had a
+  written security review with its findings fixed before release, and
+  the Windows update only runs a Setup signed with Domovoi's own release
+  key.
+* **Also:** Settings in groups with one Health page, AI chat and questions
+  as an option, the help desk, rooms are called rooms everywhere, a
+  smaller (R8-shrunk) app.
+
+Known limits are in `docs/release/v1.0.0.md` and the entries below.
+
 ## 2026-10-27 — Documents and spreadsheets: the new editors
 
 Web, dashboard and Android app. Database migrations **V041** (fonts) and

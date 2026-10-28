@@ -3,7 +3,8 @@
 Play Console → Policy and programs → App content → **Data safety**. Each
 answer below says which code makes it true. Drafted 2026-10-15 for the
 first release (versionCode 26101501), re-checked against the code on
-2026-10-21 (1.0.0-rc3, versionCode 26102001). Re-check it whenever a
+2026-10-21 (1.0.0-rc3, versionCode 26102001) and again on 2026-10-28 for
+1.0.0 (versionCode 26102801; see "Note for 1.0.0" below). Re-check it whenever a
 feature starts sending something new; `PRIVACY_POLICY.md` must say the
 same.
 
@@ -65,6 +66,7 @@ Not declared, and why:
 | Voice or sound recordings (phone chats) | Turned into text **on the phone**, never stored, never sent (`assistant/VoiceSession.kt`, `MicCapture.kt`; `NoNetworkTest` pins that the assistant's code names no network class outside `assistant/lookup/`, which only a lookup the person allows uses (see below)). |
 | Phone chat questions and answers | Stay on the phone (`assistant/ConversationStore.kt`, app-private, outside backups: `res/xml/data_extraction_rules.xml`, `AlertsManifestTest`), apart from the lookups declared below. |
 | Documents, letter photos and drafts handed to the home server | Only when the person taps it, and only to the user's own Domovoi server (see "the judgement call"): "ask the home server" for a PDF's text (`POST /api/chat/documents/extract`, read in a temporary folder and kept nowhere), "Use home server" for a long summary (`/api/chat/doc-jobs`, upload deleted once read, text in the server's memory only, 24 hours at most), "a letter for the home server" (`POST /api/chat/letters/read`, read in memory, never written; `assistant/PhoneLetters.kt`), and "send to home" for a draft (one file into the server's Documents → From Chat, `ui/screens/chat/ServerDrafts.kt`). Nothing goes to Coders Farm or a third party. |
+| Documents and sheets edited in the app (2026-10-27) | The app opens the server's own editor page in an in-app page: the page, its fonts and its co-editing traffic all come from the user's own Domovoi server; the household token goes to that page only after the server's identity check, and every request the page makes is checked. Edits are saved to the user's own server. Same judgement call as above: not collected, not shared. Nothing goes to a font service or any other third party. |
 | Voice recordings in room mode, the chat mic, drop-in | Sent only to the user's own Domovoi server (see "the judgement call"). |
 | Photos, videos, music, files | Read on the phone in local mode (`data/LocalMedia.kt`, `ui/screens/files/PhoneFileSource.kt`); uploaded only to the user's own server when the user picks "upload". |
 | Camera | QR frames decoded on the phone and dropped (`roommode/RoomScanner.kt`). A photo taken for a phone chat's question (`ui/screens/chat/PhonePhotoButtons.kt`) is held in memory, read by the model on the phone, and discarded from memory after the reply; it is never written to storage, the gallery or another app, and never sent to anyone but the user's own server, and only when the person picks "a letter for the home server" on a phone that can't read photos itself (`PhonePicturesControllerTest` checks nothing of it reaches disk). For a letter, the text read from the photo is kept in that conversation on the phone and deleted with it. |
@@ -130,6 +132,36 @@ The manifest adds the normal permission
 `com.android.alarm.permission.SET_ALARM` (handing timers and alarms to the
 Clock app). It collects and shares nothing, so the form's answers stay as
 drafted; Play lists it among the app's permissions on the install screen.
+
+## Note for 1.0.0: what changed since rc3 (checked 2026-10-28)
+
+Checked against the manifest (`git diff v1.0.0-rc3 HEAD -- android/app/src/main/AndroidManifest.xml`)
+and the code. **No answer on the form changes.** Open the form anyway
+and confirm it still matches this file, because Play compares it with the
+bundle's permissions.
+
+* **Permissions since rc3:** the same ones already drafted above:
+  `ACCESS_COARSE_LOCATION`, `ACCESS_FINE_LOCATION`, `READ_CONTACTS`,
+  `READ_CALENDAR`, `com.android.alarm.permission.SET_ALARM`. Nothing else
+  was added. There is no new foreground service type (still
+  `microphone|mediaPlayback`, `mediaPlayback`, `dataSync`).
+* **Battery level (phone rooms):** a phone in room mode sends its battery
+  level, whether it is charging, which charger and its other room health
+  figures to the user's own Domovoi server, now also when the charger goes
+  on or off and when the level moves. Same destination as before (the
+  household's server, covered by "the judgement call"), so not collected,
+  not shared. The privacy policy ("What goes to your Domovoi server")
+  already lists it. The household's other phones get a "Room batteries"
+  notification from the server's report; that is a local notification
+  channel under the existing `POST_NOTIFICATIONS` permission.
+* **Documents and sheets, co-editing, fonts:** the server's editor pages
+  open inside the app; edits and the co-editing traffic go only to the
+  user's own server, and the fonts are served by that server. No third
+  party is contacted. The privacy policy now says so.
+* **A new provider, `${applicationId}.files`:** not exported, grants one
+  file read-only to an app the person picks (DECLARATIONS.md §1).
+* **Printing and scanning** are done by the server; the app only shows
+  them.
 
 ## Security practices (shown on the listing)
 

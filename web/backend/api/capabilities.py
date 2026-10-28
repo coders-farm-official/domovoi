@@ -33,7 +33,7 @@ log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/capabilities", tags=["capabilities"])
 
-SERVER_VERSION = "1.0.0rc3"
+SERVER_VERSION = "1.0.0"
 DOMOVOI_API = "1.0.0"
 
 # Static display table for CORE handlers (§8): name → label/tone. Kept

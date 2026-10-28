@@ -1,0 +1,9 @@
+Domovoi 1.0.0 is here.
+
+- One Chat: on your home server or on your phone, with history and search
+- Ask about a PDF or Word file, write a letter, photograph a letter and ask what it says
+- Edit documents and sheets in the app, with fonts, photos and editing together
+- A spare phone as a room now warns before its battery runs out
+- Quiet hours for room announcements
+- Print and scan from Files
+- Upload whole folders, and a new Other view in Files

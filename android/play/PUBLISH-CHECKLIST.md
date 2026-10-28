@@ -180,6 +180,14 @@ Work down the list; each has its drafted answer:
    finding 2: switch to the HTTPS sink if asked), the photo/video
    permissions (finding 3), and the foreground-service videos.
 
+### Release notes for 1.0.0
+
+The "What's new" text is `WHATS-NEW-v1.0.0.txt` in this folder (en-US, under
+500 characters): paste it as the release notes of the Production release
+(and the Internal testing one). Re-open the Data safety form (section 5, item 6) and the Foreground
+service entries and confirm they still match; nothing in them changes
+for 1.0.0.
+
 ## 7. Better room-mode video (optional, recommended)
 
 The emulator's room had no server to answer. On a real spare phone paired

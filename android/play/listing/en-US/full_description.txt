@@ -12,7 +12,7 @@ WITH YOUR DOMOVOI SERVER
 • Movies and videos from your library, on your phone.
 • Audiobooks: listen at home or save a book to your phone for the road. Your place is kept, and if you got further in the kitchen, the app offers to pick up from there.
 • Radio stations and podcasts.
-• Your household's files and documents: browse, open and add to them from your phone.
+• Your household's files and documents: browse, open, edit and add to them from your phone. Documents and spreadsheets open in the same editors as the dashboard.
 • The whole house at a glance: which rooms are playing, every timer counting down, and anything that needs attention.
 • Timer and reminder alerts on your phone when one goes off anywhere in the house.
 • Drop in on a room like an intercom.
