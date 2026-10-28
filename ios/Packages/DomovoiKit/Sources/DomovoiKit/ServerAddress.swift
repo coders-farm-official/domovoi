@@ -47,10 +47,26 @@ public enum ServerAddress {
     /// is not a server address".
     ///
     /// The quirk of running the check over everything after the scheme, path
-    /// included, is Android's too and is kept on purpose: an address with a
-    /// path gets `:6369` glued onto the path. Nothing in the app types one (a
-    /// trailing `/` is already gone), and the result is refused by
-    /// ``ServerURL`` rather than saved wrong.
+    /// included, is Android's too, and so is what it does: an address with a
+    /// path gets `:6369` glued onto the **path**, and the result is then
+    /// saved, because the authority in front of it still parses.
+    ///
+    /// `"192.168.1.30/api"` is saved as `http://192.168.1.30/api:6369`, and
+    /// `"http://192.168.1.30:6390/api/health"` as
+    /// `http://192.168.1.30:6390/api/health:6369`. ``ServerURL`` does not
+    /// refuse either: it reads the authority and stops at the first `/`, so
+    /// it sees `192.168.1.30` (port 80) and `192.168.1.30:6390`, both on the
+    /// home network, and the cleartext check passes. The nonsense is in the
+    /// part of the string nothing reads — until the day something does.
+    ///
+    /// This is **not** fixed here. Android's `ServerAddress.kt` does exactly
+    /// the same thing, the saved string is shared vocabulary between the two
+    /// apps, and a one-sided fix would be the divergence. It is reported to
+    /// the owner as a both-sides fix; `ServerAddressTests` pins the current
+    /// behaviour, so the day it is fixed that test fails and says so.
+    ///
+    /// In practice nothing in the app types a path: both entry points offer
+    /// a host and an optional port, and a trailing `/` is already gone.
     private static func endsInPort(_ text: String) -> Bool {
         var digits = 0
         var index = text.endIndex

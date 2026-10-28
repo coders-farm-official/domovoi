@@ -7,11 +7,19 @@ import XCTest
 /// here on the policy.
 ///
 /// Every host in `android/.../net/CleartextPolicyTest.kt` is below, in the
-/// same two lists. The three Kotlin cases that drive an OkHttp client
-/// (`cleartextToLoopbackStillReachesTheServer`,
-/// `cleartextOutsideTheHomeNetworkFailsBeforeConnecting`,
-/// `theAppsApiClient…`) have no twin yet: they test the enforcement point,
-/// which arrives with `DomovoiClient`. Add them in that batch.
+/// same two lists. **Four** of that file's ten cases have no twin here:
+///
+///  - `cleartextToLoopbackStillReachesTheServer`
+///  - `cleartextOutsideTheHomeNetworkFailsBeforeConnecting`
+///  - `theAppsApiClientCarriesThePolicy`
+///  - `theAppsApiClientStillTalksToTheHomeNetwork`
+///
+/// All four drive a real OkHttp client (the last two through the app's
+/// `ApiClient`), so they test the enforcement point rather than the rule —
+/// on Android an interceptor that throws `UnknownServiceException` before DNS
+/// or a socket is touched, on iOS a `URLSession` delegate that refuses the
+/// task instead of starting it. That lands with `DomovoiClient`, so these
+/// four belong in that file, in that batch. The other six are all below.
 final class CleartextPolicyTests: XCTestCase {
 
     private let homeHosts = [

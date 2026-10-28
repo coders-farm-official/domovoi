@@ -36,8 +36,25 @@ public enum CleartextPolicy {
     /// Whether plain http / ws to `host` (a name or an IP literal) is allowed.
     public static func cleartextPermitted(_ host: String?) -> Bool {
         guard let host else { return false }
-        // Kotlin's `trim()` drops Unicode whitespace at both ends; Swift's
-        // `.whitespacesAndNewlines` set is the same intent.
+        // Kotlin's `trim()` vs Swift's `.whitespacesAndNewlines`, spelled out
+        // because a reviewer has already misread it once (and reported Swift
+        // as the more permissive side, which it is not).
+        //
+        // Kotlin's `trim()` uses `Char.isWhitespace()`, which on the JVM is
+        // `Character.isWhitespace(ch) || Character.isSpaceChar(ch)`. The
+        // second half is Unicode category Zs, so U+00A0 NO-BREAK SPACE *is*
+        // trimmed by Kotlin — and Swift's `.whitespacesAndNewlines` (Zs + Zl
+        // + Zp + the ASCII controls) trims it too. The two agree there.
+        //
+        // The one real difference runs the safe way: U+001C…U+001F (the file,
+        // group, record and unit separators) are whitespace to
+        // `Character.isWhitespace` but are not in Swift's set, so Kotlin
+        // trims them and Swift does not. A host with one of those on the end
+        // therefore reaches the checks below with it still attached, matches
+        // no name, no suffix and no IP literal, and is refused. Swift is
+        // *stricter* here, which is the direction that cannot hurt.
+        //
+        // Change neither side without the other: this is the Android rule.
         var h = host.trimmingCharacters(in: .whitespacesAndNewlines)
         while h.hasSuffix(".") { h = String(h.dropLast()) }   // Kotlin trimEnd('.')
         h = h.lowercased()
