@@ -263,18 +263,31 @@
     4413: 'This document is too large to edit together',
     4410: 'This document was moved or renamed',
     4415: 'This kind of document can’t be edited together',
-    4429: 'Too many wrong passwords from here: wait a few minutes',
+    4416: 'This document can’t be edited together right now; it opens on its own',
+    4429: 'Too many failed attempts from here: wait a few minutes',
   };
+
+  /* Thrown by open() when co-editing is off for a document (its shared
+   * state broke the server's document worker): the editor opens the file
+   * on its own instead, read and saved the ordinary way, with a plain
+   * notice. `err.unavailable` is true. */
+  function unavailableError() {
+    var e = new Error(CLOSE_TEXT[4416]);
+    e.unavailable = true;
+    return e;
+  }
 
   function open(docPath, opts) {
     opts = opts || {};
     return ensureLibs().then(function () {
       return fetchMeta(docPath).then(function (meta) {
+        if (meta && meta.unavailable) throw unavailableError();
         writeCache(docPath, meta);
         return meta;
       }, function (err) {
         // Offline (or the server restarting): open from this browser's own
         // copy when there is one. Refusals (401/403/404) are not offline.
+        if (err && err.unavailable) throw err;
         var c = cached(docPath);
         if (c && !(err && err.status && err.status < 500)) return Object.assign({ offline: true }, c);
         throw err;
@@ -436,6 +449,12 @@
           ev.emit('restored', msg); break;
         case 'limit':
           ev.emit('limit', msg); break;
+        case 'unavailable':
+          // Co-editing was turned off for this document while it was open:
+          // the editor reopens the file on its own (event 'unavailable').
+          collab.closedReason = CLOSE_TEXT[4416];
+          ev.emit('unavailable', msg);
+          break;
         case 'gone':
           collab.closedReason = CLOSE_TEXT[4404]; ev.emit('gone', msg); break;
         case 'moved':

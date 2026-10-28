@@ -283,9 +283,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await chat_api.stop_unsent_sweeper()
         # Co-editing rooms: last edits to Postgres, a version kept, sockets
         # told the server is restarting (they reconnect and resync).
+        from web.backend.collab import workers as collab_workers
         from web.backend.collab.rooms import MANAGER as collab_rooms
 
         await collab_rooms.shutdown()
+        await collab_workers.stop_scratch()
         await listen_task.stop()
         await poll_loop.stop()
         # Uninstall the import guard on shutdown. Irrelevant for a real

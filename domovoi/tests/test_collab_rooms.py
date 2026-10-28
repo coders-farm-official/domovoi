@@ -45,10 +45,14 @@ def docs(monkeypatch, tmp_path):
 
 
 @pytest.fixture
-def manager(monkeypatch):
+async def manager(monkeypatch):
     m = rooms.RoomManager()
     monkeypatch.setattr(rooms, "MANAGER", m)
     yield m
+    # No worker outlives its test.
+    for room in list(m.rooms.values()):
+        if room.worker is not None:
+            room.worker.kill()
 
 
 def make_peer(room, name="Ana", *, readonly=False, epoch=None, can_save=False):
@@ -99,6 +103,18 @@ async def connect(room, sim, peer):
     await pump(room, (peer, sim))
 
 
+async def server_doc(room):
+    """What the room's worker holds, decoded here (tests only: the web
+    process itself never loads pycrdt)."""
+    async with room.lock:
+        _, (state,) = await room.call("encode")
+    return content.doc_from_update(state)
+
+
+async def server_text(room) -> str:
+    return str((await server_doc(room)).get("text", type=content.Text))
+
+
 async def open_room(manager, docs, name="plan.md"):
     row = await store.get_or_create(name)
     return await manager.open(row, docs / name)
@@ -131,7 +147,7 @@ async def test_two_clients_converge_through_the_room(collab_db, docs, manager):
     await room.handle(pa, ua)
     await room.handle(pb, ub)
     await pump(room, (pa, a), (pb, b))
-    server = str(room.ydoc.get("text", type=content.Text))
+    server = await server_text(room)
     assert a.text() == b.text() == server
     assert "Ana was here." in server and server.startswith("Draft: ")
 
@@ -147,7 +163,7 @@ async def test_a_read_only_session_sees_edits_but_its_own_go_nowhere(collab_db, 
     await room.handle(pr, r.edit_text(0, "vandal "))
     await room.handle(pw, w.edit_text(0, "ok "))
     await pump(room, (pw, w), (pr, r))
-    assert str(room.ydoc.get("text", type=content.Text)) == "ok # Plan\n"
+    assert await server_text(room) == "ok # Plan\n"
     assert "vandal" not in w.text()
 
 
@@ -264,7 +280,7 @@ async def test_the_state_survives_a_restart(collab_db, docs, manager, monkeypatc
     monkeypatch.setattr(rooms, "MANAGER", fresh)
     row = await store.get_by_path("plan.md")
     again = await fresh.open(row, docs / "plan.md")
-    assert str(again.ydoc.get("text", type=content.Text)) == expected
+    assert await server_text(again) == expected
     assert again.seeded and again.rev == room.rev
     # And a client reconnecting with nothing local gets all of it.
     c = SimClient(3)
@@ -391,7 +407,7 @@ async def test_restore_of_rich_text_keeps_elements_attributes_and_marks(collab_d
     await connect(room, a, pa)
     await room.handle(pa, a.append_paragraph("Dear Sam"))
     await room.handle(pa, control({"t": "seeded"}))
-    v = room.ydoc.get_update()
+    v = (await server_doc(room)).get_update()
     await room.handle(pa, a.append_paragraph("delete me"))
     await room.restore(v, "Ana")
     await pump(room, (pa, a))
@@ -452,7 +468,7 @@ async def test_a_change_while_nobody_had_it_open_rebuilds_on_open(collab_db, doc
     (docs / "plan.md").write_text("uploaded over it\n", encoding="utf-8")
     row = await store.get_by_path("plan.md")
     again = await manager.open(row, docs / "plan.md")
-    assert again.epoch == row.epoch + 1 and not again.seeded and content.is_empty(again.ydoc)
+    assert again.epoch == row.epoch + 1 and not again.seeded and again.empty
 
 
 async def test_an_offline_phone_s_stale_copy_is_kept_not_merged(collab_db, docs, manager):
@@ -463,7 +479,7 @@ async def test_an_offline_phone_s_stale_copy_is_kept_not_merged(collab_db, docs,
     await seed(room, a, pa)
     # The phone goes offline and keeps typing.
     phone = SimClient(9)
-    phone.doc.apply_update(room.ydoc.get_update())
+    phone.doc.apply_update((await server_doc(room)).get_update())
     stale_epoch = room.epoch
     phone.edit_text(0, "typed on the bus ")
     # Meanwhile the file is replaced and the room rebuilt.
@@ -477,7 +493,7 @@ async def test_an_offline_phone_s_stale_copy_is_kept_not_merged(collab_db, docs,
     await connect(room2, phone, pp)
     assert phone.last_control("reset")["kept"] is True
     assert pp.closes[0][0] == rooms.CLOSE_RESET
-    assert content.is_empty(room2.ydoc)          # nothing old leaked in
+    assert room2.empty                           # nothing old leaked in
     snaps = await store.list_snapshots(row.doc_id)
     copy = next(s for s in snaps if s.kind == "offline_copy")
     assert copy.editors == ["Phone"]
@@ -492,7 +508,7 @@ async def test_a_view_only_stale_copy_adds_no_version(collab_db, docs, manager):
     await connect(room, a, pa)
     await seed(room, a, pa)
     viewer = SimClient(9)
-    viewer.doc.apply_update(room.ydoc.get_update())
+    viewer.doc.apply_update((await server_doc(room)).get_update())
     viewer.edit_text(0, "junk ")
     pv = rooms.Peer(**{k: getattr(make_peer(room, "Viewer", readonly=True), k)
                        for k in ("send_bytes", "close", "name", "color", "readonly", "source")},
@@ -550,7 +566,7 @@ async def test_a_document_past_its_size_limit_takes_no_more(collab_db, docs, man
     await connect(room, a, pa)
     await room.handle(pa, a.edit_text(0, "y" * 800))
     await settle()
-    assert content.is_empty(room.ydoc)
+    assert room.empty
     assert pa.closes[0][0] == rooms.CLOSE_TOO_LARGE
 
 

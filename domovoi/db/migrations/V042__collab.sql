@@ -43,6 +43,10 @@ CREATE TABLE IF NOT EXISTS collab_docs (
     -- and the next editor to connect is asked to save it.
     rev            BIGINT NOT NULL DEFAULT 0,
     saved_rev      BIGINT NOT NULL DEFAULT 0,
+    -- The stored state broke the document worker twice (web/backend/collab/
+    -- worker.py): co-editing is off and the document opens single-editor
+    -- from its file, until the file changes and the state is rebuilt.
+    unavailable    BOOLEAN NOT NULL DEFAULT FALSE,
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );

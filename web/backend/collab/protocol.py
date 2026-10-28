@@ -28,7 +28,18 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-from pycrdt import write_var_uint
+# Nothing here imports pycrdt: the web process never loads it (documents
+# live in worker subprocesses, web/backend/collab/worker.py), so the
+# y-websocket framing is written out by hand.
+
+
+def write_var_uint(num: int) -> bytes:
+    out = bytearray()
+    while num > 127:
+        out.append(128 | (num & 127))
+        num >>= 7
+    out.append(num)
+    return bytes(out)
 
 MSG_SYNC = 0
 MSG_AWARENESS = 1
@@ -39,6 +50,11 @@ MSG_CONTROL = 100
 SYNC_STEP1 = 0
 SYNC_STEP2 = 1
 SYNC_UPDATE = 2
+
+# The root types the editors here write to, by name and kind. The web
+# process refuses any other root before a worker sees it (guard.check);
+# the worker maps the kinds to pycrdt types (content.ROOTS).
+ROOT_KINDS: dict[str, str] = {"default": "xml", "text": "text"}
 
 # An update that changes nothing, as Yjs encodes it (no structs, empty
 # delete set). A client's sync step 2 is this when the server already had
@@ -143,3 +159,32 @@ def parse_control(buf: bytes, pos: int) -> dict[str, Any]:
     if not isinstance(doc, dict) or not isinstance(doc.get("t"), str):
         raise ProtocolError("control message has no type")
     return doc
+
+
+# ─── Sync messages (y-protocols/sync) ───────────────────────────────────
+
+
+def sync_step1(state_vector: bytes) -> bytes:
+    return bytes([MSG_SYNC, SYNC_STEP1]) + var_bytes(state_vector)
+
+
+def sync_step2(update: bytes) -> bytes:
+    return bytes([MSG_SYNC, SYNC_STEP2]) + var_bytes(update)
+
+
+def sync_update(update: bytes) -> bytes:
+    return bytes([MSG_SYNC, SYNC_UPDATE]) + var_bytes(update)
+
+
+EMPTY_STATE_VECTOR = bytes([0])
+
+
+def parse_state_vector(sv: bytes) -> dict[int, int]:
+    """client -> clock, from an encoded state vector."""
+    n, pos = read_var_uint(sv, 0)
+    out: dict[int, int] = {}
+    for _ in range(n):
+        client, pos = read_var_uint(sv, pos)
+        clock, pos = read_var_uint(sv, pos)
+        out[client] = clock
+    return out

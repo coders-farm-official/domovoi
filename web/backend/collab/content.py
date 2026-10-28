@@ -32,17 +32,22 @@ from typing import Any
 
 from pycrdt import Array, Doc, Map, Text, XmlElement, XmlFragment, XmlText
 
-ROOTS: dict[str, type] = {
-    "default": XmlFragment,
-    "text": Text,
-}
+from web.backend.collab.protocol import ROOT_KINDS
+
+_KINDS: dict[str, type] = {"xml": XmlFragment, "text": Text, "map": Map, "array": Array}
+
+ROOTS: dict[str, type] = {name: _KINDS[kind] for name, kind in ROOT_KINDS.items()}
 
 
-def register_root(name: str, kind: type) -> None:
-    """Declare a root type an editor uses, so restore and preview see it."""
-    if kind not in (XmlFragment, Text, Map, Array):
-        raise ValueError(f"unsupported root type {kind!r}")
-    ROOTS[name] = kind
+def register_root(name: str, kind: str) -> None:
+    """Declare a root an editor uses ("xml", "text", "map" or "array") in
+    THIS process. For a root an editor really uses, add it to
+    ``protocol.ROOT_KINDS`` instead: the web process's pre-filter and every
+    worker read that dict, and a call here would not reach the workers."""
+    if kind not in _KINDS:
+        raise ValueError(f"unsupported root kind {kind!r}")
+    ROOT_KINDS[name] = kind
+    ROOTS[name] = _KINDS[kind]
 
 
 def _present_roots(doc: Doc) -> list[tuple[str, type]]:

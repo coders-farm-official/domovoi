@@ -54,7 +54,7 @@ from domovoi import admin_auth
 from domovoi.transport_guard import host_allowed
 from domovoi.admin_auth import require_device, require_device_read
 from web.backend.api import documents as documents_api
-from web.backend.collab import content, rooms, store
+from web.backend.collab import rooms, store, workers
 from web.backend.db import session_scope
 from web.backend.middleware import cors_origin_regex
 
@@ -283,6 +283,10 @@ async def _serve_socket(ws: WebSocket, doc_id: str, token: Optional[str], source
         # rebound public name is refused here (review L4).
         if not host_allowed(ws.headers.get("host")):
             raise Refusal(rooms.CLOSE_FORBIDDEN, "not a name this server answers to")
+        if rooms.MANAGER.crash_blocked(source):
+            # This device's changes broke document workers several times
+            # lately: it waits (CRASH_WINDOW_SEC) before co-editing again.
+            raise Refusal(rooms.CLOSE_THROTTLED, "too many failed changes from this device; try later")
         access = await socket_access(ws, token)
         row = await store.get(doc_id) if len(doc_id) <= 64 else None
         if row is None:
@@ -307,7 +311,9 @@ async def _serve_socket(ws: WebSocket, doc_id: str, token: Optional[str], source
         except rooms.RoomsFull:
             raise Refusal(rooms.CLOSE_BUSY, "too many documents are open right now") from None
         except rooms.RoomUnsafe:
-            raise Refusal(rooms.CLOSE_TOO_LARGE, "this document cannot be opened for editing together") from None
+            raise Refusal(rooms.CLOSE_UNAVAILABLE, "co-editing is not available for this document") from None
+        except (workers.WorkerFailed, workers.WorkerRefused):
+            raise Refusal(rooms.CLOSE_RETRY, "the server could not open the document just now") from None
         if not room.has_room_for(readonly):
             raise Refusal(rooms.CLOSE_BUSY, "too many people have this document open")
     except Refusal as r:
@@ -383,7 +389,15 @@ async def open_doc(request: Request, path: str = Query(..., max_length=1024)) ->
     target = _collab_target(path)
     rel = documents_api._rel_of(target)
     row = await store.get_or_create(rel)
+    if row.unavailable:
+        row = await _maybe_available_again(row, target)
     room = rooms.MANAGER.rooms.get(row.doc_id)
+    if row.unavailable:
+        # Its stored state broke the document workers: the editor opens the
+        # file on its own, read and saved the ordinary way.
+        return {"doc_id": row.doc_id, "path": rel, "unavailable": True,
+                "readonly": not await _rest_may_write(request, target),
+                "user": await resolve_user(request)}
     return {
         "doc_id": row.doc_id,
         "path": rel,
@@ -393,6 +407,21 @@ async def open_doc(request: Request, path: str = Query(..., max_length=1024)) ->
         "ws": f"/api/collab/{row.doc_id}",
         "editing_now": len(room.peers) if room is not None else 0,
     }
+
+
+async def _maybe_available_again(row: store.DocRow, target: Path) -> store.DocRow:
+    """Co-editing comes back once the file has changed since the state that
+    broke the workers was built (someone saved it single-editor): the shared
+    state is rebuilt from the file, under a new epoch."""
+    async with rooms.path_lock(row.rel_path):
+        try:
+            sha = rooms.file_fingerprint(target)[0]
+        except OSError:
+            return row
+    if row.file_sha256 is not None and sha == row.file_sha256:
+        return row
+    await store.rebuild(row.doc_id)
+    return await store.get(row.doc_id) or row
 
 
 _KIND_LABELS = {
@@ -439,11 +468,15 @@ async def version(version_id: int, path: str = Query(..., max_length=1024)) -> d
     sn = await store.get_snapshot(row.doc_id, version_id) if row is not None else None
     if sn is None or sn.state is None:
         raise HTTPException(status_code=404, detail="no such version")
-    doc = content.doc_from_update(sn.state)
+    try:
+        result, _ = await workers.scratch_call("preview", [sn.state])
+        text_ = str(result.get("text") or "")
+    except (workers.WorkerFailed, workers.WorkerRefused):
+        raise HTTPException(status_code=409, detail="this version cannot be shown") from None
     return {
         **_version_json(sn),
         "update": base64.b64encode(sn.state).decode("ascii"),
-        "text": content.preview_text(doc),
+        "text": text_,
     }
 
 
@@ -473,7 +506,7 @@ async def restore(request: Request, req: RestoreRequest) -> dict[str, Any]:
     except rooms.RoomsFull:
         raise HTTPException(status_code=503, detail="too many documents are open right now") from None
     except rooms.RoomUnsafe:
-        raise HTTPException(status_code=409, detail="this document cannot be restored here") from None
+        raise HTTPException(status_code=409, detail="co-editing is not available for this document") from None
     room.holds += 1         # before any await: the room stays open for us
     try:
         sid = await room.restore(sn.state, user["name"])
@@ -481,6 +514,8 @@ async def restore(request: Request, req: RestoreRequest) -> dict[str, Any]:
         raise HTTPException(status_code=409, detail="the document is still opening; try again") from None
     except rooms.RoomGone:
         raise HTTPException(status_code=409, detail="the document changed just now; try again") from None
+    except rooms.RestoreFailed:
+        raise HTTPException(status_code=409, detail="that version could not be restored") from None
     finally:
         room.holds -= 1
         await rooms.MANAGER.release(room)

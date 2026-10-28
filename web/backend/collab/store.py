@@ -30,11 +30,12 @@ class DocRow:
     file_mtime_ns: Optional[int]
     rev: int
     saved_rev: int
+    unavailable: bool = False
 
 
 _DOC_COLUMNS = (
     "doc_id, rel_path, epoch, state, seeded, file_sha256, file_size, "
-    "file_mtime_ns, rev, saved_rev"
+    "file_mtime_ns, rev, saved_rev, unavailable"
 )
 
 
@@ -44,6 +45,7 @@ def _row(r: Any) -> DocRow:
         state=bytes(r.state) if r.state is not None else None,
         seeded=r.seeded, file_sha256=r.file_sha256, file_size=r.file_size,
         file_mtime_ns=r.file_mtime_ns, rev=r.rev, saved_rev=r.saved_rev,
+        unavailable=bool(r.unavailable),
     )
 
 
@@ -108,11 +110,13 @@ async def pending_updates(doc_id: str, epoch: int) -> list[bytes]:
     return [bytes(r.data) for r in rows]
 
 
-async def append_update(doc_id: str, epoch: int, data: bytes, rev: int) -> None:
+async def append_updates(doc_id: str, epoch: int, batch: list[bytes], rev: int) -> None:
+    """The updates a worker accepted, one row each, in order (the web
+    process never merges updates: that would mean running pycrdt here)."""
     async with session_scope() as s:
         await s.execute(
             text("INSERT INTO collab_updates (doc_id, epoch, data) VALUES (:id, :e, :d)"),
-            {"id": doc_id, "e": epoch, "d": data},
+            [{"id": doc_id, "e": epoch, "d": data} for data in batch],
         )
         await s.execute(
             text(
@@ -181,6 +185,7 @@ async def rebuild(doc_id: str) -> int:
             await s.execute(
                 text(
                     "UPDATE collab_docs SET epoch = epoch + 1, state = NULL, seeded = FALSE, "
+                    "unavailable = FALSE, "
                     "file_sha256 = NULL, file_size = NULL, file_mtime_ns = NULL, rev = 0, "
                     "saved_rev = 0, updated_at = now() WHERE doc_id = :id RETURNING epoch"
                 ),
@@ -189,6 +194,16 @@ async def rebuild(doc_id: str) -> int:
         ).first()
         await s.execute(text("DELETE FROM collab_updates WHERE doc_id = :id"), {"id": doc_id})
     return int(r.epoch) if r is not None else 0
+
+
+async def mark_unavailable(doc_id: str, value: bool) -> None:
+    """Co-editing off (or back on) for a document whose stored state breaks
+    the workers; it opens single-editor from its file meanwhile."""
+    async with session_scope() as s:
+        await s.execute(
+            text("UPDATE collab_docs SET unavailable = :v, updated_at = now() WHERE doc_id = :id"),
+            {"id": doc_id, "v": value},
+        )
 
 
 async def forget(rel_paths: Iterable[str]) -> list[str]:

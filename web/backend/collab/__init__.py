@@ -8,10 +8,25 @@ Browsers and the app run **Yjs** with the stock ``y-websocket`` provider
 
 Modules:
   protocol  the y-websocket frames, plus Domovoi's small control messages
+  guard     a cheap linear pre-filter every incoming update passes
   rooms     one live room per open document: relay, persistence, saving,
             history, outside-change detection, limits
+  workers   starting, calling (with timeouts) and replacing workers
+  worker    the subprocess that holds a document: the ONLY place pycrdt
+            runs (apply, diff, encode, restore, preview), with a nesting
+            check after every apply
   store     Postgres (V042): collab_docs, collab_updates, collab_snapshots
-  content   the little the server reads of a document (restore, preview)
+  content   what the worker reads of a document (restore, preview)
+
+**Crash isolation (security review round 2).** yrs, under pycrdt, recurses
+without a depth limit, and a crafted update can overflow the native stack.
+So the web process never loads pycrdt: each open document lives in its own
+worker subprocess, an update is relayed and stored only after its worker
+has taken it, and a worker that dies or stalls costs only the update that
+did it (its sender is closed, a new worker loads the document from
+Postgres, everyone else stays and resyncs). A stored state that breaks the
+worker twice turns co-editing off for that document; it then opens
+single-editor from its file until the file changes.
 
 **Two copies, one truth each.**
 

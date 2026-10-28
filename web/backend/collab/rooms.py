@@ -1,15 +1,21 @@
 """Live co-editing rooms: one per document someone has open.
 
-A room holds the document's shared state in memory (a pycrdt ``Doc``),
-relays edits and presence between the sockets in it, and keeps Postgres up
-to date. It exists while someone is connected (or while a restore runs) and
+A room relays edits and presence between the sockets in it and keeps
+Postgres up to date. The document itself lives in the room's WORKER, a
+subprocess (web/backend/collab/worker.py): pycrdt never runs in the web
+process, so whatever an update does to yrs, it cannot take the web process
+down. An update is relayed and persisted only after the worker has applied
+it (and checked its nesting); if the worker dies or stalls, that update is
+refused, its sender is closed, and a new worker loads the document from
+Postgres while everyone else stays connected and resyncs. It exists while someone is connected (or while a restore runs) and
 is dropped when the last one leaves, after a final flush.
 
 The jobs a room does on its one-second tick:
 
-* **persist**: edits received since the last tick are merged into ONE row
-  of ``collab_updates``; every ``COMPACT_ROWS`` rows (or ``COMPACT_BYTES``)
-  the whole state replaces ``collab_docs.state`` and the rows go;
+* **persist**: edits the worker accepted since the last tick are written
+  to ``collab_updates``; every ``COMPACT_ROWS`` rows (or ``COMPACT_BYTES``)
+  the worker encodes the whole state, which replaces ``collab_docs.state``,
+  and the rows go;
 * **ask for the clean file**: when the state has edits the file does not
   (``rev > saved_rev``) and nobody has typed for ``SAVE_IDLE_SEC``, the room
   sends a ``save`` control message to ONE writable client, the one that
@@ -22,8 +28,9 @@ The jobs a room does on its one-second tick:
   (an upload over it, another app, a save from an editor that is not
   co-editing) and the room is rebuilt from the file (``rebuild``).
 
-Everything here runs on the event loop: pycrdt documents are not shared
-across threads, and every operation on one is quick.
+Everything here runs on the event loop; every call to a worker is
+awaited under the room's lock, so the worker sees updates in the order
+they are relayed.
 """
 
 from __future__ import annotations
@@ -37,17 +44,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
 
-from pycrdt import (
-    Doc,
-    create_sync_message,
-    create_update_message,
-    handle_sync_message,
-    merge_updates,
-)
-
-from web.backend.collab import content, guard, store
+from web.backend.collab import guard, store, workers
 from web.backend.collab.protocol import (
+    EMPTY_STATE_VECTOR,
     EMPTY_UPDATE,
+    ROOT_KINDS,
     MSG_AUTH,
     MSG_AWARENESS,
     MSG_CONTROL,
@@ -65,6 +66,9 @@ from web.backend.collab.protocol import (
     parse_control,
     read_var_bytes,
     read_var_uint,
+    sync_step1,
+    sync_step2,
+    sync_update,
 )
 
 log = logging.getLogger(__name__)
@@ -102,8 +106,14 @@ FILE_CHECK_SEC = 30.0
 COMPACT_ROWS = 200
 COMPACT_BYTES = 2 * 1024 * 1024
 
+# Worker crashes one source may cause before its sockets are refused for a while.
+CRASHES_PER_SOURCE = 3
+CRASH_WINDOW_SEC = 600.0
+
 # Close codes. y-websocket stops reconnecting on 4400-4499 and retries on
-# everything else, so a refusal that reconnecting cannot fix is in 44xx.
+# everything else, so a refusal that reconnecting cannot fix is in 44xx, and
+# anything the server itself is going through (a worker restarting, too
+# busy, shutting down) is NOT, so the client comes back on its own.
 CLOSE_UNAUTHORIZED = 4401
 CLOSE_FORBIDDEN = 4403
 CLOSE_NOT_FOUND = 4404
@@ -113,7 +123,9 @@ CLOSE_TOO_LARGE = 4413
 CLOSE_UNSUPPORTED = 4415
 CLOSE_BAD_MESSAGE = 4400
 CLOSE_THROTTLED = 4429
+CLOSE_UNAVAILABLE = 4416   # co-editing is off for this document (its state broke workers)
 CLOSE_RATE = 4508          # too fast: transient, the client retries
+CLOSE_RETRY = 4502         # the server had trouble (a worker restarting): transient
 CLOSE_BUSY = 4503          # too many people / documents open: transient
 CLOSE_SHUTDOWN = 1012      # the server is restarting
 
@@ -247,7 +259,9 @@ class Room:
         self.rel_path = row.rel_path
         self.target = target
         self.epoch = row.epoch
-        self.ydoc = Doc()
+        self.worker: Optional[workers.Worker] = None
+        self.sv: bytes = EMPTY_STATE_VECTOR     # the worker's last state vector
+        self.empty = True
         self.peers: list[Peer] = []
         self.holds = 0
         self.awareness: dict[int, AwarenessEntry] = {}
@@ -284,22 +298,77 @@ class Room:
         self.closing = False
         self.done = asyncio.Event()
         self.rebuild_wanted = False
-        # Where every struct of the document sits (web/backend/collab/guard).
-        self.index = guard.StructIndex()
 
-    # ── loading ──
-    def load(self, state: Optional[bytes], updates: list[bytes]) -> None:
-        # Everything stored was read by guard.check_update on the way in.
-        # Applying never walks the structure (only printing and deleting a
-        # deep one do), so the whole is applied, then read once more as one
-        # clean encoding to rebuild the index; a document that breaks the
-        # limits is refused here, before anything else touches it.
-        for blob in ([state] if state else []) + list(updates):
-            guard.check_values(blob)      # deep values crash apply_update itself
-            self.ydoc.apply_update(blob)
-        self.index = guard.index_for(self.ydoc.get_update())
-        self.approx_size = len(self.ydoc.get_update())
+    # ── the worker ──
+    async def start(self, state: Optional[bytes], updates: list[bytes]) -> None:
+        """A worker holding this document, loaded from what Postgres has.
+        Raises workers.WorkerFailed / WorkerRefused (see RoomManager.open)."""
+        blobs = ([state] if state else []) + list(updates)
+        w = await workers.start_worker(f"doc {self.doc_id}")
+        try:
+            info, _ = await w.call("load", {}, blobs)
+            _, (sv,) = await w.call("sv")
+        except BaseException:
+            w.kill()
+            raise
+        self.worker = w
+        self.sv = sv
+        self.empty = bool(info.get("empty"))
+        self.approx_size = sum(len(b) for b in blobs)
         self.rows_since_compact = len(updates)
+
+    async def call(self, op: str, blobs: tuple[bytes, ...] | list[bytes] = (),
+                   args: Optional[dict] = None) -> tuple[dict, list[bytes]]:
+        """A call to this room's worker (the caller holds ``self.lock``)."""
+        if self.worker is None or self.worker.dead:
+            raise workers.WorkerFailed("no worker")
+        return await self.worker.call(op, args or {}, blobs)
+
+    async def recover(self) -> bool:
+        """The worker died or stalled: keep what it had accepted, start a
+        new one from Postgres, and ask everyone still here for anything the
+        server lacks. Twice in a row it cannot load: co-editing is turned
+        off for this document. Called with ``self.lock`` held."""
+        if self.worker is not None:
+            self.worker.kill()
+        self.worker = None
+        try:
+            await self.flush(compact=False)
+        except Exception as e:  # noqa: BLE001
+            log.warning("collab %s: flush before restart failed: %s", self.doc_id, e)
+        for attempt in (1, 2):
+            row = await store.get(self.doc_id)
+            if row is None or row.epoch != self.epoch:
+                break
+            try:
+                await self.start(row.state, await store.pending_updates(row.doc_id, row.epoch))
+            except (workers.WorkerFailed, workers.WorkerRefused) as e:
+                log.warning("collab %s: worker restart %d failed: %s", self.doc_id, attempt, e)
+                continue
+            log.info("collab %s: worker restarted", self.doc_id)
+            for p in self.peers:
+                if not p.archive:
+                    p.send(sync_step1(self.sv))
+            return True
+        await self.give_up()
+        return False
+
+    async def give_up(self) -> None:
+        """The stored state breaks workers: co-editing is off for this
+        document until its file changes (it opens single-editor meanwhile;
+        the file was always the source of truth)."""
+        log.warning("collab %s: %s marked unavailable for co-editing", self.doc_id, self.rel_path)
+        try:
+            await store.mark_unavailable(self.doc_id, True)
+        except Exception as e:  # noqa: BLE001
+            log.warning("collab %s: could not record that: %s", self.doc_id, e)
+        for p in list(self.peers):
+            p.send(control_message({"t": "unavailable"}))
+            p.kill_after(CLOSE_UNAVAILABLE, "co-editing is not available for this document")
+        self.closed = True
+        self.closing = True
+        MANAGER.drop(self)
+        self.done.set()
 
     @property
     def writable_peers(self) -> list[Peer]:
@@ -339,12 +408,12 @@ class Room:
                                        "user": {"name": peer.name, "color": peer.color}}))
             # An empty state vector: the client answers with EVERYTHING it
             # holds, which is what its offline copy is made of.
-            peer.send(create_sync_message(Doc()))
+            peer.send(sync_step1(EMPTY_STATE_VECTOR))
             return
         if not self.seeded and self.seed_peer is None and not peer.readonly:
             self.grant_seed(peer, announce=False)
         peer.send(control_message(self.hello(peer)))
-        peer.send(create_sync_message(self.ydoc))
+        peer.send(sync_step1(self.sv))
         if self.awareness:
             peer.send(awareness_message(encode_awareness_update(list(self.awareness.values()))))
 
@@ -412,12 +481,15 @@ class Room:
                 pass
             else:
                 raise ProtocolError(f"unknown message type {kind}")
+        except UpdateRefused as e:
+            log.info("collab %s: refused an update from %s: %s", self.doc_id, peer.source, e)
+            peer.kill(CLOSE_BAD_MESSAGE, "that change could not be applied")
         except ProtocolError as e:
             log.info("collab %s: bad message from %s: %s", self.doc_id, peer.source, e)
             peer.kill(CLOSE_BAD_MESSAGE, "not a co-editing message")
-        except Exception as e:  # noqa: BLE001 — pycrdt refusing an update
-            log.info("collab %s: refused message from %s: %s", self.doc_id, peer.source, e)
-            peer.kill(CLOSE_BAD_MESSAGE, "that change could not be applied")
+        except Exception as e:  # noqa: BLE001 — a bug here, not the client's fault
+            log.warning("collab %s: message from %s failed: %s", self.doc_id, peer.source, e)
+            peer.kill(CLOSE_RETRY, "the server had a problem; reconnecting")
 
     async def _sync(self, peer: Peer, data: bytes, pos: int) -> None:
         step, pos2 = read_var_uint(data, pos)
@@ -427,10 +499,19 @@ class Room:
                 await self.archive_offline_copy(peer, payload)
             return
         if step == SYNC_STEP1:
-            read_var_bytes(data, pos2)  # validate before pycrdt asserts on it
-            reply = handle_sync_message(data[pos:], self.ydoc)
-            if reply is not None:
-                peer.send(reply)
+            state_vector, _ = read_var_bytes(data, pos2)
+            async with self.lock:
+                if self.closed:
+                    return
+                try:
+                    _, (diff,) = await self.call("diff", [state_vector])
+                except workers.WorkerRefused:
+                    raise ProtocolError("not a state vector") from None
+                except workers.WorkerFailed:
+                    self._crashed_by(peer)
+                    await self.recover()
+                    return
+            peer.send(sync_step2(diff))
             return
         if step not in (SYNC_STEP2, SYNC_UPDATE):
             raise ProtocolError("unknown sync step")
@@ -445,21 +526,47 @@ class Room:
             peer.send(control_message({"t": "limit", "reason": "too_large"}))
             peer.kill_after(CLOSE_TOO_LARGE, "document too large")
             return
-        self.apply_and_relay(update, by=peer)
+        async with self.lock:
+            if self.closed:
+                return
+            await self.apply_and_relay(update, by=peer)
 
-    def apply_and_relay(self, update: bytes, *, by: Optional[Peer], name: str | None = None) -> None:
-        # Read before pycrdt sees it: a few kilobytes of nesting crash yrs
-        # (guard.py). UpdateRejected is a ProtocolError: the socket closes.
-        fresh = guard.check_update(update, self.index)
-        self.ydoc.apply_update(update)
-        guard.commit(self.index, fresh)
+    async def apply_and_relay(self, update: bytes, *, by: Optional[Peer],
+                              name: str | None = None) -> None:
+        """Hand ``update`` to the worker; relay and persist it only once the
+        worker has taken it. Caller holds ``self.lock``.
+
+        * The cheap pre-filter (guard.py) refuses what is plainly not an
+          editor's update: a ProtocolError, the sender is closed (4400).
+        * The worker refuses it (nested too deep, bytes yrs will not read):
+          the document is as before, the sender is closed (4400).
+        * The worker dies or stalls on it: same for the sender, and the room
+          gets a new worker (recover)."""
+        info = guard.check(update, ROOT_KINDS.keys())
+        try:
+            result, (sv,) = await self.call(
+                "apply", [update],
+                {"has_types": info.has_types, "ends": {str(k): v for k, v in info.ends.items()}},
+            )
+        except workers.WorkerRefused as e:
+            raise UpdateRefused(str(e)) from None
+        except workers.WorkerFailed as e:
+            if by is not None:
+                self._crashed_by(by)
+            await self.recover()
+            raise UpdateRefused(f"the document worker failed on it ({e})") from None
+        self.sv = sv
+        self.empty = bool(result.get("empty"))
         self._record(update, by=by, name=name)
 
+    def _crashed_by(self, peer: Peer) -> None:
+        MANAGER.note_crash(peer.source)
+
     def _record(self, update: bytes, *, by: Optional[Peer], name: str | None = None) -> None:
-        """An update already in ``self.ydoc``: relay it, queue it for
-        Postgres, count it."""
+        """An update the worker holds now: relay it, queue it for Postgres,
+        count it."""
         self.approx_size += len(update)
-        self.broadcast(create_update_message(update), skip=by)
+        self.broadcast(sync_update(update), skip=by)
         self.pending.append(update)
         self.pending_bytes += len(update)
         self.rev += 1
@@ -534,7 +641,9 @@ class Room:
         t = msg["t"]
         if t == "seeded":
             if peer is self.seed_peer and not self.seeded:
-                await self.finish_seed()
+                async with self.lock:
+                    if not self.closed and not self.seeded:
+                        await self.finish_seed()
         elif t == "seed-failed":
             # The picked client could not load the file: someone else tries.
             if peer is self.seed_peer and not self.seeded:
@@ -578,8 +687,9 @@ class Room:
         self.file_fp = self.seed_fp
         await self.flush()
         await store.mark_seeded(self.doc_id, self.epoch, self.seed_fp, self.rev)
-        state = self.ydoc.get_update()
-        await store.add_snapshot(self.doc_id, self.epoch, "from_file", state, [])
+        state = await self.encode()
+        if state is not None:
+            await store.add_snapshot(self.doc_id, self.epoch, "from_file", state, [])
         self.changed_since_snapshot = False
         self.editors_since_snapshot.clear()
         self.last_snapshot_at = time.monotonic()
@@ -605,18 +715,17 @@ class Room:
         try:
             base_snap = await store.latest_snapshot_of_epoch(self.doc_id, peer.epoch)
             if base_snap is not None:   # an epoch this document really had
-                base = content.doc_from_update(base_snap.state)
-                index = guard.index_for(base_snap.state)
-                guard.check_update(payload, index)   # read before pycrdt sees it
-                before = base.get_update()
-                base.apply_update(payload)
-                after = base.get_update()
-                if after != before and not content.is_empty(base):
+                guard.check(payload, ROOT_KINDS.keys())
+                result, (after,) = await workers.scratch_call(
+                    "merge_copy", [base_snap.state, payload])
+                if result.get("changed") and not result.get("empty"):
                     await store.keep_offline_copy(self.doc_id, peer.epoch, after,
                                                   peer.name, peer.device or peer.name)
                     kept = True
-        except guard.UpdateRejected as e:
+        except (guard.UpdateRejected, workers.WorkerRefused, workers.WorkerFailed) as e:
             log.info("collab %s: offline copy from %s refused: %s", self.doc_id, peer.source, e)
+            if isinstance(e, workers.WorkerFailed):
+                self._crashed_by(peer)
         except Exception as e:  # noqa: BLE001
             log.warning("collab %s: could not keep an offline copy: %s", self.doc_id, e)
         peer.send(control_message({"t": "reset", "epoch": self.epoch,
@@ -624,31 +733,53 @@ class Room:
         peer.kill_after(CLOSE_RESET, "the document was changed outside the editor")
 
     # ── persistence ──
-    async def flush(self) -> None:
+    async def flush(self, *, compact: bool = True) -> None:
+        """What the worker accepted, to Postgres. Caller holds ``self.lock``
+        (or the room is not shared yet)."""
         if not self.pending:
             return
         batch = self.pending
         self.pending = []
         size = self.pending_bytes
         self.pending_bytes = 0
-        data = batch[0] if len(batch) == 1 else merge_updates(*batch)
-        await store.append_update(self.doc_id, self.epoch, data, self.rev)
-        self.rows_since_compact += 1
+        await store.append_updates(self.doc_id, self.epoch, batch, self.rev)
+        self.rows_since_compact += len(batch)
         self.bytes_since_compact += size
-        if self.rows_since_compact >= COMPACT_ROWS or self.bytes_since_compact >= COMPACT_BYTES:
+        if compact and (self.rows_since_compact >= COMPACT_ROWS
+                        or self.bytes_since_compact >= COMPACT_BYTES):
             await self.compact()
 
+    async def encode(self) -> Optional[bytes]:
+        """The whole document, from the worker (None: it failed and was
+        replaced; the caller skips what needed it)."""
+        try:
+            _, (state,) = await self.call("encode")
+            return state
+        except (workers.WorkerFailed, workers.WorkerRefused) as e:
+            log.warning("collab %s: encode failed: %s", self.doc_id, e)
+            if isinstance(e, workers.WorkerFailed) and not self.closed:
+                await self.recover()
+            return None
+
     async def compact(self) -> None:
-        state = self.ydoc.get_update()
+        try:
+            info, (state,) = await self.call("compact")
+        except (workers.WorkerFailed, workers.WorkerRefused) as e:
+            log.warning("collab %s: compaction failed: %s", self.doc_id, e)
+            if isinstance(e, workers.WorkerFailed) and not self.closed:
+                await self.recover()
+            return
         await store.compact(self.doc_id, self.epoch, state, self.rev)
-        self.index = guard.index_for(state)
+        self.empty = bool(info.get("empty"))
         self.approx_size = len(state)
         self.rows_since_compact = 0
         self.bytes_since_compact = 0
 
     async def snapshot(self, kind: str) -> Optional[int]:
-        state = self.ydoc.get_update()
-        if content.is_empty(self.ydoc) and kind in ("auto", "leave"):
+        if self.empty and kind in ("auto", "leave"):
+            return None
+        state = await self.encode()
+        if state is None:
             return None
         sid = await store.add_snapshot(self.doc_id, self.epoch, kind, state,
                                        self.editors_since_snapshot)
@@ -762,9 +893,12 @@ class Room:
             if not self.seeded and self.seed_peer is not None:
                 raise StillOpening()
             await self.flush()
-            if not content.is_empty(self.ydoc):
+            if not self.empty:
+                before = await self.encode()
+                if before is None:
+                    raise RoomGone()
                 await store.add_snapshot(self.doc_id, self.epoch, "before_restore",
-                                         self.ydoc.get_update(), self.editors_since_snapshot)
+                                         before, self.editors_since_snapshot)
                 self.editors_since_snapshot = set()
             if not self.seeded:
                 # Nobody had opened it since it was (re)built from the file:
@@ -778,13 +912,18 @@ class Room:
                 self.seeded = True
                 self.saved_rev = self.rev
                 self.control_all({"t": "ready"})
-            # Worked out on a copy: if copying fails half way, the live
-            # document (and everyone in it) never sees a half-cleared state.
-            scratch = content.doc_from_update(self.ydoc.get_update())
-            sv = scratch.get_state()
-            content.restore_into(scratch, content.doc_from_update(version_state))
-            update = scratch.get_update(sv)
-            self.apply_and_relay(update, by=None, name=by_name)
+            # Worked out in the worker on a copy and applied as one update: if
+            # copying fails half way, nobody sees a half-cleared document.
+            try:
+                result, (update, sv) = await self._restore_call(version_state)
+            except workers.WorkerRefused as e:
+                raise RestoreFailed(str(e)) from None
+            except workers.WorkerFailed:
+                await self.recover()
+                raise RestoreFailed("the document worker failed") from None
+            self.sv = sv
+            self.empty = bool(result.get("empty"))
+            self._record(update, by=None, name=by_name)
             # Saving should not wait for "idle": nobody is typing a restore.
             self.last_change_at = 0.0
             await self.flush()
@@ -792,14 +931,21 @@ class Room:
             self.control_all({"t": "restored", "by": by_name})
             return sid
 
+    async def _restore_call(self, version_state: bytes):
+        result, (update,) = await self.call("restore", [version_state])
+        _, (sv,) = await self.call("sv")
+        return result, (update, sv)
+
     async def rebuild_live(self) -> None:
         """The file was changed outside the editor: keep the co-edited version
         in history, start over from the file under a new epoch, and send
         everyone connected back to open it again."""
-        await self.flush()
-        if not content.is_empty(self.ydoc):
-            await store.add_snapshot(self.doc_id, self.epoch, "before_rebuild",
-                                     self.ydoc.get_update(), self.editors_since_snapshot)
+        await self.flush(compact=False)
+        if not self.empty:
+            state = await self.encode()
+            if state is not None:
+                await store.add_snapshot(self.doc_id, self.epoch, "before_rebuild",
+                                         state, self.editors_since_snapshot)
         new_epoch = await store.rebuild(self.doc_id)
         log.info("collab %s: %s changed outside the editor; rebuilt from the file (epoch %s)",
                  self.doc_id, self.rel_path, new_epoch)
@@ -809,8 +955,13 @@ class Room:
             p.kill_after(CLOSE_RESET, "the document was changed outside the editor")
         self.closed = True
         self.closing = True
+        await self.stop_worker()
         MANAGER.drop(self)
         self.done.set()
+
+    async def stop_worker(self) -> None:
+        if self.worker is not None:
+            await self.worker.stop()
 
     async def shut(self, *, reason: str = "leave") -> None:
         """Last one out (or the server stopping): flush, keep a version,
@@ -829,6 +980,7 @@ class Room:
             except Exception as e:  # noqa: BLE001
                 log.warning("collab %s: final flush failed: %s", self.doc_id, e)
             finally:
+                await self.stop_worker()
                 MANAGER.drop(self)
                 self.done.set()
 
@@ -840,6 +992,19 @@ class RoomManager:
         self._ticker: Optional[asyncio.Task] = None
         self.sockets_by_source: dict[str, int] = {}
         self._opening = 0
+        self.crashes_by_source: dict[str, list[float]] = {}
+
+    def note_crash(self, source: str) -> None:
+        now = time.monotonic()
+        recent = [t for t in self.crashes_by_source.get(source, []) if now - t < CRASH_WINDOW_SEC]
+        recent.append(now)
+        self.crashes_by_source[source] = recent
+
+    def crash_blocked(self, source: str) -> bool:
+        now = time.monotonic()
+        recent = [t for t in self.crashes_by_source.get(source, []) if now - t < CRASH_WINDOW_SEC]
+        self.crashes_by_source[source] = recent
+        return len(recent) >= CRASHES_PER_SOURCE
 
     def by_path(self, rel_path: str) -> Optional[Room]:
         for room in self.rooms.values():
@@ -883,25 +1048,41 @@ class RoomManager:
             self._opening += 1
             try:
                 fresh = await store.get(row.doc_id) or row
+                if fresh.unavailable:
+                    raise RoomUnsafe("co-editing is off for this document")
                 room = Room(fresh, target)
-                try:
-                    room.load(fresh.state, await store.pending_updates(fresh.doc_id, fresh.epoch))
-                except guard.UpdateRejected as e:
-                    raise RoomUnsafe(str(e)) from None
                 async with path_lock(fresh.rel_path):
                     changed = fresh.seeded and room.file_changed_outside()
                 if changed:
-                    if not content.is_empty(room.ydoc):
+                    # Rebuilt from the file before anything loads: what was
+                    # co-edited goes to history as it is stored (bytes only).
+                    whole = await _merged(fresh.state, await store.pending_updates(
+                        fresh.doc_id, fresh.epoch))
+                    if whole:
                         await store.add_snapshot(fresh.doc_id, fresh.epoch, "before_rebuild",
-                                                 room.ydoc.get_update(), [])
+                                                 whole, [])
                     await store.rebuild(fresh.doc_id)
                     fresh = await store.get(row.doc_id) or fresh
                     room = Room(fresh, target)
+                await self._start(room, fresh)
                 self.rooms[row.doc_id] = room
                 self._ensure_ticker()
                 return room
             finally:
                 self._opening -= 1
+
+    async def _start(self, room: Room, row: store.DocRow) -> None:
+        """Load the room's worker; a stored state that breaks it twice turns
+        co-editing off for the document (RoomUnsafe)."""
+        updates = await store.pending_updates(row.doc_id, row.epoch)
+        for attempt in (1, 2):
+            try:
+                await room.start(row.state, updates)
+                return
+            except (workers.WorkerFailed, workers.WorkerRefused) as e:
+                log.warning("collab %s: worker load %d failed: %s", row.doc_id, attempt, e)
+        await store.mark_unavailable(row.doc_id, True)
+        raise RoomUnsafe("the stored document cannot be loaded")
 
     def _ensure_ticker(self) -> None:
         if self._ticker is None or self._ticker.done():
@@ -947,6 +1128,22 @@ class RoomManager:
                 p.kill_after(CLOSE_NOT_FOUND, "the document was deleted")
 
 
+async def _merged(state, updates) -> Optional[bytes]:
+    """Stored blobs as one encoded document, worked out on the scratch
+    worker (None when there is nothing, or it could not be done)."""
+    blobs = ([state] if state else []) + list(updates)
+    if not blobs:
+        return None
+    if len(blobs) == 1:
+        return blobs[0]
+    try:
+        _, (whole,) = await workers.scratch_call("merge_blobs", blobs)
+        return whole
+    except (workers.WorkerFailed, workers.WorkerRefused) as e:
+        log.warning("collab: could not merge a stored document: %s", e)
+        return None
+
+
 class RoomsFull(Exception):
     pass
 
@@ -956,7 +1153,15 @@ class RoomGone(Exception):
 
 
 class RoomUnsafe(Exception):
-    """Stored state this server will not load (it breaks guard's limits)."""
+    """Co-editing is off for this document (its stored state broke workers)."""
+
+
+class UpdateRefused(ProtocolError):
+    """An update refused by the pre-filter or the worker."""
+
+
+class RestoreFailed(Exception):
+    pass
 
 
 # One lock per Documents path, held across a co-editing save (the write and
