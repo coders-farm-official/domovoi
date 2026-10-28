@@ -1,3 +1,5 @@
+import Foundation
+
 /// Where the app may talk plain http / ws: the home network only.
 ///
 /// A line-for-line port of `android/.../net/CleartextPolicy.kt`. On Android

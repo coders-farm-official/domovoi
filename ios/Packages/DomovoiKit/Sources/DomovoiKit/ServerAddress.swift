@@ -1,3 +1,5 @@
+import Foundation
+
 /// A server address as a person typed it, made into one the app can save:
 /// `http://` when no scheme was given, `:6369` when no port, and the
 /// cleartext rule applied up front — a plain-http address outside the home

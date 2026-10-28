@@ -1,3 +1,5 @@
+import Foundation
+
 /// Where the household device token may go: to the active server, and
 /// nowhere else.
 ///
