@@ -524,87 +524,103 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
 
     androidx.compose.foundation.layout.Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().padding(16.dp)) {
-            PageHeader(
-                "Files",
-                source.subtitle,
-                actions = {
-                    LibraryRefreshButton(refresh, "rescan this library")
-                    if (source.onPhone) {
-                        if (canWrite) {
-                            IconButton(onClick = { filePicker.launch("*/*") }, enabled = busy == null) {
-                                Icon(Icons.Outlined.UploadFile, "add files to this folder", tint = Domovoi.colors.fgMuted)
-                            }
+            val headerActions: @Composable () -> Unit = {
+                LibraryRefreshButton(refresh, "rescan this library")
+                if (source.onPhone) {
+                    if (canWrite) {
+                        IconButton(onClick = { filePicker.launch("*/*") }, enabled = busy == null) {
+                            Icon(Icons.Outlined.UploadFile, "add files to this folder", tint = Domovoi.colors.fgMuted)
                         }
-                        if (libraryTakesFiles(selectedId)) {
-                            OutlinedButton(onClick = { folderPicker.launch(null) }) { Text("add folder") }
-                        }
-                    } else {
-                        if (canScanHere) {
-                            OutlinedButton(onClick = { scanning = true }) { Text("scan") }
-                        }
-                        // New, beside Upload, in the household's Documents only:
-                        // shown wherever the library takes files; a blocked
-                        // device is told why when it picks a kind.
-                        if (selectedId == DOCUMENTS_LIBRARY_ID && inAppEditing && editable &&
-                            libraryTakesFiles(selectedId)
-                        ) {
-                            Box {
-                                OutlinedButton(
-                                    onClick = { newMenu = true },
-                                    enabled = busy == null,
-                                    contentPadding = PaddingValues(horizontal = 14.dp),
-                                ) {
-                                    Icon(Icons.Filled.Add, null, Modifier.size(18.dp), tint = Domovoi.colors.brand)
-                                    Spacer(Modifier.width(4.dp))
-                                    Text("new")
-                                }
-                                DropdownMenu(expanded = newMenu, onDismissRequest = { newMenu = false }) {
-                                    NewDocKind.entries.forEach { k ->
-                                        DropdownMenuItem(
-                                            leadingIcon = {
-                                                Icon(
-                                                    when (k) {
-                                                        NewDocKind.Document -> Icons.Outlined.Description
-                                                        NewDocKind.Spreadsheet -> Icons.Outlined.TableChart
-                                                        NewDocKind.Text -> Icons.AutoMirrored.Outlined.Article
-                                                    },
-                                                    null, tint = Domovoi.colors.fgMuted,
-                                                )
-                                            },
-                                            text = {
-                                                Column {
-                                                    Text(k.label)
-                                                    Text(
-                                                        k.hint, style = MaterialTheme.typography.bodySmall,
-                                                        color = Domovoi.colors.fgFaint,
-                                                    )
-                                                }
-                                            },
-                                            onClick = {
-                                                newMenu = false
-                                                if (blocked) {
-                                                    toast(data?.blockedReason ?: "this device is blocked from changing files")
-                                                } else {
-                                                    newError = null
-                                                    newKind = k
-                                                }
-                                            },
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                        if (canWrite) {
+                    }
+                    if (libraryTakesFiles(selectedId)) {
+                        OutlinedButton(onClick = { folderPicker.launch(null) }) { Text("add folder") }
+                    }
+                } else {
+                    if (canScanHere) {
+                        OutlinedButton(onClick = { scanning = true }) { Text("scan") }
+                    }
+                    // New, beside Upload, in the household's Documents only:
+                    // shown wherever the library takes files; a blocked
+                    // device is told why when it picks a kind.
+                    if (selectedId == DOCUMENTS_LIBRARY_ID && inAppEditing && editable &&
+                        libraryTakesFiles(selectedId)
+                    ) {
+                        Box {
                             OutlinedButton(
-                                onClick = { filePicker.launch("*/*") },
+                                onClick = { newMenu = true },
                                 enabled = busy == null,
+                                contentPadding = PaddingValues(horizontal = 14.dp),
                             ) {
-                                Text(if (busy == "uploading") "uploading…" else "upload")
+                                Icon(Icons.Filled.Add, null, Modifier.size(18.dp), tint = Domovoi.colors.brand)
+                                Spacer(Modifier.width(4.dp))
+                                Text("new")
+                            }
+                            DropdownMenu(expanded = newMenu, onDismissRequest = { newMenu = false }) {
+                                NewDocKind.entries.forEach { k ->
+                                    DropdownMenuItem(
+                                        leadingIcon = {
+                                            Icon(
+                                                when (k) {
+                                                    NewDocKind.Document -> Icons.Outlined.Description
+                                                    NewDocKind.Spreadsheet -> Icons.Outlined.TableChart
+                                                    NewDocKind.Text -> Icons.AutoMirrored.Outlined.Article
+                                                },
+                                                null, tint = Domovoi.colors.fgMuted,
+                                            )
+                                        },
+                                        text = {
+                                            Column {
+                                                Text(k.label)
+                                                Text(
+                                                    k.hint, style = MaterialTheme.typography.bodySmall,
+                                                    color = Domovoi.colors.fgFaint,
+                                                )
+                                            }
+                                        },
+                                        onClick = {
+                                            newMenu = false
+                                            if (blocked) {
+                                                toast(data?.blockedReason ?: "this device is blocked from changing files")
+                                            } else {
+                                                newError = null
+                                                newKind = k
+                                            }
+                                        },
+                                    )
+                                }
                             }
                         }
                     }
-                },
-            )
+                    if (canWrite) {
+                        OutlinedButton(
+                            onClick = { filePicker.launch("*/*") },
+                            enabled = busy == null,
+                        ) {
+                            Text(if (busy == "uploading") "uploading…" else "upload")
+                        }
+                    }
+                }
+            }
+            // On a phone the buttons get their own row under the title: beside
+            // it they squeezed the subtitle into a word-per-line column at
+            // 320 dp (a Fold's cover screen), and New + Upload need the room.
+            androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxWidth()) {
+                if (maxWidth < 480.dp) {
+                    Column {
+                        PageHeader("Files", source.subtitle)
+                        if (!com.domovoi.app.ui.shell.keyboardCrowdsTheWindow()) {
+                            Spacer(Modifier.height(8.dp))
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) { headerActions() }
+                        }
+                    }
+                } else {
+                    PageHeader("Files", source.subtitle, actions = headerActions)
+                }
+            }
             Spacer(Modifier.height(12.dp))
 
             Row(verticalAlignment = Alignment.CenterVertically) {
