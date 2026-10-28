@@ -100,7 +100,7 @@ async def test_admin_announce_targeted_calls_announce_once() -> None:
             )
         assert r.status_code == 200
         assert r.json()["announced_to"] == ["kitchen"]
-        kitchen.announce.assert_awaited_once_with("trash day")
+        kitchen.announce.assert_awaited_once_with("trash day", kind="user")
         garage.announce.assert_not_awaited()
 
 
@@ -123,8 +123,8 @@ async def test_admin_announce_broadcast_hits_all_sessions() -> None:
             )
         assert r.status_code == 200
         assert sorted(r.json()["announced_to"]) == ["garage", "kitchen"]
-        kitchen.announce.assert_awaited_once_with("dinner")
-        garage.announce.assert_awaited_once_with("dinner")
+        kitchen.announce.assert_awaited_once_with("dinner", kind="user")
+        garage.announce.assert_awaited_once_with("dinner", kind="user")
 
 
 @requires_db
