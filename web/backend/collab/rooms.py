@@ -39,6 +39,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -83,9 +84,22 @@ MAX_MESSAGE_BYTES = 8 * 1024 * 1024
 MAX_DOC_BYTES = 48 * 1024 * 1024
 MAX_PEERS_PER_DOC = 16          # people who can edit
 MAX_VIEWERS_PER_DOC = 8         # view-only sessions, counted apart: they never take an editor's place
-MAX_ROOMS = 64
-# Rooms a view-only session may not open: the last ones are kept for editors.
-ROOMS_KEPT_FOR_EDITORS = 16
+DEFAULT_MAX_ROOMS = 32
+
+
+def max_rooms_from_env(value: Optional[str]) -> int:
+    """Documents open for co-editing at once. Each holds a worker process
+    (~25-35 MB), so the default (32, ~1 GB at the cap) suits a small box;
+    ``DOMOVOI_COLLAB_MAX_DOCS`` raises or lowers it (at least 1)."""
+    try:
+        return max(1, int(value)) if value else DEFAULT_MAX_ROOMS
+    except ValueError:
+        return DEFAULT_MAX_ROOMS
+
+
+MAX_ROOMS = max_rooms_from_env(os.environ.get("DOMOVOI_COLLAB_MAX_DOCS"))
+# Rooms a view-only session may not open: the last quarter is kept for editors.
+ROOMS_KEPT_FOR_EDITORS = MAX_ROOMS // 4
 MAX_SOCKETS_PER_SOURCE = 24
 # Messages: a steady 60 a second with bursts to 300 (typing fast is ~15).
 RATE_PER_SEC = 60.0

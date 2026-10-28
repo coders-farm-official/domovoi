@@ -732,3 +732,14 @@ async def test_the_outside_change_check_waits_for_a_save_in_flight(collab_db, do
         assert not tick.done()
     await tick
     assert not room.closed and room.saved_rev == room.rev
+
+
+def test_the_open_document_cap_defaults_to_32_and_is_configurable():
+    """Each open document holds a worker process, so the default cap is 32
+    (DOMOVOI_COLLAB_MAX_DOCS changes it); a quarter is kept for editors."""
+    assert rooms.DEFAULT_MAX_ROOMS == 32
+    assert rooms.max_rooms_from_env(None) == 32
+    assert rooms.max_rooms_from_env("") == 32
+    assert rooms.max_rooms_from_env("12") == 12
+    assert rooms.max_rooms_from_env("0") == 1
+    assert rooms.max_rooms_from_env("lots") == 32
