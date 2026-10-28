@@ -1486,6 +1486,35 @@ tells an editor on screen that a family was added or removed. The browser
 side is `window.DomovoiFonts` and `window.DomovoiFontPicker`
 (`web/static/fonts.jsx`).
 
+### 3.14a Co-editing (several people in one document)
+
+Documents can be edited by several household devices at
+once. Browsers and the app run Yjs; the web process runs pycrdt and speaks
+the standard y-websocket sync and awareness protocol, so the stock
+`y-websocket` client provider works. The shared state lives in Postgres
+(V042), never in the file: the file in Documents stays the clean latest
+version, written by the last active editor's client through the ordinary
+save route (see `web/backend/collab/__init__.py`). The tiers are exactly
+the Documents tiers (§3.14).
+
+| Route | Tier | What |
+|---|---|---|
+| `GET /api/collab/doc?path=` | Device read | The document's co-editing id (made on first use; the same path checks as `GET /api/documents/text`, `415` for a type that isn't co-edited), its `epoch`, whether this caller's session would be `readonly`, the caller's `user` `{name, color}` (the person who owns the device, else the device's name), and the socket path `ws`. |
+| `WS /api/collab/{doc_id}?epoch=` | Device read to join; device tier to edit | y-websocket protocol (0 sync, 1 awareness, 3 query awareness) plus message type 100: small JSON control messages (`hello`, `seed`, `ready`, `save`, `saved`, `reset`, `restored`). Credentials: `X-Device-Token`, an admin Bearer, the `domovoi.device-token-b64.` subprotocol (echoed back), the dashboard cookie or `?device_token=` (both **read-only sessions**: edits from them are dropped), or the pre-setup grace. The `Host` must be a name this box answers to on the LAN (DNS rebinding), and a session that rests only on the cookie or the grace must come from a Domovoi page on this server's port and a LAN name (`Origin`). The device tier also needs the Files write policy (a blocked device reads only). Refusals close the socket with a 44xx code, which the stock client does not retry: `4401` no credential, `4403` wrong origin, `4404` unknown or deleted document, `4413` message or document too large, `4415` not co-edited, `4429` too many wrong tokens; `4409` means the file changed outside the editor and the shared document was rebuilt from it (reopen); `4410` that it was moved or renamed (reopen by the new path, sent first as a `moved` control message). Transient: `4503` too many people or documents open, `4508` too fast. Limits: 8 MiB a message, 48 MiB a document, 16 editors and 8 view-only sessions a document (counted apart), 32 documents open by default (`DOMOVOI_COLLAB_MAX_DOCS`; each holds a worker process of about 25-35 MB; the last quarter only for editors), 24 sockets per device, 20 documents opened (worker processes started) a minute per device (`4503`, retried), 60 messages a second (bursts of 300), 24 MiB per 10 s. Each open document lives in its own worker subprocess (`web/backend/collab/worker.py`); pycrdt never runs in the web process. An update is relayed and stored only after the worker has applied it. A cheap pre-filter (`guard.py`) first refuses malformed updates, numbers past 32 bits, values nested past 64, sub-documents and roots no editor writes; the worker then refuses shared types nested past 64, and an update that would wait on another client's changes the document has never received (only a client's own earlier changes may still be on their way, as after reconnecting). Either way the sender is closed (`4400`). If the worker crashes on an update, that update is refused, its sender closed (`4400`), and a new worker loads the document from Postgres while the others stay connected; if it only answers too slowly, the sender is closed with the retried `4502` instead and sends the update again; a device whose updates break workers 3 times in 10 minutes is refused for a while (`4429`). `4502` (the server could not open the document just now) is retried by the client. `4416`: co-editing is off for this document (its stored state broke the worker twice); the editor opens the file on its own until the file changes, and `GET /api/collab/doc` answers `unavailable: true` meanwhile. The presence name and colour are the server's. |
+| `GET /api/collab/history?path=` | Device read | Versions, newest first: `{id, at, kind, label, editors, size}`. A version is kept every 5 minutes while someone edits, when the last editor leaves, when it is first opened from the file, and before a restore or a rebuild. Retention: everything from the last 2 hours, then one an hour for a week, one a day for 90 days, one a week after that (the survivor keeps the names), at most 200 versions or 256 MiB a document. Offline copies (a device's edits from before the document was rebuilt from a changed file, kept because they cannot be merged) have their own budget and never push out a version: one per device per epoch, the newest 10, 64 MiB, 30 days. |
+| `GET /api/collab/history/{id}?path=` | Device read | One version: its Yjs state (`update`, base64) for an editor to render read-only, and its plain `text`. `404` unless the version belongs to that path. |
+| `POST /api/collab/restore` | Device (+ Files write policy) | `{path, version_id}`: the version comes back as a NEW change everyone connected receives; what the document said just before is kept as a version too. |
+
+A save through a Documents save route that carries `X-Domovoi-Collab:
+<doc_id>;<epoch>;<rev>` is recorded as the clean file of that revision. It
+is refused `409` before anything is written when the revision is older than
+what the file already holds, newer than the document, from another epoch,
+or for a document that has since moved.
+A save without it, an upload over the file or another program changing it
+makes the server rebuild the shared document from the file (the co-edited
+state is kept in history first). Deleting a document deletes its shared
+state and history; moving it inside Documents keeps them.
+
 ### 3.15 Podcasts and audiobooks
 
 Reads are **Open**, except the directory search and an audiobook's resume

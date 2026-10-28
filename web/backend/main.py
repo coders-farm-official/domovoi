@@ -37,6 +37,7 @@ from web.backend.api import calendar as calendar_api
 from web.backend.api import captures as captures_api
 from web.backend.api import capabilities as capabilities_api
 from web.backend.api import chat as chat_api
+from web.backend.api import collab as collab_api
 from web.backend.api import help as help_api
 from web.backend.api import config as config_api
 from web.backend.api import containers as containers_api
@@ -289,6 +290,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     finally:
         await chat_doc_jobs.shutdown()
         await chat_api.stop_unsent_sweeper()
+        # Co-editing rooms: last edits to Postgres, a version kept, sockets
+        # told the server is restarting (they reconnect and resync).
+        from web.backend.collab import workers as collab_workers
+        from web.backend.collab.rooms import MANAGER as collab_rooms
+
+        await collab_rooms.shutdown()
+        await collab_workers.stop_scratch()
         await listen_task.stop()
         await poll_loop.stop()
         # Uninstall the import guard on shutdown. Irrelevant for a real
@@ -422,6 +430,8 @@ app.include_router(voice_api.router)
 app.include_router(wake_words_api.router)
 app.include_router(captures_api.router)
 app.include_router(documents_api.router)
+# Co-editing (editors v1): the /api/collab/{doc_id} socket and version history.
+app.include_router(collab_api.router)
 app.include_router(files_api.router)
 app.include_router(files_api.blocks_router)
 # The editors' fonts: /api/fonts* and the /fonts/<family>/<file> files

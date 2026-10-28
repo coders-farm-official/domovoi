@@ -89,7 +89,7 @@ import mimetypes
 import os
 import re
 import zipfile
-from contextlib import asynccontextmanager, contextmanager
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Literal, Optional
 
@@ -547,22 +547,12 @@ async def _collab_saved(request: Request, target: Path) -> None:
     from a co-editing client carries ``X-Domovoi-Collab`` and is recorded as
     the clean file of its revision; any other save means the file changed
     under the shared state, which is then rebuilt from it. Never raises.
-    Every route that saves a co-edited type calls this (imported late:
-    collab imports this module).
-
-    The same seam as wf/doc-collab's; until that branch is merged there is
-    no co-editing module, and a save simply has nobody to tell."""
-    try:
-        from web.backend.api import collab
-    except ImportError:
-        return
+    For a route that cannot wrap its write in :func:`_collab_saving`;
+    prefer that, which also refuses stale co-editing saves (imported late:
+    collab imports this module)."""
+    from web.backend.api import collab
 
     await collab.note_file_saved(request, target)
-
-
-@asynccontextmanager
-async def _no_collab():
-    yield
 
 
 def _collab_saving(request: Request, target: Path):
@@ -572,16 +562,17 @@ def _collab_saving(request: Request, target: Path):
     before the document was rebuilt or moved, is refused 409 before anything
     is written, and the path stays locked across the write and the note of
     what was written (so the outside-change check never mistakes it for
-    someone else's). Imported late: collab imports this module.
-
-    wf/doc-collab's seam; until that branch is merged there is no
-    co-editing module and the write simply goes ahead."""
-    try:
-        from web.backend.api import collab
-    except ImportError:
-        return _no_collab()
+    someone else's). Imported late: collab imports this module."""
+    from web.backend.api import collab
 
     return collab.saving(request, target)
+
+
+async def _collab_forget(rel_paths: list[str]) -> None:
+    """Deleted documents take their co-editing state and history with them."""
+    from web.backend.api import collab
+
+    await collab.forget_paths(rel_paths)
 
 
 # ─── Schemas ────────────────────────────────────────────────────────
@@ -805,6 +796,7 @@ async def delete_documents(req: DeleteRequest) -> DeleteResult:
             failed.append(rp)
     if deleted:
         _listing_changed()
+        await _collab_forget(deleted)
     return DeleteResult(deleted=deleted, failed=failed)
 
 
@@ -893,7 +885,8 @@ async def write_text_file(
     with _usable_path(rel_path):
         _assert_text_editor_may_write(target)
         _ensure_parent_dir(target)
-        target.write_text(req.text, encoding="utf-8", newline="")
+        async with _collab_saving(request, target):
+            target.write_text(req.text, encoding="utf-8", newline="")
         st = target.stat()
     _listing_changed()
     ext = target.suffix.lower()
@@ -1253,7 +1246,8 @@ async def write_sheet(
         raise HTTPException(status_code=413, detail=f"more than {_SHEET_MAX_COLS} columns")
     with _usable_path(rel_path):
         _ensure_parent_dir(target)
-        await executors.run("sheets", _write_sheet_grid, target, req.rows)
+        async with _collab_saving(request, target):
+            await executors.run("sheets", _write_sheet_grid, target, req.rows)
         st = target.stat()
     _listing_changed()
     ext = target.suffix.lower()

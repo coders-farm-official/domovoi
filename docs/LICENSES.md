@@ -162,6 +162,11 @@ household.
   GPL-3.0, used under MIT; with pako under MIT and Zlib), lop, option and
   dingbat-to-unicode (BSD-2-Clause), and @xmldom/xmldom, underscore,
   xmlbuilder, base64-js, lie, immediate and setimmediate (MIT).
+- **Co-editing** (several people editing one document at once): on the
+  server, pycrdt 0.14.10 (MIT), installed with it; in the dashboard and
+  the app's editors, the one Yjs bundle in `web/static/vendor/yjs/` listed
+  above (Yjs, y-websocket's client provider, y-indexeddb, y-protocols and
+  lib0, all MIT).
 - **The dashboard's fonts**, all under the SIL Open Font License 1.1, each
   with its licence text beside it: Inter and JetBrains Mono (through
   fontsource 5.2.8, in `web/static/vendor/fonts/`), the three fonts
