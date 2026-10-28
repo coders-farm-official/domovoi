@@ -7,8 +7,9 @@ editor's own browser-side checks (web/static/sanitize_html.js, and
 ProseMirror's schema) are a convenience, not the guard: every load and
 every save goes through :func:`sanitize_html` here.
 
-The approach is rebuild, not filter. The input is parsed with the
-standard library's HTML parser, and the output is written from scratch:
+The approach is rebuild, not filter. The input is read by a linear
+tokenizer of our own (:mod:`.tokens`, not ``html.parser``, which is slow
+and can raise on hostile input), and the output is written from scratch:
 
 * an element is written only when its name is on :data:`ALLOWED`, and
   only with attributes from that element's list, each value checked
@@ -32,7 +33,8 @@ from __future__ import annotations
 
 import html
 import re
-from html.parser import HTMLParser
+
+from domovoi.richdoc.tokens import tokenize
 
 # ─── What survives ──────────────────────────────────────────────────
 BLOCK_TAGS = frozenset({
@@ -236,9 +238,10 @@ _SCOPE = {"li": ("ul", "ol"), "td": ("table",), "th": ("table",), "tr": ("table"
           "thead": ("table",), "tbody": ("table",), "tfoot": ("table",)}
 
 
-class _Rebuilder(HTMLParser):
+class _Rebuilder:
+    """Rebuilds the allowed markup from :func:`.tokens.tokenize`'s stream."""
+
     def __init__(self) -> None:
-        super().__init__(convert_charrefs=True)
         self.out: list[str] = []
         self.stack: list[str] = []
         self.skip: list[str] = []      # open DROP_WITH_CONTENT elements
@@ -271,14 +274,7 @@ class _Rebuilder(HTMLParser):
                 self._close_to(t)
                 return
 
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        self._start(tag, attrs, self_closing=False)
-
-    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        self._start(tag, attrs, self_closing=True)
-
-    def _start(self, tag: str, attrs, self_closing: bool) -> None:
-        tag = tag.lower()
+    def start(self, tag: str, attrs, self_closing: bool) -> None:
         if self.skip:
             if tag in DROP_WITH_CONTENT and not self_closing and tag not in VOID_ANY:
                 self.skip.append(tag)
@@ -300,11 +296,9 @@ class _Rebuilder(HTMLParser):
             parts.append('rel="noopener noreferrer nofollow"')
         seen: set[str] = set()
         allowed = PER_ELEMENT_ATTRS.get(tag, frozenset())
-        for raw_name, raw_value in attrs:
-            name = (raw_name or "").lower()
+        for name, value in attrs:
             if name in seen or name.startswith("on"):
                 continue
-            value = raw_value if raw_value is not None else ""
             if name == "style":
                 kept = clean_style(tag, value)
             elif name in GLOBAL_ATTRS or name in allowed:
@@ -323,8 +317,7 @@ class _Rebuilder(HTMLParser):
         if tag not in VOID:
             self.stack.append(tag)
 
-    def handle_endtag(self, tag: str) -> None:
-        tag = tag.lower()
+    def end(self, tag: str) -> None:
         if self.skip:
             if tag == self.skip[-1]:
                 self.skip.pop()
@@ -337,26 +330,12 @@ class _Rebuilder(HTMLParser):
         elif self.dropped_depth:
             self.dropped_depth -= 1
 
-    # ── text ──
-    def handle_data(self, data: str) -> None:
+    def text(self, data: str) -> None:
         if self.skip or not data:
             return
         self.out.append(html.escape(data, quote=False))
 
-    def handle_comment(self, data: str) -> None:
-        return
-
-    def handle_decl(self, decl: str) -> None:
-        return
-
-    def handle_pi(self, data: str) -> None:
-        return
-
-    def unknown_decl(self, data: str) -> None:
-        return
-
     def finish(self) -> str:
-        self.close()
         while self.stack:
             self.out.append(f"</{self.stack.pop()}>")
         return "".join(self.out)
@@ -364,7 +343,20 @@ class _Rebuilder(HTMLParser):
 
 def sanitize_html(markup: str) -> str:
     """``markup`` rebuilt from the allowlist (module docstring). Always a
-    string, always balanced, never containing anything that runs."""
-    parser = _Rebuilder()
-    parser.feed(str(markup or ""))
-    return parser.finish()
+    string, always balanced, never containing anything that runs. Linear in
+    the input (:mod:`.tokens`); anything unexpected while reading ends in
+    the input's text, escaped, rather than an error."""
+    r = _Rebuilder()
+    try:
+        for t in tokenize(markup):
+            if t.kind == "start":
+                r.start(t.name, t.attrs, t.self_closing)
+            elif t.kind == "end":
+                r.end(t.name)
+            else:
+                r.text(t.data)
+        return r.finish()
+    except RecursionError:  # pragma: no cover - nothing here recurses
+        raise
+    except Exception:  # noqa: BLE001 - fail closed: text, never markup
+        return f"<p>{html.escape(str(markup or ''), quote=False)}</p>"

@@ -130,6 +130,10 @@
   const JPEG_QUALITY = 0.86;
   const MAX_SOURCE_BYTES = 60 * 1024 * 1024;
   const RASTER = /^data:image\/(png|jpe?g|gif|webp|avif|bmp);base64,/i;
+  // A 1 x 1 transparent picture: the stand-in for one still being copied in.
+  const PLACEHOLDER = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+  // The web addresses of pictures THIS page pasted and is copying in.
+  const PENDING_HERE = new Set();
 
   const decodePicture = async (blob) => {
     if (window.createImageBitmap) {
@@ -387,10 +391,21 @@
       });
       void lastLevel;
     }
-    // Pictures Word pastes as file:// paths can never be loaded here.
+    // Pictures Word pastes as file:// paths can never be loaded here. A
+    // picture from a website never enters the document as an address: it
+    // goes in as a blank placeholder that remembers where it came from
+    // (data-pending, never drawn or fetched by anyone else), and THIS
+    // device copies it in (embedOutsidePictures) or takes it out.
     doc.querySelectorAll('img').forEach((img) => {
       const s = img.getAttribute('src') || '';
-      if (!RASTER.test(s) && !/^https?:/i.test(s)) img.remove();
+      if (RASTER.test(s)) return;
+      if (/^https?:\/\//i.test(s) && s.length <= 2048) {
+        PENDING_HERE.add(s);
+        img.setAttribute('data-pending', s);
+        img.setAttribute('src', PLACEHOLDER);
+        return;
+      }
+      img.remove();
     });
     return unwrapLonePictures(doc.body.innerHTML);
   };
@@ -508,7 +523,120 @@
     const n = parseInt(v, 10);
     return Number.isFinite(n) && n >= 5 && n <= 100 ? n : null;
   };
-  const okSrc = (s) => RASTER.test(s || '') || /^https?:\/\//i.test(s || '');
+  const okSrc = (s) => RASTER.test(s || '');
+  const okPending = (s) => (typeof s === 'string' && s.length <= 2048 && /^https?:\/\//i.test(s) ? s : null);
+
+  /* ── The document's own rules, whatever the edit came from ──
+   * Paste and file loads go through the allowlist, but with co-editing an
+   * edit can arrive straight into the document model from another device
+   * (Yjs), never passing through it. This plugin holds every node and mark
+   * attribute to the same rules after EVERY change, local or remote: a
+   * value that fails is set back to the default (or the mark removed), in a
+   * change that is not undoable and that co-editing passes on, so nobody's
+   * screen ever draws it. The same rules as sanitize_html.js/richdoc. */
+  const SAFE = {
+    colour: (v) => /^(#[0-9a-f]{3,8}|rgba?\(\s*\d{1,3}%?\s*,\s*\d{1,3}%?\s*,\s*\d{1,3}%?\s*(,\s*(0|1|0?\.\d+|\d{1,3}%)\s*)?\)|[a-z]{3,24})$/i.test(v),
+    family: (v) => /^[A-Za-z0-9 ,'"_-]{1,200}$/.test(v),
+    size: (v) => /^\d{1,3}(\.\d{1,2})?(px|pt|em|rem|%)$/i.test(v),
+    href: (v) => /^(https?:|mailto:|tel:|#)/i.test(String(v || '').replace(/[\u0000-\u0020\u007f-\u00a0\u00ad]/g, '')),
+    align: (v) => ['left', 'center', 'right', 'justify'].includes(v),
+    lang: (v) => /^[A-Za-z0-9_+-]{1,40}$/.test(v),
+  };
+  const fixedNodeAttrs = (node) => {
+    const a = node.attrs;
+    const out = {};
+    let changed = false;
+    const put = (k, v) => { if (a[k] !== v) { out[k] = v; changed = true; } };
+    switch (node.type.name) {
+      case 'figure': {
+        if (typeof a.src !== 'string' || !RASTER.test(a.src)) put('src', null);
+        if (a.pending != null && !okPending(a.pending)) put('pending', null);
+        put('width', a.width == null ? null : clampPct(a.width));
+        if (!['left', 'center', 'right'].includes(a.align)) put('align', 'center');
+        put('alt', String(a.alt || '').slice(0, 500));
+        put('caption', String(a.caption || '').slice(0, 500));
+        break;
+      }
+      case 'paragraph': case 'heading':
+        if (a.textAlign != null && !SAFE.align(a.textAlign)) put('textAlign', null);
+        if (node.type.name === 'heading' && ![1, 2, 3, 4].includes(a.level)) put('level', 2);
+        break;
+      case 'tableCell': case 'tableHeader': {
+        const n = (v) => (Number.isInteger(v) && v >= 1 && v <= 60 ? v : 1);
+        put('colspan', n(a.colspan));
+        put('rowspan', n(a.rowspan));
+        if (a.colwidth != null && !(Array.isArray(a.colwidth)
+            && a.colwidth.every((w) => Number.isInteger(w) && w > 0 && w <= 5000))) put('colwidth', null);
+        break;
+      }
+      case 'orderedList':
+        if (!(Number.isInteger(a.start) && a.start >= 0 && a.start <= 999999)) put('start', 1);
+        break;
+      case 'taskItem':
+        if (typeof a.checked !== 'boolean') put('checked', !!a.checked);
+        break;
+      case 'codeBlock':
+        if (a.language != null && !SAFE.lang(a.language)) put('language', null);
+        break;
+      default:
+        break;
+    }
+    return changed ? Object.assign({}, a, out) : null;
+  };
+  const fixedMark = (mark) => {
+    const a = mark.attrs;
+    switch (mark.type.name) {
+      case 'link':
+        return SAFE.href(a.href) ? mark : null;
+      case 'highlight':
+        return a.color == null || SAFE.colour(a.color) ? mark : mark.type.create(Object.assign({}, a, { color: null }));
+      case 'textStyle': {
+        const next = Object.assign({}, a);
+        if (a.color != null && !SAFE.colour(a.color)) next.color = null;
+        if (a.fontFamily != null && !SAFE.family(a.fontFamily)) next.fontFamily = null;
+        if (a.fontSize != null && !SAFE.size(a.fontSize)) next.fontSize = null;
+        const same = Object.keys(a).every((k) => a[k] === next[k]);
+        return same ? mark : mark.type.create(next);
+      }
+      default:
+        return mark;
+    }
+  };
+  const buildDocumentRules = (T) => T.Extension.create({
+    name: 'documentRules',
+    addProseMirrorPlugins() {
+      return [new T.pm.state.Plugin({
+        key: new T.pm.state.PluginKey('documentRules'),
+        appendTransaction: (trs, oldState, state) => {
+          if (!trs.some((t) => t.docChanged)) return null;
+          const tr = state.tr;
+          let fixes = 0;
+          state.doc.descendants((node, pos) => {
+            const attrs = fixedNodeAttrs(node);
+            if (attrs) {
+              if (node.type.name === 'figure' && !attrs.src) { tr.delete(tr.mapping.map(pos), tr.mapping.map(pos + node.nodeSize)); fixes += 1; return false; }
+              tr.setNodeMarkup(tr.mapping.map(pos), undefined, attrs);
+              fixes += 1;
+            }
+            if (node.isText) {
+              node.marks.forEach((m) => {
+                const fixed = fixedMark(m);
+                if (fixed === m) return;
+                const from = tr.mapping.map(pos);
+                const to = tr.mapping.map(pos + node.nodeSize);
+                tr.removeMark(from, to, m);
+                if (fixed) tr.addMark(from, to, fixed);
+                fixes += 1;
+              });
+            }
+            return true;
+          });
+          if (!fixes) return null;
+          return tr.setMeta('addToHistory', false);
+        },
+      })];
+    },
+  });
 
   const buildFontSize = (T) => T.Extension.create({
     name: 'fontSize',
@@ -551,6 +679,9 @@
         caption: { default: '' },
         align: { default: 'center' },
         width: { default: null },
+        // a picture from a website, being copied in by the device that
+        // pasted it (never drawn, fetched or saved from this attribute)
+        pending: { default: null, rendered: false },
       };
     },
     parseHTML() {
@@ -568,6 +699,7 @@
               caption: cap ? cap.textContent.trim().slice(0, 500) : '',
               align: ['left', 'center', 'right'].includes(align) ? align : 'center',
               width: clampPct(el.getAttribute('data-width')),
+              pending: okPending(img.getAttribute('data-pending')),
             };
           },
         },
@@ -575,15 +707,16 @@
           tag: 'img[src]',
           getAttrs: (el) => {
             const src = el.getAttribute('src');
-            return okSrc(src) ? { src, alt: el.getAttribute('alt') || '' } : false;
+            return okSrc(src) ? { src, alt: el.getAttribute('alt') || '', pending: okPending(el.getAttribute('data-pending')) } : false;
           },
         },
       ];
     },
     renderHTML({ node }) {
       const a = node.attrs;
-      const fig = { 'data-align': a.align || 'center' };
-      if (a.width) { fig['data-width'] = String(a.width); fig.style = `width: ${a.width}%`; }
+      const fig = { 'data-align': ['left', 'center', 'right'].includes(a.align) ? a.align : 'center' };
+      const w = clampPct(a.width);
+      if (w) { fig['data-width'] = String(w); fig.style = `width: ${w}%`; }
       const img = ['img', { src: a.src, alt: a.alt || '' }];
       return a.caption ? ['figure', fig, img, ['figcaption', {}, a.caption]] : ['figure', fig, img];
     },
@@ -665,10 +798,17 @@
 
     const render = () => {
       const a = node.attrs;
-      if (img.getAttribute('src') !== a.src) img.setAttribute('src', a.src || '');
+      // Only an embedded picture is ever drawn: an outside address (a paste
+      // still being copied in, or one a co-editor's device sent) is not
+      // fetched from here.
+      const shown = RASTER.test(a.src || '') ? a.src : '';
+      if (img.getAttribute('src') !== shown) img.setAttribute('src', shown);
+      const waiting = !shown || !!a.pending;
+      img.style.minHeight = waiting ? '60px' : '';
+      img.style.background = waiting ? '#f1f1ef' : '';
       img.alt = a.alt || a.caption || '';
       dom.setAttribute('data-align', formatted ? (a.align || 'center') : 'center');
-      dom.style.width = formatted && a.width ? `${a.width}%` : '';
+      dom.style.width = formatted && clampPct(a.width) ? `${clampPct(a.width)}%` : '';
       if (document.activeElement !== cap) cap.value = a.caption || '';
       cap.classList.toggle('empty', !(a.caption || ''));
       Object.keys(alignBtns).forEach((k) => alignBtns[k].classList.toggle('on', (a.align || 'center') === k));
@@ -882,13 +1022,15 @@
         defaultProtocol: 'https',
         protocols: ['mailto', 'tel'],
         HTMLAttributes: { target: '_blank', rel: 'noopener noreferrer nofollow' },
-        validate: (href) => /^(https?:|mailto:|tel:|#)/i.test(href),
+        validate: (href) => SAFE.href(href),
+        isAllowedUri: (href) => SAFE.href(href),
       }),
       T.Table.configure({ resizable: !env.markdown, lastColumnResizable: true }),
       T.TableRow, T.TableHeader, T.TableCell,
       T.TaskList,
       T.TaskItem.configure({ nested: true }),
       buildFigure(T, env),
+      buildDocumentRules(T),
       T.Placeholder.configure({ placeholder: opts.placeholder || 'Start typing…' }),
     ];
     if (collab) {
@@ -955,9 +1097,11 @@
    * a document never points outside, so each one is fetched and embedded,
    * or removed when the site won't hand it over. */
   const embedOutsidePictures = async (editor, notice) => {
+    // Only the pictures THIS device pasted: a co-editor's pending picture
+    // is theirs to copy in (nobody else fetches from the web for them).
     const wanted = [];
-    editor.state.doc.descendants((n, pos) => {
-      if (n.type.name === 'figure' && !RASTER.test(n.attrs.src || '')) wanted.push(n.attrs.src);
+    editor.state.doc.descendants((n) => {
+      if (n.type.name === 'figure' && n.attrs.pending && PENDING_HERE.has(n.attrs.pending)) wanted.push(n.attrs.pending);
     });
     if (!wanted.length) return;
     let failed = 0;
@@ -969,9 +1113,10 @@
       } catch (e) { replacement = null; }
       const tr = editor.state.tr;
       const hits = [];
-      editor.state.doc.descendants((n, pos) => { if (n.type.name === 'figure' && n.attrs.src === src) hits.push([n, pos]); });
+      PENDING_HERE.delete(src);
+      editor.state.doc.descendants((n, pos) => { if (n.type.name === 'figure' && n.attrs.pending === src) hits.push([n, pos]); });
       hits.reverse().forEach(([n, pos]) => {
-        if (replacement) tr.setNodeMarkup(pos, undefined, Object.assign({}, n.attrs, { src: replacement }));
+        if (replacement) tr.setNodeMarkup(pos, undefined, Object.assign({}, n.attrs, { src: replacement, pending: null }));
         else { tr.delete(pos, pos + n.nodeSize); failed += 1; }
       });
       if (hits.length) editor.view.dispatch(tr);
@@ -1498,8 +1643,9 @@ img { max-width: 100%; height: auto; }
    * Android's print service (DomovoiApp.print), which has Save as PDF too. */
   const printDocument = (bodyHtml, title) => {
     const page = printablePage(bodyHtml, title);
-    if (window.DomovoiApp && typeof window.DomovoiApp.print === 'function') {
-      window.DomovoiApp.print(page, title || 'Document');
+    const host = window.DomovoiAppBridge || window.DomovoiApp;
+    if (host && typeof host.print === 'function') {
+      host.print(page, title || 'Document');
       return;
     }
     const frame = document.createElement('iframe');
@@ -1521,14 +1667,15 @@ img { max-width: 100%; height: auto; }
   /* Hand a file to the person: the phone app's share sheet when inside the
    * app, a download in a browser. */
   const deliverFile = async (name, mime, blob) => {
-    if (window.DomovoiApp && typeof window.DomovoiApp.saveFile === 'function') {
+    const host = window.DomovoiAppBridge || window.DomovoiApp;
+    if (host && typeof host.saveFile === 'function') {
       const b64 = await new Promise((res, rej) => {
         const fr = new FileReader();
         fr.onload = () => res(String(fr.result).split(',')[1] || '');
         fr.onerror = () => rej(fr.error);
         fr.readAsDataURL(blob);
       });
-      window.DomovoiApp.saveFile(name, mime, b64);
+      host.saveFile(name, mime, b64);
       return;
     }
     const url = URL.createObjectURL(blob);
@@ -1630,6 +1777,14 @@ img { max-width: 100%; height: auto; }
             // The file was changed outside the editor and the shared copy
             // was rebuilt from it: open it again.
             collab.on('reset', () => { notice('This document was changed elsewhere; it has been reopened.'); setReload((n) => n + 1); });
+            // Renamed or moved in Documents (close code 4410 + "moved"): the
+            // same document at its new path. Saving to the old one stops.
+            collab.on('moved', (ev) => {
+              const to = ev && typeof ev.path === 'string' ? ev.path : '';
+              if (!to) return;
+              notice(`This document was moved or renamed; it is now ${baseName(to)}.`);
+              setRel(to);
+            });
           }
           collabRef.current = collab;
           setCollabOn(!!collab);

@@ -85,8 +85,7 @@ def document_file(body_html: str, title: str = "") -> str:
     )
 
 
-_BODY_RE = re.compile(r"<body\b[^>]*>(.*?)(?:</body\s*>|$)", re.I | re.S)
-_GENERATOR_RE = re.compile(rf'<meta\s+name="generator"\s+content="{FORMAT_NAME}\b', re.I)
+_BODY_OPEN = re.compile(r"<body(?=[\s/>])", re.I)
 
 
 def looks_like_document(text: str) -> bool:
@@ -104,9 +103,16 @@ def document_body(text: str) -> str:
         end = text.find(BODY_END, start)
         if end != -1:
             return text[start + len(BODY_START): end].strip()
-    m = _BODY_RE.search(text)
+    # Linear on purpose (no lazy regex over the whole file, which repeated
+    # "<body" made quadratic): the first <body…> tag, then the LAST </body.
+    m = _BODY_OPEN.search(text)
     if m:
-        return m.group(1).strip()
+        gt = text.find(">", m.end())
+        if gt == -1:
+            return ""
+        close = text.lower().rfind("</body")
+        end = close if close > gt else len(text)
+        return text[gt + 1:end].strip()
     return text.strip()
 
 

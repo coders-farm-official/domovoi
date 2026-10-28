@@ -115,7 +115,7 @@ import com.domovoi.app.ui.components.Tone
 import com.domovoi.app.ui.components.fmtBytes
 import com.domovoi.app.ui.screens.documents.SheetEditorOverlay
 import com.domovoi.app.ui.screens.documents.TextEditorOverlay
-import com.domovoi.app.ui.screens.documents.WebDocEditorOverlay
+import com.domovoi.app.ui.screens.documents.WebDocEditor
 import com.domovoi.app.ui.screens.documents.opensInDocEditor
 import com.domovoi.app.ui.screens.documents.relFromEpochSec
 import com.domovoi.app.ui.screens.local.UploadButtonState
@@ -698,7 +698,7 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
             }
         }
         docEditorRel?.let { rel ->
-            WebDocEditorOverlay(rel) {
+            WebDocEditor(app, rel) {
                 docEditorRel = null
                 pager.reload()
             }

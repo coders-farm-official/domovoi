@@ -9,17 +9,17 @@ items as ``- [ ]`` / ``- [x]``, quotes as ``>``, code in fences, tables as
 reads out), pictures become their caption or alt text, and nothing from a
 ``data:`` URI ever reaches the text.
 
-It parses with the standard library and never runs, fetches or follows
-anything in the file. The input need not be sanitised first: scripts,
-styles and the like are skipped with their content.
+It reads the document through the same allowlist as the editor
+(:func:`domovoi.richdoc.sanitize_html`) and the linear tokenizer
+(:mod:`.tokens`), and never runs, fetches or follows anything in it.
 """
 
 from __future__ import annotations
 
-from html.parser import HTMLParser
 
 from domovoi.richdoc.fileformat import document_body
-from domovoi.richdoc.sanitize import DROP_WITH_CONTENT, VOID_ANY as VOID
+from domovoi.richdoc.sanitize import DROP_WITH_CONTENT, VOID_ANY as VOID, sanitize_html
+from domovoi.richdoc.tokens import tokenize
 
 _HEADINGS = {"h1": 1, "h2": 2, "h3": 3, "h4": 4, "h5": 5, "h6": 6}
 _MAX_DEPTH = 200
@@ -34,44 +34,43 @@ class _Node:
         self.children: list[object] = []
 
 
-class _TreeBuilder(HTMLParser):
-    def __init__(self) -> None:
-        super().__init__(convert_charrefs=True)
-        self.root = _Node("#root", {})
-        self.stack = [self.root]
-        self.skip = 0
-
-    def handle_starttag(self, tag, attrs):
-        tag = tag.lower()
-        if self.skip or tag in DROP_WITH_CONTENT:
-            if tag not in VOID:
-                self.skip += 1
-            return
-        node = _Node(tag, {k.lower(): (v or "") for k, v in attrs if k})
-        self.stack[-1].children.append(node)
-        if tag not in VOID and len(self.stack) < _MAX_DEPTH:
-            self.stack.append(node)
-
-    def handle_startendtag(self, tag, attrs):
-        tag = tag.lower()
-        if self.skip or tag in DROP_WITH_CONTENT:
-            return
-        self.stack[-1].children.append(_Node(tag, {k.lower(): (v or "") for k, v in attrs if k}))
-
-    def handle_endtag(self, tag):
-        tag = tag.lower()
-        if self.skip:
+def build_tree(markup: str) -> _Node:
+    """The element tree of ``markup`` (already sanitised by the callers:
+    :func:`html_to_markdown` and :mod:`.word` both run the allowlist first),
+    from the linear tokenizer. Raw-text and active elements are skipped
+    with their content through a STACK of what is open, so an element
+    nested inside one (``<svg><path></path></svg>``) never leaves the rest
+    of the document hidden."""
+    root = _Node("#root", {})
+    stack = [root]
+    skip: list[str] = []
+    for t in tokenize(markup):
+        if t.kind == "start":
+            tag = t.name
+            if skip:
+                if tag in DROP_WITH_CONTENT and not t.self_closing and tag not in VOID:
+                    skip.append(tag)
+                continue
             if tag in DROP_WITH_CONTENT:
-                self.skip -= 1
-            return
-        for i in range(len(self.stack) - 1, 0, -1):
-            if self.stack[i].tag == tag:
-                del self.stack[i:]
-                return
-
-    def handle_data(self, data):
-        if not self.skip and data:
-            self.stack[-1].children.append(data)
+                if not t.self_closing and tag not in VOID:
+                    skip.append(tag)
+                continue
+            node = _Node(tag, {k: v for k, v in t.attrs})
+            stack[-1].children.append(node)
+            if tag not in VOID and not t.self_closing and len(stack) < _MAX_DEPTH:
+                stack.append(node)
+        elif t.kind == "end":
+            if skip:
+                if t.name == skip[-1]:
+                    skip.pop()
+                continue
+            for i in range(len(stack) - 1, 0, -1):
+                if stack[i].tag == t.name:
+                    del stack[i:]
+                    break
+        elif not skip and t.data:
+            stack[-1].children.append(t.data)
+    return root
 
 
 def _inline(node: object, raw: bool = False) -> str:
@@ -223,9 +222,8 @@ class _Writer:
 
 def html_to_markdown(markup: str) -> str:
     """``markup`` (a whole file or just its content) as markdown text."""
-    builder = _TreeBuilder()
-    builder.feed(document_body(markup or ""))
-    builder.close()
+    # The readers see what the editor would show, nothing more: an alt
+    # text on a picture the allowlist drops never reaches Chat unseen.
     writer = _Writer()
-    writer.children(builder.root)
+    writer.children(build_tree(sanitize_html(document_body(markup or ""))))
     return "\n\n".join(writer.blocks) + ("\n" if writer.blocks else "")

@@ -131,7 +131,15 @@ const Auth = (() => {
   // server — they are different households with different tokens.
   const perServer = (key) => (base() ? `${key}@${base()}` : key);
   const deviceTokenKey = () => perServer(DEVICE_TOKEN_KEY);
+  // A token held for this page only, never written to storage: the phone
+  // app hands its token to the document editor's page (doc_page.jsx) this
+  // way, so nothing stays in the WebView after it closes, and a page served
+  // later from the same address by another machine finds nothing. null =
+  // not in this mode (the stored token is used).
+  let memoryToken = null;
+  let memoryRefused = null;
   const readDeviceToken = () => {
+    if (memoryToken !== null) return memoryToken || null;
     try { return localStorage.getItem(deviceTokenKey()) || null; } catch { return null; }
   };
 
@@ -160,9 +168,11 @@ const Auth = (() => {
   const DEVICE_TOKEN_REFUSED_KEY = 'domovoi-device-token-refused';
   const DEVICE_TOKEN_WAIT_KEY = 'domovoi-device-token-wait';
   const readRefused = () => {
+    if (memoryToken !== null) return memoryRefused;
     try { return localStorage.getItem(perServer(DEVICE_TOKEN_REFUSED_KEY)) || null; } catch { return null; }
   };
   const writeRefused = (value) => {
+    if (memoryToken !== null) { memoryRefused = value || null; return; }
     try {
       if (value) localStorage.setItem(perServer(DEVICE_TOKEN_REFUSED_KEY), value);
       else localStorage.removeItem(perServer(DEVICE_TOKEN_REFUSED_KEY));
@@ -218,6 +228,7 @@ const Auth = (() => {
 
   // Any new value (or none) is not the token the server refused.
   const writeDeviceToken = (value) => {
+    if (memoryToken !== null) { memoryToken = value || ''; writeRefused(null); return; }
     try {
       if (value) localStorage.setItem(deviceTokenKey(), value);
       else localStorage.removeItem(deviceTokenKey());
@@ -479,6 +490,11 @@ const Auth = (() => {
     // none is stored, when the server refused it, or while it asked this
     // address to wait.
     deviceToken: () => usableDeviceToken(),
+    // This page uses `token` and keeps it in memory only (see memoryToken).
+    holdDeviceTokenInMemory: (token) => {
+      memoryToken = storableDeviceToken(token);
+      memoryRefused = null;
+    },
     isPaired: () => !!usableDeviceToken(),
     // What is stored, refused or not (the Household token card's "this
     // browser holds it").

@@ -179,7 +179,10 @@ const SanitizeHtml = (() => {
   ]);
   const DOC_ATTRS = {
     a: new Set(['href', 'target', 'title']),
-    img: new Set(['src', 'alt', 'title', 'width', 'height']),
+    // data-pending: the web address of a pasted picture the editor is still
+    // copying in (doc_editor.jsx); kept as text only, never loaded, and
+    // never in a saved file (the server's allowlist has no such attribute).
+    img: new Set(['src', 'alt', 'title', 'width', 'height', 'data-pending']),
     figure: new Set(['data-align', 'data-width']),
     mark: new Set(['data-color']),
     ul: new Set(['data-type']),
@@ -238,6 +241,7 @@ const SanitizeHtml = (() => {
     'data-align': (v) => (['left', 'center', 'right'].includes(v) ? v : null),
     'data-width': (v) => (/^\d{1,3}$/.test(v) && +v >= 1 && +v <= 100 ? v : null),
     'data-color': (v) => (COLOUR.test(v) ? v : null),
+    'data-pending': (v) => (v.length <= 2048 && /^https?:\/\/[^\s"'<>]+$/i.test(v) ? v : null),
     colwidth: (v) => (/^\d{1,5}(,\d{1,5}){0,50}$/.test(v) ? v : null),
     colspan: (v) => (/^\d{1,3}$/.test(v) ? v : null),
     rowspan: (v) => (/^\d{1,3}$/.test(v) ? v : null),

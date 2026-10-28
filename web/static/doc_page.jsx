@@ -5,56 +5,59 @@
  * it directly: /doc.html?path=<path inside Documents>.
  *
  * Credentials: inside the app, the household token comes from the app
- * itself (window.DomovoiApp.deviceToken(), a bridge the app offers only to
- * its own server's pages), so it is never put in an address. A browser
- * uses what it already holds, or a `device_token` in the address, which is
- * checked and then removed from the address bar (as display.html does).
+ * itself (window.DomovoiAppBridge.deviceToken(), handed over once, after
+ * the app has checked this server's identity) and is held in memory only,
+ * never stored and never in an address. A browser uses what it already
+ * holds; a `device_token` in the address is used for this page only, and
+ * only when the browser holds no token of its own, then removed from the
+ * address bar.
  *
  * The app's bridge, when present (all optional):
- *   DomovoiApp.deviceToken() → the household token
- *   DomovoiApp.close()       → leave the editor (after it has saved)
- *   DomovoiApp.saveFile(name, mime, base64) / DomovoiApp.print(html, title)
- *                              → Download/share and PDF (doc_editor.jsx)
+ *   deviceToken() → the household token (once), darkTheme() → the app's theme
+ *   close()       → leave the editor (after it has saved)
+ *   saveFile(name, mime, base64) / print(html, title)
+ *                 → Download/share and PDF (doc_editor.jsx)
  * and the app calls window.DomovoiDocPage.back() for its Back button.
  */
 (() => {
   const params = new URLSearchParams(window.location.search);
   const path = (params.get('path') || '').trim();
-  const app = window.DomovoiApp || null;
+  // The app's bridge (WebDocEditor.kt). DomovoiApp is its first name, kept
+  // for builds that still use it.
+  const app = window.DomovoiAppBridge || window.DomovoiApp || null;
+  window.DomovoiDocHost = app;
 
-  const tokenAccepted = async (candidate) => {
-    const headers = {};
-    headers[(typeof Auth !== 'undefined' && Auth.DEVICE_TOKEN_HEADER) || 'X-Device-Token'] = candidate;
-    try {
-      const r = await fetch(`${API_BASE}/api/documents?kind=doc`, { credentials: 'omit', cache: 'no-store', headers });
-      return r.ok;
-    } catch (e) { return false; }
-  };
-  const adopt = (candidate, trusted) => {
-    if (!candidate || typeof Auth === 'undefined' || !Auth.pair) return Promise.resolve();
-    let stored = null;
-    try { stored = Auth.deviceToken ? Auth.deviceToken() : null; } catch (e) { stored = null; }
-    if (stored === candidate) return Promise.resolve();
-    if (!stored || trusted) { try { Auth.pair(candidate); } catch (e) { /* keep what is stored */ } return Promise.resolve(); }
-    return tokenAccepted(candidate).then((ok) => { if (ok) { try { Auth.pair(candidate); } catch (e) { /* keep */ } } });
-  };
-
-  let ready = Promise.resolve();
+  // Inside the app: the token the app hands over (once: the bridge gives it
+  // a single time) is kept in this page's memory only, never in storage, so
+  // nothing outlives the editor and a page served later from the same
+  // address by another machine finds nothing.
   if (app && typeof app.deviceToken === 'function') {
     let t = null;
     try { t = app.deviceToken(); } catch (e) { t = null; }
-    ready = adopt(t, true);
+    if (t && typeof Auth !== 'undefined' && Auth.holdDeviceTokenInMemory) Auth.holdDeviceTokenInMemory(t);
+    try {
+      if (typeof app.darkTheme === 'function') {
+        document.documentElement.setAttribute('data-theme', app.darkTheme() ? 'dark' : 'light');
+      }
+    } catch (e) { /* the page's own theme */ }
   } else if (params.has('device_token')) {
-    ready = adopt((params.get('device_token') || '').trim(), false);
+    // A link with a token in it: used for this page only, and only when
+    // this browser holds none of its own. It never replaces a stored token.
+    const t = (params.get('device_token') || '').trim();
+    let stored = null;
+    try { stored = Auth.storedDeviceToken ? Auth.storedDeviceToken() : null; } catch (e) { stored = null; }
+    if (t && !stored && typeof Auth !== 'undefined' && Auth.holdDeviceTokenInMemory) Auth.holdDeviceTokenInMemory(t);
     params.delete('device_token');
     try {
       const rest = params.toString();
       window.history.replaceState(null, '', `${window.location.pathname}${rest ? `?${rest}` : ''}${window.location.hash}`);
     } catch (e) { /* the address keeps it; harmless */ }
   }
+  const ready = Promise.resolve();
 
   const leave = () => {
     if (app && typeof app.close === 'function') { app.close(); return; }
+    // (the token was in memory only; nothing to clear)
     if (window.history.length > 1) window.history.back();
     else window.location.href = '/#files';
   };

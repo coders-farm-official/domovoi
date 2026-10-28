@@ -480,20 +480,66 @@ def test_print_and_pdf_use_the_same_page_style_as_the_saved_file():
     assert m.group(1).strip() == STYLE.strip()
 
 
-def test_every_editor_save_tells_co_editing(docs_dir, monkeypatch):
-    """wf/doc-collab: a save that doesn't call the hook looks like an outside
-    change, and the shared document is rebuilt from the file."""
+def test_every_editor_save_is_wrapped_by_co_editing(docs_dir, monkeypatch):
+    """wf/doc-collab: the WRITE happens inside _collab_saving, which refuses a
+    stale co-editing save (409) before anything is written and notes what
+    was written; without it a co-editing save looks like an outside change."""
+    from contextlib import asynccontextmanager
+
     from web.backend.api import documents as docs_api
 
-    told = []
+    seen = []
 
-    async def _saved(request, target):
-        told.append(target.name)
+    def _saving(request, target):
+        @asynccontextmanager
+        async def cm():
+            seen.append((target.name, "enter", target.exists()))
+            yield
+            seen.append((target.name, "exit", target.exists()))
+        return cm()
 
-    monkeypatch.setattr(docs_api, "_collab_saved", _saved)
+    monkeypatch.setattr(docs_api, "_collab_saving", _saving)
     (docs_dir / "n.md").write_bytes(b"# n\n")
     with _client() as c:
         assert c.put("/api/documents/doc/a.html", json={"html": "<p>x</p>"}).status_code == 200
         assert c.post("/api/documents/doc-save-as", json={
             "from_path": "n.md", "format": "html", "html": "<p>n</p>"}).status_code == 200
-    assert told == ["a.html", "n.html"]
+    assert seen == [("a.html", "enter", False), ("a.html", "exit", True),
+                    ("n.html", "enter", False), ("n.html", "exit", True)]
+
+
+def test_a_refused_co_editing_save_writes_nothing(docs_dir, monkeypatch):
+    from fastapi import HTTPException as _H
+    from contextlib import asynccontextmanager
+
+    from web.backend.api import documents as docs_api
+
+    def _stale(request, target):
+        @asynccontextmanager
+        async def cm():
+            raise _H(status_code=409, detail="stale")
+            yield  # pragma: no cover
+        return cm()
+
+    monkeypatch.setattr(docs_api, "_collab_saving", _stale)
+    (docs_dir / "a.html").write_text(richdoc.document_file("<p>kept</p>", "a"), encoding="utf-8")
+    before = (docs_dir / "a.html").read_bytes()
+    with _client() as c:
+        assert c.put("/api/documents/doc/a.html", json={"html": "<p>old</p>"}).status_code == 409
+    assert (docs_dir / "a.html").read_bytes() == before
+
+
+def test_without_co_editing_the_seam_is_a_no_op():
+    import asyncio
+    import importlib.util
+
+    if importlib.util.find_spec("web.backend.api.collab") is not None:
+        pytest.skip("co-editing is merged: the seam is wf/doc-collab's now")
+
+    from web.backend.api import documents as docs_api
+
+    async def go():
+        async with docs_api._collab_saving(None, None):
+            return "wrote"
+
+    assert asyncio.run(go()) == "wrote"

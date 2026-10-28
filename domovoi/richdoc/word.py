@@ -30,9 +30,21 @@ from dataclasses import dataclass, replace
 from typing import Any
 
 from domovoi.image_safety import LIBRARY_FORMATS, PictureRefused, open_image
-from domovoi.richdoc.text import _Node, _TreeBuilder
+from domovoi.richdoc.text import _Node, build_tree
 
 _HEADINGS = {"h1": 1, "h2": 2, "h3": 3, "h4": 4, "h5": 5, "h6": 6}
+
+# What one Word copy may hold. A document is somebody else's input, and the
+# conversion runs on the server: each bound keeps the work proportional to
+# an ordinary document's (security review round 1: a 60 x 40 table took
+# 72 s, and 144 KB of spans reached 1.1 GB). Past them, the rest of that
+# table (or the table, or the picture) is left out of the Word copy.
+MAX_TABLE_ROWS = 500
+MAX_TABLE_COLS = 60
+MAX_SPAN = 60
+MAX_TABLE_CELLS = 5_000
+MAX_DOCUMENT_CELLS = 20_000
+MAX_PICTURES = 200
 _TEXT_WIDTH_IN = 6.0       # python-docx's default page: 8.5in less 1.25in margins each side
 _DATA_URI = re.compile(r"^data:image/([a-z]+);base64,(.*)$", re.I | re.S)
 _STYLE_DECL = re.compile(r"\s*([a-z-]+)\s*:\s*([^;]+)")
@@ -105,6 +117,7 @@ class _Writer:
 
         self.doc = Document()
         self.images = 0
+        self.cells = 0
 
     # ── runs ──
     def _add_run(self, paragraph: Any, text: str, fmt: _Fmt) -> None:
@@ -234,6 +247,8 @@ class _Writer:
     def picture_run(self, paragraph: Any, img: _Node, width_pct: int | None) -> bool:
         from docx.shared import Inches
 
+        if self.images >= MAX_PICTURES:
+            return False
         got = self._picture_bytes(img.attrs.get("src", ""))
         if not got:
             return False
@@ -401,52 +416,74 @@ class _Writer:
         def walk(x: _Node) -> None:
             for c in x.children:
                 if isinstance(c, _Node) and c.tag == "tr":
-                    rows.append([td for td in c.children if isinstance(td, _Node) and td.tag in ("td", "th")])
+                    if len(rows) < MAX_TABLE_ROWS:
+                        rows.append([td for td in c.children if isinstance(td, _Node) and td.tag in ("td", "th")])
                 elif isinstance(c, _Node) and c.tag in ("thead", "tbody", "tfoot"):
                     walk(c)
 
         walk(n)
-        rows = [r for r in rows if r][:500]
+        rows = [r for r in rows if r]
         if not rows:
             return
 
         def span(td: _Node, key: str) -> int:
             try:
-                return max(1, min(50, int(td.attrs.get(key) or 1)))
+                return max(1, min(MAX_SPAN, int(td.attrs.get(key) or 1)))
             except ValueError:
                 return 1
 
         # Lay the cells out on a grid, as a browser does, so merged cells
-        # land where they were.
+        # land where they were. Every span is clamped to the grid BEFORE it
+        # is marked taken (columns to MAX_TABLE_COLS, rows to the table), and
+        # the grid itself to MAX_TABLE_CELLS, so a hostile colspan/rowspan
+        # costs no more than an ordinary table of the same size.
         grid: dict[tuple[int, int], tuple[_Node, int, int]] = {}
         taken: set[tuple[int, int]] = set()
         width = 0
+        height = len(rows)
         for r, cells in enumerate(rows):
             col = 0
             for td in cells:
                 while (r, col) in taken:
                     col += 1
-                cs, rs = span(td, "colspan"), span(td, "rowspan")
+                if col >= MAX_TABLE_COLS:
+                    break
+                cs = min(span(td, "colspan"), MAX_TABLE_COLS - col)
+                rs = min(span(td, "rowspan"), height - r)
                 grid[(r, col)] = (td, cs, rs)
                 for dr in range(rs):
                     for dc in range(cs):
                         taken.add((r + dr, col + dc))
                 col += cs
                 width = max(width, col)
-        width = min(width, 60)
-        height = max((r for r, _ in taken), default=0) + 1
+            if len(taken) > MAX_TABLE_CELLS:
+                height = r + 1
+                break
+        if width == 0:
+            return
+        height = min(height, max(1, MAX_TABLE_CELLS // width))
+        if self.cells + width * height > MAX_DOCUMENT_CELLS:
+            p = self._para(container)
+            self._add_run(p, "[A table too large for a Word copy was left out.]", _Fmt(italic=True))
+            return
+        self.cells += width * height
         table = container.add_table(rows=height, cols=width)
         try:
             table.style = "Table Grid"
         except (KeyError, ValueError):
             pass
+        # Each row's cells fetched ONCE (python-docx's table.cell(r, c)
+        # rebuilds the whole cell list on every call: quadratic), the text
+        # written first and the merges done after, on those same cells.
+        cells = [row.cells for row in table.rows]
+        merges: list[tuple[int, int, int, int]] = []
         for (r, c), (td, cs, rs) in grid.items():
-            if c >= width:
+            if r >= height or c >= width:
                 continue
-            cell = table.cell(r, c)
+            cell = cells[r][c]
             end_r, end_c = min(height - 1, r + rs - 1), min(width - 1, c + cs - 1)
             if (end_r, end_c) != (r, c):
-                cell = cell.merge(table.cell(end_r, end_c))
+                merges.append((r, c, end_r, end_c))
             p = cell.paragraphs[0]
             fmt = _Fmt(bold=td.tag == "th")
             first = True
@@ -462,6 +499,11 @@ class _Writer:
                     self.list_(cell, child, 1)
                 else:
                     self.inline(p, child, fmt)
+        for r, c, end_r, end_c in merges:
+            try:
+                cells[r][c].merge(cells[end_r][end_c])
+            except Exception:  # noqa: BLE001 - overlapping spans: keep the cells unmerged
+                continue
 
 
 def _raw_text(node: object) -> str:
@@ -475,13 +517,10 @@ def _raw_text(node: object) -> str:
 
 def html_to_docx(body_html: str, title: str = "") -> bytes:
     """The sanitised editor content ``body_html`` as .docx bytes."""
-    builder = _TreeBuilder()
-    builder.feed(body_html or "")
-    builder.close()
     w = _Writer()
     if title:
         w.doc.core_properties.title = title[:200]
-    w.blocks(w.doc, builder.root)
+    w.blocks(w.doc, build_tree(body_html or ""))
     buf = io.BytesIO()
     w.doc.save(buf)
     return buf.getvalue()

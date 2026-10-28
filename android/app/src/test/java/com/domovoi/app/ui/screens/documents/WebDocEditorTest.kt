@@ -34,4 +34,30 @@ class WebDocEditorTest {
         assertEquals("a_b_c.md", safeFileName("a/b\\c.md"))
         assertEquals("Document", safeFileName("   "))
     }
+
+    @Test fun theShareSheetOnlyGetsTheTwoDownloadKinds() {
+        assertEquals("text/markdown", shareMime("text/markdown"))
+        assertEquals(
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            shareMime("text/html"),
+        )
+    }
+
+    @Test fun theHostIsBuiltLikeTheSheetHost() {
+        // The things security review round 1 asked for, pinned in the source:
+        // refuse to open without a verified token, re-check every request,
+        // one-shot bridge, wipe storage on close, no Safe Browsing.
+        val src = java.io.File("src/main/java/com/domovoi/app/ui/screens/documents/WebDocEditor.kt").readText()
+        for (needle in listOf(
+            "if (t == null) failure =",
+            "override fun shouldInterceptRequest",
+            "pending.getAndSet(null)",
+            "WebStorage.getInstance().deleteAllData()",
+            "safeBrowsingEnabled = false",
+            "ReleasingAdapter",
+        )) {
+            assertTrue(needle, src.contains(needle))
+        }
+        assertFalse("the token never goes into page storage from here", src.contains("localStorage"))
+    }
 }

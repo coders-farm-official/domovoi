@@ -196,6 +196,7 @@ _WEB_BACKEND_CORE_IMPORTS = (
     # and the Word conversion, which documents.py imports lazily.
     "domovoi.richdoc",
     "domovoi.richdoc.word",
+    "domovoi.richdoc.runner",
 )
 
 

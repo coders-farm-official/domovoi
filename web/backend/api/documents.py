@@ -89,7 +89,7 @@ import mimetypes
 import os
 import re
 import zipfile
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 from typing import Any, Callable, Literal, Optional
 
@@ -558,6 +558,30 @@ async def _collab_saved(request: Request, target: Path) -> None:
         return
 
     await collab.note_file_saved(request, target)
+
+
+@asynccontextmanager
+async def _no_collab():
+    yield
+
+
+def _collab_saving(request: Request, target: Path):
+    """``async with _collab_saving(request, target): <write the file>``.
+    Wrap the WRITE of every save route for a co-edited type in it: a
+    co-editing save that is older than what the file already holds, or from
+    before the document was rebuilt or moved, is refused 409 before anything
+    is written, and the path stays locked across the write and the note of
+    what was written (so the outside-change check never mistakes it for
+    someone else's). Imported late: collab imports this module.
+
+    wf/doc-collab's seam; until that branch is merged there is no
+    co-editing module and the write simply goes ahead."""
+    try:
+        from web.backend.api import collab
+    except ImportError:
+        return _no_collab()
+
+    return collab.saving(request, target)
 
 
 # ─── Schemas ────────────────────────────────────────────────────────
@@ -1322,12 +1346,7 @@ async def export_doc(rel_path: str, fmt: Literal["docx"] = Query("docx")) -> Res
         raise HTTPException(status_code=413, detail=f"{target.name} is too large to export")
     text_ = target.read_bytes().decode("utf-8", errors="replace")
     if ext in _FORMATTED_EXTS:
-        from domovoi.richdoc.word import html_to_docx
-
-        data = await executors.run(
-            "documents",
-            lambda: html_to_docx(richdoc.sanitize_html(richdoc.document_body(text_)), target.stem),
-        )
+        data = await _word_copy(richdoc.document_body(text_), target.stem)
     else:
         data = _markdown_to_docx(text_)
     return Response(
@@ -1447,21 +1466,31 @@ class DocConvertRequest(BaseModel):
     title: str = Field("", max_length=200)
 
 
-def _doc_bytes(fmt: str, html_: Optional[str], markdown: Optional[str], title: str) -> bytes:
-    """What a save writes for ``fmt``, built from the request. Runs in the
-    ``documents`` pool: sanitising and converting a 32 MiB document is
-    real work, and never the event loop's."""
+async def _word_copy(markup: str, title: str) -> bytes:
+    """``markup`` as Word, converted (and sanitised) in its own capped,
+    time-limited process (domovoi.richdoc.runner): a hostile document costs
+    that one conversion, never the web process or its documents pool."""
+    from domovoi.richdoc import runner
+
+    try:
+        return await runner.to_docx(markup, title)
+    except runner.ConvertFailed as e:
+        raise HTTPException(status_code=422, detail=str(e)) from None
+
+
+async def _doc_bytes(fmt: str, html_: Optional[str], markdown: Optional[str], title: str) -> bytes:
+    """What a save writes for ``fmt``, built from the request: never on the
+    event loop (the allowlist pass in the ``documents`` pool, Word in its
+    own process)."""
     if fmt == "md":
         if markdown is None:
             raise HTTPException(status_code=422, detail="a markdown save needs `markdown`")
         return markdown.encode("utf-8")
     if html_ is None:
         raise HTTPException(status_code=422, detail="this save needs `html`")
-    body = richdoc.sanitize_html(html_)
     if fmt == "docx":
-        from domovoi.richdoc.word import html_to_docx
-
-        return html_to_docx(body, title)
+        return await _word_copy(html_, title)
+    body = await executors.run("documents", richdoc.sanitize_html, html_)
     data = richdoc.document_file(body, title).encode("utf-8")
     if len(data) > _DOC_MAX_BYTES:
         raise HTTPException(
@@ -1558,11 +1587,13 @@ async def write_doc(request: Request, rel_path: str, req: DocWriteRequest) -> Do
     with _usable_path(rel_path):
         _assert_doc_overwritable(target, fmt)
         _ensure_parent_dir(target)
-        data = await executors.run("documents", _doc_bytes, fmt, req.html, req.markdown, target.stem)
-        _replace_atomically(target, lambda p: p.write_bytes(data))
+        data = await _doc_bytes(fmt, req.html, req.markdown, target.stem)
+        # Co-editing (wf/doc-collab) refuses a stale co-editing save here,
+        # 409 before anything is written, and notes what was written.
+        async with _collab_saving(request, target):
+            _replace_atomically(target, lambda p: p.write_bytes(data))
         row = _row(target)
     _listing_changed()
-    await _collab_saved(request, target)
     return row
 
 
@@ -1579,17 +1610,17 @@ async def save_doc_as(request: Request, req: DocSaveAsRequest) -> DocumentRow:
         target = _unique_path(source.parent, f"{source.stem}{ext}")
         target = _safe_target(_rel_of(target.resolve(strict=False)))
         _assert_saveable_name(target)
-        data = await executors.run("documents", _doc_bytes, req.format, req.html, req.markdown, target.stem)
+        data = await _doc_bytes(req.format, req.html, req.markdown, target.stem)
         # Exclusive create: a file that appeared since _unique_path looked
         # is left alone, and this save is refused rather than written over it.
-        try:
-            with open(target, "xb") as fh:
-                fh.write(data)
-        except FileExistsError:
-            raise HTTPException(status_code=409, detail=f"{target.name} already exists") from None
+        async with _collab_saving(request, target):
+            try:
+                with open(target, "xb") as fh:
+                    fh.write(data)
+            except FileExistsError:
+                raise HTTPException(status_code=409, detail=f"{target.name} already exists") from None
         row = _row(target)
     _listing_changed()
-    await _collab_saved(request, target)
     return row
 
 
@@ -1597,14 +1628,9 @@ async def save_doc_as(request: Request, req: DocSaveAsRequest) -> DocumentRow:
 async def convert_to_docx(req: DocConvertRequest) -> Response:
     """The editor's content as a Word file, for "Download as Word": what is
     on screen, saved or not. Nothing is written on the server."""
-    def build() -> bytes:
-        from domovoi.richdoc.word import html_to_docx
-
-        return html_to_docx(richdoc.sanitize_html(req.html), req.title)
-
     from web.backend.api.audio_serve import attachment_headers, safe_download_name
 
-    data = await executors.run("documents", build)
+    data = await _word_copy(req.html, req.title)
     name = safe_download_name(req.title, fallback="Document")
     return Response(
         content=data, media_type=_DOCX,
