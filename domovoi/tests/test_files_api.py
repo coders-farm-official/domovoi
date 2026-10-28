@@ -124,7 +124,8 @@ def test_libraries_strips_root_path(registry):
     assert r.status_code == 200
     libs = r.json()["libraries"]
     ids = [lib["id"] for lib in libs]
-    assert ids == ["core:music", "core:documents", "plugin:jelly:videos", "removable:E"]
+    # Other is the Documents folder's non-documents, right after the core libraries.
+    assert ids == ["core:music", "core:documents", "core:other", "plugin:jelly:videos", "removable:E"]
     for lib in libs:
         assert "root_path" not in lib
     docs = next(lib for lib in libs if lib["id"] == "core:documents")

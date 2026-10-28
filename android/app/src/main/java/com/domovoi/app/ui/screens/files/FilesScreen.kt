@@ -345,6 +345,9 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
                     )
                     if (r.skipped > 0) parts.append(" · ${r.skipped} skipped")
                     if (r.reindexTriggered) parts.append(" · indexing…")
+                    // Why one was skipped, in the server's words: "Documents
+                    // shows documents, spreadsheets and PDFs. Upload this in Other…"
+                    r.firstSkipped?.let { parts.append(" · ").append(it) }
                     toast(parts.toString())
                     pager.reload()
                 }
@@ -679,7 +682,9 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
                                 // gets a destination picker instead (FilesMoveSheet).
                                 onMove = if (canWrite) ({ moveEntry = e }) else null,
                                 onDelete = if (editable) ({ confirmDelete = e }) else null,
-                                print = printOffer(e.name, e.isDir, printers),
+                                // Other only downloads: no printing from it.
+                                print = if (selectedId == OTHER_LIBRARY_ID) PrintOffer.None
+                                else printOffer(e.name, e.isDir, printers),
                                 onPrint = { printEntry = e },
                             )
                         }

@@ -963,7 +963,7 @@ Any room can read a document from your household's Documents out loud.
 
 ### Files and photos
 
-Every library in one place: Music, Documents, Pictures, Videos,
+Every library in one place: Music, Documents, Other, Pictures, Videos,
 Podcasts, Audiobooks, and plugged-in drives.
 
 **How to**
@@ -978,6 +978,13 @@ Podcasts, Audiobooks, and plugged-in drives.
 
 **Also**
 
+- Documents and **Other** are the same shared folder. Documents shows
+  just its documents, spreadsheets and PDFs. Other shows everything else
+  in it: installers, APKs, archives, anything that isn't a document,
+  picture, song or video, kept and shared as it is. Files in Other can
+  only be downloaded, moved, renamed or deleted; nothing opens them.
+- Upload documents in Documents and everything else in Other. A folder
+  you upload can mix both: each file shows where it belongs.
 - Domovoi keeps two folders of its own in Documents: **Scans**, from the
   scanner, named by date, and **From Chat**, for drafts and letters saved
   from Chat.

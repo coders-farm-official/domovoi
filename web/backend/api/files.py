@@ -120,6 +120,7 @@ from web.backend.api.files_security import (
     INDEXED_KINDS,
     MediaLibrary,
     build_libraries,
+    other_view,
     core_library,
     has_sensitive_segment,
     is_sensitive_name,
@@ -128,6 +129,7 @@ from web.backend.api.files_security import (
     unstorable_reason,
 )
 from web.backend.api import files_security as _fs
+from web.backend.api.doc_types import DOCUMENT_EXTS, in_view, view_refusal
 from web.backend.api.csrf_guard import require_requested_with
 from web.backend.api import listing_cache, paging
 from web.backend.api.music import _safe_basename, _unique_path
@@ -168,9 +170,23 @@ async def _assert_admin_for(lib: MediaLibrary, request: Request) -> None:
 
 
 # ─── Registry resolution ─────────────────────────────────────────────────────
+def _with_other(libs: list[MediaLibrary]) -> list[MediaLibrary]:
+    """The registry with Other (the Documents folder's non-documents,
+    doc_types.py) placed after the last core library, when Documents is
+    there. Only this router serves Other: the image, video and print
+    routes resolve libraries without it, so nothing previews, thumbnails
+    or prints a file in Other."""
+    docs = next((lib for lib in libs if lib.id == DOCUMENTS_LIBRARY_ID), None)
+    if docs is None:
+        return libs
+    at = max(i for i, lib in enumerate(libs) if lib.kind == "core") + 1
+    return [*libs[:at], other_view(docs), *libs[at:]]
+
+
 async def _registry() -> dict[str, MediaLibrary]:
-    """Fresh {library_id → MediaLibrary} each call (core + plugin + removable)."""
-    return {lib.id: lib for lib in await build_libraries()}
+    """Fresh {library_id → MediaLibrary} each call (core + Other + plugin +
+    removable), keyed by the id clients send (``core:other`` for Other)."""
+    return {lib.public_id: lib for lib in _with_other(await build_libraries())}
 
 
 async def _resolve_library(library_id: str) -> MediaLibrary:
@@ -570,9 +586,14 @@ async def assert_documents_write_allowed(
 @router.get("/libraries", dependencies=[Depends(require_device_read)])
 async def list_libraries() -> dict[str, Any]:
     """Rebuild the registry fresh and return the public records (root_path
-    stripped), ordered core, plugin, removable."""
-    libs = await build_libraries()
-    return {"libraries": [lib.public() for lib in libs]}
+    stripped), ordered core (Other, the Documents folder's non-documents,
+    after the last of them), plugin, removable."""
+    libs = _with_other(await build_libraries())
+    # ``document_exts``: what the Documents view lists and accepts (the rest
+    # of that folder is Other), so a client can send each file of a mixed
+    # folder upload to its own view.
+    return {"libraries": [lib.public() for lib in libs],
+            "document_exts": sorted(DOCUMENT_EXTS)}
 
 
 # ─── GET /browse ─────────────────────────────────────────────────────────────
@@ -714,11 +735,14 @@ async def browse(
         )
         rows, keys, order = snap.view(sort, _FILE_SORT_KEYS[sort])
         matches = None
-        if needle or kind:
+        # Documents and Other split one folder by type (doc_types.py).
+        shown = lib.view
+        if needle or kind or shown:
             hay = snap.hay
-            matches = snap.memo(("folder", sort, needle, kind), lambda: [
+            matches = snap.memo(("folder", sort, needle, kind, shown), lambda: [
                 i for i in range(len(rows))
                 if (not needle or needle in hay[order[i]]) and (not kind or rows[i]["kind"] == kind)
+                and in_view(shown, rows[i]["name"], rows[i]["is_dir"])
             ])
         if paging.wants_page(limit, cursor, offset):
             page, fields = paging.page_view(
@@ -729,6 +753,10 @@ async def browse(
             page = rows if matches is None else [rows[i] for i in matches]
             fields = paging.page_fields(total=len(page), limit=None, has_more=False,
                                         next_cursor=None)
+        if shown:
+            in_folder = snap.memo(("in-view", shown), lambda: sum(
+                1 for r in rows if in_view(shown, r["name"], r["is_dir"])))
+            return page, fields, in_folder
         return page, fields, len(rows)
 
     try:
@@ -738,7 +766,7 @@ async def browse(
 
     blocked_reason = await _block_status(device_id)
     return BrowseResponse(
-        library_id=lib.id,
+        library_id=lib.public_id,
         path=rel,
         editable=lib.editable,
         importable=lib.importable,
@@ -922,6 +950,7 @@ async def _upload_files(
     files: list[UploadFile], saved: list[str], created_dir: bool,
 ) -> UploadResponse:
     skipped: list[str] = []
+    wrong_view = 0
     for up in files:
         raw = up.filename or "upload"
         name = _safe_basename(raw)
@@ -937,6 +966,11 @@ async def _upload_files(
             or unstorable_reason(name) is not None
         ):
             skipped.append(f"{raw}: bad filename")
+            continue
+        refusal = view_refusal(lib.view, name)
+        if refusal:
+            skipped.append(f"{name}: {refusal}")
+            wrong_view += 1
             continue
         cand = _unique_path(dest, name)
         try:
@@ -956,6 +990,10 @@ async def _upload_files(
         saved.append(cand.name)
 
     if not saved:
+        # Refused for their type only: the sentence that names where they
+        # go, rather than a list wrapped in "no files saved".
+        if wrong_view and wrong_view == len(skipped):
+            raise HTTPException(status_code=415, detail="; ".join(skipped))
         raise HTTPException(
             status_code=400,
             detail="no files saved" + (f"; {skipped}" if skipped else ""),
@@ -1179,6 +1217,9 @@ async def upload_stream(
     root = lib.root_path
     segs = split_upload_rel(rel_path)
     folders, name = segs[:-1], segs[-1]
+    refusal = view_refusal(lib.view, name)
+    if refusal:
+        raise HTTPException(status_code=415, detail=f"{name}: {refusal}")
 
     declared = request.headers.get("content-length")
     if declared is not None and declared.isdigit() and int(declared) > MAX_UPLOAD_FILE_BYTES:
@@ -1307,6 +1348,10 @@ async def upload_check(request: Request, req: UploadCheckRequest) -> UploadCheck
                 split_upload_rel(rel)
             except HTTPException as e:
                 refused[rel] = str(e.detail).split(": ", 1)[-1]
+                continue
+            refusal = view_refusal(lib.view, rel.rsplit("/", 1)[-1])
+            if refusal:
+                refused[rel] = refusal
                 continue
             cand = base / rel
             if not _within(cand, root):
@@ -1534,6 +1579,11 @@ async def import_media(request: Request, req: ImportRequest) -> ImportResponse:
     name = _safe_basename(src.name)
     if not name or name in (".", "..") or is_sensitive_name(name):
         raise HTTPException(status_code=400, detail="bad source name")
+    # A folder is welcome in either view (its files then show in theirs);
+    # a single file must fit the view it is imported into.
+    refusal = None if src.is_dir() else view_refusal(target.view, name)
+    if refusal:
+        raise HTTPException(status_code=415, detail=f"{name}: {refusal}")
     dest = _unique_path(dst_dir, name)
     try:
         dest.resolve(strict=False).relative_to(target.root_path)
@@ -1643,6 +1693,13 @@ async def move(request: Request, req: MoveRequest) -> MoveResponse:
         name = _safe_basename(src.name)
         if not name or name in (".", "..") or is_sensitive_name(name):
             failed.append(f"{rel}: bad name")
+            continue
+
+        # Into Documents or Other: a file must fit that view (doc_types.py);
+        # a folder goes in either, its files then showing in theirs.
+        refusal = None if src.is_dir() else view_refusal(target.view, name)
+        if refusal:
+            failed.append(f"{rel}: {refusal}")
             continue
 
         # Already where it's being dropped — a no-op, not a failure.

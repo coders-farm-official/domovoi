@@ -54,6 +54,28 @@ lock files with hashes). Nothing to set up: the update applies both.
   request the page makes, and wipes the page's storage on close. Update
   the app to get it.
 
+## 2026-10-27 — Files: Documents shows documents; everything else in that folder is under Other
+
+* **A new Files section, Other.** It is the same shared Documents folder,
+  not a new one: Documents now lists only documents, spreadsheets, PDFs,
+  drawings and text files, and Other lists everything else in it
+  (installers, APKs, archives, pictures and anything else that was saved
+  there). Nothing was moved or deleted; a file that used to show in
+  Documents and isn't a document now shows under Other. Files in Other can
+  be uploaded, downloaded, moved, renamed and deleted, with the same rules
+  as Documents, and are never opened, previewed, printed or read.
+* **Documents refuses what isn't a document.** Uploading, moving or copying
+  a non-document into Documents (the Files page, the app, or
+  `/api/documents`) is refused with a sentence naming where it goes
+  (Other, or Pictures/Music/Videos). A document uploaded through Other is
+  refused the same way, pointing to Documents. A folder upload that mixes
+  both puts each file in its own view and says how many went to the other
+  one. `GET /api/documents` no longer lists non-documents. A new **Text
+  file** named with no extension at all is made as `.txt`.
+* **API:** `GET /api/files/libraries` adds `core:other`, a `view` field on
+  each library and `document_exts`; see API_REFERENCE §3.13 "Documents and
+  Other".
+
 ## 2026-10-25 — A new room after a rebuilt music player no longer trips the container guard
 
 * **"The music player for <room> is running a different image than the

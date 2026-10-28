@@ -69,6 +69,28 @@ class FileKindsTest {
         assertNull(defaultHomeLibrary(FileEntry(name = "n.md"), listOf(lib("core:music", editable = false))))
     }
 
+    @Test fun documentsHoldDocumentsAndOtherTheRest() {
+        for (n in listOf("a.md", "b.html", "c.docx", "d.odt", "e.rtf", "f.xlsx", "g.csv", "h.pdf", "i.excalidraw", "j.txt")) {
+            assertEquals(n, true, isDocumentName(n))
+        }
+        for (n in listOf("setup.exe", "app.apk", "x.zip", "p.jpg", "s.mp3", "README")) {
+            assertEquals(n, false, isDocumentName(n))
+        }
+    }
+
+    @Test fun sendToHomePutsWhatIsNotADocumentInOther() {
+        val libs = listOf(lib("core:music"), lib("core:documents"), lib(OTHER_LIBRARY_ID), lib("core:pictures"))
+        assertEquals(OTHER_LIBRARY_ID, defaultHomeLibrary(phoneEntry("app.apk"), libs))
+        assertEquals(OTHER_LIBRARY_ID, defaultHomeLibrary(phoneEntry("backup.zip"), libs))
+        assertEquals("core:documents", defaultHomeLibrary(phoneEntry("lease.pdf"), libs))
+        assertEquals("core:pictures", defaultHomeLibrary(phoneEntry("p.jpg"), libs))
+        // No Videos library: a video goes to Other, never to Documents (which refuses it).
+        assertEquals(OTHER_LIBRARY_ID, defaultHomeLibrary(phoneEntry("clip.mkv"), libs))
+        // A server older than Other: Documents is its one door for anything.
+        val older = listOf(lib("core:documents"))
+        assertEquals("core:documents", defaultHomeLibrary(phoneEntry("app.apk"), older))
+    }
+
     private fun phoneEntry(name: String) = FileEntry(name = name, kind = fileKind(name, false))
 
     @Test fun aPhoneVideoGoesToTheServersVideosLibrary() {

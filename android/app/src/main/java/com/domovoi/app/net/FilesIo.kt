@@ -10,8 +10,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -77,7 +79,13 @@ internal fun openFileDownload(context: Context, app: AppContainer, libraryId: St
 // Result holders
 // ---------------------------------------------------------------------------
 
-internal data class UploadResult(val saved: Int, val skipped: Int, val reindexTriggered: Boolean)
+internal data class UploadResult(
+    val saved: Int,
+    val skipped: Int,
+    val reindexTriggered: Boolean,
+    /** The first skipped file and why, as the server put it. */
+    val firstSkipped: String? = null,
+)
 internal data class DeleteResult(val deleted: Int, val failed: Int, val reindexTriggered: Boolean)
 internal data class ImportResult(val copied: Int, val skipped: Int, val reindexTriggered: Boolean)
 internal data class MoveResult(
@@ -119,14 +127,27 @@ internal suspend fun uploadFiles(
         added++
     }
     if (added == 0) throw IOException("nothing readable to upload")
-    val res = app.api.upload("/api/files/upload", builder.build())
+    val res = try {
+        app.api.upload("/api/files/upload", builder.build())
+    } catch (e: ApiException) {
+        // 415: every file was the wrong type for this view (Documents or
+        // Other); the server's sentence says where they go.
+        if (e.status == 415) throw IOException(uploadRefusalText(e.body) ?: e.message, e)
+        throw e
+    }
     val obj = res as? JsonObject ?: JsonObject(emptyMap())
     UploadResult(
         saved = (obj["saved"] as? JsonArray)?.size ?: 0,
         skipped = (obj["skipped"] as? JsonArray)?.size ?: 0,
         reindexTriggered = obj["reindex_triggered"]?.jsonPrimitive?.booleanOrNull ?: false,
+        firstSkipped = ((obj["skipped"] as? JsonArray)?.firstOrNull() as? JsonPrimitive)?.contentOrNull,
     )
 }
+
+/** The `detail` of a refused upload, when it is a sentence. */
+internal fun uploadRefusalText(body: String): String? = runCatching {
+    (DomovoiJson.parseToJsonElement(body) as? JsonObject)?.get("detail")?.jsonPrimitive?.contentOrNull
+}.getOrNull()?.takeIf { it.isNotBlank() }
 
 private fun displayName(resolver: ContentResolver, uri: Uri): String? = runCatching {
     resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->

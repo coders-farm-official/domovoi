@@ -140,6 +140,10 @@ private data class SheetGrid(val rows: List<List<SheetCell?>> = emptyList())
 
 internal const val DOCUMENTS_LIBRARY_ID = "core:documents"
 
+/** Other: the shared Documents folder's files that are not documents
+ *  (installers, APKs, archives). Kept as they are: download only. */
+internal const val OTHER_LIBRARY_ID = "core:other"
+
 internal fun sheetApiPath(rel: String): String = "/api/documents/sheet/" + Uri.encode(rel, "/")
 
 internal class ServerFileSource(private val app: AppContainer) : FileSource {
@@ -170,6 +174,8 @@ internal class ServerFileSource(private val app: AppContainer) : FileSource {
     override fun openFile(context: Context, libraryId: String, entry: FileEntry): Boolean {
         when {
             libraryId == DOCUMENTS_LIBRARY_ID -> openRawDoc(context, app, entry.rel)
+            // Other's files are only ever downloaded; nothing opens them.
+            libraryId == OTHER_LIBRARY_ID -> openFileDownload(context, app, libraryId, entry.rel)
             // Images in ANY library open inline (system viewer) via the
             // generic library-image serve — web-parity with the Files tab's
             // "Open" action.

@@ -761,7 +761,7 @@ const ImportMenu = ({ importables, disabled, onPick }) => {
  * library FILE rows use DocRow instead (editing affordance). */
 const BrowserRow = ({ entry, libraryId, selected, onToggleSelect, editable, removable,
                       importables, onOpen, onDownload, onDelete, onImport,
-                      onDragStartEntry, onDropMove }) => {
+                      onDragStartEntry, onDropMove, downloadOnly }) => {
   const isDir = entry.is_dir;
   // A folder accepts a drop; a file doesn't (there's nothing to drop it into).
   const drop = useDropTarget(isDir && !!onDropMove, () => onDropMove(entry));
@@ -798,10 +798,12 @@ const BrowserRow = ({ entry, libraryId, selected, onToggleSelect, editable, remo
         {isDir && (
           <Button icon="chevron-right" title="open folder" onClick={onOpen}>Open</Button>
         )}
-        {!isDir && entry.kind === 'image' && (
+        {/* Other (the Documents folder's non-documents) keeps its files as
+            they are: Download only, nothing opens or prints them. */}
+        {!isDir && !downloadOnly && entry.kind === 'image' && (
           <Button icon="external-link" title="open in a new tab" onClick={openImage}>Open</Button>
         )}
-        {!isDir && window.PrintFileButton && (
+        {!isDir && !downloadOnly && window.PrintFileButton && (
           <window.PrintFileButton libraryId={libraryId} path={entry.rel} name={entry.name}/>
         )}
         <Button icon="download" title="download" onClick={onDownload}>Download</Button>
@@ -1021,6 +1023,7 @@ const useFilesUploadQueue = ({ fire, onFinished }) => {
         total: c.items.length, finished: c.finished, saved: c.saved.length,
         skipped: c.skipped.slice(), failed: c.failed.slice(), junk: c.junk.slice(),
         notSent: c.notSent, replaced: c.replaced,
+        savedElsewhere: c.savedElsewhere, elsewhereLabel: c.elsewhereLabel,
         bytesTotal: c.bytesTotal, bytesDone,
         active: Array.from(c.active.values()).map((a) => ({ rel: a.rel, loaded: a.loaded, size: a.size })),
         reindex: c.reindex, fatal: c.fatal, cancelled: c.cancelled,
@@ -1047,11 +1050,16 @@ const useFilesUploadQueue = ({ fire, onFinished }) => {
       try {
         c.reindex = await apiPost('/api/files/upload-done',
           { library_id: c.libraryId, device_id: DeviceIdentity.id() });
+        if (c.savedElsewhere && c.elsewhereId) {
+          await apiPost('/api/files/upload-done',
+            { library_id: c.elsewhereId, device_id: DeviceIdentity.id() });
+        }
       } catch (e) { c.reindex = { error: String((e && e.message) || e) }; }
     }
     c.phase = 'done';
     publish(true);
     const parts = [`${c.saved.length} file${c.saved.length === 1 ? '' : 's'} uploaded`];
+    if (c.savedElsewhere) parts.push(`${c.savedElsewhere} of them in ${c.elsewhereLabel}`);
     if (c.skipped.length) parts.push(`${c.skipped.length} skipped`);
     if (c.failed.length) parts.push(`${c.failed.length} failed`);
     if (c.cancelled && c.notSent) parts.push(`${c.notSent} not sent (cancelled)`);
@@ -1077,7 +1085,7 @@ const useFilesUploadQueue = ({ fire, onFinished }) => {
         continue;
       }
       const a = { rel: item.rel, loaded: 0, size: item.file.size };
-      const send = sendUploadFile({ libraryId: c.libraryId, path: c.path, item,
+      const send = sendUploadFile({ libraryId: item.libraryId || c.libraryId, path: c.path, item,
                                     onConflict: c.onConflict,
                                     onProgress: (n) => { a.loaded = n; publish(); } });
       a.abort = send.abort;
@@ -1086,7 +1094,11 @@ const useFilesUploadQueue = ({ fire, onFinished }) => {
       try {
         // eslint-disable-next-line no-await-in-loop
         const res = await send.promise;
-        if (res && res.saved) { c.saved.push(res.saved); if (res.replaced) c.replaced += 1; }
+        if (res && res.saved) {
+          c.saved.push(res.saved);
+          if (res.replaced) c.replaced += 1;
+          if (item.libraryId) c.savedElsewhere += 1;
+        }
         else c.skipped.push(`${item.rel}: ${(res && res.skipped) || 'not saved'}`);
         c.finished += 1;
       } catch (e) {
@@ -1107,7 +1119,10 @@ const useFilesUploadQueue = ({ fire, onFinished }) => {
     }
   };
 
-  const start = async ({ items, unreadable = [], libraryId, path, label }) => {
+  /* `elsewhere` ({ id, label }): the sibling view of the same folder
+   * (Documents and Other) that items marked `libraryId` go to: a mixed
+   * folder upload puts each file in its own view. */
+  const start = async ({ items, unreadable = [], libraryId, path, label, elsewhere = null }) => {
     if (q.current && q.current.phase !== 'done') {
       fire('an upload is already running — wait for it, or cancel it first');
       return;
@@ -1119,7 +1134,8 @@ const useFilesUploadQueue = ({ fire, onFinished }) => {
       items: keep, next: 0, finished: 0, saved: [], skipped: unreadable.slice(), failed: [],
       junk, notSent: 0, replaced: 0, bytesTotal: keep.reduce((s, it) => s + it.file.size, 0),
       bytesFinished: 0, active: new Map(), wake: [], reindex: null, fatal: null,
-      onConflict: 'keep_both',
+      onConflict: 'keep_both', savedElsewhere: 0,
+      elsewhereId: elsewhere ? elsewhere.id : null, elsewhereLabel: elsewhere ? elsewhere.label : '',
     };
     q.current = c;
     publish(true);
@@ -1132,16 +1148,22 @@ const useFilesUploadQueue = ({ fire, onFinished }) => {
     // Which are already there, and which names the server won't take.
     const existing = [];
     try {
-      for (let at = 0; at < keep.length; at += FILES_UPLOAD_CHECK_CHUNK) {
-        const chunk = keep.slice(at, at + FILES_UPLOAD_CHECK_CHUNK);
-        // eslint-disable-next-line no-await-in-loop
-        const r = await apiPost('/api/files/upload-check', {
-          library_id: libraryId, path: path || '', device_id: DeviceIdentity.id(),
-          rel_paths: chunk.map((it) => it.rel),
-        });
-        const refused = r.refused || {};
-        chunk.forEach((it) => { if (refused[it.rel] && !it.skip) it.skip = refused[it.rel]; });
-        (r.existing || []).forEach((rel) => existing.push(rel));
+      // Checked against the view each file goes to (one group, or two for
+      // a mixed folder in Documents or Other).
+      const groups = [libraryId, c.elsewhereId].filter(Boolean)
+        .map((lid) => [lid, keep.filter((it) => (it.libraryId || libraryId) === lid)]);
+      for (const [lid, group] of groups) {
+        for (let at = 0; at < group.length; at += FILES_UPLOAD_CHECK_CHUNK) {
+          const chunk = group.slice(at, at + FILES_UPLOAD_CHECK_CHUNK);
+          // eslint-disable-next-line no-await-in-loop
+          const r = await apiPost('/api/files/upload-check', {
+            library_id: lid, path: path || '', device_id: DeviceIdentity.id(),
+            rel_paths: chunk.map((it) => it.rel),
+          });
+          const refused = r.refused || {};
+          chunk.forEach((it) => { if (refused[it.rel] && !it.skip) it.skip = refused[it.rel]; });
+          (r.existing || []).forEach((rel) => existing.push(rel));
+        }
       }
     } catch (e) {
       const msg = mutationErrorText(e, 'upload', { kept: false });
@@ -1231,6 +1253,7 @@ const FilesUploadPanel = ({ up }) => {
       + ` file${s.total === 1 ? '' : 's'} done · ${fmtBytes(s.bytesDone)} of ${fmtBytes(s.bytesTotal)}`;
   } else {
     headline = `${s.saved} file${s.saved === 1 ? '' : 's'} uploaded`
+      + (s.savedElsewhere ? ` (${s.savedElsewhere} of them show in ${s.elsewhereLabel}, the same shared folder)` : '')
       + (s.replaced ? ` (${s.replaced} replaced)` : '')
       + (s.skipped.length ? `, ${s.skipped.length} skipped` : '')
       + (s.failed.length ? `, ${s.failed.length} failed` : '')
@@ -1374,6 +1397,9 @@ const FilesPage = () => {
   const lib = useExcalidrawHook ? useExcalidrawHook() : null;
 
   const [libraries, setLibraries] = React.useState([]);
+  // What the Documents view holds (files.py /libraries); the rest of that
+  // folder is Other.
+  const [documentExts, setDocumentExts] = React.useState([]);
   const [libLoading, setLibLoading] = React.useState(true);
   const [activeId, setActiveId] = React.useState(null);
   // The folder belongs to a library: switching libraries is the root of
@@ -1403,6 +1429,8 @@ const FilesPage = () => {
   const importables = libraries.filter((l) => l.importable);
   const isRemovable = activeLib?.kind === 'removable';
   const isDocuments = activeLib?.id === 'core:documents';
+  // Other: the same shared folder's files that are not documents (doc_types.py).
+  const isOther = activeLib?.view === 'other';
 
   // The libraries are a device read: on a browser not paired yet it is
   // refused and the pair modal opens. Once a credential arrives (the
@@ -1417,6 +1445,7 @@ const FilesPage = () => {
       const r = await apiGet('/api/files/libraries');
       const libs = r.libraries || [];
       setLibraries(libs);
+      setDocumentExts(r.document_exts || []);
       setActiveId((prev) => (prev && libs.some((l) => l.id === prev)) ? prev
         : (libs.length ? libs[0].id : null));
       setLibsRefusal(null);
@@ -1532,7 +1561,27 @@ const FilesPage = () => {
     if (!items.length && !(unreadable && unreadable.length)) return;
     if (!uploadGate()) return;
     const where = [activeLib?.label || activeId, ...(path ? path.split('/') : [])].join(' / ');
-    up.start({ items, unreadable, libraryId: activeId, path, label: where });
+    // Documents and Other are one folder split by type. A file inside an
+    // uploaded FOLDER goes to its own view (same place on disk); a file
+    // picked on its own is held to this view, and the server says where
+    // it belongs instead.
+    const libView = activeLib?.view;
+    const sibling = libView && libraries.find((l) => l.view && l.view !== libView);
+    let elsewhere = null;
+    if (sibling && documentExts.length) {
+      const docs = new Set(documentExts);
+      const isDoc = (rel) => {
+        const m = /\.[^./]+$/.exec(filesUploadBaseName(rel).toLowerCase());
+        return !!m && docs.has(m[0]);
+      };
+      items.forEach((it) => {
+        if (it.rel.includes('/') && isDoc(it.rel) !== (libView === 'documents')) {
+          it.libraryId = sibling.id;
+          elsewhere = { id: sibling.id, label: sibling.label };
+        }
+      });
+    }
+    up.start({ items, unreadable, libraryId: activeId, path, label: where, elsewhere });
   };
   const onPicked = (input) => {
     const items = pickedUploadItems(input.files);
@@ -1822,6 +1871,14 @@ const FilesPage = () => {
             </>
           )}
         </div>
+        {(isOther || isDocuments) && (
+          <div style={{ padding: '6px 14px', fontSize: 12, color: 'var(--fg-muted)',
+                        borderBottom: '1px solid var(--border-soft)' }}>
+            {isOther
+              ? 'Everything in the shared Documents folder that isn’t a document: installers, apps, archives and the like, kept as they are. Download only.'
+              : 'Documents, spreadsheets and PDFs in the shared Documents folder. Anything else in it is under Other.'}
+          </div>
+        )}
 
         {busy === 'downloading' && (
           <div style={{ height: 3, background: 'var(--sunken)', overflow: 'hidden' }}>
@@ -1865,7 +1922,8 @@ const FilesPage = () => {
                           onDelete={() => requestDelete([entry])}
                           onImport={doImport}
                           onDragStartEntry={canWrite ? onDragStartEntry : null}
-                          onDropMove={canWrite ? onDropIntoEntry : null}/>
+                          onDropMove={canWrite ? onDropIntoEntry : null}
+                          downloadOnly={isOther}/>
             );
           })
         )}
