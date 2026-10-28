@@ -209,7 +209,10 @@ We build Domovoi in public. Here's where it stands.
   else has one open, and a second save asks which copy to keep), a
   workbook with charts or pictures opens read-only, and a sheet shows its
   first 5,000 rows and 100 columns. The app opens both in the same
-  editors.
+  editors. In Files, Documents lists only documents, spreadsheets, PDFs,
+  drawings and text; everything else saved in that shared folder (installers,
+  archives, pictures) sits under **Other**, download-only, in the web and the
+  app.
 - **Chat can look things up, with your permission.** Say "look up …",
   "what does this page say: https://…", or ask something Domovoi doesn't
   know. It searches its own manual and an offline library (Kiwix) first;
@@ -410,8 +413,9 @@ they have been tried on fewer devices than the rest, aren't yet held to
    player that no longer trips the container guard, quiet hours (Domovoi
    doesn't speak announcements such as a printer problem in a room at night:
    22:00 to 07:00 by default, set for the house or for each room), a
-   phone room's low-battery warning, and the new document and spreadsheet
-   editors (fonts, photos, editing together, version history).
+   phone room's low-battery warning, the new document and spreadsheet
+   editors (fonts, photos, editing together, version history), and Files'
+   new Other view. This is the v1.0.0 feature freeze: from here on, fixes only.
 
 **Later**
 
