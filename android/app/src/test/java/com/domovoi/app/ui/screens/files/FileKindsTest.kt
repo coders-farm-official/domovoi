@@ -108,4 +108,19 @@ class FileKindsTest {
         assertEquals(true, libraryTakesFiles("documents"))
         assertEquals(true, libraryTakesFiles(null))
     }
+    /** wf/editors-followups: formatted documents read as "Document" by name,
+     *  as on the dashboard (files.jsx filesDisplayName); nothing else changes. */
+    @Test fun formattedDocumentsShowTheirNameOnly() {
+        assertEquals("Shopping list", displayName("Shopping list.html"))
+        assertEquals("Old letter", displayName("Old letter.HTM"))
+        assertEquals("v1.2 notes", displayName("v1.2 notes.html"))
+        assertEquals("notes.md", displayName("notes.md"))
+        assertEquals("Letter.docx", displayName("Letter.docx"))
+        assertEquals("site.html", displayName("site.html", isDir = true))
+        assertEquals(".html", displayName(".html"))
+        assertEquals(true, isFormattedDocument("a.html"))
+        assertEquals(true, isFormattedDocument("a.htm"))
+        assertEquals(false, isFormattedDocument("a.md"))
+        assertEquals(false, isFormattedDocument("site.html", isDir = true))
+    }
 }
