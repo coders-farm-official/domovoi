@@ -114,7 +114,10 @@ def test_a_household_device_cannot_overwrite_a_pdf_or_a_sheet_with_text(
     before = _snapshot(docs_dir)
     r = _client().put(f"/api/documents/text/{rel_path}", json={"text": ""})
     assert r.status_code == 415, r.text
-    assert "text editor" in r.json()["detail"]
+    # A picture is refused before the text editor is asked: it is not a
+    # document at all (doc_types.py), so it belongs in Pictures or Other.
+    detail = r.json()["detail"]
+    assert "text editor" in detail or "Put pictures in Pictures" in detail
     assert _snapshot(docs_dir) == before
 
 
@@ -166,14 +169,15 @@ def test_a_file_too_big_for_the_editor_is_not_overwritten_by_it(claimed, docs_di
 
 # ── and everything it DOES open still saves ──
 
-@pytest.mark.parametrize("rel_path", ["notes.md", "list.txt", "server.log", "todo"])
+@pytest.mark.parametrize("rel_path", ["notes.md", "list.txt", "server.log"])
 def test_the_household_still_saves_the_files_the_editor_opens(
     claimed, docs_dir, rel_path
 ):
     """The guard must not cost the decision anything. Markdown, plain
-    text, an unrecognized-but-textual extension and a name with no
-    extension at all are all the text editor's, and a device token saves
-    every one of them."""
+    text and a known text extension are all the text editor's, and a
+    device token saves every one of them. (A name with no extension, or
+    one no editor knows, is not a document since 2026-10-27: it lives in
+    Other, which only downloads; see test_files_other.py.)"""
     r = _client().put(f"/api/documents/text/{rel_path}", json={"text": "milk, oats"})
     assert r.status_code == 200, r.text
     assert (docs_dir / rel_path).read_text(encoding="utf-8") == "milk, oats"

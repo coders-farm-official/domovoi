@@ -258,13 +258,18 @@ internal const val VIDEOS_LIBRARY_ID = "core:videos"
  */
 internal fun defaultHomeLibrary(entry: FileEntry, libraries: List<FileLibrary>): String? {
     val editable = libraries.filter { it.editable }
+    // Documents takes documents only; anything else in that folder is Other
+    // (a server older than Other takes it in Documents, its only door).
+    val isDoc = isDocumentName(entry.name)
     val wanted = when {
         entry.kind == "video" || extOf(entry.name) == "mp4" -> VIDEOS_LIBRARY_ID
         entry.kind == "image" -> "core:pictures"
         entry.kind == "audio" -> "core:music"
-        else -> DOCUMENTS_LIBRARY_ID
+        isDoc -> DOCUMENTS_LIBRARY_ID
+        else -> OTHER_LIBRARY_ID
     }
     return editable.firstOrNull { it.id == wanted }?.id
+        ?: (if (isDoc) null else editable.firstOrNull { it.id == OTHER_LIBRARY_ID }?.id)
         ?: editable.firstOrNull { it.id == DOCUMENTS_LIBRARY_ID }?.id
         ?: editable.firstOrNull()?.id
 }

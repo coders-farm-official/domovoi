@@ -1339,7 +1339,7 @@ directory zip and an import copy, even from a library rooted above it.
 
 | Method & path | Request | Purpose |
 |---|---|---|
-| `GET /api/files/libraries` | — | The library registry: `{ "libraries": [ … ] }`, ordered core, plugin, removable. Each record carries `id, label, kind (core\|plugin\|removable), icon, kind_icon, owner, editable, importable, doc_editing, reindex_kind, present` — `root_path` is stripped. |
+| `GET /api/files/libraries` | — | The library registry: `{ "libraries": [ … ], "document_exts": [ … ] }`, ordered core, plugin, removable. Each record carries `id, label, kind (core\|plugin\|removable), icon, kind_icon, owner, editable, importable, doc_editing, reindex_kind, present, view` — `root_path` is stripped. `view` is `documents` for `core:documents`, `other` for `core:other` and `null` for every other library; `document_exts` is the extensions the Documents view holds (see "Documents and Other" below). |
 | `GET /api/files/browse` | `?library_id=&path=&device_id=&q=&kind=&sort=&limit=&cursor=&refresh=` | One directory level, folders first under every `sort` (`name` default · `newest` · `oldest` · `largest`), paged (§1.7). `q` is a case-insensitive substring of the name and `kind` keeps one entry kind (`folder` = folders only), both over the whole folder. Returns `{ library_id, path, editable, importable, doc_editing, breadcrumb:[…], entries:[…], writable, blocked_reason, total, folder_total, limit, has_more, next_cursor }` (`total` counts the matches, `folder_total` the folder; no paging params → every entry, as before); the listing is cached between pages and re-read when the folder changes (§1.7); each entry is `{ name, rel, is_dir, size, mtime, kind (folder\|audio\|doc-office\|doc-text\|image\|pdf\|other), locked_by }` (`locked_by` non-null only for `core:documents`). `device_id` is optional and only affects `writable` / `blocked_reason` — `editable` is the library's property, `writable` is the calling device's. `400` traversal · `404` missing dir / unknown library · `410` ejected removable. |
 | `GET /api/files/download` | `?library_id=&path=` | Serve a file as an attachment (audio via Range/`206`) or a directory as a streamed zip (`{name}.zip`, 5000-member cap). A **directory** additionally needs an **admin session** (`401` without). `404` missing · `413` cap · `400` traversal. |
 | `POST /api/files/upload` | multipart: `library_id`, `path`, `device_id`, `files[]`, optional `create_dir` · `X-Requested-With` | Upload into the browsed directory. `200 {saved, skipped, reindex_triggered, created_dir}`. With `create_dir=true` the destination `path` is made first — exactly ONE new level under a folder that exists (`404` when its parent doesn't); the new name is refused (`400`) when it holds a separator, is `.` / `..`, has a control character, a leading/trailing space, a trailing dot, any of `< > : " \| ? *`, is a Windows device name (`CON`, `NUL`, `COM1`, `LPT9`, … with any extension) or a secret-shaped name; it is containment-checked like any destination (a link may point inside the library, never out). A folder already there is fine (`created_dir: false`); one made for an upload that saved nothing is removed again. Same tier as the upload. How the app adds a per-chapter folder to `core:audiobooks` as one book: the folder and its files, then the usual reindex. `401` no device token, or a **removable** target without an admin session (Documents is device tier like any other core library) · `403` non-editable, device blocked, **or the preflight-forcing header missing** · `404` bad dest · `400` none saved · `422` no `device_id`. Each name is sanitized to a bare basename, deduped, and re-containment-checked before write. |
@@ -1352,6 +1352,29 @@ directory zip and an import copy, even from a library rooted above it.
 | `GET /api/files/device-blocks` | **Admin (read)** | Every files block: `[{id, device_id, device_name, note, created_at}]`. |
 | `POST /api/files/device-blocks` | **Admin (mutation)** · `{device_id?, device_name?, note?}` | Block a device from uploading, moving or importing anywhere (it can still browse and download) — every door into a library: `/api/files`, the `/api/documents` saves and `POST /api/music/library/upload`. Matches id **or** name, like the queue blocks. Needs at least one of id/name (`400` otherwise); `409` when that device is already blocked. |
 | `DELETE /api/files/device-blocks/{id}` | **Admin (mutation)** | Unblock. `204`; `404` unknown id. |
+
+**Documents and Other (since 2026-10-27).** `core:documents` and `core:other`
+are two views of ONE folder (`DOCUMENTS_DIR`), split by type
+(`web/backend/api/doc_types.py`): Documents lists document types (text and
+markdown, `.html`/`.htm` formatted documents, Word/ODT/RTF, spreadsheets,
+drawings, PDF); Other lists every other file; folders are listed by both.
+Other is listed right after the last core library whenever Documents is
+there; it has no folder or setting of its own, and it carries Documents'
+`editable`/`importable` flags and write policy (device block,
+admin-write list, secret-name and containment filters) because it IS that
+library server-side. `doc_editing` is `false` and `reindex_kind` `null`
+for Other; `/api/images/*`, `/api/videos/*` and printing do not resolve it
+(`404`, and `409` "Files in Other can only be downloaded." for a print).
+A new FILE written through a view must fit it: `/upload` skips the rest with
+the reason (`415` with the reasons when nothing else was saved),
+`/upload-stream` and a single-file `/import` answer `415`, `/upload-check`
+lists them under `refused`, and `/move` fails them per path. The reasons:
+"Documents shows documents, spreadsheets and PDFs. Upload this in Other;
+it's the same shared folder." (pictures, audio and video name Pictures,
+Music and Videos), and in Other "This is a document. Upload it in
+Documents." A folder moves or imports into either view; its files then
+show in theirs. `/download`, `/delete` and folder zips act on the folder as
+it is, whichever view names it.
 
 After a successful write to an indexed library (`reindex_kind == "music"`) the
 web process proxies the core `POST /v1/admin/library/reindex` with the caller's

@@ -2931,7 +2931,7 @@
    "blocks": [
     {
      "type": "p",
-     "text": "Every library in one place: Music, Documents, Pictures, Videos, Podcasts, Audiobooks, and plugged-in drives."
+     "text": "Every library in one place: Music, Documents, Other, Pictures, Videos, Podcasts, Audiobooks, and plugged-in drives."
     },
     {
      "type": "label",
@@ -2973,6 +2973,12 @@
      "type": "list",
      "ordered": false,
      "items": [
+      {
+       "text": "Documents and **Other** are the same shared folder. Documents shows just its documents, spreadsheets and PDFs. Other shows everything else in it: installers, APKs, archives, anything that isn't a document, picture, song or video, kept and shared as it is. Files in Other can only be downloaded, moved, renamed or deleted; nothing opens them."
+      },
+      {
+       "text": "Upload documents in Documents and everything else in Other. A folder you upload can mix both: each file shows where it belongs."
+      },
       {
        "text": "Domovoi keeps two folders of its own in Documents: **Scans**, from the scanner, named by date, and **From Chat**, for drafts and letters saved from Chat."
       },

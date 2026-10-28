@@ -10254,7 +10254,7 @@
           "files"
         ],
         "summary": "List Libraries",
-        "description": "Rebuild the registry fresh and return the public records (root_path\nstripped), ordered core, plugin, removable.",
+        "description": "Rebuild the registry fresh and return the public records (root_path\nstripped), ordered core (Other, the Documents folder's non-documents,\nafter the last of them), plugin, removable.",
         "operationId": "list_libraries_api_files_libraries_get",
         "responses": {
           "200": {

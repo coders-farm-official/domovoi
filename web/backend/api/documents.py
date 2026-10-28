@@ -390,6 +390,18 @@ def _usable_path(rel: str):
 _TEXT_EDITOR_CATEGORIES = frozenset({"doc", "text"})
 
 
+def is_document_name(name: str) -> bool:
+    from web.backend.api.doc_types import is_document_name as check
+
+    return check(name)
+
+
+def documents_refusal(name: str) -> Optional[str]:
+    from web.backend.api.doc_types import documents_refusal as why
+
+    return why(name)
+
+
 def _assert_saveable_name(target: Path) -> None:
     """Refuse a save whose FILENAME ``/api/files`` would refuse.
 
@@ -407,6 +419,11 @@ def _assert_saveable_name(target: Path) -> None:
             status_code=400,
             detail=f"{target.name}: that name is reserved and is never saved here",
         )
+    # And a type the Files page's Documents view would never list (it would
+    # show in Other, where nothing opens it): doc_types.py.
+    refusal = documents_refusal(target.name)
+    if refusal:
+        raise HTTPException(status_code=415, detail=f"{target.name}: {refusal}")
 
 
 def _assert_text_editor_may_write(target: Path) -> None:
@@ -613,6 +630,10 @@ async def list_documents(
         # never listed — not by this door, not by that one.
         if is_sensitive_name(entry.name):
             continue
+        # Only documents: the rest of this folder is the Files page's Other
+        # (doc_types.py), and nothing here reads it.
+        if not is_document_name(entry.name):
+            continue
         ext = entry.suffix.lower()
         if kind == "all":
             pass
@@ -690,6 +711,12 @@ async def create_document(request: Request, req: CreateRequest) -> DocumentRow:
     ext = Path(raw).suffix.lower()
     if req.kind != "text" and ext not in _KIND_EXTS[req.kind]:
         ext = _KIND_NEW_EXT[req.kind]
+        raw = f"{raw}{ext}"
+    elif req.kind == "text" and not ext and not is_sensitive_name(raw):
+        # A text file named "shopping" would be Other, which never opens
+        # it: it is made as plain text. (Any other non-document name is
+        # refused below, a reserved one as reserved.)
+        ext = ".txt"
         raw = f"{raw}{ext}"
     target = _safe_target(raw)
     _assert_saveable_name(target)
@@ -1382,6 +1409,7 @@ async def upload_documents(
 
     saved: list[str] = []
     skipped: list[str] = []
+    wrong_type = 0
 
     for up in files:
         raw = up.filename or "upload"
@@ -1404,6 +1432,12 @@ async def upload_documents(
         if unstorable is not None:
             skipped.append(f"{name}: {unstorable}")
             continue
+        # Documents only (doc_types.py): the rest goes in through Other.
+        refusal = documents_refusal(name)
+        if refusal:
+            skipped.append(f"{name}: {refusal}")
+            wrong_type += 1
+            continue
         data = await up.read()
         target = _unique_path(base, name)
         try:
@@ -1420,6 +1454,8 @@ async def upload_documents(
 
     if saved:
         _listing_changed()
+    if not saved and wrong_type and wrong_type == len(skipped):
+        raise HTTPException(status_code=415, detail="; ".join(skipped))
     if not saved:
         raise HTTPException(
             status_code=400,

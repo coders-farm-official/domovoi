@@ -24,6 +24,18 @@ private val TEXT_EXTS = setOf(
     "sql", "c", "h", "cpp", "java", "go", "rs",
 )
 
+/**
+ * What the server's Documents view lists and accepts (web/backend/api/
+ * doc_types.py DOCUMENT_EXTS, sent as `document_exts` by /api/files/libraries
+ * and pinned against this copy by domovoi/tests/test_files_other_android.py).
+ * Everything else in that shared folder is Other ([OTHER_LIBRARY_ID]).
+ */
+internal val DOCUMENT_EXTS: Set<String> = TEXT_EXTS + OFFICE_WP_EXTS + SHEET_EXTS + DRAWING_EXTS +
+    setOf("doc", "docx", "odt", "rtf", "txt", "md", "markdown", "pdf", "html", "htm")
+
+/** True when a file of this name belongs to Documents rather than Other. */
+internal fun isDocumentName(name: String): Boolean = extOf(name) in DOCUMENT_EXTS
+
 /** Lower-case extension without the dot ("" when there is none). */
 internal fun extOf(name: String): String {
     // Python's Path.suffix: ".bashrc" and "notes." have none.
