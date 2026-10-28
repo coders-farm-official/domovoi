@@ -68,3 +68,38 @@ def test_the_univer_it_leans_on_is_the_bundled_one():
     assert 'var qM="__INTERNAL_EDITOR__",Qt=`${qM}DOCS_NORMAL`' in UNIVER
     assert "getFormula(){return this._formulaDataModel.getFormulaStringByCell(" in UNIVER
     assert "setActiveRange(e){let{unitId:n,sheetId:i}=e.getRange();" in UNIVER
+
+
+# ─── wf/sheet-touch-2: a finger scrolls; tap-tap edits; long-press selects ───
+
+
+def test_a_finger_scrolls_and_taps_select_on_a_phone_only():
+    assert "if (sheetPhoneMode()) disposeFns.push(sheetTouchGestures(holderRef.current, univerAPI, fWorkbook));" in EDITOR
+    gest = _block("const sheetTouchGestures")
+    # touch only, caught before Univer; the rest of a gesture window-wide
+    assert "e.pointerType !== 'touch'" in gest
+    assert "holder.addEventListener('pointerdown', onDown, opts);" in gest
+    assert "window.addEventListener('pointerup', onUp, opts);" in gest
+    assert "const opts = { capture: true, passive: false };" in gest
+    # a drag is Univer's own relative scroll; a tap or long-press is replayed to Univer
+    assert "executeCommand('sheet.command.set-scroll-relative', { offsetX: dx, offsetY: dy })" in gest
+    assert "replay('pointerdown', done.down, done.x0, done.y0);" in gest
+    assert "replay('pointerdown', g.down, g.x0, g.y0);" in gest      # long press starts a range
+    assert "SHEET_LONG_PRESS_MS = 450" in EDITOR
+    # a second finger is left alone (pinch)
+    assert "if (touching.size > 1) {" in gest
+    # tapping the cell already selected edits it, as a double tap does
+    assert "holder.dispatchEvent(new CustomEvent(SHEET_EDIT_EVENT));" in gest
+    assert "holder.addEventListener(SHEET_EDIT_EVENT, editHere);" in EDITOR
+
+
+def test_the_scroll_command_is_the_bundled_univers():
+    assert 'id:"sheet.command.set-scroll-relative"' in UNIVER
+    assert "{offsetX:u=0,offsetY:c=0}=e||{}" in UNIVER
+    assert "getScrollState(){" in UNIVER
+
+
+def test_the_app_lets_the_page_keep_its_drags():
+    host = (REPO / "android" / "app" / "src" / "main" / "java" / "com" / "domovoi" / "app" / "ui" / "screens"
+            / "documents" / "WebEditorHost.kt").read_text(encoding="utf-8")
+    assert "v.parent?.requestDisallowInterceptTouchEvent(true)" in host

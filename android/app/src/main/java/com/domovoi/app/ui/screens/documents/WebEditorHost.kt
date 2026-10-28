@@ -216,6 +216,16 @@ internal fun WebEditorHost(app: AppContainer, relPath: String, kind: WebEditorKi
                     WebView(ctx).apply {
                         lockDown(settings)
                         setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                        // The page handles every gesture itself (the sheet scrolls
+                        // its grid under a dragging finger): no view around it may
+                        // take a drag over, which on the emulator cancelled every
+                        // upward drag after the first (pointercancel in the page).
+                        setOnTouchListener { v, ev ->
+                            if (ev.actionMasked == android.view.MotionEvent.ACTION_DOWN) {
+                                v.parent?.requestDisallowInterceptTouchEvent(true)
+                            }
+                            false
+                        }
                         webViewClient = EditorWebClient(app, h.base)
                         if (kind.pickPictures) {
                             webChromeClient = object : WebChromeClient() {

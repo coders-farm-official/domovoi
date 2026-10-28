@@ -109,6 +109,162 @@ const sheetCellText = (range) => {
   } catch (e) { return ''; }
 };
 
+/* Touch gestures on the grid (wf/sheet-touch-2; touch-primary devices only,
+ * the mouse is Univer's own). Univer treats a finger like a mouse: dragging
+ * selects cells and nothing scrolls. Like the phone apps of Google Sheets and
+ * Excel, a finger here
+ *   - drags to scroll, any direction, with a little momentum;
+ *   - taps to select (a row or column header selects the row or column);
+ *   - taps the selected cell again to edit it (as a double tap does);
+ *   - long-presses, then drags, to select a range.
+ * The grid's touch events are caught before Univer sees them; a tap or a
+ * long-press is handed on to Univer as the same pointer events at the same
+ * place, and a drag becomes Univer's own relative-scroll command. A second
+ * finger is left alone (pinch). Returns the cleanup. */
+const SHEET_TAP_SLOP = 10;            // px a finger may wander and still be a tap
+const SHEET_LONG_PRESS_MS = 450;
+const SHEET_EDIT_EVENT = 'domovoi-sheet-edit';
+const sheetTouchGestures = (holder, univerAPI, fWorkbook) => {
+  if (!holder || !univerAPI) return () => {};
+  const replayed = new WeakSet();     // our own copies, which Univer may have
+  let g = null;                       // the gesture of the finger that is down
+  const touching = new Set();         // touch pointers now down
+  let glide = 0;                      // the momentum frame, if any
+
+  const sheet = () => { try { return fWorkbook.getActiveSheet(); } catch (e) { return null; } };
+  const activeA1 = () => {
+    try { const r = sheet().getActiveRange(); return r ? r.getA1Notation() : null; } catch (e) { return null; }
+  };
+  const scrollBy = (dx, dy) => {
+    if (!dx && !dy) return;
+    try { univerAPI.executeCommand('sheet.command.set-scroll-relative', { offsetX: dx, offsetY: dy }); } catch (e) { /* edge */ }
+  };
+  const stopGlide = () => { if (glide) cancelAnimationFrame(glide); glide = 0; };
+  const replay = (type, src, x, y) => {
+    const ev = new PointerEvent(type, {
+      bubbles: true, cancelable: true, composed: true, view: window,
+      pointerId: src.pointerId, pointerType: 'touch', isPrimary: true,
+      clientX: x, clientY: y, screenX: x, screenY: y,
+      button: type === 'pointermove' ? -1 : 0, buttons: type === 'pointerup' ? 0 : 1,
+      width: src.width, height: src.height, pressure: type === 'pointerup' ? 0 : 0.5,
+    });
+    replayed.add(ev);
+    g.target.dispatchEvent(ev);
+  };
+  const grab = (e) => { e.stopPropagation(); if (e.cancelable) e.preventDefault(); };
+  const onGrid = (e) => !!(e.target && e.target.tagName === 'CANVAS' && holder.contains(e.target));
+
+  const onDown = (e) => {
+    if (replayed.has(e) || e.pointerType !== 'touch') return;
+    if (e.isPrimary) touching.clear();               // the first finger: nothing else is down
+    touching.add(e.pointerId);
+    if (!onGrid(e)) return;
+    stopGlide();
+    if (touching.size > 1) {
+      // a second finger: a pinch, not ours
+      if (g && g.timer) clearTimeout(g.timer);
+      g = null;
+      return;
+    }
+    grab(e);
+    g = {
+      id: e.pointerId, target: e.target, x0: e.clientX, y0: e.clientY, x: e.clientX, y: e.clientY,
+      t: performance.now(), mode: 'pending', vx: 0, vy: 0, axis: null, before: activeA1(), down: e,
+    };
+    g.timer = setTimeout(() => {
+      if (!g || g.mode !== 'pending') return;
+      // long press: Univer selects from here, and the finger drags the range
+      g.mode = 'select';
+      replay('pointerdown', g.down, g.x0, g.y0);
+      if (navigator.vibrate) { try { navigator.vibrate(15); } catch (err) { /* none */ } }
+    }, SHEET_LONG_PRESS_MS);
+  };
+
+  const onMove = (e) => {
+    if (replayed.has(e) || !g || e.pointerId !== g.id) return;
+    if (g.mode === 'select') return;                  // Univer's own range drag
+    grab(e);
+    const dx = e.clientX - g.x;
+    const dy = e.clientY - g.y;
+    if (g.mode === 'pending') {
+      if (Math.hypot(e.clientX - g.x0, e.clientY - g.y0) < SHEET_TAP_SLOP) return;
+      clearTimeout(g.timer);
+      g.mode = 'scroll';
+      const ax = Math.abs(e.clientX - g.x0);
+      const ay = Math.abs(e.clientY - g.y0);
+      g.axis = ay > 2 * ax ? 'y' : ax > 2 * ay ? 'x' : null;   // a clear direction sticks
+    }
+    const now = performance.now();
+    const sx = g.axis === 'y' ? 0 : -dx;
+    const sy = g.axis === 'x' ? 0 : -dy;
+    scrollBy(sx, sy);
+    const dt = Math.max(1, now - g.t);
+    g.vx = 0.8 * (sx / dt) + 0.2 * g.vx;
+    g.vy = 0.8 * (sy / dt) + 0.2 * g.vy;
+    g.x = e.clientX; g.y = e.clientY; g.t = now;
+  };
+
+  const onUp = (e) => {
+    if (replayed.has(e) || e.pointerType !== 'touch') return;
+    touching.delete(e.pointerId);
+    if (!g || e.pointerId !== g.id) return;
+    const done = g;
+    g = null;
+    clearTimeout(done.timer);
+    if (done.mode === 'select') return;               // Univer ends its own range drag
+    grab(e);
+    g = done;
+    if (done.mode === 'pending') {
+      // a tap: Univer selects there; tapping the cell already selected edits it
+      replay('pointerdown', done.down, done.x0, done.y0);
+      replay('pointerup', e, done.x0, done.y0);
+      g = null;
+      const before = done.before;
+      setTimeout(() => {
+        const after = activeA1();
+        if (before && after && before === after && before.indexOf(':') < 0) {
+          holder.dispatchEvent(new CustomEvent(SHEET_EDIT_EVENT));
+        }
+      }, 0);
+      return;
+    }
+    g = null;
+    // a flick keeps going for a moment
+    let vx = done.vx * 16;
+    let vy = done.vy * 16;
+    if (performance.now() - done.t > 80) { vx = 0; vy = 0; }   // the finger had stopped
+    const step = () => {
+      vx *= 0.94; vy *= 0.94;
+      if (Math.abs(vx) < 0.6 && Math.abs(vy) < 0.6) { glide = 0; return; }
+      scrollBy(vx, vy);
+      glide = requestAnimationFrame(step);
+    };
+    if (Math.abs(vx) >= 0.6 || Math.abs(vy) >= 0.6) glide = requestAnimationFrame(step);
+  };
+
+  const onCancel = (e) => {
+    if (replayed.has(e) || e.pointerType !== 'touch') return;
+    touching.delete(e.pointerId);
+    if (g && e.pointerId === g.id) { clearTimeout(g.timer); g = null; }
+  };
+
+  const opts = { capture: true, passive: false };
+  // Down on the grid only; the rest on the window, so a finger that leaves
+  // the grid (or lifts over the keyboard) still ends its gesture.
+  holder.addEventListener('pointerdown', onDown, opts);
+  window.addEventListener('pointermove', onMove, opts);
+  window.addEventListener('pointerup', onUp, opts);
+  window.addEventListener('pointercancel', onCancel, opts);
+  return () => {
+    stopGlide();
+    if (g && g.timer) clearTimeout(g.timer);
+    holder.removeEventListener('pointerdown', onDown, opts);
+    window.removeEventListener('pointermove', onMove, opts);
+    window.removeEventListener('pointerup', onUp, opts);
+    window.removeEventListener('pointercancel', onCancel, opts);
+  };
+};
+
 const SheetPhoneBar = ({ apiRef, holderRef, ready, editable }) => {
   const inputRef = React.useRef(null);
   const [cell, setCell] = React.useState(null);      // { a1, row, col, sheetId }
@@ -188,19 +344,24 @@ const SheetPhoneBar = ({ apiRef, holderRef, ready, editable }) => {
       const t = e.target;
       if (t && t.isContentEditable && holder && holder.contains(t)) t.blur();
     };
-    const onDbl = (e) => {
-      if (!editable || !(e.target && e.target.tagName === 'CANVAS')) return;
+    // A double tap, or a tap on the cell already selected (sheetTouchGestures):
+    // edit the cell as it is, caret at the end.
+    const editHere = () => {
+      if (!editable) return;
       setTimeout(() => { if (inputRef.current) { inputRef.current.focus(); const n = inputRef.current.value.length; inputRef.current.setSelectionRange(n, n); } }, 0);
     };
+    const onDbl = (e) => { if (e.target && e.target.tagName === 'CANVAS') editHere(); };
     if (holder) {
       holder.addEventListener('focusin', keepOff, true);
       holder.addEventListener('dblclick', onDbl, true);
+      holder.addEventListener(SHEET_EDIT_EVENT, editHere);
     }
     return () => {
       if (sub && sub.dispose) sub.dispose();
       if (holder) {
         holder.removeEventListener('focusin', keepOff, true);
         holder.removeEventListener('dblclick', onDbl, true);
+        holder.removeEventListener(SHEET_EDIT_EVENT, editHere);
       }
     };
   }, [ready, editable, show, commit]);
@@ -623,6 +784,7 @@ const SheetEditorOverlay = ({ rel_path, onClose, fire, blockedReason = null, inA
           }) : null;
         disposeFns.push(() => fontSub && fontSub.dispose && fontSub.dispose());
         if (j.editable && !sheetPhoneMode()) disposeFns.push(sheetDesktopTyping(holderRef.current, univerAPI, fWorkbook));
+        if (sheetPhoneMode()) disposeFns.push(sheetTouchGestures(holderRef.current, univerAPI, fWorkbook));
         if (!cancelled) setState({ status: 'ready' });
       } catch (e) {
         if (!cancelled) setState({ status: 'error', message: String((e && e.message) || e) });
