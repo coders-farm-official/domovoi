@@ -371,6 +371,14 @@
         saver = fn || null;
         sendControl(provider, { t: 'saver', on: !!saver });
       },
+      /* Ask for the file to be written now (Ctrl+S, the tab going to the
+       * background): the server asks this client to save if the file is
+       * behind. Never a plain save, which would look like an outside
+       * change and rebuild the shared document from the file. */
+      saveNow: function () {
+        if (!saver || collab.readonly || closed) return false;
+        return sendControl(provider, { t: 'save-now' });
+      },
       close: close,
     };
     var saver = null;

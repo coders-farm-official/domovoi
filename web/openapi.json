@@ -19462,6 +19462,11 @@
             ],
             "title": "Device Id"
           },
+          "allow_empty": {
+            "type": "boolean",
+            "title": "Allow Empty",
+            "default": false
+          },
           "from_path": {
             "type": "string",
             "maxLength": 1024,
@@ -19523,6 +19528,11 @@
               }
             ],
             "title": "Device Id"
+          },
+          "allow_empty": {
+            "type": "boolean",
+            "title": "Allow Empty",
+            "default": false
           }
         },
         "type": "object",
@@ -23412,6 +23422,11 @@
               }
             ],
             "title": "Device Id"
+          },
+          "allow_empty": {
+            "type": "boolean",
+            "title": "Allow Empty",
+            "default": false
           }
         },
         "type": "object",

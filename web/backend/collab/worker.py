@@ -243,13 +243,15 @@ def merge_copy(base: bytes, payload: bytes) -> tuple[bytes, bool, bool]:
     return after, after != before, doc.get_state() in (b"", bytes([0]))
 
 
-def preview(state: bytes) -> str:
+def preview(state: bytes) -> dict:
+    """Plain text of a version, and whether it says anything at all
+    (``blank``: a brand-new document's first version, say)."""
     from web.backend.collab import content
 
     doc = content.doc_from_update(state)
     if not depth_ok(doc):
         raise Refused("nested too deep")
-    return content.preview_text(doc)
+    return {"text": content.preview_text(doc), "blank": not content.has_content(doc)}
 
 
 # ─── The loop ─────────────────────────────────────────────────────────
@@ -297,7 +299,7 @@ def handle(holder: Holder, op: str, args: dict, blobs: list[bytes]) -> tuple[dic
             doc.apply_update(blob)
         return {}, [doc.get_update()]
     if op == "preview":
-        return {"text": preview(blobs[0])}, []
+        return preview(blobs[0]), []
     if op == "crash":                     # tests only, and only when allowed
         if os.environ.get("DOMOVOI_COLLAB_WORKER_TEST") == "1":
             os._exit(int(args.get("code", 3)))

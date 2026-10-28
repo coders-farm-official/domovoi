@@ -116,7 +116,7 @@ const CollabHistory = ({ path, collab, onClose, fire, renderPreview }) => {
         const v = await apiFetch(
           `/api/collab/history/${picked.id}?path=${encodeURIComponent(path)}`, { quiet: true });
         if (cancelled) return;
-        setPreview({ status: 'ready', text: v.text || '', update: v.update });
+        setPreview({ status: 'ready', text: v.text || '', update: v.update, blank: !!v.blank });
         if (renderPreview && richRef.current && window.DomovoiCollab) {
           const ydoc = await window.DomovoiCollab.docFromUpdate(v.update);
           if (cancelled) { ydoc.destroy(); return; }
@@ -132,13 +132,19 @@ const CollabHistory = ({ path, collab, onClose, fire, renderPreview }) => {
 
   const onRestore = async () => {
     if (!picked) return;
-    if (!window.confirm(
-      `Restore the version from ${_collabTimeLabel(picked.at)}? `
-      + 'What the document says now is kept in the history too.')) return;
+    // A version that says nothing (a new document's first version) clears
+    // the document when restored: say so plainly, and only then ask the
+    // server to allow it (it refuses an empty version otherwise).
+    const blank = preview.status === 'ready' && !!preview.blank;
+    if (!window.confirm(blank
+      ? `The version from ${_collabTimeLabel(picked.at)} is empty. Restoring it clears the document. `
+        + 'What the document says now is kept in the history. Clear the document?'
+      : `Restore the version from ${_collabTimeLabel(picked.at)}? `
+        + 'What the document says now is kept in the history too.')) return;
     setRestoring(true);
     try {
       await apiFetch('/api/collab/restore', {
-        method: 'POST', body: JSON.stringify({ path, version_id: picked.id }),
+        method: 'POST', body: JSON.stringify({ path, version_id: picked.id, allow_empty: blank }),
       });
       if (fire) fire('Restored');
       setPicked(null);
@@ -213,6 +219,11 @@ const CollabHistory = ({ path, collab, onClose, fire, renderPreview }) => {
           )}
           {picked && preview.status === 'error' && (
             <div style={{ fontSize: 13, color: 'var(--err-ink)' }}>Couldn’t load it: {preview.message}</div>
+          )}
+          {picked && preview.status === 'ready' && preview.blank && (
+            <div role="note" style={{ fontSize: 13, color: 'var(--fg-muted)', marginBottom: 10 }}>
+              This version is empty. Restoring it clears the document.
+            </div>
           )}
           <div ref={richRef} style={{ display: renderPreview && preview.status === 'ready' ? 'block' : 'none' }}/>
           {picked && preview.status === 'ready' && !renderPreview && (

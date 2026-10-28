@@ -1792,6 +1792,60 @@ class DocWriteRequest(BaseModel):
     # The editor's markdown, required for a .md target.
     markdown: Optional[str] = Field(None, max_length=_DOC_MAX_BYTES)
     device_id: Optional[str] = Field(None, min_length=3, max_length=64)
+    # An empty document may replace a file that says something only when the
+    # editor says the emptiness is real (the person deleted everything, or
+    # restored an empty version) and not a passing state (an editor that has
+    # not loaded yet, or is closing). See _assert_not_blanking.
+    allow_empty: bool = False
+
+
+# Elements that are content even with no text in them.
+_CONTENT_TAGS = re.compile(r"<\s*(img|figure|table|hr|video|audio|svg|object|embed|iframe)\b", re.I)
+_TAGS = re.compile(r"<[^>]*>")
+
+
+def _blank_html(html: str) -> bool:
+    """True when an editor body shows nothing: no text, no picture, table or
+    rule (one empty paragraph, a few line breaks)."""
+    import html as htmllib
+
+    if _CONTENT_TAGS.search(html or ""):
+        return False
+    text = htmllib.unescape(_TAGS.sub(" ", html or ""))
+    return not text.replace("\u00a0", " ").replace("\u200b", "").strip()
+
+
+def _file_says_something(target: Path, fmt: str) -> bool:
+    """Whether the file on disk has content worth protecting (unreadable or
+    missing: nothing to protect)."""
+    try:
+        if not target.is_file():
+            return False
+        if target.stat().st_size > _DOC_MAX_BYTES * 2:
+            return True
+        text = target.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    if fmt == "md":
+        return bool(text.strip())
+    return not _blank_html(richdoc.document_body(text))
+
+
+def _assert_not_blanking(target: Path, fmt: str, req: "DocWriteRequest") -> None:
+    """The last line of defence against an editor in a passing state (not
+    loaded yet, closing, a stale copy) writing an EMPTY document over a file
+    that says something: refused 409 unless the request carries
+    ``allow_empty`` (the editor sends it only for an emptiness the person
+    made). Word files are not checked (never co-edited; the Word choice is
+    an explicit save)."""
+    if req.allow_empty or fmt == "docx":
+        return
+    blank = (not (req.markdown or "").strip()) if fmt == "md" else _blank_html(req.html or "")
+    if blank and _file_says_something(target, fmt):
+        raise HTTPException(status_code=409, detail={
+            "reason": "empty_over_content",
+            "message": "Not saved: this would have replaced the document with an empty one.",
+        })
 
 
 class DocSaveAsRequest(DocWriteRequest):
@@ -1928,6 +1982,7 @@ async def write_doc(request: Request, rel_path: str, req: DocWriteRequest) -> Do
         _assert_doc_overwritable(target, fmt)
         _ensure_parent_dir(target)
         data = await _doc_bytes(fmt, req.html, req.markdown, target.stem)
+        _assert_not_blanking(target, fmt, req)
         # Co-editing (wf/doc-collab) refuses a stale co-editing save here,
         # 409 before anything is written, and notes what was written.
         async with _collab_saving(request, target):
