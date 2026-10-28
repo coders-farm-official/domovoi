@@ -84,6 +84,9 @@ const SHELL_ASSETS = [
   '/calendar.jsx',
   '/plugins.jsx',
   '/settings.jsx',
+  // Settings → Documents → Fonts, and the editors' font picker.
+  '/fonts.jsx',
+  '/font_picker.css',
   // Settings → Printers and scanners renders its panel.
   '/printers.jsx',
   // Home is the default page (the manifest's start_url), so an offline

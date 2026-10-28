@@ -47,6 +47,7 @@
   </script>
   <link rel="stylesheet" href="colors_and_type.css">
   <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="font_picker.css">
   <link rel="stylesheet" href="/vendor/xspreadsheet/xspreadsheet.css">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png">
@@ -96,6 +97,8 @@
        dialog and the Scan sheet that Files / Documents open. Before
        settings.jsx and files.jsx, which render its components. -->
   <script type="text/babel" data-presets="react" src="printers.jsx"></script>
+  <!-- The editors' fonts: window.DomovoiFonts, the font picker and Settings → Documents → Fonts. -->
+  <script type="text/babel" data-presets="react" src="fonts.jsx"></script>
   <script type="text/babel" data-presets="react" src="settings.jsx"></script>
   <!-- Files is a multi-library browser. It MUST load before doc_editor.jsx /
        sheet_editor.jsx (which register window.DocEditor / window.SheetEditor,

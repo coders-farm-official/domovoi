@@ -1254,6 +1254,11 @@ class Settings(BaseSettings):
     # (markdown doc editor, x-spreadsheet grid, Excalidraw) — the former
     # OnlyOffice/Collabora sidecar containers are retired.
     documents_dir: str = os.path.expanduser("~/Documents")
+    # Font families an admin added for the whole house through "More fonts"
+    # (web/backend/api/fonts.py): one folder per family, the font files as
+    # fetched from the google/fonts repository plus their licence file, and
+    # the cached catalogue. The bundled set lives in web/static/fonts.
+    fonts_dir: str = os.path.expanduser("~/.domovoi/fonts")
 
     # ─── Media acquisition queue (design §4.8) ─────────────────────────
     # The queue holds USER-requested media (voice adds, dashboard adds,

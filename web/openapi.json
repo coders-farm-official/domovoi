@@ -10979,6 +10979,165 @@
         }
       }
     },
+    "/api/fonts": {
+      "get": {
+        "tags": [
+          "fonts"
+        ],
+        "summary": "List Fonts",
+        "description": "Every family the editors can use: the bundled set (``source:\n\"bundled\"``) and the ones an admin added (``\"fetched\"``), each with its\nfaces' URLs. ``internet_off`` tells an admin page why \"More fonts\" is\ngreyed. ``css`` is the bundled set's @font-face sheet.",
+        "operationId": "list_fonts_api_fonts_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response List Fonts Api Fonts Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/fonts/catalogue": {
+      "get": {
+        "tags": [
+          "fonts"
+        ],
+        "summary": "Catalogue",
+        "description": "The open-licence families an admin can add (OFL and Apache only),\neach marked ``installed`` when the house already has it.",
+        "operationId": "catalogue_api_fonts_catalogue_get",
+        "parameters": [
+          {
+            "name": "refresh",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Refresh"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Catalogue Api Fonts Catalogue Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/fonts/fetch": {
+      "post": {
+        "tags": [
+          "fonts"
+        ],
+        "summary": "Fetch Family",
+        "description": "Add one family for the whole house: check its licence, download its\nfiles, store them with the licence file, record it. One add at a time,\nwithin :data:`ADD_DEADLINE_SEC`, and only while the house is under its\ncaps (:data:`fonts_store.MAX_ADDED_FAMILIES` families,\n:data:`fonts_store.MAX_ADDED_BYTES` in all).",
+        "operationId": "fetch_family_api_fonts_fetch_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FetchBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Fetch Family Api Fonts Fetch Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/fonts/{slug}": {
+      "delete": {
+        "tags": [
+          "fonts"
+        ],
+        "summary": "Remove Family",
+        "description": "Remove an added family: its row and its folder. Documents that use\nit show it in a fallback face, marked \"not installed\", until it is\nadded again. The bundled set can't be removed.",
+        "operationId": "remove_family_api_fonts__slug__delete",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Remove Family Api Fonts  Slug  Delete"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/printers": {
       "get": {
         "tags": [
@@ -19021,6 +19180,21 @@
         ],
         "title": "FavoriteNowPlayingResult",
         "description": "Result of favoriting whatever is currently playing in a room.\n\n``kind`` tells the dashboard what happened so it can render the\nappropriate toast: ``library`` = an existing library row's flag was\nflipped (returns ``track_id``); ``acquisition`` = an external\nstream was queued into the generic media-acquisition queue\n(returns ``acquisition_id`` + the core's user-facing ``message``,\nwhich carries the graceful-absence copy when no provider plugin is\ninstalled)."
+      },
+      "FetchBody": {
+        "properties": {
+          "family": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Family"
+          }
+        },
+        "type": "object",
+        "required": [
+          "family"
+        ],
+        "title": "FetchBody"
       },
       "FilesBlock": {
         "properties": {

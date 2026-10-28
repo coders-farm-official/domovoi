@@ -45,6 +45,7 @@ from web.backend.api import devices as devices_api
 from web.backend.api import audiobooks as audiobooks_api
 from web.backend.api import documents as documents_api
 from web.backend.api import files as files_api
+from web.backend.api import fonts as fonts_api
 from web.backend.api import printers as printers_api
 from web.backend.api import files_security
 from web.backend.api import greetings as greetings_api
@@ -200,6 +201,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from domovoi import image_safety
 
     image_safety.configure_pillow()
+
+    # Fonts: a download a restart cut short leaves a staging folder behind.
+    try:
+        from web.backend.api import fonts as _fonts_api
+
+        _fonts_api.sweep_staging()
+    except Exception as e:  # never fatal
+        log.warning("fonts staging sweep raised: %s", e)
 
     # Household device token (device tier): the web boots the same hook as
     # the core so a web-only throwaway has a token row and
@@ -415,6 +424,10 @@ app.include_router(captures_api.router)
 app.include_router(documents_api.router)
 app.include_router(files_api.router)
 app.include_router(files_api.blocks_router)
+# The editors' fonts: /api/fonts* and the /fonts/<family>/<file> files
+# (bundled under web/static/fonts, added ones under FONTS_DIR), before the
+# static mount so an added family is found too.
+app.include_router(fonts_api.router)
 # Printers, printing and scanning: proxies to the core's /v1/printers, /v1/print, /v1/scan.
 app.include_router(printers_api.router)
 app.include_router(podcasts_api.router)
