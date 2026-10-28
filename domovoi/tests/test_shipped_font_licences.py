@@ -108,7 +108,10 @@ def test_every_shipped_font_is_credited_in_licenses_md():
 
 def test_cash_currency_is_gone():
     hits = subprocess.run(
-        ["git", "grep", "-i", "-l", "-I", "cash.currency\\|cash_currency", "--", "web", "docs", "android", "windows"],
+        # The Univer bundle's emoji search words say "billion cash currency
+        # money" for a banknote emoji: words, not the font.
+        ["git", "grep", "-i", "-l", "-I", "cash.currency\\|cash_currency", "--", "web", "docs", "android", "windows",
+         ":!web/static/vendor/univer/univer.js"],
         cwd=REPO, capture_output=True, text=True,
     ).stdout.split()
     assert hits == [], f"Cash Currency (no licence on record) is still referenced: {hits}"

@@ -971,7 +971,7 @@
     const pct = (v) => `${v * 100}%`;
     return (
       <div role="dialog" aria-modal="true" aria-label="Crop and rotate"
-           style={{ position: 'fixed', inset: 0, zIndex: 130, background: 'rgba(0,0,0,.72)', display: 'flex',
+           style={{ position: 'fixed', inset: 0, zIndex: 110, background: 'rgba(0,0,0,.72)', display: 'flex',
                     flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 16, gap: 14 }}>
         <div ref={stageRef} style={{ position: 'relative', maxWidth: '92vw', maxHeight: '70vh', lineHeight: 0, userSelect: 'none' }}>
           {previewUrl && <img src={previewUrl} alt="" draggable={false}
@@ -2024,7 +2024,7 @@ img { max-width: 100%; height: auto; }
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', borderBottom: '1px solid var(--border)',
                       background: 'var(--card)', minWidth: 0 }}>
           <IconButton name="arrow-left" title="Close" aria-label="Close" onClick={requestClose}/>
-          <Icon name="file-text" size={18} style={{ color: 'var(--brand)' }}/>
+          <Icon name="file-text" size={18} style={{ color: 'var(--brand-ink, var(--brand))' }}/>
           <div style={{ minWidth: 0, flex: '0 1 auto', display: 'flex', flexDirection: 'column' }}>
             <strong style={{ fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={rel}>{title}</strong>
             <span style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -2094,7 +2094,7 @@ img { max-width: 100%; height: auto; }
         )}
         {askDocx && (
           <div role="dialog" aria-modal="true" aria-label="How to save this Word file"
-               style={{ position: 'fixed', inset: 0, zIndex: 125, background: 'rgba(0,0,0,.45)', display: 'flex',
+               style={{ position: 'fixed', inset: 0, zIndex: 109, background: 'rgba(0,0,0,.45)', display: 'flex',
                         alignItems: 'center', justifyContent: 'center', padding: 16 }}>
             <div style={{ background: 'var(--card)', color: 'var(--fg)', borderRadius: 'var(--r-lg, 12px)', padding: 20, maxWidth: 440,
                           boxShadow: 'var(--shadow-md)', display: 'flex', flexDirection: 'column', gap: 12 }}>
