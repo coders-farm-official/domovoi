@@ -743,3 +743,136 @@ def test_the_open_document_cap_defaults_to_32_and_is_configurable():
     assert rooms.max_rooms_from_env("12") == 12
     assert rooms.max_rooms_from_env("0") == 1
     assert rooms.max_rooms_from_env("lots") == 32
+
+
+# ─── Round 3: pending structs, timeouts, open rate ───────────────────
+
+
+def _xml_depth(doc) -> int:
+    best, stack = 0, [(doc.get("default", type=XmlFragment), 0)]
+    while stack:
+        n, d = stack.pop()
+        best = max(best, d)
+        for c in getattr(n, "children", []):
+            if isinstance(c, XmlElement):
+                stack.append((c, d + 1))
+    return best
+
+
+async def test_R3_a_chain_parked_on_someone_else_s_next_clock_is_refused(collab_db, docs, manager):
+    """Mallory hung a 200-deep chain on Ana's NEXT clock: accepted as
+    pending, relayed, stored; Ana's next Enter released it, her update was
+    refused and she was locked out, and every browser held the chain. Now
+    the chain is refused before anything is relayed or stored."""
+    from web.backend.collab.protocol import parse_state_vector
+
+    room, a, pa = await seeded_room(manager, docs)
+    async with room.lock:
+        await room.flush(compact=False)
+    rows_before = len(await store.pending_updates(room.doc_id, room.epoch))
+    clock = parse_state_vector(a.doc.get_state()).get(1, 0)
+    m = make_peer(room, "Mallory")
+    room.join(m)
+    chain = [_el_child(1, clock)] + [_el_child(888, k - 1) for k in range(1, 200)]
+    await room.handle(m, sync_update(_vu(1) + _vu(len(chain)) + _vu(888) + _vu(0)
+                                     + b"".join(chain) + _vu(0)))
+    await settle()
+    assert m.closes and m.closes[0][0] == rooms.CLOSE_BAD_MESSAGE
+    await pump(room, (pa, a))
+    assert a.updates_seen == 0 or _xml_depth(a.doc) < 64   # nothing relayed to Ana
+    async with room.lock:
+        await room.flush(compact=False)
+    assert len(await store.pending_updates(room.doc_id, room.epoch)) == rows_before
+    await room.handle(pa, a.append_paragraph("hello"))      # Ana's Enter
+    await settle()
+    assert not pa.closes
+    assert _xml_depth(await server_doc(room)) <= 64 and _xml_depth(a.doc) <= 64
+
+
+async def test_R4_a_keystroke_before_its_step2_still_merges(collab_db, docs, manager):
+    room, a, pa = await seeded_room(manager, docs)
+    room.leave(pa)
+    a.edit_text(0, "cd ")                 # offline, never sent
+    live = a.edit_text(0, "e")            # sent first after reconnecting
+    pb = make_peer(room, "Ana again")
+    room.join(pb)
+    await room.handle(pb, live)
+    await settle()
+    assert not pb.closes
+    for f in a.hello_frames():
+        await room.handle(pb, f)
+    await pump(room, (pb, a))
+    assert (await server_text(room)).startswith("ecd ")
+
+
+async def test_R4_someone_else_may_build_on_a_struct_still_pending(collab_db, docs, manager):
+    """Ben received Ana's pending keystroke (relayed) and types right after
+    it: his update refers to Ana's clock the worker has RECEIVED but not
+    placed. That is not a dependency on the future: accepted."""
+    room, a, pa = await seeded_room(manager, docs)
+    b = SimClient(2)
+    pb = make_peer(room, "Ben")
+    await connect(room, b, pb)
+    room.leave(pa)
+    a.edit_text(0, "cd ")                 # Ana offline
+    live = a.edit_text(0, "e")
+    pa2 = make_peer(room, "Ana again")
+    room.join(pa2)
+    await room.handle(pa2, live)          # pending in the worker, relayed to Ben
+    await pump(room, (pb, b))
+    b.doc.apply_update(a.doc.get_update())  # Ben's own copy has it all (as after a sync)
+    await room.handle(pb, b.edit_text(1, "!"))
+    await settle()
+    assert not pb.closes and not pa2.closes
+
+
+async def test_R3_a_slow_worker_is_not_the_sender_s_fault(collab_db, docs, manager, monkeypatch):
+    room, a, pa = await seeded_room(manager, docs)
+    pa.source = "10.1.2.3"
+
+    async def slow_call(op, blobs=(), args=None):
+        if op == "apply":
+            room.worker.kill()
+            raise workers.WorkerTimeout("apply: no answer in time")
+        return await real(op, blobs, args)
+
+    real = room.call
+    monkeypatch.setattr(room, "call", slow_call)
+    await room.handle(pa, a.edit_text(0, "x"))
+    await settle()
+    assert pa.closes and pa.closes[0][0] == rooms.CLOSE_RETRY      # it reconnects
+    assert not 4400 <= rooms.CLOSE_RETRY < 4500
+    assert not manager.crashes_by_source.get("10.1.2.3")            # no strike
+    assert room.worker is not None and not room.worker.dead        # replaced
+
+
+def test_R3_opening_rooms_is_rate_limited_per_source():
+    m = rooms.RoomManager()
+    assert all(m.may_open("10.4.4.4") for _ in range(rooms.OPENS_PER_MINUTE))
+    assert not m.may_open("10.4.4.4")
+    assert m.may_open("10.4.4.5")
+    assert not 4400 <= rooms.CLOSE_BUSY < 4500                     # retried by the client
+
+
+async def test_R3_compaction_keeps_updates_whose_structs_are_still_pending(
+        collab_db, docs, manager):
+    room, a, pa = await seeded_room(manager, docs)
+    room.leave(pa)
+    a.edit_text(0, "cd ")                 # offline, never sent
+    live = a.edit_text(0, "e")
+    pb = make_peer(room, "Ana again")
+    room.join(pb)
+    await room.handle(pb, live)           # pending
+    async with room.lock:
+        await room.flush(compact=False)
+        await room.compact()              # inside the out-of-order window
+    rows = await store.pending_updates(room.doc_id, room.epoch)
+    assert any(r == live[2 + 1:] or live.endswith(r) for r in rows)   # the pending update kept
+    for f in a.hello_frames():
+        await room.handle(pb, f)
+    await pump(room, (pb, a))
+    room.leave(pb)
+    await manager.release(room)
+    row = await store.get_by_path("plan.md")
+    again = await manager.open(row, docs / "plan.md")
+    assert (await server_text(again)).startswith("ecd ")

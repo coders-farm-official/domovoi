@@ -120,6 +120,9 @@ FILE_CHECK_SEC = 30.0
 COMPACT_ROWS = 200
 COMPACT_BYTES = 2 * 1024 * 1024
 
+# Rooms (worker processes) one source may cause to be opened a minute.
+OPENS_PER_MINUTE = 20
+
 # Worker crashes one source may cause before its sockets are refused for a while.
 CRASHES_PER_SOURCE = 3
 CRASH_WINDOW_SEC = 600.0
@@ -495,6 +498,10 @@ class Room:
                 pass
             else:
                 raise ProtocolError(f"unknown message type {kind}")
+        except UpdateRetry as e:
+            log.info("collab %s: update from %s not taken, will be resent: %s",
+                     self.doc_id, peer.source, e)
+            peer.kill(CLOSE_RETRY, "the server was busy; reconnecting")
         except UpdateRefused as e:
             log.info("collab %s: refused an update from %s: %s", self.doc_id, peer.source, e)
             peer.kill(CLOSE_BAD_MESSAGE, "that change could not be applied")
@@ -521,8 +528,9 @@ class Room:
                     _, (diff,) = await self.call("diff", [state_vector])
                 except workers.WorkerRefused:
                     raise ProtocolError("not a state vector") from None
-                except workers.WorkerFailed:
-                    self._crashed_by(peer)
+                except workers.WorkerFailed as e:
+                    if not isinstance(e, workers.WorkerTimeout):
+                        self._crashed_by(peer)
                     await self.recover()
                     return
             peer.send(sync_step2(diff))
@@ -560,10 +568,17 @@ class Room:
         try:
             result, (sv,) = await self.call(
                 "apply", [update],
-                {"has_types": info.has_types, "ends": {str(k): v for k, v in info.ends.items()}},
+                {"has_types": info.has_types,
+                 "ends": {str(k): v for k, v in info.ends.items()},
+                 "refs": {str(k): v for k, v in info.refs.items()}},
             )
         except workers.WorkerRefused as e:
             raise UpdateRefused(str(e)) from None
+        except workers.WorkerTimeout as e:
+            # Slow, not malicious: the update is not taken, the sender
+            # reconnects (retryable close) and sends it again; no strike.
+            await self.recover()
+            raise UpdateRetry(f"the document worker was too slow ({e})") from None
         except workers.WorkerFailed as e:
             if by is not None:
                 self._crashed_by(by)
@@ -738,7 +753,7 @@ class Room:
                     kept = True
         except (guard.UpdateRejected, workers.WorkerRefused, workers.WorkerFailed) as e:
             log.info("collab %s: offline copy from %s refused: %s", self.doc_id, peer.source, e)
-            if isinstance(e, workers.WorkerFailed):
+            if isinstance(e, workers.WorkerFailed) and not isinstance(e, workers.WorkerTimeout):
                 self._crashed_by(peer)
         except Exception as e:  # noqa: BLE001
             log.warning("collab %s: could not keep an offline copy: %s", self.doc_id, e)
@@ -777,13 +792,17 @@ class Room:
 
     async def compact(self) -> None:
         try:
-            info, (state,) = await self.call("compact")
+            info, blobs = await self.call("compact")
+            state, carry = blobs[0], blobs[1:]
         except (workers.WorkerFailed, workers.WorkerRefused) as e:
             log.warning("collab %s: compaction failed: %s", self.doc_id, e)
             if isinstance(e, workers.WorkerFailed) and not self.closed:
                 await self.recover()
             return
         await store.compact(self.doc_id, self.epoch, state, self.rev)
+        if carry:
+            # Pending structs are not in the encoding: their updates stay.
+            await store.append_updates(self.doc_id, self.epoch, carry, self.rev)
         self.empty = bool(info.get("empty"))
         self.approx_size = len(state)
         self.rows_since_compact = 0
@@ -1007,6 +1026,19 @@ class RoomManager:
         self.sockets_by_source: dict[str, int] = {}
         self._opening = 0
         self.crashes_by_source: dict[str, list[float]] = {}
+        self.opens_by_source: dict[str, list[float]] = {}
+
+    def may_open(self, source: str) -> bool:
+        """Opening a room starts a worker process: at most OPENS_PER_MINUTE
+        a minute per source. Counts the attempt when it is allowed."""
+        now = time.monotonic()
+        recent = [t for t in self.opens_by_source.get(source, []) if now - t < 60.0]
+        if len(recent) >= OPENS_PER_MINUTE:
+            self.opens_by_source[source] = recent
+            return False
+        recent.append(now)
+        self.opens_by_source[source] = recent
+        return True
 
     def note_crash(self, source: str) -> None:
         now = time.monotonic()
@@ -1172,6 +1204,11 @@ class RoomUnsafe(Exception):
 
 class UpdateRefused(ProtocolError):
     """An update refused by the pre-filter or the worker."""
+
+
+class UpdateRetry(ProtocolError):
+    """An update not taken for the server's own reasons (a worker too slow):
+    the sender reconnects and sends it again."""
 
 
 class RestoreFailed(Exception):

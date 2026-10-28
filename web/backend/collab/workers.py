@@ -39,6 +39,11 @@ class WorkerFailed(Exception):
     """The worker died or did not answer in time; it is gone."""
 
 
+class WorkerTimeout(WorkerFailed):
+    """It did not answer in time (a busy box, a huge document): killed and
+    replaced like a crash, but nobody's fault."""
+
+
 class WorkerRefused(Exception):
     """The worker said no (an update it would not take); it is still fine."""
 
@@ -86,7 +91,10 @@ class Worker:
                 )
             except WorkerRefused:
                 raise
-            except Exception as e:  # noqa: BLE001 — dead, stalled, or talking nonsense
+            except asyncio.TimeoutError:
+                self.kill()
+                raise WorkerTimeout(f"{self.label}: {op}: no answer in time") from None
+            except Exception as e:  # noqa: BLE001 — dead, or talking nonsense
                 self.kill()
                 raise WorkerFailed(f"{self.label}: {op}: {type(e).__name__}") from None
 

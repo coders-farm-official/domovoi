@@ -306,6 +306,9 @@ async def _serve_socket(ws: WebSocket, doc_id: str, token: Optional[str], source
         # before anything else can run (review M3).
         user = await resolve_user(ws)
         device = _device_key(ws) or user["name"]
+        live = rooms.MANAGER.rooms.get(row.doc_id)
+        if (live is None or live.closing) and not rooms.MANAGER.may_open(source):
+            raise Refusal(rooms.CLOSE_BUSY, "too many documents opened from this device just now")
         try:
             room = await rooms.MANAGER.open(row, target, readonly=readonly)
         except rooms.RoomsFull:

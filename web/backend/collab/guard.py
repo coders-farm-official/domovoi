@@ -52,6 +52,9 @@ class UpdateRejected(ProtocolError):
 class UpdateInfo:
     has_types: bool = False
     # client -> highest clock (exclusive) this update brings for it
+    # client -> highest clock this update REFERS to (origin, right origin,
+    # parent): what yrs must already have, or the struct waits as pending
+    refs: dict[int, int] = field(default_factory=dict)
     ends: dict[int, int] = field(default_factory=dict)
     structs: int = 0
 
@@ -220,9 +223,11 @@ def _read_content(r: _Reader, ref: int, info: UpdateInfo) -> int:
     raise UpdateRejected("unknown content")
 
 
-def _id(r: _Reader) -> None:
-    r.client()
-    r.var_uint()                               # a clock: < 2^32
+def _id(r: _Reader, info: "UpdateInfo") -> None:
+    client = r.client()
+    clock = r.var_uint()                       # a clock: < 2^32
+    if clock >= info.refs.get(client, -1):
+        info.refs[client] = clock
 
 
 def check(update: bytes, roots: frozenset[str] | set[str] | None = None) -> UpdateInfo:
@@ -244,9 +249,9 @@ def check(update: bytes, roots: frozenset[str] | set[str] | None = None) -> Upda
                 length = r.var_uint()
             else:
                 if sinfo & 0x80:
-                    _id(r)                     # origin
+                    _id(r, info)               # origin
                 if sinfo & 0x40:
-                    _id(r)                     # right origin
+                    _id(r, info)               # right origin
                 if not sinfo & 0xC0:
                     flag = r.var_uint()
                     if flag == 1:
@@ -254,7 +259,7 @@ def check(update: bytes, roots: frozenset[str] | set[str] | None = None) -> Upda
                         if roots is not None and name not in roots:
                             raise UpdateRejected("not a part of a document this editor writes")
                     elif flag == 0:
-                        _id(r)                 # parent
+                        _id(r, info)           # parent
                     else:
                         raise UpdateRejected("bad parent")
                     if sinfo & 0x20:

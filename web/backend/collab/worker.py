@@ -96,6 +96,9 @@ class Holder:
         self.accepted: list[bytes] = []
         self.expected: dict[int, int] = {}   # client -> clock the updates promised
         self.pending = False
+        # client -> end of the highest clock range ever received (placed or
+        # still pending): what an update may refer to.
+        self.received: dict[int, int] = {}
 
     def _state_vector(self) -> dict[int, int]:
         from web.backend.collab.protocol import parse_state_vector
@@ -123,7 +126,21 @@ class Holder:
         sv = self.doc.get_state()
         return {"empty": sv in (b"", bytes([0])), "pending": self.pending}
 
-    def apply(self, update: bytes, has_types: bool, ends: dict[int, int]) -> dict:
+    def apply(self, update: bytes, has_types: bool, ends: dict[int, int],
+              refs: Optional[dict[int, int]] = None) -> dict:
+        # An update may leave structs pending only on its OWN clients' clocks
+        # (the out-of-order and offline cases: the rest of what it builds on
+        # comes from the same client). One that refers to another client's
+        # clock this document has never received is waiting on someone
+        # else's future (round 3: a deep chain parked on Ana's next clock,
+        # released by her next Enter, refused as hers): refused here, before
+        # anything is applied, relayed or stored.
+        sv = self._state_vector()
+        for client, clock in (refs or {}).items():
+            if client in ends:
+                continue
+            if clock >= max(sv.get(client, 0), self.received.get(client, 0)):
+                raise Refused("refers to changes from someone else that are not here")
         was_pending = self.pending
         before_expected = dict(self.expected)
         self.doc.apply_update(update)
@@ -141,13 +158,21 @@ class Holder:
                 self.pending = was_pending
                 raise Refused("nested too deep")
         self.accepted.append(update)
+        for client, end in ends.items():
+            if end > self.received.get(client, 0):
+                self.received[client] = end
         return self.info()
 
-    def compact(self) -> bytes:
+    def compact(self) -> tuple[bytes, list[bytes]]:
+        """The whole document, plus the updates to keep beside it: yrs leaves
+        pending structs out of an encoding, so while any are pending the
+        updates since the last base are carried over (re-applying them is
+        harmless) rather than lost."""
         state = self.doc.get_update()
-        self.base = [state]
+        carry = list(self.accepted) if self.pending else []
+        self.base = [state] + carry
         self.accepted = []
-        return state
+        return state, carry
 
     def restore(self, version: bytes) -> bytes:
         from web.backend.collab import content
@@ -156,7 +181,7 @@ class Holder:
         sv = scratch.get_state()
         content.restore_into(scratch, content.doc_from_update(version))
         update = scratch.get_update(sv)
-        self.apply(update, True, {})
+        self.apply(update, True, {}, {})
         return update
 
 
@@ -247,7 +272,8 @@ def handle(holder: Holder, op: str, args: dict, blobs: list[bytes]) -> tuple[dic
         return holder.load(blobs), []
     if op == "apply":
         ends = {int(k): int(v) for k, v in (args.get("ends") or {}).items()}
-        return holder.apply(blobs[0], bool(args.get("has_types")), ends), [holder.doc.get_state()]
+        refs = {int(k): int(v) for k, v in (args.get("refs") or {}).items()}
+        return holder.apply(blobs[0], bool(args.get("has_types")), ends, refs), [holder.doc.get_state()]
     if op == "sv":
         return holder.info(), [holder.doc.get_state()]
     if op == "diff":
@@ -255,8 +281,8 @@ def handle(holder: Holder, op: str, args: dict, blobs: list[bytes]) -> tuple[dic
     if op == "encode":
         return holder.info(), [holder.doc.get_update()]
     if op == "compact":
-        state = holder.compact()
-        return holder.info(), [state]
+        state, carry = holder.compact()
+        return holder.info(), [state] + carry
     if op == "restore":
         update = holder.restore(blobs[0])
         return holder.info(), [update]
