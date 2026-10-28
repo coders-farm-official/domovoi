@@ -452,3 +452,28 @@ def test_other_needs_no_folder_of_its_own(folder):
     assert [lib.public_id for lib in files_api._with_other(built)].count(OTHER_LIBRARY_ID) == 1
     assert files_api._with_other([lib for lib in built if lib.id != DOCUMENTS_LIBRARY_ID]) == \
         [lib for lib in built if lib.id != DOCUMENTS_LIBRARY_ID]
+
+
+# ─── Co-editing history follows a move made in Other ───────────────────────
+def test_a_folder_moved_in_other_keeps_its_documents_coediting_history(fake_auth, folder, monkeypatch):
+    """Documents' co-editing (web/backend/api/collab.py, the editors batch)
+    follows a move inside Documents and forgets a document that leaves it.
+    Other IS Documents server-side, so a folder of co-edited documents moved
+    through Other is a move inside Documents: its history follows. Skipped
+    on a tree without co-editing."""
+    collab = pytest.importorskip("web.backend.api.collab")
+    calls: list[tuple] = []
+
+    async def _moved(old, new):
+        calls.append(("moved", old, new))
+
+    async def _forget(paths):
+        calls.append(("forget", tuple(paths)))
+
+    monkeypatch.setattr(collab, "note_moved", _moved)
+    monkeypatch.setattr(collab, "forget_paths", _forget)
+    with _client() as c:
+        r = _move(c, OTHER_LIBRARY_ID, ["Taxes"], OTHER_LIBRARY_ID, "Installers")
+        back = _move(c, DOCUMENTS_LIBRARY_ID, ["Installers/Taxes"], OTHER_LIBRARY_ID, "")
+    assert r.json()["moved"] == ["Installers/Taxes"] and back.json()["moved"] == ["Taxes"]
+    assert calls == [("moved", "Taxes", "Installers/Taxes"), ("moved", "Installers/Taxes", "Taxes")]
