@@ -421,21 +421,33 @@
   font: inherit; font-size: 13px; flex-shrink: 0; }
 .de-btn:hover:not(:disabled) { background: var(--brand-soft); }
 .de-btn.on { background: var(--brand-soft); color: var(--brand-ink, var(--fg)); border-color: var(--brand-ring, transparent); }
-.de-btn:disabled { opacity: .38; cursor: not-allowed; }
+.de-btn:disabled { opacity: .55; cursor: not-allowed; }
 .de-btn:focus-visible, .de-select:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
 .de-sep { width: 1px; height: 20px; background: var(--border); margin: 0 4px; flex-shrink: 0; }
 .de-select { height: 32px; border: 1px solid var(--border); border-radius: var(--r-sm, 6px); background: var(--card); color: var(--fg);
   font: inherit; font-size: 13px; padding: 0 6px; flex-shrink: 0; max-width: 150px; }
-.de-select:disabled { opacity: .38; cursor: not-allowed; }
+.de-select:disabled { opacity: .55; cursor: not-allowed; }
 .de-swatch-under { display: block; height: 3px; width: 16px; border-radius: 1px; margin-top: -2px; }
 .de-colour-btn { flex-direction: column; gap: 0; }
 .de-note { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 6px 14px; font-size: 12px; color: var(--fg-muted);
   background: var(--sunken); border-bottom: 1px solid var(--border-soft, var(--border)); flex-shrink: 0; }
 .de-scroll { flex: 1; min-height: 0; overflow: auto; padding: 24px 16px 64px; }
 .de-paper { box-sizing: border-box; max-width: 816px; min-height: 1056px; margin: 0 auto; padding: 72px 80px; background: #fff; color: #1d1d1f;
-  box-shadow: 0 1px 3px rgba(0,0,0,.14), 0 0 0 1px rgba(0,0,0,.04); color-scheme: light; }
-.de-paper .ProseMirror { outline: none; min-height: 900px; font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
-  overflow-wrap: break-word; caret-color: #1d1d1f; }
+  box-shadow: 0 1px 3px rgba(0,0,0,.14), 0 0 0 1px rgba(0,0,0,.04); color-scheme: light;
+  display: flex; flex-direction: column; cursor: text;
+  /* The page is paper in every theme: dark ink on white. The dashboard's
+     own tokens and element rules (colors_and_type.css sets p, h1-h3 and
+     code to var(--fg), the theme's text colour, which is near-white in the
+     dark theme) are pointed back at the ink inside the page. Text with no
+     colour of its own simply inherits it; nothing is written into the
+     document. */
+  --fg: #1d1d1f; --fg-muted: #555; --fg-faint: #5f5f5f; --fg-subtle: #5f5f5f; }
+.de-paper > div { flex: 1 1 auto; display: flex; flex-direction: column; }
+.de-paper :is(p, h1, h2, h3, h4, h5, h6, li, td, th, figcaption, code, kbd, blockquote, pre) { color: inherit; }
+.de-paper p { font-size: inherit; line-height: inherit; letter-spacing: normal; }
+.de-paper :is(h1, h2, h3, h4, h5, h6) { letter-spacing: normal; font-weight: 700; }
+.de-paper .ProseMirror { outline: none; flex: 1 1 auto; min-height: 900px; font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+  color: #1d1d1f; overflow-wrap: break-word; caret-color: #1d1d1f; }
 .de-paper .ProseMirror > :first-child { margin-top: 0; }
 .de-paper h1 { font-size: 2em; line-height: 1.25; margin: .8em 0 .4em; }
 .de-paper h2 { font-size: 1.5em; line-height: 1.3; margin: .9em 0 .4em; }
@@ -456,7 +468,7 @@
 .de-paper ul[data-type="taskList"] li > label { flex: 0 0 auto; margin-top: .25em; user-select: none; }
 .de-paper ul[data-type="taskList"] li > label input { width: 16px; height: 16px; cursor: pointer; }
 .de-paper ul[data-type="taskList"] li > div { flex: 1 1 auto; min-width: 0; }
-.de-paper ul[data-type="taskList"] li[data-checked="true"] > div { color: #777; text-decoration: line-through; }
+.de-paper ul[data-type="taskList"] li[data-checked="true"] > div { color: #5f5f5f; text-decoration: line-through; }
 .de-paper .tableWrapper { overflow-x: auto; margin: 1em 0; }
 .de-paper table { border-collapse: collapse; width: 100%; table-layout: fixed; margin: 0; }
 .de-paper td, .de-paper th { border: 1px solid #c8c8c8; padding: 6px 8px; vertical-align: top; position: relative; min-width: 2em; }
@@ -505,7 +517,8 @@
   color: var(--fg); font: inherit; font-size: 13px; width: 260px; max-width: 70vw; }
 @media (max-width: 700px) {
   .de-scroll { padding: 0; }
-  .de-paper { padding: 20px 16px 80px; box-shadow: none; min-height: 100%; max-width: none; }
+  .de-scroll { display: flex; flex-direction: column; }
+  .de-paper { padding: 20px 16px 80px; box-shadow: none; min-height: 100%; max-width: none; flex: 1 0 auto; width: 100%; }
   .de-paper .ProseMirror { min-height: 60vh; }
   .de-fig[data-align="left"], .de-fig[data-align="right"] { float: none; margin: 1em auto; }
 }
@@ -1507,16 +1520,41 @@
         )}
         {error && <div style={{ padding: 20, color: 'var(--err-ink)', fontSize: 13 }}>The editor couldn't start: {error}</div>}
         {!editor && !error && <div style={{ padding: 20, color: 'var(--fg-faint)', fontSize: 13 }}>Opening…</div>}
-        <div className="de-scroll" onMouseDown={(e) => {
-          // a press on the grey around the page puts the cursor in the page
-          if (editor && e.target === e.currentTarget) { e.preventDefault(); editor.commands.focus('end'); }
-        }}>
+        <div className="de-scroll" onClick={(e) => pageTap(editor, e)}>
           <div className="de-paper" style={{ display: editor ? undefined : 'none' }}>
             <div ref={mountRef}/>
           </div>
         </div>
       </div>
     );
+  };
+
+  /* A tap anywhere on the page (or the grey around it) puts the cursor in
+   * the document, as on paper: below the last line at the end, anywhere
+   * else at the nearest place. ProseMirror handles taps on the text itself;
+   * pictures, their bar and caption, checkboxes and links keep their own
+   * taps; a read-only document isn't focused at all. On a phone this is
+   * what brings up the keyboard, so it runs on the tap (click) itself. */
+  const pageTap = (editor, e) => {
+    if (!editor || editor.isDestroyed || !editor.isEditable) return;
+    const t = e.target;
+    if (!(t instanceof Element)) return;
+    if (t.closest('.de-fig, a, button, input, label, select, textarea, .de-pop')) return;
+    const pm = editor.view.dom;
+    // a tap on actual content (a paragraph, a list item…) is ProseMirror's
+    if (pm.contains(t) && t !== pm) return;
+    const last = pm.lastElementChild;
+    const below = !last || e.clientY > last.getBoundingClientRect().bottom;
+    const view = editor.view;
+    const { Selection, TextSelection } = window.DomovoiTiptap.pm.state;
+    const hit = below ? null : view.posAtCoords({ left: e.clientX, top: e.clientY });
+    const doc = view.state.doc;
+    const sel = hit ? TextSelection.near(doc.resolve(Math.min(hit.pos, doc.content.size))) : Selection.atEnd(doc);
+    view.dispatch(view.state.tr.setSelection(sel).scrollIntoView());
+    // Focused here, in the tap itself (not a frame later, as Tiptap's own
+    // focus command does): a phone shows its keyboard only for a focus
+    // that happens inside the person's tap.
+    view.focus();
   };
 
   /* Word → the editor's HTML (mammoth, in this browser). Pictures come
@@ -1602,7 +1640,8 @@
   const PRINT_CSS = `:root { color-scheme: light; }
 html { background: #f3f3f1; }
 body { margin: 0; padding: 32px 16px; font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; color: #1d1d1f; }
-.doc { box-sizing: border-box; max-width: 816px; margin: 0 auto; padding: 72px 80px; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.12); min-height: 1056px; overflow-wrap: break-word; }
+.doc { box-sizing: border-box; max-width: 816px; margin: 0 auto; padding: 72px 80px; background: #fff; color: #1d1d1f; box-shadow: 0 1px 3px rgba(0,0,0,.12); min-height: 1056px; overflow-wrap: break-word; }
+h1, h2, h3, h4, h5, h6 { color: #1d1d1f; }
 .doc > :first-child { margin-top: 0; }
 h1 { font-size: 2em; line-height: 1.25; margin: .8em 0 .4em; }
 h2 { font-size: 1.5em; line-height: 1.3; margin: .9em 0 .4em; }
@@ -1622,7 +1661,7 @@ ul[data-type="taskList"] { list-style: none; padding-left: .2em; }
 ul[data-type="taskList"] li { display: flex; gap: .5em; align-items: flex-start; }
 ul[data-type="taskList"] li > label { flex: 0 0 auto; margin-top: .2em; }
 ul[data-type="taskList"] li > div { flex: 1 1 auto; }
-ul[data-type="taskList"] li[data-checked="true"] > div { color: #777; text-decoration: line-through; }
+ul[data-type="taskList"] li[data-checked="true"] > div { color: #5f5f5f; text-decoration: line-through; }
 table { border-collapse: collapse; width: 100%; margin: 1em 0; table-layout: fixed; }
 td, th { border: 1px solid #c8c8c8; padding: 6px 8px; vertical-align: top; }
 th { background: #f3f3f1; font-weight: 600; text-align: left; }

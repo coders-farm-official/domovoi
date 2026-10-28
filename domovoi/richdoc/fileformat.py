@@ -29,7 +29,8 @@ STYLE = """
 :root { color-scheme: light; }
 html { background: #f3f3f1; }
 body { margin: 0; padding: 32px 16px; font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; color: #1d1d1f; }
-.doc { box-sizing: border-box; max-width: 816px; margin: 0 auto; padding: 72px 80px; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.12); min-height: 1056px; overflow-wrap: break-word; }
+.doc { box-sizing: border-box; max-width: 816px; margin: 0 auto; padding: 72px 80px; background: #fff; color: #1d1d1f; box-shadow: 0 1px 3px rgba(0,0,0,.12); min-height: 1056px; overflow-wrap: break-word; }
+h1, h2, h3, h4, h5, h6 { color: #1d1d1f; }
 .doc > :first-child { margin-top: 0; }
 h1 { font-size: 2em; line-height: 1.25; margin: .8em 0 .4em; }
 h2 { font-size: 1.5em; line-height: 1.3; margin: .9em 0 .4em; }
@@ -49,7 +50,7 @@ ul[data-type="taskList"] { list-style: none; padding-left: .2em; }
 ul[data-type="taskList"] li { display: flex; gap: .5em; align-items: flex-start; }
 ul[data-type="taskList"] li > label { flex: 0 0 auto; margin-top: .2em; }
 ul[data-type="taskList"] li > div { flex: 1 1 auto; }
-ul[data-type="taskList"] li[data-checked="true"] > div { color: #777; text-decoration: line-through; }
+ul[data-type="taskList"] li[data-checked="true"] > div { color: #5f5f5f; text-decoration: line-through; }
 table { border-collapse: collapse; width: 100%; margin: 1em 0; table-layout: fixed; }
 td, th { border: 1px solid #c8c8c8; padding: 6px 8px; vertical-align: top; }
 th { background: #f3f3f1; font-weight: 600; text-align: left; }

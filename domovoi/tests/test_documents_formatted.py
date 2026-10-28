@@ -558,3 +558,29 @@ def test_the_editor_opens_on_its_own_when_co_editing_is_off():
     assert "e && e.unavailable ?" in jsx
     assert "collab.on('unavailable'" in jsx
     assert "!soloRef.current.has(rel)" in jsx and "soloRef.current.add(rel)" in jsx
+
+
+def test_the_page_is_paper_in_every_theme_and_a_tap_anywhere_types():
+    """Galaxy Fold, dark theme (2026-10-28): the dashboard's type rules set
+    p / h1-h3 / code to the theme's text colour (near-white in dark), so
+    typed text vanished on the white page; and only a tap on existing text
+    brought up the keyboard. Checked in a browser in both themes (paper text
+    rgb(29,29,31) at 16px, contrast audit clean) and on a phone-width tap;
+    pinned here in the source."""
+    from pathlib import Path
+
+    from domovoi.richdoc.fileformat import STYLE
+
+    jsx = (Path(__file__).resolve().parents[2] / "web" / "static" / "doc_editor.jsx").read_text(encoding="utf-8")
+    # the page's own ink, whatever the theme's tokens say
+    assert "--fg: #1d1d1f;" in jsx
+    assert ".de-paper :is(p, h1, h2, h3, h4, h5, h6, li, td, th, figcaption, code, kbd, blockquote, pre) { color: inherit; }" in jsx
+    assert ".de-paper p { font-size: inherit;" in jsx
+    # the saved file reads right in any browser: dark ink on white
+    assert ".doc { box-sizing: border-box;" in STYLE and "background: #fff; color: #1d1d1f;" in STYLE
+    assert "h1, h2, h3, h4, h5, h6 { color: #1d1d1f; }" in STYLE
+    # a tap on the page focuses inside the tap itself, not a frame later
+    assert 'onClick={(e) => pageTap(editor, e)}' in jsx
+    assert "view.focus();" in jsx and "Selection.atEnd(doc)" in jsx
+    assert "t.closest('.de-fig, a, button, input, label, select, textarea, .de-pop')" in jsx
+    assert "!editor.isEditable" in jsx
