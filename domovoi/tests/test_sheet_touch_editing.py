@@ -1,20 +1,22 @@
-"""Typing in a sheet on a phone (wf/editors-followups, 2026-10-27).
+"""Typing in a sheet on a phone (wf/editors-followups, wf/sheet-ime-double).
 
-On the Android emulator with Gboard, a double tap selected a cell but never
-opened Univer's cell editor, and a soft keyboard's keydown is
-"Unidentified" (229), so typed text went into Univer's hidden, closed editor
-(it showed in the formula bar) and Enter, the tick or another cell dropped
-it. ``sheetTouchEditing`` in web/static/sheet_editor.jsx opens the editor
-the way the desktop would (double tap: edit as it is; text arriving: typing
-mode). Checked by hand on the emulator (double tap + tick, tap + type +
-another cell, tap + type + keyboard Enter, formula bar + tick); these pin
-the wiring and the Univer API it leans on, so a Univer upgrade that renames
-any of it fails here rather than silently on phones.
+Univer types through a hidden contenteditable it empties after every
+keystroke. An Android keyboard edits the text it believes is in the field, so
+against that empty field accepting a suggestion inserted the word again
+("Helo" + "Hello" -> "Helolo "), a composing keyboard committed words twice
+("helloHello"), and before that a double tap never opened the editor at all.
+
+On a touch-first device (pointer: coarse) the cell is now edited in a plain
+text field of ours, SheetPhoneBar, which replaces Univer's formula bar there,
+and written with Univer's setValue; Univer's hidden editors are kept from the
+keyboard. Checked on the emulator with Gboard key taps: Enter, the tick,
+tapping another cell, an accepted suggestion, autocorrect, backspace mid-word,
+double tap, the cross, digits; every value landed once and was saved.
+These pin the wiring and the Univer API it leans on.
 """
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
@@ -22,30 +24,47 @@ EDITOR = (REPO / "web" / "static" / "sheet_editor.jsx").read_text(encoding="utf-
 UNIVER = (REPO / "web" / "static" / "vendor" / "univer" / "univer.js").read_text(encoding="utf-8")
 
 
-def test_editable_workbooks_get_touch_editing():
-    assert "const sheetTouchEditing = (holder, univerAPI, fWorkbook) =>" in EDITOR
-    assert re.search(r"if \(j\.editable\) disposeFns\.push\(sheetTouchEditing\(holderRef\.current, univerAPI, fWorkbook\)\)",
-                     EDITOR)
+def _block(start: str) -> str:
+    body = EDITOR[EDITOR.index(start):]
+    return body[:body.index("\n};\n")]
 
 
-def test_it_listens_where_a_soft_keyboard_speaks():
-    body = EDITOR[EDITOR.index("const sheetTouchEditing"):]
-    body = body[:body.index("\n};\n")]
-    for evt in ("pointerdown", "dblclick", "beforeinput", "compositionstart"):
-        assert f"addEventListener('{evt}'" in body and f"removeEventListener('{evt}'" in body
-    # only Univer's own cell editor, only text being inserted, only when no cell is open
-    assert "__INTERNAL_EDITOR__DOCS_NORMAL" in EDITOR
-    assert "/^insert/.test(e.inputType" in body
-    assert "if (editing()) return;" in body
+def test_a_phone_types_in_a_real_field_not_in_univers_editor():
+    assert "matchMedia('(pointer: coarse)')" in _block("const sheetPhoneMode")
+    assert "formulaBar: !phone," in EDITOR
+    assert "<SheetPhoneBar " in EDITOR
+    bar = _block("const SheetPhoneBar")
+    assert '<input ref={inputRef} type="text"' in bar
+    assert "r.setValue(value)" in bar                       # written by Univer's own parser
+    # Univer's hidden editors never get the keyboard on a phone
+    assert "addEventListener('focusin', keepOff, true)" in bar
+    assert "t.isContentEditable && holder && holder.contains(t)) t.blur()" in bar
+    # the old shim that opened Univer's editor for a phone keyboard is gone
+    assert "sheetTouchEditing" not in EDITOR
+    assert "compositionstart" not in EDITOR
+
+
+def test_typing_lands_in_the_cell_it_began_on_once():
+    bar = _block("const SheetPhoneBar")
+    assert "editRef.current = { cell: c, original: sheetCellText(rangeOf(c)) }" in bar
+    assert "const r = rangeOf(ed.cell);" in bar             # not wherever the selection is now
+    assert "if (value === ed.original) return false;" in bar
+    assert "replace(/\\s+$/, '')" in bar                    # a suggestion's trailing space
+    # buttons inside the form must not submit it
+    assert bar.count('<Button type="button"') == 2
+
+
+def test_desktop_plain_text_still_opens_the_cell_and_leaves_ime_alone():
+    desk = _block("const sheetDesktopTyping")
+    assert "e.inputType !== 'insertText' || e.isComposing" in desk
+    assert "if (j.editable && !sheetPhoneMode()) disposeFns.push(sheetDesktopTyping(" in EDITOR
 
 
 def test_the_univer_it_leans_on_is_the_bundled_one():
-    # FWorkbook facade
-    assert "startEditing(){" in UNIVER
     assert "isCellEditing(){return this._injector.get(" in UNIVER
-    # the operation and its event types (DeviceInputEventType)
     assert 'id:"sheet.operation.set-cell-edit-visible"' in UNIVER
+    assert 'id:"sheet.operation.set-selections"' in UNIVER
     assert 't[t.Dblclick=3]="Dblclick",t[t.Keyboard=4]="Keyboard"' in UNIVER
-    assert "SHEET_EVENT_DBLCLICK = 3" in EDITOR and "SHEET_EVENT_KEYBOARD = 4" in EDITOR
-    # the hidden cell editor's element id (the formula bar's is DOCS_FORMULA_BAR)
     assert 'var qM="__INTERNAL_EDITOR__",Qt=`${qM}DOCS_NORMAL`' in UNIVER
+    assert "getFormula(){return this._formulaDataModel.getFormulaStringByCell(" in UNIVER
+    assert "setActiveRange(e){let{unitId:n,sheetId:i}=e.getRange();" in UNIVER

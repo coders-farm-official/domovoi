@@ -48,61 +48,210 @@ const loadSheetUniver = () => {
   return _sheetUniverPromise;
 };
 
-/* Typing on a phone (wf/editors-followups, checked on the emulator with
- * Gboard). Univer's desktop UI opens a cell's editor on a mouse double-click
- * or on a keydown that names a printable key. A touch screen gives neither:
- * a double tap selects the cell but never opens the editor (Univer's own
- * double-click detection is mouse-only), and a soft keyboard's keydown is
- * "Unidentified" (keyCode 229) with the text arriving as beforeinput/input.
- * The text then went into Univer's hidden, closed cell editor: it showed in
- * the formula bar, and Enter, the tick or another cell "committed" a cell
- * that was never being edited, so the typing was silently dropped.
- * This opens the editor the way the desktop would have:
- *   - a double tap on the grid: edit the cell as it is (Univer's
- *     startEditing(), the double-click mode, caret at the end);
- *   - text (or an IME composition) arriving while no cell is open: open the
- *     selected cell in typing mode (replaces it, as typing on a selected
- *     cell does on the desktop), before the text lands, so none is lost.
- * Returns the cleanup. */
+/* Typing on a phone (wf/editors-followups, wf/sheet-ime-double; checked on
+ * the emulator with Gboard key taps).
+ *
+ * Univer's desktop editor types through a hidden contenteditable that it
+ * empties after every keystroke. An Android keyboard works on the text it
+ * believes is in the field: it composes words, offers suggestions, autocorrects
+ * and deletes by "the last n characters". Against a field that is always
+ * empty, accepting a suggestion inserted the word again ("Helo" + "Hello" ->
+ * "Helolo "), and a composing keyboard committed whole words twice
+ * ("helloHello"). Univer also never opened its cell editor for a touch double
+ * tap, so typing was first dropped altogether.
+ *
+ * So on a touch-first device the cell is edited in a plain text field of our
+ * own (the phone cell bar, which replaces Univer's formula bar there): the
+ * keyboard gets a real field, with everything it does applied by the browser,
+ * and the result is written with Univer's own setValue (numbers, dates,
+ * percentages and =formulas parsed as the desktop editor parses them;
+ * undoable). Univer's hidden editors are kept from taking the keyboard.
+ * Desktop editing is Univer's own, unchanged. */
+/* Desktop: typing on a selected cell when the text arrives without a key
+ * Univer recognises (a keyboard that sends it as plain text input): open the
+ * selected cell in typing mode first, as a printable keydown would, so the
+ * text is not left in Univer's closed editor. Plain text only: an IME
+ * composition is Univer's own to handle. (A phone never gets here; it types
+ * in SheetPhoneBar.) Returns the cleanup. */
 const SHEET_CELL_EDITOR_ID = '__INTERNAL_EDITOR__DOCS_NORMAL';
-const SHEET_EVENT_DBLCLICK = 3;   // Univer's DeviceInputEventType
-const SHEET_EVENT_KEYBOARD = 4;
-const sheetTouchEditing = (holder, univerAPI, fWorkbook) => {
+const SHEET_EVENT_KEYBOARD = 4;   // Univer's DeviceInputEventType
+const sheetDesktopTyping = (holder, univerAPI, fWorkbook) => {
   if (!holder || !fWorkbook || typeof fWorkbook.isCellEditing !== 'function') return () => {};
-  let touchedAt = 0;
-  const editing = () => { try { return fWorkbook.isCellEditing(); } catch (e) { return true; } };
-  const open = (eventType) => {
-    if (editing()) return;
-    try {
-      if (eventType === SHEET_EVENT_DBLCLICK && typeof fWorkbook.startEditing === 'function') {
-        fWorkbook.startEditing();
-      } else {
-        univerAPI.syncExecuteCommand('sheet.operation.set-cell-edit-visible',
-          { visible: true, eventType, unitId: fWorkbook.getId() });
-      }
-    } catch (e) { /* Univer refused (a protected cell): nothing opens, as on the desktop */ }
-  };
-  const isCellEditor = (t) => !!(t && t.id && t.id.indexOf(SHEET_CELL_EDITOR_ID) >= 0);
-  const onPointer = (e) => { if (e.pointerType === 'touch' || e.pointerType === 'pen') touchedAt = Date.now(); };
-  const onDblclick = (e) => {
-    if (Date.now() - touchedAt > 1500 || !(e.target && e.target.tagName === 'CANVAS')) return;
-    open(SHEET_EVENT_DBLCLICK);
-  };
   const onText = (e) => {
-    if (!isCellEditor(e.target)) return;
-    if (e.type === 'beforeinput' && !/^insert/.test(e.inputType || '')) return;
-    open(SHEET_EVENT_KEYBOARD);
+    const t = e.target;
+    if (!(t && t.id && t.id.indexOf(SHEET_CELL_EDITOR_ID) >= 0)) return;
+    if (e.inputType !== 'insertText' || e.isComposing) return;
+    try {
+      if (fWorkbook.isCellEditing()) return;
+      univerAPI.syncExecuteCommand('sheet.operation.set-cell-edit-visible',
+        { visible: true, eventType: SHEET_EVENT_KEYBOARD, unitId: fWorkbook.getId() });
+    } catch (err) { /* a protected cell: nothing opens, as with a key */ }
   };
-  holder.addEventListener('pointerdown', onPointer, true);
-  holder.addEventListener('dblclick', onDblclick, true);
   holder.addEventListener('beforeinput', onText, true);
-  holder.addEventListener('compositionstart', onText, true);
-  return () => {
-    holder.removeEventListener('pointerdown', onPointer, true);
-    holder.removeEventListener('dblclick', onDblclick, true);
-    holder.removeEventListener('beforeinput', onText, true);
-    holder.removeEventListener('compositionstart', onText, true);
+  return () => holder.removeEventListener('beforeinput', onText, true);
+};
+
+const sheetPhoneMode = () => {
+  try {
+    return !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+  } catch (e) { return false; }
+};
+
+/* What the bar shows for a cell: its formula, else its raw value. */
+const sheetCellText = (range) => {
+  if (!range) return '';
+  try {
+    const f = range.getFormula && range.getFormula();
+    if (f) return f;
+    const v = range.getValue();
+    if (v !== null && v !== undefined && v !== '') return String(v);
+    return String((range.getDisplayValue && range.getDisplayValue()) || '');
+  } catch (e) { return ''; }
+};
+
+const SheetPhoneBar = ({ apiRef, holderRef, ready, editable }) => {
+  const inputRef = React.useRef(null);
+  const [cell, setCell] = React.useState(null);      // { a1, row, col, sheetId }
+  const [text, setText] = React.useState('');
+  const editRef = React.useRef(null);                 // the cell being edited and what it held
+  const textRef = React.useRef('');
+  textRef.current = text;
+
+  const sheet = () => {
+    const api = apiRef.current && apiRef.current.univerAPI;
+    const wb = api && api.getActiveWorkbook();
+    return wb ? wb.getActiveSheet() : null;
   };
+  const activeCell = () => {
+    const ws = sheet();
+    const r = ws && (ws.getActiveCell ? ws.getActiveCell() : ws.getActiveRange());
+    if (!ws || !r) return null;
+    return { a1: r.getA1Notation(), row: r.getRow(), col: r.getColumn(), sheetId: ws.getSheetId() };
+  };
+  const rangeOf = (c) => {
+    const ws = sheet();
+    return ws && c && ws.getSheetId() === c.sheetId ? ws.getRange(c.row, c.col) : null;
+  };
+
+  // Write what was typed into the cell the edit began on (not wherever the
+  // selection is now). Nothing is written when nothing changed.
+  const commit = React.useCallback(() => {
+    const ed = editRef.current;
+    editRef.current = null;
+    if (!ed || !editable) return false;
+    // A keyboard leaves a space after an accepted suggestion or autocorrection;
+    // a cell keeps none at the end ("12 " would not be a number).
+    const value = textRef.current.replace(/\s+$/, '');
+    if (value === ed.original) return false;
+    const r = rangeOf(ed.cell);
+    if (!r) return false;
+    try { r.setValue(value); } catch (e) { return false; }
+    return true;
+  }, [editable]);
+
+  const show = React.useCallback(() => {
+    const c = activeCell();
+    setCell(c);
+    if (!editRef.current) setText(sheetCellText(rangeOf(c)));
+  }, []);
+
+  React.useEffect(() => {
+    if (!ready) return undefined;
+    const api = apiRef.current && apiRef.current.univerAPI;
+    if (!api) return undefined;
+    show();
+    // (the workbook's onCommandExecuted: this Univer's facade has none of its own)
+    const wb = api.getActiveWorkbook();
+    const listen = (fn) => (wb && wb.onCommandExecuted ? wb.onCommandExecuted(fn)
+      : (api.onCommandExecuted ? api.onCommandExecuted(fn) : null));
+    const sub = listen((cmd) => {
+      if (!cmd) return;
+      if (cmd.id === 'sheet.operation.set-selections') {
+        // Another cell picked while typing: keep the typing, in the cell it
+        // was meant for (as tapping another cell does on the desktop).
+        if (editRef.current) {
+          const now = activeCell();
+          const was = editRef.current.cell;
+          if (!now || now.row !== was.row || now.col !== was.col || now.sheetId !== was.sheetId) {
+            commit();
+            if (inputRef.current) inputRef.current.blur();
+          }
+        }
+        show();
+      } else if (cmd.type === 2 && !editRef.current) {
+        show();                                      // a mutation: the cell may say something new
+      }
+    });
+    // Univer's own hidden editors must not take the keyboard on a phone.
+    const holder = holderRef.current;
+    const keepOff = (e) => {
+      const t = e.target;
+      if (t && t.isContentEditable && holder && holder.contains(t)) t.blur();
+    };
+    const onDbl = (e) => {
+      if (!editable || !(e.target && e.target.tagName === 'CANVAS')) return;
+      setTimeout(() => { if (inputRef.current) { inputRef.current.focus(); const n = inputRef.current.value.length; inputRef.current.setSelectionRange(n, n); } }, 0);
+    };
+    if (holder) {
+      holder.addEventListener('focusin', keepOff, true);
+      holder.addEventListener('dblclick', onDbl, true);
+    }
+    return () => {
+      if (sub && sub.dispose) sub.dispose();
+      if (holder) {
+        holder.removeEventListener('focusin', keepOff, true);
+        holder.removeEventListener('dblclick', onDbl, true);
+      }
+    };
+  }, [ready, editable, show, commit]);
+
+  const begin = () => {
+    if (!editable || editRef.current) return;
+    const c = activeCell();
+    if (!c) return;
+    editRef.current = { cell: c, original: sheetCellText(rangeOf(c)) };
+  };
+  const done = (move) => {
+    const ed = editRef.current;
+    commit();
+    if (inputRef.current) inputRef.current.blur();
+    if (move && ed) {
+      const ws = sheet();
+      try { if (ws && ws.getSheetId() === ed.cell.sheetId) ws.setActiveRange(ws.getRange(ed.cell.row + 1, ed.cell.col)); } catch (e) { /* last row */ }
+    }
+    show();
+  };
+  const cancel = () => {
+    editRef.current = null;
+    if (inputRef.current) inputRef.current.blur();
+    show();
+  };
+
+  return (
+    <form onSubmit={(e) => { e.preventDefault(); done(true); }}
+          style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px',
+                   borderBottom: '1px solid var(--border)', background: 'var(--card)' }}>
+      <span className="mono" style={{ fontSize: 12, color: 'var(--fg-muted)', minWidth: 34 }}>
+        {cell ? cell.a1 : ''}
+      </span>
+      <input ref={inputRef} type="text" value={text} disabled={!ready} readOnly={!editable}
+             enterKeyHint="done" aria-label={cell ? `Cell ${cell.a1}` : 'Cell'}
+             placeholder={editable ? 'Tap here to type in this cell' : ''}
+             onFocus={begin}
+             onChange={(e) => { begin(); setText(e.target.value); }}
+             onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); cancel(); } }}
+             style={{ flex: 1, minWidth: 0, height: 34, padding: '0 10px', fontSize: 16,
+                      border: '1px solid var(--border)', borderRadius: 6,
+                      background: 'var(--bg)', color: 'var(--fg)' }}/>
+      {editable && (
+        <React.Fragment>
+          <Button type="button" icon="x" title="cancel" aria-label="cancel" onClick={cancel} onMouseDown={(e) => e.preventDefault()}/>
+          <Button type="button" icon="check" title="enter" aria-label="enter" variant="primary" onClick={() => done(false)}
+                  onMouseDown={(e) => e.preventDefault()}/>
+        </React.Fragment>
+      )}
+    </form>
+  );
 };
 
 /* Univer's palette from the dashboard's tokens: its warm stone greys and
@@ -292,6 +441,7 @@ const SheetEditorOverlay = ({ rel_path, onClose, fire, blockedReason = null, inA
   const [others, setOthers] = React.useState([]);
   const [reloadKey, setReloadKey] = React.useState(0);
   const holderRef = React.useRef(null);
+  const phone = React.useMemo(sheetPhoneMode, []);
   const apiRef = React.useRef(null);        // { univer, univerAPI }
   const metaRef = React.useRef({ version: null, origins: {}, lastSaved: null, format: 'xlsx' });
   const timerRef = React.useRef(null);
@@ -422,7 +572,8 @@ const SheetEditorOverlay = ({ rel_path, onClose, fire, blockedReason = null, inA
               header: true,
               toolbar: true,
               ribbonType: 'simple',
-              formulaBar: true,
+              // A phone edits through SheetPhoneBar (above) instead.
+              formulaBar: !phone,
               contextMenu: true,
               disableAutoFocus: true,
               customFontFamily: { override: true, list: fonts },
@@ -471,7 +622,7 @@ const SheetEditorOverlay = ({ rel_path, onClose, fire, blockedReason = null, inA
             }
           }) : null;
         disposeFns.push(() => fontSub && fontSub.dispose && fontSub.dispose());
-        if (j.editable) disposeFns.push(sheetTouchEditing(holderRef.current, univerAPI, fWorkbook));
+        if (j.editable && !sheetPhoneMode()) disposeFns.push(sheetDesktopTyping(holderRef.current, univerAPI, fWorkbook));
         if (!cancelled) setState({ status: 'ready' });
       } catch (e) {
         if (!cancelled) setState({ status: 'error', message: String((e && e.message) || e) });
@@ -654,6 +805,11 @@ const SheetEditorOverlay = ({ rel_path, onClose, fire, blockedReason = null, inA
           {meta.truncated.join(', ')}: only the first {meta.format === 'csv' ? 'rows and columns' : '5,000 rows and 100 columns'} are
           shown. The rest of the file is kept as it is.
         </div>
+      )}
+
+      {phone && state.status === 'ready' && (
+        <SheetPhoneBar key={`bar-${reloadKey}`} apiRef={apiRef} holderRef={holderRef}
+                       ready={state.status === 'ready'} editable={!!meta.editable}/>
       )}
 
       <div key={reloadKey} style={{ flex: 1, minHeight: 0, position: 'relative' }}>
