@@ -1,0 +1,269 @@
+# The whole Xcode project, as YAML, for XcodeGen (MIT).
+#
+# `Domovoi.xcodeproj` is GENERATED from this file and is in .gitignore, so no
+# agent and no person ever hand-edits `project.pbxproj` — a merge conflict in
+# that file is the kind of thing that eats an afternoon. The app's Info.plist
+# is generated from the `info:` block below for the same reason, and is
+# likewise not committed.
+#
+# Regenerate with `ios/scripts/build-sim.sh` or, on the Mac, `xcodegen
+# generate` in this folder.
+#
+# Nothing in this file has been generated or built yet: there was no Mac when
+# it was written.
+
+name: Domovoi
+
+options:
+  bundleIdPrefix: com.domovoi
+  deploymentTarget:
+    iOS: "18.0"
+  createIntermediateGroups: true
+  localPackagesGroup: Packages
+  groupSortPosition: top
+  transitivelyLinkDependencies: true
+
+configs:
+  Debug: debug
+  Release: release
+
+packages:
+  DomovoiKit:
+    path: Packages/DomovoiKit
+  DomovoiPhonemizer:
+    path: Packages/DomovoiPhonemizer
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    IPHONEOS_DEPLOYMENT_TARGET: "18.0"
+
+    # Apple takes three integers in the short version string and nothing else,
+    # so `1.0.0-rc2` is not a thing here: TestFlight builds ARE the release
+    # candidates (plan 4.4). The build number is the same YYMMDDNN sequence
+    # Android uses, and must only ever go up.
+    MARKETING_VERSION: "1.0.0"
+    CURRENT_PROJECT_VERSION: "26102701"
+
+    ENABLE_USER_SCRIPT_SANDBOXING: true
+
+    # iPhone and iPad (owner answer Q4: iPad ships, Simulator-tested only,
+    # because Kamron has no iPad). Not on Apple-silicon Macs until someone has
+    # actually used it there.
+    TARGETED_DEVICE_FAMILY: "1,2"
+    SUPPORTS_MACCATALYST: false
+    SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: false
+    SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD: false
+
+    # Agents only ever build for the Simulator, which needs no signing. The
+    # team is empty here and comes from Kamron's own environment in his own
+    # script; no certificate, profile or Apple ID is ever in this repository.
+    CODE_SIGN_STYLE: Automatic
+    DEVELOPMENT_TEAM: ""
+
+  # The bundle ID is per-configuration on purpose (plan 4.1). A bundle ID
+  # registered by one team cannot be used by another, so a development build
+  # signed with Kamron's personal team must never register the real ID: it has
+  # to be first registered by the Coders Farm organisation account. Debug —
+  # which is what `install-on-phone.sh` builds — therefore carries a throwaway
+  # ID, and only Release, which only Kamron ever signs, carries
+  # `com.domovoi.app` (owner answer Q2).
+  #
+  # To build under some other ID, override it on the command line:
+  #   xcodebuild ... DOMOVOI_BUNDLE_ID=org.example.whatever
+  configs:
+    Debug:
+      DOMOVOI_BUNDLE_ID: org.codersfarm.domovoi.dev.kamron
+    Release:
+      DOMOVOI_BUNDLE_ID: com.domovoi.app
+
+targets:
+  Domovoi:
+    type: application
+    platform: iOS
+    sources:
+      - path: Domovoi
+      # The privacy manifest has to be IN the app bundle, not just in the
+      # repository, or it is not there at all as far as Apple is concerned.
+      - path: PrivacyInfo.xcprivacy
+        buildPhase: resources
+    dependencies:
+      - package: DomovoiKit
+        product: DomovoiKit
+      - package: DomovoiPhonemizer
+        product: DomovoiPhonemizer
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(DOMOVOI_BUNDLE_ID)
+        PRODUCT_NAME: Domovoi
+        # INFOPLIST_FILE is set by XcodeGen from the `info:` block below.
+        #
+        # No entitlements file at all in this batch. Background audio needs
+        # only the UIBackgroundModes key below, and the increased-memory-limit
+        # entitlement is spike A0's decision to make, on Kamron's iPhone 14,
+        # with numbers — not ours to guess at.
+    info:
+      path: Domovoi/Info.plist
+      properties:
+        CFBundleDisplayName: Domovoi
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        ITSAppUsesNonExemptEncryption: false
+        LSRequiresIPhoneOS: true
+        UILaunchScreen: {}
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        UISupportedInterfaceOrientations~iphone:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+
+        # ---- the permission prompts, in a household's words ----------------
+        #
+        # Each of these is read by the person, once, in a system alert, with
+        # two buttons. They are not developer notes. "Domovoi" is named in
+        # each one because the alert's title is the app's name and people read
+        # the sentence, not the title.
+
+        # The I0 gate on Kamron's phone. iOS shows this the first time the app
+        # touches the local network, and there is no API that says whether it
+        # was allowed (TN3179) — a refusal only shows up as a failure. So this
+        # sentence is the whole explanation the person gets.
+        NSLocalNetworkUsageDescription:
+          Domovoi looks for your home server on your Wi-Fi, the way a printer
+          app looks for your printer. Nothing is sent out of your house.
+
+        NSMicrophoneUsageDescription:
+          Domovoi uses the microphone when you hold the talk button, and when
+          this phone is set up as a room that listens. What you say is handled
+          by your own server or on this phone, and recordings are not kept.
+
+        # The camera is for the room-mode QR code and nothing else today.
+        NSCameraUsageDescription:
+          Domovoi uses the camera to read the square code that sets this phone
+          up as a room in your house. No photo is taken or kept.
+
+        NSPhotoLibraryUsageDescription:
+          Domovoi shows your own photos and videos so you can play them here
+          or send one to your house. You choose what it can see, and it never
+          sends them anywhere else.
+
+        NSPhotoLibraryAddUsageDescription:
+          Domovoi saves a photo or video from your house into your photos when
+          you ask it to.
+
+        # iOS 26 and later only; below that the assistant's "set a timer"
+        # hides itself rather than pretending (plan 1.6).
+        NSAlarmKitUsageDescription:
+          Domovoi sets the timers and alarms you ask it for, so they ring even
+          when your phone is silent.
+
+        # NO NSSpeechRecognitionUsageDescription. Owner answer Q12: speech to
+        # text is our own Moonshine on ONNX Runtime, pinned, the same model
+        # Android uses. Apple's speech framework is not used, so that prompt
+        # never appears — and if a later batch adds this key, something has
+        # gone wrong.
+
+        # ---- what the app may reach in the clear ---------------------------
+        #
+        # App Transport Security is the platform half of
+        # DomovoiKit's CleartextPolicy, the way
+        # res/xml/network_security_config.xml is on Android.
+        #
+        # NSAllowsLocalNetworking covers unqualified names, `.local` and ALL
+        # IP addresses — since iOS 17, without it, ATS blocks an IP address
+        # outright, and a home server's address usually IS an IP address. Note
+        # that it is LOOSER than we want: it admits public IP addresses too.
+        # So the app keeps enforcing its own CleartextPolicy on top, exactly
+        # as Android does, and plain http to a public address is still refused
+        # by the app before DNS or a socket is touched.
+        #
+        # The four exception domains are the names Android accepts that ATS
+        # has never heard of: RFC 8375 `.home.arpa`, ICANN-reserved
+        # `.internal`, and the never-delegated `.lan` and `.home` that home
+        # routers hand out. App Review asks for insecure-HTTP exceptions to be
+        # justified (owner answer Q5), and the justification is in the review
+        # notes: these names only ever resolve inside a home network.
+        #
+        # NSAllowsArbitraryLoads is deliberately absent. It would turn ATS off
+        # for everything.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+          NSExceptionDomains:
+            home.arpa:
+              NSExceptionAllowsInsecureHTTPLoads: true
+              NSIncludesSubdomains: true
+            lan:
+              NSExceptionAllowsInsecureHTTPLoads: true
+              NSIncludesSubdomains: true
+            internal:
+              NSExceptionAllowsInsecureHTTPLoads: true
+              NSIncludesSubdomains: true
+            home:
+              NSExceptionAllowsInsecureHTTPLoads: true
+              NSIncludesSubdomains: true
+
+        # ---- background and files ------------------------------------------
+        #
+        # `audio` only. Room mode stays on screen in v1 (owner answer Q9 and
+        # App Review guideline 2.5.4: a background mode is for its purpose and
+        # nothing else), and iOS cannot restart a microphone from the
+        # background anyway.
+        UIBackgroundModes:
+          - audio
+
+        # Saved music, videos, audiobooks and files show up under
+        # "On My iPhone > Domovoi" in the Files app, so a person can get at
+        # what they saved without going through us.
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
+
+  DomovoiTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: DomovoiTests
+    dependencies:
+      - target: Domovoi
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(DOMOVOI_BUNDLE_ID).tests
+        GENERATE_INFOPLIST_FILE: true
+
+  DomovoiUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: DomovoiUITests
+    dependencies:
+      - target: Domovoi
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(DOMOVOI_BUNDLE_ID).uitests
+        GENERATE_INFOPLIST_FILE: true
+
+schemes:
+  Domovoi:
+    build:
+      targets:
+        Domovoi: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      gatherCoverageData: true
+      targets:
+        - DomovoiTests
+        - DomovoiUITests
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release

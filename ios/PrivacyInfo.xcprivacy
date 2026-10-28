@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  The privacy manifest (plan 4.3). Required since May 2024.
+
+  Three claims, all of them true of this app as the Android app is true of it:
+
+    * NSPrivacyTracking false and no tracking domains. There is no analytics
+      SDK, no advertising SDK and no crash-reporting SDK in this app, and the
+      licences test fails the build if one ever appears.
+    * NSPrivacyCollectedDataTypes empty. Everything the app sends goes to the
+      household's own server, which Coders Farm never sees; problem reports go
+      by the person's own email, from their own mail app. Apple's definition
+      of "collected" is data leaving the device in a way that lets US or a
+      partner of ours get at it, which is nothing here.
+    * The required-reason APIs below, each with a reason code from Apple's
+      published list.
+
+  When any of that stops being true — a phone lookup to Wikipedia, an HTTPS
+  report destination of ours, any service of ours — this file and the App
+  Store privacy label change in the same batch, and the privacy policy the
+  same day, as for Play.
+
+  NOT YET VERIFIED. This file has never been through a build, and the reason
+  codes are quoted from the plan's reading of Apple's list rather than from
+  Apple's page itself. The two marked TODO(verify-at-mac) are the ones to
+  confirm first; a wrong code is rejected at upload, not at build, so it is
+  worth checking before the first TestFlight build rather than after.
+-->
+<plist version="1.0">
+<dict>
+	<key>NSPrivacyTracking</key>
+	<false/>
+	<key>NSPrivacyTrackingDomains</key>
+	<array/>
+	<key>NSPrivacyCollectedDataTypes</key>
+	<array/>
+	<key>NSPrivacyAccessedAPITypes</key>
+	<array>
+		<!--
+		  UserDefaults. Settings, the chosen theme, the device name, the phone
+		  bar's layout: the app's own preferences and nothing else. CA92.1 is
+		  the code for an app reading and writing its OWN defaults, which is
+		  all this app does (it is in no app group and shares nothing).
+		-->
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>CA92.1</string>
+			</array>
+		</dict>
+		<!--
+		  File timestamps. The Files screen shows when a file was changed, the
+		  audiobook and video downloads resume from a partial file by its date
+		  (with ETag and Last-Modified), and saved media is listed by date.
+		  C617.1 is the code for timestamps displayed to the person or used
+		  inside the app's own container.
+		-->
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryFileTimestamp</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>C617.1</string>
+			</array>
+		</dict>
+		<!--
+		  Free disk space. The model download (2.5 GB for Gemma 4 E2B) checks
+		  there is room before it starts, and so does saving an audiobook or a
+		  video to the phone: a download that fills someone's phone and then
+		  fails is worse than a download that never starts. 85F4.1 is the code
+		  for checking space before writing a file at the person's request.
+
+		  TODO(verify-at-mac): confirm 85F4.1 against Apple's required-reason
+		  list, and confirm it covers "the person asked us to save this, is
+		  there room" rather than only a developer-initiated write.
+		-->
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryDiskSpace</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>85F4.1</string>
+			</array>
+		</dict>
+		<!--
+		  System boot time. Used only to measure elapsed time that a clock
+		  change cannot bend: a timer counting down, a playback position, the
+		  back-off between socket reconnections. Nothing about it leaves the
+		  phone. 35F9.1 is the code for measuring elapsed time inside the app.
+
+		  TODO(verify-at-mac): confirm 35F9.1, and confirm we actually need
+		  this category at all — if every elapsed-time measurement ends up
+		  going through `ContinuousClock` / `DispatchTime` rather than
+		  `kern.boottime`, this whole entry comes out.
+		-->
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategorySystemBootTime</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>35F9.1</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>
