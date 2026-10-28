@@ -195,6 +195,21 @@ We build Domovoi in public. Here's where it stands.
   "Take a letter to the landlord" keeps the room listening until "end of
   letter" or the room goes quiet, writes it up, and saves it as a Word file
   in Documents → From Chat ("Saved as ..."); it is never sent anywhere.
+- **Write documents and spreadsheets, together.** Documents → New →
+  Document opens a word processor in the page (headings, lists, tables,
+  colours, fonts and sizes) that saves by itself; photos paste or drop in
+  and can be resized, captioned, cropped and rotated. 73 open-licence
+  fonts come with it and work offline, and an admin can add more for the
+  house when the internet setting allows. Several household devices can
+  edit one document at once, with each other's names and cursors, and
+  History brings back an earlier version. Download gives PDF, Word or
+  Markdown; Markdown and Word files open in the same editor. Spreadsheets
+  open in a sheet editor that keeps formulas, formatting and several
+  sheets in the same `.xlsx`; sheets aren't edited together (it says who
+  else has one open, and a second save asks which copy to keep), a
+  workbook with charts or pictures opens read-only, and a sheet shows its
+  first 5,000 rows and 100 columns. The app opens both in the same
+  editors.
 - **Chat can look things up, with your permission.** Say "look up …",
   "what does this page say: https://…", or ask something Domovoi doesn't
   know. It searches its own manual and an offline library (Kiwix) first;
@@ -394,8 +409,9 @@ they have been tried on fewer devices than the rest, aren't yet held to
    clock and cutouts, a repair by Setup or an update that rebuilds the music
    player that no longer trips the container guard, quiet hours (Domovoi
    doesn't speak announcements such as a printer problem in a room at night:
-   22:00 to 07:00 by default, set for the house or for each room) and a
-   phone room's low-battery warning.
+   22:00 to 07:00 by default, set for the house or for each room), a
+   phone room's low-battery warning, and the new document and spreadsheet
+   editors (fonts, photos, editing together, version history).
 
 **Later**
 
@@ -782,6 +798,7 @@ Deep dive: [Architecture](docs/ARCHITECTURE.md) ·
 | A chat that answers with no server | — | — | — | ✅ preview: 64-bit phones with 8 GB or more |
 | Save music, podcasts & audiobooks to your device | — | — | ✅ browser download | ✅ music & podcasts via DownloadManager; audiobooks into the app, played offline |
 | Calendar, documents, people & voice profiles | voice where it makes sense | voice where it makes sense | ✅ | ✅ |
+| Edit documents and spreadsheets (documents co-edited live) | — | — | ✅ | ✅ the server's Documents, same editors |
 | Satellite management & per-room settings | — | — | ✅ edits a Pi's or spare computer's config remotely | ✅ view/manage |
 | Custom wake-word recording & training | records the clips | wakes on a pushed model; no recording | ✅ record → train → push to room | — |
 | **Plugin install & administration** | — | — | ✅ **only here** — admin-gated, two-phase trust screen | — (plugin *screens* appear when installed) |
@@ -921,7 +938,11 @@ BSD-style licensed, and portions of it are copyright The FreeType Project
 (www.freetype.org), all rights reserved, under the FreeType licence. The
 PDFs Domovoi makes (chat drafts, print templates) are set in the Liberation
 Sans and Serif fonts (SIL Open
-Font License 1.1, which ships beside them).
+Font License 1.1, which ships beside them). The document editor is built
+on Tiptap and ProseMirror, co-editing on Yjs and pycrdt (all MIT), and the
+spreadsheet editor on Univer (Apache-2.0); the editors' fonts are OFL or
+Apache-licensed families from the google/fonts collection, each with its
+licence ([licences](docs/LICENSES.md)).
 
 Domovoi's voices are three public-domain Piper voices by Bryce Beattie
 (Norman and Kristin from LibriVox recordings, Linda from the LJ Speech
