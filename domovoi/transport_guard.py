@@ -255,6 +255,9 @@ UPLOAD_LIMITS: tuple[tuple[str, int], ...] = (
     ("/api/documents/doc", 48 * 1024 * 1024),
     ("/api/documents/doc-save-as", 48 * 1024 * 1024),
     ("/api/documents/convert", 48 * 1024 * 1024),
+    # The Univer sheet editor's whole workbook: at most 250,000 cells in all
+    # (sheet_workbook.MAX_SAVE_CELLS), about 25 MB of JSON with room for text.
+    ("/api/documents/workbook", 32 * 1024 * 1024),
     ("/api/chat/uploads", 64 * 1024 * 1024),
     # A document for a chat, and one a phone hands over to be read
     # (chat_documents.py caps the file itself at 100 MB, as it streams).

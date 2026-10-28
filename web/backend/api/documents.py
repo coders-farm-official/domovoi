@@ -13,10 +13,14 @@ iframes, no JWT/WOPI handshakes, no per-file engine locks):
     here on every load and save; ``.md`` opens and saves as markdown;
     ``.docx`` converts on open and, if the person keeps it as Word, on
     save. Routes: ``/doc`` (GET/PUT), ``/doc-save-as``, ``/convert/docx``.
-  * **Sheet editor** (web/static/sheet_editor.jsx) — vendored
-    ``x-spreadsheet`` grid with client-side formula evaluation. Reads and
-    writes .xlsx (openpyxl — values, formula strings; a save updates the
-    existing workbook in place) and .csv through the ``/sheet`` endpoints; export to .csv/.xlsx via ``/export/sheet``.
+  * **Sheet editor** (web/static/sheet_editor.jsx) — vendored Univer
+    (open-source core, Apache-2.0) with client-side formula evaluation.
+    Reads and writes the whole workbook (.xlsx: every sheet, formatting,
+    merges, sizes, frozen panes; .csv: values) through the ``/workbook``
+    endpoints and :mod:`web.backend.api.sheet_workbook` (openpyxl; a save
+    updates the existing file in place). The older ``/sheet`` grid
+    endpoints serve the phone app's own grid editor. Export to .csv/.xlsx
+    via ``/export/sheet``.
   * **Excalidraw** — in-page React lib, unchanged (.excalidraw scenes).
 
 Legacy office formats (.doc/.odt/.rtf and .xls/.ods) are stored,
@@ -118,6 +122,7 @@ from web.backend.api.files_security import (
 )
 from web.backend.api.inline_serve import disposition_for, inert_headers
 from web.backend.api import listing_cache
+from web.backend.api import sheet_workbook
 
 log = logging.getLogger(__name__)
 
@@ -988,8 +993,21 @@ def _read_sheet_grid(target: Path) -> list[list[dict[str, Any]]]:
 # Parts of an .xlsx that openpyxl does not read, so a load-and-save would
 # silently drop them: charts, pictures and shapes (DrawingML under
 # xl/drawings/, but not the vmlDrawing that carries cell comments, which it
-# keeps), embedded media, and pivot tables.
-_XLSX_UNKEPT_PREFIXES = ("xl/charts/", "xl/media/", "xl/pivotTables/", "xl/pivotCache/")
+# keeps), embedded media, pivot tables, threaded comments, slicers and
+# timelines, form controls, ActiveX, embedded objects and the data model.
+# What openpyxl drops from INSIDE a sheet (sparklines, x14 validation and
+# conditional formatting) it warns about on load:
+# sheet_workbook.load_xlsx turns that warning into the same refusal.
+_XLSX_UNKEPT_PREFIXES = (
+    "xl/charts/", "xl/media/", "xl/pivotTables/", "xl/pivotCache/",
+    "xl/threadedComments/", "xl/slicers/", "xl/slicerCaches/", "xl/timelines/",
+    "xl/timelineCaches/", "xl/ctrlProps/", "xl/activeX/", "xl/embeddings/", "xl/model/",
+    "xl/persons/",
+)
+_UNKEPT_SAVE = (
+    "{name} has charts, pictures or pivot tables (or other parts, such as sparklines) "
+    "the sheet editor can't keep, so it was not saved. Edit it in a spreadsheet app."
+)
 
 
 # What an .xlsx may hold once inflated before either sheet route opens it.
@@ -1106,11 +1124,16 @@ def _replace_atomically(target: Path, write: Callable[[Path], None]) -> None:
                 pass
 
 
-def _write_csv_grid(target: Path, rows: list[list[Optional[SheetCell]]]) -> None:
+def _write_csv_grid(
+    target: Path,
+    rows: list[list[Optional[SheetCell]]],
+    max_rows: int = _SHEET_MAX_ROWS,
+    max_cols: int = _SHEET_MAX_COLS,
+) -> None:
     """Write the grid as CSV. The editor only ever saw the first
-    ``_SHEET_MAX_ROWS`` x ``_SHEET_MAX_COLS``; anything the file holds
-    beyond that window is carried over as it was rather than dropped, and
-    a UTF-8 byte-order mark the file started with is kept."""
+    ``max_rows`` x ``max_cols``; anything the file holds beyond that
+    window is carried over as it was rather than dropped, and a UTF-8
+    byte-order mark the file started with is kept."""
     original: list[list[str]] = []
     bom = False
     _assert_sheet_save_fits(target)
@@ -1122,15 +1145,15 @@ def _write_csv_grid(target: Path, rows: list[list[Optional[SheetCell]]]) -> None
     def text(c: Optional[SheetCell]) -> str:
         return c.f if c and c.f else (c.v if c and c.v is not None else "")
 
-    window = _SHEET_MAX_ROWS if len(original) > _SHEET_MAX_ROWS else len(rows)
+    window = max_rows if len(original) > max_rows else len(rows)
     out: list[list[str]] = []
     for r in range(window):
-        part = [text(c) for c in rows[r][:_SHEET_MAX_COLS]] if r < len(rows) else []
-        beyond = original[r][_SHEET_MAX_COLS:] if r < len(original) else []
+        part = [text(c) for c in rows[r][:max_cols]] if r < len(rows) else []
+        beyond = original[r][max_cols:] if r < len(original) else []
         if beyond:
-            part = part + [""] * (_SHEET_MAX_COLS - len(part)) + beyond
+            part = part + [""] * (max_cols - len(part)) + beyond
         out.append(part)
-    out.extend(original[_SHEET_MAX_ROWS:])
+    out.extend(original[max_rows:])
 
     def write(path: Path) -> None:
         with path.open("w", encoding="utf-8-sig" if bom else "utf-8", newline="") as fh:
@@ -1145,7 +1168,7 @@ def _write_xlsx_grid(target: Path, rows: list[list[Optional[SheetCell]]]) -> Non
     first sheet, so formatting, column widths, merges, other sheets and
     everything past the window survive. (This used to build a brand-new
     workbook, which threw all of that away.) A new file starts blank."""
-    from openpyxl import Workbook, load_workbook
+    from openpyxl import Workbook
     from openpyxl.cell.cell import MergedCell
 
     wb = None
@@ -1153,13 +1176,9 @@ def _write_xlsx_grid(target: Path, rows: list[list[Optional[SheetCell]]]) -> Non
         _assert_xlsx_fits(target)
         _assert_sheet_save_fits(target)
         if _xlsx_unkept_parts(target):
-            raise HTTPException(
-                status_code=409,
-                detail=f"{target.name} has charts, pictures or pivot tables the sheet "
-                "editor can't keep, so it was not saved. Edit it in a spreadsheet app.",
-            )
+            raise HTTPException(status_code=409, detail=_UNKEPT_SAVE.format(name=target.name))
         try:
-            wb = load_workbook(target)
+            wb, lost = sheet_workbook.load_xlsx(target)
         except Exception as exc:  # noqa: BLE001 — whatever openpyxl could not read
             # Not a workbook this server can open (an .xls renamed, a damaged
             # file). The old save would have put a brand-new workbook in its
@@ -1170,6 +1189,8 @@ def _write_xlsx_grid(target: Path, rows: list[list[Optional[SheetCell]]]) -> Non
                 detail=f"{target.name} could not be read as a workbook, so it was not "
                 "saved. Open it in a spreadsheet app.",
             ) from exc
+        if lost:
+            raise HTTPException(status_code=409, detail=_UNKEPT_SAVE.format(name=target.name))
     if wb is None:
         wb = Workbook()  # a new name, or an empty file
     ws = wb.worksheets[0]
@@ -1256,6 +1277,331 @@ async def write_sheet(
         size=st.st_size, modified_at=st.st_mtime,
         category=_doc_category(ext),
     )
+
+
+# ─── Univer sheet editor: the whole workbook (.xlsx / .csv) ─────────
+# web/static/sheet_editor.jsx (Univer, open-source core) reads and saves
+# the workbook model in sheet_workbook.py. The /sheet grid routes above
+# stay for the phone app's own grid editor and older clients.
+_WB_CSV_ROWS = sheet_workbook.WINDOW_ROWS
+_WB_CSV_COLS = sheet_workbook.WINDOW_COLS
+
+
+def _sheet_version(target: Path) -> Optional[str]:
+    """What a save compares against to tell "nobody else saved": the
+    file's modification time (ns) and size; None for no file."""
+    try:
+        st = target.stat()
+    except OSError:
+        return None
+    return f"{st.st_mtime_ns}-{st.st_size}"
+
+
+def _blank_workbook(name: str) -> dict[str, Any]:
+    return {
+        "workbook": {
+            "id": "domovoi-sheet", "name": name, "appVersion": "domovoi", "locale": "enUS",
+            "styles": {}, "sheetOrder": ["s0"],
+            "sheets": {"s0": {"id": "s0", "name": "Sheet1", "rowCount": 1000, "columnCount": 26,
+                              "cellData": {}}},
+        },
+        "truncated": [],
+    }
+
+
+_TOO_MANY_CELLS = (
+    "{name} is too big to edit here (more than {n:,} filled cells), so it opens "
+    "read-only and only part of it is shown. Edit it in a spreadsheet app."
+)
+
+
+def _read_workbook_model(target: Path) -> dict[str, Any]:
+    """The editor's view of a sheet file, and whether it may save it."""
+    ext = target.suffix.lower()
+    if ext == ".csv":
+        model = sheet_workbook.read_csv(target, _WB_CSV_ROWS, _WB_CSV_COLS)
+        model.update(format="csv", editable=True, why=None)
+        try:
+            _assert_sheet_save_fits(target)
+        except HTTPException as exc:
+            model.update(editable=False, why=str(exc.detail))
+        if model.pop("over_budget", False) and model["editable"]:
+            model.update(editable=False, why=_TOO_MANY_CELLS.format(
+                name=target.name, n=sheet_workbook.MAX_OPEN_CELLS))
+        return model
+    if ext != ".xlsx":
+        raise HTTPException(
+            status_code=415,
+            detail=f"{ext} isn't editable in the sheet editor (xlsx/csv only)",
+        )
+    if target.stat().st_size == 0:
+        model = _blank_workbook(target.stem)
+        model.update(format="xlsx", editable=True, why=None)
+        return model
+    _assert_xlsx_fits(target)
+    try:
+        _assert_sheet_save_fits(target)
+        too_big = None
+    except HTTPException as exc:
+        too_big = str(exc.detail)
+    try:
+        if too_big:
+            model = sheet_workbook.read_xlsx_values_only(target)
+        else:
+            model = sheet_workbook.read_xlsx(target)
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 — whatever openpyxl could not read
+        raise HTTPException(
+            status_code=415,
+            detail=f"{target.name} could not be read as a workbook. Download it and "
+            "open it in a spreadsheet app.",
+        ) from exc
+    why = too_big
+    if why is None and model.pop("over_budget", False):
+        why = _TOO_MANY_CELLS.format(name=target.name, n=sheet_workbook.MAX_OPEN_CELLS)
+    if why is None and (_xlsx_unkept_parts(target) or model.get("lost")):
+        why = (f"{target.name} has charts, pictures or pivot tables (or other parts, such as "
+               "sparklines) the sheet editor can't keep, so it opens read-only here. Edit it "
+               "in a spreadsheet app.")
+    model.pop("over_budget", None)
+    model.pop("lost", None)
+    if why is None:
+        why = _unsaveable_why(target, model["workbook"])
+    model.update(format="xlsx", editable=why is None, why=why)
+    return model
+
+
+def _unsaveable_why(target: Path, workbook: dict[str, Any]) -> Optional[str]:
+    """A file that opens editable must be one its own unchanged snapshot can
+    be saved from: run the save's checks on it (merges past the limits, a
+    sheet name or text a save refuses, ...) and, if they fail, say so and
+    open it read-only, rather than let someone edit what can't be saved."""
+    snap = dict(workbook)
+    snap["sheets"] = {sid: dict(sh, origin=sid) for sid, sh in (workbook.get("sheets") or {}).items()}
+    try:
+        sheet_workbook.validate_snapshot(snap)
+    except sheet_workbook.WorkbookRefused as exc:
+        return (f"{target.name} can't be saved from the sheet editor ({exc.detail}), so it "
+                "opens read-only here. Edit it in a spreadsheet app.")
+    return None
+
+
+def _read_workbook_json(target: Path, rel: str) -> bytes:
+    """The whole GET answer, built AND serialised in the sheets pool, so a
+    big workbook never costs the event loop its JSON encoding."""
+    import json as _json
+
+    version = _sheet_version(target)
+    model = _read_workbook_model(target)
+    body = {
+        "rel_path": rel,
+        "version": version,
+        "window": {"rows": sheet_workbook.WINDOW_ROWS, "cols": sheet_workbook.WINDOW_COLS},
+        **model,
+    }
+    return _json.dumps(body, separators=(",", ":"), allow_nan=False).encode("utf-8")
+
+
+def _parse_workbook_put(raw: bytes) -> dict[str, Any]:
+    """The PUT body, parsed and checked in the sheets pool (a big body is
+    seconds of json work that must not run on the event loop)."""
+    import json as _json
+
+    try:
+        body = _json.loads(raw)
+    except (ValueError, RecursionError):
+        raise HTTPException(status_code=400, detail="the body is not valid JSON") from None
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="the body must be an object")
+    base = body.get("base_version")
+    if base is not None and (not isinstance(base, str) or len(base) > 64):
+        raise HTTPException(status_code=400, detail="base_version must be text")
+    force = body.get("force", False)
+    if not isinstance(force, bool):
+        raise HTTPException(status_code=400, detail="force must be true or false")
+    device = body.get("device_id")
+    if device is not None and (not isinstance(device, str) or not 3 <= len(device) <= 64):
+        raise HTTPException(status_code=400, detail="device_id is not a device id")
+    sheet_workbook.validate_snapshot(body.get("workbook"))
+    return {"workbook": body["workbook"], "base_version": base, "force": force, "device_id": device}
+
+
+def _write_workbook_file(
+    target: Path, snapshot: dict[str, Any], base_version: Optional[str], force: bool,
+) -> Optional[str]:
+    """Save ``snapshot`` into ``target`` (in the one-thread sheets pool, so
+    the version check and the write can't interleave with another save).
+    Returns the new version."""
+    from openpyxl import Workbook
+
+    sheet_workbook.validate_snapshot(snapshot)  # before anything touches openpyxl
+    if not force and _sheet_version(target) != base_version:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "reason": "changed",
+                "message": f"{target.name} was saved from another device after you "
+                "opened it.",
+            },
+        )
+    ext = target.suffix.lower()
+    if ext == ".csv":
+        rows = sheet_workbook.csv_rows(snapshot)
+        grid = [[SheetCell(v=t) if t != "" else None for t in row] for row in rows]
+        _write_csv_grid(target, grid, _WB_CSV_ROWS, _WB_CSV_COLS)
+        return _sheet_version(target)
+    if ext != ".xlsx":  # pragma: no cover — _assert_sheet_editor_may_write ran first
+        raise HTTPException(status_code=415, detail=f"{ext} isn't editable in the sheet editor")
+    wb = None
+    if target.is_file() and target.stat().st_size > 0:
+        _assert_xlsx_fits(target)
+        _assert_sheet_save_fits(target)
+        if _xlsx_unkept_parts(target):
+            raise HTTPException(status_code=409, detail=_UNKEPT_SAVE.format(name=target.name))
+        try:
+            wb, lost = sheet_workbook.load_xlsx(target)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(
+                status_code=409,
+                detail=f"{target.name} could not be read as a workbook, so it was not "
+                "saved. Open it in a spreadsheet app.",
+            ) from exc
+        if lost:
+            raise HTTPException(status_code=409, detail=_UNKEPT_SAVE.format(name=target.name))
+    if wb is None:
+        wb = Workbook()
+    sheet_workbook.write_xlsx(wb, snapshot)
+    _replace_atomically(target, lambda path: wb.save(path))
+    return _sheet_version(target)
+
+
+@router.get("/workbook/{rel_path:path}", dependencies=DAILY)
+async def read_workbook(rel_path: str) -> Response:
+    """The whole workbook for the Univer sheet editor (every sheet, values,
+    formulas, formatting, merges, sizes, frozen panes), its ``version`` for
+    the save's stale check, and whether it may be saved here
+    (``editable``/``why``). At most ``MAX_OPEN_CELLS`` cells in all; a
+    bigger workbook opens read-only. 415 for types it can't open."""
+    target = _readable_target(rel_path)
+    if not target.exists() or not target.is_file():
+        raise HTTPException(status_code=404, detail=f"{rel_path} not found")
+    with _usable_path(rel_path):
+        body = await executors.run("sheets", _read_workbook_json, target, _rel_of(target))
+    return Response(content=body, media_type="application/json")
+
+
+@router.put("/workbook/{rel_path:path}", dependencies=DEVICE)
+async def write_workbook(request: Request, rel_path: str) -> dict[str, Any]:
+    """Save the editor's workbook into the file in place: only what changed
+    is written, so what the editor doesn't show survives (see
+    sheet_workbook). Body ``{workbook, base_version, force?, device_id?}``,
+    parsed and checked off the event loop before openpyxl sees it (400 for
+    a malformed snapshot, 413 past the size limits). 409 ``{reason:
+    "changed"}`` when someone else saved since ``base_version`` (send
+    ``force`` to overwrite), 409 for files with parts openpyxl can't keep
+    and for a rename that would break references, 415 for non-sheet
+    targets."""
+    target = _safe_target(rel_path)
+    _assert_saveable_name(target)
+    _assert_sheet_editor_may_write(target)
+    raw = await request.body()
+    req = await executors.run("sheets", _parse_workbook_put, raw)
+    await _assert_files_policy(request, req["device_id"])
+    with _usable_path(rel_path):
+        _ensure_parent_dir(target)
+        version = await executors.run(
+            "sheets", _write_workbook_file, target, req["workbook"], req["base_version"], req["force"],
+        )
+        st = target.stat()
+    _listing_changed()
+    ext = target.suffix.lower()
+    return {
+        "rel_path": _rel_of(target), "name": target.stem, "ext": ext,
+        "size": st.st_size, "modified_at": st.st_mtime,
+        "category": _doc_category(ext), "version": version,
+    }
+
+
+# Who else has a sheet open, so the editor can say "Kitchen tablet has this
+# sheet open too" instead of letting two people overwrite each other
+# unawares. In memory, per web process: it is a courtesy, not a lock (the
+# save's version check is what actually stops a silent overwrite). Only
+# files that exist are tracked, a bounded number of them, and the device is
+# the one the REQUEST identifies (X-Device-Id, the registration cookie;
+# files.caller_device_id), never a name the body asks for.
+_PRESENCE_TTL = 40.0
+_PRESENCE_MAX_PATHS = 500
+_PRESENCE_MAX_SESSIONS = 20
+_presence: dict[str, dict[str, tuple[Optional[str], float]]] = {}
+
+
+class PresenceRequest(BaseModel):
+    session_id: str = Field(..., min_length=8, max_length=64)
+    leaving: bool = False
+
+
+async def _device_names(device_ids: list[str]) -> dict[str, str]:
+    if not device_ids:
+        return {}
+    try:
+        from sqlalchemy import bindparam, text as sql_text
+        from web.backend.db import session_scope
+
+        async with session_scope() as s:
+            rows = (await s.execute(
+                sql_text("SELECT device_id, name FROM devices WHERE device_id IN :ids")
+                .bindparams(bindparam("ids", expanding=True)),
+                {"ids": device_ids},
+            )).all()
+        return {r[0]: r[1] for r in rows if r[1]}
+    except Exception:  # noqa: BLE001 — names are a nicety; never fail the ping
+        log.debug("presence: device names unavailable", exc_info=True)
+        return {}
+
+
+@router.post("/presence/{rel_path:path}", dependencies=DEVICE)
+async def sheet_presence(request: Request, rel_path: str, req: PresenceRequest) -> dict[str, Any]:
+    """Heartbeat from an open sheet editor (every ~15 s; ``leaving`` on
+    close). Answers who ELSE has the same file open, by device name. 404
+    for a file that isn't there (or isn't readable here); 429 when too
+    many sheets or sessions are open to track."""
+    import time
+
+    from web.backend.api.files import caller_device_id
+
+    target = _readable_target(rel_path)
+    if not target.is_file() or target.suffix.lower() not in _SHEET_EXTS:
+        raise HTTPException(status_code=404, detail=f"{rel_path} not found")
+    key = _rel_of(target)
+    now = time.monotonic()
+    for k in list(_presence):
+        live = {sid: v for sid, v in _presence[k].items() if now - v[1] < _PRESENCE_TTL}
+        if live:
+            _presence[k] = live
+        else:
+            del _presence[k]
+    here = _presence.get(key)
+    if req.leaving:
+        if here is not None:
+            here.pop(req.session_id, None)
+    else:
+        if here is None:
+            if len(_presence) >= _PRESENCE_MAX_PATHS:
+                raise HTTPException(status_code=429, detail="too many sheets open to track")
+            here = _presence[key] = {}
+        if req.session_id not in here and len(here) >= _PRESENCE_MAX_SESSIONS:
+            raise HTTPException(status_code=429, detail="too many editors on this sheet")
+        here[req.session_id] = (caller_device_id(request, None), now)
+    if here is None:
+        return {"others": []}
+    me = caller_device_id(request, None)
+    others = [dev for sid, (dev, _) in here.items() if sid != req.session_id and (dev is None or dev != me)]
+    names = await _device_names(sorted({d for d in others if d}))
+    if not here:
+        _presence.pop(key, None)
+    # One name per device: a page reloaded leaves its old session to time out.
+    return {"others": sorted({names.get(d or "", "another device") for d in others})}
 
 
 # ─── Exports (docx from markdown · csv/xlsx from sheets) ────────────

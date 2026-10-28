@@ -146,7 +146,7 @@ household.
 - **The dashboard's libraries**, served by the server itself so the
   dashboard makes no outside requests (`web/static/vendor/`): React and
   ReactDOM 18.3.1 (MIT), Babel standalone 7.29.0 (MIT), Lucide 1.22.0
-  (ISC), marked 12.0.2 (MIT), x-spreadsheet (MIT), qrcode-generator 1.4.4
+  (ISC), marked 12.0.2 (MIT), qrcode-generator 1.4.4
   by Kazuhiko Arase (MIT) and Excalidraw 0.17.6 (MIT; it carries DOMPurify
   3.0.3 under Apache-2.0 or MPL-2.0, used here under Apache-2.0).
 - **The Documents editor's libraries** (`web/static/vendor/tiptap`,
@@ -167,6 +167,14 @@ household.
   the app's editors, the one Yjs bundle in `web/static/vendor/yjs/` listed
   above (Yjs, y-websocket's client provider, y-indexeddb, y-protocols and
   lib0, all MIT).
+- **The spreadsheet editor**, Univer 1.2.0 (Apache-2.0; only its
+  open-source packages, none of Univer's paid ones), bundled with what it
+  carries: React 18.3.1, Radix UI, Floating UI, rxjs, lodash-es,
+  decimal.js and smaller MIT, ISC, BSD and Apache-2.0 libraries. Every one,
+  with its version and licence text, is listed in
+  `web/static/vendor/univer/THIRD-PARTY-NOTICES.txt`; Univer's licence is
+  `web/static/vendor/univer/LICENSE`. The bundle is made by
+  `scripts/vendor/univer/vendor_univer.py` from pinned versions.
 - **The dashboard's fonts**, all under the SIL Open Font License 1.1, each
   with its licence text beside it: Inter and JetBrains Mono (through
   fontsource 5.2.8, in `web/static/vendor/fonts/`), the three fonts

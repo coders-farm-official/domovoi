@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
+  <title>Domovoi sheet</title>
+  <!-- The spreadsheet editor on its own page, for the phone app: it opens
+       a Documents .xlsx/.csv here, in a WebView, instead of loading the
+       whole dashboard (android/.../documents/SheetWebEditor.kt). Same
+       editor (sheet_editor.jsx), same routes, same rules; the address is
+       sheet.html#path=<documents-relative path>.
+
+       The app hands over its household token and device id through
+       window.DomovoiAppBridge before auth.js reads them, and only after
+       it has checked this server's identity (IdentityGate). Opened in a
+       plain browser the page works with whatever the browser holds, like
+       the dashboard. -->
+  <script>
+  (function () {
+    // DomovoiAppBridge: SheetWebEditor.kt. DomovoiApp: the documents
+    // editor's host (WebDocEditor.kt, wf/doc-editor), which may end up
+    // hosting this page too; it has deviceToken() and close() only.
+    var b = window.DomovoiAppBridge || window.DomovoiApp;
+    if (!b) return;
+    window.DomovoiSheetHost = b;
+    try {
+      var token = b.deviceToken && b.deviceToken();
+      if (token) localStorage.setItem('domovoi-device-token', token);
+      var id = b.deviceId && b.deviceId();
+      if (id) localStorage.setItem('domovoi-client-id', id);
+      // Same origin as the server the app is on: never a remembered other one.
+      localStorage.removeItem('domovoi-server');
+      if (b.darkTheme) document.documentElement.setAttribute('data-theme', b.darkTheme() ? 'dark' : 'light');
+    } catch (e) { /* the page still opens; a save will say what is missing */ }
+  })();
+  </script>
+  <link rel="stylesheet" href="colors_and_type.css">
+  <link rel="stylesheet" href="styles.css">
+  <style>
+    html, body { height: 100%; margin: 0; overflow: hidden; background: var(--canvas); }
+    #root { height: 100%; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script src="/vendor/react/react.development.js"></script>
+  <script src="/vendor/react/react-dom.development.js"></script>
+  <script src="/vendor/babel/babel.min.js"></script>
+  <script src="/vendor/lucide/lucide.min.js"></script>
+
+  <script type="text/babel" data-presets="react" src="auth.js"></script>
+  <script type="text/babel" data-presets="react" src="data.js"></script>
+  <script type="text/babel" data-presets="react" src="components.jsx"></script>
+  <script type="text/babel" data-presets="react" src="sheet_editor.jsx"></script>
+
+  <script type="text/babel" data-presets="react">
+    (() => {
+      const sheetPath = () => {
+        const m = /(?:^|[#&])path=([^&]*)/.exec(window.location.hash || '');
+        try { return m ? decodeURIComponent(m[1]) : ''; } catch (e) { return ''; }
+      };
+      const close = () => {
+        const b = window.DomovoiSheetHost;
+        if (b && b.close) b.close();
+        else window.history.back();
+      };
+      const SheetPage = () => {
+        const [fire, toastNode] = useToast();
+        const path = sheetPath();
+        return (
+          <React.Fragment>
+            {path
+              ? <window.SheetEditor rel_path={path} onClose={close} fire={fire} inApp={!!window.DomovoiSheetHost}/>
+              : <div style={{ padding: 24, color: 'var(--fg-muted)', fontSize: 13 }}>No sheet was named.</div>}
+            {toastNode}
+          </React.Fragment>
+        );
+      };
+      // A different sheet named in the address: start again with it.
+      window.addEventListener('hashchange', () => window.location.reload());
+      ReactDOM.createRoot(document.getElementById('root')).render(<SheetPage/>);
+    })();
+  </script>
+</body>
+</html>
