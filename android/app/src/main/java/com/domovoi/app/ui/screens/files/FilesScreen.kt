@@ -410,7 +410,7 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
             inAppEditing && how == OpenWith.SheetEditor -> sheetEditorRel = e.rel
             inAppEditing && how == OpenWith.TextEditor -> textEditorRel = e.rel
             source.viewsImagesInApp && e.kind == "image" -> imageEntry = e
-            else -> if (!source.openFile(ctx, id, e)) {
+            else -> if (!source.openFile(ctx, id, e, toast)) {
                 toast("no app on this phone opens \"${e.name}\"")
             }
         }
@@ -767,7 +767,7 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
                                 ),
                                 onOpen = { onEntryPrimary(e) },
                                 onImport = if (isRemovable && !blocked) ({ importEntry = e }) else null,
-                                onDownload = if (source.canDownload) ({ source.download(ctx, selectedId ?: "", e) }) else null,
+                                onDownload = if (source.canDownload) ({ source.download(ctx, selectedId ?: "", e, toast) }) else null,
                                 onSendHome = if (canSendHome && !e.isDir) ({ askSendHome(e) }) else null,
                                 onAsk = if (canAsk(e)) ({ ask(e) }) else null,
                                 upload = uploader?.state(fileUploadKey(selectedId ?: "", e.rel)),
@@ -824,7 +824,7 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
                 onSendHome = if (canSendHome) ({ askSendHome(e) }) else null,
                 sendLabel = if (uploader != null) "upload" else "send to home",
                 onOpenWith = {
-                    if (!source.openFile(ctx, id, e)) toast("no app on this phone opens \"${e.name}\"")
+                    if (!source.openFile(ctx, id, e, toast)) toast("no app on this phone opens \"${e.name}\"")
                 },
                 onClose = { imageEntry = null },
             )
@@ -947,7 +947,7 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
                 val rel = s.path ?: return@ScanSheet
                 val name = s.name ?: rel.substringAfterLast('/')
                 scanning = false
-                if (!source.openFile(ctx, s.libraryId ?: DOCUMENTS_LIBRARY_ID, FileEntry(name = name, rel = rel, kind = fileKind(name, false)))) {
+                if (!source.openFile(ctx, s.libraryId ?: DOCUMENTS_LIBRARY_ID, FileEntry(name = name, rel = rel, kind = fileKind(name, false)), toast)) {
                     toast("no app on this phone opens \"$name\"")
                 }
             },

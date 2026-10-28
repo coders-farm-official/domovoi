@@ -451,8 +451,9 @@ private fun DashboardPanel(section: SettingsSection) {
     }
 }
 
-/** Hand a URL to whatever browser the system has (same shape as
- *  FilesIo.openFileDownload); false when nothing can open it. */
+/** Hand a URL to whatever browser the system has; false when nothing can
+ *  open it. Only for pages a browser loads on its own (the dashboard),
+ *  never a device-tier API route (see ServerFileTransfer). */
 internal fun openInBrowser(context: Context, url: String): Boolean =
     runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }.isSuccess
 

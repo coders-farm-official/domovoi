@@ -62,18 +62,16 @@ internal fun filesBrowseQueryPath(
     (if (q.isNotBlank()) "&q=" + Uri.encode(q.trim()) else "") +
     (if (foldersOnly) "&kind=folder" else "")
 
-/** Absolute /api/files/download URL for a file or directory (dir → server zip). */
-internal fun filesDownloadUrl(app: AppContainer, libraryId: String, rel: String): String =
-    app.api.absolute("/api/files/download?library_id=" + Uri.encode(libraryId) + "&path=" + Uri.encode(rel))
+/** The /api/files/download route for a file or directory (dir → server zip).
+ *  Fetched by the app (ServerFileTransfer), which carries the device token;
+ *  never handed to another app as an address: a browser can't send the
+ *  token and gets "X-Device-Token or admin session required". */
+internal fun filesDownloadPath(libraryId: String, rel: String): String =
+    "/api/files/download?library_id=" + Uri.encode(libraryId) + "&path=" + Uri.encode(rel)
 
-/** Open /api/files/download with the system viewer/downloader (attachment serve). */
-internal fun openFileDownload(context: Context, app: AppContainer, libraryId: String, rel: String) {
-    runCatching {
-        context.startActivity(
-            Intent(Intent.ACTION_VIEW, Uri.parse(filesDownloadUrl(app, libraryId, rel))),
-        )
-    }
-}
+/** The /api/images/raw route for an image in any library. */
+internal fun imagesRawPath(libraryId: String, rel: String): String =
+    "/api/images/raw?library_id=" + Uri.encode(libraryId) + "&path=" + Uri.encode(rel)
 
 // ---------------------------------------------------------------------------
 // Result holders

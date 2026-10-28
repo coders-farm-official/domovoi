@@ -10,4 +10,7 @@
     <!-- A document downloaded from the in-app document editor (Word or
          Markdown), on its way to the share sheet. -->
     <cache-path name="docs_share" path="docs-share/" />
+    <!-- A file from the home server fetched by the app to be opened in
+         another app (ServerFileTransfer): the file, never the server address. -->
+    <cache-path name="open_files" path="open-files/" />
 </paths>
