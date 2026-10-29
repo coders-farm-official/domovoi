@@ -94,6 +94,22 @@ public enum ShellSheet: String, Identifiable, Equatable, Sendable, CaseIterable 
     public var id: String { rawValue }
 }
 
+/// A toast: one sentence, at the bottom, gone by itself after
+/// ``ShellStrings/toastMs``.
+///
+/// The `id` is a generation rather than a `UUID` so a test can say *which*
+/// toast is up and a view's transition has something stable to key on. Two
+/// toasts with the same words are two toasts.
+public struct ShellToast: Equatable, Sendable, Identifiable {
+    public let id: Int
+    public let text: String
+
+    public init(id: Int, text: String) {
+        self.id = id
+        self.text = text
+    }
+}
+
 /// Whether the token-trouble card offers `try the old token again`.
 ///
 /// `TokenTroubleScreen.kt:149` draws that button only for

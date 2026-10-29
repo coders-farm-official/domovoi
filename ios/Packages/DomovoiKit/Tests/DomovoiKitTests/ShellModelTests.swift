@@ -455,7 +455,8 @@ final class ShellModelTests: XCTestCase {
         XCTAssertEqual("Satellite", rig.container.pendingChatThread?.title)
 
         // Switch servers and the same notification no longer matches.
-        rig.store.setServerURL("http://10.0.0.7:6369")
+        rig.store.trustServer("http://10.0.0.7:6369", identity: nil)
+        XCTAssertTrue(rig.store.setServerURL("http://10.0.0.7:6369"))
         XCTAssertFalse(rig.container.requestChatThread(serverKey: mine, thread: 11, title: nil))
         rig.model.stop()
     }

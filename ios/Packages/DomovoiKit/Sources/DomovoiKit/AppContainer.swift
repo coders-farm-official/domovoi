@@ -61,6 +61,66 @@ public protocol ShellStore: IdentityGate.PinStore, TokenHealth.RejectedBook {
     /// would otherwise pair the new address with the old household's token
     /// (finding A6-01). The implementation reads ``TokenVault``.
     func token(for url: String) -> String?
+
+    // MARK: - the server book (I1-C part 3)
+    //
+    // Part 1 left these out as "the connection dialog's job" and part 2 did
+    // not add them. They are here now because part 3 draws the picker, the
+    // trust dialogs and Settings → Phones & browsers, every one of which
+    // reads or writes one of them. The **rules** are ``TrustBook``'s, not an
+    // implementation's: a store is expected to hold one and delegate, so
+    // there is one copy of the refusal and one copy of the cascade.
+    //
+    // Still **not** here, because nothing in this batch reads them:
+    // `themeMode`, the write side of `phoneBar`, and the shared-screen and
+    // owner writers. ``TrustBook`` holds the last two fields because the
+    // cascade deletes them, and the cascade is ported whole.
+
+    /// Normalised spellings this phone connects to without asking again.
+    var trustedServers: Set<String> { get }
+
+    /// The known-server rows, in saved order.
+    var knownServers: [KnownServer] { get }
+
+    /// ``TrustBook/isTrusted(_:)``.
+    func isTrusted(_ url: String) -> Bool
+
+    /// ``TrustBook/trust(_:identity:)`` — the trust dialog's yes.
+    func trustServer(_ url: String, identity: ServerIdentity.Pin?)
+
+    /// ``TrustBook/setServerURL(_:)``. **False means nothing was written**,
+    /// because the server is not trusted; a caller that ignores the answer
+    /// has a bug, which is why the result is not discardable here.
+    func setServerURL(_ url: String) -> Bool
+
+    /// ``TrustBook/upsertKnown(url:name:)``.
+    func upsertKnownServer(url: String, name: String?)
+
+    /// ``TrustBook/setToken(_:for:)``.
+    func setToken(_ token: String?, for url: String)
+
+    /// ``TrustBook/replacePin(url:pin:)`` — the trust-again dialog's yes.
+    func replacePin(url: String, pin: ServerIdentity.Pin)
+
+    /// ``TrustBook/forget(_:)``: the forgetting cascade, for a server that is
+    /// not the active one.
+    @discardableResult
+    func removeKnownServer(_ url: String) -> TrustBook.ForgetReach
+
+    /// ``TrustBook/forgetActiveServer()``: the address forgotten, or nil.
+    @discardableResult
+    func forgetActiveServer() -> String?
+}
+
+public extension ShellStore {
+
+    /// The pin for a saved address, through ``IdentityGate/pinKey(_:)``.
+    /// Kotlin's `Prefs.pinForServer`, which is the same two lines wherever a
+    /// store keeps its pins.
+    func pin(forServer url: String) -> ServerIdentity.Pin? {
+        guard let key = IdentityGate.pinKey(url) else { return nil }
+        return pinFor(key)
+    }
 }
 
 /// A store that keeps everything in memory: the tests', and a preview's.
@@ -73,57 +133,107 @@ public protocol ShellStore: IdentityGate.PinStore, TokenHealth.RejectedBook {
 public final class InMemoryShellStore: ShellStore {
 
     private struct State {
-        var serverURL = ""
+        var book = TrustBook()
         var preferLocal = false
         var phoneBar: String?
-        var tokens: [String: String] = [:]
-        var pins: [String: ServerIdentity.Pin] = [:]
-        var rejected: Set<String> = []
     }
 
     private let state = Mutex(State())
 
-    public init(serverURL: String = "", preferLocal: Bool = false, token: String? = nil) {
+    /// - Parameter trusted: whether the server passed in is also trusted.
+    ///   Default **true**, because a phone with a saved server is a phone
+    ///   that trusted it — ``TrustBook/setServerURL(_:)`` refuses to write
+    ///   one otherwise — and a rig that set the address straight would be
+    ///   building a state the app cannot reach. Pass `false` to build the
+    ///   one install that can hold an untrusted address: an older one,
+    ///   restored from a backup.
+    public init(
+        serverURL: String = "",
+        preferLocal: Bool = false,
+        token: String? = nil,
+        trusted: Bool = true
+    ) {
         state.withLock {
-            $0.serverURL = serverURL
             $0.preferLocal = preferLocal
-            if let token, !ServerCredentials.isBlank(serverURL) {
-                $0.tokens[ServerCredentials.normalize(serverURL)] = token
+            $0.book.serverURL = ServerCredentials.normalize(serverURL)
+            if !ServerCredentials.isBlank(serverURL) {
+                if trusted { $0.book.trust(serverURL) }
+                if let token { $0.book.setToken(token, for: serverURL) }
             }
         }
     }
 
-    public var serverURL: String { state.withLock { $0.serverURL } }
+    /// The whole book, for a test that wants to arrange or read a corner of
+    /// it the store has no writer for (the shared-screen answers and the
+    /// owners, which the cascade deletes and nothing in this batch writes).
+    public var trustBook: TrustBook {
+        get { state.withLock { $0.book } }
+        set { state.withLock { $0.book = newValue } }
+    }
+
+    public var serverURL: String { state.withLock { $0.book.serverURL } }
     public var preferLocal: Bool { state.withLock { $0.preferLocal } }
 
     public var phoneBar: String? { state.withLock { $0.phoneBar } }
 
-    public func setServerURL(_ url: String) { state.withLock { $0.serverURL = url } }
     public func setPreferLocal(_ value: Bool) { state.withLock { $0.preferLocal = value } }
     public func setPhoneBar(_ raw: String?) { state.withLock { $0.phoneBar = raw } }
 
     public func token(for url: String) -> String? {
-        state.withLock { $0.tokens[ServerCredentials.normalize(url)] }
+        state.withLock { $0.book.token(for: url) }
     }
 
     public func setToken(_ token: String?, for url: String) {
-        state.withLock { $0.tokens[ServerCredentials.normalize(url)] = token }
+        state.withLock { $0.book.setToken(token, for: url) }
     }
 
-    public func pinFor(_ key: String) -> ServerIdentity.Pin? { state.withLock { $0.pins[key] } }
-    public func pin(_ key: String, _ pin: ServerIdentity.Pin) { state.withLock { $0.pins[key] = pin } }
+    public func pinFor(_ key: String) -> ServerIdentity.Pin? { state.withLock { $0.book.pins[key] } }
+    public func pin(_ key: String, _ pin: ServerIdentity.Pin) { state.withLock { $0.book.pins[key] = pin } }
     public func mayPinOnFirstProof(_ key: String) -> Bool { false }
 
     public func isTokenRejected(_ url: String) -> Bool {
-        state.withLock { $0.rejected.contains(ServerCredentials.normalize(url)) }
+        state.withLock { $0.book.rejected.contains(ServerCredentials.normalize(url)) }
     }
 
     public func markTokenRejected(_ url: String) {
-        state.withLock { _ = $0.rejected.insert(ServerCredentials.normalize(url)) }
+        state.withLock { _ = $0.book.rejected.insert(ServerCredentials.normalize(url)) }
     }
 
     public func clear(_ url: String) {
-        state.withLock { _ = $0.rejected.remove(ServerCredentials.normalize(url)) }
+        state.withLock { _ = $0.book.rejected.remove(ServerCredentials.normalize(url)) }
+    }
+
+    // MARK: - the server book, delegated whole
+
+    public var trustedServers: Set<String> { state.withLock { $0.book.trusted } }
+    public var knownServers: [KnownServer] { state.withLock { $0.book.known } }
+
+    public func isTrusted(_ url: String) -> Bool { state.withLock { $0.book.isTrusted(url) } }
+
+    public func trustServer(_ url: String, identity: ServerIdentity.Pin? = nil) {
+        state.withLock { $0.book.trust(url, identity: identity) }
+    }
+
+    public func setServerURL(_ url: String) -> Bool {
+        state.withLock { $0.book.setServerURL(url) }
+    }
+
+    public func upsertKnownServer(url: String, name: String? = nil) {
+        state.withLock { $0.book.upsertKnown(url: url, name: name) }
+    }
+
+    public func replacePin(url: String, pin newPin: ServerIdentity.Pin) {
+        state.withLock { $0.book.replacePin(url: url, pin: newPin) }
+    }
+
+    @discardableResult
+    public func removeKnownServer(_ url: String) -> TrustBook.ForgetReach {
+        state.withLock { $0.book.forget(url) }
+    }
+
+    @discardableResult
+    public func forgetActiveServer() -> String? {
+        state.withLock { $0.book.forgetActiveServer()?.url }
     }
 }
 

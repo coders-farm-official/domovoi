@@ -142,6 +142,10 @@ public final class ShellModel {
     private var waitTick: Task<Void, Never>?
     private var waitTickGeneration = 0
 
+    /// The toast's own dismissal, and which toast it is for.
+    private var toastTask: Task<Void, Never>?
+    private var toastGeneration = 0
+
     /// The container's network-change sink, so ``stop()`` can take it off
     /// again. Added and never removed until a review pointed out that a test
     /// building many models over one container leaks a closure per model.
@@ -293,6 +297,54 @@ public final class ShellModel {
               status.base == key
         else { return nil }
         return status.verdict
+    }
+
+    /// Whether the pairing screen may offer the token field at all
+    /// (``pairingOffersTheField(verdict:)``, finding A6-03).
+    public var pairingOffersTheTokenField: Bool {
+        pairingOffersTheField(verdict: activeVerdict)
+    }
+
+    /// What the pairing screen says instead, when it may not.
+    public var pairingWithheld: String? {
+        guard !pairingOffersTheTokenField else { return nil }
+        return pairingWithheldText(
+            address: ServerCredentials.address(inputs.serverURL),
+            canTrustAgain: changedIdentityHere != nil
+        )
+    }
+
+    /// What the forget confirmation shows about the active server, when it is
+    /// raised from Settings or from the picker.
+    public func forgetActiveAsk() -> ForgetActiveServerAsk? {
+        let url = inputs.serverURL
+        guard !ServerCredentials.isBlank(url) else { return nil }
+        return ForgetActiveServerAsk(
+            url: url,
+            pinned: container.store.pin(forServer: url)?.fingerprint,
+            proven: provenFingerprint(status: container.identity.status, serverURL: url)
+        )
+    }
+
+    /// The identity display for the active server (``IdentityDisplay``).
+    public var identityDisplay: IdentityDisplay {
+        IdentityDisplay.of(pin: container.store.pin(forServer: inputs.serverURL), verdict: activeVerdict)
+    }
+
+    /// `pin this identity`: the one way a pin is written without a trust
+    /// decision, and never silently — the button is drawn only for
+    /// ``IdentityDisplay/offered(_:)``, which is the state where the person
+    /// has the fingerprint in front of them.
+    @discardableResult
+    public func pinTheOfferedIdentity() -> Bool {
+        guard case .offered(let offered) = identityDisplay,
+              let key = IdentityGate.pinKey(inputs.serverURL)
+        else { return false }
+        container.store.pin(key, offered)
+        container.identity.pinChanged()
+        showToast(ShellStrings.pinned(fingerprint: offered.fingerprint))
+        refresh()
+        return true
     }
 
     /// Trusted, with nothing pinned: an `IdentityVerdict.legacy` for this
@@ -452,6 +504,94 @@ public final class ShellModel {
         if sheetUp == .trustAgain { sheetUp = nil }
     }
 
+    /// `yes, it's mine` (`IdentityChanged.kt:72`): pin the key the server
+    /// proved, in place of the one this phone trusted, and pair again from
+    /// scratch.
+    ///
+    /// Three things, in Android's order, and the order is finding S-T1:
+    ///
+    /// 1. ``TrustBook/replacePin(url:pin:)``, which **drops the household
+    ///    token before it writes the new key**, so the old token can never go
+    ///    to whatever holds the new one — not even on a request already in
+    ///    flight;
+    /// 2. ``IdentityGate/pinChanged()``, which bumps the epoch so every
+    ///    cached verdict about this server is stale;
+    /// 3. the toast, and the sheet goes away.
+    ///
+    /// False when there was nothing pending — a second tap, or a sheet
+    /// dismissed under the person's finger.
+    @discardableResult
+    public func confirmTrustAgain() -> Bool {
+        guard let changed = trustAgain else { return false }
+        let url = inputs.serverURL
+        guard !ServerCredentials.isBlank(url) else { return false }
+        container.store.replacePin(url: url, pin: changed.seenPin)
+        container.identity.pinChanged()
+        showToast(trustingAgainToast(address: ServerCredentials.address(url)))
+        dismissTrustAgain()
+        refresh()
+        return true
+    }
+
+    /// The forget confirmation's `forget`, from the picker or from
+    /// Settings → Phones & browsers.
+    ///
+    /// `forgetActiveServer(app, toast)` (`ForgetServer.kt:70`) in its four
+    /// steps. The third is the one worth naming: **`pendingRoute = "picker"`
+    /// is how a forget from inside Settings reopens the connection dialog**.
+    /// Forgetting leaves the app with no server, so the workspace drops to
+    /// the local shell the same instant — and a dialog opened by the screen
+    /// that caused that would vanish with it. The request is read by
+    /// ``takePendingRoute()``, which is above both shells.
+    ///
+    /// The address forgotten, or nil when there was no active server.
+    @discardableResult
+    public func forgetTheActiveServer() -> String? {
+        guard let url = container.store.forgetActiveServer() else { return nil }
+        container.client.clearPairingRequired()
+        container.requestPicker()
+        showToast(ShellStrings.forgotActive(address: ServerCredentials.address(url)))
+        refresh()
+        return url
+    }
+
+    // MARK: - toasts (map §7.10)
+
+    /// The toast on screen, or nil.
+    ///
+    /// Part 2 left the queue out on the grounds that "a queue with no
+    /// producer would be a guess at the shape". **This batch is the
+    /// producer**: every toast in map §7.10 comes from the picker, the
+    /// pairing screen or Settings, and all three are drawn here. It is one
+    /// toast and not a queue because that is what the map describes — "one at
+    /// a time off the head of a list" — and because a second toast arriving
+    /// while one is up replaces it, which is what a person watching a single
+    /// pill sees either way.
+    public private(set) var toast: ShellToast?
+
+    /// Raise a toast. It goes away by itself after ``ShellStrings/toastMs``,
+    /// on the same injected `tick` the countdown uses, so a test does not
+    /// wait on real time.
+    public func showToast(_ text: String) {
+        toastGeneration += 1
+        let generation = toastGeneration
+        toast = ShellToast(id: generation, text: text)
+        toastTask?.cancel()
+        toastTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            do { try await self.tick(ShellStrings.toastMs) } catch { return }
+            // Only the toast this task raised: a later one owns the slot now.
+            if self.toastGeneration == generation { self.toast = nil }
+        }
+    }
+
+    /// Dismiss it early — a tap on the pill.
+    public func dismissToast() {
+        toastTask?.cancel()
+        toastTask = nil
+        toast = nil
+    }
+
     /// Open the connection dialog, from the pill or from a `"picker"` request.
     public func openConnection() {
         sheet = .connection
@@ -589,6 +729,8 @@ public final class ShellModel {
         driver.stop()
         waitTick?.cancel()
         waitTick = nil
+        toastTask?.cancel()
+        toastTask = nil
         if let networkSink {
             container.removeNetworkChangeSink(networkSink)
             self.networkSink = nil

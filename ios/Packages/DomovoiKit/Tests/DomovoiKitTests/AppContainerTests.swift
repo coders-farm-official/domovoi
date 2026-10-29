@@ -49,7 +49,8 @@ final class AppContainerTests: XCTestCase {
         // The book reads the store live, rather than having copied it: a
         // server switch must be seen by the next request, not by the next
         // launch.
-        store.setServerURL("http://10.0.0.7:6369")
+        store.trustServer("http://10.0.0.7:6369", identity: nil)
+        XCTAssertTrue(store.setServerURL("http://10.0.0.7:6369"))
         XCTAssertEqual("http://10.0.0.7:6369", container.client.baseURL)
     }
 

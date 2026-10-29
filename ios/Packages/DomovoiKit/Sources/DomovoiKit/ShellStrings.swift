@@ -305,6 +305,58 @@ public enum ShellStrings {
         return ("\(label.lowercased()) isn't available", "the plugin providing this screen isn't installed on this server")
     }
 
+    // MARK: - §6/§7.9 Settings → Phones & browsers (ui/screens/settings/ConnectionPanel.kt)
+
+    /// The three card titles this batch draws. The section's own subtitle is
+    /// ``SettingsSection/sub`` for `phones-and-browsers`, not repeated here.
+    public static let serverCard = "Server"
+    public static let householdTokenCard = "Household token"
+    public static let trustedServersCard = "Trusted servers"
+
+    /// **em dash.**
+    public static let serverCardSub =
+        "The Domovoi web backend this app talks to — usually http://<domovoi-ip>:6369 on your LAN."
+
+    public static let householdTokenCardSub =
+        "What this phone presents so the server knows it belongs here. "
+        + "An admin finds it on the dashboard under Settings → Phones & browsers."
+
+    /// **em dash.**
+    public static let trustedServersCardSub =
+        "The Domovois this phone will connect to without asking again. Forgetting one also "
+        + "forgets its household token and its pinned identity; forgetting the one you are "
+        + "connected to returns you to the server list — the way to re-pair after a server "
+        + "was reinstalled or replaced."
+
+    /// The live socket, which is **not** the same question as the picker's
+    /// `connected` pill: this one is `bus.connected` and that one is the
+    /// reachability-and-identity verdict. Both read "connected" to a person,
+    /// and §11.6 is about exactly that.
+    public static let notConnected = "not connected"
+
+    public static let serverURLPlaceholder = "http://192.168.1.10:6369"
+    public static let saveAndReconnect = "Save & reconnect"
+
+    public static let paired = "paired"
+    public static let notPaired = "not paired"
+
+    public static let pairedExplanation =
+        "This phone sends the household token with every request to this server, "
+        + "and to nothing else. Paste a new one here after an admin rotates it."
+
+    /// It forgets **only** the token — not the trust, not the pin, not the
+    /// server.
+    public static let forgetTheToken = "forget the token"
+
+    public static let identityLabel = "identity"
+    public static let pinThisIdentity = "pin this identity"
+
+    /// Under a trusted row with no pin. A normal, visible state.
+    public static let identityNotPinnedYet = "identity not pinned yet"
+
+    /// The trusted-servers card with nothing in it.
+    public static let noTrustedServersYet = "none yet"
+
     // MARK: - §7.10 toasts
 
     /// Toasts are bottom-centre pills, one at a time off the head of a list,
