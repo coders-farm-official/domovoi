@@ -853,20 +853,32 @@ public final class ShellModel {
     ///    server older than V014 cannot mark a device, and "unknown" on a
     ///    paired install means shared for ever.
     public func sendRegister() {
+        Task { @MainActor [weak self] in
+            await self?.register()
+        }
+    }
+
+    /// The body of ``sendRegister()``, awaitable.
+    ///
+    /// Split out so a test can wait for the register to have **landed** rather
+    /// than for a few `Task.yield()`s. That is not a convenience: the first
+    /// version of `testAFailedRegisterLeavesTheLastAnswerStanding` asserted
+    /// after three yields, which is not long enough for a round trip through
+    /// `StubURLProtocol`, so the deliberate break it was written for — writing
+    /// a nil on failure — did not fail it. A test that cannot fail is worse
+    /// than no test.
+    func register() async {
         guard let deviceSelf else { return }
         let who = deviceSelf()
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            let row = await DeviceRegistry.register(
-                with: container.client,
-                deviceID: who.deviceID,
-                name: who.name,
-                userAgent: who.userAgent,
-                ownerPersonID: who.ownerPersonID
-            )
-            guard let row else { return }
-            sharedScreenAnswered(DeviceRegistry.sharedScreenAnswer(row))
-        }
+        let row = await DeviceRegistry.register(
+            with: container.client,
+            deviceID: who.deviceID,
+            name: who.name,
+            userAgent: who.userAgent,
+            ownerPersonID: who.ownerPersonID
+        )
+        guard let row else { return }
+        sharedScreenAnswered(DeviceRegistry.sharedScreenAnswer(row))
     }
 
     /// Fetch the capability manifest. Android fetches it at connect and again

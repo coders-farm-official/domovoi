@@ -132,6 +132,10 @@ final class ShellModelSocketTests: XCTestCase {
         }
         let (model, _, _) = model()
         model.socketConnectionChanged(false)
+        // The decisive half is synchronous: if the sender had been called,
+        // `registerIfDue` would have recorded the ask and this would be
+        // false. The request count is the slower confirmation.
+        XCTAssertTrue(model.registerIfDue(reason: .changed), "the cadence slot was never taken")
         await Task.yield()
         await Task.yield()
         XCTAssertEqual(0, count.current)
@@ -162,23 +166,24 @@ final class ShellModelSocketTests: XCTestCase {
     /// nil here instead would un-mask a shared screen on every hiccup.
     func testAFailedRegisterLeavesTheLastAnswerStanding() async {
         let fail = Shared(false)
+        let count = Shared(0)
         StubURLProtocol.dispatch { request in
             guard request.url?.path == "/api/devices/register" else { return .json("{}") }
+            count.mutate { $0 += 1 }
             if fail.current { return .json(#"{"detail":"nope"}"#, status: 500) }
             return .json(#"{"device_id":"ios-0123456789abcdef","name":"iPhone","shared_screen":true}"#)
         }
-        let clock = Shared<Int64>(0)
-        let (model, _, _) = model(clock: clock)
-        model.socketConnectionChanged(true)
-        await settleUntil { model.sharedScreenAnswer == true }
+        let (model, _, _) = model()
+        // `register()` rather than a socket bounce plus yields: this has to
+        // wait for the failure to have **landed**, and three `Task.yield()`s
+        // are not a round trip through the stub — the version that asserted
+        // after them could not fail, which the deliberate break proved.
+        await model.register()
+        XCTAssertEqual(true, model.sharedScreenAnswer)
 
         fail.set(true)
-        clock.advance(DeviceRegistry.reaskGapMs)
-        model.socketConnectionChanged(false)
-        model.socketConnectionChanged(true)
-        await Task.yield()
-        await Task.yield()
-        await Task.yield()
+        await model.register()
+        XCTAssertEqual(2, count.current, "the second register really was attempted")
         XCTAssertEqual(true, model.sharedScreenAnswer, "a failure is not an answer")
         model.stop()
     }
@@ -242,13 +247,17 @@ final class ShellModelSocketTests: XCTestCase {
         model.socketConnectionChanged(true)
         await settleUntil { fetches.current == 1 }
 
+        // A disconnect fetches nothing. Measured by letting the NEXT connect
+        // land and counting exactly two: a fetch on the disconnect would make
+        // it three, and waiting for a round trip is what makes the assertion
+        // able to fail at all.
         model.socketConnectionChanged(false)
-        await Task.yield()
-        await Task.yield()
-        XCTAssertEqual(1, fetches.current, "a disconnect fetches nothing")
-
         model.socketConnectionChanged(true)
         await settleUntil { fetches.current == 2 }
+        await settleUntil {
+            StubURLProtocol.recorded.filter { $0.url?.path == "/api/capabilities" }.count == 2
+        }
+        XCTAssertEqual(2, fetches.current, "two connects, two fetches, and the disconnect added none")
         model.stop()
     }
 
