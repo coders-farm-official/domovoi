@@ -192,18 +192,30 @@ final class ShellStringsTests: XCTestCase {
 
     // MARK: - the test that proves this test can fail
 
-    func testTheHaystackWasActuallyRead() {
-        XCTAssertGreaterThan(
-            Self.haystack.count, 20_000,
-            "the Kotlin was not read: check the file list and the six-up walk"
-        )
+    /// **Every** file in the list must exist and must have contributed
+    /// literals.
+    ///
+    /// A per-file check and not a size threshold on the whole haystack: one
+    /// renamed file out of fourteen would barely move a total (the measured
+    /// total on 2026-10-29 is 13,787 characters, and the smallest file
+    /// contributes a few dozen), so a total would let a file go missing and
+    /// quietly stop checking its strings. `literals(in:)` returns `[]` for a
+    /// file it could not read, which is exactly the silent case.
+    func testEveryKotlinFileWasActuallyRead() throws {
         let base = Self.repositoryRoot.appendingPathComponent("android/app/src/main/java/com/domovoi/app")
         for name in Self.kotlinFiles {
+            let url = base.appendingPathComponent(name)
             XCTAssertTrue(
-                FileManager.default.fileExists(atPath: base.appendingPathComponent(name).path),
+                FileManager.default.fileExists(atPath: url.path),
                 "\(name) has moved; this test would quietly check nothing"
             )
+            let text = try String(contentsOf: url, encoding: .utf8)
+            XCTAssertFalse(
+                Self.literals(in: text).isEmpty,
+                "\(name) contributed no string literals at all"
+            )
         }
+        XCTAssertGreaterThan(Self.haystack.count, 5_000, "the haystack is far smaller than measured")
     }
 
     func testTheHaystackCanFail() {
