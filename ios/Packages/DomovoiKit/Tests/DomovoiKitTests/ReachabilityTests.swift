@@ -143,7 +143,9 @@ final class ReachabilityTests: XCTestCase {
                     publish: { verdict in verdicts.mutate { $0.append(verdict) } }
                 )
             }
-            while !parked.current { await Task.yield() }
+            // Bounded: it cancels and unwinds even when nothing ever parked,
+            // so a broken rig fails rather than hanging the suite.
+            await settle(for: parked, what: "the raw reachability loop", reset: false)
             task.cancel()
             await task.value
         }
@@ -192,7 +194,9 @@ final class ReachabilityTests: XCTestCase {
                     publish: { verdict in verdicts.mutate { $0.append(verdict) } }
                 )
             }
-            while !parked.current { await Task.yield() }
+            // Bounded: it cancels and unwinds even when nothing ever parked,
+            // so a broken rig fails rather than hanging the suite.
+            await settle(for: parked, what: "the raw reachability loop", reset: false)
             task.cancel()
             await task.value
         }
@@ -301,9 +305,13 @@ final class ReachabilityTests: XCTestCase {
             },
             publish: { verdict in verdicts.mutate { $0.append(verdict) } }
         )
-        func settle() async {
-            while !parked.current { await Task.yield() }
-            parked.set(false)
+        func settle(file: StaticString = #filePath, line: UInt = #line) async {
+            await DomovoiKitTests.settle(
+                for: parked,
+                what: "the driver's reachability loop",
+                file: file,
+                line: line
+            )
         }
         let server = "http://10.0.0.42:6369"
         driver.update(serverURL: server, connected: false, phase: .active)

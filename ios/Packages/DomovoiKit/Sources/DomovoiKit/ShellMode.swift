@@ -354,6 +354,16 @@ public final class Reachability: Sendable {
 
     public var unreachable: Bool { state.withLock { $0.unreachable } }
 
+    /// Whether a stretch is open — whether anything is being timed at all.
+    ///
+    /// Internal, and only a test reads it: it is the exact condition
+    /// ``missed(_:)`` guards on, so it is how a test can see the failure in
+    /// which the stopwatch is closed **under a live loop** — every later
+    /// `missed` returns early and a server that really is gone never falls
+    /// back. See `ShellLifecycleTests.testPhaseChurnNeverClosesTheStopwatch`
+    /// `UnderALiveLoop`.
+    var isTiming: Bool { state.withLock { $0.askingSince != nil } }
+
     /// The app is on screen with the live socket down: asking starts (or
     /// starts again).
     ///

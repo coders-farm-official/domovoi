@@ -77,9 +77,17 @@ final class ShellModelTests: XCTestCase {
         }
 
         /// Wait until the loop has probed and is sitting in its `wait`.
-        func settle() async {
-            while !parked.current { await Task.yield() }
-            parked.set(false)
+        ///
+        /// Bounded — see `settle(for:what:reset:file:line:)` in
+        /// `Shared.swift`, and `settleVerdict(_:)` below, which has said why
+        /// since this batch began.
+        func settle(file: StaticString = #filePath, line: UInt = #line) async {
+            await DomovoiKitTests.settle(
+                for: parked,
+                what: "the shell's reachability loop",
+                file: file,
+                line: line
+            )
         }
 
         /// The server refuses the token this phone holds, through a real

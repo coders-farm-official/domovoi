@@ -75,9 +75,17 @@ final class ShellLifecycleTests: XCTestCase {
         }
 
         /// Wait until the loop has probed and is sitting in its `wait`.
-        func settle() async {
-            while !parked.current { await Task.yield() }
-            parked.set(false)
+        ///
+        /// Bounded — see `settle(for:what:reset:file:line:)` in
+        /// `Shared.swift`. A wiring that never parks has to fail this test,
+        /// not hang the suite.
+        func settle(file: StaticString = #filePath, line: UInt = #line) async {
+            await DomovoiKitTests.settle(
+                for: parked,
+                what: "the reachability loop",
+                file: file,
+                line: line
+            )
         }
     }
 
@@ -187,6 +195,54 @@ final class ShellLifecycleTests: XCTestCase {
         third.pause(5_000)
         third.missed(600_000)
         XCTAssertFalse(third.unreachable, "nothing is being timed")
+    }
+
+    /// **Phase churn must never leave the stopwatch closed under a live
+    /// loop**, which is the failure a stretch token exists to prevent and the
+    /// one `testALatePauseFromACancelledLoopIsIgnored` only pins when the two
+    /// `resume` calls do **not** overlap.
+    ///
+    /// `.active → .background → .active` with no suspension point between
+    /// them — a launch straight into the background, or a flick through the
+    /// app switcher — leaves task A cancelled before it has run an
+    /// instruction. A Swift task still runs its body when it is cancelled, so
+    /// A's `resume` races B's. While `resume` answered *the stretch in
+    /// progress* rather than a fresh ticket, the loser of that race was handed
+    /// **the winner's token**, and A's `defer` then closed B's stretch: every
+    /// later ``Reachability/missed(_:)`` returned early, `publish` said
+    /// reachable for ever, and the app never fell back to local media —
+    /// a workspace with every panel failing and no banner.
+    ///
+    /// 200 cycles, because it is a race: on stock `fefa3d9b` it bit 11 of
+    /// them (the reviewer measured 13 of 200), and one cycle would pass by
+    /// luck most of the time.
+    func testPhaseChurnNeverClosesTheStopwatchUnderALiveLoop() async {
+        let rig = Rig(answers: { _ in false })
+        var closedUnderALiveLoop = 0
+        for _ in 0..<200 {
+            // No `await` between the three: one main-actor turn, exactly as a
+            // launch-into-background or a fast switcher flick delivers them.
+            rig.driver.update(serverURL: server, connected: false, phase: .active)
+            rig.driver.update(serverURL: server, connected: false, phase: .background)
+            rig.driver.update(serverURL: server, connected: false, phase: .active)
+
+            // The live loop has probed and parked; give every cancelled loop
+            // its chance to run its `defer` too, since that late `pause` is
+            // the whole hazard.
+            await rig.settle()
+            for _ in 0..<200 { await Task.yield() }
+            if rig.driver.isAsking && !rig.driver.reach.isTiming { closedUnderALiveLoop += 1 }
+
+            // The socket coming up ends the cycle cleanly: the loop is
+            // cancelled and nothing is owed, so each cycle starts fresh.
+            rig.driver.update(serverURL: server, connected: true, phase: .active)
+        }
+        XCTAssertEqual(
+            0,
+            closedUnderALiveLoop,
+            "a cancelled loop's late pause closed the live loop's stretch in \(closedUnderALiveLoop) of 200 cycles"
+        )
+        rig.driver.stop()
     }
 
     /// The live socket coming up is better evidence than any probe: the loop
