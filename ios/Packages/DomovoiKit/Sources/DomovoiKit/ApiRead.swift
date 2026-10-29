@@ -70,8 +70,33 @@ public final class ApiRead<Value: Sendable> {
     /// say "and nothing else was asked".
     public private(set) var fetches = 0
 
+    /// When ``data`` last arrived, on ``clock``'s scale, or nil while it
+    /// never has.
+    ///
+    /// Android's `satsAt` / `timersAt` (`HomeScreen.kt:146`) are
+    /// `remember(sats.data) { System.currentTimeMillis() }` — **composition**
+    /// timestamps keyed on the data *object*, so they move when a read
+    /// returns and not when one fails. This is the same fact, stamped where
+    /// the value is assigned rather than where a view happens to recompose.
+    ///
+    /// The clock is monotonic, not wall-clock, which is where this
+    /// deliberately differs from Android: the ages it feeds decide whether a
+    /// reconnect re-reads (``homeFreshMs``), and a wall clock that jumps
+    /// while the app is suspended would skip or double that window. It is the
+    /// same reason ``StateSocket``'s budget is monotonic.
+    public private(set) var dataAt: Int64?
+
+    /// How long ago ``data`` arrived, or `Int64.max` while it never has —
+    /// which reads as "older than any freshness window", and so as "re-read
+    /// it", which is the safe direction.
+    public func dataAgeMs(now: Int64? = nil) -> Int64 {
+        guard let dataAt else { return .max }
+        return max(0, (now ?? clock()) - dataAt)
+    }
+
     private let fetch: @Sendable () async throws -> Value
     private let base: @Sendable () -> String
+    private let clock: @Sendable () -> Int64
     private let eventTypes: Set<String>
     private var inFlight: Task<Void, Never>?
     private var lastBase: String?
@@ -101,6 +126,7 @@ public final class ApiRead<Value: Sendable> {
     public convenience init(
         in container: AppContainer,
         eventTypes: Set<String> = [],
+        clock: @Sendable @escaping () -> Int64 = TokenHealth.monotonicMs,
         fetch: @Sendable @escaping () async throws -> Value
     ) {
         let store = container.store
@@ -108,6 +134,7 @@ public final class ApiRead<Value: Sendable> {
             base: { store.serverURL },
             eventTypes: eventTypes,
             keyedTo: container,
+            clock: clock,
             fetch: fetch
         )
     }
@@ -125,12 +152,14 @@ public final class ApiRead<Value: Sendable> {
         base: @Sendable @escaping () -> String,
         eventTypes: Set<String> = [],
         keyedTo: AppContainer? = nil,
+        clock: @Sendable @escaping () -> Int64 = TokenHealth.monotonicMs,
         fetch: @Sendable @escaping () async throws -> Value
     ) {
         self.base = base
         self.eventTypes = eventTypes
         self.fetch = fetch
         self.keyedTo = keyedTo
+        self.clock = clock
         // Last, because it captures `self`.
         joinTheServerKey()
     }
@@ -211,6 +240,7 @@ public final class ApiRead<Value: Sendable> {
             // (`ApiHooks.kt:46`) — so the explicit check is the same rule.
             guard !Task.isCancelled else { return }
             data = value
+            dataAt = clock()
             error = nil
         } catch is CancellationError {
             return

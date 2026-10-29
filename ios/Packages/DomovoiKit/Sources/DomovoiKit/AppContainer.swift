@@ -553,10 +553,55 @@ public final class AppContainer: Sendable {
         }
     }
 
+    /// ``SinkRegistry``'s sibling for sinks that are handed a value.
+    ///
+    /// A separate type rather than a generic one because ``SinkRegistry``'s
+    /// `Mutex` is non-copyable and a generic over a closure type that takes a
+    /// `sending` parameter does not come out simpler than twenty lines
+    /// written twice. The invariants are the same and so are the reasons:
+    /// keyed so a sink can leave, and fired in the order sinks joined.
+    final class EventSinkRegistry: Sendable {
+        private struct State {
+            var sinks: [Int: @Sendable (StateEvent) -> Void] = [:]
+            var next = 1
+        }
+
+        private let state = Mutex(State())
+
+        var count: Int { state.withLock { $0.sinks.count } }
+
+        func add(_ sink: @Sendable @escaping (StateEvent) -> Void) -> Int {
+            state.withLock { current in
+                let token = current.next
+                current.next += 1
+                current.sinks[token] = sink
+                return token
+            }
+        }
+
+        func remove(_ token: Int) {
+            state.withLock { _ = $0.sinks.removeValue(forKey: token) }
+        }
+
+        /// The sinks are collected under the lock and called **outside** it,
+        /// which is the house rule part 1's `StateSocket` follows and which a
+        /// stub once broke to the cost of two tests that could not fail: a
+        /// sink that reaches back into something holding this lock would
+        /// deadlock, and a sink that parks would hold every other consumer's
+        /// frames behind it.
+        func fire(_ event: StateEvent) {
+            let sinks = state.withLock { $0.sinks.sorted { $0.key < $1.key }.map(\.value) }
+            for sink in sinks { sink(event) }
+        }
+    }
+
     private let networkObservers: SinkRegistry
 
     /// The reads keyed to the saved server's address — ``onServerChange(_:)``.
     private let serverObservers = SinkRegistry()
+
+    /// The socket's frame consumers — ``onStateEvent(_:)``.
+    private let stateEventObservers = EventSinkRegistry()
 
     /// Be told when the network picture changes — after the identity epoch
     /// has been bumped, so a sink that asks the server something gets a fresh
@@ -632,6 +677,42 @@ public final class AppContainer: Sendable {
     /// How many reads are keyed to the server address, for a test that has to
     /// say a read really joined and really left.
     public var serverChangeSinkCount: Int { serverObservers.count }
+
+    // MARK: - the socket's frames, fanned out
+
+    /// Whoever wants the state socket's frames — the port of Android's
+    /// `app.bus.events` being a `SharedFlow` that any composable collects.
+    ///
+    /// ``SocketRelay`` holds **one** event sink, claimed by
+    /// ``ShellModel/watchSocket(event:)``, which is right: the socket is the
+    /// container's and lives for the process, and one subscriber per relay is
+    /// what keeps the ownership clear. But Home has seven reads and map §1.7
+    /// lists five further consumers on Android (four alert engines and the
+    /// sidebar counts), so a single sink cannot be where frames end.
+    ///
+    /// Same shape and same reasoning as ``onServerChange(_:)``: a consumer
+    /// joins here and leaves by its token, rather than a view remembering to
+    /// pass a closure down. Frames are **not replayed** — Android's `events`
+    /// has no replay and `tryEmit` into a buffer with no collector is dropped
+    /// (map §1.1) — which is why every consumer also has a catch-up read.
+    @discardableResult
+    public func onStateEvent(_ sink: @Sendable @escaping (StateEvent) -> Void) -> Int {
+        stateEventObservers.add(sink)
+    }
+
+    public func removeStateEventSink(_ token: Int) {
+        stateEventObservers.remove(token)
+    }
+
+    /// A frame arrived. Called by ``ShellModel/watchSocket(event:)``, which
+    /// holds the relay's one sink.
+    public func stateEventArrived(_ event: StateEvent) {
+        stateEventObservers.fire(event)
+    }
+
+    /// How many consumers are listening to the socket, for a test that has to
+    /// say one really joined and really left.
+    public var stateEventSinkCount: Int { stateEventObservers.count }
 
     /// How many network changes ``NetworkWatch`` has reported to this
     /// container.

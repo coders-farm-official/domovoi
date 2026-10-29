@@ -772,12 +772,17 @@ public final class ShellModel {
     /// container's and lives for the process, so a model does not own it — it
     /// subscribes, and ``stop()`` unsubscribes.
     ///
-    /// - Parameter event: where frames go. This batch has no consumer of one
-    ///   — Home's seven reads are part 2's — so the default drops them, which
-    ///   is also what Android does with a frame nobody is collecting: `events`
-    ///   has no replay and `tryEmit` into a buffer with no collector is
-    ///   dropped (map §1.1). ``ApiRead/received(_:)`` is the consumer that
-    ///   takes them.
+    /// Every frame is handed to ``AppContainer/stateEventArrived(_:)``, which
+    /// fans it out to whoever joined ``AppContainer/onStateEvent(_:)`` —
+    /// Home's reads through ``HomeModel``, and on Android five further
+    /// consumers besides (map §1.7). The relay holds one sink and this method
+    /// claims it; the fan-out is where frames actually end.
+    ///
+    /// - Parameter event: an **extra** sink for a caller that wants frames
+    ///   without joining the registry, called after the fan-out. The app
+    ///   passes none. It is kept because ``AppShellView`` is where a future
+    ///   shell-level consumer would go and removing a parameter is a change
+    ///   to the app target, which `swift test` cannot see.
     public func watchSocket(event: (@MainActor (StateEvent) -> Void)? = nil) {
         container.socketRelay.connect(
             connection: { [weak self] up in
@@ -785,7 +790,8 @@ public final class ShellModel {
             },
             event: { [weak self] frame in
                 Task { @MainActor in
-                    guard self != nil else { return }
+                    guard let self else { return }
+                    self.container.stateEventArrived(frame)
                     event?(frame)
                 }
             }
