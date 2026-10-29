@@ -73,6 +73,16 @@ final class HealthChecksTests: XCTestCase {
         )
         XCTAssertEqual(["stt", "offline", "waiting"], rows.map(\.key), "err → warn, then by order")
         XCTAssertTrue(rows.allSatisfy { $0.target == .settings("health") })
+        // …and over **every** check rather than over the three this fixture
+        // happens to make problems of, which is what `HomeView`'s `.dashboard`
+        // branch stands on. The real guarantee is `HealthCheck.row` hardcoding
+        // `healthTarget` and taking no parameter; this is the ten checks' worth
+        // of evidence that nothing else can get in.
+        XCTAssertTrue(
+            checks.map(\.row).allSatisfy { $0.target == healthTarget },
+            "a row that could carry a dashboard target is a tap that does nothing"
+        )
+        XCTAssertEqual(.settings("health"), healthTarget)
         XCTAssertEqual("kitchen is offline · it can't hear anyone right now", rows[1].text)
         XCTAssertEqual("2026-10-21T08:00:00Z", rows[1].at, "the row carries the time it happened")
         // Health's row leads on to the page that fixes it, and names the room.

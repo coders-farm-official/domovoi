@@ -461,8 +461,14 @@ public func healthChecks(
         } else if let plugins {
             let all = plugins.plugins.filter { $0.status != "uninstalled" }
             // `LinkedHashMap<slug, (name, tone)>`: insertion order, one entry
-            // per slug, and the **first** verdict for a slug wins because the
-            // Kotlin's two `if` branches are exclusive per plugin.
+            // per slug, and the **last** row for a slug wins, as Kotlin's
+            // `bad[p.slug] = name to tone` assignment does, while the slug
+            // keeps its first position. (`mark` appends to `badOrder` only on
+            // first sight but always overwrites the value.) The comment used
+            // to say the first verdict won, and to give as its reason that the
+            // two `if` branches are exclusive per plugin — which is true of
+            // one plugin and says nothing about two rows sharing a slug, the
+            // only case the claim was about.
             var badOrder: [String] = []
             var bad: [String: (name: String, tone: HealthTone)] = [:]
             func mark(_ slug: String, _ name: String, _ tone: HealthTone) {
@@ -597,12 +603,21 @@ public func guardCheck(_ state: ContainerGuardState?) -> HealthCheck {
 /// `statusLine(if (sats.data != null) rooms else null, …)`
 /// (`HomeScreen.kt:271`).
 ///
-/// **iOS does not port line 275.** ``HomeAttention/rows`` is built from
-/// `sats.data` mapped through the Wi-Fi merge — nil stays nil — and
-/// `HealthChecksTests.testAFailedRoomsReadIsNotEveryRoomBeingFine` is the
-/// test Android's version would fail. It is also the owner's standing
+/// **iOS does not port line 275.** `rooms` here is `ApiRead.data` passed
+/// through unchanged — nil stays nil — with no `.orEmpty()` and no Wi-Fi merge
+/// of any kind: `mergeWifi` is **not ported at all** on iOS (it is in the
+/// report's named gaps), so there is nothing between the read and this
+/// function. Two tests hold it, and they hold different halves:
+/// `HealthChecksTests.testANilRoomListIsNotAnEmptyOne` over the pure function,
+/// and `HomeModelTests.testAFailedRoomsReadIsNotEveryRoomBeingFine` through
+/// the real call site and a real 401. It is also the owner's standing
 /// `no-misleading-controls` rule in its sharpest form: a green tick for
 /// something the app never checked.
+///
+/// Three things this paragraph used to say were not true — a DocC link that
+/// resolved to nothing, a Wi-Fi merge iOS does not have, and the wrong test's
+/// name, which the neighbouring file got right. Three false facts in the
+/// explanation of the trap they are about.
 public func attentionRows(
     health: HomeHealth?,
     rooms: [HomeRoom]?,

@@ -18,8 +18,16 @@ public let homeFocusGapMs: Int64 = 15_000
 public let homeRoomDebounceMs: Int64 = 300
 
 /// A read this young needs no re-read on a (re)connect
-/// (`HomeModels.kt:37`). It is what keeps the mount's own reads from being
-/// repeated a moment later when the socket opens.
+/// (`HomeModels.kt:37`).
+///
+/// It is what keeps the mount's own reads from being repeated a moment later
+/// when the socket opens — **and that depends on what "young" means for a read
+/// that has not come back yet.** ``ApiRead/dataAgeMs(now:)`` measures from
+/// `dataAt ?? firstAttemptAt`, so a read still in flight is as old as the
+/// attempt, which is what Android's `remember(sats.data)` holds on the first
+/// composition. While it answered `Int64.max` instead, this sentence was false
+/// in the ordinary case: the socket opens in a few hundred milliseconds, before
+/// the mount's reads land, and rooms and timers were both read again.
 public let homeFreshMs: Int64 = 5_000
 
 /// Attention rows a phone shows before `+N more` (`HomeModels.kt:33`).
@@ -219,7 +227,10 @@ public func homeRefreshPlan(for trigger: HomeTrigger, in context: HomeRefreshCon
 
     // §2.3 item 5 — `HomeScreen.kt:177-185`. A read younger than five
     // seconds needs no re-read, which is what makes the socket's FIRST open
-    // (a moment after the mount's own reads) a no-op without a flag for it.
+    // (a moment after the mount's own reads) a no-op without a flag for it —
+    // including when those reads have not come back yet, which is the age
+    // ``ApiRead/firstAttemptAt`` exists for. `.max` now means only "nothing
+    // has asked for this at all".
     case .socketCameUp:
         var plan = HomeRefreshPlan()
         if context.sinceRoomsReadMs >= homeFreshMs { plan.now.insert(.rooms) }

@@ -425,8 +425,9 @@ final class NetworkWatchTests: XCTestCase {
         XCTAssertTrue(CleartextPolicy.cleartextPermitted("100.64.0.5"))
     }
 
-    func testTheAdapterSeedsEveryMonitorInOnePictureAndCountsNoChangeForIt() throws {
-        // The one test of `start()`: real monitors, no connections made.
+    func testTheAdapterSeedsEveryMonitorInOnePicture() throws {
+        // The one test of `start()`: real monitors, no connections made, and
+        // **nothing asserted that a shared Mac's network can falsify**.
         //
         // The bug this is written against: the seed used to hold only the
         // interface list, and the three `NWPathMonitor`s were started AFTER
@@ -435,9 +436,9 @@ final class NetworkWatchTests: XCTestCase {
         // at three changes per launch, which is three wasted proofs and a
         // cold-start request whose proof is discarded between hops.
         //
-        // It also had no assertion on the change counter at all, and an
-        // `XCTestExpectation` fulfilled unconditionally after a polling loop
-        // that was doing the real waiting. Both are gone.
+        // What it asserts is that the seed is **complete**, which is the half
+        // of that bug this test can see deterministically. The other half —
+        // that a picture already held is not a change — is the test below.
         let seen = Shared<Int>(0)
         let watch = NetworkWatch(onChange: { seen.mutate { $0 += 1 } })
         defer { watch.stop() }
@@ -450,17 +451,37 @@ final class NetworkWatchTests: XCTestCase {
         XCTAssertNotEqual(NetworkWatch.none, watch.fingerprint, "the seed is synchronous")
         XCTAssertTrue(watch.fingerprint.contains("P|wifi"), "the wifi path was not in the seed")
         XCTAssertTrue(watch.fingerprint.contains("P|wired"), "the wired path was not in the seed")
-        XCTAssertEqual(0, watch.changeCount, "the seed is one picture, not a change")
-        XCTAssertEqual(0, seen.current)
         XCTAssertTrue(watch.fingerprint.contains("P|default"), "the default path was not in the seed")
         XCTAssertTrue(watch.fingerprint.contains("I|"), "no interface addresses in the fingerprint")
-        // **And nothing waits here.** This used to let the three real
-        // monitors deliver their first updates and assert `changeCount == 0`
-        // over a 1.5 s wall-clock window — so a Wi-Fi roam, a DHCP renew or a
-        // VPN blink on a shared Mac failed the suite for something that was
-        // not a defect. The property that was being tested is a property of
-        // the comparison, not of 1.5 s of quiet, and
-        // `testAPathAlreadyInThePictureIsNotAChange` tests it in microseconds.
+        // **And no assertion on the change counter here at all.** This used to
+        // let the three real monitors deliver their first updates and assert
+        // `changeCount == 0` over a 1.5 s wall-clock window, so a Wi-Fi roam, a
+        // DHCP renew or a VPN blink on a shared Mac failed the suite for
+        // something that was not a defect.
+        //
+        // The counter is not deterministic even *before* the window: a real
+        // `NWPathMonitor`'s `currentPath` at the instant `start` reads it need
+        // not be what its first `pathUpdateHandler` then reports — an
+        // unsatisfied path that becomes satisfied a moment later is one honest
+        // change — and the synchronous `changeCount == 0` was measured failing
+        // on this Mac on 2026-10-29. Keeping it would have been the same flake
+        // with a shorter window.
+        //
+        // What the bug was actually about is pinned deterministically in two
+        // halves: that the **seed is complete** (the four assertions above —
+        // it used to hold only the interface list, so each monitor's first
+        // callback was a change), and that **a path already in the picture is
+        // not a change** (`testAPathAlreadyInThePictureIsNotAChange`, which
+        // takes microseconds and asserts both directions).
+        //
+        // A **relation** instead, which a genuine network change cannot
+        // falsify: the counter and the callback agree about how many there
+        // have been (the review's third option for a test that must keep the
+        // real monitors).
+        XCTAssertEqual(
+            watch.changeCount, seen.current,
+            "every counted change was published, and nothing was published twice"
+        )
     }
 
     /// **A path already in the picture is not a change** — the bug the test

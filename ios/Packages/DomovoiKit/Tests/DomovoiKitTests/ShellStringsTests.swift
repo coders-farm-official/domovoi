@@ -1190,11 +1190,14 @@ final class ShellStringsTests: XCTestCase {
 
     /// `+N more`, which is built rather than stored.
     ///
-    /// `HomeSections.kt:303` is `"+${rows.size - 3} more"`, so only the tail
-    /// is a literal; the `+` and the count are the composition, and that is
-    /// what the second assertion pins.
+    /// `HomeSections.kt:300` is `"+$extra more"`, with
+    /// `extra = rows.size - HOME_PHONE_ROWS` computed at `:299`, so only the
+    /// tail is a literal; the `+` and the count are the composition, and that
+    /// is what the second assertion pins. This doc used to cite `:303` and
+    /// restate the Kotlin as `"+${rows.size - 3} more"` — a misquotation in a
+    /// test whose whole job is to be the authority on what the Kotlin says.
     func testTheMoreLabelIsTheKotlinsMoreLabel() {
-        assertKotlinSays(" more", "the tail of HomeSections.kt:303's interpolation")
+        assertKotlinSays(" more", "the tail of HomeSections.kt:300's interpolation")
         let five = HomeAttentionState(
             view: .rows((0..<5).map {
                 AttentionRow(key: "k\($0)", tone: .warn, text: "x", target: .settings("health"))

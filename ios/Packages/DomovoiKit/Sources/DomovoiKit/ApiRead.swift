@@ -110,8 +110,8 @@ public final class ApiRead<Value: Sendable> {
     /// made the socket's first open repeat the mount's own rooms and timers
     /// reads — nine requests on a cold open where Android makes seven.
     public func dataAgeMs(now: Int64? = nil) -> Int64 {
-        guard let dataAt else { return .max }
-        return max(0, (now ?? clock()) - dataAt)
+        guard let since = dataAt ?? firstAttemptAt else { return .max }
+        return max(0, (now ?? clock()) - since)
     }
 
     /// Run when a value lands, **in the read's own success path**.

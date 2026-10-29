@@ -85,6 +85,11 @@ struct HomeAttentionView: View {
             if let more = state.moreLabel {
                 Button(more, action: onMore)
                     .font(.subheadline)
+                    // Android's row minimum applies to this too
+                    // (`HomeSections.kt:309`), and it is the smallest control
+                    // on the card.
+                    .frame(minHeight: state.rowMinHeight)
+                    .contentShape(.rect)
             }
         }
     }
@@ -107,7 +112,12 @@ struct HomeAttentionView: View {
     /// names rooms.
     private func summary(_ count: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            toneDot(.warn)
+            // ``HomeAttentionState/summaryTone`` — **grey**, as
+            // `HomeSections.kt:282`'s `StatusDot(Tone.Idle)` is, and not a
+            // literal in this file where `swift test` cannot see it. It drew
+            // amber, which grades a problem for the one viewer the house has
+            // decided not to tell what the problem is.
+            toneDot(state.summaryTone)
             Text(HomeAttentionStrings.summaryLine)
                 .font(.subheadline)
                 .fixedSize(horizontal: false, vertical: true)
@@ -129,6 +139,16 @@ struct HomeAttentionView: View {
             ForEach(state.shownRows) { row in
                 Button { onRow(row) } label: { rowBody(row) }
                     .buttonStyle(.plain)
+                    // `heightIn(min = if (compact) 44.dp else 40.dp)`
+                    // (`HomeSections.kt:309`), which is also Apple's 44 pt
+                    // minimum. The label is a subheadline and a footnote —
+                    // about 20 pt at default type — on a control whose whole
+                    // job is to be tapped. The figure is
+                    // ``HomeAttentionState/rowMinHeight``'s, so a test holds
+                    // it; `contentShape` is what makes the whole of the frame
+                    // the tap target rather than just the text in it.
+                    .frame(minHeight: state.rowMinHeight, alignment: .leading)
+                    .contentShape(.rect)
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel(state.spokenRow(row, nowMs: nowMs))
                     .accessibilityAddTraits(.isButton)
@@ -184,9 +204,19 @@ struct HomeAttentionView: View {
     private func rowText(_ row: AttentionRow) -> some View {
         Text(row.text)
             .font(.subheadline)
-            // No `lineLimit`: a row says which room is offline and the room
-            // is named by the person who set it up, so there is no length
-            // this can assume.
+            // **No `lineLimit`, and that is a declared divergence from
+            // Android** — `HomeSections.kt:311-316` caps a compact row at one
+            // line with an ellipsis, "so three of them and the timers leave
+            // the rooms above the fold". It is in `I1D2-FIX-REPORT.md`'s
+            // divergence list and on the Simulator checklist, which is where a
+            // divergence belongs; this comment is the reason, not the record.
+            //
+            // The reason: a row says which room is offline and the room is
+            // named by the person who set it up, so there is no length this
+            // can assume — and Apple's `performAccessibilityAudit` failed the
+            // first screen of this app for text that "may be clipped at larger
+            // Dynamic Type sizes". The cost is a taller card, which the owner
+            // can see on the pass and the cap can be added in one line.
             .fixedSize(horizontal: false, vertical: true)
             .multilineTextAlignment(.leading)
     }

@@ -48,7 +48,7 @@ public func parseInstant(_ iso: String?) -> Date? {
     return local.date(from: iso)
 }
 
-/// `isoMs` (`HomeModels.kt:215`) — a server timestamp as epoch milliseconds.
+/// `isoMs` (`HomeModels.kt:216`) — a server timestamp as epoch milliseconds.
 public func isoMs(_ iso: String?) -> Int64? {
     guard let date = parseInstant(iso) else { return nil }
     return Int64((date.timeIntervalSince1970 * 1000).rounded())
@@ -58,7 +58,7 @@ public func isoMs(_ iso: String?) -> Int64? {
 /// (`Format.kt:21`).
 ///
 /// `relTime(null)` is a bare **em dash**, U+2014, on both platforms
-/// (`Format.kt:22`), and a future time reads `in 5m` (`relFuture`, `:35`).
+/// (`Format.kt:22`), and a future time reads `in 5m` (`relFuture`, `:34`).
 ///
 /// - Parameter nowMs: the clock to measure against. Android reads
 ///   `Instant.now()` inside the function; here it is a parameter, because a
@@ -88,7 +88,7 @@ public func relTime(_ iso: String?, nowMs: Int64) -> String {
     }
 }
 
-/// `relFuture` (`Format.kt:35`).
+/// `relFuture` (`Format.kt:34`).
 private func relFuture(_ seconds: Int64) -> String {
     switch seconds {
     case ..<60: return "in \(seconds)s"

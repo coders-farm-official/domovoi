@@ -219,6 +219,15 @@ public final class HomeModel {
             .plugins: plugins, .acquisitions: acquisitions, .calendar: calendar,
         ]
         tick = wallClock()
+        // **The offset is recomputed where the value lands.** Android keys it
+        // on the data object (`remember(timers.data)`, `HomeScreen.kt:233`),
+        // so it moves when a read returns and not when one fails — which is
+        // exactly what this read's own success path is. The alternative, a
+        // method the view calls on every redraw, is what was here: it had no
+        // caller at all and its documentation named the view as the party that
+        // called it, so `serverNowMs` was `nowMs` for ever. One mechanism,
+        // wired by having been built.
+        timers.onValue = { [weak self] in self?.refreshServerOffset() }
     }
 
     /// `Date().timeIntervalSince1970` in milliseconds —
@@ -237,10 +246,24 @@ public final class HomeModel {
     /// (`HomeScreen.kt:209`) for exactly the same reason, so the `ON_RESUME`
     /// that fires on first composition finds the gap unspent and reads
     /// nothing on top of the mount's own seven.
+    ///
+    /// **Idempotent per thing, not guarded as a whole.** This used to begin
+    /// `guard !onScreen else { return }`, which made it cheap and *partial*:
+    /// paired with a ``cameBackOnScreen()`` that set `onScreen` from off
+    /// screen, a return to Home became a complete no-op — no `.mount` re-read
+    /// and, worse, no event sink, so Home received no push at all for the rest
+    /// of the process. Each piece now checks its own precondition: the sink is
+    /// joined if it is not joined, the loops cancel before they restart, and
+    /// `.mount` is what "a route holds nothing" means (map §7.6).
     public func start() {
-        guard !onScreen else { return }
         onScreen = true
         focusAt = clock()
+        // Seeded, not awaited: `socketChanged(live:)`'s caller is an
+        // `.onChange`, which never fires for the value already there, so a
+        // Home that appeared beside a working socket would poll beside it.
+        // Android's `LaunchedEffect(live, lifecycle)` runs on composition with
+        // the current value, and `wasLive` is seeded from it (`:177`).
+        live = liveNow()
         if eventSink == nil {
             eventSink = container.onStateEvent { [weak self] frame in
                 Task { @MainActor in self?.received(frame) }
@@ -257,9 +280,16 @@ public final class HomeModel {
     ///
     /// "A route holds nothing" (map §7.6): leaving Home and coming back
     /// re-reads, because `rememberApi`'s state dies with the composable. This
-    /// is that, said explicitly — and it is also what keeps a backgrounded
-    /// phone from polling, which Android gets from
-    /// `repeatOnLifecycle(STARTED)`.
+    /// is that, said explicitly.
+    ///
+    /// **This is also what keeps a backgrounded phone from polling**, which
+    /// Android gets from `repeatOnLifecycle(STARTED)` — of this method, and of
+    /// this method alone. The sentence used to be written about `stop()` *and*
+    /// ``cameBackOnScreen()`` as a pair, and of the pair it was false: the
+    /// resume put `onScreen` back without re-joining the sink, which is how a
+    /// backgrounded phone came to poll a screen nobody was looking at and
+    /// receive no pushes on the one it was. An argument for why an omission is
+    /// safe is a thing to check, not a thing to trust.
     public func stop() {
         onScreen = false
         tickLoop?.cancel(); tickLoop = nil
@@ -275,13 +305,16 @@ public final class HomeModel {
 
     /// Back on screen — §2.3 item 8. Called on a route return **and** on the
     /// app foregrounding; the 15 s gap means both at once is one read.
+    ///
+    /// **A resume while Home is off screen does nothing.** Android's
+    /// `LifecycleEventEffect(ON_RESUME)` is scoped to the composable: if Home
+    /// is not composed it does not fire. Home is the root of a
+    /// `NavigationStack`, so it stays in the view tree under a pushed
+    /// destination with its `onChange(of: scenePhase)` live — and this method
+    /// used to answer that by setting `onScreen` back to `true` and starting
+    /// the loops. ``start()`` owns `onScreen`; this one only ever reads it.
     public func cameBackOnScreen() {
-        if !onScreen {
-            onScreen = true
-            restartTickLoop()
-            restartPollLoop()
-            restartHealthLoop()
-        }
+        guard onScreen else { return }
         apply(.cameBackOnScreen)
     }
 
@@ -502,16 +535,21 @@ public final class HomeModel {
     ///
     /// `remember(timers.data) { serverOffsetMs(timers.data?.server_now, timersAt) }`
     /// (`HomeScreen.kt:233`): keyed on the **data object**, so it is
-    /// recomputed when a read returns and not when one fails. The view calls
-    /// this where Android's `remember` would re-key — which is on every
-    /// redraw, and the `dataAt` guard is what makes that idempotent.
-    public func refreshServerOffset() {
+    /// recomputed when a read returns and not when one fails.
+    ///
+    /// **Called from the timers read's own success path**
+    /// (``ApiRead/onValue``), wired in this type's initialiser. Not public and
+    /// not the view's: a mechanism whose only guarantee is that somebody
+    /// remembers to call it is one that was not called.
+    private func refreshServerOffset() {
         guard let at = timers.dataAt, at != offsetFromTimersAt else { return }
         offsetFromTimersAt = at
         // `timersAt` is when the read landed, on the wall clock the offset is
         // measured against. `dataAt` is monotonic, so the wall-clock instant
-        // is reconstructed from how long ago that was.
-        let receivedAt = wallClock() - timers.dataAgeMs(now: clock())
+        // is reconstructed from how long ago that was — from `dataAt` itself
+        // and not from ``ApiRead/dataAgeMs(now:)``, which also answers for a
+        // read that has only ever been *attempted*.
+        let receivedAt = wallClock() - max(0, clock() - at)
         serverOffset = serverOffsetMs(serverNow: timers.data?.serverNow, receivedAtMs: receivedAt)
     }
 

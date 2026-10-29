@@ -47,6 +47,13 @@ struct HomeView: View {
     /// both phones.
     @State private var attentionExpanded = false
 
+    /// Whether this view is on screen, as `onAppear`/`onDisappear` report it.
+    ///
+    /// Not a nicety: Home is a `NavigationStack` root, so it is still in the
+    /// hierarchy — and still receiving `onChange(of: scenePhase)` — under a
+    /// pushed Settings. See the `onChange` below.
+    @State private var visible = false
+
     @Environment(\.horizontalSizeClass) private var sizeClass
 
     @Environment(\.scenePhase) private var scenePhase
@@ -92,17 +99,34 @@ struct HomeView: View {
             // view's — the one place a trigger turns into reads.
             home?.start()
         }
+        .onAppear { visible = true }
         // `repeatOnLifecycle(STARTED)` on Android: the loops stop with the
         // screen rather than polling a screen nobody is looking at.
-        .onDisappear { home?.stop() }
+        .onDisappear {
+            visible = false
+            home?.stop()
+        }
         // `LifecycleEventEffect(ON_RESUME)` (`HomeScreen.kt:211`), which the
         // fifteen-second focus gap then throws away if the screen was only
         // away for a moment.
+        //
+        // **Guarded on being visible**, because Home is the root of a
+        // `NavigationStack` (`WorkspaceView.swift:34`): a pushed destination
+        // fires Home's `onDisappear` while this view stays in the hierarchy
+        // with its `onChange` live. Android cannot reach that at all — a
+        // `LifecycleEventEffect` is scoped to the composable — so the port is
+        // a view that does not call a model it has left. ``HomeModel`` guards
+        // the same thing on its own side; two independent mechanisms, because
+        // the one-sided version cost Home its socket for whole sessions.
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active { home?.cameBackOnScreen() }
+            if phase == .active, visible { home?.cameBackOnScreen() }
         }
+        // Same guard, same reason: `LaunchedEffect(live, lifecycle)` does not
+        // run for a composable that is gone. A socket change missed while Home
+        // was away is picked up by ``HomeModel/start()``, which reads the
+        // current value when the screen comes back.
         .onChange(of: model.connected) { _, live in
-            home?.socketChanged(live: live)
+            if visible { home?.socketChanged(live: live) }
         }
     }
 
@@ -116,20 +140,24 @@ struct HomeView: View {
         case .screen(let route):
             model.navigate(route)
         case .dashboard:
-            // **No Home row carries one**, and this is not an assumption:
-            // every ``AttentionRow`` targets ``healthTarget``, which
-            // `HealthChecksTests` asserts for every check at once
-            // (`rows.allSatisfy { $0.target == .settings("health") }`). The
-            // `.dashboard` targets in `HealthChecks.swift` are the per-check
-            // `fix` links, which are *Health's* rows and not Home's.
+            // **No Home row can carry one, and the type is what says so:**
+            // ``HealthCheck/row`` (`HealthChecks.swift`) hardcodes
+            // ``healthTarget`` and takes no parameter, so an
+            // ``AttentionRow`` has no way to carry anything else. That is a
+            // stronger guarantee than a test, and this comment used to credit
+            // the test instead — `HealthChecksTests`'
+            // `rows.allSatisfy { $0.target == .settings("health") }`, which
+            // runs over one fixture producing three rows rather than "every
+            // check at once".
             //
-            // So this branch is unreachable rather than unimplemented, and
-            // the test is what keeps it that way: a part-3 row with a
-            // dashboard target fails that assertion instead of shipping a tap
-            // that silently does nothing, which is the owner's
-            // no-misleading-controls rule. There is also no in-app dashboard
-            // opener to call — opening one means a web view or Safari, and
-            // that is a decision nobody has made.
+            // So this branch is unreachable rather than unimplemented. The
+            // `.dashboard` targets in `HealthChecks.swift` are the per-check
+            // `fix` links, which are *Health's* rows and not Home's, and a
+            // part-3 row that wanted one would have to change `row` — which is
+            // where the owner's no-misleading-controls rule gets its say,
+            // because there is no in-app dashboard opener to call: opening one
+            // means a web view or Safari, and that is a decision nobody has
+            // made.
             break
         }
     }
