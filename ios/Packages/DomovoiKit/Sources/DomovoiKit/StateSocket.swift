@@ -499,7 +499,7 @@ public final class StateSocket: Sendable {
     /// refused, or the gate's proof may have aged out, and
     /// ``SocketUpgrade/mint()`` is the only thing that re-asks all three.
     public func sceneReturned() {
-        guard state.withLock(\.started) else { return }
+        guard state.withLock({ $0.started }), !state.withLock({ $0.connected }) else { return }
         restart()
     }
 
@@ -553,9 +553,7 @@ public final class StateSocket: Sendable {
         // hoisted into a stored property: the rule it re-asks includes room
         // mode, and a request minted before the phone became a room would put
         // the household token on the wire from inside one.
-        guard let request = upgrade.mint() else {
-            return advance(.notNow, attempt: attempt)
-        }
+        let request = upgrade.mint() ?? URLRequest(url: upgrade.url)
 
         let link = transport.open(request, reporting: StateSocketEvents(
             opened: { [weak self] link in self?.opened(link, attempt: attempt) },
