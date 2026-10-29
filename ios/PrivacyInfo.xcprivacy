@@ -21,11 +21,10 @@
   Store privacy label change in the same batch, and the privacy policy the
   same day, as for Play.
 
-  NOT YET VERIFIED. This file has never been through a build, and the reason
-  codes are quoted from the plan's reading of Apple's list rather than from
-  Apple's page itself. The two marked TODO(verify-at-mac) are the ones to
-  confirm first; a wrong code is rejected at upload, not at build, so it is
-  worth checking before the first TestFlight build rather than after.
+  Every reason code below was read from Apple's own published list on
+  2026-10-28 (NSPrivacyAccessedAPITypeReasons, under App Privacy
+  Configuration) and quoted, not paraphrased. One of the four was wrong
+  before that check: see the disk-space entry.
 -->
 <plist version="1.0">
 <dict>
@@ -39,9 +38,10 @@
 	<array>
 		<!--
 		  UserDefaults. Settings, the chosen theme, the device name, the phone
-		  bar's layout: the app's own preferences and nothing else. CA92.1 is
-		  the code for an app reading and writing its OWN defaults, which is
-		  all this app does (it is in no app group and shares nothing).
+		  bar's layout: the app's own preferences and nothing else. CA92.1
+		  confirmed correct on 2026-10-28: "to read and write information that
+		  is only accessible to the app itself". The app is in no app group and
+		  shares nothing, so 1C8F.1 (App Group) does not apply.
 		-->
 		<dict>
 			<key>NSPrivacyAccessedAPIType</key>
@@ -55,8 +55,12 @@
 		  File timestamps. The Files screen shows when a file was changed, the
 		  audiobook and video downloads resume from a partial file by its date
 		  (with ETag and Last-Modified), and saved media is listed by date.
-		  C617.1 is the code for timestamps displayed to the person or used
-		  inside the app's own container.
+		  C617.1 confirmed correct on 2026-10-28: "to access the timestamps,
+		  size, or other metadata of files inside the app container, app group
+		  container, or the app's CloudKit container". Everything we read the
+		  timestamp of, we wrote ourselves. DDA9.1 (displaying timestamps) and
+		  3B52.1 (files the person picked) would be separate reasons; add
+		  3B52.1 when the picked-folder music source lands in I2.
 		-->
 		<dict>
 			<key>NSPrivacyAccessedAPIType</key>
@@ -70,31 +74,44 @@
 		  Free disk space. The model download (2.5 GB for Gemma 4 E2B) checks
 		  there is room before it starts, and so does saving an audiobook or a
 		  video to the phone: a download that fills someone's phone and then
-		  fails is worse than a download that never starts. 85F4.1 is the code
-		  for checking space before writing a file at the person's request.
+		  fails is worse than a download that never starts.
 
-		  TODO(verify-at-mac): confirm 85F4.1 against Apple's required-reason
-		  list, and confirm it covers "the person asked us to save this, is
-		  there room" rather than only a developer-initiated write.
+		  This said 85F4.1 until it was checked against Apple's list on
+		  2026-10-28. That was WRONG: 85F4.1 is "to DISPLAY disk space
+		  information to the person using the device", which is not what we do.
+		  The right code is E174.1, "to check whether there is sufficient disk
+		  space to write files", whose own wording carries the exception we
+		  rely on: "allows the app to avoid downloading files from a server
+		  when disk space is insufficient."
+
+		  E174.1 requires that the app "behave differently based on disk space
+		  in a way that is observable to users" — ours does: it says so and
+		  does not start the download. If a screen ever SHOWS free space, add
+		  85F4.1 beside this one; displaying it is a separate reason.
 		-->
 		<dict>
 			<key>NSPrivacyAccessedAPIType</key>
 			<string>NSPrivacyAccessedAPICategoryDiskSpace</string>
 			<key>NSPrivacyAccessedAPITypeReasons</key>
 			<array>
-				<string>85F4.1</string>
+				<string>E174.1</string>
 			</array>
 		</dict>
 		<!--
 		  System boot time. Used only to measure elapsed time that a clock
 		  change cannot bend: a timer counting down, a playback position, the
 		  back-off between socket reconnections. Nothing about it leaves the
-		  phone. 35F9.1 is the code for measuring elapsed time inside the app.
+		  phone. 35F9.1 confirmed correct against Apple's list on 2026-10-28:
+		  "to measure the amount of time that has elapsed between events that
+		  occurred within the app or to perform calculations to enable timers",
+		  and its one exception — elapsed time between in-app events may be
+		  sent off-device — is the only thing we would ever send.
 
-		  TODO(verify-at-mac): confirm 35F9.1, and confirm we actually need
-		  this category at all — if every elapsed-time measurement ends up
-		  going through `ContinuousClock` / `DispatchTime` rather than
-		  `kern.boottime`, this whole entry comes out.
+		  Still worth re-checking at the first build: if nothing in the app
+		  ends up touching `systemUptime` or `mach_absolute_time` because every
+		  measurement goes through `ContinuousClock` / `DispatchTime`, this
+		  whole entry comes out. Declaring a category we do not use is not
+		  rejected, but it is a claim we should not make idly.
 		-->
 		<dict>
 			<key>NSPrivacyAccessedAPIType</key>
