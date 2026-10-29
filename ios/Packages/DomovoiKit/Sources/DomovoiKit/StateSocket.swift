@@ -203,7 +203,7 @@ public func socketNext(after step: SocketStep, backoff: inout SocketBackoff) -> 
     case .addressUnusable:
         return .park(.addressUnusable)
     case .notNow:
-        return .retry(afterMs: backoff.take())
+        return .park(.notNow)
     case .opened:
         backoff.reset()
         return .live

@@ -149,7 +149,7 @@ public func homeDate(ms: Int64, timeZone: TimeZone) -> String {
     guard let weekday = parts.weekday, let day = parts.day, let month = parts.month else { return "" }
     // Foundation: 1 = Sunday … 7 = Saturday. Kotlin's `dayOfWeek.value`:
     // 1 = Monday … 7 = Sunday. So Sunday (1) is the table's last entry.
-    let index = weekday - 1
+    let index = (weekday + 5) % 7
     return "\(homeWeekdays[index]) \(day) \(homeMonths[month - 1])"
 }
 

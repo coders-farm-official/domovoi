@@ -143,7 +143,6 @@ public final class ApiRead<Value: Sendable> {
             return
         } catch let trouble {
             guard !Task.isCancelled else { return }
-            data = nil
             error = message(of: trouble)
         }
         loading = false
