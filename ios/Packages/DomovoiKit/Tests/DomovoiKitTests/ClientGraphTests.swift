@@ -138,20 +138,23 @@ final class ClientGraphTests: XCTestCase {
         XCTAssertEqual([], gate.required.current, "the probe must not ask the gate to admit it")
     }
 
-    /// An ordinary `.scoped` request through the probe client still asks no
-    /// gate and still carries no token — **the property `gate: nil` is
-    /// actually for.**
+    /// **A gate-less client still sends the household token on an ordinary
+    /// `.scoped` request.** Measured, not assumed, and it is why
+    /// ``AppContainer/probeClient`` is not public.
     ///
-    /// The probe client is public so the picker and anything else that has to
-    /// ask a host which is not the active server can use it rather than build
-    /// one, and those callers are not confined to `TokenMode.none`. A probe
-    /// client that held a gate would, on a plain `get`, take a proof and
-    /// could carry the household token — A6-02/A6-03. This is the test that
-    /// catches that, and the one in front of it only catches the wiring.
+    /// ``DomovoiClient/tokenOutcome(for:wsUpgrade:)`` reads
+    /// `if let gate { try gate.requireAdmitted(base) }`, so an absent gate is
+    /// an absent check rather than a refusal. `gate: nil` therefore buys the
+    /// probe client exactly one thing — it asks no gate — and buys it
+    /// **nothing** about the token. The token is kept off the probe by
+    /// ``UnauthenticatedProbe``'s `TokenMode.none`, which is a different
+    /// mechanism entirely.
     ///
-    /// Watched failing by returning the app's client as the probe client in
-    /// `graph`: the gate is asked to prepare, and the token goes out.
-    func testAnOrdinaryRequestThroughTheProbeClientStillAsksNoGate() async throws {
+    /// I wrote the opposite in a comment first, and this test is what
+    /// corrected it. It is left asserting the uncomfortable truth rather than
+    /// the comfortable one, so the next person to reach for a gate-less
+    /// client as a "safe" client finds out here.
+    func testAGateLessClientStillSendsTheTokenOnAScopedRequest() async throws {
         let gate = RecordingGate()
         let graph = DomovoiClient.graph(
             book: .fixed(server: "http://10.0.0.42:6369", token: "household-abc"),
@@ -161,18 +164,36 @@ final class ClientGraphTests: XCTestCase {
         ) { _ in gate }
         StubURLProtocol.enqueue(.json("{}"))
         _ = try await graph.probe.raw(method: "GET", path: "/api/state", trackPairing: false)
-        XCTAssertEqual(1, StubURLProtocol.requestCount)
         XCTAssertEqual([], gate.prepared.current, "no proof is taken for a client with no gate")
-        XCTAssertEqual([], gate.required.current)
-        XCTAssertNil(
-            StubURLProtocol.header("X-Device-Token", at: 0),
-            "a client with no gate must not carry the household token either"
+        XCTAssertEqual([], gate.required.current, "and no gate is asked to admit it")
+        XCTAssertEqual(
+            "household-abc", StubURLProtocol.header("X-Device-Token", at: 0),
+            "an absent gate is an absent CHECK, not a refusal: the token goes out unproven"
         )
-        // ...and the app's client, with the gate, does both.
+        // The app's client, with the gate, takes the proof first.
         StubURLProtocol.enqueue(.json("{}"))
         _ = try await graph.app.raw(method: "GET", path: "/api/state", trackPairing: false)
         XCTAssertEqual(["10.0.0.42"], gate.prepared.current, "the app's client takes the proof")
         XCTAssertEqual("household-abc", StubURLProtocol.header("X-Device-Token", at: 1))
+    }
+
+    /// So what the container hands out is the probe, not the client: a type
+    /// that carries no token whatever it is pointed at.
+    ///
+    /// Watched failing by making `AppContainer.probeClient` public again and
+    /// asserting against it instead — the token is there.
+    func testTheContainerHandsOutAProbeAndNotAClient() async throws {
+        let container = makeContainer()
+        StubURLProtocol.enqueue(.json("{}"))
+        _ = try await container.unauthenticatedProbe.get(
+            URL(string: "http://10.0.0.42:6369/api/state")!,
+            timeout: 3
+        )
+        XCTAssertEqual(1, StubURLProtocol.requestCount)
+        XCTAssertNil(
+            StubURLProtocol.header("X-Device-Token", at: 0),
+            "the probe carries nothing, even to the active server"
+        )
     }
 
     /// The gate's own probe, wired through the container, reaches the

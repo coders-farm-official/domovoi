@@ -209,10 +209,29 @@ public final class AppContainer: Sendable {
     /// The app's client: the only one that carries the household token.
     public let client: DomovoiClient
 
-    /// The gate's probe client: the same client with no gate. Public so a
-    /// caller that has to ask an address that is not (yet) the active server
-    /// — the picker's sweep — asks through it rather than building its own.
-    public let probeClient: DomovoiClient
+    /// The gate's probe client: the same client with no gate.
+    ///
+    /// **Not public, and that is a correction rather than a style choice.** I
+    /// made it public so the picker's sweep could use it instead of building
+    /// its own client, and the test written for that found the hazard: a
+    /// client with no gate still sends the household token on an ordinary
+    /// `.scoped` request, because ``DomovoiClient/tokenOutcome(for:wsUpgrade:)``
+    /// is `if let gate { try gate.requireAdmitted(base) }` and an absent gate
+    /// is therefore an absent check, not a refusal. So a public gate-less
+    /// client is a way to send the token to a server that has not proved
+    /// itself — finding A6-03 again, through a convenience.
+    ///
+    /// What callers outside this module get instead is
+    /// ``unauthenticatedProbe``, which is a type that cannot carry a token
+    /// whatever it is pointed at. `ClientGraphTests.testAGateLessClientStillSendsTheTokenOnAScopedRequest`
+    /// pins the measurement this paragraph rests on.
+    let probeClient: DomovoiClient
+
+    /// The one way outside this module to ask a host that is not (yet) the
+    /// active server: the picker's sweep, and anything else that must reach
+    /// an address before it is trusted. Cannot carry the household token —
+    /// see ``UnauthenticatedProbe``.
+    public var unauthenticatedProbe: UnauthenticatedProbe { probeClient.unauthenticatedProbe }
 
     let networkSink: DeferredSink
 

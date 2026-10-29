@@ -75,19 +75,27 @@ public extension DomovoiClient {
     ///    probe consulting the gate and carrying the token; here two
     ///    independent mechanisms would have to fail. Keeping both means the
     ///    two apps can be reasoned about the same way.
-    ///  - **The probe client is public**, so the picker and anything else
-    ///    that must ask a host which is not the active server can use it
-    ///    instead of building one. Those callers are not confined to
-    ///    `TokenMode.none`: an ordinary `.scoped` request through a probe
-    ///    client that held a gate *would* take a proof and could carry the
-    ///    token, which is findings A6-02/A6-03. `gate: nil` is what makes the
-    ///    client safe for any request, not just for the one shape of request
-    ///    it is used for today — and
-    ///    `ClientGraphTests.testAnOrdinaryRequestThroughTheProbeClientStillAsksNoGate`
-    ///    is that property.
+    ///  - **It keeps the gate out of its own answer.** A verdict the gate
+    ///    reached while consulting itself would be a verdict about nothing,
+    ///    and the day a probe stops being `TokenMode.none` — a probe that
+    ///    needs a POST, say — `gate: nil` is the one of the two mechanisms
+    ///    that still holds.
     ///  - I1-B's ``DomovoiError/probeWiringCycle`` and its `@TaskLocal` guard
-    ///    remain the net under a future probe that is not `.none`. A net, not
-    ///    the design.
+    ///    remain the net under that day. A net, not the design.
+    ///
+    /// **What `gate: nil` does NOT buy, measured:** a gate-less client still
+    /// puts the household token on an ordinary `.scoped` request to the
+    /// active server, because ``DomovoiClient/tokenOutcome(for:wsUpgrade:)``
+    /// is `if let gate { try gate.requireAdmitted(base) }` — an absent gate
+    /// is an absent *check*, not a refusal. So a gate-less client is not a
+    /// safe client, and
+    /// `ClientGraphTests.testAGateLessClientStillSendsTheTokenOnAScopedRequest`
+    /// asserts exactly that. It is why ``AppContainer`` keeps its probe
+    /// client internal and hands out ``AppContainer/unauthenticatedProbe``
+    /// instead, and it is reported in `I1C1-REPORT.md` as a fail-open worth
+    /// a decision: in production there is one app client and it has the gate,
+    /// so nothing is wrong today, but the default direction of the `if` is
+    /// the permissive one.
     ///
     /// - Parameter gate: given the finished probe client, returns the gate.
     ///   Non-escaping and called exactly once, before the app's client
