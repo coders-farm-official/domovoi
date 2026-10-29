@@ -77,6 +77,13 @@ final class ShellStringsTests: XCTestCase {
         // with part 2's sections.
         "ui/screens/home/HomeSections.kt",
         "ui/screens/home/HomeModels.kt",
+        // **`HomeScreen.kt` is here for one literal**: `"domovoi"`, the
+        // header's fallback name, whose source is `HomeScreen.kt:390`.
+        // Without this file the assertion passed on `AppShell.kt:891` and
+        // `ConnectionPanel.kt:498` — two unrelated literals that happen to be
+        // the same word — so it read as evidence of a match it had not made.
+        // Part 2 adds the rest of this file's strings with its sections.
+        "ui/screens/home/HomeScreen.kt",
     ]
 
     /// Every literal in every file above, decoded, concatenated per file.

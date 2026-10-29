@@ -594,23 +594,37 @@ final class StateSocketTests: XCTestCase {
 
     // MARK: - the relay
 
-    /// A connect that lands before anything is listening is counted, not
-    /// pretended away: it is a connect whose capability refresh and device
-    /// register never happened.
-    func testAConnectBeforeAnybodyIsListeningIsCounted() {
+    /// **Dropped, not replayed**, which is Android's no-replay
+    /// `MutableSharedFlow` and is why every consumer has a catch-up read.
+    ///
+    /// This used to assert a `missedConnections` tally instead. The tally is
+    /// gone — nothing read it, and `DomovoiApp.init`'s ordering makes the
+    /// window unreachable. What is worth pinning is that connecting a sink
+    /// does not hand it the past, and that a dropped sink stops being called.
+    func testWhatArrivesBeforeAnybodyIsListeningIsDropped() {
         let relay = SocketRelay()
         relay.connectionChanged(true)
-        XCTAssertEqual(1, relay.missedConnections)
+        relay.arrived(StateEvent(type: "timers.changed", frame: #"{"type":"timers.changed"}"#))
+
         let seen = Shared<[Bool]>([])
-        relay.connect(connection: { value in seen.mutate { $0.append(value) } }, event: { _ in })
+        let frames = Shared<[String]>([])
+        relay.connect(
+            connection: { value in seen.mutate { $0.append(value) } },
+            event: { frame in frames.mutate { $0.append(frame.type) } }
+        )
+        XCTAssertEqual([], seen.current, "connecting does not replay the connect it missed")
+        XCTAssertEqual([], frames.current, "nor the frame")
+
         relay.connectionChanged(false)
+        relay.arrived(StateEvent(type: "rooms.changed", frame: #"{"type":"rooms.changed"}"#))
         XCTAssertEqual([false], seen.current)
-        XCTAssertEqual(1, relay.missedConnections, "and the tally does not grow once it is wired")
+        XCTAssertEqual(["rooms.changed"], frames.current)
 
         relay.disconnect()
         relay.connectionChanged(true)
+        relay.arrived(StateEvent(type: "x", frame: #"{"type":"x"}"#))
         XCTAssertEqual([false], seen.current, "a dropped sink is not called")
-        XCTAssertEqual(2, relay.missedConnections)
+        XCTAssertEqual(["rooms.changed"], frames.current, "and neither is its event half")
     }
 
     // MARK: - the real transport, against a real socket on 127.0.0.1

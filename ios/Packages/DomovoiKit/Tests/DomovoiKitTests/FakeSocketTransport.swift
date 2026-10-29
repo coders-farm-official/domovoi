@@ -1,4 +1,5 @@
 import Foundation
+import XCTest
 @testable import DomovoiKit
 
 /// A ``StateSocketTransport`` a test drives by hand.
@@ -22,6 +23,9 @@ final class FakeSocketTransport: StateSocketTransport, @unchecked Sendable {
         private let lock = NSLock()
         private var frames: [String] = []
         private var cancelled = false
+        /// Which ending call has already been made, if any — see
+        /// ``end(_:)``.
+        private var ended: String?
 
         init(request: URLRequest, events: StateSocketEvents) {
             self.request = request
@@ -43,8 +47,47 @@ final class FakeSocketTransport: StateSocketTransport, @unchecked Sendable {
 
         func reportOpen() { events.opened(self) }
         func deliver(_ text: String) { events.text(text) }
-        func fail(status: Int? = nil, body: String? = nil) { events.failed(status, body) }
-        func closeFromPeer() { events.closed() }
+
+        func fail(
+            status: Int? = nil,
+            body: String? = nil,
+            file: StaticString = #filePath,
+            line: UInt = #line
+        ) {
+            end("failed", file: file, line: line)
+            events.failed(status, body)
+        }
+
+        func closeFromPeer(file: StaticString = #filePath, line: UInt = #line) {
+            end("closed", file: file, line: line)
+            events.closed()
+        }
+
+        /// **``StateSocketTransport``'s obligation, enforced:** exactly one of
+        /// `failed` or `closed` per link, and neither after `cancel()`.
+        ///
+        /// A fake that let a test report both would let a test pass against a
+        /// transport that cannot exist — and the thing it would hide is a
+        /// silently halved backoff, because `advance(.lost, attempt:)` does
+        /// not bump the attempt. The real transport's `claimFinish()` makes
+        /// this impossible; this is where it is **checked**, which is the
+        /// difference between a contract and a paragraph.
+        private func end(_ what: String, file: StaticString, line: UInt) {
+            let trouble = lock.withLock { () -> String? in
+                if cancelled { return "\(what) after cancel()" }
+                if let ended { return "\(what) after \(ended)" }
+                ended = what
+                return nil
+            }
+            if let trouble {
+                XCTFail(
+                    "one end per link: \(trouble). StateSocketTransport promises exactly one of "
+                        + "failed/closed per link and none after cancel().",
+                    file: file,
+                    line: line
+                )
+            }
+        }
     }
 
     private struct State {

@@ -39,6 +39,31 @@ struct HomeHeaderView: View {
 
     @Environment(\.dynamicTypeSize) private var typeSize
 
+    /// The Kotlin's `compact` — **pane width, which is what Android branches
+    /// the dot on** (`HomeSections.kt:211-238`): a phone gets the bare 44 dp
+    /// dot and a wide pane gets a bordered pill with the words in it.
+    ///
+    /// I1-D part 1 branched on `isAccessibilitySize` alone, so on an iPad or
+    /// a wide split view at ordinary text size iOS drew the bare dot where
+    /// Android draws the labelled pill, and `live` / `not live · updates
+    /// every 30s` — both pinned against the Kotlin and both tested — reached
+    /// a person through VoiceOver and nowhere else.
+    @Environment(\.horizontalSizeClass) private var sizeClass
+
+    /// Whether the dot carries its words. The Kotlin's `!compact`, **plus**
+    /// the accessibility reflow `8c2e7117` added: at `.isAccessibilitySize`
+    /// the words come even on a phone, because the dot has moved under the
+    /// text and a bare circle there is unreadable.
+    private var showsLiveWords: Bool {
+        ShellWidth(sizeClass) == .regular || typeSize.isAccessibilitySize
+    }
+
+    /// A pill only where Android draws one: on a wide pane. The
+    /// accessibility reflow on a phone keeps the plain row it already had,
+    /// because a bordered pill wrapping to four lines at AX5 is the clipping
+    /// the audit failed the first screen of this app for.
+    private var showsLivePill: Bool { ShellWidth(sizeClass) == .regular }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             if typeSize.isAccessibilitySize {
@@ -120,19 +145,14 @@ struct HomeHeaderView: View {
 
     /// On a phone: the dot alone, in a 44-point target, with no text — so the
     /// accessibility label is the only thing that says what it means. On a
-    /// wider pane: a bordered pill with the words beside it.
+    /// wider pane: a bordered pill with the words beside it, which is what
+    /// the Kotlin draws there.
     private var dot: some View {
         Button {
             explaining.toggle()
         } label: {
-            if typeSize.isAccessibilitySize {
-                HStack(spacing: 8) {
-                    circle
-                    Text(state.liveLabel)
-                        .font(.footnote)
-                        .foregroundStyle(Color.fgMuted)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+            if showsLiveWords {
+                words(beside: circle)
             } else {
                 circle.frame(width: 44, height: 44)
             }
@@ -140,6 +160,42 @@ struct HomeHeaderView: View {
         .buttonStyle(.plain)
         .accessibilityLabel(state.liveLabel)
         .accessibilityHint(state.explanation)
+    }
+
+    /// The dot and its label, as a pill on a wide pane and as a plain row at
+    /// the accessibility sizes.
+    ///
+    /// The pill's shape is the Kotlin's: a 6 dp corner, a 1 dp border, the
+    /// card fill, 10 × 7 dp of padding (`HomeSections.kt:221-238`). The
+    /// border and fill are SwiftUI's `.separator` and `.background.secondary`
+    /// rather than `Domovoi.colors.border` / `.card`, because the asset
+    /// catalogue generated from `web/static/colors_and_type.css` is plan
+    /// 1.1's and this target still has exactly one hand-written token
+    /// (``Color/fgMuted``). That is a divergence in two colours, written down
+    /// here, and not one in the layout or the words.
+    @ViewBuilder private func words(beside mark: some View) -> some View {
+        let row = HStack(spacing: 8) {
+            mark
+            Text(state.liveLabel)
+                .font(.footnote)
+                .foregroundStyle(Color.fgMuted)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        if showsLivePill {
+            row
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(.background.secondary)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .strokeBorder(.separator, lineWidth: 1)
+                )
+        } else {
+            row
+        }
     }
 
     private var circle: some View {

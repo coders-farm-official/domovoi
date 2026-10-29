@@ -7,8 +7,6 @@ import XCTest
 /// chooses between them.
 final class HomeHeaderTests: XCTestCase {
 
-    private let london = TimeZone(identifier: "Europe/London")!
-
     // MARK: - the name
 
     func testABlankBotNameIsNotAName() {
@@ -148,9 +146,35 @@ final class HomeHeaderTests: XCTestCase {
         XCTAssertEqual("mon 28 sep  ·  3 online  ·  1 timer", full.spokenLine)
     }
 
-    func testTheCountsAreSkeletonedUntilTheRoomsReadAnswers() {
-        let waiting = HomeHeaderState(name: "d", date: "mon 28 sep", countsReady: false, live: false, paired: true)
-        XCTAssertFalse(waiting.countsReady, "a skeleton beside the date, not a spinner")
-        XCTAssertEqual("mon 28 sep", waiting.spokenLine)
+    /// **A skeleton is a promise, so it is drawn only when a read is
+    /// pending.** The old version of this test read `countsReady` back out of
+    /// the initialiser it had just been passed to, which could only fail if
+    /// it stopped being a stored property; nothing about the skeleton was
+    /// tested at all. What decides is `showsCountsSkeleton`, and the state
+    /// that mattered — a screen with no rooms read — is the one this batch
+    /// shipped drawing a skeleton for ever.
+    func testTheSkeletonIsDrawnForAPendingReadAndNotForAnAbsentOne() {
+        let pending = HomeHeaderState(name: "d", date: "mon 28 sep", countsReady: false, live: false, paired: true)
+        XCTAssertTrue(pending.showsCountsSkeleton, "the rooms read has not answered: a grey box, not a spinner")
+        XCTAssertEqual("mon 28 sep", pending.spokenLine, "and nothing to say beside the date yet")
+
+        // What Home passes at this commit: there is no rooms read, so
+        // nothing is pending and the date stands alone.
+        let nothingToWaitFor = HomeHeaderState(
+            name: "d", date: "mon 28 sep", counts: [], countsReady: true, live: false, paired: true
+        )
+        XCTAssertFalse(
+            nothingToWaitFor.showsCountsSkeleton,
+            "no read to wait on, so no promise that one is coming"
+        )
+        XCTAssertEqual("mon 28 sep", nothingToWaitFor.spokenLine)
+
+        // And when a read has answered with something, the counts are drawn
+        // rather than the box.
+        let answered = HomeHeaderState(
+            name: "d", date: "mon 28 sep", counts: ["3 online"], countsReady: true, live: false, paired: true
+        )
+        XCTAssertFalse(answered.showsCountsSkeleton)
+        XCTAssertEqual("mon 28 sep  ·  3 online", answered.spokenLine)
     }
 }

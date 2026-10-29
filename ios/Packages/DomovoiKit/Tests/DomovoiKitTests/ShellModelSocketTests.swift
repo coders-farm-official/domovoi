@@ -356,8 +356,17 @@ final class ShellModelSocketTests: XCTestCase {
         XCTAssertFalse(room.socket.isStarted, "the household side is off while the phone is a room")
     }
 
-    /// Watching picks up a socket that is already up, rather than waiting for
-    /// the next change — the window ``SocketRelay/missedConnections`` counts.
+    /// **Watching takes the socket's current value**, rather than waiting to
+    /// be told — which is what keeps the window ``SocketRelay`` cannot replay
+    /// from mattering.
+    ///
+    /// The old version of this asserted `missedConnections == 0` having
+    /// started nothing, so neither half could fail: an unstarted socket is
+    /// not connected, and a relay nothing has told anything has missed
+    /// nothing. The tally is gone; what is pinned now is the property the
+    /// tally was standing in for, which is that a connect arriving with
+    /// nothing listening is **dropped** — so `watchSocket()` has to read the
+    /// socket, and does.
     func testWatchingTakesTheSocketsCurrentValue() async {
         let fetches = Shared(0)
         StubURLProtocol.dispatch { request in
@@ -366,9 +375,24 @@ final class ShellModelSocketTests: XCTestCase {
         }
         let (model, container, _) = model(deviceSelf: nil)
         XCTAssertFalse(model.connected)
+
+        // The relay is told the socket is up while nobody is listening. There
+        // is no replay, so this value is gone for good.
+        container.socketRelay.connectionChanged(true)
+        XCTAssertFalse(model.connected, "nobody was watching, and nothing is replayed")
+
+        // So watching reads the socket. The container's own socket is parked
+        // on an unproven gate, so `false` is the right answer here and the
+        // measurement is that it came from the socket rather than from the
+        // dropped message above.
         model.watchSocket()
-        XCTAssertFalse(model.connected, "nothing started it")
-        XCTAssertEqual(0, container.socketRelay.missedConnections)
+        XCTAssertFalse(model.connected)
+        XCTAssertEqual(.notNow, container.socket.paused, "which is what the socket itself says")
+
+        // And from here on the sink is live: the next change does arrive.
+        container.socketRelay.connectionChanged(true)
+        await settleUntil { model.connected }
+        XCTAssertTrue(model.connected)
         model.stop()
     }
 
@@ -443,6 +467,11 @@ final class ShellModelSocketTests: XCTestCase {
             answer: { .json(#"{"device_id":"ios-0123456789abcdef","name":"iPhone","shared_screen":false}"#) }
         )
         let (model, _, store) = model()
+        // A gets a known-server row before the switch. Without one its trust
+        // is orphan trust, and `setServerURL` drops orphan trust as it
+        // switches (`TrustBook:127-131`, P2-at-01) — so switching back to A
+        // at the end would be refused and the last assertion could not run.
+        store.upsertKnownServer(url: server, name: nil)
 
         // A's register is in flight and parked at the server.
         let pending = Task { @MainActor in await model.register() }

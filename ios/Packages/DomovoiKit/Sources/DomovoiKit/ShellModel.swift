@@ -793,8 +793,9 @@ public final class ShellModel {
         // The socket may already be up — `AppContainer.start()` opens it, and
         // whether that happened before this call is the app's build order,
         // not a fact this method can assume. So the current value is taken
-        // rather than waited for, and `SocketRelay.missedConnections` is what
-        // says whether the window was ever entered.
+        // rather than waited for, which makes the build order something that
+        // cannot be got wrong silently rather than something a counter
+        // reports after the fact.
         socketConnectionChanged(container.socket.connected)
     }
 

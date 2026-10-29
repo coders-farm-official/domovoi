@@ -60,9 +60,10 @@ struct DomovoiApp: App {
         // **Subscribed before the socket is opened**, in this order and not
         // in a view's `.task`, which runs later: a connect that landed in
         // between would be a connect whose capability refresh and device
-        // register never happened. ``SocketRelay/missedConnections`` is the
-        // number that says whether that window was ever entered, and these
-        // two lines are why it should read zero.
+        // register never happened, because ``SocketRelay`` does not replay.
+        // These two lines, in this order, are the whole of what prevents it —
+        // which is also why ``ShellModel/watchSocket()`` takes the socket's
+        // CURRENT value rather than waiting for the next change.
         model.watchSocket()
         // Registering the path monitors, and opening the state socket, are
         // side effects on the process, which is why they are a separate call

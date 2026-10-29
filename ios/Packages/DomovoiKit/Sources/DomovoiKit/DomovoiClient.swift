@@ -792,6 +792,18 @@ public final class DomovoiClient: Sendable {
         }
     }
 
+    /// How the app opens a socket: this client's own `URLSession`, so the
+    /// upgrade inherits its configuration exactly as Android's goes through
+    /// the app's one `OkHttpClient` (map §1.2).
+    ///
+    /// The session itself stays internal. A transport can only open a request
+    /// it is handed, and the only thing that builds one is
+    /// ``webSocketUpgrade(_:)``, so handing out the transport hands out no
+    /// way to make an unminted request.
+    public var webSocketTransport: any StateSocketTransport {
+        URLSessionStateSocketTransport(session: session)
+    }
+
     /// A WebSocket upgrade this phone may open, which decides what it carries
     /// at **connect** time.
     ///
@@ -830,18 +842,6 @@ public final class DomovoiClient: Sendable {
     /// when it is made; refusing to build it is the stricter half of the same
     /// rule, and it means no caller can be handed a socket request that cannot
     /// legitimately be opened ("no misleading controls").
-    /// How the app opens a socket: this client's own `URLSession`, so the
-    /// upgrade inherits its configuration exactly as Android's goes through
-    /// the app's one `OkHttpClient` (map §1.2).
-    ///
-    /// The session itself stays internal. A transport can only open a request
-    /// it is handed, and the only thing that builds one is
-    /// ``webSocketUpgrade(_:)``, so handing out the transport hands out no
-    /// way to make an unminted request.
-    public var webSocketTransport: any StateSocketTransport {
-        URLSessionStateSocketTransport(session: session)
-    }
-
     public func webSocketUpgrade(_ url: String) -> SocketUpgrade? {
         guard let parsed = ServerURL.parseAllowingWebSocket(url), let target = URL(string: url) else { return nil }
         guard CleartextPolicy.permits(parsed) else { return nil }

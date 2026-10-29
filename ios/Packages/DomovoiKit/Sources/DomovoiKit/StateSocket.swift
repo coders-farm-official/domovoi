@@ -319,6 +319,25 @@ public struct StateSocketEvents: Sendable {
 
 /// How a socket is actually opened. The app passes
 /// ``URLSessionStateSocketTransport``; a test passes its own.
+///
+/// ### The obligation a transport takes on
+///
+/// **Exactly one of `failed` or `closed` per link, and neither after
+/// `cancel()`.** `opened` and `text` may come any number of times; the two
+/// ending calls are one between them, for ever.
+///
+/// This is not a tidiness rule, it is what the generation scheme's safety
+/// rests on. ``StateSocket``'s `advance(.lost, attempt:)` deliberately does
+/// **not** bump `attempt`, because a lost link's retry has to stay the same
+/// attempt. A transport that reported both `failed` and `closed` would hit
+/// that path twice with `attempt` unchanged: the second would take a second
+/// rung off the backoff ladder and cancel-and-replace the retry task the
+/// first had already scheduled. Not a crash — a silently wrong backoff,
+/// which is the kind of thing nobody notices for a year.
+///
+/// ``URLSessionStateSocketTransport.Link`` guarantees it with `claimFinish()`,
+/// and `FakeSocketTransport.Link` **asserts** it, so the contract is checked
+/// where transports are written rather than only described here.
 public protocol StateSocketTransport: Sendable {
     func open(_ request: URLRequest, reporting events: StateSocketEvents) -> any StateSocketLink
 }
@@ -808,32 +827,33 @@ public final class StateSocket: Sendable {
 /// ``AppContainer`` builds the socket in `init`, where ``ShellModel`` does
 /// not exist yet; the model connects afterwards. The same forward reference
 /// ``DeferredSink`` and ``ShellModel/VerdictRelay`` exist for, resolved the
-/// same way — and, like them, it **counts** what arrived before anything was
-/// listening rather than pretending it cannot happen. It can: the container's
-/// ``AppContainer/start()`` may open the socket before a shell is built, and
-/// a connect that lands in that window is a connect whose capability refresh
-/// and device register never happened.
+/// same way.
 ///
-/// ``missedConnections`` is the number to look at, and
-/// `testAConnectBeforeAnybodyIsListeningIsCounted` is what says it is
-/// counted. The app avoids the window by building the model before calling
-/// `start()` (`DomovoiApp.init`), which is one line and is checkable by
-/// reading it.
+/// ### No replay, and no counter either
+///
+/// Anything that arrives before a sink is connected is **dropped**, which is
+/// Android's no-replay `MutableSharedFlow` and is why every consumer also has
+/// a catch-up read (map §1.1).
+/// `testWhatArrivesBeforeAnybodyIsListeningIsDropped` is that.
+///
+/// This type used to keep `missedConnections` and `missedEvents`, two tallies
+/// of how often that window was entered. They are gone. Nothing in the app
+/// ever logged or showed them, and the window they measured is one
+/// `DomovoiApp.init`'s own ordering makes unreachable — it builds the model,
+/// and so connects the sinks, **before** `container.start()` opens the
+/// socket. A counter for a condition the construction already prevents is a
+/// comment arguing that an omission is safe, wearing a number's hat; the
+/// ordering is one line and is checkable by reading it.
 public final class SocketRelay: Sendable {
 
     private struct State {
         var connection: (@Sendable (Bool) -> Void)?
         var event: (@Sendable (StateEvent) -> Void)?
-        var missedConnections = 0
-        var missedEvents = 0
     }
 
     private let state = Mutex(State())
 
     public init() {}
-
-    public var missedConnections: Int { state.withLock { $0.missedConnections } }
-    public var missedEvents: Int { state.withLock { $0.missedEvents } }
 
     public func connect(
         connection: @Sendable @escaping (Bool) -> Void,
@@ -855,18 +875,12 @@ public final class SocketRelay: Sendable {
     }
 
     func connectionChanged(_ connected: Bool) {
-        let sink = state.withLock { current -> (@Sendable (Bool) -> Void)? in
-            if current.connection == nil { current.missedConnections += 1 }
-            return current.connection
-        }
+        let sink = state.withLock { current in current.connection }
         sink?(connected)
     }
 
     func arrived(_ event: StateEvent) {
-        let sink = state.withLock { current -> (@Sendable (StateEvent) -> Void)? in
-            if current.event == nil { current.missedEvents += 1 }
-            return current.event
-        }
+        let sink = state.withLock { current in current.event }
         sink?(event)
     }
 }
