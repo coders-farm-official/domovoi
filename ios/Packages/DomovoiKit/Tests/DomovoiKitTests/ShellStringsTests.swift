@@ -1065,6 +1065,19 @@ final class ShellStringsTests: XCTestCase {
         assertKotlinSaysWhole(HealthStrings.adminAttention)
         assertKotlinSaysWhole(HealthStrings.tampering)
         assertKotlinSaysWhole(HealthStrings.containerNeedsAttention)
+        // The one plural, which is built rather than stored
+        // (`"${ids.size} Domovoi containers need attention"`,
+        // `HealthChecks.kt`). Guarded by `> 1` on both sides, so there is no
+        // "1 Domovoi containers" to catch — unlike `stop $count rooms?`,
+        // which is defect #9 and is not this batch's code.
+        assertKotlinSays(" Domovoi containers need attention")
+        XCTAssertEqual(
+            "2 Domovoi containers need attention",
+            guardCheck(ContainerGuardState(
+                loaded: true, tier: .household, bannerShows: true,
+                bannerTone: .error, incidentIDs: [1, 2]
+            )).text
+        )
     }
 
     /// The four that **cannot** be whole literals, and why.

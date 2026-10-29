@@ -346,8 +346,9 @@ final class HomeModelTests: XCTestCase {
             let check = checks.first { $0.key == key }
             XCTAssertEqual(
                 HealthStrings.unread, check?.text,
-                "\(key): with `.orEmpty()` this reads "
-                    + "\"\(key == "rooms" ? HealthStrings.noRoomsYet : HealthStrings.none)\" instead"
+                "\(key): Android's `.orEmpty()` reports a room list it never "
+                    + "saw, and the words it reaches for are the ones for an "
+                    + "empty house"
             )
             XCTAssertEqual(.idle, check?.tone, "\(key): grey, never green")
         }
