@@ -393,7 +393,7 @@ public final class AppContainer: Sendable {
         }
 
         func remove(_ token: Int) {
-            state.withLock { $0.sinks.removeValue(forKey: token) }
+            state.withLock { _ = $0.sinks.removeValue(forKey: token) }
         }
 
         func fire() {

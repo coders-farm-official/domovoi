@@ -64,11 +64,19 @@ final class ShellModelTests: XCTestCase {
             self.store = store
             let lines = self.lines
             let clock = self.clock
+            // Spelt out rather than a ternary of two closures, which the type
+            // checker cannot diagnose inside this call.
+            let containerClock: @Sendable () -> Int64
+            if sharesClock {
+                containerClock = { clock.current }
+            } else {
+                containerClock = { 0 }
+            }
             container = AppContainer(
                 store: store,
                 vault: TokenVault(items: InMemoryKeychain()),
                 lock: HouseholdLock(),
-                clock: sharesClock ? { clock.current } : { 0 },
+                clock: containerClock,
                 configuration: StubURLProtocol.session(timeout: 1),
                 log: { who, what in lines.mutate { $0.append("\(who): \(what)") } }
             )
