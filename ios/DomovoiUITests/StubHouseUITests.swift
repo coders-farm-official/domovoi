@@ -95,7 +95,7 @@ final class StubHouseUITests: XCTestCase {
                 // Print every issue rather than only failing on the first:
                 // the result bundle names none of them, and finding out
                 // which element is at fault took a throwaway test last time.
-                print("AUDIT detail=\(issue.detail ?? "nil") element=\(issue.element?.debugDescription ?? "nil")")
+                print("AUDIT \(issue.compactDescription) element=\(issue.element?.debugDescription ?? "nil")")
                 return false
             }
         }
