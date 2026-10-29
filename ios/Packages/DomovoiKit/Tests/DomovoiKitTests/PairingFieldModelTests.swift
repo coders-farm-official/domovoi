@@ -242,7 +242,8 @@ final class PairingFieldModelTests: XCTestCase {
         )
         field.typed = token
 
-        XCTAssertEqual(.accepted, await field.submit())
+        let answer = await field.submit()
+        XCTAssertEqual(.accepted, answer)
         XCTAssertEqual(other, store.serverURL, "the switch really happened")
         XCTAssertEqual(token, store.token(for: server), "filed where it was checked")
         XCTAssertNil(store.token(for: other), "and NOT under the server it was never offered to")
@@ -258,7 +259,8 @@ final class PairingFieldModelTests: XCTestCase {
         let saved = Shared<[String]>([])
         let field = makeField(store: store, answer: .accepted, cleared: cleared, saved: saved)
         field.typed = token
-        XCTAssertEqual(.accepted, await field.submit())
+        let answer = await field.submit()
+        XCTAssertEqual(.accepted, answer)
         XCTAssertEqual(token, store.token(for: server))
         XCTAssertEqual(1, cleared.current)
         XCTAssertEqual([token], saved.current)
