@@ -82,18 +82,34 @@ func headerSafeToken(_ token: String?) -> String? {
 /// `base` may go out now and throws otherwise — the request never leaves.
 /// Consulted only when there is a token to protect.
 ///
-/// **I1-B implements this.** Nothing in this batch does; the client takes it
-/// as an optional and a nil gate means "nothing beyond being the active
-/// server", which is the shape Android's own tests use.
+/// ``IdentityGate`` is the implementation; the client takes this as an
+/// optional and a nil gate means "nothing beyond being the active server",
+/// which is the shape Android's own tests use.
 ///
-/// It is synchronous, like the Kotlin's `fun interface`, because the redirect
-/// delegate that must ask it cannot `await` (see ``HouseholdLock``). The
-/// Kotlin gate takes a fresh network proof on the spot when it has none,
-/// which on iOS cannot happen inside this call; I1-B will have to keep the
-/// proof where a synchronous reader can see it, and say what it does when
-/// there is none.
+/// ### Why there are two methods and not one
+///
+/// ``requireAdmitted(_:)`` is synchronous, like the Kotlin's `fun interface`,
+/// because the redirect delegate that must ask it cannot `await` (see
+/// ``HouseholdLock``). The Kotlin gate takes a fresh network proof on the
+/// spot when it has none — its OkHttp interceptor is allowed to block — and
+/// inside a synchronous `URLSession` callback iOS cannot.
+///
+/// So the proof is taken in ``prepare(_:)``, which ``DomovoiClient`` calls
+/// from its `async` entry point **before the task starts** and only when the
+/// decision has reached the point of needing the gate; the synchronous call
+/// each hop makes then reads the verdict that is already there.
+/// ``IdentityGate`` documents at length what happens when a hop asks and
+/// there is no usable verdict (it holds the token) and why that is the only
+/// answer.
 public protocol TokenGate: Sendable {
+    /// Take or refresh whatever ``requireAdmitted(_:)`` will read. Called
+    /// once per request, before it is sent. Never throws: a server that
+    /// cannot be reached is not a verdict about who it is, and the request
+    /// that follows fails on its own.
+    func prepare(_ base: ServerURL) async
+
     /// Throws when a token-bearing request to `base` must not go out now.
+    /// Reads only what ``prepare(_:)`` left; it cannot ask the network.
     func requireAdmitted(_ base: ServerURL) throws
 
     /// Whether a refusal from `base` may raise the pairing screen: a server
@@ -104,6 +120,10 @@ public protocol TokenGate: Sendable {
 public extension TokenGate {
     /// Kotlin's default body, verbatim: `base != null`.
     func admitsPairingPrompt(_ base: ServerURL?) -> Bool { base != nil }
+
+    /// A gate with nothing to take: the shape the tests' stubs want, and the
+    /// reason adding ``prepare(_:)`` did not break them.
+    func prepare(_ base: ServerURL) async {}
 }
 
 /// True when a refusal is the server asking to be **paired** rather than

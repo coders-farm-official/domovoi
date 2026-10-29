@@ -209,7 +209,25 @@ public final class DomovoiClient: Sendable {
         case held(reason: String)
     }
 
-    func tokenOutcome(for url: ServerURL, wsUpgrade: Bool) -> TokenOutcome {
+    /// The decision as far as the gate, and no further.
+    ///
+    /// Split out because the gate is asked in two places that cannot share
+    /// one call: ``prepareIdentity(for:wsUpgrade:)``, which is `async` and
+    /// takes the proof, and ``tokenOutcome(for:wsUpgrade:)``, which is
+    /// synchronous and reads it. Both have to apply the five rules in front
+    /// of the gate, in the same order, and there is one copy of them here —
+    /// so a phone with no token to protect probes nothing, exactly as
+    /// Android's interceptor never reaches its gate in that case.
+    enum PreGate: Equatable {
+        case bare
+        case wait(ms: Int64)
+        /// The rules so far admit it; the gate decides. `base` is the active
+        /// server, which is what the gate is asked about — never the hop's
+        /// own URL, which may be another port on the same host.
+        case ask(base: ServerURL, token: String, server: String)
+    }
+
+    func tokenDecision(for url: ServerURL, wsUpgrade: Bool) -> PreGate {
         // Room mode: the household token goes nowhere (HouseholdLock).
         if lock.roomModeActive { return .bare }
         let raw = book.activeServer()
@@ -224,11 +242,54 @@ public final class DomovoiClient: Sendable {
             let wait = health.waitMs(raw)
             if wait > 0 { return .wait(ms: wait) }
         }
-        if let gate {
-            do { try gate.requireAdmitted(base) }
-            catch { return .held(reason: (error as? DomovoiError)?.message ?? "\(error)") }
+        return .ask(base: base, token: token, server: raw)
+    }
+
+    func tokenOutcome(for url: ServerURL, wsUpgrade: Bool) -> TokenOutcome {
+        switch tokenDecision(for: url, wsUpgrade: wsUpgrade) {
+        case .bare:
+            return .bare
+        case .wait(let ms):
+            return .wait(ms: ms)
+        case .ask(let base, let token, let server):
+            if let gate {
+                do { try gate.requireAdmitted(base) }
+                catch { return .held(reason: (error as? DomovoiError)?.message ?? "\(error)") }
+            }
+            return .send(token: token, server: server)
         }
-        return .send(token: token, server: raw)
+    }
+
+    /// Take or refresh the identity proof this request will need, before it
+    /// is sent.
+    ///
+    /// The `async` half of the gate's split (see ``TokenGate``): the proof is
+    /// a network call, the per-hop reader is a synchronous platform callback,
+    /// so the call happens here and the callback reads what it left. One call
+    /// covers the whole redirect chain, because every hop that may carry the
+    /// token is on the active server by definition and so asks about the same
+    /// `base`.
+    ///
+    /// It asks nothing when the decision would not reach the gate — room
+    /// mode, a foreign host, no token, a refused token, a wait — so an
+    /// unpaired phone and a sweep probe no server about its identity.
+    func prepareIdentity(for url: ServerURL, wsUpgrade: Bool) async {
+        guard let gate, case .ask(let base, _, _) = tokenDecision(for: url, wsUpgrade: wsUpgrade) else { return }
+        await gate.prepare(base)
+    }
+
+    /// ``prepareIdentity(for:wsUpgrade:)`` for a caller that is about to ask
+    /// a **synchronous** question about `address`: ``tokenForDownload(_:)``
+    /// and ``SocketUpgrade/mint()``, neither of which can take a proof of its
+    /// own.
+    ///
+    /// I1-D must `await` this immediately before each `mint()`, and I1-C
+    /// before handing a URL to the system downloader. Without it the first
+    /// such call after a network change is refused — correctly, and
+    /// needlessly.
+    public func prepareIdentity(forAddress address: String, wsUpgrade: Bool = false) async {
+        guard let parsed = ServerURL.parseAllowingWebSocket(address) else { return }
+        await prepareIdentity(for: parsed, wsUpgrade: wsUpgrade)
     }
 
     // ---- making a request --------------------------------------------------
@@ -291,6 +352,10 @@ public final class DomovoiClient: Sendable {
             outgoing.setValue(candidate, forHTTPHeaderField: deviceTokenHeader)
             sentToken = candidate
         case .scoped:
+            // The proof, taken here because this is the last place that can
+            // `await` before the task — and before the token decision, which
+            // only reads it. See ``TokenGate``.
+            await prepareIdentity(for: parsed, wsUpgrade: wsUpgrade)
             switch tokenOutcome(for: parsed, wsUpgrade: wsUpgrade) {
             case .bare:
                 break
@@ -566,6 +631,13 @@ public final class DomovoiClient: Sendable {
             if wait > 0 { return .throttled(waitMs: wait) }
         }
         if let gate {
+            // Android asks the gate here unconditionally — not through the
+            // token decision, because the candidate is not the saved token
+            // and none of the five rules in front of the gate is about it.
+            // So the proof is taken here too, rather than by
+            // `prepareIdentity`, which would decline (there may be no saved
+            // token at all: this is the pairing screen).
+            await gate.prepare(base)
             do { try gate.requireAdmitted(base) } catch { return .unavailable }
         }
         guard let url = URL(string: "\(base.scheme)://\(hostForURL(base.host)):\(base.port)\(Self.tokenCheckPath)") else {
@@ -606,8 +678,11 @@ public final class DomovoiClient: Sendable {
     ///
     /// Android's version suspends because its gate takes a fresh network
     /// proof on the spot. This one does not, because the gate here is
-    /// synchronous (see ``TokenGate``) — if I1-B needs to take a proof at
-    /// this point, this is a function that will have to grow an `await`.
+    /// synchronous (see ``TokenGate``): **the caller must
+    /// `await prepareIdentity(forAddress:)` first**, or the first call after
+    /// a network change throws ``DomovoiError/identityHeld(_:)`` — which is
+    /// the right answer to "is this proved?" and the wrong answer to "may
+    /// this download go ahead?".
     public func tokenForDownload(_ url: URL) throws(DomovoiError) -> String? {
         guard let parsed = ServerURL.parse(url.absoluteString) else { return nil }
         switch tokenOutcome(for: parsed, wsUpgrade: false) {

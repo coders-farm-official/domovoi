@@ -380,8 +380,16 @@ final class ServerIdentityTests: XCTestCase {
         // So the decoder pads it back, and the two apps read the same key.
         XCTAssertEqual(key, ServerIdentity.decodeBase64(unpadded))
         XCTAssertEqual(key, ServerIdentity.decodeBase64(padded))
-        // One leftover character is invalid base64 to Java too: still a no.
-        XCTAssertNil(ServerIdentity.decodeBase64(String(padded.dropLast(2)) + "A"[...]))
+        // A length of 4n+1 encodes nothing: one base64 character carries six
+        // bits and no byte boundary falls there, so it is invalid to Java's
+        // decoder as well and stays a refusal on both phones.
+        XCTAssertEqual(1, (padded.count + 1) % 4)
+        XCTAssertNil(ServerIdentity.decodeBase64(padded + "A"))
+        XCTAssertNil(ServerIdentity.decodeBase64("A"))
+        // Dropping only the padding is NOT that case — 43 characters is a
+        // legitimate unpadded encoding of 32 bytes, which is the whole point
+        // of the two assertions above it.
+        XCTAssertEqual(3, unpadded.count % 4)
         XCTAssertNil(ServerIdentity.decodeBase64(String(repeating: "A", count: 257)), "the Kotlin's 256-character ceiling")
         XCTAssertNotNil(ServerIdentity.decodeBase64(String(repeating: "A", count: 256)))
         // And an unpadded key in a real answer verifies, rather than reading
