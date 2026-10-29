@@ -498,7 +498,10 @@ public final class DomovoiClient: Sendable {
         let raw = baseURL
         guard let base = TokenScope.baseOf(raw) else { return .unavailable }
         guard let token = headerSafeToken(candidate) else { return .refused }
-        if let health, health.waitMs(raw) > 0 { return .throttled(waitMs: health.waitMs(raw)) }
+        if let health {
+            let wait = health.waitMs(raw)
+            if wait > 0 { return .throttled(waitMs: wait) }
+        }
         if let gate {
             do { try gate.requireAdmitted(base) } catch { return .unavailable }
         }
@@ -564,6 +567,13 @@ public final class DomovoiClient: Sendable {
     /// The scope rule still decides: an upgrade to another host gets nothing,
     /// an upgrade to another port on the active server's host keeps the token
     /// (the drop-in socket to the core's own port), and room mode seals it.
+    ///
+    /// Nil means there is no socket to open: an address that does not parse,
+    /// or one the cleartext rule refuses. Android's `wsRequest` builds the
+    /// request anyway and its interceptor refuses the connection when it is
+    /// made; refusing to build it is the stricter half of the same rule, and
+    /// it means no caller can be handed a socket request that cannot
+    /// legitimately be opened.
     public func webSocketRequest(_ url: String) -> URLRequest? {
         guard let parsed = ServerURL.parseAllowingWebSocket(url), let target = URL(string: url) else { return nil }
         guard CleartextPolicy.permits(parsed) else { return nil }
