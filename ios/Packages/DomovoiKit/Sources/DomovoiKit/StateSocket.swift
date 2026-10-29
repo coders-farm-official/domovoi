@@ -82,6 +82,48 @@ public let stateSocketPath = "/ws/state"
 /// ``URLSessionStateSocketTransport`` sends them itself.
 public let stateSocketPingMs: Int64 = 15_000
 
+/// How long an attempt may be neither open nor ended before it stops counting
+/// as a connection.
+///
+/// **This number is one answer to two questions, and that is deliberate.**
+///
+///  1. ``URLSessionStateSocketTransport`` ends a link that has not reported
+///     `opened` within it. A server that completes the `101` and then answers
+///     nothing — a proxy, a captive-portal box in front of the house — is
+///     otherwise a socket with no bound on it at all, because
+///     `URLSessionWebSocketTask` has no post-handshake idle timeout this app
+///     may rely on (`timeoutIntervalForRequest` is documented as the
+///     handshake's, and whether it also acts as an idle timeout is an
+///     undocumented implementation detail that differs across OS versions).
+///  2. ``StateSocket/wake()`` restarts such an attempt. That is the half that
+///     does not depend on the transport ever calling back at all, which is
+///     worth more than the timeout: the timeout fixes the transport this app
+///     ships, and this fixes every transport.
+///
+/// 10 s beside a 15 s ping cadence: long enough that a slow LAN handshake is
+/// not a failure, short enough that the person waiting on the live dot is not.
+/// It is also the line that keeps ``StateSocket/wake()`` from thrashing a
+/// socket that is legitimately still connecting — `wake()` is called on
+/// **every** reachability verdict, so that line has to exist and be measured
+/// (`testWakingASocketThatIsStillConnectingDoesNotThrashIt`).
+public let stateSocketConnectBudgetMs: Int64 = 10_000
+
+/// The largest frame this app will take off the socket.
+///
+/// The same 1 MiB `URLSessionWebSocketTask` defaults to, **chosen rather than
+/// inherited**, and set explicitly on the task so that a platform whose
+/// default changes does not change this app. ``StateEvent/parse(_:)`` rejects
+/// an over-size frame before `JSONSerialization` sees it, so a transport that
+/// does not enforce it is bounded too.
+///
+/// Android has no equivalent — OkHttp sets no maximum — so **a frame iOS
+/// rejects, Android would parse**. Nothing the server pushes today comes near
+/// it: the largest is `satellites.wifi.changed`, which carries one small
+/// object per room. If a house ever could exceed it, the answer is a smaller
+/// push on the server side rather than a bigger number here, and that is an
+/// owner decision; `I1D1-FIX-REPORT.md` records it as one.
+public let stateSocketMaximumFrameBytes = 1 << 20
+
 /// The socket's address for a saved server: the base with its scheme swapped
 /// and ``stateSocketPath`` on the end.
 ///
@@ -331,6 +373,11 @@ public final class StateSocket: Sendable {
         /// arrive from the transport's own threads.
         var attempt: Int64 = 0
         var connected = false
+        /// When the current attempt was claimed, on ``clock``'s scale. The
+        /// measurement behind ``stateSocketConnectBudgetMs``: an attempt that
+        /// has neither opened nor ended is a connection only while it is
+        /// younger than that.
+        var attemptStartedMs: Int64 = 0
     }
 
     private let state: Mutex<State>
@@ -339,6 +386,7 @@ public final class StateSocket: Sendable {
     private let upgrade: @Sendable (String) -> SocketUpgrade?
     private let transport: any StateSocketTransport
     private let noteRefusal: @Sendable (Int, String?) -> Void
+    private let clock: @Sendable () -> Int64
     private let wait: @Sendable (Int64) async throws -> Void
     private let publish: @Sendable (Bool) -> Void
     private let event: @Sendable (StateEvent) -> Void
@@ -353,6 +401,11 @@ public final class StateSocket: Sendable {
     ///     method's stated obligation and the reason it is a value with a
     ///     `mint()` rather than a stored request.
     ///   - noteRefusal: ``DomovoiClient/notePossiblePairingRefusal(status:body:)``.
+    ///   - clock: a monotonic millisecond clock, for
+    ///     ``stateSocketConnectBudgetMs`` and nothing else. Monotonic rather
+    ///     than wall-clock for the usual reason: the budget must not be
+    ///     skipped or doubled by a clock correction, and the house pattern is
+    ///     ``TokenHealth/monotonicMs``.
     ///   - publish: whether the socket is up, on every change and only on a
     ///     change (Android's `StateFlow` dedupes; so does this, because a
     ///     repeat would burn a device-register cadence slot).
@@ -365,6 +418,7 @@ public final class StateSocket: Sendable {
         upgrade: @Sendable @escaping (String) -> SocketUpgrade?,
         transport: any StateSocketTransport,
         noteRefusal: @Sendable @escaping (Int, String?) -> Void = { _, _ in },
+        clock: @Sendable @escaping () -> Int64 = TokenHealth.monotonicMs,
         wait: @Sendable @escaping (Int64) async throws -> Void = { try await Task.sleep(for: .milliseconds($0)) },
         publish: @Sendable @escaping (Bool) -> Void = { _ in },
         event: @Sendable @escaping (StateEvent) -> Void = { _ in }
@@ -373,6 +427,7 @@ public final class StateSocket: Sendable {
         self.upgrade = upgrade
         self.transport = transport
         self.noteRefusal = noteRefusal
+        self.clock = clock
         self.wait = wait
         self.publish = publish
         self.event = event
@@ -528,6 +583,7 @@ public final class StateSocket: Sendable {
     /// and the link stored in another.
     private func connect() {
         let address = base()
+        let startedAt = clock()
         let claimed = state.withLock { current -> (Int64, (any StateSocketLink)?)? in
             guard current.started else { return nil }
             current.retry?.cancel()
@@ -535,6 +591,7 @@ public final class StateSocket: Sendable {
             current.paused = nil
             current.base = address
             current.attempt += 1
+            current.attemptStartedMs = startedAt
             let stale = current.link
             current.link = nil
             return (current.attempt, stale)

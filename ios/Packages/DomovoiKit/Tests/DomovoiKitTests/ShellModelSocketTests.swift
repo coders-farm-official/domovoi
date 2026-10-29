@@ -372,6 +372,185 @@ final class ShellModelSocketTests: XCTestCase {
         model.stop()
     }
 
+    // MARK: - the answer is filed under the server that was ASKED (the review's M1)
+
+    /// A dispatcher that holds `path` until `release` is set, so a test can
+    /// make something happen **inside** a round trip rather than after it.
+    ///
+    /// It blocks one `URLSession` worker thread and nothing else — a
+    /// `URLProtocol`'s `startLoading` is synchronous, so there is nowhere
+    /// else to hold it. **Bounded**, like every wait in this suite: a wiring
+    /// that never releases fails the test rather than leaving an orphaned
+    /// `xctest` on the shared Mac, which an unbounded spin loop once did for
+    /// three and a half hours.
+    private func parking(
+        _ path: String,
+        until release: Shared<Bool>,
+        answer: @Sendable @escaping () -> StubURLProtocol.Answer,
+        otherwise: @Sendable @escaping (URLRequest) -> StubURLProtocol.Answer = { _ in .json("{}") }
+    ) {
+        StubURLProtocol.dispatch { request in
+            guard request.url?.path == path else { return otherwise(request) }
+            for _ in 0..<2_500 {
+                if release.current { break }
+                Thread.sleep(forTimeInterval: 0.002)
+            }
+            return answer()
+        }
+    }
+
+    /// **The switch happens inside the round trip, which is the only place it
+    /// means anything.** `testASharedScreenAnswerDoesNotFollowTheServerSwitch`
+    /// switches *after* the register has landed, so the per-server key it
+    /// checks is the key on the **read**. This checks the key on the
+    /// **write**: `sharedScreenAnswered` used to read `inputs.serverURL` when
+    /// the answer arrived rather than capturing it when the request went, so
+    /// server A's `false` was filed under server B.
+    ///
+    /// The unsafe direction is the one the code's own comment names: a
+    /// `false` from A un-masks a paired install on B, where the conservative
+    /// default is shared until the server says otherwise — so Chat and the
+    /// other personal surfaces appear on a kitchen tablet.
+    ///
+    /// I1-C part 3's F2 for the third time on this track. The shape is **a
+    /// value read after an await that should have been captured before it**.
+    func testARegistersAnswerIsFiledUnderTheServerItWasAskedOf() async {
+        let release = Shared<Bool>(false)
+        parking(
+            "/api/devices/register",
+            until: release,
+            answer: { .json(#"{"device_id":"ios-0123456789abcdef","name":"iPhone","shared_screen":false}"#) }
+        )
+        let (model, _, store) = model()
+
+        // A's register is in flight and parked at the server.
+        let pending = Task { @MainActor in await model.register() }
+        await settleUntil {
+            StubURLProtocol.recorded.contains { $0.url?.path == "/api/devices/register" }
+        }
+
+        // The person switches houses while it is in flight.
+        let next = "http://10.0.0.77:6369"
+        store.trustServer(next)
+        store.upsertKnownServer(url: next, name: nil)
+        XCTAssertTrue(store.setServerURL(next))
+        store.setToken("household-xyz", for: next)
+        model.refresh()
+
+        release.set(true)
+        await pending.value
+        XCTAssertNil(
+            model.sharedScreenAnswer,
+            "server A's answer is not about server B, whenever it lands"
+        )
+        XCTAssertTrue(
+            model.visibility.sharedScreen,
+            "and B with no answer counts as shared, which is the conservative side"
+        )
+        model.stop()
+    }
+
+    /// The same shape, in the method that had **no** key at all — and which
+    /// this batch newly fires on every socket connect, so the exposure is
+    /// new even though the code is not.
+    func testACapabilityManifestIsNotAppliedToAServerItIsNotFrom() async {
+        let release = Shared<Bool>(false)
+        parking(
+            "/api/capabilities",
+            until: release,
+            answer: { .json(#"{"server_version":"from-server-a","plugins":[],"features":{}}"#) }
+        )
+        let (model, _, store) = model(deviceSelf: nil)
+
+        let pending = Task { @MainActor in await model.refreshCapabilities() }
+        await settleUntil {
+            StubURLProtocol.recorded.contains { $0.url?.path == "/api/capabilities" }
+        }
+
+        let next = "http://10.0.0.77:6369"
+        store.trustServer(next)
+        store.upsertKnownServer(url: next, name: nil)
+        XCTAssertTrue(store.setServerURL(next))
+        model.refresh()
+
+        release.set(true)
+        await pending.value
+        XCTAssertNil(
+            model.capabilities.serverVersion,
+            "A's manifest is not B's: gated screens stay hidden until B answers"
+        )
+        model.stop()
+    }
+
+    // MARK: - the socket parks on a cold gate and the probe un-parks it (H1)
+
+    /// **The companion to
+    /// ``testTheContainersSocketHoldsUntilTheServerHasProvedItself``, which
+    /// asserts the first half of this and stops there.**
+    ///
+    /// A cold process on a correctly paired phone: `mint()` asks
+    /// `gate.requireAdmitted`, the gate's cache is in memory and empty, so
+    /// the token is held and the socket parks `.notNow`. The socket never
+    /// takes the proof itself — `mint()` goes through the **synchronous**
+    /// `tokenOutcome(for:wsUpgrade:)`, and the `await prepareIdentity(…)`
+    /// that warms the cache is only on `perform(_:mode:.scoped)`.
+    ///
+    /// What does warm it is the reachability probe: `client.answers()` →
+    /// `/api/health` → `prepareIdentity`. Before this fix,
+    /// `verdictArrived(_:)` set `unreachable` and nothing else, so the warm
+    /// cache was never acted on and the socket stayed parked **for ever** —
+    /// a paired phone, a plainly reachable server and a permanently grey live
+    /// dot whose own explanation says it is reconnecting. The only rescue was
+    /// backgrounding the app and coming back, so it read as a flaky socket
+    /// rather than a missing call.
+    ///
+    /// The address is `127.0.0.1` on this suite's own throwaway range so that
+    /// the upgrade, which does not go through `StubURLProtocol`, is refused
+    /// locally and reaches no network.
+    func testTheSocketOpensOnceTheProbeHasProvedTheServer() async {
+        StubURLProtocol.dispatch { request in
+            guard request.url?.path == "/api/health" else { return .json("{}") }
+            // No identity block at all: a server from before identity, whose
+            // verdict is `.legacy`, which admits the token.
+            return .json(TestIdentity.noIdentityBody)
+        }
+        let address = "http://127.0.0.1:6601"
+        let store = InMemoryShellStore(serverURL: address, token: "household-abc")
+        let container = AppContainer(
+            store: store,
+            vault: TokenVault(items: InMemoryKeychain()),
+            lock: HouseholdLock(),
+            clock: { 0 },
+            configuration: StubURLProtocol.session(timeout: 1)
+        )
+        // The real probe — `client.answers()` — and not the rig's `{ true }`,
+        // because the whole point is that the probe is what warms the gate.
+        let model = ShellModel(
+            container: container,
+            deviceSelf: nil,
+            clock: { 0 },
+            wait: { _ in try await Task.sleep(for: .seconds(3600)) },
+            tick: { _ in try await Task.sleep(for: .seconds(3600)) }
+        )
+        container.startSocketUnlessARoom()
+        XCTAssertEqual(
+            .notNow, container.socket.paused,
+            "a cold process: the gate has nothing cached, so the token is held"
+        )
+
+        // What `AppShellView.onChange(of: scenePhase, initial: true)` does on
+        // launch. It is NOT a return — `phase` already defaults to `.active`
+        // — so it does not refresh; it only starts the probe loop.
+        model.scenePhaseChanged(to: .active)
+        await settleUntil { container.socket.paused == nil }
+        XCTAssertNil(
+            container.socket.paused,
+            "the probe proved the server, so the socket is no longer holding"
+        )
+        container.socket.stop()
+        model.stop()
+    }
+
     /// Bounded, as `settle(for:what:)` is: a condition that never comes fails
     /// the test rather than hanging the suite.
     private func settleUntil(

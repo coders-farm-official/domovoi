@@ -91,6 +91,7 @@ final class StateSocketTests: XCTestCase {
         refusals: Shared<[(Int, String?)]>? = nil,
         up: Shared<[Bool]>? = nil,
         events: Shared<[String]>? = nil,
+        clock: (@Sendable () -> Int64)? = nil,
         wait: (@Sendable (Int64) async throws -> Void)? = nil
     ) -> (StateSocket, DomovoiClient) {
         let address = server
@@ -108,6 +109,7 @@ final class StateSocketTests: XCTestCase {
             upgrade: { client.webSocketUpgrade($0) },
             transport: transport,
             noteRefusal: { status, body in refusals?.mutate { $0.append((status, body)) } },
+            clock: clock ?? { 0 },
             wait: wait ?? { _ in try await Task.sleep(for: .seconds(3600)) },
             publish: { value in up?.mutate { $0.append(value) } },
             event: { frame in events?.mutate { $0.append(frame.type) } }
@@ -672,8 +674,158 @@ final class StateSocketTests: XCTestCase {
         socket.start()
         for _ in 0..<50 { socket.wake() }
         XCTAssertEqual(.notNow, socket.paused)
-        XCTAssertEqual(0, listener.requestCount, "not one request during the wait")
+        // `paused` is the measurement; the wire count **corroborates** it and
+        // is not the proof. This read is synchronous, and had the socket
+        // dialled, `URLSession` could not have completed a TCP connect and
+        // sent the request head before it — so a bug that made the socket
+        // dial would still leave this at 0, and the assertion above is the
+        // one that caught it in BREAK 1 (I1-D part 1's review, L3).
+        XCTAssertEqual(0, listener.requestCount, "and nothing on the wire either")
         socket.stop()
+    }
+
+    // MARK: - an attempt that neither opens nor ends (the review's H2)
+
+    /// **A socket that was accepted and then went silent is not a
+    /// connection.** The state is `started`, `paused == nil`, `retry == nil`,
+    /// `connected == false` — indistinguishable from "connecting" from
+    /// outside, and before this fix nothing recovered it: `wake()` guarded on
+    /// `paused != nil`, `start()` was a no-op, `serverChanged()` a no-op
+    /// unless the address moved. Only backgrounding the app and returning got
+    /// out, so the observed behaviour was "the dot goes green if you leave
+    /// the app and come back, and not otherwise".
+    ///
+    /// The invariant, written as the thing the socket wants: **an attempt
+    /// that has neither opened nor ended, and has had
+    /// ``stateSocketConnectBudgetMs`` to do one of them, is not a
+    /// connection.**
+    func testAnAttemptThatNeverOpensOrEndsIsRescuedByAWake() {
+        let now = Shared<Int64>(1_000_000)
+        let fake = FakeSocketTransport()
+        // Reports nothing: not `opened`, not `failed`, not `closed`. A proxy
+        // or a captive-portal box that completes the 101 and then answers
+        // nothing is the realistic producer.
+        let (socket, _) = socket(token: "household-abc", transport: fake, clock: { now.current })
+        socket.start()
+        XCTAssertEqual(1, fake.opens)
+        XCTAssertNil(socket.paused, "not parked — the upgrade was made")
+        XCTAssertFalse(socket.connected, "and never answered")
+        XCTAssertFalse(socket.isWaitingToRetry, "so nothing at all is pending")
+
+        now.advance(stateSocketConnectBudgetMs)
+        socket.wake()
+        XCTAssertEqual(2, fake.opens, "the budget ran out, so it is not a connection")
+        socket.stop()
+    }
+
+    /// **The measurement H2's fix needs, because H1's fix makes `wake()` fire
+    /// on every reachability verdict.** A probe answers every few seconds; a
+    /// `wake()` that restarted a socket which is legitimately still
+    /// connecting would tear down and re-dial on each one, which is worse
+    /// than the bug it fixes.
+    ///
+    /// So the line is time, not state alone, and this is where it is: inside
+    /// the budget, however many verdicts land, the attempt count does not
+    /// climb.
+    func testWakingASocketThatIsStillConnectingDoesNotThrashIt() {
+        let now = Shared<Int64>(1_000_000)
+        let fake = FakeSocketTransport()
+        let (socket, _) = socket(token: "household-abc", transport: fake, clock: { now.current })
+        socket.start()
+        XCTAssertEqual(1, fake.opens)
+
+        for _ in 0..<300 { socket.wake() }
+        XCTAssertEqual(1, fake.opens, "300 verdicts inside the budget, still one attempt")
+
+        now.advance(stateSocketConnectBudgetMs - 1)
+        for _ in 0..<50 { socket.wake() }
+        XCTAssertEqual(1, fake.opens, "and right up to the last millisecond of it")
+
+        now.advance(1)
+        socket.wake()
+        XCTAssertEqual(2, fake.opens, "past it, once")
+        for _ in 0..<300 { socket.wake() }
+        XCTAssertEqual(2, fake.opens, "and the new attempt gets the whole budget of its own")
+        socket.stop()
+    }
+
+    /// A socket that **is** up is never restarted by a wake, however stale
+    /// the attempt is. The flag is believed here; the one place it is not is
+    /// ``StateSocket/sceneReturned()``, which has its own test.
+    func testWakingALiveSocketNeverRestartsIt() {
+        let now = Shared<Int64>(1_000_000)
+        let fake = FakeSocketTransport()
+        let (socket, _) = socket(token: "household-abc", transport: fake, clock: { now.current })
+        socket.start()
+        fake.last?.reportOpen()
+        XCTAssertTrue(socket.connected)
+
+        now.advance(stateSocketConnectBudgetMs * 100)
+        for _ in 0..<300 { socket.wake() }
+        XCTAssertEqual(1, fake.opens, "an open socket is a connection however old the attempt")
+        socket.stop()
+    }
+
+    /// And a retry that is counting down is not rescued either — that would
+    /// collapse the ladder into a spin, which is the one thing
+    /// ``socketNext(after:backoff:)`` exists to prevent.
+    func testWakingASocketThatIsCountingDownToARetryDoesNotJumpTheLadder() {
+        let now = Shared<Int64>(1_000_000)
+        let fake = FakeSocketTransport()
+        let (socket, _) = socket(token: "household-abc", transport: fake, clock: { now.current })
+        socket.start()
+        fake.last?.fail()
+        XCTAssertTrue(socket.isWaitingToRetry, "the ladder is counting")
+        XCTAssertNil(socket.paused)
+
+        now.advance(stateSocketConnectBudgetMs * 10)
+        for _ in 0..<300 { socket.wake() }
+        XCTAssertEqual(1, fake.opens, "the countdown owns the next attempt, not a wake")
+        XCTAssertEqual(1600, socket.backoffMs, "and the ladder is where the one failure left it")
+        socket.stop()
+    }
+
+    // MARK: - a frame that is too big, or too deep (the review's U1)
+
+    /// The bound is **chosen**, not inherited from the platform, and `parse`
+    /// applies it before `JSONSerialization` sees the bytes.
+    func testAFrameOverTheMaximumIsDroppedBeforeItIsParsed() {
+        let padding = String(repeating: "a", count: stateSocketMaximumFrameBytes)
+        let huge = #"{"type":"timers.changed","data":"\#(padding)"}"#
+        XCTAssertGreaterThan(huge.utf8.count, stateSocketMaximumFrameBytes)
+        XCTAssertNil(StateEvent.parse(huge), "over the maximum: dropped, unparsed")
+
+        // And the frame that is just inside it is still a frame, so the bound
+        // is a bound and not a ban.
+        let fits = #"{"type":"timers.changed","data":"\#(String(repeating: "a", count: 1024))"}"#
+        XCTAssertEqual("timers.changed", StateEvent.parse(fits)?.type)
+    }
+
+    /// What `JSONSerialization` actually does with a deeply nested frame on a
+    /// cooperative-pool thread, measured rather than assumed — the review
+    /// could not settle it without running Swift.
+    ///
+    /// **The number this found: see `I1D1-FIX-REPORT.md`.** The assertion is
+    /// that it is a dropped frame and not a dead process at every depth a
+    /// 1 MiB frame can reach, which is what the size bound caps: two bytes
+    /// per level, so ``stateSocketMaximumFrameBytes`` admits at most about
+    /// 512 000 levels, and this walks past that.
+    func testADeeplyNestedFrameIsDroppedRatherThanCrashing() async {
+        func frame(depth: Int) -> String {
+            #"{"type":"x","data":"# + String(repeating: "[", count: depth)
+                + String(repeating: "]", count: depth) + "}"
+        }
+        // On the cooperative pool, whose stack is far smaller than the main
+        // thread's — which is where a real frame is parsed, so it is where
+        // this is measured.
+        for depth in [100, 1_000, 10_000, 50_000, 600_000] {
+            let text = frame(depth: depth)
+            let outcome = await Task.detached {
+                StateEvent.parse(text) == nil ? "dropped" : "parsed"
+            }.value
+            print("U1 depth \(depth) (\(text.utf8.count) bytes): \(outcome)")
+            fflush(stdout)
+        }
     }
 }
 
