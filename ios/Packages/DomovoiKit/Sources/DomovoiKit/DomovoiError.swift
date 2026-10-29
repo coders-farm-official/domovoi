@@ -78,10 +78,21 @@ public enum DomovoiError: Error, Equatable, Sendable {
 
     /// The rule refused the request before anything was connected: a
     /// plain-http address ``CleartextPolicy`` does not allow, a redirect this
-    /// app will not follow, or the identity gate holding a token-bearing
-    /// request back. Android's `UnknownServiceException` and the gate's
-    /// `IOException`.
+    /// app will not follow, or an address this app cannot parse. Android's
+    /// `UnknownServiceException`.
     case notPermitted(String)
+
+    /// The identity gate held a token-bearing request back: this server has
+    /// not proved itself on this network, or it proved itself a different
+    /// server (the `Mismatch` verdict).
+    ///
+    /// Android's `ServerIdentityException`, which is a plain `IOException` and
+    /// NOT an `UnknownServiceException` — so it is a case of its own here, and
+    /// not a shape of ``notPermitted(_:)``. Two things turn on the difference:
+    /// ``DomovoiClient/answers()`` counts a cleartext refusal as an answer and
+    /// a held request as no answer, exactly as Android's two catch clauses do,
+    /// and ``failureText(_:_:)`` says which of the two happened.
+    case identityHeld(String)
 
     /// Nothing answered: no route to the host, a refused connection, a
     /// timeout. Android's plain `IOException`.
@@ -114,7 +125,7 @@ public enum DomovoiError: Error, Equatable, Sendable {
     public var failure: ApiFailure? {
         switch self {
         case .refused(let f), .rateLimited(let f, _), .serverTrouble(let f), .httpError(let f): return f
-        case .noServer, .notPermitted, .unreachable, .notDomovoi, .tokenThrottled: return nil
+        case .noServer, .notPermitted, .identityHeld, .unreachable, .notDomovoi, .tokenThrottled: return nil
         }
     }
 
@@ -122,7 +133,8 @@ public enum DomovoiError: Error, Equatable, Sendable {
     public var message: String {
         switch self {
         case .noServer: return "no server configured"
-        case .notPermitted(let reason), .unreachable(let reason), .notDomovoi(let reason): return reason
+        case .notPermitted(let reason), .identityHeld(let reason),
+             .unreachable(let reason), .notDomovoi(let reason): return reason
         case .refused(let f), .rateLimited(let f, _), .serverTrouble(let f), .httpError(let f): return f.message
         case .tokenThrottled(let waitMs):
             return "Domovoi asked this phone to wait \((waitMs + 999) / 1000) s before it tries the household token again"
@@ -147,16 +159,16 @@ public func failureText(_ action: String, _ error: DomovoiError) -> String {
         return "\(action) failed: \(detail.isEmpty ? "not permitted" : detail)"
     case .unreachable, .noServer:
         return "\(action) failed (offline?)"
-    case .tokenThrottled:
-        // Android reaches its `e is IOException` branch here and says
-        // "(offline?)" for a wait as well, because `TokenThrottledException`
-        // IS an IOException and it is tested after the two named types. Kept
-        // on purpose: the shell shows the wait card instead of a toast, so
-        // this string is almost never seen, and the two apps saying different
-        // things in a corner nobody looks at is worse than both saying the
-        // same slightly wrong thing. Reported to the owner as an Android
-        // wart, not fixed one-sidedly.
-        return "\(action) failed (offline?)"
+    case .tokenThrottled, .identityHeld:
+        // A request the app chose not to send is not the network's fault.
+        // Both of these used to read "(offline?)" on both phones, because
+        // `TokenThrottledException` and `ServerIdentityException` are
+        // `IOException`s and `failureText` tests `IOException` after the two
+        // named types — so the toast blamed the connection for a wait the
+        // server asked for, and for a server that did not prove itself.
+        // Android now reports each one's own message (2026-10-29); these say
+        // the same, which is what keeps the two phones' toasts in step.
+        return "\(action) failed: \(detail.isEmpty ? "not permitted" : detail)"
     case .notDomovoi:
         return "\(action) failed: \(detail)"
     }

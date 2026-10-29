@@ -90,6 +90,18 @@ final class DomovoiClientTests: XCTestCase {
         XCTAssertNil(token(at: 0), "the client decides, not the caller")
     }
 
+    /// And on a request to the active server the caller's value is *replaced*
+    /// rather than left alone — the strip is unconditional and the decision is
+    /// made afresh, so a value from a library, a deep link or a stale screen
+    /// cannot become what this phone authenticates with.
+    func testAnExplicitHeaderOnTheActiveServerIsReplacedByTheStoredToken() async throws {
+        StubURLProtocol.enqueue(.json("{}"))
+        var request = URLRequest(url: URL(string: "\(server)/api/rooms")!)
+        request.setValue("whatever-a-caller-set", forHTTPHeaderField: deviceTokenHeader)
+        _ = try await makeClient().perform(request)
+        XCTAssertEqual(token(at: 0), "household-abc")
+    }
+
     func testTheTokenIsLookedUpByTheServerTheRequestIsScopedTo() async throws {
         // A server switch writes the address, then the token. A request
         // intercepted between the two would pair the NEW address with the OLD
@@ -115,7 +127,7 @@ final class DomovoiClientTests: XCTestCase {
         // A server with no token of its own: nothing, not the other one's.
         active.withLock { $0 = "http://10.0.0.30:6369" }
         XCTAssertNil(client.deviceToken)
-        XCTAssertNil(client.webSocketRequest("ws://10.0.0.30:6369/ws/state")?.value(forHTTPHeaderField: deviceTokenHeader))
+        XCTAssertNil(client.webSocketUpgrade("ws://10.0.0.30:6369/ws/state")?.mint()?.value(forHTTPHeaderField: deviceTokenHeader))
     }
 
     func testTheSharedClientStillAuthenticatesTheActiveServerAfterAForeignCall() async throws {
@@ -143,7 +155,7 @@ final class DomovoiClientTests: XCTestCase {
         lock.setRoomModeActive(true)
         _ = try await client.get("/api/music/library", as: [String: String].self)
         XCTAssertNil(token(at: 1))
-        XCTAssertNil(client.webSocketRequest("ws://10.0.0.9:6369/ws/state")?.value(forHTTPHeaderField: deviceTokenHeader))
+        XCTAssertNil(client.webSocketUpgrade("ws://10.0.0.9:6369/ws/state")?.mint()?.value(forHTTPHeaderField: deviceTokenHeader))
         XCTAssertNil(try client.tokenForDownload(URL(string: "http://10.0.0.9:6369/api/videos/1/stream")!))
         let check = await client.checkDeviceToken("household-abc")
         XCTAssertEqual(check, .unavailable)
@@ -237,6 +249,95 @@ final class DomovoiClientTests: XCTestCase {
             StubURLProtocol.requestCount, RedirectPolicy.maxHops + 1,
             "one request, then twenty hops, then no more"
         )
+    }
+
+    /// **A hop carries what the CALL was allowed to carry, re-asked — not the
+    /// scope rule regardless.**
+    ///
+    /// The paste check's whole job is to ask the server about a candidate the
+    /// vault has not accepted. Android runs it on a client with
+    /// `DeviceAuthInterceptor` removed, so a hop carries nothing at all. If a
+    /// hop ran the scope rule instead it would re-acquire the SAVED token —
+    /// and a wrong paste plus a `302` (a reverse proxy, or FastAPI's
+    /// `redirect_slashes`) would be answered 200 on the strength of the valid
+    /// token and reported as `.accepted`, which is the 2026-10-17 incident
+    /// this check was added to prevent.
+    func testAPasteCheckThatIsRedirectedDoesNotReacquireTheSavedToken() async {
+        StubURLProtocol.dispatch { request in
+            // A server whose satellites read redirects once, and which
+            // answers only to the token it really issued.
+            if request.url?.path == DomovoiClient.tokenCheckPath {
+                return .moved(302, to: "\(DomovoiClient.tokenCheckPath)/")
+            }
+            if request.value(forHTTPHeaderField: deviceTokenHeader) == "household-abc" {
+                return .json("[]")
+            }
+            return .json(#"{"detail":"X-Device-Token or admin session required"}"#, status: 401)
+        }
+        let check = await makeClient().checkDeviceToken("wrong-paste-abcd")
+        XCTAssertEqual(StubURLProtocol.requestCount, 2)
+        XCTAssertEqual(token(at: 0), "wrong-paste-abcd")
+        XCTAssertNil(token(at: 1), "a hop of the paste check carries nothing, as on a client with no auth interceptor")
+        XCTAssertEqual(check, .refused, "a wrong paste plus a 302 must never read as accepted")
+    }
+
+    /// The same rule for `.none`, which is what I1-B's /24 sweep will use:
+    /// "the sweep sends no token" has to mean no hop either, or finding A6-02
+    /// comes back through a redirect. Aimed at the ACTIVE server, where the
+    /// scope rule would have put the token on both hops.
+    func testAProbeThatCarriesNoTokenCarriesNoneOnAHopEither() async throws {
+        StubURLProtocol.enqueue(.moved(302, to: "/api/health/"), .json("{}"))
+        var request = URLRequest(url: URL(string: "\(server)/api/health")!)
+        request.setValue("household-abc", forHTTPHeaderField: deviceTokenHeader)
+        _ = try await makeClient().perform(request, mode: .none)
+        XCTAssertEqual(StubURLProtocol.requestCount, 2)
+        XCTAssertNil(token(at: 0), "the caller's header is stripped and nothing is put back")
+        XCTAssertNil(token(at: 1), "and a redirect is not where a sweep acquires one")
+    }
+
+    // ---- what a redirected chain's answer is about ---------------------------
+
+    /// **A stranger's 401 must not end this phone's pairing with its own
+    /// server.**
+    ///
+    /// ``TokenHealth`` is told about an answer only when the origin that
+    /// answered is the one that issued the token. The response here is the
+    /// LAST hop's, so checking the FIRST hop's URL would have filed a foreign
+    /// host's verdict against the active server: requests would go out bare
+    /// for good and the shell would say "Domovoi doesn't recognise this phone
+    /// any more" on a stranger's say-so.
+    func testAForeignHostsRefusalIsNotFiledAgainstTheActiveServersToken() async {
+        let health = TokenHealth()
+        StubURLProtocol.enqueue(
+            .moved(302, to: "http://10.0.0.99:6369/api/rooms"),
+            .json(#"{"detail":"X-Device-Token or admin session required"}"#, status: 401)
+        )
+        let client = makeClient(health: health)
+        _ = await failure { try await client.get("/api/rooms", as: [String: String].self) }
+        XCTAssertEqual(token(at: 0), "household-abc")
+        XCTAssertNil(token(at: 1), "the hop went out bare, as it must")
+        XCTAssertFalse(health.isRejected(server), "and what the stranger said about it is not about it")
+        XCTAssertEqual(
+            client.webSocketUpgrade("ws://10.0.0.9:6369/ws/state")?.mint()?.value(forHTTPHeaderField: deviceTokenHeader),
+            "household-abc",
+            "so the phone is still paired"
+        )
+    }
+
+    /// The other half of the same rule, and the reason it is written as "the
+    /// origin that answered" rather than "no redirect happened": a redirect
+    /// WITHIN the active server carried the token and the server's own verdict
+    /// on it still teaches, exactly as Android's per-hop interceptor learns it.
+    func testARefusalAfterARedirectWithinTheServerStillTeaches() async {
+        let health = TokenHealth()
+        StubURLProtocol.enqueue(
+            .moved(302, to: "/api/rooms/"),
+            .json(#"{"detail":"X-Device-Token or admin session required"}"#, status: 401)
+        )
+        let client = makeClient(health: health)
+        _ = await failure { try await client.get("/api/rooms", as: [String: String].self) }
+        XCTAssertEqual(token(at: 1), "household-abc", "the hop is the active server's own")
+        XCTAssertTrue(health.isRejected(server))
     }
 
     // ---- what the answers become --------------------------------------------
@@ -421,21 +522,98 @@ final class DomovoiClientTests: XCTestCase {
     func testTheUpgradeCarriesTheTokenOnlyWhereItMay() {
         let client = makeClient()
         XCTAssertEqual(
-            client.webSocketRequest("ws://10.0.0.9:6369/ws/state")?.value(forHTTPHeaderField: deviceTokenHeader),
+            client.webSocketUpgrade("ws://10.0.0.9:6369/ws/state")?.mint()?.value(forHTTPHeaderField: deviceTokenHeader),
             "household-abc"
         )
         XCTAssertEqual(
-            client.webSocketRequest("ws://10.0.0.9:6370/v1/dropin/kitchen")?.value(forHTTPHeaderField: deviceTokenHeader),
+            client.webSocketUpgrade("ws://10.0.0.9:6370/v1/dropin/kitchen")?.mint()?.value(forHTTPHeaderField: deviceTokenHeader),
             "household-abc",
             "the drop-in socket to the core's own port is the documented exception"
         )
         XCTAssertNil(
-            client.webSocketRequest("ws://10.0.0.10:6369/ws/state")?.value(forHTTPHeaderField: deviceTokenHeader),
+            client.webSocketUpgrade("ws://10.0.0.10:6369/ws/state")?.mint()?.value(forHTTPHeaderField: deviceTokenHeader),
             "an upgrade is still host-bound"
         )
         XCTAssertNil(
-            client.webSocketRequest("ws://203.0.113.5:6369/ws/state"),
-            "a socket the cleartext rule refuses is not built at all"
+            client.webSocketUpgrade("ws://203.0.113.5:6369/ws/state"),
+            "a socket the cleartext rule refuses is not offered at all"
+        )
+        XCTAssertNil(
+            client.webSocketUpgrade("ws://not a server/ws/state"),
+            "nor one at an address that does not parse"
+        )
+    }
+
+    /// **The seal is read when the socket connects, not when it was minted.**
+    ///
+    /// Android's interceptor runs on the upgrade's own connection, so room
+    /// mode is re-read at connect and at every reconnect. A `URLRequest`
+    /// handed out of this client would carry what was true when it was made,
+    /// for as long as the socket held it: the shell mints it, the person
+    /// starts room mode, the state socket reconnects from the held value — and
+    /// the household token goes on the wire while the phone is a room.
+    func testAnUpgradeMintedBeforeRoomModeIsResealedWhenItReconnects() throws {
+        let lock = HouseholdLock()
+        let client = makeClient(lock: lock)
+        let upgrade = try XCTUnwrap(client.webSocketUpgrade("ws://10.0.0.9:6369/ws/state"))
+        XCTAssertEqual(upgrade.mint()?.value(forHTTPHeaderField: deviceTokenHeader), "household-abc")
+
+        lock.setRoomModeActive(true)
+        let reconnect = try XCTUnwrap(upgrade.mint(), "a room still opens a bare state socket")
+        XCTAssertNil(
+            reconnect.value(forHTTPHeaderField: deviceTokenHeader),
+            "the household token must not reach the wire while this phone is a room"
+        )
+
+        lock.setRoomModeActive(false)
+        XCTAssertEqual(
+            upgrade.mint()?.value(forHTTPHeaderField: deviceTokenHeader), "household-abc",
+            "and it comes back, from the value the socket is still holding"
+        )
+    }
+
+    /// A refused token is re-read at connect too — the same held value stops
+    /// carrying it the moment ``TokenHealth`` learns.
+    func testAnUpgradeStopsCarryingATokenTheServerRefusesAfterItWasMinted() throws {
+        let health = TokenHealth()
+        let client = makeClient(health: health)
+        let upgrade = try XCTUnwrap(client.webSocketUpgrade("ws://10.0.0.9:6369/ws/state"))
+        XCTAssertEqual(upgrade.mint()?.value(forHTTPHeaderField: deviceTokenHeader), "household-abc")
+        health.observe(
+            url: server,
+            sent: "household-abc",
+            current: "household-abc",
+            status: 401,
+            body: #"{"detail":"X-Device-Token or admin session required"}"#,
+            retryAfter: nil
+        )
+        XCTAssertNil(upgrade.mint()?.value(forHTTPHeaderField: deviceTokenHeader))
+    }
+
+    /// `nil` from ``SocketUpgrade/mint()`` is "we refused", never "there is no
+    /// token": a wait and a held request are the two places Android's
+    /// interceptor throws instead of proceeding, so no socket connects there;
+    /// an unpaired phone's bare socket is legitimate — the server's pre-setup
+    /// grace — and still opens.
+    func testNoSocketIsMintedWhileTheServerSaysWaitOrTheGateHoldsIt() throws {
+        let now = Shared<Int64>(1_000)
+        let health = TokenHealth(clock: { now.current })
+        health.noteWait(server, waitMs: 30_000)
+        let waiting = try XCTUnwrap(makeClient(health: health).webSocketUpgrade("ws://10.0.0.9:6369/ws/state"))
+        XCTAssertNil(waiting.mint(), "a wait is not a bare socket; Android throws here and never connects")
+
+        let held = try XCTUnwrap(makeClient(gate: ClosedGate()).webSocketUpgrade("ws://10.0.0.9:6369/ws/state"))
+        XCTAssertNil(held.mint(), "nor is a server that has not proved itself")
+
+        let unpaired = try XCTUnwrap(makeClient(token: nil).webSocketUpgrade("ws://10.0.0.9:6369/ws/state"))
+        let bare = try XCTUnwrap(unpaired.mint(), "an unpaired phone legitimately opens a bare socket")
+        XCTAssertNil(bare.value(forHTTPHeaderField: deviceTokenHeader))
+
+        // And once the wait has run out, the same held value opens again.
+        now.advance(30_001)
+        XCTAssertEqual(
+            waiting.mint()?.value(forHTTPHeaderField: deviceTokenHeader), "household-abc",
+            "the wait was the only reason, and it is over"
         )
     }
 
@@ -463,7 +641,7 @@ final class DomovoiClientTests: XCTestCase {
         let client = makeClient(token: "café-token-abcdef")
         _ = try await client.get("/api/health", as: [String: String].self)
         XCTAssertNil(token(at: 0), "the server answers 401 and the phone is sent to the pairing screen")
-        XCTAssertNil(client.webSocketRequest("ws://10.0.0.9:6369/ws/state")?.value(forHTTPHeaderField: deviceTokenHeader))
+        XCTAssertNil(client.webSocketUpgrade("ws://10.0.0.9:6369/ws/state")?.mint()?.value(forHTTPHeaderField: deviceTokenHeader))
     }
 
     func testAnUnpairedPhoneSendsNoHeaderAtAll() async throws {
@@ -516,8 +694,33 @@ final class DomovoiClientTests: XCTestCase {
     func testAGateThatRefusesHoldsTheWholeRequestBack() async {
         let client = makeClient(gate: ClosedGate())
         let error = await failure { try await client.get("/api/x", as: [String: String].self) }
-        XCTAssertEqual(error, .notPermitted("this server has not proved itself on this network"))
+        XCTAssertEqual(error, .identityHeld("this server has not proved itself on this network"))
         XCTAssertEqual(StubURLProtocol.requestCount, 0, "the request never left")
+    }
+
+    /// A held request is not an answer, where a cleartext refusal is: the
+    /// split Android makes by catching `UnknownServiceException` as true and
+    /// letting `ServerIdentityException` fall through to its `IOException`
+    /// branch. Sharing one `.notPermitted` case made the two shells disagree
+    /// about whether a `Mismatch` server is there — the one case the gate
+    /// exists for.
+    func testAServerThatFailsTheIdentityGateDoesNotCountAsAnswering() async {
+        let answered = await makeClient(gate: ClosedGate()).answers()
+        XCTAssertFalse(answered, "the gate held it; nothing was asked and nothing answered")
+        XCTAssertEqual(StubURLProtocol.requestCount, 0)
+    }
+
+    /// And the toast says which it was, rather than blaming the network for a
+    /// request the app chose not to send.
+    func testFailureTextNamesAHeldRequestAndAWaitRatherThanTheConnection() {
+        XCTAssertEqual(
+            failureText("Poll", .identityHeld("this server has not proved itself on this network")),
+            "Poll failed: this server has not proved itself on this network"
+        )
+        XCTAssertEqual(
+            failureText("Poll", .tokenThrottled(waitMs: 30_000)),
+            "Poll failed: Domovoi asked this phone to wait 30 s before it tries the household token again"
+        )
     }
 
     func testTheGateIsOnlyAskedWhenThereIsATokenToProtect() async throws {

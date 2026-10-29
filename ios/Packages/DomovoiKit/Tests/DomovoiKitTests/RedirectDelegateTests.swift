@@ -62,7 +62,7 @@ final class RedirectDelegateTests: XCTestCase {
     func testAGateThatRefusesMidChainStopsIt() {
         let hops = delegate(outcome: .held(reason: "not proved on this network"))
         XCTAssertNil(hops.followUp(response: response(302, location: "/api/y")))
-        XCTAssertEqual(hops.refusal, .notPermitted("not proved on this network"))
+        XCTAssertEqual(hops.refusal, .identityHeld("not proved on this network"))
     }
 
     func testTheCeilingIsCountedAndTheReasonRecorded() {

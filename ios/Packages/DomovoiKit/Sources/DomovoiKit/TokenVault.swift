@@ -169,15 +169,34 @@ public struct SystemKeychain: KeychainItems {
         // Replace the value in place rather than delete-then-add: a process
         // killed between a delete and an add would leave the phone unpaired
         // for no reason.
+        //
+        // The accessibility goes in the update as well as in the add. An
+        // update that sent only `kSecValueData` would leave an existing item
+        // on whatever `kSecAttrAccessible` it was created with — which, for an
+        // item this app wrote, is this same value, so nothing in the shipping
+        // app can reach it; it is in here because "a token written over an
+        // older item keeps a weaker protection class" is not a thing to leave
+        // depending on there being exactly one writer for ever.
         let updated = SecItemUpdate(
             query(account: account) as CFDictionary,
-            [kSecValueData as String: secret] as CFDictionary
+            [
+                kSecValueData as String: secret,
+                kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+            ] as CFDictionary
         )
         guard updated == errSecSuccess else { throw TokenVaultError.keychain(updated) }
     }
 
     public func get(account: String) throws -> Data? {
         var attributes = query(account: account)
+        // `kSecAttrSynchronizable` is part of an item's primary key, and a
+        // query that omits it matches NON-synchronizable items only. This app
+        // writes `false`, so the shipping app always finds its own item — but
+        // a read that cannot see an iCloud-keychain item would read as "not
+        // paired" and send the person back to the pairing screen with a token
+        // sitting right there, so ask for either kind and let the one that
+        // exists answer.
+        attributes[kSecAttrSynchronizable as String] = kSecAttrSynchronizableAny
         attributes[kSecReturnData as String] = true
         attributes[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: CFTypeRef?
@@ -188,7 +207,12 @@ public struct SystemKeychain: KeychainItems {
     }
 
     public func remove(account: String) throws {
-        let status = SecItemDelete(query(account: account) as CFDictionary)
+        // Synchronizable-any for the same reason `get` asks for it, and it
+        // matters more here: "forget this server" that left a matching item
+        // behind would be a credential the person believes they deleted.
+        var attributes = query(account: account)
+        attributes[kSecAttrSynchronizable as String] = kSecAttrSynchronizableAny
+        let status = SecItemDelete(attributes as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw TokenVaultError.keychain(status)
         }

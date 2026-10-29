@@ -257,6 +257,22 @@ final class DeviceRegistryTests: XCTestCase {
         XCTAssertEqual(DeviceRegistry.pathEscaped("ios-1a2b3c4d5e6f7a8b"), "ios-1a2b3c4d5e6f7a8b", "a well-formed id is untouched")
     }
 
+    /// Android's `Uri.encode` safe set is ASCII letters and digits plus
+    /// `_-!.~'()*`, and nothing else. `CharacterSet.alphanumerics` is
+    /// Unicode-wide — "é", "д" and the Arabic-Indic digit "٣" are all
+    /// alphanumeric to it — so an id holding any of them went into the path
+    /// unescaped here and percent-encoded there. An id is self-asserted, so
+    /// this is the half of `pathEscaped` that is not decoration.
+    func testTheEscapedSetIsAsciiAsAndroidsIsAndNotUnicodeWide() {
+        XCTAssertEqual(DeviceRegistry.pathEscaped("ios-café"), "ios-caf%C3%A9")
+        XCTAssertEqual(DeviceRegistry.pathEscaped("ios-д"), "ios-%D0%B4")
+        XCTAssertEqual(DeviceRegistry.pathEscaped("ios-٣"), "ios-%D9%A3")
+        XCTAssertEqual(
+            DeviceRegistry.pathEscaped("aZ09_-!.~'()*"), "aZ09_-!.~'()*",
+            "and the whole safe set still goes through untouched"
+        )
+    }
+
     private final class Box: DeviceIdentity.Store {
         private struct State: Sendable {
             var saved: String?

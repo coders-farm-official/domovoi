@@ -237,7 +237,16 @@ public final class DomovoiClient: Sendable {
     enum TokenMode: Sendable {
         /// The rule above.
         case scoped
-        /// Never — a discovery probe, the reachability probe.
+        /// Never, on any hop — I1-B's /24 discovery sweep, which must send
+        /// nothing to 254 strangers (finding A6-02, the thing Android fixed
+        /// on 2026-10-08 by taking `DeviceAuthInterceptor` off its probe
+        /// client).
+        ///
+        /// **Not the reachability probe.** ``answers()`` uses `.scoped` and
+        /// carries the token when the scope admits it, because Android's
+        /// `answers()` runs on `probeHttp` — a short-fused copy of the main
+        /// client with every interceptor still on it — and because the shell
+        /// reads a 401 from that probe as "this phone is not paired".
         case none
         /// Exactly this value on the FIRST hop and nothing on any hop after
         /// it: the paste check, which carries a candidate the vault has not
@@ -292,20 +301,38 @@ public final class DomovoiClient: Sendable {
             case .wait(let ms):
                 throw DomovoiError.tokenThrottled(waitMs: ms)
             case .held(let reason):
-                throw DomovoiError.notPermitted(reason)
+                throw DomovoiError.identityHeld(reason)
             }
         }
 
-        let hops = RedirectDelegate(
-            start: outgoing,
-            wsUpgrade: wsUpgrade,
-            // A hop decides the token afresh, by the scope rule, whatever the
-            // first hop was allowed to carry. A candidate never rides along.
-            decide: { [weak self] url in
+        // What a HOP may carry, which is **not always the scope rule**: it is
+        // the same `mode`, asked again for the hop's own URL.
+        //
+        // `.scoped` decides afresh, so a redirect within the active server
+        // keeps the token and a redirect anywhere else loses it. `.candidate`
+        // and `.none` carry nothing on any hop, and that is the whole point of
+        // them:
+        //
+        //  * `.candidate` is the paste check. On Android it runs on a client
+        //    with `DeviceAuthInterceptor` removed, so a hop carries nothing at
+        //    all. Running the scope rule on hop 2 instead would re-acquire the
+        //    SAVED token — so a wrong paste plus a `302` (a reverse proxy, or
+        //    FastAPI's `redirect_slashes`) would answer 200 to the valid token
+        //    and report `.accepted` for the wrong paste. That is exactly the
+        //    incident of 2026-10-17 the paste check was added to prevent.
+        //  * `.none` is the sweep. "The sweep sends no token" has to mean no
+        //    hop either, or finding A6-02 comes back through a redirect.
+        let decide: @Sendable (ServerURL) -> TokenOutcome
+        switch mode {
+        case .scoped:
+            decide = { [weak self] url in
                 guard let self else { return .bare }
                 return tokenOutcome(for: url, wsUpgrade: false)
             }
-        )
+        case .candidate, .none:
+            decide = { _ in .bare }
+        }
+        let hops = RedirectDelegate(start: outgoing, wsUpgrade: wsUpgrade, decide: decide)
         let data: Data
         let response: URLResponse
         do {
@@ -325,16 +352,37 @@ public final class DomovoiClient: Sendable {
             throw DomovoiError.notDomovoi("the answer was not an HTTP response")
         }
 
+        // Only the server's own answers (its scheme, host and port) speak for
+        // its token; the drop-in socket on the core's port keeps its own
+        // count.
+        //
+        // **Gated on the URL that answered, not on the URL we asked.**
+        // Android's interceptor runs per hop, so the scope check it makes
+        // always concerns the response it is looking at. Here the response is
+        // the LAST hop's and `parsed` is the FIRST hop's, so checking `parsed`
+        // would have let a foreign host's verdict be filed against the active
+        // server: the active server redirects off-origin, hop 2 correctly goes
+        // out bare, the stranger answers `401 {"detail":"X-Device-Token or
+        // admin session required"}` — and this phone's token would be marked
+        // permanently rejected for the ACTIVE server on the stranger's say-so,
+        // sending every request bare for good under "Domovoi doesn't recognise
+        // this phone any more".
+        //
+        // A redirect WITHIN the active server still teaches, as on Android:
+        // the hop carried the token (`decide` put it back) and the origin that
+        // answered is the one that issued it.
         if let health, let sentToken, let tokenServer,
            let base = TokenScope.baseOf(tokenServer),
-           TokenScope.sameServer(base, parsed) {
-            // Only the server's own answers (its scheme, host and port) speak
-            // for its token; the drop-in socket on the core's port keeps its
-            // own count.
+           let answered = http.url.flatMap({ ServerURL.parse($0.absoluteString) }),
+           TokenScope.sameServer(base, answered) {
             health.observe(
                 url: tokenServer,
                 sent: sentToken,
-                current: book.tokenForServer(tokenServer),
+                // `headerSafeToken`, as `DeviceAuth.kt:125` does, so the two
+                // call sites read identically: the question `observe` asks is
+                // whether the token held NOW is the one that was sent, and the
+                // one that could be sent is the header-safe one.
+                current: headerSafeToken(book.tokenForServer(tokenServer)),
                 status: http.statusCode,
                 body: Self.text(data),
                 retryAfter: http.value(forHTTPHeaderField: "Retry-After")
@@ -463,6 +511,21 @@ public final class DomovoiClient: Sendable {
     /// setting to fix, not an outage, so it counts as an answer too and the
     /// workspace stays up to say so. So does a server that asked this phone
     /// to wait: it answered, and the shell shows the wait.
+    ///
+    /// **The identity gate's hold is NOT an answer**, which is why it has a
+    /// case of its own (``DomovoiError/identityHeld(_:)``) rather than sharing
+    /// `.notPermitted` with the cleartext refusal. Android splits them by
+    /// type: `UnknownServiceException` (cleartext) is caught as true, and
+    /// `ServerIdentityException` is a plain `IOException` and so is false. A
+    /// server in the identity `Mismatch` state must read the same on both
+    /// phones — it is the one case the gate exists for.
+    ///
+    /// Two shapes of `.notPermitted` do still count as an answer, and
+    /// deliberately: a redirect this app refused to follow (the server
+    /// answered, we declined), and an active-server address this app cannot
+    /// parse (where Android's `Request.Builder.url` throws
+    /// `IllegalArgumentException` out of `answers()` altogether, so there is
+    /// no behaviour to match — and no shell can reach that server anyway).
     public func answers() async -> Bool {
         let base = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !base.isEmpty else { return false }
@@ -551,11 +614,12 @@ public final class DomovoiClient: Sendable {
         case .bare: return nil
         case .send(let token, _): return token
         case .wait(let ms): throw DomovoiError.tokenThrottled(waitMs: ms)
-        case .held(let reason): throw DomovoiError.notPermitted(reason)
+        case .held(let reason): throw DomovoiError.identityHeld(reason)
         }
     }
 
-    /// A WebSocket upgrade request carrying this phone's household token.
+    /// A WebSocket upgrade this phone may open, which decides what it carries
+    /// at **connect** time.
     ///
     /// Used by the state socket (`/ws/state`) and the drop-in call socket
     /// (`/v1/dropin/{room}`), both of which are later batches. Android marks
@@ -564,24 +628,44 @@ public final class DomovoiClient: Sendable {
     /// marking is simply that this method is the only thing that builds one,
     /// and it is the only caller that passes `wsUpgrade: true`.
     ///
-    /// The scope rule still decides: an upgrade to another host gets nothing,
-    /// an upgrade to another port on the active server's host keeps the token
-    /// (the drop-in socket to the core's own port), and room mode seals it.
+    /// ### Why a value with a `mint()` and not a request
     ///
-    /// Nil means there is no socket to open: an address that does not parse,
-    /// or one the cleartext rule refuses. Android's `wsRequest` builds the
-    /// request anyway and its interceptor refuses the connection when it is
-    /// made; refusing to build it is the stricter half of the same rule, and
-    /// it means no caller can be handed a socket request that cannot
-    /// legitimately be opened.
-    public func webSocketRequest(_ url: String) -> URLRequest? {
+    /// Android's `wsRequest` stamps the token in too, but its interceptor runs
+    /// on the upgrade's own connection, so room mode, a refused token, a wait
+    /// and the gate are all re-read when the socket connects **and again on
+    /// every reconnect**. A `URLRequest` handed back from here would carry
+    /// whatever was true when it was minted, for as long as the socket held
+    /// it: the shell mints the request, the person starts room mode, the state
+    /// socket reconnects from the request it is holding — and the household
+    /// token goes on the wire while the phone is a room. ``HouseholdLock``
+    /// argues at length that sampling the flag once per *call* is the bug to
+    /// avoid; once per *mint* is longer-lived still.
+    ///
+    /// So this hands back a small value that re-asks the rule each time, and
+    /// **I1-D must call ``SocketUpgrade/mint()`` immediately before each
+    /// `webSocketTask(with:)`, including every reconnect** — never once into a
+    /// stored property. A nil from `mint()` means "not now": do not connect,
+    /// show the wait or the identity card, and try again when the shell says
+    /// the state changed.
+    ///
+    /// Nil from *this* method means there is no socket to open at all: an
+    /// address that does not parse, or one the cleartext rule refuses. Both
+    /// are properties of the address, so they cannot change under a held
+    /// value, which is why they are decided once, here. Android's `wsRequest`
+    /// builds the request anyway and its interceptor refuses the connection
+    /// when it is made; refusing to build it is the stricter half of the same
+    /// rule, and it means no caller can be handed a socket request that cannot
+    /// legitimately be opened ("no misleading controls").
+    public func webSocketUpgrade(_ url: String) -> SocketUpgrade? {
         guard let parsed = ServerURL.parseAllowingWebSocket(url), let target = URL(string: url) else { return nil }
         guard CleartextPolicy.permits(parsed) else { return nil }
-        var request = URLRequest(url: target)
-        if case .send(let token, _) = tokenOutcome(for: parsed, wsUpgrade: true) {
-            request.setValue(token, forHTTPHeaderField: deviceTokenHeader)
+        // `self` strongly, not weakly: this is the app's one client and it
+        // outlives every socket. A weak capture would turn "the client is
+        // gone" into a silently bare socket, which is the failure this whole
+        // method exists to prevent.
+        return SocketUpgrade(url: target) { [self] in
+            tokenOutcome(for: parsed, wsUpgrade: true)
         }
-        return request
     }
 
     // ---- turning answers into errors ---------------------------------------
@@ -651,6 +735,59 @@ public final class DomovoiClient: Sendable {
     }
 }
 
+/// A socket this phone may open, and the decision about what it carries,
+/// deferred to the moment it is opened.
+///
+/// Made only by ``DomovoiClient/webSocketUpgrade(_:)``, whose doc comment has
+/// the reasoning and I1-D's obligation.
+public struct SocketUpgrade: Sendable {
+
+    /// Where the socket is aimed. Fixed for the life of this value: the
+    /// address passed the parser and the cleartext rule when it was made, and
+    /// neither answer can change for the same address.
+    public let url: URL
+
+    private let decide: @Sendable () -> DomovoiClient.TokenOutcome
+
+    init(url: URL, decide: @Sendable @escaping () -> DomovoiClient.TokenOutcome) {
+        self.url = url
+        self.decide = decide
+    }
+
+    /// The upgrade request to open **now**, or nil when this phone is not
+    /// opening one at the moment.
+    ///
+    /// Call it immediately before each `webSocketTask(with:)`, reconnects
+    /// included.
+    ///
+    /// * A request **with** the token: the scope rule admits this URL and the
+    ///   token is good.
+    /// * A request **without** it: bare is a legitimate socket, not a
+    ///   failure — an unpaired phone opens one during the server's pre-setup
+    ///   grace, room mode seals the household token while the phone is a
+    ///   room, and a token the server has already refused is not sent again.
+    ///   Android proceeds bare in each of those.
+    /// * **Nil**: this app refused to send the request at all. The server
+    ///   asked this phone to wait, or the identity gate held it — the two
+    ///   places Android's interceptor *throws* instead of proceeding, so the
+    ///   socket never connects there either. Falling through to a bare socket
+    ///   here would open a connection Android would not have opened, and
+    ///   would tell the shell the phone is unpaired when the truth is that it
+    ///   is waiting.
+    public func mint() -> URLRequest? {
+        var request = URLRequest(url: url)
+        switch decide() {
+        case .bare:
+            return request
+        case .send(let token, _):
+            request.setValue(token, forHTTPHeaderField: deviceTokenHeader)
+            return request
+        case .wait, .held:
+            return nil
+        }
+    }
+}
+
 /// The redirect half of the client, as one request's delegate.
 ///
 /// Why a class the compiler cannot check for me: `URLSessionTaskDelegate`
@@ -658,9 +795,10 @@ public final class DomovoiClient: Sendable {
 /// delegate must be an `NSObject` subclass, and `NSObject` is not `Sendable`.
 /// There is no way to write a `URLSession` redirect delegate without this.
 /// The `@unchecked` claim is sound here and that is checkable by reading the
-/// stored properties: all four are `let`, three hold `Sendable` values, and
-/// the fourth is a `Mutex`, which exists for exactly this. Nothing mutable is
-/// reachable from here without going through that lock.
+/// stored properties: all three are `let`, two hold `Sendable` values (a
+/// `Bool` and a `@Sendable` closure), and the third is a `Mutex`, which exists
+/// for exactly this. Nothing mutable is reachable from here without going
+/// through that lock.
 final class RedirectDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
 
     private struct State {
@@ -721,49 +859,71 @@ final class RedirectDelegate: NSObject, URLSessionTaskDelegate, @unchecked Senda
     /// which strips the token header; then the hop's own URL is run through
     /// the cleartext rule and the scope rule, in that order, exactly as
     /// Android's interceptor stack does it for every hop.
+    ///
+    /// **The lock is not held across `decide`.** `Mutex` is non-reentrant,
+    /// and `decide` calls out of this file into other locks: ``HouseholdLock``
+    /// and ``TokenHealth`` today, I1-C's settings store (which `ServerBook`
+    /// reads) after that, and I1-B's gate, which will hold a cache of its
+    /// own. Nothing in this batch can take those in the other order, so
+    /// nothing deadlocks today; two locks nested in a synchronous platform
+    /// callback is a trap to be walked out of while it is still cheap, and it
+    /// costs nothing, because one chain's hops are strictly sequential — the
+    /// platform asks the next question only after this one has answered. So:
+    /// read the state under the lock, decide outside it, write back under it.
     func followUp(response: HTTPURLResponse) -> URLRequest? {
-        state.withLock { state -> URLRequest? in
-            guard state.refusal == nil else { return nil }
-            guard var next = RedirectPolicy.followUp(
-                state.current,
-                status: response.statusCode,
-                location: response.value(forHTTPHeaderField: "Location"),
-                isWebSocketUpgrade: wsUpgrade
-            ) else { return nil }
+        let (refused, current, hopsSoFar) = state.withLock { ($0.refusal != nil, $0.current, $0.hops) }
+        guard !refused else { return nil }
+        guard var next = RedirectPolicy.followUp(
+            current,
+            status: response.statusCode,
+            location: response.value(forHTTPHeaderField: "Location"),
+            isWebSocketUpgrade: wsUpgrade
+        ) else { return nil }
 
-            state.hops += 1
-            if state.hops > RedirectPolicy.maxHops {
-                state.refusal = .notPermitted("too many redirects: \(state.hops)")
-                return nil
-            }
-            guard let url = next.url, let parsed = ServerURL.parse(url.absoluteString) else {
-                state.refusal = .notPermitted("that is not a server address")
-                return nil
-            }
-            // The cleartext rule for THIS hop, before it is connected. The
-            // reason Android turns OkHttp's own follower off is that its
-            // follower would have skipped this.
-            guard CleartextPolicy.permits(parsed) else {
-                state.refusal = .notPermitted(CleartextPolicy.refusalMessage(parsed.host))
-                return nil
-            }
-            // And the token for THIS hop's URL: the active server keeps it,
-            // anywhere else loses it. `RedirectPolicy` has already removed
-            // the header, so doing nothing here is "bare".
-            switch decide(parsed) {
-            case .bare:
-                break
-            case .send(let token, _):
-                next.setValue(token, forHTTPHeaderField: deviceTokenHeader)
-            case .wait(let ms):
-                state.refusal = .tokenThrottled(waitMs: ms)
-                return nil
-            case .held(let reason):
-                state.refusal = .notPermitted(reason)
-                return nil
-            }
-            state.current = next
-            return next
+        // Counted whether or not the hop is then allowed, as before: a chain
+        // that is refused on its twenty-first hop was still twenty-one hops
+        // long.
+        let hops = hopsSoFar + 1
+        if hops > RedirectPolicy.maxHops {
+            return stop(at: hops, .notPermitted("too many redirects: \(hops)"))
         }
+        guard let url = next.url, let parsed = ServerURL.parse(url.absoluteString) else {
+            return stop(at: hops, .notPermitted("that is not a server address"))
+        }
+        // The cleartext rule for THIS hop, before it is connected. The reason
+        // Android turns OkHttp's own follower off is that its follower would
+        // have skipped this.
+        guard CleartextPolicy.permits(parsed) else {
+            return stop(at: hops, .notPermitted(CleartextPolicy.refusalMessage(parsed.host)))
+        }
+        // And the token for THIS hop's URL: the active server keeps it,
+        // anywhere else loses it. `RedirectPolicy` has already removed the
+        // header, so doing nothing here is "bare".
+        switch decide(parsed) {
+        case .bare:
+            break
+        case .send(let token, _):
+            next.setValue(token, forHTTPHeaderField: deviceTokenHeader)
+        case .wait(let ms):
+            return stop(at: hops, .tokenThrottled(waitMs: ms))
+        case .held(let reason):
+            return stop(at: hops, .identityHeld(reason))
+        }
+        state.withLock {
+            $0.hops = hops
+            $0.current = next
+        }
+        return next
+    }
+
+    /// Record the hop and why the chain stopped. Always returns nil, so a
+    /// refusal reads as one statement at the site that found it.
+    private func stop(at hops: Int, _ why: DomovoiError) -> URLRequest? {
+        state.withLock {
+            $0.hops = hops
+            // First refusal wins, as it did when this all ran under one lock.
+            if $0.refusal == nil { $0.refusal = why }
+        }
+        return nil
     }
 }

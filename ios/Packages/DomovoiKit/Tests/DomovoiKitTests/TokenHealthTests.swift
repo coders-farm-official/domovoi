@@ -254,7 +254,7 @@ final class TokenHealthTests: XCTestCase {
     func testTheUpgradeStopsCarryingARefusedTokenToo() async {
         _ = await get()
         XCTAssertNil(
-            client.webSocketRequest("ws://10.0.0.9:6369/ws/state")?.value(forHTTPHeaderField: deviceTokenHeader),
+            client.webSocketUpgrade("ws://10.0.0.9:6369/ws/state")?.mint()?.value(forHTTPHeaderField: deviceTokenHeader),
             "the upgrade is built from the same rule, so a refused token is not on it"
         )
     }

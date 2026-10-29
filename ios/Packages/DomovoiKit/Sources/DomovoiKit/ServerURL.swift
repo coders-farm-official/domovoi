@@ -1,9 +1,9 @@
-// `String.range(of:)`, used here and in the new IPv6 check, is Foundation's,
-// not the standard library's (`firstRange(of:)` is the stdlib one). The file
-// had no import and so could not have compiled; `CleartextPolicy.swift` and
-// `ServerAddress.swift` have the same gap for `trimmingCharacters(in:)` and
-// are reported rather than touched, since nothing in this round changes them
-// in a way that needs it.
+// `String.range(of:)`, used here and in the IPv6 check, is Foundation's, not
+// the standard library's (`firstRange(of:)` is the stdlib one). This file had
+// no import when it was written on a PC and so could not have compiled; the
+// import below is that fix. (An earlier version of this note reported the same
+// gap in `CleartextPolicy.swift` and `ServerAddress.swift`. It was wrong:
+// both have imported Foundation since I0-A.)
 import Foundation
 
 /// The little bit of a URL the pairing rules actually need: scheme, host and

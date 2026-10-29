@@ -172,10 +172,18 @@ public enum DeviceRegistry {
     /// everything but the unreserved set and `!.~'()*`. A well-formed id has
     /// nothing in it that needs escaping except `:`, but an id is
     /// self-asserted and this is a path segment, so it is escaped anyway.
+    ///
+    /// The safe set is written out rather than taken from
+    /// `CharacterSet.alphanumerics`, which is Unicode-wide: it contains "é",
+    /// "д" and "٣", so a device id holding any of them would have gone into
+    /// the path unescaped where Android's `Uri.encode` — whose safe set is
+    /// ASCII letters and digits plus `_-!.~'()*` — percent-encodes it.
+    static let pathSafeCharacters = CharacterSet(
+        charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-!.~'()*"
+    )
+
     static func pathEscaped(_ text: String) -> String {
-        var allowed = CharacterSet.alphanumerics
-        allowed.insert(charactersIn: "_-!.~'()*")
-        return text.addingPercentEncoding(withAllowedCharacters: allowed) ?? text
+        text.addingPercentEncoding(withAllowedCharacters: pathSafeCharacters) ?? text
     }
 
     // ---- the name and the user agent ---------------------------------------
