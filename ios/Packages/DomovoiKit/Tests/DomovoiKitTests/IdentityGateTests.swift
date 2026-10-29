@@ -624,9 +624,11 @@ final class IdentityGateTests: XCTestCase {
             XCTAssertEqual(false, error.failure?.deviceTokenRequired, "not a pairing refusal from a server that is not ours")
         }
         // ...and it is refused because the gate asked and the ROGUE answered,
-        // not because nobody asked anything.
-        guard case .mismatch = gate.status?.verdict else {
-            return XCTFail("the gate should hold a rogue's verdict, not an empty cache: \(String(describing: gate.status?.verdict))")
+        // not because nobody asked anything. Checked without returning, so
+        // the second half below still runs and says whether the pairing
+        // screen is reachable at all.
+        if case .mismatch = gate.status?.verdict {} else {
+            XCTFail("the gate should hold a rogue's verdict, not a stale or empty one: \(String(describing: gate.status?.verdict))")
         }
         XCTAssertFalse(client.pairingRequired)
         client.notePossiblePairingRefusal(status: 401, body: "X-Device-Token or admin session required")
