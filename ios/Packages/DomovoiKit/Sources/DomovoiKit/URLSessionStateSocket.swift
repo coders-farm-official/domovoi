@@ -18,15 +18,34 @@ public final class URLSessionStateSocketTransport: StateSocketTransport {
 
     private let session: URLSession
     private let pingMs: Int64
+    private let connectBudgetMs: Int64
 
     /// - Parameters:
     ///   - session: the app's one session, so the socket inherits its
     ///     configuration. Android's upgrade goes through the app's one
     ///     `OkHttpClient` for the same reason (map §1.2).
     ///   - pingMs: ``stateSocketPingMs``.
-    public init(session: URLSession, pingMs: Int64 = stateSocketPingMs) {
+    ///   - connectBudgetMs: ``stateSocketConnectBudgetMs``, the connect
+    ///     watchdog's bound.
+    ///
+    ///     **A parameter with no test behind it, deliberately.** Exercising
+    ///     the watchdog needs a server that completes a real `101` and then
+    ///     says nothing, and `LoopbackServer` speaks HTTP and not the
+    ///     WebSocket handshake — so the watchdog is not covered by
+    ///     `swift test`, and `I1D1-FIX-REPORT.md` says so rather than leaving
+    ///     it to be assumed. The seam is here so the batch that teaches the
+    ///     loopback server to upgrade can test it in milliseconds instead of
+    ///     ten seconds. The **state** the watchdog exists for is covered,
+    ///     through the layer a test can see: ``StateSocket/wake()``'s rescue
+    ///     and `testAnAttemptThatNeverOpensOrEndsIsRescuedByAWake`.
+    public init(
+        session: URLSession,
+        pingMs: Int64 = stateSocketPingMs,
+        connectBudgetMs: Int64 = stateSocketConnectBudgetMs
+    ) {
         self.session = session
         self.pingMs = pingMs
+        self.connectBudgetMs = connectBudgetMs
     }
 
     public func open(_ request: URLRequest, reporting events: StateSocketEvents) -> any StateSocketLink {
@@ -38,7 +57,7 @@ public final class URLSessionStateSocketTransport: StateSocketTransport {
         task.maximumMessageSize = stateSocketMaximumFrameBytes
         let link = Link(task: task, events: events)
         task.resume()
-        link.run(pingMs: pingMs)
+        link.run(pingMs: pingMs, connectBudgetMs: connectBudgetMs)
         return link
     }
 
@@ -103,9 +122,9 @@ public final class URLSessionStateSocketTransport: StateSocketTransport {
         /// dot, and nothing behaves differently: the subscribe-all frame goes
         /// out on `opened` either way, and the server treats "no frame" as
         /// subscribed to everything anyway (`web/backend/main.py:704`).
-        func run(pingMs: Int64) {
+        func run(pingMs: Int64, connectBudgetMs: Int64) {
             let pump = Task<Void, Never> { [weak self] in
-                await self?.pump(pingMs: pingMs)
+                await self?.pump(pingMs: pingMs, connectBudgetMs: connectBudgetMs)
             }
             let stale = state.withLock { current -> Task<Void, Never>? in
                 guard !current.finished else { return pump }
@@ -145,10 +164,10 @@ public final class URLSessionStateSocketTransport: StateSocketTransport {
         /// the server's wording and an `HTTPURLResponse` carries none. That
         /// was map §11.6's real reason all along; it used to also be true by
         /// accident, because the status was never read at all.
-        private func pump(pingMs: Int64) async {
+        private func pump(pingMs: Int64, connectBudgetMs: Int64) async {
             let watchdog = Task { [weak self] in
                 do {
-                    try await Task.sleep(for: .milliseconds(stateSocketConnectBudgetMs))
+                    try await Task.sleep(for: .milliseconds(connectBudgetMs))
                 } catch { return }
                 self?.failIfNeverOpened()
             }

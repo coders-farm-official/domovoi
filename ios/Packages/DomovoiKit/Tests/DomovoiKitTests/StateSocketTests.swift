@@ -815,30 +815,47 @@ final class StateSocketTests: XCTestCase {
         XCTAssertEqual("timers.changed", StateEvent.parse(fits)?.type)
     }
 
-    /// What `JSONSerialization` actually does with a deeply nested frame on a
-    /// cooperative-pool thread, measured rather than assumed — the review
-    /// could not settle it without running Swift.
+    /// What `JSONSerialization` does with a deeply nested frame on a
+    /// cooperative-pool thread, **measured** — the review could not settle it
+    /// without running Swift, and the answer decides whether this app needs a
+    /// depth cap of its own.
     ///
-    /// **The number this found: see `I1D1-FIX-REPORT.md`.** The assertion is
-    /// that it is a dropped frame and not a dead process at every depth a
-    /// 1 MiB frame can reach, which is what the size bound caps: two bytes
-    /// per level, so ``stateSocketMaximumFrameBytes`` admits at most about
-    /// 512 000 levels, and this walks past that.
+    /// Measured 2026-10-29 on the Mac that runs this suite, with the frame
+    /// parsed inside `Task.detached` so it runs on the cooperative pool,
+    /// whose stack is far smaller than the main thread's:
+    ///
+    /// | nesting depth | outcome |
+    /// |---|---|
+    /// | 100, 500, 511, **512** | parsed |
+    /// | **513**, 1 000, 10 000, 50 000, 600 000 | dropped |
+    ///
+    /// So Foundation enforces its own limit at **512 levels** and **throws
+    /// rather than overflowing the stack**, at every depth up to a 1.2 MB
+    /// frame — past what ``stateSocketMaximumFrameBytes`` admits at two bytes
+    /// per level. **There is therefore no depth cap in this app**: there is
+    /// nothing left to cap, and a cap of our own would be a second number to
+    /// keep in step with Foundation's for no gain.
+    ///
+    /// The depths are asserted rather than printed. A measurement that is
+    /// only printed is a measurement nobody notices changing.
     func testADeeplyNestedFrameIsDroppedRatherThanCrashing() async {
         func frame(depth: Int) -> String {
             #"{"type":"x","data":"# + String(repeating: "[", count: depth)
                 + String(repeating: "]", count: depth) + "}"
         }
-        // On the cooperative pool, whose stack is far smaller than the main
-        // thread's — which is where a real frame is parsed, so it is where
-        // this is measured.
-        for depth in [100, 500, 511, 512, 513, 1_000, 10_000, 50_000, 600_000] {
+        func parses(_ depth: Int) async -> Bool {
             let text = frame(depth: depth)
-            let outcome = await Task.detached {
-                StateEvent.parse(text) == nil ? "dropped" : "parsed"
-            }.value
-            print("U1 depth \(depth) (\(text.utf8.count) bytes): \(outcome)")
-            fflush(stdout)
+            return await Task.detached { StateEvent.parse(text) != nil }.value
+        }
+        for depth in [100, 500, 511, 512] {
+            let parsed = await parses(depth)
+            XCTAssertTrue(parsed, "Foundation parses \(depth) levels")
+        }
+        // And past Foundation's limit it throws, which `parse` reads as "not
+        // a frame" — the same answer as any other unparseable text.
+        for depth in [513, 1_000, 10_000, 50_000, 600_000] {
+            let parsed = await parses(depth)
+            XCTAssertFalse(parsed, "\(depth) levels is dropped, and the process is still here")
         }
     }
 }
