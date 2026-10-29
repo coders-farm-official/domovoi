@@ -247,5 +247,11 @@ public enum HomeAttentionStrings {
     /// is in `design-notes/ios/IOS-ONLY-STRINGS.md` with a shorter
     /// alternative for the owner to choose between. Do not treat its presence
     /// here as approval.
-    public static let stale = "showing the last answer · the newest check didn't get through"
+    ///
+    /// **The words live in ``IOSOnlyStrings``, not here.** That is the one
+    /// place this app's own sentences are written down, so that `grep
+    /// IOSOnlyStrings` finds every string the owner has not yet worded — a
+    /// second home for one of them is how one gets reworded and the other
+    /// does not.
+    public static let stale = IOSOnlyStrings.attentionStale
 }

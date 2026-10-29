@@ -1,6 +1,6 @@
 import Foundation
 
-/// The two sentences this app says that Android has no words for.
+/// The three sentences this app says that Android has no words for.
 ///
 /// **Drafts, awaiting Kamron's wording.** They are written down here, in one
 /// place and nowhere else, so that rewording either is a one-line change and
@@ -20,6 +20,11 @@ import Foundation
 ///    (`ANDROID-SHELL-MAP.md` §3.1, `Discovery.localIpv4()` returning null).
 ///    That is reported for Android, not fixed, because it is shipping v1
 ///    behaviour in a soak.
+///  - **``attentionStale``** is not iOS-only either: Android's `rememberApi`
+///    keeps the last value when a read fails and says nothing at all about
+///    it (`ANDROID-HOME-MAP.md` §10.4), so a card can show a check that no
+///    longer holds with no mark on it. Part 1 shipped ``ApiRead/isStale``
+///    with no words; this is the words, for the needs-attention card.
 ///
 /// ### The seam this batch deliberately leaves open
 ///
@@ -49,4 +54,13 @@ public enum IOSOnlyStrings {
     /// The dash is an em dash, U+2014.
     public static let noAddressYet =
         "on wifi but no address yet — wait a moment and rescan, or add an address manually"
+
+    /// The newest health check did not get through, so what the card shows is
+    /// the previous answer.
+    ///
+    /// Used by ``HomeAttentionStrings/stale``. The separator is U+00B7, as
+    /// every Home string's is, and the apostrophe is ASCII — this is in
+    /// Android's voice even though Android has no such string.
+    public static let attentionStale =
+        "showing the last answer · the newest check didn't get through"
 }

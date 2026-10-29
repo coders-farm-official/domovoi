@@ -84,6 +84,9 @@ final class ShellStringsTests: XCTestCase {
         // the same word — so it read as evidence of a match it had not made.
         // Part 2 adds the rest of this file's strings with its sections.
         "ui/screens/home/HomeScreen.kt",
+        // Part 2: the health checks and the two formatters a row draws.
+        "ui/screens/home/HealthChecks.kt",
+        "ui/components/Format.kt",
     ]
 
     /// Every literal in every file above, decoded, concatenated per file.
@@ -973,12 +976,13 @@ final class ShellStringsTests: XCTestCase {
         )
     }
 
-    /// The two sentences Android has no words for are **not** in the Kotlin,
-    /// and that is the point: this is the test that fails if someone
-    /// "ports" one of them into `ShellStrings` as though it were Android's.
+    /// The sentences Android has no words for are **not** in the Kotlin, and
+    /// that is the point: this is the test that fails if someone "ports" one
+    /// of them into `ShellStrings` as though it were Android's.
     func testTheTwoIOSOnlySentencesAreNotInTheKotlin() {
         XCTAssertFalse(Self.haystack.contains(IOSOnlyStrings.localNetworkDenied))
         XCTAssertFalse(Self.haystack.contains(IOSOnlyStrings.noAddressYet))
+        XCTAssertFalse(Self.haystack.contains(IOSOnlyStrings.attentionStale))
         // The one Android does say about an empty sweep is checked against
         // the Kotlin by `testThePickersTwoInterpolations`, which splits it on
         // the sentinel where the port goes; it is not repeated here.
@@ -1030,4 +1034,99 @@ final class ShellStringsTests: XCTestCase {
         XCTAssertFalse(HomeHeaderStrings.explainUnpaired.contains("\u{2019}"), "no curly apostrophe")
         XCTAssertEqual("  \u{00B7}  ", HomeHeaderStrings.countsSeparator)
     }
+
+    // MARK: - the health checks (map §6.2) and the card (§6.3)
+
+    /// The twenty health-check strings that are whole literals in
+    /// `HealthChecks.kt`, each against the Kotlin whole.
+    ///
+    /// Whole and not fragments: a fragment check passes on a substring, so
+    /// `"none"` would be satisfied by `"none installed"` and `"ready"` by
+    /// `"already"` — and twenty-four assertions that cannot fail are worse
+    /// than none, because they read as cover.
+    func testTheHealthChecksSayWhatTheKotlinSays() {
+        assertKotlinSaysWhole(HealthStrings.waiting)
+        assertKotlinSaysWhole(HealthStrings.unread)
+        assertKotlinSaysWhole(HealthStrings.answering)
+        assertKotlinSaysWhole(HealthStrings.coreDown, "U+00B7, ASCII apostrophe in isn't")
+        assertKotlinSaysWhole(HealthStrings.dbDown)
+        assertKotlinSaysWhole(HealthStrings.sttReady)
+        assertKotlinSaysWhole(HealthStrings.sttOff, "can't, ASCII")
+        assertKotlinSaysWhole(HealthStrings.sttFallback)
+        assertKotlinSaysWhole(HealthStrings.sttUnreported)
+        assertKotlinSaysWhole(HealthStrings.noRoomsYet)
+        assertKotlinSaysWhole(HealthStrings.none)
+        assertKotlinSaysWhole(HealthStrings.everyScreenIsShowing)
+        assertKotlinSaysWhole(HealthStrings.noneInstalled)
+        assertKotlinSaysWhole(HealthStrings.noneStuck)
+        assertKotlinSaysWhole(HealthStrings.acqCoreAway)
+        assertKotlinSaysWhole(HealthStrings.oneRequestWaiting)
+        assertKotlinSaysWhole(HealthStrings.containersFine)
+        assertKotlinSaysWhole(HealthStrings.adminAttention)
+        assertKotlinSaysWhole(HealthStrings.tampering)
+        assertKotlinSaysWhole(HealthStrings.containerNeedsAttention)
+    }
+
+    /// The four that **cannot** be whole literals, and why.
+    ///
+    /// Each one is the tail of a Kotlin string with a value interpolated into
+    /// its head — `"$name is offline · it can't hear anyone right now"` — so
+    /// there is no literal in the file equal to it and
+    /// ``assertKotlinSaysWhole(_:_:file:line:)`` would have to fail. The
+    /// honest check is containment, and the leading space is part of what is
+    /// checked: dropping it is how `kitchenis offline` ships.
+    func testTheFourInterpolatedTailsAreTheKotlinsTails() {
+        assertKotlinSays(HealthStrings.isOfflineSuffix, "leading space included")
+        assertKotlinSays(HealthStrings.wasSetUpSuffix, "leading space included")
+        assertKotlinSays(HealthStrings.allWorkingSuffix, "space, U+00B7, space")
+        assertKotlinSays(HealthStrings.manyRequestsSuffix)
+        for suffix in [
+            HealthStrings.isOfflineSuffix,
+            HealthStrings.wasSetUpSuffix,
+            HealthStrings.allWorkingSuffix,
+            HealthStrings.manyRequestsSuffix,
+        ] {
+            XCTAssertTrue(suffix.hasPrefix(" "), "a tail begins with its space: \(debugged(suffix))")
+        }
+    }
+
+    /// The card's three ported strings. The fourth — the stale mark — is
+    /// **ours**, and `IOSOnlyStrings` is where that is recorded; a
+    /// `assertKotlinSaysWhole` on it would have to fail.
+    func testTheAttentionCardSaysWhatTheKotlinSays() {
+        assertKotlinSaysWhole(HomeAttentionStrings.title)
+        assertKotlinSaysWhole(HomeAttentionStrings.summaryLine, "the admin's, ASCII apostrophe")
+        assertKotlinSaysWhole(HomeAttentionStrings.checking, "U+2026 ellipsis, not three dots")
+        XCTAssertFalse(
+            Self.wholeStrings.contains(HomeAttentionStrings.stale),
+            "if Android ever grows this string, port it and drop it from IOSOnlyStrings"
+        )
+    }
+
+    /// `+N more`, which is built rather than stored.
+    ///
+    /// `HomeSections.kt:303` is `"+${rows.size - 3} more"`, so only the tail
+    /// is a literal; the `+` and the count are the composition, and that is
+    /// what the second assertion pins.
+    func testTheMoreLabelIsTheKotlinsMoreLabel() {
+        assertKotlinSays(" more", "the tail of HomeSections.kt:303's interpolation")
+        let five = HomeAttentionState(
+            view: .rows((0..<5).map {
+                AttentionRow(key: "k\($0)", tone: .warn, text: "x", target: .settings("health"))
+            }),
+            compact: true
+        )
+        XCTAssertEqual("+2 more", five.moreLabel)
+    }
+
+    /// `relTime`'s words, from `ui/components/Format.kt`.
+    func testTheRelativeTimesSayWhatTheKotlinSays() {
+        assertKotlinSaysWhole("just now")
+        assertKotlinSays("m ago")
+        assertKotlinSays("h ago")
+        assertKotlinSays("d ago")
+        assertKotlinSays("MMM d, yyyy", "the pattern itself, so a locale cannot drift it")
+        assertKotlinSaysWhole("\u{2014}", "an em dash for no time, not a hyphen")
+    }
+
 }
