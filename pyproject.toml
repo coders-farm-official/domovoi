@@ -1,6 +1,6 @@
 [project]
 name = "domovoi"
-version = "1.0.0rc3"
+version = "1.0.0"
 description = "Domovoi — the home computer system that just works: media, files, rooms, voice and optional AI, all at home"
 requires-python = ">=3.11"
 # Floors are the lowest versions the code is known to work with AND, for
@@ -68,6 +68,10 @@ dependencies = [
     # WebP cache in S–XL buckets. Pure-wheel on Windows; the endpoint
     # degrades to 204/no-thumbs if it were somehow absent.
     "pillow>=10.4",
+    # Co-editing (web/backend/collab): pycrdt (MIT), the Python binding of
+    # the Yrs CRDT, speaks the same Yjs update format as the browsers.
+    # abi3 wheels from CPython 3.11 (cp314 included), x86_64 and aarch64.
+    "pycrdt>=0.14.10,<0.15",
     # Printing (domovoi/printing/): pypdfium2 (Apache-2.0 or BSD-3-Clause;
     # its PDFium is BSD-style, the FreeType inside it under the FreeType
     # licence, credited in docs/LICENSES.md) draws pages for printers that

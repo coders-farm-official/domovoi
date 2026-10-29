@@ -1,6 +1,5 @@
 package com.domovoi.app.ui.screens.images
 
-import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -257,9 +256,13 @@ fun ImagesScreen() {
             items(history.data.orEmpty(), key = { "hist-${it.id}" }) { h ->
                 HistoryCard(
                     h,
+                    // Fetched by the app (it carries the device token) and
+                    // handed on as a file: a bare server address opened in
+                    // the browser would be refused without the token.
                     onOpen = { name ->
-                        context.startActivity(
-                            Intent(Intent.ACTION_VIEW, Uri.parse(app.api.absolute(filePath(name)))),
+                        com.domovoi.app.net.ServerFileTransfer.open(
+                            context, app, filePath(name), name,
+                            com.domovoi.app.ui.screens.files.mimeFor(name), toast,
                         )
                     },
                     onDelete = { confirmDelete = h },

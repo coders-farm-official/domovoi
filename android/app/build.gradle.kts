@@ -66,8 +66,8 @@ android {
         // Play refuses an upload whose versionCode is not above the last
         // one, and a phone refuses an update that goes down, so it only
         // ever goes up; release.ps1 and play-bundle.ps1 both read it here.
-        versionCode = 26102001
-        versionName = "1.0.0-rc3"
+        versionCode = 26102801
+        versionName = "1.0.0"
         // The ABIs above. One APK per ABI filters by splits (below)
         // instead of here.
         if (!apkPerAbi) {

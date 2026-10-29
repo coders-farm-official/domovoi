@@ -41,10 +41,22 @@ def _src(name: str) -> str:
 
 
 def test_every_editor_asks_the_same_question() -> None:
-    """One idiom, four editors. A second phrasing here is a bug."""
-    for name in ("doc_editor.jsx", "sheet_editor.jsx", "files.jsx", "drawings.jsx"):
+    """One idiom, three Save-button editors. A second phrasing here is a bug."""
+    for name in ("sheet_editor.jsx", "files.jsx", "drawings.jsx"):
         src = _src(name)
         assert GUARD in src, f"{name} does not guard Close with the house confirm"
+
+
+def test_the_document_editor_saves_on_close_and_asks_only_when_that_fails() -> None:
+    """The document editor (editors v1) has no Save button for its own
+    formats: it saves as you type, and Close saves what is pending first.
+    Nothing is discarded silently: it asks only when that last save fails."""
+    src = _src("doc_editor.jsx")
+    body = src[src.index("const requestClose = async () => {"):]
+    body = body[:body.index("// The phone app's Back button closes through here too")]
+    assert "const ok = await saveRef.current();" in body
+    assert ("if (!ok && !window.confirm(\"Your latest changes couldn't be saved. "
+            "Close anyway and lose them?\")) return;") in body
 
 
 def test_the_whiteboard_close_button_goes_through_the_guard() -> None:

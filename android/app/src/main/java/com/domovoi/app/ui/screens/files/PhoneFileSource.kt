@@ -369,7 +369,7 @@ internal class PhoneFileSource(
 
     override fun imageModel(libraryId: String, entry: FileEntry): Any? = contentUri(libraryId, entry.rel)
 
-    override fun openFile(context: Context, libraryId: String, entry: FileEntry): Boolean {
+    override fun openFile(context: Context, libraryId: String, entry: FileEntry, report: (String) -> Unit): Boolean {
         val uri = contentUri(libraryId, entry.rel) ?: return false
         val type = resolver.getType(uri)?.takeIf { it != "application/octet-stream" } ?: mimeFor(entry.name)
         var flags = Intent.FLAG_GRANT_READ_URI_PERMISSION
@@ -385,7 +385,7 @@ internal class PhoneFileSource(
         }
     }
 
-    override fun openRaw(context: Context, libraryId: String, rel: String) {
+    override fun openRaw(context: Context, libraryId: String, rel: String, report: (String) -> Unit) {
         openFile(context, libraryId, FileEntry(name = rel.substringAfterLast('/'), rel = rel, kind = fileKind(rel, false)))
     }
 

@@ -47,7 +47,7 @@
   </script>
   <link rel="stylesheet" href="colors_and_type.css">
   <link rel="stylesheet" href="styles.css">
-  <link rel="stylesheet" href="/vendor/xspreadsheet/xspreadsheet.css">
+  <link rel="stylesheet" href="font_picker.css">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png">
   <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
@@ -63,10 +63,10 @@
   <script src="/vendor/react/react-dom.development.js"></script>
   <script src="/vendor/babel/babel.min.js"></script>
   <script src="/vendor/lucide/lucide.min.js"></script>
-  <!-- Homegrown editors: marked (markdown preview, MIT) + x-spreadsheet
-       (grid with client-side formulas, MIT). Vendored like everything else. -->
+  <!-- Homegrown editors: marked (markdown preview, MIT). The sheet
+       editor's Univer (Apache-2.0, /vendor/univer) is loaded by
+       sheet_editor.jsx the first time a sheet is opened. -->
   <script src="/vendor/marked/marked.min.js"></script>
-  <script src="/vendor/xspreadsheet/xspreadsheet.js"></script>
 
   <script type="text/babel" data-presets="react" src="auth.js"></script>
   <!-- Turns rendered markdown back into data before any page shows it.
@@ -96,6 +96,8 @@
        dialog and the Scan sheet that Files / Documents open. Before
        settings.jsx and files.jsx, which render its components. -->
   <script type="text/babel" data-presets="react" src="printers.jsx"></script>
+  <!-- The editors' fonts: window.DomovoiFonts, the font picker and Settings → Documents → Fonts. -->
+  <script type="text/babel" data-presets="react" src="fonts.jsx"></script>
   <script type="text/babel" data-presets="react" src="settings.jsx"></script>
   <!-- Files is a multi-library browser. It MUST load before doc_editor.jsx /
        sheet_editor.jsx (which register window.DocEditor / window.SheetEditor,
@@ -105,6 +107,9 @@
        tab. -->
   <script type="text/babel" data-presets="react" src="files.jsx"></script>
   <script type="text/babel" data-presets="react" src="doc_editor.jsx"></script>
+  <!-- Co-editing: window.DomovoiCollab (plain script; loads vendor/yjs on first use) and its UI. -->
+  <script src="/collab.js"></script>
+  <script type="text/babel" data-presets="react" src="collab_ui.jsx"></script>
   <script type="text/babel" data-presets="react" src="sheet_editor.jsx"></script>
   <script type="text/babel" data-presets="react" src="drawings.jsx"></script>
   <script type="text/babel" data-presets="react" src="models.jsx"></script>

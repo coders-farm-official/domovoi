@@ -1,9 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- What the app's FileProvider (AndroidManifest.xml) may hand out, read-only
      and only through an intent's grant: the phone's "Chat documents" library
-     (saved drafts) and the cache folder a draft being shared is written to.
+     (saved drafts) and the cache folders a draft or a document being shared
+     is written to.
      Nothing else in the app's storage is reachable through it. -->
 <paths>
     <files-path name="chat_documents" path="Chat documents/" />
     <cache-path name="drafts_share" path="drafts-share/" />
+    <!-- A document downloaded from the in-app document editor (Word or
+         Markdown), on its way to the share sheet. -->
+    <cache-path name="docs_share" path="docs-share/" />
+    <!-- A file from the home server fetched by the app to be opened in
+         another app (ServerFileTransfer): the file, never the server address. -->
+    <cache-path name="open_files" path="open-files/" />
 </paths>

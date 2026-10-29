@@ -143,6 +143,14 @@ ALLOWLIST: dict[tuple[str, str, str], str] = {
     ("web", "POST", "/api/plugins/{slug}/uninstall"): "proxy — core require_admin gates it",
     ("web", "POST", "/api/plugins/{slug}/upgrade"): "proxy — core require_admin gates it",
     ("web", "POST", "/api/music/add-by-url"): "proxy — core check_outbound_fetch gates it",
+    # The document editor's "Download → Word" (editors v1, 2026-10-27):
+    # a POST only because the editor's content is the body; nothing is
+    # written on the server. It wears require_device_read like the other
+    # downloads, so a view-only (cookie) session can download what it sees.
+    ("web", "POST", "/api/documents/convert/docx"): (
+        "a read: converts the posted content to Word and returns it, writes nothing; "
+        "require_device_read, the conversion runs in its own capped process"
+    ),
     # ── web: the video satellite's kiosk transport row (FE-3) ─────────
     # Kamron's decision: the kiosk renders unattended, with nobody in the
     # room to hold a credential, so its four transport verbs stay open.

@@ -1,0 +1,4611 @@
+{
+ "google_fonts_commit": "e7db6ca603fd4862010383ff17ffd6cc4ffac1c0",
+ "families": [
+  {
+   "family": "Abril Fatface",
+   "slug": "abrilfatface",
+   "category": "display",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "google/fonts ofl/abrilfatface at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/abrilfatface",
+   "reserved_names": [
+    "Abril",
+    "Abril Fatface"
+   ],
+   "modified": false,
+   "note": "",
+   "weights": [
+    400
+   ],
+   "italic": false,
+   "bytes": 20736,
+   "faces": [
+    {
+     "file": "abrilfatface-normal-400.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "bytes": 20736,
+     "from": "AbrilFatface-Regular.ttf"
+    }
+   ]
+  },
+  {
+   "family": "Amatic SC",
+   "slug": "amaticsc",
+   "category": "handwriting",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "google/fonts ofl/amaticsc at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/amaticsc",
+   "reserved_names": [],
+   "modified": true,
+   "note": "",
+   "weights": [
+    400,
+    700
+   ],
+   "italic": false,
+   "bytes": 103748,
+   "faces": [
+    {
+     "file": "amaticsc-normal-400-latin.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 28348,
+     "from": "AmaticSC-Regular.ttf"
+    },
+    {
+     "file": "amaticsc-normal-400-latin-ext.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 23992,
+     "from": "AmaticSC-Regular.ttf"
+    },
+    {
+     "file": "amaticsc-normal-700-latin.woff2",
+     "style": "normal",
+     "weight": [
+      700,
+      700
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 27352,
+     "from": "AmaticSC-Bold.ttf"
+    },
+    {
+     "file": "amaticsc-normal-700-latin-ext.woff2",
+     "style": "normal",
+     "weight": [
+      700,
+      700
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 24056,
+     "from": "AmaticSC-Bold.ttf"
+    }
+   ]
+  },
+  {
+   "family": "Anton",
+   "slug": "anton",
+   "category": "display",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "google/fonts ofl/anton at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/anton",
+   "reserved_names": [],
+   "modified": true,
+   "note": "",
+   "weights": [
+    400
+   ],
+   "italic": false,
+   "bytes": 56404,
+   "faces": [
+    {
+     "file": "anton-normal-400-latin.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 22508,
+     "from": "Anton-Regular.ttf"
+    },
+    {
+     "file": "anton-normal-400-latin-ext.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 33896,
+     "from": "Anton-Regular.ttf"
+    }
+   ]
+  },
+  {
+   "family": "Architects Daughter",
+   "slug": "architectsdaughter",
+   "category": "handwriting",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "google/fonts ofl/architectsdaughter at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/architectsdaughter",
+   "reserved_names": [],
+   "modified": true,
+   "note": "",
+   "weights": [
+    400
+   ],
+   "italic": false,
+   "bytes": 26552,
+   "faces": [
+    {
+     "file": "architectsdaughter-normal-400-latin.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 16456,
+     "from": "ArchitectsDaughter-Regular.ttf"
+    },
+    {
+     "file": "architectsdaughter-normal-400-latin-ext.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 10096,
+     "from": "ArchitectsDaughter-Regular.ttf"
+    }
+   ]
+  },
+  {
+   "family": "Arimo",
+   "slug": "arimo",
+   "category": "sans",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "google/fonts ofl/arimo at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/arimo",
+   "reserved_names": [],
+   "modified": true,
+   "note": "same widths as Arial",
+   "weights": [
+    400,
+    500,
+    600,
+    700
+   ],
+   "italic": true,
+   "bytes": 255328,
+   "faces": [
+    {
+     "file": "arimo-normal-400-700-latin.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      700
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 23404,
+     "from": "Arimo[wght].ttf"
+    },
+    {
+     "file": "arimo-normal-400-700-latin-ext.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      700
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 94948,
+     "from": "Arimo[wght].ttf"
+    },
+    {
+     "file": "arimo-italic-400-700-latin.woff2",
+     "style": "italic",
+     "weight": [
+      400,
+      700
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 26144,
+     "from": "Arimo-Italic[wght].ttf"
+    },
+    {
+     "file": "arimo-italic-400-700-latin-ext.woff2",
+     "style": "italic",
+     "weight": [
+      400,
+      700
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 110832,
+     "from": "Arimo-Italic[wght].ttf"
+    }
+   ]
+  },
+  {
+   "family": "Atkinson Hyperlegible",
+   "slug": "atkinsonhyperlegible",
+   "category": "sans",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "google/fonts ofl/atkinsonhyperlegible at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/atkinsonhyperlegible",
+   "reserved_names": [],
+   "modified": true,
+   "note": "made for low-vision readers",
+   "weights": [
+    400,
+    700
+   ],
+   "italic": true,
+   "bytes": 108940,
+   "faces": [
+    {
+     "file": "atkinsonhyperlegible-normal-400-latin.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 17168,
+     "from": "AtkinsonHyperlegible-Regular.ttf"
+    },
+    {
+     "file": "atkinsonhyperlegible-normal-400-latin-ext.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 9052,
+     "from": "AtkinsonHyperlegible-Regular.ttf"
+    },
+    {
+     "file": "atkinsonhyperlegible-normal-700-latin.woff2",
+     "style": "normal",
+     "weight": [
+      700,
+      700
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 17520,
+     "from": "AtkinsonHyperlegible-Bold.ttf"
+    },
+    {
+     "file": "atkinsonhyperlegible-normal-700-latin-ext.woff2",
+     "style": "normal",
+     "weight": [
+      700,
+      700
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 9124,
+     "from": "AtkinsonHyperlegible-Bold.ttf"
+    },
+    {
+     "file": "atkinsonhyperlegible-italic-400-latin.woff2",
+     "style": "italic",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 18332,
+     "from": "AtkinsonHyperlegible-Italic.ttf"
+    },
+    {
+     "file": "atkinsonhyperlegible-italic-400-latin-ext.woff2",
+     "style": "italic",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 9480,
+     "from": "AtkinsonHyperlegible-Italic.ttf"
+    },
+    {
+     "file": "atkinsonhyperlegible-italic-700-latin.woff2",
+     "style": "italic",
+     "weight": [
+      700,
+      700
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 18620,
+     "from": "AtkinsonHyperlegible-BoldItalic.ttf"
+    },
+    {
+     "file": "atkinsonhyperlegible-italic-700-latin-ext.woff2",
+     "style": "italic",
+     "weight": [
+      700,
+      700
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 9644,
+     "from": "AtkinsonHyperlegible-BoldItalic.ttf"
+    }
+   ]
+  },
+  {
+   "family": "Bebas Neue",
+   "slug": "bebasneue",
+   "category": "display",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "google/fonts ofl/bebasneue at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/bebasneue",
+   "reserved_names": [],
+   "modified": true,
+   "note": "",
+   "weights": [
+    400
+   ],
+   "italic": false,
+   "bytes": 23028,
+   "faces": [
+    {
+     "file": "bebasneue-normal-400-latin.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 14368,
+     "from": "BebasNeue-Regular.ttf"
+    },
+    {
+     "file": "bebasneue-normal-400-latin-ext.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 8660,
+     "from": "BebasNeue-Regular.ttf"
+    }
+   ]
+  },
+  {
+   "family": "Bitter",
+   "slug": "bitter",
+   "category": "serif",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "google/fonts ofl/bitter at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/bitter",
+   "reserved_names": [
+    "Bitter Pro"
+   ],
+   "modified": false,
+   "note": "",
+   "weights": [
+    100,
+    200,
+    300,
+    400,
+    500,
+    600,
+    700,
+    800,
+    900
+   ],
+   "italic": true,
+   "bytes": 227504,
+   "faces": [
+    {
+     "file": "bitter-normal-100-900.woff2",
+     "style": "normal",
+     "weight": [
+      100,
+      900
+     ],
+     "format": "woff2",
+     "bytes": 113984,
+     "from": "Bitter[wght].ttf"
+    },
+    {
+     "file": "bitter-italic-100-900.woff2",
+     "style": "italic",
+     "weight": [
+      100,
+      900
+     ],
+     "format": "woff2",
+     "bytes": 113520,
+     "from": "Bitter-Italic[wght].ttf"
+    }
+   ]
+  },
+  {
+   "family": "Bungee",
+   "slug": "bungee",
+   "category": "display",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "google/fonts ofl/bungee at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/bungee",
+   "reserved_names": [],
+   "modified": true,
+   "note": "",
+   "weights": [
+    400
+   ],
+   "italic": false,
+   "bytes": 37872,
+   "faces": [
+    {
+     "file": "bungee-normal-400-latin.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 25892,
+     "from": "Bungee-Regular.ttf"
+    },
+    {
+     "file": "bungee-normal-400-latin-ext.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 11980,
+     "from": "Bungee-Regular.ttf"
+    }
+   ]
+  },
+  {
+   "family": "Caladea",
+   "slug": "caladea",
+   "category": "serif",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "google/fonts ofl/caladea at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/caladea",
+   "reserved_names": [],
+   "modified": true,
+   "note": "same widths as Cambria",
+   "weights": [
+    400,
+    700
+   ],
+   "italic": true,
+   "bytes": 151032,
+   "faces": [
+    {
+     "file": "caladea-normal-400-latin.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 21732,
+     "from": "Caladea-Regular.ttf"
+    },
+    {
+     "file": "caladea-normal-400-latin-ext.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 14844,
+     "from": "Caladea-Regular.ttf"
+    },
+    {
+     "file": "caladea-normal-700-latin.woff2",
+     "style": "normal",
+     "weight": [
+      700,
+      700
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 21792,
+     "from": "Caladea-Bold.ttf"
+    },
+    {
+     "file": "caladea-normal-700-latin-ext.woff2",
+     "style": "normal",
+     "weight": [
+      700,
+      700
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 15012,
+     "from": "Caladea-Bold.ttf"
+    },
+    {
+     "file": "caladea-italic-400-latin.woff2",
+     "style": "italic",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 23028,
+     "from": "Caladea-Italic.ttf"
+    },
+    {
+     "file": "caladea-italic-400-latin-ext.woff2",
+     "style": "italic",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 15648,
+     "from": "Caladea-Italic.ttf"
+    },
+    {
+     "file": "caladea-italic-700-latin.woff2",
+     "style": "italic",
+     "weight": [
+      700,
+      700
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 23044,
+     "from": "Caladea-BoldItalic.ttf"
+    },
+    {
+     "file": "caladea-italic-700-latin-ext.woff2",
+     "style": "italic",
+     "weight": [
+      700,
+      700
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 15932,
+     "from": "Caladea-BoldItalic.ttf"
+    }
+   ]
+  },
+  {
+   "family": "Carlito",
+   "slug": "carlito",
+   "category": "sans",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "google/fonts ofl/carlito at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/carlito",
+   "reserved_names": [
+    "Carlito"
+   ],
+   "modified": false,
+   "note": "same widths as Calibri",
+   "weights": [
+    400,
+    700
+   ],
+   "italic": true,
+   "bytes": 796164,
+   "faces": [
+    {
+     "file": "carlito-normal-400.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "bytes": 190256,
+     "from": "Carlito-Regular.ttf"
+    },
+    {
+     "file": "carlito-normal-700.woff2",
+     "style": "normal",
+     "weight": [
+      700,
+      700
+     ],
+     "format": "woff2",
+     "bytes": 198084,
+     "from": "Carlito-Bold.ttf"
+    },
+    {
+     "file": "carlito-italic-400.woff2",
+     "style": "italic",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "bytes": 201544,
+     "from": "Carlito-Italic.ttf"
+    },
+    {
+     "file": "carlito-italic-700.woff2",
+     "style": "italic",
+     "weight": [
+      700,
+      700
+     ],
+     "format": "woff2",
+     "bytes": 206280,
+     "from": "Carlito-BoldItalic.ttf"
+    }
+   ]
+  },
+  {
+   "family": "Caveat",
+   "slug": "caveat",
+   "category": "handwriting",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "google/fonts ofl/caveat at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/caveat",
+   "reserved_names": [],
+   "modified": true,
+   "note": "",
+   "weights": [
+    400,
+    500,
+    600,
+    700
+   ],
+   "italic": false,
+   "bytes": 106048,
+   "faces": [
+    {
+     "file": "caveat-normal-400-700-latin.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      700
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 77592,
+     "from": "Caveat[wght].ttf"
+    },
+    {
+     "file": "caveat-normal-400-700-latin-ext.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      700
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 28456,
+     "from": "Caveat[wght].ttf"
+    }
+   ]
+  },
+  {
+   "family": "Cinzel",
+   "slug": "cinzel",
+   "category": "display",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "google/fonts ofl/cinzel at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/cinzel",
+   "reserved_names": [],
+   "modified": true,
+   "note": "",
+   "weights": [
+    400,
+    500,
+    600,
+    700,
+    800,
+    900
+   ],
+   "italic": false,
+   "bytes": 57356,
+   "faces": [
+    {
+     "file": "cinzel-normal-400-900-latin.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      900
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 36988,
+     "from": "Cinzel[wght].ttf"
+    },
+    {
+     "file": "cinzel-normal-400-900-latin-ext.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      900
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 20368,
+     "from": "Cinzel[wght].ttf"
+    }
+   ]
+  },
+  {
+   "family": "Comfortaa",
+   "slug": "comfortaa",
+   "category": "display",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "google/fonts ofl/comfortaa at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/comfortaa",
+   "reserved_names": [
+    "Comfortaa"
+   ],
+   "modified": false,
+   "note": "",
+   "weights": [
+    300,
+    400,
+    500,
+    600,
+    700
+   ],
+   "italic": false,
+   "bytes": 79988,
+   "faces": [
+    {
+     "file": "comfortaa-normal-300-700.woff2",
+     "style": "normal",
+     "weight": [
+      300,
+      700
+     ],
+     "format": "woff2",
+     "bytes": 79988,
+     "from": "Comfortaa[wght].ttf"
+    }
+   ]
+  },
+  {
+   "family": "Comic Neue",
+   "slug": "comicneue",
+   "category": "handwriting",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "google/fonts ofl/comicneue at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/comicneue",
+   "reserved_names": [],
+   "modified": true,
+   "note": "",
+   "weights": [
+    400,
+    700
+   ],
+   "italic": true,
+   "bytes": 119608,
+   "faces": [
+    {
+     "file": "comicneue-normal-400-latin.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 19744,
+     "from": "ComicNeue-Regular.ttf"
+    },
+    {
+     "file": "comicneue-normal-400-latin-ext.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 9816,
+     "from": "ComicNeue-Regular.ttf"
+    },
+    {
+     "file": "comicneue-normal-700-latin.woff2",
+     "style": "normal",
+     "weight": [
+      700,
+      700
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 19300,
+     "from": "ComicNeue-Bold.ttf"
+    },
+    {
+     "file": "comicneue-normal-700-latin-ext.woff2",
+     "style": "normal",
+     "weight": [
+      700,
+      700
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 9780,
+     "from": "ComicNeue-Bold.ttf"
+    },
+    {
+     "file": "comicneue-italic-400-latin.woff2",
+     "style": "italic",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 19660,
+     "from": "ComicNeue-Italic.ttf"
+    },
+    {
+     "file": "comicneue-italic-400-latin-ext.woff2",
+     "style": "italic",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 10680,
+     "from": "ComicNeue-Italic.ttf"
+    },
+    {
+     "file": "comicneue-italic-700-latin.woff2",
+     "style": "italic",
+     "weight": [
+      700,
+      700
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 19916,
+     "from": "ComicNeue-BoldItalic.ttf"
+    },
+    {
+     "file": "comicneue-italic-700-latin-ext.woff2",
+     "style": "italic",
+     "weight": [
+      700,
+      700
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 10712,
+     "from": "ComicNeue-BoldItalic.ttf"
+    }
+   ]
+  },
+  {
+   "family": "Cormorant Garamond",
+   "slug": "cormorantgaramond",
+   "category": "serif",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "google/fonts ofl/cormorantgaramond at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/cormorantgaramond",
+   "reserved_names": [],
+   "modified": true,
+   "note": "",
+   "weights": [
+    300,
+    400,
+    500,
+    600,
+    700
+   ],
+   "italic": true,
+   "bytes": 214636,
+   "faces": [
+    {
+     "file": "cormorantgaramond-normal-300-700-latin.woff2",
+     "style": "normal",
+     "weight": [
+      300,
+      700
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 67092,
+     "from": "CormorantGaramond[wght].ttf"
+    },
+    {
+     "file": "cormorantgaramond-normal-300-700-latin-ext.woff2",
+     "style": "normal",
+     "weight": [
+      300,
+      700
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 59708,
+     "from": "CormorantGaramond[wght].ttf"
+    },
+    {
+     "file": "cormorantgaramond-italic-300-700-latin.woff2",
+     "style": "italic",
+     "weight": [
+      300,
+      700
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 50076,
+     "from": "CormorantGaramond-Italic[wght].ttf"
+    },
+    {
+     "file": "cormorantgaramond-italic-300-700-latin-ext.woff2",
+     "style": "italic",
+     "weight": [
+      300,
+      700
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 37760,
+     "from": "CormorantGaramond-Italic[wght].ttf"
+    }
+   ]
+  },
+  {
+   "family": "Courier Prime",
+   "slug": "courierprime",
+   "category": "mono",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "google/fonts ofl/courierprime at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/courierprime",
+   "reserved_names": [],
+   "modified": true,
+   "note": "",
+   "weights": [
+    400,
+    700
+   ],
+   "italic": true,
+   "bytes": 138088,
+   "faces": [
+    {
+     "file": "courierprime-normal-400-latin.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 19312,
+     "from": "CourierPrime-Regular.ttf"
+    },
+    {
+     "file": "courierprime-normal-400-latin-ext.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 12900,
+     "from": "CourierPrime-Regular.ttf"
+    },
+    {
+     "file": "courierprime-normal-700-latin.woff2",
+     "style": "normal",
+     "weight": [
+      700,
+      700
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 19992,
+     "from": "CourierPrime-Bold.ttf"
+    },
+    {
+     "file": "courierprime-normal-700-latin-ext.woff2",
+     "style": "normal",
+     "weight": [
+      700,
+      700
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 13092,
+     "from": "CourierPrime-Bold.ttf"
+    },
+    {
+     "file": "courierprime-italic-400-latin.woff2",
+     "style": "italic",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 22060,
+     "from": "CourierPrime-Italic.ttf"
+    },
+    {
+     "file": "courierprime-italic-400-latin-ext.woff2",
+     "style": "italic",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 14104,
+     "from": "CourierPrime-Italic.ttf"
+    },
+    {
+     "file": "courierprime-italic-700-latin.woff2",
+     "style": "italic",
+     "weight": [
+      700,
+      700
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 22472,
+     "from": "CourierPrime-BoldItalic.ttf"
+    },
+    {
+     "file": "courierprime-italic-700-latin-ext.woff2",
+     "style": "italic",
+     "weight": [
+      700,
+      700
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 14156,
+     "from": "CourierPrime-BoldItalic.ttf"
+    }
+   ]
+  },
+  {
+   "family": "Cousine",
+   "slug": "cousine",
+   "category": "mono",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "google/fonts ofl/cousine at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/cousine",
+   "reserved_names": [],
+   "modified": true,
+   "note": "same widths as Courier New",
+   "weights": [
+    400,
+    700
+   ],
+   "italic": true,
+   "bytes": 290964,
+   "faces": [
+    {
+     "file": "cousine-normal-400-latin.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 16184,
+     "from": "Cousine-Regular.ttf"
+    },
+    {
+     "file": "cousine-normal-400-latin-ext.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 53348,
+     "from": "Cousine-Regular.ttf"
+    },
+    {
+     "file": "cousine-normal-700-latin.woff2",
+     "style": "normal",
+     "weight": [
+      700,
+      700
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 16312,
+     "from": "Cousine-Bold.ttf"
+    },
+    {
+     "file": "cousine-normal-700-latin-ext.woff2",
+     "style": "normal",
+     "weight": [
+      700,
+      700
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 53556,
+     "from": "Cousine-Bold.ttf"
+    },
+    {
+     "file": "cousine-italic-400-latin.woff2",
+     "style": "italic",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 17324,
+     "from": "Cousine-Italic.ttf"
+    },
+    {
+     "file": "cousine-italic-400-latin-ext.woff2",
+     "style": "italic",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 58356,
+     "from": "Cousine-Italic.ttf"
+    },
+    {
+     "file": "cousine-italic-700-latin.woff2",
+     "style": "italic",
+     "weight": [
+      700,
+      700
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 17412,
+     "from": "Cousine-BoldItalic.ttf"
+    },
+    {
+     "file": "cousine-italic-700-latin-ext.woff2",
+     "style": "italic",
+     "weight": [
+      700,
+      700
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 58472,
+     "from": "Cousine-BoldItalic.ttf"
+    }
+   ]
+  },
+  {
+   "family": "Crimson Pro",
+   "slug": "crimsonpro",
+   "category": "serif",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "google/fonts ofl/crimsonpro at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/crimsonpro",
+   "reserved_names": [],
+   "modified": true,
+   "note": "",
+   "weights": [
+    200,
+    300,
+    400,
+    500,
+    600,
+    700,
+    800,
+    900
+   ],
+   "italic": true,
+   "bytes": 184132,
+   "faces": [
+    {
+     "file": "crimsonpro-normal-200-900-latin.woff2",
+     "style": "normal",
+     "weight": [
+      200,
+      900
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 52836,
+     "from": "CrimsonPro[wght].ttf"
+    },
+    {
+     "file": "crimsonpro-normal-200-900-latin-ext.woff2",
+     "style": "normal",
+     "weight": [
+      200,
+      900
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 36648,
+     "from": "CrimsonPro[wght].ttf"
+    },
+    {
+     "file": "crimsonpro-italic-200-900-latin.woff2",
+     "style": "italic",
+     "weight": [
+      200,
+      900
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 55960,
+     "from": "CrimsonPro-Italic[wght].ttf"
+    },
+    {
+     "file": "crimsonpro-italic-200-900-latin-ext.woff2",
+     "style": "italic",
+     "weight": [
+      200,
+      900
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 38688,
+     "from": "CrimsonPro-Italic[wght].ttf"
+    }
+   ]
+  },
+  {
+   "family": "Dancing Script",
+   "slug": "dancingscript",
+   "category": "handwriting",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "google/fonts ofl/dancingscript at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/dancingscript",
+   "reserved_names": [
+    "Dancing Script"
+   ],
+   "modified": false,
+   "note": "",
+   "weights": [
+    400,
+    500,
+    600,
+    700
+   ],
+   "italic": false,
+   "bytes": 59856,
+   "faces": [
+    {
+     "file": "dancingscript-normal-400-700.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      700
+     ],
+     "format": "woff2",
+     "bytes": 59856,
+     "from": "DancingScript[wght].ttf"
+    }
+   ]
+  },
+  {
+   "family": "DM Sans",
+   "slug": "dmsans",
+   "category": "sans",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "google/fonts ofl/dmsans at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/dmsans",
+   "reserved_names": [],
+   "modified": true,
+   "note": "",
+   "weights": [
+    100,
+    200,
+    300,
+    400,
+    500,
+    600,
+    700,
+    800,
+    900
+   ],
+   "italic": true,
+   "bytes": 122256,
+   "faces": [
+    {
+     "file": "dmsans-normal-100-1000-latin.woff2",
+     "style": "normal",
+     "weight": [
+      100,
+      1000
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 40396,
+     "from": "DMSans[opsz,wght].ttf"
+    },
+    {
+     "file": "dmsans-normal-100-1000-latin-ext.woff2",
+     "style": "normal",
+     "weight": [
+      100,
+      1000
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 19564,
+     "from": "DMSans[opsz,wght].ttf"
+    },
+    {
+     "file": "dmsans-italic-100-1000-latin.woff2",
+     "style": "italic",
+     "weight": [
+      100,
+      1000
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 40760,
+     "from": "DMSans-Italic[opsz,wght].ttf"
+    },
+    {
+     "file": "dmsans-italic-100-1000-latin-ext.woff2",
+     "style": "italic",
+     "weight": [
+      100,
+      1000
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 21536,
+     "from": "DMSans-Italic[opsz,wght].ttf"
+    }
+   ]
+  },
+  {
+   "family": "EB Garamond",
+   "slug": "ebgaramond",
+   "category": "serif",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "google/fonts ofl/ebgaramond at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/ebgaramond",
+   "reserved_names": [],
+   "modified": true,
+   "note": "",
+   "weights": [
+    400,
+    500,
+    600,
+    700,
+    800
+   ],
+   "italic": true,
+   "bytes": 456824,
+   "faces": [
+    {
+     "file": "ebgaramond-normal-400-800-latin.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      800
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 114000,
+     "from": "EBGaramond[wght].ttf"
+    },
+    {
+     "file": "ebgaramond-normal-400-800-latin-ext.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      800
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 118696,
+     "from": "EBGaramond[wght].ttf"
+    },
+    {
+     "file": "ebgaramond-italic-400-800-latin.woff2",
+     "style": "italic",
+     "weight": [
+      400,
+      800
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 129836,
+     "from": "EBGaramond-Italic[wght].ttf"
+    },
+    {
+     "file": "ebgaramond-italic-400-800-latin-ext.woff2",
+     "style": "italic",
+     "weight": [
+      400,
+      800
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 94292,
+     "from": "EBGaramond-Italic[wght].ttf"
+    }
+   ]
+  },
+  {
+   "family": "Figtree",
+   "slug": "figtree",
+   "category": "sans",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "google/fonts ofl/figtree at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/figtree",
+   "reserved_names": [],
+   "modified": true,
+   "note": "",
+   "weights": [
+    300,
+    400,
+    500,
+    600,
+    700,
+    800,
+    900
+   ],
+   "italic": true,
+   "bytes": 62772,
+   "faces": [
+    {
+     "file": "figtree-normal-300-900-latin.woff2",
+     "style": "normal",
+     "weight": [
+      300,
+      900
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 20868,
+     "from": "Figtree[wght].ttf"
+    },
+    {
+     "file": "figtree-normal-300-900-latin-ext.woff2",
+     "style": "normal",
+     "weight": [
+      300,
+      900
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 10172,
+     "from": "Figtree[wght].ttf"
+    },
+    {
+     "file": "figtree-italic-300-900-latin.woff2",
+     "style": "italic",
+     "weight": [
+      300,
+      900
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 21388,
+     "from": "Figtree-Italic[wght].ttf"
+    },
+    {
+     "file": "figtree-italic-300-900-latin-ext.woff2",
+     "style": "italic",
+     "weight": [
+      300,
+      900
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 10344,
+     "from": "Figtree-Italic[wght].ttf"
+    }
+   ]
+  },
+  {
+   "family": "Fira Code",
+   "slug": "firacode",
+   "category": "mono",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "google/fonts ofl/firacode at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/firacode",
+   "reserved_names": [],
+   "modified": true,
+   "note": "",
+   "weights": [
+    300,
+    400,
+    500,
+    600,
+    700
+   ],
+   "italic": false,
+   "bytes": 51936,
+   "faces": [
+    {
+     "file": "firacode-normal-300-700-latin.woff2",
+     "style": "normal",
+     "weight": [
+      300,
+      700
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 39320,
+     "from": "FiraCode[wght].ttf"
+    },
+    {
+     "file": "firacode-normal-300-700-latin-ext.woff2",
+     "style": "normal",
+     "weight": [
+      300,
+      700
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 12616,
+     "from": "FiraCode[wght].ttf"
+    }
+   ]
+  },
+  {
+   "family": "Fira Sans",
+   "slug": "firasans",
+   "category": "sans",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "google/fonts ofl/firasans at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/firasans",
+   "reserved_names": [],
+   "modified": true,
+   "note": "",
+   "weights": [
+    400,
+    700
+   ],
+   "italic": true,
+   "bytes": 378516,
+   "faces": [
+    {
+     "file": "firasans-normal-400-latin.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 33060,
+     "from": "FiraSans-Regular.ttf"
+    },
+    {
+     "file": "firasans-normal-400-latin-ext.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 56028,
+     "from": "FiraSans-Regular.ttf"
+    },
+    {
+     "file": "firasans-normal-700-latin.woff2",
+     "style": "normal",
+     "weight": [
+      700,
+      700
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 35048,
+     "from": "FiraSans-Bold.ttf"
+    },
+    {
+     "file": "firasans-normal-700-latin-ext.woff2",
+     "style": "normal",
+     "weight": [
+      700,
+      700
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 61188,
+     "from": "FiraSans-Bold.ttf"
+    },
+    {
+     "file": "firasans-italic-400-latin.woff2",
+     "style": "italic",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 34668,
+     "from": "FiraSans-Italic.ttf"
+    },
+    {
+     "file": "firasans-italic-400-latin-ext.woff2",
+     "style": "italic",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 58400,
+     "from": "FiraSans-Italic.ttf"
+    },
+    {
+     "file": "firasans-italic-700-latin.woff2",
+     "style": "italic",
+     "weight": [
+      700,
+      700
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 36420,
+     "from": "FiraSans-BoldItalic.ttf"
+    },
+    {
+     "file": "firasans-italic-700-latin-ext.woff2",
+     "style": "italic",
+     "weight": [
+      700,
+      700
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 63704,
+     "from": "FiraSans-BoldItalic.ttf"
+    }
+   ]
+  },
+  {
+   "family": "Fredoka",
+   "slug": "fredoka",
+   "category": "display",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "google/fonts ofl/fredoka at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/fredoka",
+   "reserved_names": [],
+   "modified": true,
+   "note": "",
+   "weights": [
+    300,
+    400,
+    500,
+    600,
+    700
+   ],
+   "italic": false,
+   "bytes": 29804,
+   "faces": [
+    {
+     "file": "fredoka-normal-300-700-latin.woff2",
+     "style": "normal",
+     "weight": [
+      300,
+      700
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 29804,
+     "from": "Fredoka[wdth,wght].ttf"
+    }
+   ]
+  },
+  {
+   "family": "Great Vibes",
+   "slug": "greatvibes",
+   "category": "handwriting",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "google/fonts ofl/greatvibes at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/greatvibes",
+   "reserved_names": [],
+   "modified": true,
+   "note": "",
+   "weights": [
+    400
+   ],
+   "italic": false,
+   "bytes": 140616,
+   "faces": [
+    {
+     "file": "greatvibes-normal-400-latin.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 56592,
+     "from": "GreatVibes-Regular.ttf"
+    },
+    {
+     "file": "greatvibes-normal-400-latin-ext.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 84024,
+     "from": "GreatVibes-Regular.ttf"
+    }
+   ]
+  },
+  {
+   "family": "IBM Plex Mono",
+   "slug": "ibmplexmono",
+   "category": "mono",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "google/fonts ofl/ibmplexmono at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/ibmplexmono",
+   "reserved_names": [
+    "Plex"
+   ],
+   "modified": false,
+   "note": "",
+   "weights": [
+    400,
+    700
+   ],
+   "italic": true,
+   "bytes": 167520,
+   "faces": [
+    {
+     "file": "ibmplexmono-normal-400.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "bytes": 39176,
+     "from": "IBMPlexMono-Regular.ttf"
+    },
+    {
+     "file": "ibmplexmono-normal-700.woff2",
+     "style": "normal",
+     "weight": [
+      700,
+      700
+     ],
+     "format": "woff2",
+     "bytes": 40348,
+     "from": "IBMPlexMono-Bold.ttf"
+    },
+    {
+     "file": "ibmplexmono-italic-400.woff2",
+     "style": "italic",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "bytes": 43716,
+     "from": "IBMPlexMono-Italic.ttf"
+    },
+    {
+     "file": "ibmplexmono-italic-700.woff2",
+     "style": "italic",
+     "weight": [
+      700,
+      700
+     ],
+     "format": "woff2",
+     "bytes": 44280,
+     "from": "IBMPlexMono-BoldItalic.ttf"
+    }
+   ]
+  },
+  {
+   "family": "IBM Plex Sans",
+   "slug": "ibmplexsans",
+   "category": "sans",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "google/fonts ofl/ibmplexsans at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/ibmplexsans",
+   "reserved_names": [
+    "Plex"
+   ],
+   "modified": false,
+   "note": "",
+   "weights": [
+    100,
+    200,
+    300,
+    400,
+    500,
+    600,
+    700
+   ],
+   "italic": true,
+   "bytes": 492480,
+   "faces": [
+    {
+     "file": "ibmplexsans-normal-100-700.woff2",
+     "style": "normal",
+     "weight": [
+      100,
+      700
+     ],
+     "format": "woff2",
+     "bytes": 229852,
+     "from": "IBMPlexSans[wdth,wght].ttf"
+    },
+    {
+     "file": "ibmplexsans-italic-100-700.woff2",
+     "style": "italic",
+     "weight": [
+      100,
+      700
+     ],
+     "format": "woff2",
+     "bytes": 262628,
+     "from": "IBMPlexSans-Italic[wdth,wght].ttf"
+    }
+   ]
+  },
+  {
+   "family": "IBM Plex Serif",
+   "slug": "ibmplexserif",
+   "category": "serif",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "google/fonts ofl/ibmplexserif at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/ibmplexserif",
+   "reserved_names": [
+    "Plex"
+   ],
+   "modified": false,
+   "note": "",
+   "weights": [
+    400,
+    700
+   ],
+   "italic": true,
+   "bytes": 213184,
+   "faces": [
+    {
+     "file": "ibmplexserif-normal-400.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "bytes": 51212,
+     "from": "IBMPlexSerif-Regular.ttf"
+    },
+    {
+     "file": "ibmplexserif-normal-700.woff2",
+     "style": "normal",
+     "weight": [
+      700,
+      700
+     ],
+     "format": "woff2",
+     "bytes": 50480,
+     "from": "IBMPlexSerif-Bold.ttf"
+    },
+    {
+     "file": "ibmplexserif-italic-400.woff2",
+     "style": "italic",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "bytes": 55844,
+     "from": "IBMPlexSerif-Italic.ttf"
+    },
+    {
+     "file": "ibmplexserif-italic-700.woff2",
+     "style": "italic",
+     "weight": [
+      700,
+      700
+     ],
+     "format": "woff2",
+     "bytes": 55648,
+     "from": "IBMPlexSerif-BoldItalic.ttf"
+    }
+   ]
+  },
+  {
+   "family": "Inconsolata",
+   "slug": "inconsolata",
+   "category": "mono",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "google/fonts ofl/inconsolata at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/inconsolata",
+   "reserved_names": [],
+   "modified": true,
+   "note": "",
+   "weights": [
+    200,
+    300,
+    400,
+    500,
+    600,
+    700,
+    800,
+    900
+   ],
+   "italic": false,
+   "bytes": 65428,
+   "faces": [
+    {
+     "file": "inconsolata-normal-200-900-latin.woff2",
+     "style": "normal",
+     "weight": [
+      200,
+      900
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 35472,
+     "from": "Inconsolata[wdth,wght].ttf"
+    },
+    {
+     "file": "inconsolata-normal-200-900-latin-ext.woff2",
+     "style": "normal",
+     "weight": [
+      200,
+      900
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 29956,
+     "from": "Inconsolata[wdth,wght].ttf"
+    }
+   ]
+  },
+  {
+   "family": "Indie Flower",
+   "slug": "indieflower",
+   "category": "handwriting",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "google/fonts ofl/indieflower at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/indieflower",
+   "reserved_names": [],
+   "modified": true,
+   "note": "",
+   "weights": [
+    400
+   ],
+   "italic": false,
+   "bytes": 47844,
+   "faces": [
+    {
+     "file": "indieflower-normal-400-latin.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 25904,
+     "from": "IndieFlower-Regular.ttf"
+    },
+    {
+     "file": "indieflower-normal-400-latin-ext.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 21940,
+     "from": "IndieFlower-Regular.ttf"
+    }
+   ]
+  },
+  {
+   "family": "Inter",
+   "slug": "inter",
+   "category": "sans",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "google/fonts ofl/inter at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/inter",
+   "reserved_names": [],
+   "modified": true,
+   "note": "also the dashboard's own face",
+   "weights": [
+    100,
+    200,
+    300,
+    400,
+    500,
+    600,
+    700,
+    800,
+    900
+   ],
+   "italic": true,
+   "bytes": 330368,
+   "faces": [
+    {
+     "file": "inter-normal-100-900-latin.woff2",
+     "style": "normal",
+     "weight": [
+      100,
+      900
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 69040,
+     "from": "Inter[opsz,wght].ttf"
+    },
+    {
+     "file": "inter-normal-100-900-latin-ext.woff2",
+     "style": "normal",
+     "weight": [
+      100,
+      900
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 89856,
+     "from": "Inter[opsz,wght].ttf"
+    },
+    {
+     "file": "inter-italic-100-900-latin.woff2",
+     "style": "italic",
+     "weight": [
+      100,
+      900
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 74364,
+     "from": "Inter-Italic[opsz,wght].ttf"
+    },
+    {
+     "file": "inter-italic-100-900-latin-ext.woff2",
+     "style": "italic",
+     "weight": [
+      100,
+      900
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 97108,
+     "from": "Inter-Italic[opsz,wght].ttf"
+    }
+   ]
+  },
+  {
+   "family": "JetBrains Mono",
+   "slug": "jetbrainsmono",
+   "category": "mono",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "google/fonts ofl/jetbrainsmono at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/jetbrainsmono",
+   "reserved_names": [],
+   "modified": true,
+   "note": "also the dashboard's own code face",
+   "weights": [
+    100,
+    200,
+    300,
+    400,
+    500,
+    600,
+    700,
+    800
+   ],
+   "italic": true,
+   "bytes": 114256,
+   "faces": [
+    {
+     "file": "jetbrainsmono-normal-100-800-latin.woff2",
+     "style": "normal",
+     "weight": [
+      100,
+      800
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 40696,
+     "from": "JetBrainsMono[wght].ttf"
+    },
+    {
+     "file": "jetbrainsmono-normal-100-800-latin-ext.woff2",
+     "style": "normal",
+     "weight": [
+      100,
+      800
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 14448,
+     "from": "JetBrainsMono[wght].ttf"
+    },
+    {
+     "file": "jetbrainsmono-italic-100-800-latin.woff2",
+     "style": "italic",
+     "weight": [
+      100,
+      800
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 43360,
+     "from": "JetBrainsMono-Italic[wght].ttf"
+    },
+    {
+     "file": "jetbrainsmono-italic-100-800-latin-ext.woff2",
+     "style": "italic",
+     "weight": [
+      100,
+      800
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 15752,
+     "from": "JetBrainsMono-Italic[wght].ttf"
+    }
+   ]
+  },
+  {
+   "family": "Kalam",
+   "slug": "kalam",
+   "category": "handwriting",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "google/fonts ofl/kalam at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/kalam",
+   "reserved_names": [],
+   "modified": true,
+   "note": "",
+   "weights": [
+    400,
+    700
+   ],
+   "italic": false,
+   "bytes": 70732,
+   "faces": [
+    {
+     "file": "kalam-normal-400-latin.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 22940,
+     "from": "Kalam-Regular.ttf"
+    },
+    {
+     "file": "kalam-normal-400-latin-ext.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 12540,
+     "from": "Kalam-Regular.ttf"
+    },
+    {
+     "file": "kalam-normal-700-latin.woff2",
+     "style": "normal",
+     "weight": [
+      700,
+      700
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 22672,
+     "from": "Kalam-Bold.ttf"
+    },
+    {
+     "file": "kalam-normal-700-latin-ext.woff2",
+     "style": "normal",
+     "weight": [
+      700,
+      700
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 12580,
+     "from": "Kalam-Bold.ttf"
+    }
+   ]
+  },
+  {
+   "family": "Lato",
+   "slug": "lato",
+   "category": "sans",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "google/fonts ofl/lato at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/lato",
+   "reserved_names": [
+    "Lato"
+   ],
+   "modified": false,
+   "note": "",
+   "weights": [
+    400,
+    700
+   ],
+   "italic": true,
+   "bytes": 883080,
+   "faces": [
+    {
+     "file": "lato-normal-400.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "bytes": 212004,
+     "from": "Lato-Regular.ttf"
+    },
+    {
+     "file": "lato-normal-700.woff2",
+     "style": "normal",
+     "weight": [
+      700,
+      700
+     ],
+     "format": "woff2",
+     "bytes": 211256,
+     "from": "Lato-Bold.ttf"
+    },
+    {
+     "file": "lato-italic-400.woff2",
+     "style": "italic",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "bytes": 231684,
+     "from": "Lato-Italic.ttf"
+    },
+    {
+     "file": "lato-italic-700.woff2",
+     "style": "italic",
+     "weight": [
+      700,
+      700
+     ],
+     "format": "woff2",
+     "bytes": 228136,
+     "from": "Lato-BoldItalic.ttf"
+    }
+   ]
+  },
+  {
+   "family": "Lexend",
+   "slug": "lexend",
+   "category": "sans",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "google/fonts ofl/lexend at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/lexend",
+   "reserved_names": [
+    "RevReading Lexend"
+   ],
+   "modified": false,
+   "note": "made for easier reading",
+   "weights": [
+    100,
+    200,
+    300,
+    400,
+    500,
+    600,
+    700,
+    800,
+    900
+   ],
+   "italic": false,
+   "bytes": 71896,
+   "faces": [
+    {
+     "file": "lexend-normal-100-900.woff2",
+     "style": "normal",
+     "weight": [
+      100,
+      900
+     ],
+     "format": "woff2",
+     "bytes": 71896,
+     "from": "Lexend[wght].ttf"
+    }
+   ]
+  },
+  {
+   "family": "Liberation Mono",
+   "slug": "liberationmono",
+   "category": "mono",
+   "licence": "OFL-1.1",
+   "licence_file": "LICENSE",
+   "source": "Liberation 2.1.5 release (liberation-fonts-ttf-2.1.5.tar.gz)",
+   "source_url": "https://github.com/liberationfonts/liberation-fonts/releases/tag/2.1.5",
+   "reserved_names": [
+    "Arimo",
+    "Tinos",
+    "Cousine",
+    "Liberation"
+   ],
+   "modified": false,
+   "note": "same widths as Courier New",
+   "weights": [
+    400,
+    700
+   ],
+   "italic": true,
+   "bytes": 480700,
+   "faces": [
+    {
+     "file": "liberationmono-normal-400.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "bytes": 125868,
+     "from": "LiberationMono-Regular.ttf"
+    },
+    {
+     "file": "liberationmono-normal-700.woff2",
+     "style": "normal",
+     "weight": [
+      700,
+      700
+     ],
+     "format": "woff2",
+     "bytes": 123116,
+     "from": "LiberationMono-Bold.ttf"
+    },
+    {
+     "file": "liberationmono-italic-400.woff2",
+     "style": "italic",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "bytes": 114660,
+     "from": "LiberationMono-Italic.ttf"
+    },
+    {
+     "file": "liberationmono-italic-700.woff2",
+     "style": "italic",
+     "weight": [
+      700,
+      700
+     ],
+     "format": "woff2",
+     "bytes": 117056,
+     "from": "LiberationMono-BoldItalic.ttf"
+    }
+   ]
+  },
+  {
+   "family": "Liberation Sans",
+   "slug": "liberationsans",
+   "category": "sans",
+   "licence": "OFL-1.1",
+   "licence_file": "LICENSE",
+   "source": "Liberation 2.1.5 release (liberation-fonts-ttf-2.1.5.tar.gz)",
+   "source_url": "https://github.com/liberationfonts/liberation-fonts/releases/tag/2.1.5",
+   "reserved_names": [
+    "Arimo",
+    "Tinos",
+    "Cousine",
+    "Liberation"
+   ],
+   "modified": false,
+   "note": "same widths as Arial",
+   "weights": [
+    400,
+    700
+   ],
+   "italic": true,
+   "bytes": 598840,
+   "faces": [
+    {
+     "file": "liberationsans-normal-400.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "bytes": 146884,
+     "from": "LiberationSans-Regular.ttf"
+    },
+    {
+     "file": "liberationsans-normal-700.woff2",
+     "style": "normal",
+     "weight": [
+      700,
+      700
+     ],
+     "format": "woff2",
+     "bytes": 148348,
+     "from": "LiberationSans-Bold.ttf"
+    },
+    {
+     "file": "liberationsans-italic-400.woff2",
+     "style": "italic",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "bytes": 152996,
+     "from": "LiberationSans-Italic.ttf"
+    },
+    {
+     "file": "liberationsans-italic-700.woff2",
+     "style": "italic",
+     "weight": [
+      700,
+      700
+     ],
+     "format": "woff2",
+     "bytes": 150612,
+     "from": "LiberationSans-BoldItalic.ttf"
+    }
+   ]
+  },
+  {
+   "family": "Liberation Serif",
+   "slug": "liberationserif",
+   "category": "serif",
+   "licence": "OFL-1.1",
+   "licence_file": "LICENSE",
+   "source": "Liberation 2.1.5 release (liberation-fonts-ttf-2.1.5.tar.gz)",
+   "source_url": "https://github.com/liberationfonts/liberation-fonts/releases/tag/2.1.5",
+   "reserved_names": [
+    "Arimo",
+    "Tinos",
+    "Cousine",
+    "Liberation"
+   ],
+   "modified": false,
+   "note": "same widths as Times New Roman",
+   "weights": [
+    400,
+    700
+   ],
+   "italic": true,
+   "bytes": 582304,
+   "faces": [
+    {
+     "file": "liberationserif-normal-400.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "bytes": 146716,
+     "from": "LiberationSerif-Regular.ttf"
+    },
+    {
+     "file": "liberationserif-normal-700.woff2",
+     "style": "normal",
+     "weight": [
+      700,
+      700
+     ],
+     "format": "woff2",
+     "bytes": 141012,
+     "from": "LiberationSerif-Bold.ttf"
+    },
+    {
+     "file": "liberationserif-italic-400.woff2",
+     "style": "italic",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "bytes": 147476,
+     "from": "LiberationSerif-Italic.ttf"
+    },
+    {
+     "file": "liberationserif-italic-700.woff2",
+     "style": "italic",
+     "weight": [
+      700,
+      700
+     ],
+     "format": "woff2",
+     "bytes": 147100,
+     "from": "LiberationSerif-BoldItalic.ttf"
+    }
+   ]
+  },
+  {
+   "family": "Libre Baskerville",
+   "slug": "librebaskerville",
+   "category": "serif",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "google/fonts ofl/librebaskerville at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/librebaskerville",
+   "reserved_names": [
+    "Libre Baskerville"
+   ],
+   "modified": false,
+   "note": "",
+   "weights": [
+    400,
+    500,
+    600,
+    700
+   ],
+   "italic": true,
+   "bytes": 125508,
+   "faces": [
+    {
+     "file": "librebaskerville-normal-400-700.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      700
+     ],
+     "format": "woff2",
+     "bytes": 64008,
+     "from": "LibreBaskerville[wght].ttf"
+    },
+    {
+     "file": "librebaskerville-italic-400-700.woff2",
+     "style": "italic",
+     "weight": [
+      400,
+      700
+     ],
+     "format": "woff2",
+     "bytes": 61500,
+     "from": "LibreBaskerville-Italic[wght].ttf"
+    }
+   ]
+  },
+  {
+   "family": "Lobster",
+   "slug": "lobster",
+   "category": "display",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "google/fonts ofl/lobster at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/lobster",
+   "reserved_names": [
+    "Lobster"
+   ],
+   "modified": false,
+   "note": "",
+   "weights": [
+    400
+   ],
+   "italic": false,
+   "bytes": 103000,
+   "faces": [
+    {
+     "file": "lobster-normal-400.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "bytes": 103000,
+     "from": "Lobster-Regular.ttf"
+    }
+   ]
+  },
+  {
+   "family": "Lora",
+   "slug": "lora",
+   "category": "serif",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "google/fonts ofl/lora at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/lora",
+   "reserved_names": [
+    "Lora"
+   ],
+   "modified": false,
+   "note": "",
+   "weights": [
+    400,
+    500,
+    600,
+    700
+   ],
+   "italic": true,
+   "bytes": 176732,
+   "faces": [
+    {
+     "file": "lora-normal-400-700.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      700
+     ],
+     "format": "woff2",
+     "bytes": 85096,
+     "from": "Lora[wght].ttf"
+    },
+    {
+     "file": "lora-italic-400-700.woff2",
+     "style": "italic",
+     "weight": [
+      400,
+      700
+     ],
+     "format": "woff2",
+     "bytes": 91636,
+     "from": "Lora-Italic[wght].ttf"
+    }
+   ]
+  },
+  {
+   "family": "Merriweather",
+   "slug": "merriweather",
+   "category": "serif",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "google/fonts ofl/merriweather at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/merriweather",
+   "reserved_names": [
+    "Merriweather"
+   ],
+   "modified": false,
+   "note": "",
+   "weights": [
+    300,
+    400,
+    500,
+    600,
+    700,
+    800,
+    900
+   ],
+   "italic": true,
+   "bytes": 4970128,
+   "faces": [
+    {
+     "file": "merriweather-normal-300-900.woff2",
+     "style": "normal",
+     "weight": [
+      300,
+      900
+     ],
+     "format": "woff2",
+     "bytes": 2490512,
+     "from": "Merriweather[opsz,wdth,wght].ttf"
+    },
+    {
+     "file": "merriweather-italic-300-900.woff2",
+     "style": "italic",
+     "weight": [
+      300,
+      900
+     ],
+     "format": "woff2",
+     "bytes": 2479616,
+     "from": "Merriweather-Italic[opsz,wdth,wght].ttf"
+    }
+   ]
+  },
+  {
+   "family": "Montserrat",
+   "slug": "montserrat",
+   "category": "sans",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "google/fonts ofl/montserrat at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/montserrat",
+   "reserved_names": [],
+   "modified": true,
+   "note": "",
+   "weights": [
+    100,
+    200,
+    300,
+    400,
+    500,
+    600,
+    700,
+    800,
+    900
+   ],
+   "italic": true,
+   "bytes": 363624,
+   "faces": [
+    {
+     "file": "montserrat-normal-100-900-latin.woff2",
+     "style": "normal",
+     "weight": [
+      100,
+      900
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 59020,
+     "from": "Montserrat[wght].ttf"
+    },
+    {
+     "file": "montserrat-normal-100-900-latin-ext.woff2",
+     "style": "normal",
+     "weight": [
+      100,
+      900
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 115484,
+     "from": "Montserrat[wght].ttf"
+    },
+    {
+     "file": "montserrat-italic-100-900-latin.woff2",
+     "style": "italic",
+     "weight": [
+      100,
+      900
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 62752,
+     "from": "Montserrat-Italic[wght].ttf"
+    },
+    {
+     "file": "montserrat-italic-100-900-latin-ext.woff2",
+     "style": "italic",
+     "weight": [
+      100,
+      900
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 126368,
+     "from": "Montserrat-Italic[wght].ttf"
+    }
+   ]
+  },
+  {
+   "family": "Noto Sans",
+   "slug": "notosans",
+   "category": "sans",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "google/fonts ofl/notosans at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/notosans",
+   "reserved_names": [],
+   "modified": true,
+   "note": "",
+   "weights": [
+    100,
+    200,
+    300,
+    400,
+    500,
+    600,
+    700,
+    800,
+    900
+   ],
+   "italic": true,
+   "bytes": 494748,
+   "faces": [
+    {
+     "file": "notosans-normal-100-900-latin.woff2",
+     "style": "normal",
+     "weight": [
+      100,
+      900
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 57040,
+     "from": "NotoSans[wdth,wght].ttf"
+    },
+    {
+     "file": "notosans-normal-100-900-latin-ext.woff2",
+     "style": "normal",
+     "weight": [
+      100,
+      900
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 176920,
+     "from": "NotoSans[wdth,wght].ttf"
+    },
+    {
+     "file": "notosans-italic-100-900-latin.woff2",
+     "style": "italic",
+     "weight": [
+      100,
+      900
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 62580,
+     "from": "NotoSans-Italic[wdth,wght].ttf"
+    },
+    {
+     "file": "notosans-italic-100-900-latin-ext.woff2",
+     "style": "italic",
+     "weight": [
+      100,
+      900
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 198208,
+     "from": "NotoSans-Italic[wdth,wght].ttf"
+    }
+   ]
+  },
+  {
+   "family": "Noto Serif",
+   "slug": "notoserif",
+   "category": "serif",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "google/fonts ofl/notoserif at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/notoserif",
+   "reserved_names": [],
+   "modified": true,
+   "note": "",
+   "weights": [
+    100,
+    200,
+    300,
+    400,
+    500,
+    600,
+    700,
+    800,
+    900
+   ],
+   "italic": true,
+   "bytes": 574480,
+   "faces": [
+    {
+     "file": "notoserif-normal-100-900-latin.woff2",
+     "style": "normal",
+     "weight": [
+      100,
+      900
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 58964,
+     "from": "NotoSerif[wdth,wght].ttf"
+    },
+    {
+     "file": "notoserif-normal-100-900-latin-ext.woff2",
+     "style": "normal",
+     "weight": [
+      100,
+      900
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 193852,
+     "from": "NotoSerif[wdth,wght].ttf"
+    },
+    {
+     "file": "notoserif-italic-100-900-latin.woff2",
+     "style": "italic",
+     "weight": [
+      100,
+      900
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 75340,
+     "from": "NotoSerif-Italic[wdth,wght].ttf"
+    },
+    {
+     "file": "notoserif-italic-100-900-latin-ext.woff2",
+     "style": "italic",
+     "weight": [
+      100,
+      900
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 246324,
+     "from": "NotoSerif-Italic[wdth,wght].ttf"
+    }
+   ]
+  },
+  {
+   "family": "Nunito",
+   "slug": "nunito",
+   "category": "sans",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "google/fonts ofl/nunito at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/nunito",
+   "reserved_names": [],
+   "modified": true,
+   "note": "",
+   "weights": [
+    200,
+    300,
+    400,
+    500,
+    600,
+    700,
+    800,
+    900
+   ],
+   "italic": true,
+   "bytes": 156036,
+   "faces": [
+    {
+     "file": "nunito-normal-200-1000-latin.woff2",
+     "style": "normal",
+     "weight": [
+      200,
+      1000
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 40328,
+     "from": "Nunito[wght].ttf"
+    },
+    {
+     "file": "nunito-normal-200-1000-latin-ext.woff2",
+     "style": "normal",
+     "weight": [
+      200,
+      1000
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 34608,
+     "from": "Nunito[wght].ttf"
+    },
+    {
+     "file": "nunito-italic-200-1000-latin.woff2",
+     "style": "italic",
+     "weight": [
+      200,
+      1000
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 42968,
+     "from": "Nunito-Italic[wght].ttf"
+    },
+    {
+     "file": "nunito-italic-200-1000-latin-ext.woff2",
+     "style": "italic",
+     "weight": [
+      200,
+      1000
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 38132,
+     "from": "Nunito-Italic[wght].ttf"
+    }
+   ]
+  },
+  {
+   "family": "Open Sans",
+   "slug": "opensans",
+   "category": "sans",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "google/fonts ofl/opensans at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/opensans",
+   "reserved_names": [],
+   "modified": true,
+   "note": "",
+   "weights": [
+    300,
+    400,
+    500,
+    600,
+    700,
+    800
+   ],
+   "italic": true,
+   "bytes": 186488,
+   "faces": [
+    {
+     "file": "opensans-normal-300-800-latin.woff2",
+     "style": "normal",
+     "weight": [
+      300,
+      800
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 53900,
+     "from": "OpenSans[wdth,wght].ttf"
+    },
+    {
+     "file": "opensans-normal-300-800-latin-ext.woff2",
+     "style": "normal",
+     "weight": [
+      300,
+      800
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 36612,
+     "from": "OpenSans[wdth,wght].ttf"
+    },
+    {
+     "file": "opensans-italic-300-800-latin.woff2",
+     "style": "italic",
+     "weight": [
+      300,
+      800
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 56884,
+     "from": "OpenSans-Italic[wdth,wght].ttf"
+    },
+    {
+     "file": "opensans-italic-300-800-latin-ext.woff2",
+     "style": "italic",
+     "weight": [
+      300,
+      800
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 39092,
+     "from": "OpenSans-Italic[wdth,wght].ttf"
+    }
+   ]
+  },
+  {
+   "family": "OpenDyslexic",
+   "slug": "opendyslexic",
+   "category": "sans",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "antijingoist/opendyslexic at 1824da5c0e41",
+   "source_url": "https://github.com/antijingoist/opendyslexic/tree/1824da5c0e41dc3e13ffc7f3a636dcaf695d61b7",
+   "reserved_names": [
+    "OpenDyslexic"
+   ],
+   "modified": false,
+   "note": "made for readers with dyslexia",
+   "weights": [
+    400,
+    700
+   ],
+   "italic": true,
+   "bytes": 437420,
+   "faces": [
+    {
+     "file": "opendyslexic-normal-400.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "bytes": 103336,
+     "from": "OpenDyslexic-Regular.woff2"
+    },
+    {
+     "file": "opendyslexic-normal-700.woff2",
+     "style": "normal",
+     "weight": [
+      700,
+      700
+     ],
+     "format": "woff2",
+     "bytes": 108068,
+     "from": "OpenDyslexic-Bold.woff2"
+    },
+    {
+     "file": "opendyslexic-italic-400.woff2",
+     "style": "italic",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "bytes": 107968,
+     "from": "OpenDyslexic-Italic.woff2"
+    },
+    {
+     "file": "opendyslexic-italic-700.woff2",
+     "style": "italic",
+     "weight": [
+      700,
+      700
+     ],
+     "format": "woff2",
+     "bytes": 118048,
+     "from": "OpenDyslexic-Bold-Italic.woff2"
+    }
+   ]
+  },
+  {
+   "family": "Oswald",
+   "slug": "oswald",
+   "category": "display",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "google/fonts ofl/oswald at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/oswald",
+   "reserved_names": [],
+   "modified": true,
+   "note": "",
+   "weights": [
+    200,
+    300,
+    400,
+    500,
+    600,
+    700
+   ],
+   "italic": false,
+   "bytes": 51420,
+   "faces": [
+    {
+     "file": "oswald-normal-200-700-latin.woff2",
+     "style": "normal",
+     "weight": [
+      200,
+      700
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 28452,
+     "from": "Oswald[wght].ttf"
+    },
+    {
+     "file": "oswald-normal-200-700-latin-ext.woff2",
+     "style": "normal",
+     "weight": [
+      200,
+      700
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 22968,
+     "from": "Oswald[wght].ttf"
+    }
+   ]
+  },
+  {
+   "family": "Pacifico",
+   "slug": "pacifico",
+   "category": "handwriting",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "google/fonts ofl/pacifico at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/pacifico",
+   "reserved_names": [],
+   "modified": true,
+   "note": "",
+   "weights": [
+    400
+   ],
+   "italic": false,
+   "bytes": 73512,
+   "faces": [
+    {
+     "file": "pacifico-normal-400-latin.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 37836,
+     "from": "Pacifico-Regular.ttf"
+    },
+    {
+     "file": "pacifico-normal-400-latin-ext.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 35676,
+     "from": "Pacifico-Regular.ttf"
+    }
+   ]
+  },
+  {
+   "family": "Patrick Hand",
+   "slug": "patrickhand",
+   "category": "handwriting",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "google/fonts ofl/patrickhand at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/patrickhand",
+   "reserved_names": [],
+   "modified": true,
+   "note": "",
+   "weights": [
+    400
+   ],
+   "italic": false,
+   "bytes": 59508,
+   "faces": [
+    {
+     "file": "patrickhand-normal-400-latin.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 32852,
+     "from": "PatrickHand-Regular.ttf"
+    },
+    {
+     "file": "patrickhand-normal-400-latin-ext.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 26656,
+     "from": "PatrickHand-Regular.ttf"
+    }
+   ]
+  },
+  {
+   "family": "Permanent Marker",
+   "slug": "permanentmarker",
+   "category": "handwriting",
+   "licence": "Apache-2.0",
+   "licence_file": "LICENSE.txt",
+   "source": "google/fonts apache/permanentmarker at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/apache/permanentmarker",
+   "reserved_names": [],
+   "modified": true,
+   "note": "",
+   "weights": [
+    400
+   ],
+   "italic": false,
+   "bytes": 29528,
+   "faces": [
+    {
+     "file": "permanentmarker-normal-400-latin.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 29528,
+     "from": "PermanentMarker-Regular.ttf"
+    }
+   ]
+  },
+  {
+   "family": "Playfair Display",
+   "slug": "playfairdisplay",
+   "category": "serif",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "google/fonts ofl/playfairdisplay at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/playfairdisplay",
+   "reserved_names": [
+    "Playfair Display"
+   ],
+   "modified": false,
+   "note": "",
+   "weights": [
+    400,
+    500,
+    600,
+    700,
+    800,
+    900
+   ],
+   "italic": true,
+   "bytes": 210168,
+   "faces": [
+    {
+     "file": "playfairdisplay-normal-400-900.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      900
+     ],
+     "format": "woff2",
+     "bytes": 106440,
+     "from": "PlayfairDisplay[wght].ttf"
+    },
+    {
+     "file": "playfairdisplay-italic-400-900.woff2",
+     "style": "italic",
+     "weight": [
+      400,
+      900
+     ],
+     "format": "woff2",
+     "bytes": 103728,
+     "from": "PlayfairDisplay-Italic[wght].ttf"
+    }
+   ]
+  },
+  {
+   "family": "Poppins",
+   "slug": "poppins",
+   "category": "sans",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "google/fonts ofl/poppins at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/poppins",
+   "reserved_names": [],
+   "modified": true,
+   "note": "",
+   "weights": [
+    400,
+    700
+   ],
+   "italic": true,
+   "bytes": 60508,
+   "faces": [
+    {
+     "file": "poppins-normal-400-latin.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 9036,
+     "from": "Poppins-Regular.ttf"
+    },
+    {
+     "file": "poppins-normal-400-latin-ext.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 5564,
+     "from": "Poppins-Regular.ttf"
+    },
+    {
+     "file": "poppins-normal-700-latin.woff2",
+     "style": "normal",
+     "weight": [
+      700,
+      700
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 8968,
+     "from": "Poppins-Bold.ttf"
+    },
+    {
+     "file": "poppins-normal-700-latin-ext.woff2",
+     "style": "normal",
+     "weight": [
+      700,
+      700
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 5404,
+     "from": "Poppins-Bold.ttf"
+    },
+    {
+     "file": "poppins-italic-400-latin.woff2",
+     "style": "italic",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 9868,
+     "from": "Poppins-Italic.ttf"
+    },
+    {
+     "file": "poppins-italic-400-latin-ext.woff2",
+     "style": "italic",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 5956,
+     "from": "Poppins-Italic.ttf"
+    },
+    {
+     "file": "poppins-italic-700-latin.woff2",
+     "style": "italic",
+     "weight": [
+      700,
+      700
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 9812,
+     "from": "Poppins-BoldItalic.ttf"
+    },
+    {
+     "file": "poppins-italic-700-latin-ext.woff2",
+     "style": "italic",
+     "weight": [
+      700,
+      700
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 5900,
+     "from": "Poppins-BoldItalic.ttf"
+    }
+   ]
+  },
+  {
+   "family": "PT Sans",
+   "slug": "ptsans",
+   "category": "sans",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "google/fonts ofl/ptsans at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/ptsans",
+   "reserved_names": [
+    "PT Sans",
+    "ParaType"
+   ],
+   "modified": false,
+   "note": "",
+   "weights": [
+    400,
+    700
+   ],
+   "italic": true,
+   "bytes": 498832,
+   "faces": [
+    {
+     "file": "ptsans-normal-400.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "bytes": 132192,
+     "from": "PT_Sans-Web-Regular.ttf"
+    },
+    {
+     "file": "ptsans-normal-700.woff2",
+     "style": "normal",
+     "weight": [
+      700,
+      700
+     ],
+     "format": "woff2",
+     "bytes": 136892,
+     "from": "PT_Sans-Web-Bold.ttf"
+    },
+    {
+     "file": "ptsans-italic-400.woff2",
+     "style": "italic",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "bytes": 126332,
+     "from": "PT_Sans-Web-Italic.ttf"
+    },
+    {
+     "file": "ptsans-italic-700.woff2",
+     "style": "italic",
+     "weight": [
+      700,
+      700
+     ],
+     "format": "woff2",
+     "bytes": 103416,
+     "from": "PT_Sans-Web-BoldItalic.ttf"
+    }
+   ]
+  },
+  {
+   "family": "PT Serif",
+   "slug": "ptserif",
+   "category": "serif",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "google/fonts ofl/ptserif at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/ptserif",
+   "reserved_names": [
+    "PT Sans",
+    "PT Serif",
+    "ParaType"
+   ],
+   "modified": false,
+   "note": "",
+   "weights": [
+    400,
+    700
+   ],
+   "italic": true,
+   "bytes": 395096,
+   "faces": [
+    {
+     "file": "ptserif-normal-400.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "bytes": 102608,
+     "from": "PT_Serif-Web-Regular.ttf"
+    },
+    {
+     "file": "ptserif-normal-700.woff2",
+     "style": "normal",
+     "weight": [
+      700,
+      700
+     ],
+     "format": "woff2",
+     "bytes": 91824,
+     "from": "PT_Serif-Web-Bold.ttf"
+    },
+    {
+     "file": "ptserif-italic-400.woff2",
+     "style": "italic",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "bytes": 109632,
+     "from": "PT_Serif-Web-Italic.ttf"
+    },
+    {
+     "file": "ptserif-italic-700.woff2",
+     "style": "italic",
+     "weight": [
+      700,
+      700
+     ],
+     "format": "woff2",
+     "bytes": 91032,
+     "from": "PT_Serif-Web-BoldItalic.ttf"
+    }
+   ]
+  },
+  {
+   "family": "Raleway",
+   "slug": "raleway",
+   "category": "sans",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "google/fonts ofl/raleway at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/raleway",
+   "reserved_names": [
+    "Raleway"
+   ],
+   "modified": false,
+   "note": "",
+   "weights": [
+    100,
+    200,
+    300,
+    400,
+    500,
+    600,
+    700,
+    800,
+    900
+   ],
+   "italic": true,
+   "bytes": 266504,
+   "faces": [
+    {
+     "file": "raleway-normal-100-900.woff2",
+     "style": "normal",
+     "weight": [
+      100,
+      900
+     ],
+     "format": "woff2",
+     "bytes": 129484,
+     "from": "Raleway[wght].ttf"
+    },
+    {
+     "file": "raleway-italic-100-900.woff2",
+     "style": "italic",
+     "weight": [
+      100,
+      900
+     ],
+     "format": "woff2",
+     "bytes": 137020,
+     "from": "Raleway-Italic[wght].ttf"
+    }
+   ]
+  },
+  {
+   "family": "Righteous",
+   "slug": "righteous",
+   "category": "display",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "google/fonts ofl/righteous at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/righteous",
+   "reserved_names": [
+    "Righteous"
+   ],
+   "modified": false,
+   "note": "",
+   "weights": [
+    400
+   ],
+   "italic": false,
+   "bytes": 16816,
+   "faces": [
+    {
+     "file": "righteous-normal-400.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "bytes": 16816,
+     "from": "Righteous-Regular.ttf"
+    }
+   ]
+  },
+  {
+   "family": "Roboto",
+   "slug": "roboto",
+   "category": "sans",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "google/fonts ofl/roboto at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/roboto",
+   "reserved_names": [],
+   "modified": true,
+   "note": "",
+   "weights": [
+    100,
+    200,
+    300,
+    400,
+    500,
+    600,
+    700,
+    800,
+    900
+   ],
+   "italic": true,
+   "bytes": 181724,
+   "faces": [
+    {
+     "file": "roboto-normal-100-900-latin.woff2",
+     "style": "normal",
+     "weight": [
+      100,
+      900
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 52780,
+     "from": "Roboto[wdth,wght].ttf"
+    },
+    {
+     "file": "roboto-normal-100-900-latin-ext.woff2",
+     "style": "normal",
+     "weight": [
+      100,
+      900
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 33400,
+     "from": "Roboto[wdth,wght].ttf"
+    },
+    {
+     "file": "roboto-italic-100-900-latin.woff2",
+     "style": "italic",
+     "weight": [
+      100,
+      900
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 59164,
+     "from": "Roboto-Italic[wdth,wght].ttf"
+    },
+    {
+     "file": "roboto-italic-100-900-latin-ext.woff2",
+     "style": "italic",
+     "weight": [
+      100,
+      900
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 36380,
+     "from": "Roboto-Italic[wdth,wght].ttf"
+    }
+   ]
+  },
+  {
+   "family": "Roboto Mono",
+   "slug": "robotomono",
+   "category": "mono",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "google/fonts ofl/robotomono at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/robotomono",
+   "reserved_names": [],
+   "modified": true,
+   "note": "",
+   "weights": [
+    100,
+    200,
+    300,
+    400,
+    500,
+    600,
+    700
+   ],
+   "italic": true,
+   "bytes": 135272,
+   "faces": [
+    {
+     "file": "robotomono-normal-100-700-latin.woff2",
+     "style": "normal",
+     "weight": [
+      100,
+      700
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 37912,
+     "from": "RobotoMono[wght].ttf"
+    },
+    {
+     "file": "robotomono-normal-100-700-latin-ext.woff2",
+     "style": "normal",
+     "weight": [
+      100,
+      700
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 27104,
+     "from": "RobotoMono[wght].ttf"
+    },
+    {
+     "file": "robotomono-italic-100-700-latin.woff2",
+     "style": "italic",
+     "weight": [
+      100,
+      700
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 41096,
+     "from": "RobotoMono-Italic[wght].ttf"
+    },
+    {
+     "file": "robotomono-italic-100-700-latin-ext.woff2",
+     "style": "italic",
+     "weight": [
+      100,
+      700
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 29160,
+     "from": "RobotoMono-Italic[wght].ttf"
+    }
+   ]
+  },
+  {
+   "family": "Roboto Slab",
+   "slug": "robotoslab",
+   "category": "serif",
+   "licence": "Apache-2.0",
+   "licence_file": "LICENSE.txt",
+   "source": "google/fonts apache/robotoslab at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/apache/robotoslab",
+   "reserved_names": [],
+   "modified": true,
+   "note": "",
+   "weights": [
+    100,
+    200,
+    300,
+    400,
+    500,
+    600,
+    700,
+    800,
+    900
+   ],
+   "italic": false,
+   "bytes": 75196,
+   "faces": [
+    {
+     "file": "robotoslab-normal-100-900-latin.woff2",
+     "style": "normal",
+     "weight": [
+      100,
+      900
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 48532,
+     "from": "RobotoSlab[wght].ttf"
+    },
+    {
+     "file": "robotoslab-normal-100-900-latin-ext.woff2",
+     "style": "normal",
+     "weight": [
+      100,
+      900
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 26664,
+     "from": "RobotoSlab[wght].ttf"
+    }
+   ]
+  },
+  {
+   "family": "Satisfy",
+   "slug": "satisfy",
+   "category": "handwriting",
+   "licence": "Apache-2.0",
+   "licence_file": "LICENSE.txt",
+   "source": "google/fonts apache/satisfy at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/apache/satisfy",
+   "reserved_names": [],
+   "modified": true,
+   "note": "",
+   "weights": [
+    400
+   ],
+   "italic": false,
+   "bytes": 22584,
+   "faces": [
+    {
+     "file": "satisfy-normal-400-latin.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 22584,
+     "from": "Satisfy-Regular.ttf"
+    }
+   ]
+  },
+  {
+   "family": "Shadows Into Light",
+   "slug": "shadowsintolight",
+   "category": "handwriting",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "google/fonts ofl/shadowsintolight at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/shadowsintolight",
+   "reserved_names": [],
+   "modified": true,
+   "note": "",
+   "weights": [
+    400
+   ],
+   "italic": false,
+   "bytes": 31980,
+   "faces": [
+    {
+     "file": "shadowsintolight-normal-400-latin.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 19564,
+     "from": "ShadowsIntoLight.ttf"
+    },
+    {
+     "file": "shadowsintolight-normal-400-latin-ext.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 12416,
+     "from": "ShadowsIntoLight.ttf"
+    }
+   ]
+  },
+  {
+   "family": "Source Code Pro",
+   "slug": "sourcecodepro",
+   "category": "mono",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "google/fonts ofl/sourcecodepro at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/sourcecodepro",
+   "reserved_names": [
+    "Source"
+   ],
+   "modified": false,
+   "note": "",
+   "weights": [
+    200,
+    300,
+    400,
+    500,
+    600,
+    700,
+    800,
+    900
+   ],
+   "italic": true,
+   "bytes": 164576,
+   "faces": [
+    {
+     "file": "sourcecodepro-normal-200-900.woff2",
+     "style": "normal",
+     "weight": [
+      200,
+      900
+     ],
+     "format": "woff2",
+     "bytes": 89484,
+     "from": "SourceCodePro[wght].ttf"
+    },
+    {
+     "file": "sourcecodepro-italic-200-900.woff2",
+     "style": "italic",
+     "weight": [
+      200,
+      900
+     ],
+     "format": "woff2",
+     "bytes": 75092,
+     "from": "SourceCodePro-Italic[wght].ttf"
+    }
+   ]
+  },
+  {
+   "family": "Source Sans 3",
+   "slug": "sourcesans3",
+   "category": "sans",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "google/fonts ofl/sourcesans3 at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/sourcesans3",
+   "reserved_names": [
+    "Source"
+   ],
+   "modified": false,
+   "note": "",
+   "weights": [
+    200,
+    300,
+    400,
+    500,
+    600,
+    700,
+    800,
+    900
+   ],
+   "italic": true,
+   "bytes": 307444,
+   "faces": [
+    {
+     "file": "sourcesans3-normal-200-900.woff2",
+     "style": "normal",
+     "weight": [
+      200,
+      900
+     ],
+     "format": "woff2",
+     "bytes": 169416,
+     "from": "SourceSans3[wght].ttf"
+    },
+    {
+     "file": "sourcesans3-italic-200-900.woff2",
+     "style": "italic",
+     "weight": [
+      200,
+      900
+     ],
+     "format": "woff2",
+     "bytes": 138028,
+     "from": "SourceSans3-Italic[wght].ttf"
+    }
+   ]
+  },
+  {
+   "family": "Source Serif 4",
+   "slug": "sourceserif4",
+   "category": "serif",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "google/fonts ofl/sourceserif4 at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/sourceserif4",
+   "reserved_names": [],
+   "modified": true,
+   "note": "",
+   "weights": [
+    200,
+    300,
+    400,
+    500,
+    600,
+    700,
+    800,
+    900
+   ],
+   "italic": true,
+   "bytes": 240588,
+   "faces": [
+    {
+     "file": "sourceserif4-normal-200-900-latin.woff2",
+     "style": "normal",
+     "weight": [
+      200,
+      900
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 78076,
+     "from": "SourceSerif4[opsz,wght].ttf"
+    },
+    {
+     "file": "sourceserif4-normal-200-900-latin-ext.woff2",
+     "style": "normal",
+     "weight": [
+      200,
+      900
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 53836,
+     "from": "SourceSerif4[opsz,wght].ttf"
+    },
+    {
+     "file": "sourceserif4-italic-200-900-latin.woff2",
+     "style": "italic",
+     "weight": [
+      200,
+      900
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 64548,
+     "from": "SourceSerif4-Italic[opsz,wght].ttf"
+    },
+    {
+     "file": "sourceserif4-italic-200-900-latin-ext.woff2",
+     "style": "italic",
+     "weight": [
+      200,
+      900
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 44128,
+     "from": "SourceSerif4-Italic[opsz,wght].ttf"
+    }
+   ]
+  },
+  {
+   "family": "Space Grotesk",
+   "slug": "spacegrotesk",
+   "category": "sans",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "google/fonts ofl/spacegrotesk at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/spacegrotesk",
+   "reserved_names": [],
+   "modified": true,
+   "note": "",
+   "weights": [
+    300,
+    400,
+    500,
+    600,
+    700
+   ],
+   "italic": false,
+   "bytes": 46072,
+   "faces": [
+    {
+     "file": "spacegrotesk-normal-300-700-latin.woff2",
+     "style": "normal",
+     "weight": [
+      300,
+      700
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 26876,
+     "from": "SpaceGrotesk[wght].ttf"
+    },
+    {
+     "file": "spacegrotesk-normal-300-700-latin-ext.woff2",
+     "style": "normal",
+     "weight": [
+      300,
+      700
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 19196,
+     "from": "SpaceGrotesk[wght].ttf"
+    }
+   ]
+  },
+  {
+   "family": "Space Mono",
+   "slug": "spacemono",
+   "category": "mono",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "google/fonts ofl/spacemono at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/spacemono",
+   "reserved_names": [],
+   "modified": true,
+   "note": "",
+   "weights": [
+    400,
+    700
+   ],
+   "italic": true,
+   "bytes": 150556,
+   "faces": [
+    {
+     "file": "spacemono-normal-400-latin.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 19508,
+     "from": "SpaceMono-Regular.ttf"
+    },
+    {
+     "file": "spacemono-normal-400-latin-ext.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 17264,
+     "from": "SpaceMono-Regular.ttf"
+    },
+    {
+     "file": "spacemono-normal-700-latin.woff2",
+     "style": "normal",
+     "weight": [
+      700,
+      700
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 19892,
+     "from": "SpaceMono-Bold.ttf"
+    },
+    {
+     "file": "spacemono-normal-700-latin-ext.woff2",
+     "style": "normal",
+     "weight": [
+      700,
+      700
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 17300,
+     "from": "SpaceMono-Bold.ttf"
+    },
+    {
+     "file": "spacemono-italic-400-latin.woff2",
+     "style": "italic",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 19660,
+     "from": "SpaceMono-Italic.ttf"
+    },
+    {
+     "file": "spacemono-italic-400-latin-ext.woff2",
+     "style": "italic",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 18072,
+     "from": "SpaceMono-Italic.ttf"
+    },
+    {
+     "file": "spacemono-italic-700-latin.woff2",
+     "style": "italic",
+     "weight": [
+      700,
+      700
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 19956,
+     "from": "SpaceMono-BoldItalic.ttf"
+    },
+    {
+     "file": "spacemono-italic-700-latin-ext.woff2",
+     "style": "italic",
+     "weight": [
+      700,
+      700
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 18904,
+     "from": "SpaceMono-BoldItalic.ttf"
+    }
+   ]
+  },
+  {
+   "family": "Spectral",
+   "slug": "spectral",
+   "category": "serif",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "google/fonts ofl/spectral at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/spectral",
+   "reserved_names": [],
+   "modified": true,
+   "note": "",
+   "weights": [
+    400,
+    700
+   ],
+   "italic": true,
+   "bytes": 246764,
+   "faces": [
+    {
+     "file": "spectral-normal-400-latin.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 34720,
+     "from": "Spectral-Regular.ttf"
+    },
+    {
+     "file": "spectral-normal-400-latin-ext.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 24284,
+     "from": "Spectral-Regular.ttf"
+    },
+    {
+     "file": "spectral-normal-700-latin.woff2",
+     "style": "normal",
+     "weight": [
+      700,
+      700
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 37108,
+     "from": "Spectral-Bold.ttf"
+    },
+    {
+     "file": "spectral-normal-700-latin-ext.woff2",
+     "style": "normal",
+     "weight": [
+      700,
+      700
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 25188,
+     "from": "Spectral-Bold.ttf"
+    },
+    {
+     "file": "spectral-italic-400-latin.woff2",
+     "style": "italic",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 35916,
+     "from": "Spectral-Italic.ttf"
+    },
+    {
+     "file": "spectral-italic-400-latin-ext.woff2",
+     "style": "italic",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 24868,
+     "from": "Spectral-Italic.ttf"
+    },
+    {
+     "file": "spectral-italic-700-latin.woff2",
+     "style": "italic",
+     "weight": [
+      700,
+      700
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 38388,
+     "from": "Spectral-BoldItalic.ttf"
+    },
+    {
+     "file": "spectral-italic-700-latin-ext.woff2",
+     "style": "italic",
+     "weight": [
+      700,
+      700
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 26292,
+     "from": "Spectral-BoldItalic.ttf"
+    }
+   ]
+  },
+  {
+   "family": "Vast Shadow",
+   "slug": "vastshadow",
+   "category": "display",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "google/fonts ofl/vastshadow at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/vastshadow",
+   "reserved_names": [
+    "Vast",
+    "Vast Shadow"
+   ],
+   "modified": false,
+   "note": "also the dashboard's display face",
+   "weights": [
+    400
+   ],
+   "italic": false,
+   "bytes": 25444,
+   "faces": [
+    {
+     "file": "vastshadow-normal-400.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      400
+     ],
+     "format": "woff2",
+     "bytes": 25444,
+     "from": "VastShadow-Regular.ttf"
+    }
+   ]
+  },
+  {
+   "family": "Work Sans",
+   "slug": "worksans",
+   "category": "sans",
+   "licence": "OFL-1.1",
+   "licence_file": "OFL.txt",
+   "source": "google/fonts ofl/worksans at e7db6ca603fd",
+   "source_url": "https://github.com/google/fonts/tree/e7db6ca603fd4862010383ff17ffd6cc4ffac1c0/ofl/worksans",
+   "reserved_names": [],
+   "modified": true,
+   "note": "",
+   "weights": [
+    100,
+    200,
+    300,
+    400,
+    500,
+    600,
+    700,
+    800,
+    900
+   ],
+   "italic": true,
+   "bytes": 237280,
+   "faces": [
+    {
+     "file": "worksans-normal-100-900-latin.woff2",
+     "style": "normal",
+     "weight": [
+      100,
+      900
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 77860,
+     "from": "WorkSans[wght].ttf"
+    },
+    {
+     "file": "worksans-normal-100-900-latin-ext.woff2",
+     "style": "normal",
+     "weight": [
+      100,
+      900
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 44388,
+     "from": "WorkSans[wght].ttf"
+    },
+    {
+     "file": "worksans-italic-100-900-latin.woff2",
+     "style": "italic",
+     "weight": [
+      100,
+      900
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD",
+     "bytes": 73892,
+     "from": "WorkSans-Italic[wght].ttf"
+    },
+    {
+     "file": "worksans-italic-100-900-latin-ext.woff2",
+     "style": "italic",
+     "weight": [
+      100,
+      900
+     ],
+     "format": "woff2",
+     "unicode_range": "U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF",
+     "bytes": 41140,
+     "from": "WorkSans-Italic[wght].ttf"
+    }
+   ]
+  }
+ ],
+ "bytes": 19534876
+}

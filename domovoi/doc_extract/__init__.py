@@ -7,7 +7,7 @@ with the label an answer cites and its text in plain markdown
 | Format | A part is | Cited as |
 |---|---|---|
 | PDF (:mod:`.pdf`) | a page | "p. 12" |
-| .docx (:mod:`.word`), .odt (:mod:`.odf`), .md, .txt (:mod:`.plain`) | a section under a heading, a long one split between paragraphs | "Section: Deposit", "Section: Deposit (para 3)", "para 14" |
+| .docx (:mod:`.word`), .odt (:mod:`.odf`), .md, .txt, formatted documents (.html, :mod:`.plain` through :mod:`domovoi.richdoc`) | a section under a heading, a long one split between paragraphs | "Section: Deposit", "Section: Deposit (para 3)", "para 14" |
 | .xlsx, .csv (:mod:`.sheets`) | 40 rows, the header row repeated; a sheet's column totals | "Sheet Budget, rows 2-41", "rows 2-41", "Sheet Budget, column totals" |
 
 The file is somebody else's bytes, so:
@@ -45,6 +45,10 @@ KIND_BY_EXT = {
     ".text": "txt",
     ".md": "md",
     ".markdown": "md",
+    # The Documents editor's formatted documents (domovoi/richdoc): read as
+    # the markdown-shaped text richdoc.html_to_markdown makes of them.
+    ".html": "html",
+    ".htm": "html",
 }
 ACCEPTS = "PDF, Word (.docx), OpenDocument (.odt), Excel (.xlsx), CSV, text or markdown"
 
@@ -127,6 +131,10 @@ def extract(path: Path, kind: str, *, single_pass: int | None = None) -> dict[st
         from domovoi.doc_extract import plain
 
         result = plain.extract(path, markdown=kind == "md", max_chars=MAX_TEXT_CHARS)
+    elif kind == "html":
+        from domovoi.doc_extract import plain
+
+        result = plain.extract_html(path, max_chars=MAX_TEXT_CHARS)
     else:
         raise Refused(f"Chat reads {ACCEPTS} files.")
     parts, cut = _cap(result.get("parts") or [], MAX_TEXT_CHARS)

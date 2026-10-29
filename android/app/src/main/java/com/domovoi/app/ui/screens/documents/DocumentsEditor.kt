@@ -333,7 +333,7 @@ internal fun TextEditorOverlay(source: FileSource, libraryId: String, relPath: S
                         color = Domovoi.colors.fgMuted,
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(onClick = { source.openRaw(ctx, libraryId, relPath) }) {
+                        OutlinedButton(onClick = { source.openRaw(ctx, libraryId, relPath, toast) }) {
                             Text(source.rawLabel)
                         }
                     }

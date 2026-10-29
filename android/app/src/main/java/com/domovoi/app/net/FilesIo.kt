@@ -10,8 +10,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -60,24 +62,28 @@ internal fun filesBrowseQueryPath(
     (if (q.isNotBlank()) "&q=" + Uri.encode(q.trim()) else "") +
     (if (foldersOnly) "&kind=folder" else "")
 
-/** Absolute /api/files/download URL for a file or directory (dir → server zip). */
-internal fun filesDownloadUrl(app: AppContainer, libraryId: String, rel: String): String =
-    app.api.absolute("/api/files/download?library_id=" + Uri.encode(libraryId) + "&path=" + Uri.encode(rel))
+/** The /api/files/download route for a file or directory (dir → server zip).
+ *  Fetched by the app (ServerFileTransfer), which carries the device token;
+ *  never handed to another app as an address: a browser can't send the
+ *  token and gets "X-Device-Token or admin session required". */
+internal fun filesDownloadPath(libraryId: String, rel: String): String =
+    "/api/files/download?library_id=" + Uri.encode(libraryId) + "&path=" + Uri.encode(rel)
 
-/** Open /api/files/download with the system viewer/downloader (attachment serve). */
-internal fun openFileDownload(context: Context, app: AppContainer, libraryId: String, rel: String) {
-    runCatching {
-        context.startActivity(
-            Intent(Intent.ACTION_VIEW, Uri.parse(filesDownloadUrl(app, libraryId, rel))),
-        )
-    }
-}
+/** The /api/images/raw route for an image in any library. */
+internal fun imagesRawPath(libraryId: String, rel: String): String =
+    "/api/images/raw?library_id=" + Uri.encode(libraryId) + "&path=" + Uri.encode(rel)
 
 // ---------------------------------------------------------------------------
 // Result holders
 // ---------------------------------------------------------------------------
 
-internal data class UploadResult(val saved: Int, val skipped: Int, val reindexTriggered: Boolean)
+internal data class UploadResult(
+    val saved: Int,
+    val skipped: Int,
+    val reindexTriggered: Boolean,
+    /** The first skipped file and why, as the server put it. */
+    val firstSkipped: String? = null,
+)
 internal data class DeleteResult(val deleted: Int, val failed: Int, val reindexTriggered: Boolean)
 internal data class ImportResult(val copied: Int, val skipped: Int, val reindexTriggered: Boolean)
 internal data class MoveResult(
@@ -119,14 +125,27 @@ internal suspend fun uploadFiles(
         added++
     }
     if (added == 0) throw IOException("nothing readable to upload")
-    val res = app.api.upload("/api/files/upload", builder.build())
+    val res = try {
+        app.api.upload("/api/files/upload", builder.build())
+    } catch (e: ApiException) {
+        // 415: every file was the wrong type for this view (Documents or
+        // Other); the server's sentence says where they go.
+        if (e.status == 415) throw IOException(uploadRefusalText(e.body) ?: e.message, e)
+        throw e
+    }
     val obj = res as? JsonObject ?: JsonObject(emptyMap())
     UploadResult(
         saved = (obj["saved"] as? JsonArray)?.size ?: 0,
         skipped = (obj["skipped"] as? JsonArray)?.size ?: 0,
         reindexTriggered = obj["reindex_triggered"]?.jsonPrimitive?.booleanOrNull ?: false,
+        firstSkipped = ((obj["skipped"] as? JsonArray)?.firstOrNull() as? JsonPrimitive)?.contentOrNull,
     )
 }
+
+/** The `detail` of a refused upload, when it is a sentence. */
+internal fun uploadRefusalText(body: String): String? = runCatching {
+    (DomovoiJson.parseToJsonElement(body) as? JsonObject)?.get("detail")?.jsonPrimitive?.contentOrNull
+}.getOrNull()?.takeIf { it.isNotBlank() }
 
 private fun displayName(resolver: ContentResolver, uri: Uri): String? = runCatching {
     resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->

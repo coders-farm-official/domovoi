@@ -195,6 +195,24 @@ We build Domovoi in public. Here's where it stands.
   "Take a letter to the landlord" keeps the room listening until "end of
   letter" or the room goes quiet, writes it up, and saves it as a Word file
   in Documents → From Chat ("Saved as ..."); it is never sent anywhere.
+- **Write documents and spreadsheets, together.** Documents → New →
+  Document opens a word processor in the page (headings, lists, tables,
+  colours, fonts and sizes) that saves by itself; photos paste or drop in
+  and can be resized, captioned, cropped and rotated. 73 open-licence
+  fonts come with it and work offline, and an admin can add more for the
+  house when the internet setting allows. Several household devices can
+  edit one document at once, with each other's names and cursors, and
+  History brings back an earlier version. Download gives PDF, Word or
+  Markdown; Markdown and Word files open in the same editor. Spreadsheets
+  open in a sheet editor that keeps formulas, formatting and several
+  sheets in the same `.xlsx`; sheets aren't edited together (it says who
+  else has one open, and a second save asks which copy to keep), a
+  workbook with charts or pictures opens read-only, and a sheet shows its
+  first 5,000 rows and 100 columns. The app opens both in the same
+  editors. In Files, Documents lists only documents, spreadsheets, PDFs,
+  drawings and text; everything else saved in that shared folder (installers,
+  archives, pictures) sits under **Other**, download-only, in the web and the
+  app.
 - **Chat can look things up, with your permission.** Say "look up …",
   "what does this page say: https://…", or ask something Domovoi doesn't
   know. It searches its own manual and an offline library (Kiwix) first;
@@ -211,13 +229,12 @@ We build Domovoi in public. Here's where it stands.
   ("wake me up at 7" is the next 7 o'clock), "what can you do", and
   what's on your calendar each have their own handler.
 - **Updates from the dashboard,** on a release channel. Settings → System →
-  About & updates names the release the server runs (`1.0.0-rc3 +
+  About & updates names the release the server runs (`1.0.0`, or `1.0.0 +
   14 (abc1234)` between releases) and pulls and applies updates, rolling
   back by itself when the new code doesn't come up healthy. Root only
   ever runs a verified copy of the commit, never the files in the checkout
   ([the update verifier](docs/LINUX_HOST.md#the-update-verifier)). New
-  installs follow `stable`, releases only (until the first release is
-  out, `main`); servers installed before stay on `main`, every change as
+  installs follow `stable`, releases only; servers installed before stay on `main`, every change as
   it lands; an admin switches in the same card
   ([release channels](docs/LINUX_HOST.md#release-channels)).
 - **Raspberry Pi satellites** put a voice in every room, with wake word,
@@ -271,7 +288,7 @@ We build Domovoi in public. Here's where it stands.
   to your phone, on Android 8.0 or later, 32-bit phones included
   ([Android compatibility](docs/ANDROID_COMPATIBILITY.md)). With no server it
   still plays your phone's own music, videos and files. It is a signed
-  release, [v1.0.0-rc3](https://github.com/coders-farm-official/domovoi/releases/tag/v1.0.0-rc3)
+  release, [v1.0.0](https://github.com/coders-farm-official/domovoi/releases/tag/v1.0.0)
   on GitHub, and your server can hand it to phones: press **Download the
   app to this server** once on the dashboard, and a phone installs it from
   your server's own page by scanning a QR code
@@ -327,7 +344,7 @@ they have been tried on fewer devices than the rest, aren't yet held to
 - **A Windows installer.** `DomovoiSetup.exe` puts the Linux
   server inside WSL2 on a Windows 11 PC. It is not code-signed yet;
   download it from the
-  [v1.0.0-rc3 release](https://github.com/coders-farm-official/domovoi/releases/tag/v1.0.0-rc3)
+  [v1.0.0 release](https://github.com/coders-farm-official/domovoi/releases/tag/v1.0.0)
   ([Windows installer](docs/WINDOWS_HOST.md)). Setup also puts
   Domovoi's icon beside the clock: whether Domovoi is
   running, the dashboard, a QR code for phones, and a helper that prepares
@@ -363,47 +380,42 @@ they have been tried on fewer devices than the rest, aren't yet held to
   setup. Tested in virtual machines; real computers are next
   ([old computers](docs/SPARE_DEVICE_SATELLITES.md#old-computers-usb-stick)).
 
-**Coming next** (being finished now)
+**This release: Domovoi v1.0.0**
 
-1. **Domovoi v1.0.0,** the full product. Three dress rehearsals went out
-   ([v1.0.0-rc1](https://github.com/coders-farm-official/domovoi/releases/tag/v1.0.0-rc1),
-   [rc2](https://github.com/coders-farm-official/domovoi/releases/tag/v1.0.0-rc2)
-   and [rc3](https://github.com/coders-farm-official/domovoi/releases/tag/v1.0.0-rc3));
-   there are no more release candidates. 1.0.0 is everything above and in
-   the previews, built once more and run for a while before it ships: the
-   server, the app and a Windows Setup (with the Windows satellite Setup
-   beside it), one `SHA256SUMS` for every file, published the way the
-   rehearsals were ([Releasing](docs/CONTRIBUTING.md#releasing)). It ships
-   once that build has run with no freeze and no satellite dropping out,
-   and the hardware checks on real phones and spare computers are done.
-   `stable` then points at it, and new installs follow it. What went in
-   since rc3 is in the [release notes](docs/RELEASE_NOTES.md): printing and
-   scanning, AI chat and questions as an option, Settings in groups with
-   one Health page, One Chat in the app, chat history and titles, the help
-   desk, asking a chat about a document and summarizing long ones, honest
-   heads-ups before shaky results, writing and saving resumes and letters,
-   reading a photographed letter, reading documents aloud and taking a letter by voice,
-   looking things up from chat with your permission, "what is this?" on an
-   attached document answered with a short overview, the phone's clock
-   words ("twelve to nine") and reminders as timers read right, a rewritten user manual
-   and a pass over every document (privacy wording, licences, the fonts),
-   a phone chat that answers about
-   the phone, does things on it and looks at a photo, the Windows satellite
-   Setup, a smaller (R8-shrunk) release
-   build of the app, tablet and sideways-phone screens that clear the
-   clock and cutouts, a repair by Setup or an update that rebuilds the music
-   player that no longer trips the container guard, quiet hours (Domovoi
-   doesn't speak announcements such as a printer problem in a room at night:
-   22:00 to 07:00 by default, set for the house or for each room) and a
-   phone room's low-battery warning.
+Version 1.0.0 is the first full release. Three dress rehearsals went out
+before it
+([v1.0.0-rc1](https://github.com/coders-farm-official/domovoi/releases/tag/v1.0.0-rc1),
+[rc2](https://github.com/coders-farm-official/domovoi/releases/tag/v1.0.0-rc2)
+and [rc3](https://github.com/coders-farm-official/domovoi/releases/tag/v1.0.0-rc3)).
+It is everything above and in the previews: the server, the app and a Windows
+Setup (with the Windows satellite Setup beside it), one `SHA256SUMS` for every
+file, published as described in [Releasing](docs/CONTRIBUTING.md#releasing).
+`stable` points at it, and new installs follow it. A plain-language summary is
+in [docs/release/v1.0.0.md](docs/release/v1.0.0.md); every change is in the
+[release notes](docs/RELEASE_NOTES.md). Since rc3: printing and
+scanning, AI chat and questions as an option, Settings in groups with one
+Health page, One Chat in the app, chat history and titles, the help desk,
+asking a chat about a document and summarizing long ones, honest heads-ups
+before shaky results, writing and saving resumes and letters, reading a
+photographed letter, reading documents aloud and taking a letter by voice,
+looking things up from chat with your permission, a rewritten user manual, a
+phone chat that answers about the phone, does things on it and looks at a
+photo, the Windows satellite Setup, a smaller (R8-shrunk) release build of the
+app, tablet and sideways-phone screens that clear the clock and cutouts,
+upload of whole folders, a repair by Setup or an update that rebuilds the music
+player that no longer trips the container guard, quiet hours (Domovoi doesn't
+speak announcements such as a printer problem in a room at night: 22:00 to
+07:00 by default, set for the house or for each room), a phone room's
+low-battery warning, a router-friendlier room Wi-Fi setup, one **Update
+Domovoi** button for both halves of a Windows install, the new document and
+spreadsheet editors (fonts, photos, editing together, version history), and
+Files' new Other view. From here on, fixes only until the next release.
 
 **Later**
 
 - **Guided resumes and letters, held out of 1.0.0.** The step-by-step
   flows that ask questions to build a resume or letter are built but not
-  part of 1.0.0; plain "write a cover letter" in Chat ships. Photographed
-  letters and documents by voice were the last features planned for 1.0.0:
-  from here it is the soak and the release checks.
+  part of 1.0.0; plain "write a cover letter" in Chat ships.
 
 - **The Android app on Google Play.** Coders Farm's developer account is
   cleared and the store listing is written; the release build is made
@@ -782,6 +794,7 @@ Deep dive: [Architecture](docs/ARCHITECTURE.md) ·
 | A chat that answers with no server | — | — | — | ✅ preview: 64-bit phones with 8 GB or more |
 | Save music, podcasts & audiobooks to your device | — | — | ✅ browser download | ✅ music & podcasts via DownloadManager; audiobooks into the app, played offline |
 | Calendar, documents, people & voice profiles | voice where it makes sense | voice where it makes sense | ✅ | ✅ |
+| Edit documents and spreadsheets (documents co-edited live) | — | — | ✅ | ✅ the server's Documents, same editors |
 | Satellite management & per-room settings | — | — | ✅ edits a Pi's or spare computer's config remotely | ✅ view/manage |
 | Custom wake-word recording & training | records the clips | wakes on a pushed model; no recording | ✅ record → train → push to room | — |
 | **Plugin install & administration** | — | — | ✅ **only here** — admin-gated, two-phase trust screen | — (plugin *screens* appear when installed) |
@@ -921,7 +934,11 @@ BSD-style licensed, and portions of it are copyright The FreeType Project
 (www.freetype.org), all rights reserved, under the FreeType licence. The
 PDFs Domovoi makes (chat drafts, print templates) are set in the Liberation
 Sans and Serif fonts (SIL Open
-Font License 1.1, which ships beside them).
+Font License 1.1, which ships beside them). The document editor is built
+on Tiptap and ProseMirror, co-editing on Yjs and pycrdt (all MIT), and the
+spreadsheet editor on Univer (Apache-2.0); the editors' fonts are OFL or
+Apache-licensed families from the google/fonts collection, each with its
+licence ([licences](docs/LICENSES.md)).
 
 Domovoi's voices are three public-domain Piper voices by Bryce Beattie
 (Norman and Kristin from LibriVox recordings, Linda from the LJ Speech

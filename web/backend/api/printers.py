@@ -213,6 +213,9 @@ async def _read_file(library_id: str, path: str) -> tuple[bytes, str]:
     from web.backend.api.files_security import has_sensitive_segment, is_sensitive_name, safe_join
 
     lib = await _resolve_library(library_id)
+    if lib.view == "other":
+        # Other's files are kept as they are and only downloaded (doc_types.py).
+        raise HTTPException(status_code=409, detail="Files in Other can only be downloaded.")
     target = safe_join(lib.root_path, path)
     if is_sensitive_name(target.name) or has_sensitive_segment(path, target, lib.root_path):
         raise HTTPException(status_code=404, detail="not found")

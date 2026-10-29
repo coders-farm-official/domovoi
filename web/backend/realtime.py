@@ -209,6 +209,9 @@ NOTIFY_CHANNEL_TO_REALTIME: dict[str, str] = {
     # switches changing. The app's notification and the dashboard's room
     # list ride the resulting `room_battery.changed` event.
     "room_battery_changed": "room_battery",
+    # Fonts an admin added for the house (V041, web/backend/api/fonts.py):
+    # an editor on screen re-reads /api/fonts on `fonts.changed`.
+    "fonts_changed": "fonts",
 }
 
 # Plugin NOTIFY → realtime channel entries, replaced wholesale on every
@@ -1026,6 +1029,14 @@ async def _snapshot_room_battery() -> dict[str, Any]:
     }
 
 
+async def _snapshot_fonts() -> list[dict[str, Any]]:
+    """The font families an admin added (``fonts.changed``): ``[{slug,
+    fetched_at}]``; ``[]`` without V041."""
+    from web.backend.api import fonts as fonts_api
+
+    return await fonts_api.snapshot()
+
+
 # Bind the snapshot helpers to the StatePollLoop so emit_for_channel
 # can resolve them by channel name. Done outside the class body
 # because the helpers themselves are defined further down in the
@@ -1067,6 +1078,8 @@ StatePollLoop._CHANNEL_HELPERS = {
     # `files.changed` so a page on screen shows an upload, a delete or a
     # file a plugin wrote without being left and opened again.
     "files": _snapshot_files,
+    # The added font families' slugs (V041): `fonts.changed`.
+    "fonts": _snapshot_fonts,
 }
 
 # The core realtime channels, frozen BEFORE any plugin mutates the helper

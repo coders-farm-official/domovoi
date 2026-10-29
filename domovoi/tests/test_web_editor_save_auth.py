@@ -476,8 +476,11 @@ def _editor_scenario(component: str, page: str, pair: bool,
 EDITOR_SCENARIOS = {
     "text_paired": _editor_scenario("TextEditorOverlay", "web/static/files.jsx", True),
     "text_dismissed": _editor_scenario("TextEditorOverlay", "web/static/files.jsx", False),
-    "doc_paired": _editor_scenario("DocEditorOverlay", "web/static/doc_editor.jsx", True),
-    "doc_dismissed": _editor_scenario("DocEditorOverlay", "web/static/doc_editor.jsx", False),
+    # The document editor (editors v1, doc_editor.jsx) is Tiptap in a
+    # closure with autosave, not a textarea with a Save button: this
+    # harness can't drive it. Its save seam is pinned by source facts
+    # (test_every_editor_save_branches_on_the_auth_outcome) and by
+    # test_documents_formatted.py.
 }
 
 
@@ -494,7 +497,7 @@ def editors(node_bin) -> dict:
     return out
 
 
-@pytest.mark.parametrize("name", ["text_paired", "doc_paired"])
+@pytest.mark.parametrize("name", ["text_paired"])
 def test_the_editor_reads_the_file_on_the_cookie_alone(editors, name):
     # Reads are DAILY tier: an unpaired browser can still open the file,
     # which is why the failure only shows up on Save.
@@ -504,7 +507,7 @@ def test_the_editor_reads_the_file_on_the_cookie_alone(editors, name):
     assert o["beforeSave"]["unsaved"] is True
 
 
-@pytest.mark.parametrize("name", ["text_paired", "doc_paired"])
+@pytest.mark.parametrize("name", ["text_paired"])
 def test_pressing_save_offers_pairing_and_then_completes_the_save(editors, name):
     """Saving is DEVICE tier, so what the editor asks for is PAIRING, and
     the replay goes out on the household token — no admin password is
@@ -525,7 +528,7 @@ def test_pressing_save_offers_pairing_and_then_completes_the_save(editors, name)
     assert o["unsavedAfter"] is False
 
 
-@pytest.mark.parametrize("name", ["text_dismissed", "doc_dismissed"])
+@pytest.mark.parametrize("name", ["text_dismissed"])
 def test_dismissing_the_prompt_keeps_the_text_and_says_cancelled(editors, name):
     o = editors[name]
     writes = [c for c in o["net"] if c["method"] == "PUT"]
@@ -617,7 +620,7 @@ def test_every_editor_save_branches_on_the_auth_outcome(name: str):
     assert "Save failed" not in src, f"{name}: unconditional Save-failed toast"
 
 
-@pytest.mark.parametrize("name", ["doc_editor.jsx", "sheet_editor.jsx"])
+@pytest.mark.parametrize("name", ["sheet_editor.jsx"])
 def test_export_stops_when_the_save_did_not_happen(name: str):
     """Export used to download the server's copy either way, handing back
     the OLD text after a refused save — the one shape here that loses
@@ -625,6 +628,19 @@ def test_export_stops_when_the_save_did_not_happen(name: str):
     src = (STATIC / name).read_text(encoding="utf-8")
     assert re.search(r"if \(dirty && !\(await onSave\(\)\)\) return;", src), name
     assert "if (dirty) await onSave();" not in src, name
+
+
+def test_the_document_editor_downloads_what_is_on_screen():
+    """The document editor (editors v1) never downloads the server's copy:
+    PDF, Markdown and Word are made from the editor's own content, saved
+    or not, so a refused save can't hand back older text."""
+    src = (STATIC / "doc_editor.jsx").read_text(encoding="utf-8")
+    body = src[src.index("const download = async (kind) => {"):]
+    body = body[:body.index("} catch (e) {")]
+    assert "printDocument(ed.getHTML(), title)" in body
+    assert "ed.getMarkdown()" in body
+    assert "body: JSON.stringify({ html: ed.getHTML(), title })" in body
+    assert "/raw/" not in body and "/export/" not in body
 
 
 def test_a_toast_outranks_every_overlay_it_can_be_fired_from():

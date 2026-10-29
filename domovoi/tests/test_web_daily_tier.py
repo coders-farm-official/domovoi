@@ -127,6 +127,9 @@ DEVICE_TIER = [
     ("PUT", "/api/documents/text/{rel_path:path}"),
     ("PUT", "/api/documents/sheet/{rel_path:path}"),
     ("POST", "/api/documents/drawings/write"),
+    # the live document editor's saves (formatted documents, markdown, Word)
+    ("PUT", "/api/documents/doc/{rel_path:path}"),
+    ("POST", "/api/documents/doc-save-as"),
     # files: the ordinary writes, including into core:documents
     ("POST", "/api/files/upload"),
     ("POST", "/api/files/import"),

@@ -70,7 +70,7 @@ internal fun FilesMoveSheet(
     browse: suspend (libraryId: String, path: String) -> FileBrowse,
     onMove: (targetLibraryId: String, targetPath: String) -> Unit,
     onDismiss: () -> Unit,
-    title: String = "move \"${entry.name}\" to…",
+    title: String = "move \"${displayName(entry.name, entry.isDir)}\" to…",
     actionLabel: String = "move here",
     verb: String = "move",
     initialLibraryId: String? = null,

@@ -22,12 +22,21 @@ object ServerAddress {
         data class Refused(val message: String) : Result()
     }
 
-    /** Null for a blank input (nothing to do). */
+    /**
+     * Null for a blank input (nothing to do). A path, query or fragment is
+     * dropped, so an address copied from the browser's bar while the
+     * dashboard is open ("http://192.168.1.30:6369/files?x") saves as that
+     * server. Until 2026-10-28 the port check ran over the path too and the
+     * default port was appended after it (found by the iOS port).
+     */
     fun fromTyped(input: String, defaultPort: Int = Discovery.DEFAULT_PORT): Result? {
-        var url = input.trim().trimEnd('/')
-        if (url.isBlank()) return null
-        if (!url.contains("://")) url = "http://$url"
-        if (!Regex(":\\d+$").containsMatchIn(url.substringAfter("://"))) url = "$url:$defaultPort"
+        val typed = input.trim()
+        if (typed.isBlank()) return null
+        val scheme = if (typed.contains("://")) typed.substringBefore("://") else "http"
+        val authority = typed.substringAfter("://").takeWhile { it != '/' && it != '?' && it != '#' }
+        if (authority.isBlank()) return Result.Refused("that is not a server address")
+        var url = "$scheme://$authority"
+        if (!Regex(":\\d+$").containsMatchIn(authority)) url = "$url:$defaultPort"
         val parsed = url.toHttpUrlOrNull() ?: return Result.Refused("that is not a server address")
         if (!CleartextPolicy.permits(parsed)) return Result.Refused(CleartextPolicy.refusalMessage(parsed.host))
         return Result.Ok(url)

@@ -37,6 +37,7 @@ from web.backend.api import calendar as calendar_api
 from web.backend.api import captures as captures_api
 from web.backend.api import capabilities as capabilities_api
 from web.backend.api import chat as chat_api
+from web.backend.api import collab as collab_api
 from web.backend.api import help as help_api
 from web.backend.api import config as config_api
 from web.backend.api import containers as containers_api
@@ -45,6 +46,7 @@ from web.backend.api import devices as devices_api
 from web.backend.api import audiobooks as audiobooks_api
 from web.backend.api import documents as documents_api
 from web.backend.api import files as files_api
+from web.backend.api import fonts as fonts_api
 from web.backend.api import printers as printers_api
 from web.backend.api import files_security
 from web.backend.api import greetings as greetings_api
@@ -201,6 +203,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     image_safety.configure_pillow()
 
+    # Fonts: a download a restart cut short leaves a staging folder behind.
+    try:
+        from web.backend.api import fonts as _fonts_api
+
+        _fonts_api.sweep_staging()
+    except Exception as e:  # never fatal
+        log.warning("fonts staging sweep raised: %s", e)
+
     # Household device token (device tier): the web boots the same hook as
     # the core so a web-only throwaway has a token row and
     # ~/.domovoi/device-token.txt (0600) too. Whichever process boots first
@@ -280,6 +290,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     finally:
         await chat_doc_jobs.shutdown()
         await chat_api.stop_unsent_sweeper()
+        # Co-editing rooms: last edits to Postgres, a version kept, sockets
+        # told the server is restarting (they reconnect and resync).
+        from web.backend.collab import workers as collab_workers
+        from web.backend.collab.rooms import MANAGER as collab_rooms
+
+        await collab_rooms.shutdown()
+        await collab_workers.stop_scratch()
         await listen_task.stop()
         await poll_loop.stop()
         # Uninstall the import guard on shutdown. Irrelevant for a real
@@ -413,8 +430,14 @@ app.include_router(voice_api.router)
 app.include_router(wake_words_api.router)
 app.include_router(captures_api.router)
 app.include_router(documents_api.router)
+# Co-editing (editors v1): the /api/collab/{doc_id} socket and version history.
+app.include_router(collab_api.router)
 app.include_router(files_api.router)
 app.include_router(files_api.blocks_router)
+# The editors' fonts: /api/fonts* and the /fonts/<family>/<file> files
+# (bundled under web/static/fonts, added ones under FONTS_DIR), before the
+# static mount so an added family is found too.
+app.include_router(fonts_api.router)
 # Printers, printing and scanning: proxies to the core's /v1/printers, /v1/print, /v1/scan.
 app.include_router(printers_api.router)
 app.include_router(podcasts_api.router)

@@ -16,13 +16,15 @@ import com.domovoi.app.net.Paging
 import com.domovoi.app.net.filesBrowseQueryPath
 import com.domovoi.app.net.importFile
 import com.domovoi.app.net.moveFiles
-import com.domovoi.app.net.openFileDownload
+import com.domovoi.app.net.ServerFileTransfer
+import com.domovoi.app.net.filesDownloadPath
+import com.domovoi.app.net.imagesRawPath
 import com.domovoi.app.net.uploadFiles
 import com.domovoi.app.ui.components.FILES_CHANGED
 import com.domovoi.app.ui.screens.documents.SheetCell
 import com.domovoi.app.ui.screens.documents.SheetUnsupported
 import com.domovoi.app.ui.screens.documents.docTextPath
-import com.domovoi.app.ui.screens.documents.openRawDoc
+import com.domovoi.app.ui.screens.documents.docRawPath
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
@@ -89,11 +91,11 @@ internal interface FileSource {
     val viewsImagesInApp: Boolean get() = false
 
     /** Open a file that has no in-app editor, in whatever the source uses for it. */
-    fun openFile(context: Context, libraryId: String, entry: FileEntry): Boolean
+    fun openFile(context: Context, libraryId: String, entry: FileEntry, report: (String) -> Unit = {}): Boolean
 
     /** Save a copy to the device (the server's download verb). */
     val canDownload: Boolean get() = false
-    fun download(context: Context, libraryId: String, entry: FileEntry) {}
+    fun download(context: Context, libraryId: String, entry: FileEntry, report: (String) -> Unit = {}) {}
 
     /** Removable-drive import into another library (server only). */
     suspend fun import(sourceLibraryId: String, entry: FileEntry, target: FileLibrary): ImportResult =
@@ -121,7 +123,7 @@ internal interface FileSource {
 
     /** The text editor's way out for a file it can't show ("download", "open in another app"). */
     val rawLabel: String
-    fun openRaw(context: Context, libraryId: String, rel: String)
+    fun openRaw(context: Context, libraryId: String, rel: String, report: (String) -> Unit = {})
 
     /** Image data for the in-app viewer / photo grid (a content Uri on the phone). */
     fun imageModel(libraryId: String, entry: FileEntry): Any? = null
@@ -139,6 +141,10 @@ internal interface FileSource {
 private data class SheetGrid(val rows: List<List<SheetCell?>> = emptyList())
 
 internal const val DOCUMENTS_LIBRARY_ID = "core:documents"
+
+/** Other: the shared Documents folder's files that are not documents
+ *  (installers, APKs, archives). Kept as they are: download only. */
+internal const val OTHER_LIBRARY_ID = "core:other"
 
 internal fun sheetApiPath(rel: String): String = "/api/documents/sheet/" + Uri.encode(rel, "/")
 
@@ -167,26 +173,24 @@ internal class ServerFileSource(private val app: AppContainer) : FileSource {
     // with the system viewer.
     override fun editsInApp(lib: FileLibrary?): Boolean = lib?.id == DOCUMENTS_LIBRARY_ID
 
-    override fun openFile(context: Context, libraryId: String, entry: FileEntry): Boolean {
+    // Every server file is fetched by the app, which carries the device
+    // token, and handed on as a file (ServerFileTransfer), never as a
+    // server address another app would open without the token.
+    override fun openFile(context: Context, libraryId: String, entry: FileEntry, report: (String) -> Unit): Boolean {
+        val name = ServerFileTransfer.saveName(entry.rel, entry.isDir)
         when {
-            libraryId == DOCUMENTS_LIBRARY_ID -> openRawDoc(context, app, entry.rel)
-            // Images in ANY library open inline (system viewer) via the
-            // generic library-image serve — web-parity with the Files tab's
-            // "Open" action.
-            entry.kind == "image" -> runCatching {
-                context.startActivity(
-                    android.content.Intent(
-                        android.content.Intent.ACTION_VIEW,
-                        Uri.parse(
-                            app.api.absolute(
-                                "/api/images/raw?library_id=${Uri.encode(libraryId)}" +
-                                    "&path=${Uri.encode(entry.rel)}",
-                            ),
-                        ),
-                    ),
-                )
-            }
-            else -> openFileDownload(context, app, libraryId, entry.rel)
+            // A Documents file the editors don't take (PDF, .doc...): opened
+            // in the app that views it.
+            libraryId == DOCUMENTS_LIBRARY_ID && !entry.isDir ->
+                ServerFileTransfer.open(context, app, docRawPath(entry.rel), name, mimeFor(entry.name), report)
+            // Other's files are only ever downloaded; nothing opens them.
+            libraryId == OTHER_LIBRARY_ID -> download(context, libraryId, entry, report)
+            // Images in ANY library open in the phone's viewer, from the
+            // generic library-image serve (web-parity with the Files tab's
+            // "Open" action).
+            entry.kind == "image" ->
+                ServerFileTransfer.open(context, app, imagesRawPath(libraryId, entry.rel), name, mimeFor(entry.name), report)
+            else -> download(context, libraryId, entry, report)
         }
         return true
     }
@@ -195,9 +199,10 @@ internal class ServerFileSource(private val app: AppContainer) : FileSource {
 
     // Documents files reuse the /api/documents/raw attachment serve; every
     // other library (and any directory → server zip) uses /api/files/download.
-    override fun download(context: Context, libraryId: String, entry: FileEntry) {
-        if (libraryId == DOCUMENTS_LIBRARY_ID && !entry.isDir) openRawDoc(context, app, entry.rel)
-        else openFileDownload(context, app, libraryId, entry.rel)
+    override fun download(context: Context, libraryId: String, entry: FileEntry, report: (String) -> Unit) {
+        val path = if (libraryId == DOCUMENTS_LIBRARY_ID && !entry.isDir) docRawPath(entry.rel)
+        else filesDownloadPath(libraryId, entry.rel)
+        ServerFileTransfer.download(context, app, path, ServerFileTransfer.saveName(entry.rel, entry.isDir), report)
     }
 
     override suspend fun import(sourceLibraryId: String, entry: FileEntry, target: FileLibrary): ImportResult =
@@ -274,5 +279,6 @@ internal class ServerFileSource(private val app: AppContainer) : FileSource {
 
     override val rawLabel = "download"
 
-    override fun openRaw(context: Context, libraryId: String, rel: String) = openRawDoc(context, app, rel)
+    override fun openRaw(context: Context, libraryId: String, rel: String, report: (String) -> Unit) =
+        ServerFileTransfer.download(context, app, docRawPath(rel), ServerFileTransfer.saveName(rel, false), report)
 }

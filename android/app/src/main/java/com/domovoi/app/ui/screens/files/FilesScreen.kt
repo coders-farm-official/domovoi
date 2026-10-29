@@ -33,6 +33,17 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import com.domovoi.app.ui.components.PromptDialog
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.material.icons.outlined.TableChart
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.material.icons.automirrored.outlined.OpenInNew
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.Upload
 import androidx.compose.material.icons.automirrored.filled.DriveFileMove
 import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.automirrored.outlined.Article
@@ -115,6 +126,9 @@ import com.domovoi.app.ui.components.Tone
 import com.domovoi.app.ui.components.fmtBytes
 import com.domovoi.app.ui.screens.documents.SheetEditorOverlay
 import com.domovoi.app.ui.screens.documents.TextEditorOverlay
+import com.domovoi.app.ui.screens.documents.WebEditorHost
+import com.domovoi.app.ui.screens.documents.WebEditorKind
+import com.domovoi.app.ui.screens.documents.opensInDocEditor
 import com.domovoi.app.ui.screens.documents.relFromEpochSec
 import com.domovoi.app.ui.screens.local.UploadButtonState
 import com.domovoi.app.ui.screens.local.UploadDest
@@ -260,6 +274,7 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
 
     var textEditorRel by remember { mutableStateOf<String?>(null) }
     var sheetEditorRel by remember { mutableStateOf<String?>(null) }
+    var docEditorRel by remember { mutableStateOf<String?>(null) }
     var imageEntry by remember { mutableStateOf<FileEntry?>(null) }
     var confirmDelete by remember { mutableStateOf<FileEntry?>(null) }
     var moveEntry by remember { mutableStateOf<FileEntry?>(null) }
@@ -267,6 +282,12 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
     var sendHomeEntry by remember { mutableStateOf<FileEntry?>(null) }
     var confirmForget by remember { mutableStateOf<FileLibrary?>(null) }
     var busy by remember { mutableStateOf<String?>(null) } // uploading | deleting | importing | sending
+    // Documents → New (the dashboard's "+ New"): the kind being named, and
+    // the dialog's refusal / in-flight state.
+    var newKind by remember { mutableStateOf<NewDocKind?>(null) }
+    var newError by remember { mutableStateOf<String?>(null) }
+    var newWorking by remember { mutableStateOf(false) }
+    var newMenu by remember { mutableStateOf(false) }
 
     // Printing and scanning through the home server: server files only. A
     // phone file keeps Android's own print path; nothing here touches it.
@@ -341,6 +362,9 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
                     )
                     if (r.skipped > 0) parts.append(" · ${r.skipped} skipped")
                     if (r.reindexTriggered) parts.append(" · indexing…")
+                    // Why one was skipped, in the server's words: "Documents
+                    // shows documents, spreadsheets and PDFs. Upload this in Other…"
+                    r.firstSkipped?.let { parts.append(" · ").append(it) }
                     toast(parts.toString())
                     pager.reload()
                 }
@@ -375,11 +399,18 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
         // folder): text/markdown in the text editor, .xlsx/.csv in the sheet
         // editor; everything else opens with the system viewer.
         val how = openWith(e.name, e.kind)
+        // Documents on the server (formatted documents, markdown, Word) open
+        // in the server's own document editor, in the app; a phone folder
+        // has no server to edit on, so its files keep the on-phone editors.
+        if (inAppEditing && !source.onPhone && id == DOCUMENTS_LIBRARY_ID && opensInDocEditor(e.name)) {
+            docEditorRel = e.rel
+            return
+        }
         when {
             inAppEditing && how == OpenWith.SheetEditor -> sheetEditorRel = e.rel
             inAppEditing && how == OpenWith.TextEditor -> textEditorRel = e.rel
             source.viewsImagesInApp && e.kind == "image" -> imageEntry = e
-            else -> if (!source.openFile(ctx, id, e)) {
+            else -> if (!source.openFile(ctx, id, e, toast)) {
                 toast("no app on this phone opens \"${e.name}\"")
             }
         }
@@ -493,35 +524,103 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
 
     androidx.compose.foundation.layout.Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().padding(16.dp)) {
-            PageHeader(
-                "Files",
-                source.subtitle,
-                actions = {
-                    LibraryRefreshButton(refresh, "rescan this library")
-                    if (source.onPhone) {
-                        if (canWrite) {
-                            IconButton(onClick = { filePicker.launch("*/*") }, enabled = busy == null) {
-                                Icon(Icons.Outlined.UploadFile, "add files to this folder", tint = Domovoi.colors.fgMuted)
-                            }
+            val headerActions: @Composable () -> Unit = {
+                LibraryRefreshButton(refresh, "rescan this library")
+                if (source.onPhone) {
+                    if (canWrite) {
+                        IconButton(onClick = { filePicker.launch("*/*") }, enabled = busy == null) {
+                            Icon(Icons.Outlined.UploadFile, "add files to this folder", tint = Domovoi.colors.fgMuted)
                         }
-                        if (libraryTakesFiles(selectedId)) {
-                            OutlinedButton(onClick = { folderPicker.launch(null) }) { Text("add folder") }
-                        }
-                    } else {
-                        if (canScanHere) {
-                            OutlinedButton(onClick = { scanning = true }) { Text("scan") }
-                        }
-                        if (canWrite) {
+                    }
+                    if (libraryTakesFiles(selectedId)) {
+                        OutlinedButton(onClick = { folderPicker.launch(null) }) { Text("add folder") }
+                    }
+                } else {
+                    if (canScanHere) {
+                        OutlinedButton(onClick = { scanning = true }) { Text("scan") }
+                    }
+                    // New, beside Upload, in the household's Documents only:
+                    // shown wherever the library takes files; a blocked
+                    // device is told why when it picks a kind.
+                    if (selectedId == DOCUMENTS_LIBRARY_ID && inAppEditing && editable &&
+                        libraryTakesFiles(selectedId)
+                    ) {
+                        Box {
                             OutlinedButton(
-                                onClick = { filePicker.launch("*/*") },
+                                onClick = { newMenu = true },
                                 enabled = busy == null,
+                                contentPadding = PaddingValues(horizontal = 14.dp),
                             ) {
-                                Text(if (busy == "uploading") "uploading…" else "upload")
+                                Icon(Icons.Filled.Add, null, Modifier.size(18.dp), tint = Domovoi.colors.brand)
+                                Spacer(Modifier.width(4.dp))
+                                Text("new")
+                            }
+                            DropdownMenu(expanded = newMenu, onDismissRequest = { newMenu = false }) {
+                                NewDocKind.entries.forEach { k ->
+                                    DropdownMenuItem(
+                                        leadingIcon = {
+                                            Icon(
+                                                when (k) {
+                                                    NewDocKind.Document -> Icons.Outlined.Description
+                                                    NewDocKind.Spreadsheet -> Icons.Outlined.TableChart
+                                                    NewDocKind.Text -> Icons.AutoMirrored.Outlined.Article
+                                                },
+                                                null, tint = Domovoi.colors.fgMuted,
+                                            )
+                                        },
+                                        text = {
+                                            Column {
+                                                Text(k.label)
+                                                Text(
+                                                    k.hint, style = MaterialTheme.typography.bodySmall,
+                                                    color = Domovoi.colors.fgFaint,
+                                                )
+                                            }
+                                        },
+                                        onClick = {
+                                            newMenu = false
+                                            if (blocked) {
+                                                toast(data?.blockedReason ?: "this device is blocked from changing files")
+                                            } else {
+                                                newError = null
+                                                newKind = k
+                                            }
+                                        },
+                                    )
+                                }
                             }
                         }
                     }
-                },
-            )
+                    if (canWrite) {
+                        OutlinedButton(
+                            onClick = { filePicker.launch("*/*") },
+                            enabled = busy == null,
+                        ) {
+                            Text(if (busy == "uploading") "uploading…" else "upload")
+                        }
+                    }
+                }
+            }
+            // On a phone the buttons get their own row under the title: beside
+            // it they squeezed the subtitle into a word-per-line column at
+            // 320 dp (a Fold's cover screen), and New + Upload need the room.
+            androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxWidth()) {
+                if (maxWidth < 480.dp) {
+                    Column {
+                        PageHeader("Files", source.subtitle)
+                        if (!com.domovoi.app.ui.shell.keyboardCrowdsTheWindow()) {
+                            Spacer(Modifier.height(8.dp))
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) { headerActions() }
+                        }
+                    }
+                } else {
+                    PageHeader("Files", source.subtitle, actions = headerActions)
+                }
+            }
             Spacer(Modifier.height(12.dp))
 
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -658,9 +757,17 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
                         items(listing.items, key = { it.rel }) { e ->
                             FileRow(
                                 entry = e,
+                                primaryLabel = primaryVerb(
+                                    e.name, e.kind, e.isDir,
+                                    editsInApp = inAppEditing,
+                                    docEditor = inAppEditing && !source.onPhone &&
+                                        selectedId == DOCUMENTS_LIBRARY_ID && opensInDocEditor(e.name),
+                                    downloadOnly = !source.onPhone && selectedId == OTHER_LIBRARY_ID,
+                                    opensByDownload = !source.onPhone && selectedId != DOCUMENTS_LIBRARY_ID,
+                                ),
                                 onOpen = { onEntryPrimary(e) },
                                 onImport = if (isRemovable && !blocked) ({ importEntry = e }) else null,
-                                onDownload = if (source.canDownload) ({ source.download(ctx, selectedId ?: "", e) }) else null,
+                                onDownload = if (source.canDownload) ({ source.download(ctx, selectedId ?: "", e, toast) }) else null,
                                 onSendHome = if (canSendHome && !e.isDir) ({ askSendHome(e) }) else null,
                                 onAsk = if (canAsk(e)) ({ ask(e) }) else null,
                                 upload = uploader?.state(fileUploadKey(selectedId ?: "", e.rel)),
@@ -668,7 +775,9 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
                                 // gets a destination picker instead (FilesMoveSheet).
                                 onMove = if (canWrite) ({ moveEntry = e }) else null,
                                 onDelete = if (editable) ({ confirmDelete = e }) else null,
-                                print = printOffer(e.name, e.isDir, printers),
+                                // Other only downloads: no printing from it.
+                                print = if (selectedId == OTHER_LIBRARY_ID) PrintOffer.None
+                                else printOffer(e.name, e.isDir, printers),
                                 onPrint = { printEntry = e },
                             )
                         }
@@ -687,10 +796,24 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
                 pager.reload()
             }
         }
+        docEditorRel?.let { rel ->
+            WebEditorHost(app, rel, WebEditorKind.Document) {
+                docEditorRel = null
+                pager.reload()
+            }
+        }
         sheetEditorRel?.let { rel ->
-            SheetEditorOverlay(source, selectedId ?: "", rel) {
+            val close = {
                 sheetEditorRel = null
                 pager.reload()
+            }
+            // The server's Documents: the dashboard's own sheet editor
+            // (formulas, formatting, sheets, autosave) in a WebView. A
+            // phone folder has no server behind it: the plain grid editor.
+            if (!source.onPhone && selectedId == DOCUMENTS_LIBRARY_ID) {
+                WebEditorHost(app, rel, WebEditorKind.Sheet, close)
+            } else {
+                SheetEditorOverlay(source, selectedId ?: "", rel, close)
             }
         }
         imageEntry?.let { e ->
@@ -701,7 +824,7 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
                 onSendHome = if (canSendHome) ({ askSendHome(e) }) else null,
                 sendLabel = if (uploader != null) "upload" else "send to home",
                 onOpenWith = {
-                    if (!source.openFile(ctx, id, e)) toast("no app on this phone opens \"${e.name}\"")
+                    if (!source.openFile(ctx, id, e, toast)) toast("no app on this phone opens \"${e.name}\"")
                 },
                 onClose = { imageEntry = null },
             )
@@ -714,12 +837,40 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
             body = if (e.isDir) {
                 "Delete \"${e.name}\" and everything inside it? This can't be undone."
             } else {
-                "Delete \"${e.name}\"? This can't be undone."
+                "Delete \"${displayName(e.name)}\"? This can't be undone."
             },
             confirmLabel = "delete",
             destructive = true,
             onConfirm = { doDelete(e) },
             onDismiss = { confirmDelete = null },
+        )
+    }
+
+    newKind?.let { k ->
+        PromptDialog(
+            title = k.prompt,
+            placeholder = k.placeholder,
+            note = if (path.isNotEmpty()) "It goes at the top of Documents, as on the dashboard." else null,
+            error = newError,
+            working = newWorking,
+            dismissOnConfirm = false,
+            onConfirm = { name ->
+                newWorking = true
+                newError = null
+                scope.launch {
+                    runCatching { createDocument(app, name, k) }
+                        .onSuccess { row ->
+                            newKind = null
+                            pager.reload()
+                            // Opens as tapping its row would: the document
+                            // editor, the sheet editor, the text editor.
+                            onEntryPrimary(row.asEntry())
+                        }
+                        .onFailure { newError = createFailureText(it) }
+                    newWorking = false
+                }
+            },
+            onDismiss = { newKind = null; newError = null },
         )
     }
 
@@ -796,7 +947,7 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
                 val rel = s.path ?: return@ScanSheet
                 val name = s.name ?: rel.substringAfterLast('/')
                 scanning = false
-                if (!source.openFile(ctx, s.libraryId ?: DOCUMENTS_LIBRARY_ID, FileEntry(name = name, rel = rel, kind = fileKind(name, false)))) {
+                if (!source.openFile(ctx, s.libraryId ?: DOCUMENTS_LIBRARY_ID, FileEntry(name = name, rel = rel, kind = fileKind(name, false)), toast)) {
                     toast("no app on this phone opens \"$name\"")
                 }
             },
@@ -918,14 +1069,16 @@ private fun Breadcrumb(
 @Composable
 private fun FileRow(
     entry: FileEntry,
+    /** What tapping the row does ("Open", "Edit", "View", "Play", "Download"): [primaryVerb]. */
+    primaryLabel: String,
     onOpen: () -> Unit,
-    /** Each action is shown only when it is offered (non-null). */
+    /** Each action is offered (in the ⋮ menu) only when it is non-null. */
     onImport: (() -> Unit)?,
     onDownload: (() -> Unit)?,
     onSendHome: (() -> Unit)?,
     onMove: (() -> Unit)?,
     onDelete: (() -> Unit)?,
-    /** Set in "your device" mode: [onSendHome] is shown as the Upload button, in this state. */
+    /** Set in "your device" mode: [onSendHome] is the Upload item, in this state. */
     upload: UploadButtonState? = null,
     /** The server's Print for this file: a menu item, a "save as PDF first" line, or nothing. */
     print: PrintOffer = PrintOffer.None,
@@ -933,11 +1086,17 @@ private fun FileRow(
     /** "Ask about this document": a chat with it attached. */
     onAsk: (() -> Unit)? = null,
 ) {
+    // The row is the primary action (as Music and Videos rows play on a
+    // tap); every other verb lives in the ⋮ menu, so the name gets the
+    // width even on a 320 dp cover screen. Delete stays last, behind its
+    // confirmation dialog.
+    val name = displayName(entry.name, entry.isDir)
     Column {
         Row(
             Modifier.fillMaxWidth()
-                .clickable(onClick = onOpen)
-                .padding(horizontal = 14.dp, vertical = 8.dp),
+                .heightIn(min = 56.dp)
+                .clickable(onClickLabel = "${primaryLabel.lowercase()} $name", onClick = onOpen)
+                .padding(start = 14.dp, end = 2.dp, top = 6.dp, bottom = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
@@ -949,92 +1108,90 @@ private fun FileRow(
             )
             Column(Modifier.weight(1f)) {
                 Text(
-                    entry.name,
+                    name,
                     style = MaterialTheme.typography.titleSmall,
                     color = Domovoi.colors.fg,
-                    maxLines = 1,
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    Text(
-                        if (entry.isDir) {
-                            "folder · ${relFromEpochSec(entry.mtime)}"
-                        } else {
+                Text(
+                    if (entry.isDir) {
+                        "folder · ${relFromEpochSec(entry.mtime)}"
+                    } else {
+                        (if (isFormattedDocument(entry.name)) "Document · " else "") +
                             "${fmtBytes(entry.size)} · ${relFromEpochSec(entry.mtime)}"
-                        },
-                        style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFamily),
-                        color = Domovoi.colors.fgFaint,
-                    )
-                    entry.lockedBy?.let { Pill("editing in $it", Tone.Warn) }
+                    },
+                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFamily),
+                    color = Domovoi.colors.fgFaint,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                entry.lockedBy?.let {
+                    Spacer(Modifier.height(2.dp))
+                    Pill("editing in $it", Tone.Warn)
                 }
             }
-            onAsk?.let {
-                IconButton(onClick = it) {
-                    Icon(Icons.Outlined.QuestionAnswer, "ask about this document", tint = Domovoi.colors.fgMuted)
+            // An upload in flight shows its progress in the row (a status,
+            // not a button); starting one is in the menu.
+            if (upload is UploadButtonState.Busy && onSendHome != null) UploadRowButton(upload, onSendHome)
+            var menu by remember { mutableStateOf(false) }
+            Box {
+                IconButton(onClick = { menu = true }) {
+                    Icon(Icons.Filled.MoreVert, "more for $name", tint = Domovoi.colors.fgMuted)
                 }
-            }
-            onImport?.let {
-                IconButton(onClick = it) {
-                    Icon(Icons.Filled.ContentCopy, "import into a library", tint = Domovoi.colors.fgMuted)
-                }
-            }
-            onDownload?.let {
-                IconButton(onClick = it) {
-                    Icon(Icons.Outlined.Download, "download", tint = Domovoi.colors.fgMuted)
-                }
-            }
-            onSendHome?.let {
-                if (upload != null) {
-                    UploadRowButton(upload, it)
-                } else {
-                    IconButton(onClick = it) {
-                        Icon(Icons.Outlined.CloudUpload, "send to home", tint = Domovoi.colors.fgMuted)
-                    }
-                }
-            }
-            onMove?.let {
-                IconButton(onClick = it) {
-                    Icon(
-                        Icons.AutoMirrored.Filled.DriveFileMove, "move to another folder",
-                        tint = Domovoi.colors.fgMuted,
-                    )
-                }
-            }
-            onDelete?.let {
-                IconButton(onClick = it) {
-                    Icon(Icons.Outlined.Delete, "delete", tint = Domovoi.colors.fgMuted)
-                }
-            }
-            if (print != PrintOffer.None) {
-                var menu by remember { mutableStateOf(false) }
-                Box {
-                    IconButton(onClick = { menu = true }) {
-                        Icon(Icons.Filled.MoreVert, "more for ${entry.name}", tint = Domovoi.colors.fgMuted)
-                    }
-                    DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                        when (print) {
-                            PrintOffer.Print -> DropdownMenuItem(
-                                leadingIcon = { Icon(Icons.Outlined.Print, null, tint = Domovoi.colors.fgMuted) },
-                                text = { Text("Print") },
-                                onClick = { menu = false; onPrint() },
+                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                    @Composable
+                    fun item(label: String, icon: ImageVector, enabled: Boolean = true, danger: Boolean = false, onClick: () -> Unit) =
+                        DropdownMenuItem(
+                            leadingIcon = {
+                                Icon(icon, null, tint = if (danger) Domovoi.colors.err else Domovoi.colors.fgMuted)
+                            },
+                            text = { Text(label, color = if (danger) Domovoi.colors.err else Color.Unspecified) },
+                            enabled = enabled,
+                            onClick = { menu = false; onClick() },
+                        )
+                    item(primaryLabel, primaryIcon(primaryLabel), onClick = onOpen)
+                    onAsk?.let { item("Ask in chat", Icons.Outlined.QuestionAnswer, onClick = it) }
+                    if (primaryLabel != "Download") onDownload?.let { item("Download", Icons.Outlined.Download, onClick = it) }
+                    onSendHome?.let {
+                        if (upload != null) {
+                            item(
+                                if (upload is UploadButtonState.Busy) "Uploading…" else "Upload",
+                                Icons.Outlined.Upload,
+                                enabled = upload is UploadButtonState.Ready || upload is UploadButtonState.Refused,
+                                onClick = it,
                             )
-                            is PrintOffer.PdfFirst -> Text(
-                                print.message,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = Domovoi.colors.fgMuted,
-                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp).widthIn(max = 280.dp),
-                            )
-                            PrintOffer.None -> Unit
+                        } else {
+                            item("Send to home", Icons.Outlined.CloudUpload, onClick = it)
                         }
                     }
+                    onImport?.let { item("Import into a library", Icons.Filled.ContentCopy, onClick = it) }
+                    onMove?.let { item("Move", Icons.AutoMirrored.Filled.DriveFileMove, onClick = it) }
+                    when (print) {
+                        PrintOffer.Print -> item("Print", Icons.Outlined.Print, onClick = onPrint)
+                        is PrintOffer.PdfFirst -> Text(
+                            print.message,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Domovoi.colors.fgMuted,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp).widthIn(max = 280.dp),
+                        )
+                        PrintOffer.None -> Unit
+                    }
+                    onDelete?.let { item("Delete…", Icons.Outlined.Delete, danger = true, onClick = it) }
                 }
             }
         }
         HorizontalDivider(color = Domovoi.colors.borderSoft)
     }
+}
+
+private fun primaryIcon(verb: String): ImageVector = when (verb) {
+    "Edit" -> Icons.Outlined.Edit
+    "Play" -> Icons.Filled.PlayArrow
+    "Download" -> Icons.Outlined.Download
+    "View" -> Icons.Outlined.Image
+    else -> Icons.AutoMirrored.Outlined.OpenInNew
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -1093,7 +1250,9 @@ private fun libIcon(name: String): ImageVector = when (name) {
 }
 
 // Entry `kind` → row glyph.
-private fun entryIcon(entry: FileEntry): ImageVector = when (entry.kind) {
+private fun entryIcon(entry: FileEntry): ImageVector = if (isFormattedDocument(entry.name, entry.isDir)) {
+    Icons.Outlined.Description
+} else when (entry.kind) {
     "folder" -> Icons.Filled.Folder
     "audio" -> Icons.Filled.MusicNote
     "doc-office" -> Icons.Outlined.Description

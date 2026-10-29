@@ -5,6 +5,13 @@ For the first Google Play submission of `com.domovoi.app` (versionCode
 on 2026-10-15; anything those pages don't say is marked *(unverified)*.
 Each answer names the code that makes it true.
 
+**Re-checked 2026-10-28 for 1.0.0 (versionCode 26102801):** the manifest
+diffed against `v1.0.0-rc3` adds only what section 1 already lists (location,
+contacts, calendar, `SET_ALARM`, the `<queries>` hand-offs, the `FileProvider`)
+and the launcher label/task-affinity placeholders (bench builds only). No new
+permission, no new foreground service type and no new form to fill; the
+three foreground service declarations in section 3 stand.
+
 ## 1. Blockers found, and what happened to each
 
 | # | Finding | Would it fail review? | Done |

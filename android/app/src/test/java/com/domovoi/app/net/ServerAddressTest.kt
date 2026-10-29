@@ -29,6 +29,18 @@ class ServerAddressTest {
         )
     }
 
+    @Test fun aPathQueryOrFragmentIsDroppedAndTheServerKept() {
+        assertEquals(ServerAddress.Result.Ok("http://192.168.1.30:6369"), ServerAddress.fromTyped("192.168.1.30/api"))
+        assertEquals(
+            ServerAddress.Result.Ok("http://192.168.1.30:6390"),
+            ServerAddress.fromTyped("http://192.168.1.30:6390/api/health"),
+        )
+        assertEquals(ServerAddress.Result.Ok("http://192.168.1.30:6369"), ServerAddress.fromTyped("http://192.168.1.30:6369/#files"))
+        assertEquals(ServerAddress.Result.Ok("http://domovoi.lan:6369"), ServerAddress.fromTyped("domovoi.lan?x=1"))
+        assertEquals(ServerAddress.Result.Ok("http://[fe80::1]:6369"), ServerAddress.fromTyped("http://[fe80::1]/files"))
+        assertEquals(ServerAddress.Result.Refused("that is not a server address"), ServerAddress.fromTyped("http:///files"))
+    }
+
     @Test fun nonsenseIsRefusedAndBlankIsNothing() {
         assertEquals(ServerAddress.Result.Refused("that is not a server address"), ServerAddress.fromTyped("http://:::"))
         assertNull(ServerAddress.fromTyped("   "))

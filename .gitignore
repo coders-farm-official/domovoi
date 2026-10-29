@@ -289,3 +289,7 @@ xcuserdata/
 *.hmap
 *.ipa
 *.dSYM.zip
+
+# The editor bundles' npm sources install here only to build them
+# (scripts/vendor/editors/build.mjs); the bundles themselves are committed.
+scripts/vendor/editors/node_modules/

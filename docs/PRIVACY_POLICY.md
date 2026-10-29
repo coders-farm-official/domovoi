@@ -209,7 +209,11 @@ they are a Domovoi server), it talks to that server and to nothing else of
 ours. It sends what each feature needs: your chat messages and mic audio,
 what you play and control, files you upload, the documents, letters,
 drafts and lookups you hand to it, timers you set or cancel, this phone's
-name, and the pairing token so the server knows the phone. In room
+name, and the pairing token so the server knows the phone. Documents and
+spreadsheets you edit in the app open in your server's own editor page
+(the page and its fonts come from the server, and what you type, and the
+edits of other household devices editing the same document, go to and
+from the server only). In room
 mode the phone also sends the room's health to the server: battery level,
 whether it is charging, Wi-Fi signal and speed, memory, temperature and
 whether the microphone is working.

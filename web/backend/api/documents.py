@@ -7,17 +7,23 @@ extension, never separate stores. Three in-app editors, all homegrown or
 in-page — the OnlyOffice/Collabora sidecar containers are retired (no
 iframes, no JWT/WOPI handshakes, no per-file engine locks):
 
-  * **Doc editor** (web/static/doc_editor.jsx) — markdown-first: toolbar
-    formatting + live preview (vendored ``marked``), plain UTF-8 storage
-    via the ``/text`` endpoints. Export to .docx server-side
-    (``/export/doc``, python-docx).
-  * **Sheet editor** (web/static/sheet_editor.jsx) — vendored
-    ``x-spreadsheet`` grid with client-side formula evaluation. Reads and
-    writes .xlsx (openpyxl — values, formula strings; a save updates the
-    existing workbook in place) and .csv through the ``/sheet`` endpoints; export to .csv/.xlsx via ``/export/sheet``.
+  * **Doc editor** (web/static/doc_editor.jsx) — a live word-processor
+    editor (Tiptap, vendored). New documents are formatted documents:
+    one self-contained ``.html`` page each (domovoi/richdoc), sanitised
+    here on every load and save; ``.md`` opens and saves as markdown;
+    ``.docx`` converts on open and, if the person keeps it as Word, on
+    save. Routes: ``/doc`` (GET/PUT), ``/doc-save-as``, ``/convert/docx``.
+  * **Sheet editor** (web/static/sheet_editor.jsx) — vendored Univer
+    (open-source core, Apache-2.0) with client-side formula evaluation.
+    Reads and writes the whole workbook (.xlsx: every sheet, formatting,
+    merges, sizes, frozen panes; .csv: values) through the ``/workbook``
+    endpoints and :mod:`web.backend.api.sheet_workbook` (openpyxl; a save
+    updates the existing file in place). The older ``/sheet`` grid
+    endpoints serve the phone app's own grid editor. Export to .csv/.xlsx
+    via ``/export/sheet``.
   * **Excalidraw** — in-page React lib, unchanged (.excalidraw scenes).
 
-Legacy office formats (.docx/.doc/.odt/.rtf and .xls/.ods) are stored,
+Legacy office formats (.doc/.odt/.rtf and .xls/.ods) are stored,
 listed, uploaded, and downloaded — but not edited in-app (category
 ``download``).
 
@@ -105,7 +111,7 @@ from fastapi import (
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
-from domovoi import executors
+from domovoi import executors, richdoc
 from domovoi.admin_auth import require_admin_mutation, require_device, require_device_read
 from domovoi.config import settings as core_settings
 from web.backend.api.csrf_guard import require_requested_with
@@ -116,6 +122,7 @@ from web.backend.api.files_security import (
 )
 from web.backend.api.inline_serve import disposition_for, inert_headers
 from web.backend.api import listing_cache
+from web.backend.api import sheet_workbook
 
 log = logging.getLogger(__name__)
 
@@ -134,12 +141,22 @@ router = APIRouter(prefix="/api/documents", tags=["documents"])
 # The Documents ("doc") view is the CATCH-ALL: every file not claimed by
 # the Spreadsheets or Drawings views, each routed to the right open-action
 # by ``_doc_category`` below. Sheet/drawing views stay narrow (exact-ext).
-_DOC_EXTS = frozenset({".docx", ".doc", ".odt", ".rtf", ".txt", ".md"})
+_DOC_EXTS = frozenset({".html", ".htm", ".docx", ".doc", ".odt", ".rtf", ".txt", ".md"})
 _SHEET_EXTS = frozenset({".xlsx", ".xls", ".ods", ".csv"})
 _DRAWING_EXTS = frozenset({".excalidraw", ".svg"})
 
-# Legacy office word-processor types — stored/served, not edited in-app.
+# Office word-processor types. .docx opens in the document editor
+# (converted on open, ``_RICH_EDITOR_EXTS``); the others are stored and
+# served, not edited in-app.
 _OFFICE_WP_EXTS = frozenset({".docx", ".doc", ".odt", ".rtf"})
+
+# Formatted documents: the editor's own files (one self-contained HTML
+# page each, domovoi.richdoc). People see them as "Document".
+_FORMATTED_EXTS = frozenset({".html", ".htm"})
+
+# Everything the live document editor opens and saves: formatted
+# documents, markdown, and Word (.docx, converted on open and on save).
+_RICH_EDITOR_EXTS = _FORMATTED_EXTS | frozenset({".md", ".markdown", ".docx"})
 
 # Sheet types the homegrown editor can actually round-trip.
 _EDITABLE_SHEET_EXTS = frozenset({".xlsx", ".csv"})
@@ -190,7 +207,8 @@ _SHEET_MAX_COLS = 60
 def _doc_category(ext: str) -> str:
     """How the unified Documents page should open a file of this extension.
 
-      * ``"doc"``      → homegrown markdown editor (.md, toolbar + preview).
+      * ``"doc"``      → the live document editor (formatted documents
+                         .html/.htm, markdown .md, Word .docx).
       * ``"sheet"``    → homegrown spreadsheet editor (.xlsx/.csv).
       * ``"drawing"``  → in-page Excalidraw editor (.excalidraw scenes).
       * ``"newtab"``   → open the raw endpoint in a new tab (PDFs, images).
@@ -199,7 +217,7 @@ def _doc_category(ext: str) -> str:
                          the /text endpoint decides if it's really editable).
     """
     ext = ext.lower()
-    if ext in _MARKDOWN_EXTS:
+    if ext in _RICH_EDITOR_EXTS:
         return "doc"
     if ext in _EDITABLE_SHEET_EXTS:
         return "sheet"
@@ -390,6 +408,18 @@ def _usable_path(rel: str):
 _TEXT_EDITOR_CATEGORIES = frozenset({"doc", "text"})
 
 
+def is_document_name(name: str) -> bool:
+    from web.backend.api.doc_types import is_document_name as check
+
+    return check(name)
+
+
+def documents_refusal(name: str) -> Optional[str]:
+    from web.backend.api.doc_types import documents_refusal as why
+
+    return why(name)
+
+
 def _assert_saveable_name(target: Path) -> None:
     """Refuse a save whose FILENAME ``/api/files`` would refuse.
 
@@ -407,6 +437,11 @@ def _assert_saveable_name(target: Path) -> None:
             status_code=400,
             detail=f"{target.name}: that name is reserved and is never saved here",
         )
+    # And a type the Files page's Documents view would never list (it would
+    # show in Other, where nothing opens it): doc_types.py.
+    refusal = documents_refusal(target.name)
+    if refusal:
+        raise HTTPException(status_code=415, detail=f"{target.name}: {refusal}")
 
 
 def _assert_text_editor_may_write(target: Path) -> None:
@@ -441,6 +476,13 @@ def _assert_text_editor_may_write(target: Path) -> None:
     the name is one the editor could open afterwards.
     """
     ext = target.suffix.lower()
+    if ext in _FORMATTED_EXTS or ext == ".docx":
+        # A formatted document is written only through PUT /doc, which
+        # sanitises it; raw text here would skip that. A .docx is not text.
+        raise HTTPException(
+            status_code=415,
+            detail=f"{ext} is saved by the document editor, not the text editor",
+        )
     if _doc_category(ext) not in _TEXT_EDITOR_CATEGORIES:
         raise HTTPException(
             status_code=415,
@@ -520,6 +562,39 @@ async def _assert_files_policy(request: Request, device_id: Optional[str]) -> No
     from web.backend.api import files as files_api
 
     await files_api.assert_documents_write_allowed(request, device_id)
+
+
+async def _collab_saved(request: Request, target: Path) -> None:
+    """Tell co-editing (web/backend/api/collab.py) that a save landed. A save
+    from a co-editing client carries ``X-Domovoi-Collab`` and is recorded as
+    the clean file of its revision; any other save means the file changed
+    under the shared state, which is then rebuilt from it. Never raises.
+    For a route that cannot wrap its write in :func:`_collab_saving`;
+    prefer that, which also refuses stale co-editing saves (imported late:
+    collab imports this module)."""
+    from web.backend.api import collab
+
+    await collab.note_file_saved(request, target)
+
+
+def _collab_saving(request: Request, target: Path):
+    """``async with _collab_saving(request, target): <write the file>``.
+    Wrap the WRITE of every save route for a co-edited type in it: a
+    co-editing save that is older than what the file already holds, or from
+    before the document was rebuilt or moved, is refused 409 before anything
+    is written, and the path stays locked across the write and the note of
+    what was written (so the outside-change check never mistakes it for
+    someone else's). Imported late: collab imports this module."""
+    from web.backend.api import collab
+
+    return collab.saving(request, target)
+
+
+async def _collab_forget(rel_paths: list[str]) -> None:
+    """Deleted documents take their co-editing state and history with them."""
+    from web.backend.api import collab
+
+    await collab.forget_paths(rel_paths)
 
 
 # ─── Schemas ────────────────────────────────────────────────────────
@@ -613,6 +688,10 @@ async def list_documents(
         # never listed — not by this door, not by that one.
         if is_sensitive_name(entry.name):
             continue
+        # Only documents: the rest of this folder is the Files page's Other
+        # (doc_types.py), and nothing here reads it.
+        if not is_document_name(entry.name):
+            continue
         ext = entry.suffix.lower()
         if kind == "all":
             pass
@@ -649,7 +728,7 @@ def _blank_xlsx() -> bytes:
     return buf.getvalue()
 
 
-def _blank_content(ext: str) -> bytes:
+def _blank_content(ext: str, title: str = "") -> bytes:
     if ext == ".xlsx":
         return _blank_xlsx()
     if ext == ".excalidraw":
@@ -661,14 +740,23 @@ def _blank_content(ext: str) -> bytes:
         return (
             '<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600"></svg>'
         ).encode("utf-8")
+    if ext in _FORMATTED_EXTS:
+        return richdoc.document_file("<p></p>", title).encode("utf-8")
+    if ext == ".docx":
+        from docx import Document
+
+        buf = io.BytesIO()
+        Document().save(buf)
+        return buf.getvalue()
     # .md / .txt / .csv — empty file is valid.
     return b""
 
 
-# Default extension a "New <kind>" gets. "doc" is markdown-first now —
-# the homegrown editor's native format.
+# Default extension a "New <kind>" gets. A new document is a formatted
+# document (.html, the live editor's own format); naming it "x.md" still
+# makes a markdown one.
 _KIND_NEW_EXT = {
-    "doc": ".md",
+    "doc": ".html",
     "sheet": ".xlsx",
     "drawing": ".excalidraw",
 }
@@ -691,13 +779,19 @@ async def create_document(request: Request, req: CreateRequest) -> DocumentRow:
     if req.kind != "text" and ext not in _KIND_EXTS[req.kind]:
         ext = _KIND_NEW_EXT[req.kind]
         raw = f"{raw}{ext}"
+    elif req.kind == "text" and not ext and not is_sensitive_name(raw):
+        # A text file named "shopping" would be Other, which never opens
+        # it: it is made as plain text. (Any other non-document name is
+        # refused below, a reserved one as reserved.)
+        ext = ".txt"
+        raw = f"{raw}{ext}"
     target = _safe_target(raw)
     _assert_saveable_name(target)
     with _usable_path(raw):
         if target.exists():
             raise HTTPException(status_code=409, detail=f"{raw} already exists")
         _ensure_parent_dir(target)
-        target.write_bytes(_blank_content(ext))
+        target.write_bytes(_blank_content(ext, target.stem))
         st = target.stat()
     _listing_changed()
     return DocumentRow(
@@ -734,6 +828,7 @@ async def delete_documents(req: DeleteRequest) -> DeleteResult:
             failed.append(rp)
     if deleted:
         _listing_changed()
+        await _collab_forget(deleted)
     return DeleteResult(deleted=deleted, failed=failed)
 
 
@@ -822,7 +917,8 @@ async def write_text_file(
     with _usable_path(rel_path):
         _assert_text_editor_may_write(target)
         _ensure_parent_dir(target)
-        target.write_text(req.text, encoding="utf-8", newline="")
+        async with _collab_saving(request, target):
+            target.write_text(req.text, encoding="utf-8", newline="")
         st = target.stat()
     _listing_changed()
     ext = target.suffix.lower()
@@ -924,8 +1020,21 @@ def _read_sheet_grid(target: Path) -> list[list[dict[str, Any]]]:
 # Parts of an .xlsx that openpyxl does not read, so a load-and-save would
 # silently drop them: charts, pictures and shapes (DrawingML under
 # xl/drawings/, but not the vmlDrawing that carries cell comments, which it
-# keeps), embedded media, and pivot tables.
-_XLSX_UNKEPT_PREFIXES = ("xl/charts/", "xl/media/", "xl/pivotTables/", "xl/pivotCache/")
+# keeps), embedded media, pivot tables, threaded comments, slicers and
+# timelines, form controls, ActiveX, embedded objects and the data model.
+# What openpyxl drops from INSIDE a sheet (sparklines, x14 validation and
+# conditional formatting) it warns about on load:
+# sheet_workbook.load_xlsx turns that warning into the same refusal.
+_XLSX_UNKEPT_PREFIXES = (
+    "xl/charts/", "xl/media/", "xl/pivotTables/", "xl/pivotCache/",
+    "xl/threadedComments/", "xl/slicers/", "xl/slicerCaches/", "xl/timelines/",
+    "xl/timelineCaches/", "xl/ctrlProps/", "xl/activeX/", "xl/embeddings/", "xl/model/",
+    "xl/persons/",
+)
+_UNKEPT_SAVE = (
+    "{name} has charts, pictures or pivot tables (or other parts, such as sparklines) "
+    "the sheet editor can't keep, so it was not saved. Edit it in a spreadsheet app."
+)
 
 
 # What an .xlsx may hold once inflated before either sheet route opens it.
@@ -1042,11 +1151,16 @@ def _replace_atomically(target: Path, write: Callable[[Path], None]) -> None:
                 pass
 
 
-def _write_csv_grid(target: Path, rows: list[list[Optional[SheetCell]]]) -> None:
+def _write_csv_grid(
+    target: Path,
+    rows: list[list[Optional[SheetCell]]],
+    max_rows: int = _SHEET_MAX_ROWS,
+    max_cols: int = _SHEET_MAX_COLS,
+) -> None:
     """Write the grid as CSV. The editor only ever saw the first
-    ``_SHEET_MAX_ROWS`` x ``_SHEET_MAX_COLS``; anything the file holds
-    beyond that window is carried over as it was rather than dropped, and
-    a UTF-8 byte-order mark the file started with is kept."""
+    ``max_rows`` x ``max_cols``; anything the file holds beyond that
+    window is carried over as it was rather than dropped, and a UTF-8
+    byte-order mark the file started with is kept."""
     original: list[list[str]] = []
     bom = False
     _assert_sheet_save_fits(target)
@@ -1058,15 +1172,15 @@ def _write_csv_grid(target: Path, rows: list[list[Optional[SheetCell]]]) -> None
     def text(c: Optional[SheetCell]) -> str:
         return c.f if c and c.f else (c.v if c and c.v is not None else "")
 
-    window = _SHEET_MAX_ROWS if len(original) > _SHEET_MAX_ROWS else len(rows)
+    window = max_rows if len(original) > max_rows else len(rows)
     out: list[list[str]] = []
     for r in range(window):
-        part = [text(c) for c in rows[r][:_SHEET_MAX_COLS]] if r < len(rows) else []
-        beyond = original[r][_SHEET_MAX_COLS:] if r < len(original) else []
+        part = [text(c) for c in rows[r][:max_cols]] if r < len(rows) else []
+        beyond = original[r][max_cols:] if r < len(original) else []
         if beyond:
-            part = part + [""] * (_SHEET_MAX_COLS - len(part)) + beyond
+            part = part + [""] * (max_cols - len(part)) + beyond
         out.append(part)
-    out.extend(original[_SHEET_MAX_ROWS:])
+    out.extend(original[max_rows:])
 
     def write(path: Path) -> None:
         with path.open("w", encoding="utf-8-sig" if bom else "utf-8", newline="") as fh:
@@ -1081,7 +1195,7 @@ def _write_xlsx_grid(target: Path, rows: list[list[Optional[SheetCell]]]) -> Non
     first sheet, so formatting, column widths, merges, other sheets and
     everything past the window survive. (This used to build a brand-new
     workbook, which threw all of that away.) A new file starts blank."""
-    from openpyxl import Workbook, load_workbook
+    from openpyxl import Workbook
     from openpyxl.cell.cell import MergedCell
 
     wb = None
@@ -1089,13 +1203,9 @@ def _write_xlsx_grid(target: Path, rows: list[list[Optional[SheetCell]]]) -> Non
         _assert_xlsx_fits(target)
         _assert_sheet_save_fits(target)
         if _xlsx_unkept_parts(target):
-            raise HTTPException(
-                status_code=409,
-                detail=f"{target.name} has charts, pictures or pivot tables the sheet "
-                "editor can't keep, so it was not saved. Edit it in a spreadsheet app.",
-            )
+            raise HTTPException(status_code=409, detail=_UNKEPT_SAVE.format(name=target.name))
         try:
-            wb = load_workbook(target)
+            wb, lost = sheet_workbook.load_xlsx(target)
         except Exception as exc:  # noqa: BLE001 — whatever openpyxl could not read
             # Not a workbook this server can open (an .xls renamed, a damaged
             # file). The old save would have put a brand-new workbook in its
@@ -1106,6 +1216,8 @@ def _write_xlsx_grid(target: Path, rows: list[list[Optional[SheetCell]]]) -> Non
                 detail=f"{target.name} could not be read as a workbook, so it was not "
                 "saved. Open it in a spreadsheet app.",
             ) from exc
+        if lost:
+            raise HTTPException(status_code=409, detail=_UNKEPT_SAVE.format(name=target.name))
     if wb is None:
         wb = Workbook()  # a new name, or an empty file
     ws = wb.worksheets[0]
@@ -1182,7 +1294,8 @@ async def write_sheet(
         raise HTTPException(status_code=413, detail=f"more than {_SHEET_MAX_COLS} columns")
     with _usable_path(rel_path):
         _ensure_parent_dir(target)
-        await executors.run("sheets", _write_sheet_grid, target, req.rows)
+        async with _collab_saving(request, target):
+            await executors.run("sheets", _write_sheet_grid, target, req.rows)
         st = target.stat()
     _listing_changed()
     ext = target.suffix.lower()
@@ -1191,6 +1304,331 @@ async def write_sheet(
         size=st.st_size, modified_at=st.st_mtime,
         category=_doc_category(ext),
     )
+
+
+# ─── Univer sheet editor: the whole workbook (.xlsx / .csv) ─────────
+# web/static/sheet_editor.jsx (Univer, open-source core) reads and saves
+# the workbook model in sheet_workbook.py. The /sheet grid routes above
+# stay for the phone app's own grid editor and older clients.
+_WB_CSV_ROWS = sheet_workbook.WINDOW_ROWS
+_WB_CSV_COLS = sheet_workbook.WINDOW_COLS
+
+
+def _sheet_version(target: Path) -> Optional[str]:
+    """What a save compares against to tell "nobody else saved": the
+    file's modification time (ns) and size; None for no file."""
+    try:
+        st = target.stat()
+    except OSError:
+        return None
+    return f"{st.st_mtime_ns}-{st.st_size}"
+
+
+def _blank_workbook(name: str) -> dict[str, Any]:
+    return {
+        "workbook": {
+            "id": "domovoi-sheet", "name": name, "appVersion": "domovoi", "locale": "enUS",
+            "styles": {}, "sheetOrder": ["s0"],
+            "sheets": {"s0": {"id": "s0", "name": "Sheet1", "rowCount": 1000, "columnCount": 26,
+                              "cellData": {}}},
+        },
+        "truncated": [],
+    }
+
+
+_TOO_MANY_CELLS = (
+    "{name} is too big to edit here (more than {n:,} filled cells), so it opens "
+    "read-only and only part of it is shown. Edit it in a spreadsheet app."
+)
+
+
+def _read_workbook_model(target: Path) -> dict[str, Any]:
+    """The editor's view of a sheet file, and whether it may save it."""
+    ext = target.suffix.lower()
+    if ext == ".csv":
+        model = sheet_workbook.read_csv(target, _WB_CSV_ROWS, _WB_CSV_COLS)
+        model.update(format="csv", editable=True, why=None)
+        try:
+            _assert_sheet_save_fits(target)
+        except HTTPException as exc:
+            model.update(editable=False, why=str(exc.detail))
+        if model.pop("over_budget", False) and model["editable"]:
+            model.update(editable=False, why=_TOO_MANY_CELLS.format(
+                name=target.name, n=sheet_workbook.MAX_OPEN_CELLS))
+        return model
+    if ext != ".xlsx":
+        raise HTTPException(
+            status_code=415,
+            detail=f"{ext} isn't editable in the sheet editor (xlsx/csv only)",
+        )
+    if target.stat().st_size == 0:
+        model = _blank_workbook(target.stem)
+        model.update(format="xlsx", editable=True, why=None)
+        return model
+    _assert_xlsx_fits(target)
+    try:
+        _assert_sheet_save_fits(target)
+        too_big = None
+    except HTTPException as exc:
+        too_big = str(exc.detail)
+    try:
+        if too_big:
+            model = sheet_workbook.read_xlsx_values_only(target)
+        else:
+            model = sheet_workbook.read_xlsx(target)
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 — whatever openpyxl could not read
+        raise HTTPException(
+            status_code=415,
+            detail=f"{target.name} could not be read as a workbook. Download it and "
+            "open it in a spreadsheet app.",
+        ) from exc
+    why = too_big
+    if why is None and model.pop("over_budget", False):
+        why = _TOO_MANY_CELLS.format(name=target.name, n=sheet_workbook.MAX_OPEN_CELLS)
+    if why is None and (_xlsx_unkept_parts(target) or model.get("lost")):
+        why = (f"{target.name} has charts, pictures or pivot tables (or other parts, such as "
+               "sparklines) the sheet editor can't keep, so it opens read-only here. Edit it "
+               "in a spreadsheet app.")
+    model.pop("over_budget", None)
+    model.pop("lost", None)
+    if why is None:
+        why = _unsaveable_why(target, model["workbook"])
+    model.update(format="xlsx", editable=why is None, why=why)
+    return model
+
+
+def _unsaveable_why(target: Path, workbook: dict[str, Any]) -> Optional[str]:
+    """A file that opens editable must be one its own unchanged snapshot can
+    be saved from: run the save's checks on it (merges past the limits, a
+    sheet name or text a save refuses, ...) and, if they fail, say so and
+    open it read-only, rather than let someone edit what can't be saved."""
+    snap = dict(workbook)
+    snap["sheets"] = {sid: dict(sh, origin=sid) for sid, sh in (workbook.get("sheets") or {}).items()}
+    try:
+        sheet_workbook.validate_snapshot(snap)
+    except sheet_workbook.WorkbookRefused as exc:
+        return (f"{target.name} can't be saved from the sheet editor ({exc.detail}), so it "
+                "opens read-only here. Edit it in a spreadsheet app.")
+    return None
+
+
+def _read_workbook_json(target: Path, rel: str) -> bytes:
+    """The whole GET answer, built AND serialised in the sheets pool, so a
+    big workbook never costs the event loop its JSON encoding."""
+    import json as _json
+
+    version = _sheet_version(target)
+    model = _read_workbook_model(target)
+    body = {
+        "rel_path": rel,
+        "version": version,
+        "window": {"rows": sheet_workbook.WINDOW_ROWS, "cols": sheet_workbook.WINDOW_COLS},
+        **model,
+    }
+    return _json.dumps(body, separators=(",", ":"), allow_nan=False).encode("utf-8")
+
+
+def _parse_workbook_put(raw: bytes) -> dict[str, Any]:
+    """The PUT body, parsed and checked in the sheets pool (a big body is
+    seconds of json work that must not run on the event loop)."""
+    import json as _json
+
+    try:
+        body = _json.loads(raw)
+    except (ValueError, RecursionError):
+        raise HTTPException(status_code=400, detail="the body is not valid JSON") from None
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="the body must be an object")
+    base = body.get("base_version")
+    if base is not None and (not isinstance(base, str) or len(base) > 64):
+        raise HTTPException(status_code=400, detail="base_version must be text")
+    force = body.get("force", False)
+    if not isinstance(force, bool):
+        raise HTTPException(status_code=400, detail="force must be true or false")
+    device = body.get("device_id")
+    if device is not None and (not isinstance(device, str) or not 3 <= len(device) <= 64):
+        raise HTTPException(status_code=400, detail="device_id is not a device id")
+    sheet_workbook.validate_snapshot(body.get("workbook"))
+    return {"workbook": body["workbook"], "base_version": base, "force": force, "device_id": device}
+
+
+def _write_workbook_file(
+    target: Path, snapshot: dict[str, Any], base_version: Optional[str], force: bool,
+) -> Optional[str]:
+    """Save ``snapshot`` into ``target`` (in the one-thread sheets pool, so
+    the version check and the write can't interleave with another save).
+    Returns the new version."""
+    from openpyxl import Workbook
+
+    sheet_workbook.validate_snapshot(snapshot)  # before anything touches openpyxl
+    if not force and _sheet_version(target) != base_version:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "reason": "changed",
+                "message": f"{target.name} was saved from another device after you "
+                "opened it.",
+            },
+        )
+    ext = target.suffix.lower()
+    if ext == ".csv":
+        rows = sheet_workbook.csv_rows(snapshot)
+        grid = [[SheetCell(v=t) if t != "" else None for t in row] for row in rows]
+        _write_csv_grid(target, grid, _WB_CSV_ROWS, _WB_CSV_COLS)
+        return _sheet_version(target)
+    if ext != ".xlsx":  # pragma: no cover — _assert_sheet_editor_may_write ran first
+        raise HTTPException(status_code=415, detail=f"{ext} isn't editable in the sheet editor")
+    wb = None
+    if target.is_file() and target.stat().st_size > 0:
+        _assert_xlsx_fits(target)
+        _assert_sheet_save_fits(target)
+        if _xlsx_unkept_parts(target):
+            raise HTTPException(status_code=409, detail=_UNKEPT_SAVE.format(name=target.name))
+        try:
+            wb, lost = sheet_workbook.load_xlsx(target)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(
+                status_code=409,
+                detail=f"{target.name} could not be read as a workbook, so it was not "
+                "saved. Open it in a spreadsheet app.",
+            ) from exc
+        if lost:
+            raise HTTPException(status_code=409, detail=_UNKEPT_SAVE.format(name=target.name))
+    if wb is None:
+        wb = Workbook()
+    sheet_workbook.write_xlsx(wb, snapshot)
+    _replace_atomically(target, lambda path: wb.save(path))
+    return _sheet_version(target)
+
+
+@router.get("/workbook/{rel_path:path}", dependencies=DAILY)
+async def read_workbook(rel_path: str) -> Response:
+    """The whole workbook for the Univer sheet editor (every sheet, values,
+    formulas, formatting, merges, sizes, frozen panes), its ``version`` for
+    the save's stale check, and whether it may be saved here
+    (``editable``/``why``). At most ``MAX_OPEN_CELLS`` cells in all; a
+    bigger workbook opens read-only. 415 for types it can't open."""
+    target = _readable_target(rel_path)
+    if not target.exists() or not target.is_file():
+        raise HTTPException(status_code=404, detail=f"{rel_path} not found")
+    with _usable_path(rel_path):
+        body = await executors.run("sheets", _read_workbook_json, target, _rel_of(target))
+    return Response(content=body, media_type="application/json")
+
+
+@router.put("/workbook/{rel_path:path}", dependencies=DEVICE)
+async def write_workbook(request: Request, rel_path: str) -> dict[str, Any]:
+    """Save the editor's workbook into the file in place: only what changed
+    is written, so what the editor doesn't show survives (see
+    sheet_workbook). Body ``{workbook, base_version, force?, device_id?}``,
+    parsed and checked off the event loop before openpyxl sees it (400 for
+    a malformed snapshot, 413 past the size limits). 409 ``{reason:
+    "changed"}`` when someone else saved since ``base_version`` (send
+    ``force`` to overwrite), 409 for files with parts openpyxl can't keep
+    and for a rename that would break references, 415 for non-sheet
+    targets."""
+    target = _safe_target(rel_path)
+    _assert_saveable_name(target)
+    _assert_sheet_editor_may_write(target)
+    raw = await request.body()
+    req = await executors.run("sheets", _parse_workbook_put, raw)
+    await _assert_files_policy(request, req["device_id"])
+    with _usable_path(rel_path):
+        _ensure_parent_dir(target)
+        version = await executors.run(
+            "sheets", _write_workbook_file, target, req["workbook"], req["base_version"], req["force"],
+        )
+        st = target.stat()
+    _listing_changed()
+    ext = target.suffix.lower()
+    return {
+        "rel_path": _rel_of(target), "name": target.stem, "ext": ext,
+        "size": st.st_size, "modified_at": st.st_mtime,
+        "category": _doc_category(ext), "version": version,
+    }
+
+
+# Who else has a sheet open, so the editor can say "Kitchen tablet has this
+# sheet open too" instead of letting two people overwrite each other
+# unawares. In memory, per web process: it is a courtesy, not a lock (the
+# save's version check is what actually stops a silent overwrite). Only
+# files that exist are tracked, a bounded number of them, and the device is
+# the one the REQUEST identifies (X-Device-Id, the registration cookie;
+# files.caller_device_id), never a name the body asks for.
+_PRESENCE_TTL = 40.0
+_PRESENCE_MAX_PATHS = 500
+_PRESENCE_MAX_SESSIONS = 20
+_presence: dict[str, dict[str, tuple[Optional[str], float]]] = {}
+
+
+class PresenceRequest(BaseModel):
+    session_id: str = Field(..., min_length=8, max_length=64)
+    leaving: bool = False
+
+
+async def _device_names(device_ids: list[str]) -> dict[str, str]:
+    if not device_ids:
+        return {}
+    try:
+        from sqlalchemy import bindparam, text as sql_text
+        from web.backend.db import session_scope
+
+        async with session_scope() as s:
+            rows = (await s.execute(
+                sql_text("SELECT device_id, name FROM devices WHERE device_id IN :ids")
+                .bindparams(bindparam("ids", expanding=True)),
+                {"ids": device_ids},
+            )).all()
+        return {r[0]: r[1] for r in rows if r[1]}
+    except Exception:  # noqa: BLE001 — names are a nicety; never fail the ping
+        log.debug("presence: device names unavailable", exc_info=True)
+        return {}
+
+
+@router.post("/presence/{rel_path:path}", dependencies=DEVICE)
+async def sheet_presence(request: Request, rel_path: str, req: PresenceRequest) -> dict[str, Any]:
+    """Heartbeat from an open sheet editor (every ~15 s; ``leaving`` on
+    close). Answers who ELSE has the same file open, by device name. 404
+    for a file that isn't there (or isn't readable here); 429 when too
+    many sheets or sessions are open to track."""
+    import time
+
+    from web.backend.api.files import caller_device_id
+
+    target = _readable_target(rel_path)
+    if not target.is_file() or target.suffix.lower() not in _SHEET_EXTS:
+        raise HTTPException(status_code=404, detail=f"{rel_path} not found")
+    key = _rel_of(target)
+    now = time.monotonic()
+    for k in list(_presence):
+        live = {sid: v for sid, v in _presence[k].items() if now - v[1] < _PRESENCE_TTL}
+        if live:
+            _presence[k] = live
+        else:
+            del _presence[k]
+    here = _presence.get(key)
+    if req.leaving:
+        if here is not None:
+            here.pop(req.session_id, None)
+    else:
+        if here is None:
+            if len(_presence) >= _PRESENCE_MAX_PATHS:
+                raise HTTPException(status_code=429, detail="too many sheets open to track")
+            here = _presence[key] = {}
+        if req.session_id not in here and len(here) >= _PRESENCE_MAX_SESSIONS:
+            raise HTTPException(status_code=429, detail="too many editors on this sheet")
+        here[req.session_id] = (caller_device_id(request, None), now)
+    if here is None:
+        return {"others": []}
+    me = caller_device_id(request, None)
+    others = [dev for sid, (dev, _) in here.items() if sid != req.session_id and (dev is None or dev != me)]
+    names = await _device_names(sorted({d for d in others if d}))
+    if not here:
+        _presence.pop(key, None)
+    # One name per device: a page reloaded leaves its old session to time out.
+    return {"others": sorted({names.get(d or "", "another device") for d in others})}
 
 
 # ─── Exports (docx from markdown · csv/xlsx from sheets) ────────────
@@ -1268,10 +1706,16 @@ async def export_doc(rel_path: str, fmt: Literal["docx"] = Query("docx")) -> Res
     target = _readable_target(rel_path)
     if not target.exists() or not target.is_file():
         raise HTTPException(status_code=404, detail=f"{rel_path} not found")
-    if target.suffix.lower() not in (_MARKDOWN_EXTS | {".txt"}):
-        raise HTTPException(status_code=415, detail="docx export is for .md/.txt documents")
+    ext = target.suffix.lower()
+    if ext not in (_MARKDOWN_EXTS | _FORMATTED_EXTS | {".txt"}):
+        raise HTTPException(status_code=415, detail="docx export is for documents (.html/.md/.txt)")
+    if target.stat().st_size > _DOC_MAX_BYTES:
+        raise HTTPException(status_code=413, detail=f"{target.name} is too large to export")
     text_ = target.read_bytes().decode("utf-8", errors="replace")
-    data = _markdown_to_docx(text_)
+    if ext in _FORMATTED_EXTS:
+        data = await _word_copy(richdoc.document_body(text_), target.stem)
+    else:
+        data = _markdown_to_docx(text_)
     return Response(
         content=data,
         media_type=(
@@ -1335,6 +1779,287 @@ async def export_sheet(
     )
 
 
+# ─── The live document editor (.html / .md / .docx) ─────────────────
+# web/static/doc_editor.jsx (window.DomovoiDocEditor) opens three kinds of
+# file and saves each as itself:
+#
+#   * a formatted document (.html/.htm): the editor's content, sanitised
+#     HERE on every load and every save (domovoi.richdoc.sanitize_html),
+#     written as one self-contained page (richdoc.document_file);
+#   * markdown (.md): the editor sends its markdown serialisation;
+#   * Word (.docx): read in the browser (mammoth, from /raw); a save the
+#     person chose to keep as Word is converted here (richdoc.word).
+#
+# The co-editing saver (wf/doc-collab) writes the clean file through the
+# same PUT, so a document saved by one person or by five is the same file.
+
+#: The largest formatted document (pictures embedded) or markdown file the
+#: editor opens or saves. Pictures are downscaled to about 2000 px and
+#: compressed before they are embedded, so this is a lot of them.
+_DOC_MAX_BYTES = 32 * 1024 * 1024
+_DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+
+def _editor_format(ext: str) -> str:
+    ext = ext.lower()
+    if ext in _FORMATTED_EXTS:
+        return "html"
+    if ext in _MARKDOWN_EXTS:
+        return "md"
+    if ext == ".docx":
+        return "docx"
+    raise HTTPException(
+        status_code=415, detail=f"{ext or 'that file'} isn't opened by the document editor"
+    )
+
+
+class DocWriteRequest(BaseModel):
+    # The editor's content (body only, no page wrapper) for .html/.docx.
+    html: Optional[str] = Field(None, max_length=_DOC_MAX_BYTES)
+    # The editor's markdown, required for a .md target.
+    markdown: Optional[str] = Field(None, max_length=_DOC_MAX_BYTES)
+    device_id: Optional[str] = Field(None, min_length=3, max_length=64)
+    # An empty document may replace a file that says something only when the
+    # editor says the emptiness is real (the person deleted everything, or
+    # restored an empty version) and not a passing state (an editor that has
+    # not loaded yet, or is closing). See _assert_not_blanking.
+    allow_empty: bool = False
+
+
+# Elements that are content even with no text in them.
+_CONTENT_TAGS = re.compile(r"<\s*(img|figure|table|hr|video|audio|svg|object|embed|iframe)\b", re.I)
+_TAGS = re.compile(r"<[^>]*>")
+
+
+def _blank_html(html: str) -> bool:
+    """True when an editor body shows nothing: no text, no picture, table or
+    rule (one empty paragraph, a few line breaks)."""
+    import html as htmllib
+
+    if _CONTENT_TAGS.search(html or ""):
+        return False
+    text = htmllib.unescape(_TAGS.sub(" ", html or ""))
+    return not text.replace("\u00a0", " ").replace("\u200b", "").strip()
+
+
+def _file_says_something(target: Path, fmt: str) -> bool:
+    """Whether the file on disk has content worth protecting (unreadable or
+    missing: nothing to protect)."""
+    try:
+        if not target.is_file():
+            return False
+        if target.stat().st_size > _DOC_MAX_BYTES * 2:
+            return True
+        text = target.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    if fmt == "md":
+        return bool(text.strip())
+    return not _blank_html(richdoc.document_body(text))
+
+
+def _assert_not_blanking(target: Path, fmt: str, req: "DocWriteRequest") -> None:
+    """The last line of defence against an editor in a passing state (not
+    loaded yet, closing, a stale copy) writing an EMPTY document over a file
+    that says something: refused 409 unless the request carries
+    ``allow_empty`` (the editor sends it only for an emptiness the person
+    made). Word files are not checked (never co-edited; the Word choice is
+    an explicit save)."""
+    if req.allow_empty or fmt == "docx":
+        return
+    blank = (not (req.markdown or "").strip()) if fmt == "md" else _blank_html(req.html or "")
+    if blank and _file_says_something(target, fmt):
+        raise HTTPException(status_code=409, detail={
+            "reason": "empty_over_content",
+            "message": "Not saved: this would have replaced the document with an empty one.",
+        })
+
+
+class DocSaveAsRequest(DocWriteRequest):
+    # The document being saved under another format; the new file goes
+    # beside it, named after it, never over an existing file.
+    from_path: str = Field(..., min_length=1, max_length=1024)
+    format: Literal["html", "docx", "md"]
+
+
+class DocConvertRequest(BaseModel):
+    html: str = Field(..., max_length=_DOC_MAX_BYTES)
+    title: str = Field("", max_length=200)
+
+
+async def _word_copy(markup: str, title: str) -> bytes:
+    """``markup`` as Word, converted (and sanitised) in its own capped,
+    time-limited process (domovoi.richdoc.runner): a hostile document costs
+    that one conversion, never the web process or its documents pool."""
+    from domovoi.richdoc import runner
+
+    try:
+        return await runner.to_docx(markup, title)
+    except runner.ConvertFailed as e:
+        raise HTTPException(status_code=422, detail=str(e)) from None
+
+
+async def _doc_bytes(fmt: str, html_: Optional[str], markdown: Optional[str], title: str) -> bytes:
+    """What a save writes for ``fmt``, built from the request: never on the
+    event loop (the allowlist pass in the ``documents`` pool, Word in its
+    own process)."""
+    if fmt == "md":
+        if markdown is None:
+            raise HTTPException(status_code=422, detail="a markdown save needs `markdown`")
+        return markdown.encode("utf-8")
+    if html_ is None:
+        raise HTTPException(status_code=422, detail="this save needs `html`")
+    if fmt == "docx":
+        return await _word_copy(html_, title)
+    body = await executors.run("documents", richdoc.sanitize_html, html_)
+    data = richdoc.document_file(body, title).encode("utf-8")
+    if len(data) > _DOC_MAX_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"that document is larger than {_DOC_MAX_BYTES // _MIB} MB; "
+            "try smaller or fewer pictures",
+        )
+    return data
+
+
+def _assert_doc_overwritable(target: Path, fmt: str) -> None:
+    """Refuse a save over a file the editor could not have opened: the
+    mirror of :func:`_assert_text_editor_may_write` for this editor, so a
+    save is never an overwrite of something it never read."""
+    if not target.exists():
+        return
+    if not target.is_file():
+        raise HTTPException(status_code=415, detail=f"{_rel_of(target)} is a folder, not a document")
+    if target.stat().st_size > _DOC_MAX_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"{target.name} is larger than the {_DOC_MAX_BYTES // _MIB} MB the editor opens",
+        )
+    if fmt == "md":
+        try:
+            target.read_bytes().decode("utf-8")
+        except UnicodeDecodeError:
+            raise HTTPException(
+                status_code=415, detail=f"{target.name} isn't a text file; it was not overwritten"
+            ) from None
+    elif fmt == "docx" and not zipfile.is_zipfile(target):
+        raise HTTPException(
+            status_code=409, detail=f"{target.name} isn't a Word file; it was not overwritten"
+        )
+
+
+def _row(target: Path) -> DocumentRow:
+    st = target.stat()
+    ext = target.suffix.lower()
+    return DocumentRow(
+        rel_path=_rel_of(target), name=target.stem, ext=ext, size=st.st_size,
+        modified_at=st.st_mtime, category=_doc_category(ext),
+    )
+
+
+def _read_doc(target: Path, fmt: str) -> dict[str, Any]:
+    data = target.read_bytes()
+    if fmt == "html":
+        text_ = data.decode("utf-8", errors="replace")
+        return {"html": richdoc.sanitize_html(richdoc.document_body(text_))}
+    try:
+        return {"markdown": data.decode("utf-8-sig")}
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=415, detail=f"{target.name} isn't a text file") from None
+
+
+@router.get("/doc/{rel_path:path}", dependencies=DAILY)
+async def read_doc(rel_path: str) -> dict[str, Any]:
+    """A document for the editor: a formatted document's content, already
+    sanitised and without its page wrapper (``html``); a markdown file's
+    text (``markdown``); for a .docx, only its details (the browser reads
+    ``/raw`` and converts it)."""
+    target = _readable_target(rel_path)
+    if not target.exists() or not target.is_file():
+        raise HTTPException(status_code=404, detail=f"{rel_path} not found")
+    fmt = _editor_format(target.suffix)
+    with _usable_path(rel_path):
+        st = target.stat()
+        if st.st_size > _DOC_MAX_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"{target.name} is larger than the {_DOC_MAX_BYTES // _MIB} MB the editor opens",
+            )
+        out: dict[str, Any] = {
+            "rel_path": _rel_of(target), "name": target.stem, "ext": target.suffix.lower(),
+            "format": fmt, "size": st.st_size, "modified_at": st.st_mtime,
+        }
+        if fmt != "docx":
+            out.update(await executors.run("documents", _read_doc, target, fmt))
+    return out
+
+
+@router.put("/doc/{rel_path:path}", response_model=DocumentRow, dependencies=DEVICE)
+async def write_doc(request: Request, rel_path: str, req: DocWriteRequest) -> DocumentRow:
+    """Save the editor's document as the file it is (see the section
+    comment): .html sanitised and wrapped, .md as the editor's markdown,
+    .docx converted. Device tier and the Files write policy, like every
+    other save here; written through a temporary file, so a failed save
+    never leaves half a document."""
+    await _assert_files_policy(request, req.device_id)
+    target = _safe_target(rel_path)
+    _assert_saveable_name(target)
+    fmt = _editor_format(target.suffix)
+    with _usable_path(rel_path):
+        _assert_doc_overwritable(target, fmt)
+        _ensure_parent_dir(target)
+        data = await _doc_bytes(fmt, req.html, req.markdown, target.stem)
+        _assert_not_blanking(target, fmt, req)
+        # Co-editing (wf/doc-collab) refuses a stale co-editing save here,
+        # 409 before anything is written, and notes what was written.
+        async with _collab_saving(request, target):
+            _replace_atomically(target, lambda p: p.write_bytes(data))
+        row = _row(target)
+    _listing_changed()
+    return row
+
+
+@router.post("/doc-save-as", response_model=DocumentRow, dependencies=DEVICE)
+async def save_doc_as(request: Request, req: DocSaveAsRequest) -> DocumentRow:
+    """"Save as formatted document" (from a .md or a .docx) and "save as
+    Word": a NEW file beside ``from_path``, named after it, with `` (1)``
+    and so on when that name is taken. Nothing existing is overwritten."""
+    await _assert_files_policy(request, req.device_id)
+    source = _safe_target(req.from_path)
+    ext = {"html": ".html", "docx": ".docx", "md": ".md"}[req.format]
+    with _usable_path(req.from_path):
+        _ensure_parent_dir(source)
+        target = _unique_path(source.parent, f"{source.stem}{ext}")
+        target = _safe_target(_rel_of(target.resolve(strict=False)))
+        _assert_saveable_name(target)
+        data = await _doc_bytes(req.format, req.html, req.markdown, target.stem)
+        # Exclusive create: a file that appeared since _unique_path looked
+        # is left alone, and this save is refused rather than written over it.
+        async with _collab_saving(request, target):
+            try:
+                with open(target, "xb") as fh:
+                    fh.write(data)
+            except FileExistsError:
+                raise HTTPException(status_code=409, detail=f"{target.name} already exists") from None
+        row = _row(target)
+    _listing_changed()
+    return row
+
+
+@router.post("/convert/docx", dependencies=DAILY)
+async def convert_to_docx(req: DocConvertRequest) -> Response:
+    """The editor's content as a Word file, for "Download as Word": what is
+    on screen, saved or not. Nothing is written on the server."""
+    from web.backend.api.audio_serve import attachment_headers, safe_download_name
+
+    data = await _word_copy(req.html, req.title)
+    name = safe_download_name(req.title, fallback="Document")
+    return Response(
+        content=data, media_type=_DOCX,
+        headers={**attachment_headers(f"{name}.docx"), "Content-Length": str(len(data))},
+    )
+
+
 # ─── Upload files into documents_dir ────────────────────────────────
 @router.post(
     "/upload",
@@ -1382,6 +2107,7 @@ async def upload_documents(
 
     saved: list[str] = []
     skipped: list[str] = []
+    wrong_type = 0
 
     for up in files:
         raw = up.filename or "upload"
@@ -1404,6 +2130,12 @@ async def upload_documents(
         if unstorable is not None:
             skipped.append(f"{name}: {unstorable}")
             continue
+        # Documents only (doc_types.py): the rest goes in through Other.
+        refusal = documents_refusal(name)
+        if refusal:
+            skipped.append(f"{name}: {refusal}")
+            wrong_type += 1
+            continue
         data = await up.read()
         target = _unique_path(base, name)
         try:
@@ -1420,6 +2152,8 @@ async def upload_documents(
 
     if saved:
         _listing_changed()
+    if not saved and wrong_type and wrong_type == len(skipped):
+        raise HTTPException(status_code=415, detail="; ".join(skipped))
     if not saved:
         raise HTTPException(
             status_code=400,

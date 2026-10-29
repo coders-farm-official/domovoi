@@ -4,6 +4,118 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-28 — 1.0.0
+
+Version 1.0.0 (the app 1.0.0, versionCode 26102801; the Windows Setup
+1.0.0). The first full release. It holds every entry between this one and
+"1.0.0-rc3: audiobooks on the phone" (2026-10-20), which was the newest in
+1.0.0-rc3; nothing else changed in the release commit itself. The update
+applies ten migrations by itself, **V033** (printing) to **V042**
+(co-editing); there is nothing to run by hand. The plain-language summary
+is `docs/release/v1.0.0.md`.
+
+What a household notices:
+
+* **One Chat**, on the home server or on the phone itself, with history,
+  titles, search, documents, photos, letters and lookups you allow.
+* **Documents in chat:** ask about a PDF or Word file, summarize a long
+  one, write a resume or letter and save it, photograph a letter and ask
+  what to do, have a room read a document aloud or take a letter.
+* **Printing and scanning** on network printers, no drivers.
+* **New Documents and Sheets editors** with co-editing (documents),
+  history, 73 built-in fonts, photos, and Word, Markdown and PDF.
+* **Files:** an Other view, and whole folders can be uploaded.
+* **Rooms:** Wi-Fi setup that works with mesh and WPA2/WPA3 routers, a
+  phone room that warns before its battery runs out, quiet hours, a spare
+  Windows laptop through a double-click Setup.
+* **Windows:** one **Update Domovoi** button updates both halves of an
+  install. An install whose tray is from 1.0.0-rc3 or earlier updates its
+  Windows side once by hand (run the new Setup); from then on the button
+  does it.
+* **Container guard:** a repair by Setup, an update or a new room no
+  longer trips the guard over a rebuilt music player.
+* **Security:** the new editors, co-editing and printing each had a
+  written security review with its findings fixed before release, and
+  the Windows update only runs a Setup signed with Domovoi's own release
+  key.
+* **Also:** Settings in groups with one Health page, AI chat and questions
+  as an option, the help desk, rooms are called rooms everywhere, a
+  smaller (R8-shrunk) app.
+
+Known limits are in `docs/release/v1.0.0.md` and the entries below.
+
+## 2026-10-27 — Documents and spreadsheets: the new editors
+
+Web, dashboard and Android app. Database migrations **V041** (fonts) and
+**V042** (co-editing); one new Python dependency, **pycrdt** (MIT, in the
+lock files with hashes). Nothing to set up: the update applies both.
+
+* **A new document editor.** Documents → **New** → **Document** opens a
+  word processor in the page: headings, lists, checklists, tables, links,
+  colours, alignment, fonts and sizes, with Markdown shortcuts and paste
+  from Word and the web. New documents are formatted documents, one file
+  each with its pictures inside, shown in Files as "Document" with the
+  name and no extension. They save by themselves.
+* **Photos:** paste, drag in or pick one; resize, align, caption, crop
+  and rotate. Big photos are scaled down to about 2000 px before they go
+  in.
+* **Fonts:** 73 open-licence families come with Domovoi, served by the
+  server, so they work with no internet. An admin can add more for the
+  whole house in Settings → Documents → **Fonts** from the google/fonts
+  open-source collection (only OFL and Apache-licensed families; each
+  family's licence is checked first). That is a new outside request, and
+  it follows the internet setting: under **No** the button is greyed.
+* **Co-editing and history.** Several household devices can edit one
+  document at once, with names and cursors; a phone's offline edits join
+  in when it reconnects. **History** keeps versions (every few minutes
+  while people edit, and when the last one leaves) to open and restore.
+  This state lives in the database, never in the file: the file on disk
+  is always the clean latest version.
+* **Word, Markdown, PDF.** Download offers PDF (print or save as PDF),
+  Word and Markdown. Markdown files open in the same editor with font
+  and colour controls greyed (**Save as formatted document** makes a copy
+  that keeps them). Word files open in it too; saving one asks: keep it
+  as Word (complex layouts may shift) or save as a Document beside it.
+* **Spreadsheets** now open in a new sheet editor (Univer, Apache-2.0),
+  which keeps formulas, formatting, several sheets, merges, sizes and
+  frozen panes, saving into the same `.xlsx` file in place. Its limits:
+  * a workbook with charts, pictures, pivot tables or other parts the
+    editor can't keep opens **read-only**, so a save can never strip them;
+  * a sheet shows its first 5,000 rows and 100 columns; the rest of the
+    file is kept as it is;
+  * **no live co-editing for sheets.** A sheet says who else has it open,
+    and if two people save, the second chooses **Keep mine** or **Load
+    their version**: nobody is overwritten without knowing.
+  The old grid editor (x-spreadsheet) is gone from the dashboard; the
+  app's grid editor stays for sheets in a phone folder.
+* **The app** opens documents and sheets in the server's Documents in
+  the same editors (one in-app host for both). It hands the household
+  token to that page only after the server's identity check, checks every
+  request the page makes, and wipes the page's storage on close. Update
+  the app to get it.
+
+## 2026-10-27 — Files: Documents shows documents; everything else in that folder is under Other
+
+* **A new Files section, Other.** It is the same shared Documents folder,
+  not a new one: Documents now lists only documents, spreadsheets, PDFs,
+  drawings and text files, and Other lists everything else in it
+  (installers, APKs, archives, pictures and anything else that was saved
+  there). Nothing was moved or deleted; a file that used to show in
+  Documents and isn't a document now shows under Other. Files in Other can
+  be uploaded, downloaded, moved, renamed and deleted, with the same rules
+  as Documents, and are never opened, previewed, printed or read.
+* **Documents refuses what isn't a document.** Uploading, moving or copying
+  a non-document into Documents (the Files page, the app, or
+  `/api/documents`) is refused with a sentence naming where it goes
+  (Other, or Pictures/Music/Videos). A document uploaded through Other is
+  refused the same way, pointing to Documents. A folder upload that mixes
+  both puts each file in its own view and says how many went to the other
+  one. `GET /api/documents` no longer lists non-documents. A new **Text
+  file** named with no extension at all is made as `.txt`.
+* **API:** `GET /api/files/libraries` adds `core:other`, a `view` field on
+  each library and `document_exts`; see API_REFERENCE §3.13 "Documents and
+  Other".
+
 ## 2026-10-25 — A new room after a rebuilt music player no longer trips the container guard
 
 * **"The music player for <room> is running a different image than the

@@ -43,7 +43,7 @@ import logging
 import os
 import re
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable
 
@@ -659,10 +659,21 @@ class MediaLibrary:
     reindex_kind: str | None
     present: bool = True
     read_only_note: bool = False  # reserved; plugin RO libs set editable=False
+    # Documents and Other are two views of ONE folder (doc_types.py):
+    # "documents" lists document types, "other" everything else; None for
+    # every other library. Other keeps Documents' ``id`` server-side, so
+    # every rule keyed on the Documents library (the two-doors policy, the
+    # listing cache, co-editing follow-moves) applies to it unchanged; only
+    # :attr:`public_id` differs.
+    view: str | None = None
+
+    @property
+    def public_id(self) -> str:
+        return OTHER_LIBRARY_ID if self.view == "other" else self.id
 
     def public(self) -> dict[str, Any]:
         return {
-            "id": self.id,
+            "id": self.public_id,
             "label": self.label,
             "kind": self.kind,
             "icon": self.icon,
@@ -673,6 +684,7 @@ class MediaLibrary:
             "doc_editing": self.doc_editing,
             "reindex_kind": self.reindex_kind,
             "present": self.present,
+            "view": self.view,
         }
 
 
@@ -695,6 +707,20 @@ CORE_LIBRARIES: tuple[tuple[str, str, str, str, bool, bool, str, bool], ...] = (
 # :func:`web.backend.api.files.assert_documents_write_allowed`), so the id
 # is a constant rather than a string literal repeated in two routers.
 DOCUMENTS_LIBRARY_ID = "core:documents"
+
+# Other: the Documents folder's files that are not documents (doc_types.py).
+# Not a row of CORE_LIBRARIES (it has no folder of its own); the Files
+# router adds it beside Documents with :func:`other_view`.
+OTHER_LIBRARY_ID = "core:other"
+
+
+def other_view(documents: MediaLibrary) -> MediaLibrary:
+    """The Other view of the Documents library: same root, same ``id`` (so
+    the same write policy), download-only for its files."""
+    return replace(
+        documents, label="Other", icon="package", view="other",
+        doc_editing=False, reindex_kind=None,
+    )
 
 # reindex_kind values that trigger a post-write reindex.
 INDEXED_KINDS: frozenset[str] = frozenset({"music", "audiobooks", "podcasts"})
@@ -926,6 +952,7 @@ def build_core_libraries(allowed_under_config: set[Path]) -> list[MediaLibrary]:
                 importable=importable,
                 doc_editing=doc_editing,
                 reindex_kind=reindex,
+                view="documents" if lib_id == DOCUMENTS_LIBRARY_ID else None,
             )
         )
     return libs

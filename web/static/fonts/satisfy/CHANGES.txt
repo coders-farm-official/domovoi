@@ -1,0 +1,14 @@
+Changes made by Domovoi (scripts/vendor/fonts.py)
+===================================================
+
+The font files in this folder were made from google/fonts apache/satisfy at e7db6ca603fd
+as follows:
+
+* in a variable font, every axis except weight was fixed at its default;
+* each font was cut into a Latin and a Latin Extended part (characters
+  outside those ranges removed);
+* each part was saved as WOFF2.
+
+Nothing else was changed: the outlines, the names and the copyright
+notices inside the fonts are the originals'. The licence beside this file
+(LICENSE.txt) still applies to every file here.

@@ -9970,6 +9970,145 @@
         }
       }
     },
+    "/api/documents/workbook/{rel_path}": {
+      "get": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "Read Workbook",
+        "description": "The whole workbook for the Univer sheet editor (every sheet, values,\nformulas, formatting, merges, sizes, frozen panes), its ``version`` for\nthe save's stale check, and whether it may be saved here\n(``editable``/``why``). At most ``MAX_OPEN_CELLS`` cells in all; a\nbigger workbook opens read-only. 415 for types it can't open.",
+        "operationId": "read_workbook_api_documents_workbook__rel_path__get",
+        "parameters": [
+          {
+            "name": "rel_path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Rel Path"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "Write Workbook",
+        "description": "Save the editor's workbook into the file in place: only what changed\nis written, so what the editor doesn't show survives (see\nsheet_workbook). Body ``{workbook, base_version, force?, device_id?}``,\nparsed and checked off the event loop before openpyxl sees it (400 for\na malformed snapshot, 413 past the size limits). 409 ``{reason:\n\"changed\"}`` when someone else saved since ``base_version`` (send\n``force`` to overwrite), 409 for files with parts openpyxl can't keep\nand for a rename that would break references, 415 for non-sheet\ntargets.",
+        "operationId": "write_workbook_api_documents_workbook__rel_path__put",
+        "parameters": [
+          {
+            "name": "rel_path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Rel Path"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Write Workbook Api Documents Workbook  Rel Path  Put"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/documents/presence/{rel_path}": {
+      "post": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "Sheet Presence",
+        "description": "Heartbeat from an open sheet editor (every ~15 s; ``leaving`` on\nclose). Answers who ELSE has the same file open, by device name. 404\nfor a file that isn't there (or isn't readable here); 429 when too\nmany sheets or sessions are open to track.",
+        "operationId": "sheet_presence_api_documents_presence__rel_path__post",
+        "parameters": [
+          {
+            "name": "rel_path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Rel Path"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PresenceRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Sheet Presence Api Documents Presence  Rel Path  Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/documents/export/doc/{rel_path}": {
       "get": {
         "tags": [
@@ -10055,6 +10194,184 @@
             }
           }
         ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/documents/doc/{rel_path}": {
+      "get": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "Read Doc",
+        "description": "A document for the editor: a formatted document's content, already\nsanitised and without its page wrapper (``html``); a markdown file's\ntext (``markdown``); for a .docx, only its details (the browser reads\n``/raw`` and converts it).",
+        "operationId": "read_doc_api_documents_doc__rel_path__get",
+        "parameters": [
+          {
+            "name": "rel_path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Rel Path"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Read Doc Api Documents Doc  Rel Path  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "Write Doc",
+        "description": "Save the editor's document as the file it is (see the section\ncomment): .html sanitised and wrapped, .md as the editor's markdown,\n.docx converted. Device tier and the Files write policy, like every\nother save here; written through a temporary file, so a failed save\nnever leaves half a document.",
+        "operationId": "write_doc_api_documents_doc__rel_path__put",
+        "parameters": [
+          {
+            "name": "rel_path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Rel Path"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DocWriteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentRow"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/documents/doc-save-as": {
+      "post": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "Save Doc As",
+        "description": "\"Save as formatted document\" (from a .md or a .docx) and \"save as\nWord\": a NEW file beside ``from_path``, named after it, with `` (1)``\nand so on when that name is taken. Nothing existing is overwritten.",
+        "operationId": "save_doc_as_api_documents_doc_save_as_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DocSaveAsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentRow"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/documents/convert/docx": {
+      "post": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "Convert To Docx",
+        "description": "The editor's content as a Word file, for \"Download as Word\": what is\non screen, saved or not. Nothing is written on the server.",
+        "operationId": "convert_to_docx_api_documents_convert_docx_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DocConvertRequest"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -10248,13 +10565,204 @@
         }
       }
     },
+    "/api/collab/doc": {
+      "get": {
+        "tags": [
+          "collab"
+        ],
+        "summary": "Open Doc",
+        "description": "Map a Documents path to its co-editing id (made on first use) and say\nwhat this caller may do with it. ``ws`` is the socket path for the\ny-websocket provider (server URL ``/api/collab``, room = ``doc_id``).",
+        "operationId": "open_doc_api_collab_doc_get",
+        "parameters": [
+          {
+            "name": "path",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 1024,
+              "title": "Path"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Open Doc Api Collab Doc Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/collab/history": {
+      "get": {
+        "tags": [
+          "collab"
+        ],
+        "summary": "History",
+        "description": "The versions of a document, newest first: when, and who edited.",
+        "operationId": "history_api_collab_history_get",
+        "parameters": [
+          {
+            "name": "path",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 1024,
+              "title": "Path"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response History Api Collab History Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/collab/history/{version_id}": {
+      "get": {
+        "tags": [
+          "collab"
+        ],
+        "summary": "Version",
+        "description": "One version, for the preview: its Yjs state (base64, for an editor to\nrender read-only) and its plain text. The path must be the document the\nversion belongs to.",
+        "operationId": "version_api_collab_history__version_id__get",
+        "parameters": [
+          {
+            "name": "version_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Version Id"
+            }
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 1024,
+              "title": "Path"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Version Api Collab History  Version Id  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/collab/restore": {
+      "post": {
+        "tags": [
+          "collab"
+        ],
+        "summary": "Restore",
+        "description": "Restore a version as a NEW change (nothing in history is lost: the\nversion just before it is kept too). Device tier and the Files write\npolicy, as for a save. Everyone with the document open sees it arrive;\nthe editor that made the restore is then asked to save the file.",
+        "operationId": "restore_api_collab_restore_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RestoreRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Restore Api Collab Restore Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/files/libraries": {
       "get": {
         "tags": [
           "files"
         ],
         "summary": "List Libraries",
-        "description": "Rebuild the registry fresh and return the public records (root_path\nstripped), ordered core, plugin, removable.",
+        "description": "Rebuild the registry fresh and return the public records (root_path\nstripped), ordered core (Other, the Documents folder's non-documents,\nafter the last of them), plugin, removable.",
         "operationId": "list_libraries_api_files_libraries_get",
         "responses": {
           "200": {
@@ -10965,6 +11473,165 @@
         "responses": {
           "204": {
             "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/fonts": {
+      "get": {
+        "tags": [
+          "fonts"
+        ],
+        "summary": "List Fonts",
+        "description": "Every family the editors can use: the bundled set (``source:\n\"bundled\"``) and the ones an admin added (``\"fetched\"``), each with its\nfaces' URLs. ``internet_off`` tells an admin page why \"More fonts\" is\ngreyed. ``css`` is the bundled set's @font-face sheet.",
+        "operationId": "list_fonts_api_fonts_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response List Fonts Api Fonts Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/fonts/catalogue": {
+      "get": {
+        "tags": [
+          "fonts"
+        ],
+        "summary": "Catalogue",
+        "description": "The open-licence families an admin can add (OFL and Apache only),\neach marked ``installed`` when the house already has it.",
+        "operationId": "catalogue_api_fonts_catalogue_get",
+        "parameters": [
+          {
+            "name": "refresh",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Refresh"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Catalogue Api Fonts Catalogue Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/fonts/fetch": {
+      "post": {
+        "tags": [
+          "fonts"
+        ],
+        "summary": "Fetch Family",
+        "description": "Add one family for the whole house: check its licence, download its\nfiles, store them with the licence file, record it. One add at a time,\nwithin :data:`ADD_DEADLINE_SEC`, and only while the house is under its\ncaps (:data:`fonts_store.MAX_ADDED_FAMILIES` families,\n:data:`fonts_store.MAX_ADDED_BYTES` in all).",
+        "operationId": "fetch_family_api_fonts_fetch_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FetchBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Fetch Family Api Fonts Fetch Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/fonts/{slug}": {
+      "delete": {
+        "tags": [
+          "fonts"
+        ],
+        "summary": "Remove Family",
+        "description": "Remove an added family: its row and its folder. Documents that use\nit show it in a fallback face, marked \"not installed\", until it is\nadded again. The bundled set can't be removed.",
+        "operationId": "remove_family_api_fonts__slug__delete",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Remove Family Api Fonts  Slug  Delete"
+                }
+              }
+            }
           },
           "422": {
             "description": "Validation Error",
@@ -18736,6 +19403,141 @@
         "title": "DisplayRequest",
         "description": "Drive a video satellite's screen from the drawer's Display block."
       },
+      "DocConvertRequest": {
+        "properties": {
+          "html": {
+            "type": "string",
+            "maxLength": 33554432,
+            "title": "Html"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Title",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "html"
+        ],
+        "title": "DocConvertRequest"
+      },
+      "DocSaveAsRequest": {
+        "properties": {
+          "html": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 33554432
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Html"
+          },
+          "markdown": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 33554432
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Markdown"
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64,
+                "minLength": 3
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id"
+          },
+          "allow_empty": {
+            "type": "boolean",
+            "title": "Allow Empty",
+            "default": false
+          },
+          "from_path": {
+            "type": "string",
+            "maxLength": 1024,
+            "minLength": 1,
+            "title": "From Path"
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "html",
+              "docx",
+              "md"
+            ],
+            "title": "Format"
+          }
+        },
+        "type": "object",
+        "required": [
+          "from_path",
+          "format"
+        ],
+        "title": "DocSaveAsRequest"
+      },
+      "DocWriteRequest": {
+        "properties": {
+          "html": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 33554432
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Html"
+          },
+          "markdown": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 33554432
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Markdown"
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64,
+                "minLength": 3
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id"
+          },
+          "allow_empty": {
+            "type": "boolean",
+            "title": "Allow Empty",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "DocWriteRequest"
+      },
       "DocumentRow": {
         "properties": {
           "rel_path": {
@@ -19021,6 +19823,21 @@
         ],
         "title": "FavoriteNowPlayingResult",
         "description": "Result of favoriting whatever is currently playing in a room.\n\n``kind`` tells the dashboard what happened so it can render the\nappropriate toast: ``library`` = an existing library row's flag was\nflipped (returns ``track_id``); ``acquisition`` = an external\nstream was queued into the generic media-acquisition queue\n(returns ``acquisition_id`` + the core's user-facing ``message``,\nwhich carries the graceful-absence copy when no provider plugin is\ninstalled)."
+      },
+      "FetchBody": {
+        "properties": {
+          "family": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Family"
+          }
+        },
+        "type": "object",
+        "required": [
+          "family"
+        ],
+        "title": "FetchBody"
       },
       "FilesBlock": {
         "properties": {
@@ -21932,6 +22749,26 @@
         "type": "object",
         "title": "PrepareRequest"
       },
+      "PresenceRequest": {
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 8,
+            "title": "Session Id"
+          },
+          "leaving": {
+            "type": "boolean",
+            "title": "Leaving",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "session_id"
+        ],
+        "title": "PresenceRequest"
+      },
       "PreviewBody": {
         "properties": {
           "word": {
@@ -22561,6 +23398,43 @@
         },
         "type": "object",
         "title": "ReportBody"
+      },
+      "RestoreRequest": {
+        "properties": {
+          "path": {
+            "type": "string",
+            "maxLength": 1024,
+            "title": "Path"
+          },
+          "version_id": {
+            "type": "integer",
+            "title": "Version Id"
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64,
+                "minLength": 3
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id"
+          },
+          "allow_empty": {
+            "type": "boolean",
+            "title": "Allow Empty",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "path",
+          "version_id"
+        ],
+        "title": "RestoreRequest"
       },
       "RoomBattery": {
         "properties": {

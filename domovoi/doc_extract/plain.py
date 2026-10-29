@@ -1,4 +1,4 @@
-"""Plain text (.txt) and markdown (.md).
+"""Plain text (.txt), markdown (.md) and formatted documents (.html).
 
 UTF-8 (a BOM dropped), UTF-16 by its BOM, cp1252 as the fallback. A
 markdown ``#`` line is a heading; paragraphs are separated by blank lines
@@ -57,3 +57,25 @@ def extract(path: Path, markdown: bool, max_chars: int | None = None) -> dict[st
     if max_chars and len(text) > max_chars:
         text, more = text[:max_chars], True
     return {"parts": blocks_to_parts(blocks_of(text, markdown)), "encoding": enc, "truncated": more}
+
+
+#: A formatted document's pictures are in the file (data: URIs), so its
+#: size says little about its text; this much of it is parsed at most.
+HTML_MAX_BYTES = 64 * 1024 * 1024
+
+
+def extract_html(path: Path, max_chars: int | None = None) -> dict[str, Any]:
+    """A formatted document (the Documents editor's .html, or any HTML
+    page) as markdown-shaped text (domovoi.richdoc.html_to_markdown: the
+    headings, lists, checklists, tables and captions; no pictures, nothing
+    run or fetched), then read like a markdown file."""
+    from domovoi.richdoc import html_to_markdown
+
+    with path.open("rb") as f:
+        raw = f.read(HTML_MAX_BYTES)
+    markup, enc = decode_text(raw)
+    text = normalize(html_to_markdown(markup))
+    more = False
+    if max_chars and len(text) > max_chars:
+        text, more = text[:max_chars], True
+    return {"parts": blocks_to_parts(blocks_of(text, True)), "encoding": enc, "truncated": more}

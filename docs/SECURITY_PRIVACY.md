@@ -1694,8 +1694,65 @@ the other:
   extension as well as the media type: a name that is a document's
   (`.html`, `.svg`, `.rss`, `.xsl`, …) is a download even under a type
   that would otherwise be allowed.
-- **Rendered markdown is sanitised before it reaches the page.** The
-  document editor's preview runs `marked` output through
+- **Documents are sanitised on the server, on every load and every
+  save.** The Documents editor's formatted documents are `.html` files,
+  and an `.html` file in Documents can come from anywhere. The server
+  rebuilds each one from an allowlist (`domovoi/richdoc/sanitize.py`):
+  only the tags and attributes the editor itself writes, `style` cut down
+  to the properties the editor sets on that element (colour, highlight,
+  font, size, alignment, widths) with each value matched whole (no
+  `url()`, `expression()`, escapes or comments), links to `http(s)`,
+  `mailto` and `tel` only, and pictures only as embedded raster
+  `data:image/…` (never SVG, never an outside address, so opening a
+  document fetches nothing from anywhere). Scripts, styles, frames,
+  objects, SVG and MathML go with their contents. The browser applies
+  the same allowlist before anything reaches the editor
+  (`sanitizeDocumentHtml` in `web/static/sanitize_html.js`), and the
+  editor's schema keeps only what it knows. A picture pasted from a web
+  page is copied into the document when the site allows it and dropped
+  when it doesn't. The raw file is still only ever served as a download
+  with the sandbox headers (below). `domovoi/tests/test_documents_formatted.py`
+  holds the cases. Two documented limits:
+  - The phone app's editor checks every request its page makes against
+    the server's verified identity, but Android doesn't show it WebSocket
+    connections, so the co-editing socket opened from that page isn't
+    re-checked on its own. The page itself (and the token it holds, in
+    memory only) was handed over only after the identity check.
+  - Sanitising runs in linear time, but a pathological 32 MB document
+    (deeply nested, all markup) still takes about 20 seconds of the
+    documents pool on load or save; a real document takes about a second.
+    Word copies run in their own time-limited process instead.
+- **Co-editing keeps the Documents tiers and its own state apart from the
+  file.** The co-editing socket (`/api/collab/{doc_id}`,
+  `web/backend/api/collab.py`) admits the same household devices the
+  Documents routes do; a session that rests only on the dashboard cookie,
+  a `?device_token=` link or a blocked device is view-only (its edits are
+  dropped), and the `Host` and `Origin` checks guard against DNS
+  rebinding. The shared state and version history live in Postgres
+  (V042: `collab_docs`, `collab_updates`, `collab_snapshots`), never in
+  the file, and go when the document is deleted. Each open document is
+  held by its own worker subprocess, the only place pycrdt runs, behind
+  a pre-filter that refuses malformed or deeply nested updates; a worker
+  that crashes costs only the update that did it, and a document whose
+  stored state breaks the worker twice opens single-editor from its file.
+  Sizes, rates and the number of open documents, editors and viewers are
+  capped (API reference §3.14a). People editing together see each other's
+  names and cursors: the presence name is the one the server gives the
+  device, never one a client sets.
+- **Spreadsheets are checked on the server and never co-edited.** The
+  sheet editor's whole-workbook save (`PUT /api/documents/workbook/…`,
+  `web/backend/api/sheet_workbook.py`) is parsed and validated in the
+  documents pool, not the web process: 400 for a malformed snapshot, 413
+  past 50 sheets, 250,000 cells or 5,000 merges, and a 32 MiB transport
+  limit. A workbook with parts openpyxl would drop on a load-and-save
+  (charts, pictures, pivot tables, slicers, embedded objects, …) opens
+  read-only and both sheet save routes refuse it, so a save never strips
+  them. A save from a stale copy is refused (409) unless the person
+  chooses to keep theirs. "Also open" presence (`POST
+  /api/documents/presence/…`) is kept in memory only, names the other
+  devices that have the sheet open, and is capped per sheet and in all.
+- **Rendered markdown is sanitised before it reaches the page.** Chat
+  replies and other markdown previews run `marked` output through
   `web/static/sanitize_html.js`, an allowlist-and-escape pass that keeps
   markdown's own elements, drops every `on*` attribute, drops
   `<script>`/`<style>`/`<iframe>` with their contents, and accepts only
@@ -2222,6 +2279,7 @@ outbound traffic, each with its own off switch:
 | **Web answers** — "check that online", "double-check that", the weather: search queries through the local SearXNG container to public search engines. **The container also fetches on its own every time it starts**, with no query sent: the ClearURLs rule lists (rules1/rules2.clearurls.xyz, raw.githubusercontent.com), a Wikidata SPARQL query, and the radio-browser server list | While the `searxng` container runs. It follows the internet answer: started when **Yes** or **Sometimes** is saved (and by the dev scripts and the Linux update unit), stopped on **No** and at every core start while the answer is No (an answer set by hand in `.env` is never "saved") — which is why **No** stops it rather than only refusing searches; never started at boot | Answer **No**, or stop the container (`docker stop domovoi-searxng`); `DOMOVOI_MANAGE_SEARXNG=0` (process environment) stops Domovoi starting it. Under `never` no query is sent even if it runs, but its startup fetches would be, so leave it stopped. |
 | **Chat lookups** — a chat's search words to the local SearXNG (Wikipedia, Wikidata, then its other engines), Wikipedia's own API, the household's own SearXNG or Brave Search (with its key, in `X-Subscription-Token`, to Brave only), and a page a person names (`domovoi/lookup_web.py`, [below](#looking-things-up-chat-lookups)) | Only after the person allows it on the chat's card, or in a chat set to "Allow in this chat", or with **Always allow internet** on (off by default) | Leave **Always allow internet** off and answer **Not now**. Under `never` nothing is sent: the route refuses with 409, and only the manual and an offline library answer. |
 | **Podcasts** — the subscribed feeds and the episode files they point at; each show's artwork, fetched once by the server; a show's name to Apple's iTunes search when you subscribe by voice or use Discover | Only for shows you subscribed to, when the poller runs (on for the **Yes** answer, off otherwise) or you press "poll now"; the search only when you ask | `podcast_feed_poller_enabled = false`; unsubscribe from a show to stop fetching it. The browser and the phone load artwork from the server, never from the publisher. |
+| **More fonts** — the list of open-licence font families (GitHub's API for the google/fonts repository's folder listing, then each family's `METADATA.pb` from raw.githubusercontent.com) and, for a family an admin adds, its licence file and font files (`web/backend/api/fonts.py`). Nothing about the house is sent: no document, no name, only the requests for those public files | Only when an admin opens "More fonts" (Settings → Documents → Fonts; the list is then kept for a week) or adds a family | Don't use it: the bundled fonts never need the internet. Under `never` the button is greyed and the server refuses with the turned-off reason before asking GitHub. |
 | **Library enricher** — audio fingerprints (Chromaprint → AcoustID, with the AcoustID key, over HTTPS since 2026-10-17: pyacoustid's own default is plain HTTP) and metadata lookups (MusicBrainz) to identify/clean up untagged music files. Settings → Advanced's **test the key** sends the key with one made-up fingerprint (`library_enricher.KEY_CHECK_FINGERPRINT`, never one of your files) | Background, when unenriched tracks exist; the test only when an admin presses it, never under **No** | `library_enricher_enabled = false`. Note: fingerprints of your files go out; the files themselves never do. |
 | **MusicBrainz alias lookup** — artist names from your library are searched on musicbrainz.org for the spoken names people use for them ("Tec 9" for Tech N9ne), so a spoken request finds a stylized name. The names sent are the library's artist credits, **including the "Artist" part of an untagged file named "Artist - Title"** (a home recording "Grandma Edith - Happy Birthday" would send "Grandma Edith"). Only stage names are kept: legal names, a person's names sharing a word with one, non-English and non-Latin forms and, for a person, names that don't sound like the stage name are dropped and never stored; for a band (a MusicBrainz group) its other names are kept, which may include members' or family names ("The Farriss Brothers" for INXS) (`domovoi/workers/library_alias_fetch.py`) | **Only if you opt in** — off by default. Then one search per artist (a library of a few thousand tracks takes on the order of an hour and a half the first time), one request a second through the same paced client as every other MusicBrainz call, only while the connectivity probe reports online, and afterwards only for artists added to the library | On when the internet answer is **Yes** or **Sometimes**; set `music_alias_fetch_enabled` off (Settings → Advanced → Library → "Look up other names on MusicBrainz") to keep it off anyway; switching it off stops the fetch before its next request. A fetched name can be removed from a track's "also called" list by anyone and is never fetched back. |
 | **LRCLIB synced lyrics** — for library songs with no timed lyrics of their own (no `.lrc` next to them, none in their tags), the song's **title, artist credit and primary performer, album and length in seconds** go to lrclib.net, which answers with its lyrics, timed when it has them (`domovoi/workers/lyrics_fetch.py`, `domovoi/clients/lrclib.py`; [Lyrics](#lyrics-household-tier-only) above) | **Only if you opt in** — on when the internet answer is **Yes** or **Sometimes**, off for **No** and while unanswered. Then about one request a second (several hours the first time for 5,000 songs, about a night, longer when LRCLIB asks it to slow down), only while the connectivity probe reports online; a song LRCLIB didn't have is asked about again after 4, 8 and then 16 weeks | Set `lyrics_lrclib_enabled` off (Settings → Advanced → Library → "Synced lyrics from LRCLIB") to keep it off anyway; switching it off stops the lookup before its next request. Lyrics in `.lrc` files and in the songs' own tags never need it. |
@@ -2291,7 +2349,7 @@ network:
   the trainer image and downloads its data, and every training), the
   library enricher
   (AcoustID, Shazam, MusicBrainz), the MusicBrainz name lookup, the
-  LRCLIB lyrics lookup, Apple's iTunes search, the radio plugin's
+  LRCLIB lyrics lookup, Apple's iTunes search, "More fonts", the radio plugin's
   directory, simulcast and FCC lookups and its Shazam step,
   `git fetch` / `pull`, plugin downloads from GitHub
   (and PyPI: pip runs with `--no-index`), the satellite media cache

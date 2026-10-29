@@ -36,13 +36,6 @@ internal fun docRawPath(rel: String): String = "/api/documents/raw/" + Uri.encod
 
 internal fun docTextPath(rel: String): String = "/api/documents/text/" + Uri.encode(rel, "/")
 
-/** Open the /raw endpoint with the system viewer/downloader. */
-internal fun openRawDoc(context: Context, app: AppContainer, rel: String) {
-    runCatching {
-        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(app.api.absolute(docRawPath(rel)))))
-    }
-}
-
 /** modified_at arrives as unix seconds — bridge it into the shared relTime. */
 internal fun relFromEpochSec(sec: Double?): String {
     val s = sec ?: return "—"

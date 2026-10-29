@@ -963,7 +963,7 @@ Any room can read a document from your household's Documents out loud.
 
 ### Files and photos
 
-Every library in one place: Music, Documents, Pictures, Videos,
+Every library in one place: Music, Documents, Other, Pictures, Videos,
 Podcasts, Audiobooks, and plugged-in drives.
 
 **How to**
@@ -978,6 +978,13 @@ Podcasts, Audiobooks, and plugged-in drives.
 
 **Also**
 
+- Documents and **Other** are the same shared folder. Documents shows
+  just its documents, spreadsheets and PDFs. Other shows everything else
+  in it: installers, APKs, archives, anything that isn't a document,
+  picture, song or video, kept and shared as it is. Files in Other can
+  only be downloaded, moved, renamed or deleted; nothing opens them.
+- Upload documents in Documents and everything else in Other. A folder
+  you upload can mix both: each file shows where it belongs.
 - Domovoi keeps two folders of its own in Documents: **Scans**, from the
   scanner, named by date, and **From Chat**, for drafts and letters saved
   from Chat.
@@ -986,13 +993,53 @@ Podcasts, Audiobooks, and plugged-in drives.
 
 [More detail](docs/FAQ.md#can-i-move-files-around-without-the-command-line)
 
-### Documents, sheets and drawings
+### Documents and spreadsheets
 
 **How to:** [Files](#files) → Documents → **New** → **Document**,
-**Spreadsheet**, **Drawing** or **Text file**. Each opens in its editor;
-press **Save**.
+**Spreadsheet**, **Drawing** or **Text file**. Documents and spreadsheets
+save by themselves as you type.
 
-**App:** opens text files and sheets from Files.
+**Documents**
+
+- **Write** like a word processor: headings, bold and italics, lists and
+  checklists, tables, links, colours, alignment, font and size. Markdown
+  shortcuts work too (`#` for a heading, `-` for a list).
+- **Photos:** paste, drag in or pick a photo. Drag its corner to resize,
+  set it left, centre or right, **Add a caption**, or **Crop & rotate**.
+- **Fonts:** about 70 come with Domovoi and work with no internet. *(admin)*
+  [Settings → Documents → Fonts](#settings/fonts) adds more for the
+  whole house from a free, open-licence collection, when the internet
+  setting allows it.
+- **Together:** several people can edit one document at once, each with
+  their own coloured cursor and name. A phone's changes made offline join
+  in when it reconnects.
+- **History:** **History** lists earlier versions; open one and
+  **Restore** it. Nothing is lost: what it said before comes back as a
+  version too.
+- **Download:** **PDF** (print or save as PDF), **Word (.docx)** or
+  **Markdown (.md)**.
+- **Markdown files** open in the same editor. Fonts, colours and sizes
+  are greyed out there; **Save as formatted document** makes a copy that
+  keeps them.
+- **Word files** open in it too. On save it asks: **Keep as Word**
+  (complex Word layouts may shift) or **Save as Document**, a copy that
+  keeps everything you see.
+
+**Spreadsheets**
+
+- Formulas, formatting, several sheets, sort and filter, in `.xlsx` or
+  `.csv`.
+- **One person at a time:** if someone else has the sheet open, it says
+  so. If you both save, the second person chooses **Keep mine** or
+  **Load their version**; nobody is overwritten without knowing.
+- **Read-only:** a workbook with charts, pictures, pivot tables or other
+  parts the editor can't keep opens read-only, so saving can't damage it.
+  Download it to edit it elsewhere.
+- **Big sheets:** only the first 5,000 rows and 100 columns of a sheet
+  show; the rest of the file is kept as it is.
+
+**App:** documents and spreadsheets in the server's Documents open in
+the same editors.
 
 **Also:** to ask about a document, see [Ask about a
 document](#node:ask-document); to have a room read one out, see [Read it

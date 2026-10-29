@@ -69,6 +69,28 @@ class FileKindsTest {
         assertNull(defaultHomeLibrary(FileEntry(name = "n.md"), listOf(lib("core:music", editable = false))))
     }
 
+    @Test fun documentsHoldDocumentsAndOtherTheRest() {
+        for (n in listOf("a.md", "b.html", "c.docx", "d.odt", "e.rtf", "f.xlsx", "g.csv", "h.pdf", "i.excalidraw", "j.txt")) {
+            assertEquals(n, true, isDocumentName(n))
+        }
+        for (n in listOf("setup.exe", "app.apk", "x.zip", "p.jpg", "s.mp3", "README")) {
+            assertEquals(n, false, isDocumentName(n))
+        }
+    }
+
+    @Test fun sendToHomePutsWhatIsNotADocumentInOther() {
+        val libs = listOf(lib("core:music"), lib("core:documents"), lib(OTHER_LIBRARY_ID), lib("core:pictures"))
+        assertEquals(OTHER_LIBRARY_ID, defaultHomeLibrary(phoneEntry("app.apk"), libs))
+        assertEquals(OTHER_LIBRARY_ID, defaultHomeLibrary(phoneEntry("backup.zip"), libs))
+        assertEquals("core:documents", defaultHomeLibrary(phoneEntry("lease.pdf"), libs))
+        assertEquals("core:pictures", defaultHomeLibrary(phoneEntry("p.jpg"), libs))
+        // No Videos library: a video goes to Other, never to Documents (which refuses it).
+        assertEquals(OTHER_LIBRARY_ID, defaultHomeLibrary(phoneEntry("clip.mkv"), libs))
+        // A server older than Other: Documents is its one door for anything.
+        val older = listOf(lib("core:documents"))
+        assertEquals("core:documents", defaultHomeLibrary(phoneEntry("app.apk"), older))
+    }
+
     private fun phoneEntry(name: String) = FileEntry(name = name, kind = fileKind(name, false))
 
     @Test fun aPhoneVideoGoesToTheServersVideosLibrary() {
@@ -107,5 +129,52 @@ class FileKindsTest {
         assertEquals(true, libraryTakesFiles("phone:folder:abc"))
         assertEquals(true, libraryTakesFiles("documents"))
         assertEquals(true, libraryTakesFiles(null))
+    }
+    /** wf/editors-followups: formatted documents read as "Document" by name,
+     *  as on the dashboard (files.jsx filesDisplayName); nothing else changes. */
+    @Test fun formattedDocumentsShowTheirNameOnly() {
+        assertEquals("Shopping list", displayName("Shopping list.html"))
+        assertEquals("Old letter", displayName("Old letter.HTM"))
+        assertEquals("v1.2 notes", displayName("v1.2 notes.html"))
+        assertEquals("notes.md", displayName("notes.md"))
+        assertEquals("Letter.docx", displayName("Letter.docx"))
+        assertEquals("site.html", displayName("site.html", isDir = true))
+        assertEquals(".html", displayName(".html"))
+        assertEquals(true, isFormattedDocument("a.html"))
+        assertEquals(true, isFormattedDocument("a.htm"))
+        assertEquals(false, isFormattedDocument("a.md"))
+        assertEquals(false, isFormattedDocument("site.html", isDir = true))
+    }
+
+    private fun verb(
+        name: String,
+        isDir: Boolean = false,
+        editsInApp: Boolean = false,
+        docEditor: Boolean = false,
+        downloadOnly: Boolean = false,
+        opensByDownload: Boolean = false,
+    ) = primaryVerb(name, fileKind(name, isDir), isDir, editsInApp, docEditor, downloadOnly, opensByDownload)
+
+    /** The row's tap label says what onEntryPrimary does, library by library. */
+    @Test fun primaryVerbMatchesTheTap() {
+        // Folders always open, even in Other.
+        assertEquals("Open", verb("Taxes", isDir = true, downloadOnly = true, opensByDownload = true))
+        // Server Documents: the document editor, the sheet editor, the raw file.
+        assertEquals("Edit", verb("letter.docx", editsInApp = true, docEditor = true))
+        assertEquals("Edit", verb("budget.xlsx", editsInApp = true))
+        assertEquals("Open", verb("scan.pdf", editsInApp = true))
+        // Other: everything downloads, images too.
+        assertEquals("Download", verb("archive.zip", downloadOnly = true, opensByDownload = true))
+        assertEquals("Download", verb("photo.jpg", downloadOnly = true, opensByDownload = true))
+        // Pictures / Music / plugin libraries on the server.
+        assertEquals("View", verb("photo.jpg", opensByDownload = true))
+        assertEquals("Download", verb("song.flac", opensByDownload = true))
+        // A phone folder: editors in the app, media in the phone's player.
+        assertEquals("Edit", verb("notes.md", editsInApp = true))
+        assertEquals("Play", verb("song.mp3", editsInApp = true))
+        assertEquals("Play", verb("clip.mkv"))
+        assertEquals("Open", verb("letter.docx", editsInApp = true))
+        // Without in-app editing a text file opens in another app.
+        assertEquals("Open", verb("notes.md"))
     }
 }
