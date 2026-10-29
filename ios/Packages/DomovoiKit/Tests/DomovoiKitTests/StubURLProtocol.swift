@@ -82,9 +82,15 @@ final class StubURLProtocol: URLProtocol {
     }
 
     /// A session that answers from this stub and from nothing else.
-    static func session(_ configure: (URLSessionConfiguration) -> Void = { _ in }) -> URLSessionConfiguration {
+    /// `timeout` is there so a test that expects nothing to answer does not
+    /// spend the client's real 60 s finding that out.
+    static func session(
+        timeout: TimeInterval? = nil,
+        _ configure: (URLSessionConfiguration) -> Void = { _ in }
+    ) -> URLSessionConfiguration {
         let configuration = DomovoiClient.defaultConfiguration()
         configuration.protocolClasses = [StubURLProtocol.self]
+        if let timeout { configuration.timeoutIntervalForRequest = timeout }
         configure(configuration)
         return configuration
     }
@@ -127,6 +133,13 @@ final class StubURLProtocol: URLProtocol {
             proposed.allHTTPHeaderFields = request.allHTTPHeaderFields
             proposed.httpBody = request.httpBody
             client.urlProtocol(self, wasRedirectedTo: proposed, redirectResponse: response)
+            // And then finish, as a `URLProtocol` must: the loading system
+            // has no way to tell a protocol instance "carry on, the delegate
+            // declined". Measured on 2026-10-28: a stub that signalled the
+            // redirect and then returned without finishing left the task
+            // hanging until `timeoutIntervalForRequest` expired, 60 s later.
+            client.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client.urlProtocolDidFinishLoading(self)
             return
         }
 

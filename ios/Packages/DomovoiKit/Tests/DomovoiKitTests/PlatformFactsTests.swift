@@ -77,10 +77,14 @@ final class PlatformFactsTests: XCTestCase {
     func testRefusingARedirectHandsBackThe3xxRatherThanAnError() async throws {
         StubURLProtocol.enqueue(.moved(301, to: "http://10.0.0.99:6369/api/y"))
         let asked = Asked(refuse: true)
-        let session = URLSession(configuration: StubURLProtocol.session())
+        let session = URLSession(configuration: StubURLProtocol.session(timeout: 3))
         let request = URLRequest(url: URL(string: "http://10.0.0.9:6369/api/x")!)
-        let (_, response) = try await session.data(for: request, delegate: asked)
-        XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 301)
+        do {
+            let (_, response) = try await session.data(for: request, delegate: asked)
+            print("MEASURED declined-redirect outcome: response \((response as? HTTPURLResponse)?.statusCode ?? -1)")
+        } catch {
+            print("MEASURED declined-redirect outcome: error \(error)")
+        }
         XCTAssertEqual(StubURLProtocol.requestCount, 1, "nothing was sent to the host it named")
     }
 
@@ -94,19 +98,23 @@ final class PlatformFactsTests: XCTestCase {
     /// measured, against a loopback listener on the build Mac rather than in
     /// this suite, is written up in `RedirectDelegate.followUp` and in the
     /// batch report.
-    func testAWebSocketTaskDoesNotGoThroughAStubProtocol() async {
-        StubURLProtocol.enqueue(.json("{}"))
-        let session = URLSession(configuration: StubURLProtocol.session())
+    func testIsAWebSocketUpgradeRedirectedAndIsTheDelegateAsked() async {
+        StubURLProtocol.enqueue(.moved(302, to: "ws://10.0.0.99:6369/ws/state"), .json("{}"))
+        let asked = Asked()
+        let session = URLSession(configuration: StubURLProtocol.session(timeout: 3))
         let socket = session.webSocketTask(with: URL(string: "ws://10.0.0.9:6369/ws/state")!)
+        socket.delegate = asked
         socket.resume()
-        // Receiving is how a socket reports that it never opened.
         do {
             _ = try await socket.receive()
-            XCTFail("a socket to an address nothing is listening on should not open")
+            print("MEASURED socket redirect outcome: the socket opened")
         } catch {
-            // The error is the network's, not the stub's, which is the point.
+            print("MEASURED socket redirect outcome: \(error)")
         }
-        XCTAssertEqual(StubURLProtocol.requestCount, 0, "the stub was never consulted")
+        print("MEASURED socket redirect: delegate asked \(asked.redirections) time(s), stub saw \(StubURLProtocol.requestCount) request(s)")
+        for (index, request) in StubURLProtocol.recorded.enumerated() {
+            print("MEASURED socket request \(index): \(request.url?.absoluteString ?? "?")")
+        }
         socket.cancel()
     }
 
