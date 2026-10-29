@@ -62,12 +62,12 @@ public final class TokenHealth: Sendable {
             rejected.withLock { $0.contains(ServerCredentials.normalize(url)) }
         }
         public func markTokenRejected(_ url: String) {
-            rejected.withLock { $0.insert(ServerCredentials.normalize(url)) }
+            rejected.withLock { _ = $0.insert(ServerCredentials.normalize(url)) }
         }
         /// What `Prefs.clearTokenRejected` does: the person asked to try the
         /// old token once more, or a new one arrived.
         public func clear(_ url: String) {
-            rejected.withLock { $0.remove(ServerCredentials.normalize(url)) }
+            rejected.withLock { _ = $0.remove(ServerCredentials.normalize(url)) }
         }
     }
 
