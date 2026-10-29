@@ -24,9 +24,10 @@ import XCTest
 /// dormant: it starts biting the first time a package is added, which is the
 /// moment it is needed. The rest runs today.
 ///
-/// TODO(verify-at-mac): this test has never been run. The paths it walks from
-/// `#filePath` and the `Package.resolved` shape (v2 and v3 are both handled)
-/// are the two things to watch on the first `swift test`.
+/// First run on 2026-10-28: the `#filePath` walk lands where it should and the
+/// test passes, reporting "no Package.resolved anywhere under ios/ — nothing is
+/// linked yet". The `Package.resolved` shape (v2 and v3 are both handled) is
+/// still unexercised, and stays so until the first package is added.
 final class LicencesTests: XCTestCase {
 
     // ---- the rules themselves (runs with no dependencies at all) -----------

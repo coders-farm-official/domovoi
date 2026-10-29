@@ -13,30 +13,37 @@ import Foundation
 /// the Kotlin app and the core's own signer (`domovoi/_ed25519.py`) are all
 /// pinned to the same answers.
 ///
-/// Differences from the Kotlin worth knowing:
-///  - A non-canonical scalar `s` (one at or above the group order L) is
-///    refused here explicitly, by ``isCanonicalScalar(_:)``, because the
-///    Kotlin refuses it (`Ed25519.kt:55`, `if (s >= L) return false`) and
-///    CryptoKit documents no such check of its own. Without the check iOS
-///    accepted signatures Android refuses: malleability rather than forgery,
-///    but a divergence in the unsafe direction, and cheap to close.
-///  - Non-canonical POINT encodings are still an open question, and it can
-///    only go one way. The Kotlin refuses them: `recoverX` starts with
-///    `if (y >= P) return null`, so an `R` or an `A` whose `y` is in
-///    [2^255-19, 2^255) is rejected. The Swift has no check of its own at
-///    all, so CryptoKit is either exactly as strict as the Kotlin here or
-///    more permissive — it cannot be stricter. TODO(verify-at-mac): feed a
-///    key and a signature with `y = 2^255 - 18` to CryptoKit and record
-///    whether it refuses them; if it does not, add the explicit check, the
-///    way the scalar check above was added.
-///  - Apple documents neither whether its verifier is cofactorless (RFC 8032
-///    strict) or cofactored. The two agree on every vector and on every
-///    honest signature; only a small-order `R` could tell them apart.
-///    TODO(verify-at-mac): record which CryptoKit does.
-///  - CryptoKit refuses some keys when the value is constructed (a wrong
-///    length, and possibly a non-canonical point) by throwing. A throw is
-///    folded into the same answer, so a malformed key, a malformed signature
-///    and a wrong signature are all simply "no", exactly as on Android.
+/// **Measured against CryptoKit on 2026-10-28** (macOS 26.4.1, Xcode 26.4,
+/// M1 Pro) rather than assumed, because what Apple documents and what its
+/// verifier does are not the same list. Every input below that the Kotlin
+/// refuses, CryptoKit also refuses, so the two apps agree:
+///
+///  - A non-canonical scalar `s` (at or above the group order L) is refused
+///    by CryptoKit **itself**: vector 2's signature with `s + L` substituted
+///    does not verify. ``isCanonicalScalar(_:)`` therefore duplicates a check
+///    Apple already makes. It stays anyway — Apple guarantees it nowhere, it
+///    costs one comparison, and it makes the parity with `Ed25519.kt:55`
+///    (`if (s >= L) return false`) visible instead of incidental. The review
+///    that asked for it believed iOS was accepting what Android refuses; it
+///    was not.
+///  - A non-canonical POINT encoding (`y` in [2^255-19, 2^255), which the
+///    Kotlin's `recoverX` rejects outright) is **constructed** without
+///    throwing but does not verify, as a key or as a signature's `R`. Same
+///    answer as Android by a different route, so no explicit check is needed.
+///  - An all-zero key likewise constructs and then verifies nothing.
+///  - A key of 0, 31, 33 or 64 bytes throws; a signature of 0, 63 or 65 bytes
+///    is refused. A throw is folded into the same answer, so a malformed key,
+///    a malformed signature and a wrong signature are all simply "no",
+///    exactly as on Android.
+///  - **Signing is randomised, not RFC 8032 deterministic**: two signatures
+///    over one message with one key differ, and neither equals the vector's
+///    published bytes. Only verification is pinned, so no test here may
+///    assert signature bytes — it would fail at random. (The app never signs;
+///    the test's signer exists only to prove the key pair round-trips.)
+///  - Still open: whether the verifier is cofactorless (RFC 8032 strict) or
+///    cofactored. The two agree on every vector and every honest signature;
+///    only a small-order `R` tells them apart, and nothing we do produces
+///    one. Left unmeasured on purpose.
 public enum Ed25519Verify {
     public static let keySize = 32
     public static let signatureSize = 64

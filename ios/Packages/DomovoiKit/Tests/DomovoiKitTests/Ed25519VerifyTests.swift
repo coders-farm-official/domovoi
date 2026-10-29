@@ -53,11 +53,12 @@ final class Ed25519VerifyTests: XCTestCase {
     /// signer and Android's test-only signer do, so a fake server in a later
     /// gate test can sign a fresh challenge the way the core does.
     ///
-    /// Signature BYTES are deliberately not compared: RFC 8032 signing is
-    /// deterministic, but Apple does not document its implementation as such,
-    /// so the test asks only that what CryptoKit signs verifies.
-    /// TODO(verify-at-mac): print `signature(for:)` for vector 2 and, if it
-    /// equals the RFC's bytes, tighten this to an equality assertion.
+    /// Signature BYTES are deliberately not compared, and **must never be**:
+    /// measured on 2026-10-28, CryptoKit's signing is randomised, not RFC 8032
+    /// deterministic. Two signatures over one message with one key differ, and
+    /// neither equals the vector's published bytes. An equality assertion here
+    /// would fail at random. The test asks only that what CryptoKit signs
+    /// verifies, which is the property the identity gate actually relies on.
     func testTheSeedsGiveTheRfcPublicKeysAndSignaturesThatVerify() throws {
         for vector in vectors {
             let key = try Curve25519.Signing.PrivateKey(rawRepresentation: try hex(vector.seed))
@@ -155,10 +156,10 @@ final class Ed25519VerifyTests: XCTestCase {
     /// here would crash on a server that answers rubbish.
     ///
     /// The all-0xff signature is refused by the scalar check before CryptoKit
-    /// sees it; the all-zero key is where CryptoKit's documented behaviour
-    /// still runs out. TODO(verify-at-mac): if the all-zero key case fails on
-    /// the Mac, read what Apple actually does with a low-order public key and
-    /// decide whether an explicit point check is needed (see `Ed25519Verify`).
+    /// sees it. The all-zero key was the open question: measured on
+    /// 2026-10-28, CryptoKit **constructs** it without throwing and then
+    /// verifies nothing with it, so the answer is "no" either way and no
+    /// explicit point check is needed (see `Ed25519Verify`).
     func testMalformedInputIsAnAnswerNotAnException() throws {
         let message = Data("m".utf8)
         XCTAssertFalse(Ed25519Verify.verify(publicKey: Data(), message: message, signature: Data()))
