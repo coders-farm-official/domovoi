@@ -121,11 +121,21 @@ public enum DomovoiError: Error, Equatable, Sendable {
     /// it looks at a household token from it again (``TokenHealth``).
     case tokenThrottled(waitMs: Int64)
 
+    /// A wiring mistake, not a condition of the network: the identity probe
+    /// for a server needed the very gate it belongs to. The gate needs a
+    /// client and the client needs the gate, so the circular wiring is easy
+    /// to build by accident; see ``IdentityGate/httpProbe(_:)``. Without this
+    /// the probe would wait on the task it is running inside, which is a
+    /// hang rather than a failure — the one outcome a person cannot report
+    /// usefully.
+    case probeWiringCycle(String)
+
     /// The failure a status brought, if this error carries one.
     public var failure: ApiFailure? {
         switch self {
         case .refused(let f), .rateLimited(let f, _), .serverTrouble(let f), .httpError(let f): return f
-        case .noServer, .notPermitted, .identityHeld, .unreachable, .notDomovoi, .tokenThrottled: return nil
+        case .noServer, .notPermitted, .identityHeld, .unreachable, .notDomovoi, .tokenThrottled,
+             .probeWiringCycle: return nil
         }
     }
 
@@ -134,7 +144,8 @@ public enum DomovoiError: Error, Equatable, Sendable {
         switch self {
         case .noServer: return "no server configured"
         case .notPermitted(let reason), .identityHeld(let reason),
-             .unreachable(let reason), .notDomovoi(let reason): return reason
+             .unreachable(let reason), .notDomovoi(let reason),
+             .probeWiringCycle(let reason): return reason
         case .refused(let f), .rateLimited(let f, _), .serverTrouble(let f), .httpError(let f): return f.message
         case .tokenThrottled(let waitMs):
             return "Domovoi asked this phone to wait \((waitMs + 999) / 1000) s before it tries the household token again"
@@ -171,5 +182,9 @@ public func failureText(_ action: String, _ error: DomovoiError) -> String {
         return "\(action) failed: \(detail.isEmpty ? "not permitted" : detail)"
     case .notDomovoi:
         return "\(action) failed: \(detail)"
+    case .probeWiringCycle:
+        // Ours, not theirs. Say the server could not be checked rather than
+        // showing a person the wiring; the detail is in the log.
+        return "\(action) failed: this server could not be checked"
     }
 }

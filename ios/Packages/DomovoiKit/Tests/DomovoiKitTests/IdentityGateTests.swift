@@ -693,4 +693,44 @@ final class IdentityGateTests: XCTestCase {
         XCTAssertTrue(IdentityVerdict.unproven(expected: nil, reason: "r").cacheable)
         XCTAssertFalse(IdentityVerdict.unavailable(expected: nil, reason: "r").cacheable)
     }
+    // ---- the wiring cycle --------------------------------------------------
+
+    /// A probe wired back into its own gate must FAIL, not hang.
+    ///
+    /// The gate needs a client and the client needs the gate, so this wiring
+    /// is circular by nature; `wire()` above resolves it the way the app will,
+    /// by probing through `unauthenticatedProbe`, whose `.none` mode never
+    /// reaches the gate (`perform` only awaits `prepare` when the decision is
+    /// `.ask`). Get it wrong and `ProbeQueue.coalesced` is re-entered for a
+    /// key whose task has not finished, so it waits on the task it is running
+    /// inside — a hang, with no error and no timeout: a frozen pairing screen
+    /// and nothing in a bug report to go on.
+    ///
+    /// I1-B hit this by hand while breaking things on purpose and the whole
+    /// suite stopped. Without the guard in `coalesced` this test does not
+    /// fail, it hangs, which is exactly why it is worth having.
+    func testAProbeWiredBackIntoItsOwnGateFailsInsteadOfHanging() async throws {
+        let box = Shared<IdentityGate?>(nil)
+        let cycling = IdentityGate(
+            probe: { base, _ in
+                // The mistake this guards: asking the gate that is asking.
+                _ = try await box.current!.verdict(for: base)
+                return nil
+            },
+            pins: pins
+        )
+        box.set(cycling)
+
+        do {
+            _ = try await cycling.verdict(for: base)
+            XCTFail("the cycle did not fail (before the guard it hung here instead)")
+        } catch let error as DomovoiError {
+            guard case .probeWiringCycle(let why) = error else {
+                return XCTFail("wrong error for a wiring cycle: \(error)")
+            }
+            XCTAssertTrue(why.contains(key), "the reason should name the server: \(why)")
+            // A person is told the server could not be checked, not the wiring.
+            XCTAssertEqual(failureText("Check", error), "Check failed: this server could not be checked")
+        }
+    }
 }

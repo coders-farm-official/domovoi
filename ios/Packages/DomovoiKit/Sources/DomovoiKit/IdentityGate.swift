@@ -592,16 +592,39 @@ public enum IdentityVerdict: Equatable, Sendable {
 /// the synchronous half of the gate never probes, which is the whole point of
 /// the split — and a lock held across an `await` is the one thing a `Mutex`
 /// must not do.
+/// The keys whose probe body the current call chain is already inside.
+///
+/// A `@TaskLocal` and not state on the actor, because the question this
+/// answers is "is THIS chain inside that probe", not "is anyone". An
+/// unstructured `Task` copies task-local values at creation, so the binding
+/// reaches the body and everything the body awaits.
+private enum ProbeCycle {
+    @TaskLocal static var inFlight: Set<String> = []
+}
+
 private actor ProbeQueue {
     private var running: [String: Task<IdentityVerdict, any Error>] = [:]
 
     func coalesced(_ key: String, _ body: @Sendable @escaping () async throws -> IdentityVerdict) async throws -> IdentityVerdict {
+        // A probe must never need the gate it belongs to. If it does, this is
+        // re-entered for a key whose task has not finished, and the line below
+        // would wait on the task it is running inside: a hang, with no error
+        // and no timeout, which is the one failure a person cannot report
+        // usefully. The wiring that causes it is easy to build by accident,
+        // because the gate needs a client and the client needs the gate — so
+        // say so instead of stopping. See `httpProbe(_:)`.
+        if ProbeCycle.inFlight.contains(key) {
+            throw DomovoiError.probeWiringCycle(
+                "the identity probe for \(key) asked the same gate to prove \(key); "
+                + "the probe has to go through a client that holds no gate")
+        }
         if let existing = running[key] { return try await existing.value }
         // An unstructured `Task` on purpose: it does not inherit the calling
         // task's cancellation, so a caller that goes away (a screen closing
         // mid-request) does not cancel the probe the other callers are
         // waiting on.
-        let task = Task { try await body() }
+        let inFlight = ProbeCycle.inFlight.union([key])
+        let task = Task { try await ProbeCycle.$inFlight.withValue(inFlight) { try await body() } }
         running[key] = task
         defer { running[key] = nil }
         return try await task.value
