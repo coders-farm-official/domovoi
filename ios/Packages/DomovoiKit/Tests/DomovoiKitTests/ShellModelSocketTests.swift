@@ -376,23 +376,29 @@ final class ShellModelSocketTests: XCTestCase {
         let (model, container, _) = model(deviceSelf: nil)
         XCTAssertFalse(model.connected)
 
-        // The relay is told the socket is up while nobody is listening. There
-        // is no replay, so this value is gone for good.
+        // The socket is really opened, before anybody watches — which is the
+        // window itself: `AppContainer.start()` may open it before a shell
+        // exists. With the real gate and an unproven server it parks.
+        container.startSocketUnlessARoom()
+        XCTAssertEqual(.notNow, container.socket.paused)
+
+        // And the relay is told the socket is up while nobody is listening.
+        // There is no replay, so this value is gone for good.
         container.socketRelay.connectionChanged(true)
         XCTAssertFalse(model.connected, "nobody was watching, and nothing is replayed")
 
-        // So watching reads the socket. The container's own socket is parked
-        // on an unproven gate, so `false` is the right answer here and the
-        // measurement is that it came from the socket rather than from the
-        // dropped message above.
+        // So watching reads the socket rather than waiting to be told again.
+        // The socket says it is down, so `false` here came from the socket
+        // and not from the dropped message above.
         model.watchSocket()
         XCTAssertFalse(model.connected)
-        XCTAssertEqual(.notNow, container.socket.paused, "which is what the socket itself says")
+        XCTAssertFalse(container.socket.connected, "which is what the socket itself says")
 
         // And from here on the sink is live: the next change does arrive.
         container.socketRelay.connectionChanged(true)
         await settleUntil { model.connected }
         XCTAssertTrue(model.connected)
+        container.socket.stop()
         model.stop()
     }
 
