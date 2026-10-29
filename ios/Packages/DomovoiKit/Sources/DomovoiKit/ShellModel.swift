@@ -82,6 +82,7 @@ public final class ShellModel {
     /// server says otherwise. So the answer is kept with the address it is
     /// about. `testASharedScreenAnswerDoesNotFollowTheServerSwitch` is that.
     public var sharedScreenAnswer: Bool? {
+        guard sharedAnswerFor == inputs.serverURL else { return nil }
         return sharedAnswer
     }
 
@@ -863,7 +864,8 @@ public final class ShellModel {
                 userAgent: who.userAgent,
                 ownerPersonID: who.ownerPersonID
             )
-            sharedScreenAnswered(row.map(DeviceRegistry.sharedScreenAnswer))
+            guard let row else { return }
+            sharedScreenAnswered(DeviceRegistry.sharedScreenAnswer(row))
         }
     }
 
