@@ -810,8 +810,7 @@ public final class ShellModel {
     ///     capability fetcher instead of here would lose that trigger (map
     ///     §12.2).
     public func socketConnectionChanged(_ up: Bool) {
-        socketChanged(connected: up, sendRegister: registerSender)
-        guard up else { return }
+        socketChanged(connected: up)
         Task { @MainActor [weak self] in
             await self?.refreshCapabilities()
         }
@@ -877,8 +876,7 @@ public final class ShellModel {
             userAgent: who.userAgent,
             ownerPersonID: who.ownerPersonID
         )
-        guard let row else { return }
-        sharedScreenAnswered(DeviceRegistry.sharedScreenAnswer(row))
+        sharedScreenAnswered(row.map(DeviceRegistry.sharedScreenAnswer))
     }
 
     /// Fetch the capability manifest. Android fetches it at connect and again

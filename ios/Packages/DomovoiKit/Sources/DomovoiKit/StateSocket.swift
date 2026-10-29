@@ -684,12 +684,8 @@ public final class StateSocket: Sendable {
     /// Publish without consulting the rule — ``restart()``'s one use, which
     /// knows the link is gone because it dropped it.
     private func tell(connected: Bool) {
-        let changed = state.withLock { current -> Bool in
-            guard current.connected != connected else { return false }
-            current.connected = connected
-            return true
-        }
-        if changed { publish(connected) }
+        state.withLock { $0.connected = connected }
+        publish(connected)
     }
 }
 
