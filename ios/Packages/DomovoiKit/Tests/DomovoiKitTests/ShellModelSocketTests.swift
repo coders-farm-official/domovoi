@@ -39,9 +39,13 @@ final class ShellModelSocketTests: XCTestCase {
             clock: { 0 },
             configuration: StubURLProtocol.session(timeout: 1)
         )
+        // Spelt out rather than `deviceSelf.map { who in { who } }`, which
+        // the type checker cannot even produce a diagnostic for.
+        var introduce: (@Sendable () -> DeviceSelf)?
+        if let deviceSelf { introduce = { deviceSelf } }
         let model = ShellModel(
             container: container,
-            deviceSelf: deviceSelf.map { who in { who } },
+            deviceSelf: introduce,
             probe: { true },
             clock: { clock.current },
             wait: { _ in try await Task.sleep(for: .seconds(3600)) },
