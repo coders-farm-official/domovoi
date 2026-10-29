@@ -381,6 +381,10 @@ const UmThingsToSay = ({ ctx }) => {
 const UM_SLOTS = { 'wake-word': UmWakeNote, rooms: UmRooms, plugins: UmPlugins, 'things-to-say': UmThingsToSay };
 
 /* ── the checklist ───────────────────────────────────────────────── */
+
+/** What a phone app registers itself as (POST /api/devices/register). */
+const PHONE_APP_PLATFORMS = ['android', 'ios'];
+
 const umChecklistDone = (key, live) => {
   const known = (v) => (v === undefined ? null : v);
   switch (key) {
@@ -392,7 +396,12 @@ const umChecklistDone = (key, live) => {
     case 'room_heard': return live.roomHeard === undefined ? null : live.roomHeard;
     case 'people': return Array.isArray(live.people) ? live.people.length > 0 : null;
     case 'music': return live.library && typeof live.library.total_tracks === 'number' ? live.library.total_tracks > 0 : null;
-    case 'phone_app': return Array.isArray(live.devices) ? live.devices.some((d) => d.platform === 'android') : null;
+    // Any of our phone apps ticks this, not Android's alone: an iPhone
+    // registers as 'ios' (POST /api/devices/register), and before 2026-10-28
+    // this read `=== 'android'`, so a house whose only phone app was an
+    // iPhone was told it had not put the app on its phones.
+    case 'phone_app': return Array.isArray(live.devices)
+      ? live.devices.some((d) => PHONE_APP_PLATFORMS.includes(d.platform)) : null;
     default: return null;
   }
 };
@@ -961,3 +970,6 @@ const UserManualPage = () => {
 };
 
 window.UserManualPage = UserManualPage;
+// The checklist's rule, so a test can ask it directly instead of rendering
+// the page and reading ticks off it (ChatDrafts.sourceLabel does the same).
+window.UserManual = { checklistDone: umChecklistDone };
