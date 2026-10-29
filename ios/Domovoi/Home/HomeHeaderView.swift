@@ -156,15 +156,42 @@ struct HomeHeaderView: View {
     /// accessibility label is the only thing that says what it means. On a
     /// wider pane: a bordered pill with the words beside it, which is what
     /// the Kotlin draws there.
+    ///
+    /// ### `.contentShape` is what makes the 44 points real
+    ///
+    /// This used to read `circle.frame(width: 44, height: 44)` under a
+    /// comment promising a 44-point target, and the target was **ten** points:
+    /// Apple's accessibility audit failed Home with "Hit area is too small"
+    /// and the accessibility tree reported `Button {{350, 101.7}, {10, 10}}`.
+    ///
+    /// A `frame` is not a hit area. SwiftUI hit-tests the *drawn* content, so
+    /// a 10-point circle centred in a 44-point frame leaves 1 936 points of
+    /// transparency that no touch and no audit can find. `contentShape`
+    /// declares the whole rectangle tappable, and the accessibility frame
+    /// follows it.
+    ///
+    /// The minimum is applied to **both** branches, not just the dot: the
+    /// pill is `footnote` plus 7 points of vertical padding, which is about
+    /// 27 points — also under the line. A `minHeight` only grows what is
+    /// short, so the pill keeps its drawn size on a wide pane and gains room
+    /// around it.
+    ///
+    /// No test in this package can see this. `swift test` has no hit-testing
+    /// and no layout; it took a Simulator, a stub server to reach this screen
+    /// at all, and Apple's own audit.
     private var dot: some View {
         Button {
             explaining.toggle()
         } label: {
-            if showsLiveWords {
-                words(beside: circle)
-            } else {
-                circle.frame(width: 44, height: 44)
+            Group {
+                if showsLiveWords {
+                    words(beside: circle)
+                } else {
+                    circle
+                }
             }
+            .frame(minWidth: 44, minHeight: 44)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel(state.liveLabel)

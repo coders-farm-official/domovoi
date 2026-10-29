@@ -175,6 +175,13 @@ struct PhoneBarView: View {
                             .lineLimit(1)
                     }
                     .frame(maxWidth: .infinity, minHeight: 44)
+                    // The frame is the space; `contentShape` is the target.
+                    // Without it SwiftUI hit-tests the drawn icon and caption
+                    // only, and a Simulator measured these at
+                    // `{{34.5, 779.7}, {29.3, 33.8}}` — under 44 in both
+                    // directions, on the app's primary navigation. Same
+                    // defect as the header's live dot, found the same way.
+                    .contentShape(Rectangle())
                     .foregroundStyle(selected ? Color.accentColor : Color.fgMuted)
                 }
                 .buttonStyle(.plain)
