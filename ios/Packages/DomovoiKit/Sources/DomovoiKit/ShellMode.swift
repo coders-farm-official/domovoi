@@ -344,10 +344,11 @@ public final class Reachability: Sendable {
         /// The last ticket ``resume(_:)`` handed out, counted from 1. Every
         /// call gets its own, whether or not it opened anything.
         var lastTicket: Int64 = 0
-        /// The ticket of the call that **opened** the stretch now in
-        /// progress; nil while nothing is being timed. See
-        /// ``pause(_:stretch:)``.
-        var openedBy: Int64?
+        /// The tickets of every loop that is **currently asking**. The
+        /// stretch is open while this is non-empty and closes when the last
+        /// of them leaves. See ``pause(_:stretch:)`` for why it is a set and
+        /// not one number.
+        var openers: Set<Int64> = []
     }
 
     private let state = Mutex(State())
@@ -383,20 +384,29 @@ public final class Reachability: Sendable {
     /// safe. This used to increment only when it opened a stretch and
     /// otherwise answer *the stretch in progress*, so two callers whose
     /// `resume` calls overlapped were handed **the same number** — and a
-    /// token that identifies the stretch rather than its opener cannot tell
-    /// the opener from a bystander. `pause`'s "a stale one is ignored" was
-    /// true and beside the point: a bystander's token was not stale, it was
+    /// number that names the stretch rather than its caller cannot tell the
+    /// opener from a bystander. `pause`'s "a stale one is ignored" was true
+    /// and beside the point: a bystander's token was not stale, it was
     /// identical, and its late `pause` closed the live loop's stretch.
     /// `ShellLifecycleTests.testPhaseChurnNeverClosesTheStopwatchUnderALive`
-    /// `Loop` is that race, and it fails on the old shape.
+    /// `Loop` is that race, and it fails on the old shape — 2 of 200 cycles,
+    /// measured.
+    ///
+    /// **A ticket that named only the opener was not enough either**, and
+    /// that is worth recording too, because it is what the fix was first
+    /// written as. In the churn case the late pauser *is* the opener: the
+    /// cancelled loop resumed first and opened the stretch, the live loop
+    /// found one open and so opened nothing, and the cancelled loop's `defer`
+    /// then closed the stretch the live loop was running under — which the
+    /// churn test still caught, 1 of 200, with that shape in place. So the
+    /// stretch is not owned by one loop: it is open while **any** loop is
+    /// asking, which is what ``State/openers`` holds.
     @discardableResult
     public func resume(_ now: Int64) -> Int64 {
         state.withLock {
             $0.lastTicket += 1
-            if $0.askingSince == nil {
-                $0.askingSince = now
-                $0.openedBy = $0.lastTicket
-            }
+            if $0.askingSince == nil { $0.askingSince = now }
+            $0.openers.insert($0.lastTicket)
             return $0.lastTicket
         }
     }
@@ -417,20 +427,29 @@ public final class Reachability: Sendable {
     ///   `ShellLifecycleTests.testAnInterruptionKeepsWhatIsOwedRatherThan`
     ///   `ClearingIt` fails without this.
     ///
-    ///   **A bystander's ticket is not "stale"; it is simply not the
-    ///   opener's.** An earlier version of this compared against a counter
-    ///   that named the stretch rather than its opener, so two overlapping
-    ///   `resume` calls shared one number and either loop's `defer` could
-    ///   close the other's stretch — the thing the parameter exists to stop.
-    ///   The comparison is against ``State/openedBy`` for that reason.
+    ///   With a ticket this means **"this loop has stopped asking"**, and the
+    ///   stretch closes only once nothing else is asking either. One number
+    ///   naming the opener is not enough: in the churn case the loop that
+    ///   leaves is the one that opened the stretch, and the live loop joined
+    ///   an already-open one, so "only the opener may close it" closes it
+    ///   under the live loop. A ticket that is not in ``State/openers`` —
+    ///   a loop that never asked, or asked and has already left — does
+    ///   nothing at all.
     ///
-    ///   Omitted (the driver's own call), it closes whatever is open.
+    ///   Omitted (``ReachabilityDriver``'s own call, and ``stop()``'s), it
+    ///   means **"everybody is off the screen now"**: every opener is
+    ///   dropped and the stretch closes with this timestamp, which is the
+    ///   authoritative one. That is why the driver's call has no ticket.
     public func pause(_ now: Int64, stretch: Int64? = nil) {
         state.withLock {
-            if let stretch, stretch != $0.openedBy { return }
+            if let stretch {
+                guard $0.openers.remove(stretch) != nil else { return }
+                guard $0.openers.isEmpty else { return }
+            } else {
+                $0.openers.removeAll()
+            }
             if let since = $0.askingSince { $0.spentMs += max(0, now - since) }
             $0.askingSince = nil
-            $0.openedBy = nil
         }
     }
 
@@ -448,7 +467,7 @@ public final class Reachability: Sendable {
         state.withLock {
             $0.spentMs = 0
             $0.askingSince = nil
-            $0.openedBy = nil
+            $0.openers.removeAll()
             $0.unreachable = false
         }
     }
