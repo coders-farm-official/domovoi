@@ -166,18 +166,53 @@ final class StubHouseUITests: XCTestCase {
         XCTAssertTrue(named, "the header never drew the house's name")
     }
 
-    /// An unpaired phone: the device reads 401 and the pairing screen is
-    /// what a person is supposed to see.
+    /// An unpaired phone still sees its house, and is told to pair.
     ///
-    /// Run against `--mode unpaired`, which also refuses the socket upgrade
-    /// with a 403 — so this is the picture that settles whether a socket's
-    /// own refusal can raise the pairing screen (map §11.6).
+    /// Both halves matter and they come from different tiers of the same
+    /// server: `/api/config` is open, so the header draws `stub house`,
+    /// while `/api/satellites`, `/api/calendar/events` and `/api/timers`
+    /// answer 401 — and that is what raises the pairing link. A phone
+    /// showing neither has lost the server; one showing the name and no link
+    /// is silently missing its rooms.
+    ///
+    /// `--mode unpaired` is **not** what produces those 401s, whatever this
+    /// comment claimed when it was written. The stub refuses a device-tier
+    /// route when `MODE == "unpaired" or not self._paired()`, and a launch
+    /// with no token fails the second half on its own; the mode changes that
+    /// line only for a phone that *does* send a token.
+    ///
+    /// The **socket** is the other way round. Its refusal is
+    /// `MODE == "unpaired" and not self._paired()`, so under `--mode normal`
+    /// an unpaired phone is handed `/ws/state` anyway and the header reads
+    /// `live` with no token saved. That cannot happen against a real house,
+    /// so this case has to be run a **second** time under `--mode unpaired`,
+    /// where the socket behaves like the server it stands in for. Nothing in
+    /// this file can pin that: `stub_run.sh` gives one mode to the whole
+    /// class. The assertions below hold under either, which is the point —
+    /// the mode decides what the *picture* shows, and whether a socket's own
+    /// 403 can raise the pairing screen (map §11.6) is only answerable
+    /// there.
+    ///
+    /// It asserted nothing until it was looked at: `waitForExistence` on
+    /// `staticTexts.firstMatch` is true of every screen the app can draw,
+    /// the local-media placeholder included, so this case could not fail.
     func testAnUnpairedPhoneIsToldToPair() throws {
         let app = launch(paired: false)
         // Whatever it shows, photograph it: the point of this one is the
         // words, which no test has ever read on a screen.
-        _ = app.staticTexts.firstMatch.waitForExistence(timeout: 20)
+        let link = app.buttons[ShellStringsUnderTest.pairLink]
+        let told = link.waitForExistence(timeout: 20)
+        let named = houseName(in: app).waitForExistence(timeout: 10)
         evidence(app, "20-unpaired")
+        XCTAssertFalse(
+            fellBackToLocalMedia(in: app),
+            "the shell gave up on the server instead of drawing an unpaired Home"
+        )
+        XCTAssertTrue(
+            named,
+            "the open config read did not land — an unpaired phone still gets it"
+        )
+        XCTAssertTrue(told, "nothing on this screen told the phone to pair")
     }
 
     /// The screen behind the pairing link — and the app's prominent buttons,
