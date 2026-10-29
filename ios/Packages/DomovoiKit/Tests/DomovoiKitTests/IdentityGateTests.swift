@@ -141,6 +141,22 @@ final class IdentityGateTests: XCTestCase {
         }
     }
 
+    /// The message of a refusal, or a clean failure.
+    ///
+    /// **Never `error!`.** A force-unwrap that finds nil here traps, and a
+    /// trap takes the whole `xctest` process with it — the run reports
+    /// "unexpected signal code 5" and every test after this one simply does
+    /// not happen, so one broken expectation hides the rest of the suite.
+    /// Found by deliberately breaking the gate: the suite crashed instead of
+    /// reporting four failures.
+    private func heldMessage(_ error: DomovoiError?, line: UInt = #line) -> String {
+        guard let error else {
+            XCTFail("expected the request to be refused", line: line)
+            return ""
+        }
+        return error.message
+    }
+
     private var probes: [URLRequest] { StubURLProtocol.recorded.filter { $0.url?.path == "/api/health" } }
     private var reads: [URLRequest] { StubURLProtocol.recorded.filter { $0.url?.path == "/api/timers" } }
 
@@ -230,7 +246,7 @@ final class IdentityGateTests: XCTestCase {
         // Away from home: whoever answers at the saved address has its own key.
         identity.set(TestIdentity.rogue)
         let error = await failedRead()
-        XCTAssertTrue(error!.message.contains("mismatch"), error!.message)
+        XCTAssertTrue(heldMessage(error).contains("mismatch"), heldMessage(error))
         XCTAssertEqual(2, probes.count, "the rogue saw a token-less probe and nothing else")
         XCTAssertEqual(1, reads.count)
         XCTAssertNil(probes[1].value(forHTTPHeaderField: deviceTokenHeader))
@@ -291,7 +307,7 @@ final class IdentityGateTests: XCTestCase {
         gate.networkChanged()
         identity.set(nil)   // a plain web server at the saved address
         let error = await failedRead()
-        XCTAssertTrue(error!.message.contains("unproven"), error!.message)
+        XCTAssertTrue(heldMessage(error).contains("unproven"), heldMessage(error))
         XCTAssertEqual(1, reads.count)
         guard case .unproven = gate.status?.verdict else {
             return XCTFail("expected unproven, got \(String(describing: gate.status?.verdict))")
@@ -398,9 +414,9 @@ final class IdentityGateTests: XCTestCase {
         wire()
         let error = await failedRead()
         XCTAssertEqual(IdentityGate.proofAttempts, probes.count)
-        XCTAssertTrue(error!.message.contains("not fully up"), error!.message)
-        XCTAssertTrue(error!.message.contains("the network kept changing"), error!.message)
-        XCTAssertFalse(error!.message.contains("mismatch"), "never an impostor")
+        XCTAssertTrue(heldMessage(error).contains("not fully up"), heldMessage(error))
+        XCTAssertTrue(heldMessage(error).contains("the network kept changing"), heldMessage(error))
+        XCTAssertFalse(heldMessage(error).contains("mismatch"), "never an impostor")
         XCTAssertTrue(reads.isEmpty)
         guard case .unavailable = gate.status?.verdict else {
             return XCTFail("expected unavailable, got \(String(describing: gate.status?.verdict))")
@@ -425,7 +441,7 @@ final class IdentityGateTests: XCTestCase {
         // and holds. Both refuse to send the token and both say the server
         // cannot be relied on; the iPhone says "has not proved itself" where
         // the Android phone says "offline". Written up in the batch report.
-        XCTAssertTrue(error!.message.contains("has not proved itself"), error!.message)
+        XCTAssertTrue(heldMessage(error).contains("has not proved itself"), heldMessage(error))
         XCTAssertEqual(1, reads.count)
         XCTAssertNil(gate.cachedVerdict(base), "nothing cached for this network")
     }
@@ -435,8 +451,8 @@ final class IdentityGateTests: XCTestCase {
         gate.networkChanged()
         healthStatus.set(404)
         let error = await failedRead()
-        XCTAssertTrue(error!.message.contains("did not answer /api/health"), error!.message)
-        XCTAssertTrue(error!.message.contains("unproven"), error!.message)
+        XCTAssertTrue(heldMessage(error).contains("did not answer /api/health"), heldMessage(error))
+        XCTAssertTrue(heldMessage(error).contains("unproven"), heldMessage(error))
     }
 
     func testAServerWhoseCoreIsDownIsNotAnImpostorAndIsAskedAgainAtOnce() async throws {
@@ -446,8 +462,8 @@ final class IdentityGateTests: XCTestCase {
         // passes no identity through.
         coreDown.set(true)
         let error = await failedRead()
-        XCTAssertTrue(error!.message.contains("not fully up"), error!.message)
-        XCTAssertFalse(error!.message.contains("mismatch"), "never an impostor")
+        XCTAssertTrue(heldMessage(error).contains("not fully up"), heldMessage(error))
+        XCTAssertFalse(heldMessage(error).contains("mismatch"), "never an impostor")
         XCTAssertEqual(1, reads.count)
         guard case .unavailable = gate.status?.verdict else {
             return XCTFail("expected unavailable, got \(String(describing: gate.status?.verdict))")
@@ -469,7 +485,7 @@ final class IdentityGateTests: XCTestCase {
         // core restart): still not Legacy — the token waits for the proof.
         coreDown.set(true)
         let error = await failedRead()
-        XCTAssertTrue(error!.message.contains("not fully up"), error!.message)
+        XCTAssertTrue(heldMessage(error).contains("not fully up"), heldMessage(error))
         XCTAssertTrue(reads.isEmpty)
         XCTAssertTrue(pins.book.isEmpty)
     }
@@ -554,7 +570,7 @@ final class IdentityGateTests: XCTestCase {
             }
         }
         let error = await failedRead()
-        XCTAssertTrue(error!.message.contains("has not proved itself"), error!.message)
+        XCTAssertTrue(heldMessage(error).contains("has not proved itself"), heldMessage(error))
         // Hop 1 carried the token (its proof was good); hop 2 was never sent.
         let hops = StubURLProtocol.recorded.filter { $0.url?.path.hasPrefix("/api/timers") == true }
         XCTAssertEqual("/api/timers", hops.last?.url?.path, "nothing was sent to the hop's URL")
