@@ -180,8 +180,11 @@ final class ClientGraphTests: XCTestCase {
     /// So what the container hands out is the probe, not the client: a type
     /// that carries no token whatever it is pointed at.
     ///
-    /// Watched failing by making `AppContainer.probeClient` public again and
-    /// asserting against it instead — the token is there.
+    /// The test above is the other half of this one: it points the *client*
+    /// at the same path and finds the token on it. I did not sabotage this
+    /// one separately, because the pair is the measurement — the same request
+    /// through the probe carries nothing and through the client carries the
+    /// token.
     func testTheContainerHandsOutAProbeAndNotAClient() async throws {
         let container = makeContainer()
         StubURLProtocol.enqueue(.json("{}"))

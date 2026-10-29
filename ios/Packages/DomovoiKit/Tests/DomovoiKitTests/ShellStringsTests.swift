@@ -201,18 +201,17 @@ final class ShellStringsTests: XCTestCase {
     /// contributes a few dozen), so a total would let a file go missing and
     /// quietly stop checking its strings. `literals(in:)` returns `[]` for a
     /// file it could not read, which is exactly the silent case.
-    func testEveryKotlinFileWasActuallyRead() throws {
+    func testEveryKotlinFileWasActuallyRead() {
         let base = Self.repositoryRoot.appendingPathComponent("android/app/src/main/java/com/domovoi/app")
         for name in Self.kotlinFiles {
             let url = base.appendingPathComponent(name)
-            XCTAssertTrue(
-                FileManager.default.fileExists(atPath: url.path),
-                "\(name) has moved; this test would quietly check nothing"
-            )
-            let text = try String(contentsOf: url, encoding: .utf8)
+            // `try?` and not `try`: a throwing read stops the loop at the
+            // first missing file, so a run that renamed three of them would
+            // only name one. Every file is reported.
+            let text = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
             XCTAssertFalse(
                 Self.literals(in: text).isEmpty,
-                "\(name) contributed no string literals at all"
+                "\(name) could not be read, or contributed no string literals at all"
             )
         }
         XCTAssertGreaterThan(Self.haystack.count, 5_000, "the haystack is far smaller than measured")
