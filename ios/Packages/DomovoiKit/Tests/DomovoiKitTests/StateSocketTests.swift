@@ -566,6 +566,30 @@ final class StateSocketTests: XCTestCase {
         XCTAssertEqual(.notNow, socket.paused)
     }
 
+    /// A socket that has never been up says nothing when it restarts.
+    ///
+    /// ``StateSocket``'s `restart()` publishes `false` through `tell(connected:)`
+    /// because it knows it dropped the link — and a scene return restarts
+    /// unconditionally (trap 1), so on a phone that is parked unpaired every
+    /// return to the foreground runs that path. Without the dedupe inside
+    /// `tell` each one would push another `false` into
+    /// `ShellModel.socketConnectionChanged`, which is not a no-op: it is the
+    /// header's `live` and the register cadence's input. The rung above —
+    /// `advance`'s own `if !current.connected` — does not cover this path,
+    /// which is how BREAK 3 removed this guard and no test noticed.
+    func testASocketThatWasNeverUpPublishesNothingWhenItRestarts() {
+        let book = TokenHealth.InMemoryBook()
+        let health = TokenHealth(book: book, clock: { 1_000 })
+        health.noteWait(server, waitMs: 60_000)
+        let fake = FakeSocketTransport()
+        let up = Shared<[Bool]>([])
+        let (socket, _) = socket(token: "household-abc", health: health, transport: fake, up: up)
+        socket.start()
+        for _ in 0..<5 { socket.sceneReturned() }
+        XCTAssertEqual(0, fake.opens, "parked, so nothing was dialled")
+        XCTAssertEqual([], up.current, "and a drop that was never an open is not news")
+    }
+
     // MARK: - the relay
 
     /// A connect that lands before anything is listening is counted, not
