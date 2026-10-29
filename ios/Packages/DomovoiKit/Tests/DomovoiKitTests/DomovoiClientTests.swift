@@ -265,9 +265,12 @@ final class DomovoiClientTests: XCTestCase {
     func testAPasteCheckThatIsRedirectedDoesNotReacquireTheSavedToken() async {
         StubURLProtocol.dispatch { request in
             // A server whose satellites read redirects once, and which
-            // answers only to the token it really issued.
-            if request.url?.path == DomovoiClient.tokenCheckPath {
-                return .moved(302, to: "\(DomovoiClient.tokenCheckPath)/")
+            // answers only to the token it really issued. The hop is marked
+            // with a query rather than a trailing slash, because `URL.path`
+            // drops a trailing slash — so the stub would have redirected for
+            // ever, and found the hop ceiling instead of the bug.
+            if request.url?.query == nil {
+                return .moved(302, to: "\(DomovoiClient.tokenCheckPath)?hop=1")
             }
             if request.value(forHTTPHeaderField: deviceTokenHeader) == "household-abc" {
                 return .json("[]")
