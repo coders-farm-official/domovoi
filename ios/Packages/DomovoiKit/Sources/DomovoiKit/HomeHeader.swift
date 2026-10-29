@@ -111,7 +111,7 @@ public enum HomeHeaderStrings {
     public static let live = "live"
 
     /// …and when it is down. **U+00B7, one space each side.**
-    public static let notLive = "not live • updates every 30s"
+    public static let notLive = "not live · updates every 30s"
 
     /// The three explanations (`HomeSections.kt:170-172`). Each carries a
     /// **U+00B7**; the second's two apostrophes are **ASCII**.
@@ -221,6 +221,6 @@ public struct HomeConfig: Equatable, Sendable, Decodable {
 public enum HomeApi {
 
     public static func config(_ client: DomovoiClient) async throws -> HomeConfig {
-        try await client.get("/api/config", as: HomeConfig.self)
+        try await client.getUntracked("/api/config", as: HomeConfig.self)
     }
 }
