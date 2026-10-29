@@ -408,7 +408,12 @@ public enum DeviceIdentity {
     /// testable by `ios/scripts/pkgtest.sh` — `UserDefaults` is Foundation,
     /// and a store written beside `DomovoiApp` would be one more thing
     /// nothing checks.
-    public struct UserDefaultsStore: Store {
+    /// `@unchecked Sendable` with the reason, as the house rule asks:
+    /// `UserDefaults` is not `Sendable` to the compiler, but Apple documents
+    /// it as thread-safe ("the `UserDefaults` class is thread-safe"), the one
+    /// stored property is a `let`, and the two methods below are the only
+    /// things that touch it.
+    public struct UserDefaultsStore: Store, @unchecked Sendable {
 
         /// The key. Android's is `Prefs.deviceId`; this one names the app so
         /// a shared suite could never collide.
