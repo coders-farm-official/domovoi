@@ -138,7 +138,11 @@ final class DiscoveryTests: XCTestCase {
         // hand out 10.x on cellular IPv4, so an address gate would have fired
         // 254 probes into the carrier's private range on a metered link.
         let outcome = await Discovery.scan(makeClient().unauthenticatedProbe, onLan: { false })
-        XCTAssertEqual(.notOnLan, outcome)
+        // Matched rather than compared: a `swept` outcome's failure message
+        // would print all 254 hits and bury the next assertion.
+        guard case .notOnLan = outcome else {
+            return XCTFail("the sweep ran off-LAN and came back with \(outcome.servers.count) hits")
+        }
         XCTAssertEqual(0, StubURLProtocol.requestCount, "probes went out on a phone that is not on a LAN")
         XCTAssertEqual([], SweepOutcome.notOnLan.servers)
         // ...and it is a case of its own, so I1-C can say "join your home

@@ -677,10 +677,15 @@ final class IdentityGateTests: XCTestCase {
     func testAnUnpairedPhoneStillAsksTheActiveServerToProveItself() async throws {
         token.set(nil)
         try await read()
+        // `.first?` and not `[0]`: an index into an empty array traps, and a
+        // trap takes the whole `xctest` process with it (the reason
+        // `heldMessage` exists), so an assertion about something that may not
+        // be there never subscripts it. Learned again here — the first run of
+        // this test, before the fix, crashed the suite instead of failing.
         XCTAssertEqual(1, probes.count, "the active server was never asked, so its 401 can never raise the pairing screen")
-        XCTAssertNil(probes[0].value(forHTTPHeaderField: deviceTokenHeader), "a probe carries no token, paired or not")
+        XCTAssertNil(probes.first?.value(forHTTPHeaderField: deviceTokenHeader), "a probe carries no token, paired or not")
         XCTAssertEqual(1, reads.count)
-        XCTAssertNil(reads[0].value(forHTTPHeaderField: deviceTokenHeader), "and the read itself still goes out bare")
+        XCTAssertNil(reads.first?.value(forHTTPHeaderField: deviceTokenHeader), "and the read itself still goes out bare")
         XCTAssertTrue(gate.admitsPairingPrompt(base), "the verdict is warm for the refusal path to read")
         // One proof, not one per request: the verdict stands for the network.
         try await read()
@@ -706,7 +711,7 @@ final class IdentityGateTests: XCTestCase {
         )
         _ = try await client.get("/api/timers", as: [String: String].self)
         XCTAssertEqual(1, probes.count, "a refused token still leaves a server to prove itself")
-        XCTAssertNil(reads[0].value(forHTTPHeaderField: deviceTokenHeader), "a refused token is never sent again")
+        XCTAssertNil(reads.first?.value(forHTTPHeaderField: deviceTokenHeader), "a refused token is never sent again")
         XCTAssertTrue(gate.admitsPairingPrompt(base))
     }
 
