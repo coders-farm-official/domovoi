@@ -220,7 +220,18 @@ final class DiscoveryTests: XCTestCase {
 
     func testMultipleHitsAreAllKeptAndSortedByUrlStringAsAndroidSortsThem() async {
         let targets = ["http://10.0.0.20:6369", "http://10.0.0.100:6369", "http://10.0.0.3:6369"]
-        let found = await Discovery.sweep(targets, onProgress: { _, _, _ in }) { FoundDomovoi(url: $0) }
+        // The three probes finish in an order that is NEITHER the order they
+        // were started in nor the order the answer must come back in: `…3`
+        // first, then `…20`, then `…100`, where the sorted answer is `…100`,
+        // `…20`, `…3`. Without that, a sweep of three instant probes
+        // happens to complete in sorted order and the assertion below holds
+        // whether or not anything sorts anything — which is how it read when
+        // it was first written, and removing the `sorted` did not fail it.
+        let found = await Discovery.sweep(targets, onProgress: { _, _, _ in }) { base in
+            let order = base.hasSuffix(".3:6369") ? 1 : base.hasSuffix(".20:6369") ? 2 : 3
+            try? await Task.sleep(nanoseconds: UInt64(order) * 30_000_000)
+            return FoundDomovoi(url: base)
+        }
         // A PLAIN STRING SORT, so `…100` comes before `…20`. Android's
         // `sortedBy { it.url }` does this and the two apps must list a
         // house's servers in the same order, so it is ported rather than
