@@ -181,12 +181,65 @@ public func pairingOffersTheField(verdict: IdentityVerdict?) -> Bool {
 }
 
 /// What the pairing screen says instead of offering a field, when
-/// ``pairingOffersTheField(verdict:)`` says no.
+/// ``pairingOffersTheField(verdict:)`` says no — **per verdict**, because the
+/// three refusing verdicts are three different facts about the server. Nil
+/// for the verdicts that get a field.
 ///
-/// The words are the local shell's own banner for the same situation
-/// (``identityChangedText(address:canTrustAgain:)``), which is the one thing
-/// that can honestly be said: this server did not prove it is the Domovoi
-/// this phone trusted, so nothing is being asked for.
-public func pairingWithheldText(address: String, canTrustAgain: Bool) -> String {
-    identityChangedText(address: address, canTrustAgain: canTrustAgain)
+/// ### Why this is not one sentence for all of them
+///
+/// It was, and the one it borrowed was the local shell's impostor banner
+/// (``identityChangedText(address:canTrustAgain:)``), whose comment called it
+/// "the one thing that can honestly be said". It is honest about a
+/// `.mismatch` — and a `.mismatch` is the one verdict that **cannot reach
+/// this screen**: ``shellMode(serverURL:unreachable:pairingRequired:preferLocal:identityChanged:tokenTrouble:)``
+/// asks `identityChanged` before `pairingRequired`, so a mismatch returns
+/// `.local` and gets the banner there. What arrives here is `.unproven` and
+/// `.unavailable` — and `.unavailable` is the verdict
+/// ``ServerChoice/coreDown(label:)`` documents as *"not an impostor, never a
+/// reason to forget it"*: a box that is restarting, updating or busy.
+///
+/// So the screen told a person whose Domovoi was restarting that it had
+/// answered "not with the identity this phone trusted", and pointed them at
+/// the forgetting cascade — which drops the household token and the pin. They
+/// would forget a healthy server and pair again from scratch. Two smaller
+/// untruths rode along: this screen is not "showing its own media", and
+/// neither the server list nor Settings is reachable from it (it replaces the
+/// whole shell; `not now` is the only control).
+///
+/// ### What each verdict gets
+///
+///  - `.unproven` and `.unavailable` → ``TokenPasteField/message(_:)``'s
+///    `.unavailable` sentence, which is **the answer the field itself would
+///    have given**: ``DomovoiClient/checkDeviceToken(_:)`` returns
+///    `.unavailable` for every verdict the gate refuses, and that string's own
+///    doc says it covers "a 503, no answer, **or a server that did not prove
+///    itself**. NOT 'that token is wrong'". No forget advice, no claim about
+///    identity that was not proved, and nothing invented.
+///  - `.mismatch` → the impostor words, which are true of it. **This branch
+///    is unreachable through `shellMode` today**, for the reason above; it is
+///    not dead code to delete, because it is the only honest answer if a
+///    later change lets a mismatch reach the pairing screen, and because
+///    `pairingOffersTheField` is a public rule anything may ask.
+///  - `.verified`, `.legacy`, nil → nil: those get a field.
+///
+/// The `.unproven` case is the one the owner may want a fuller sentence for
+/// ("this server has not proved it is the Domovoi this phone trusted", with
+/// no forgetting advice). Writing one here would be inventing a user-facing
+/// string, so this uses the closest honest existing one and the report asks.
+public func pairingWithheldText(
+    address: String,
+    verdict: IdentityVerdict?,
+    canTrustAgain: Bool
+) -> String? {
+    switch verdict {
+    case .verified, .legacy, nil:
+        return nil
+    case .mismatch:
+        return identityChangedText(address: address, canTrustAgain: canTrustAgain)
+    case .unproven, .unavailable:
+        // Never nil for `.unavailable`; `PhonesAndBrowsersTests` pins that,
+        // because a nil here would leave the screen with neither a field nor
+        // a word.
+        return TokenPasteField.message(.unavailable)
+    }
 }

@@ -173,6 +173,97 @@ final class PairingFieldModelTests: XCTestCase {
         XCTAssertEqual(1, calls.current, "nothing tried again on its own")
     }
 
+    /// **A field stopped mid-wait comes back when the wait ends, with
+    /// nothing ticking.**
+    ///
+    /// `nowMs` is written only by the countdown, and `stop()`
+    /// (`PairingFieldView`'s `onDisappear`) cancels it with no way to start
+    /// another: `startCountdown` is reached only from `submit()`'s
+    /// `.throttled` branch and `submit()` is gated on `isEnabled`. A review
+    /// measured the field frozen on `wait 0:42` with `isEnabled=false` ten
+    /// minutes of clock later. ``PairingFieldModel/waitLeftMs`` is now a
+    /// function of the clock, so this is the test that the wait ends by
+    /// itself.
+    func testAStoppedCountdownStillLetsTheWaitEnd() async {
+        let clock = Shared<Int64>(0)
+        let field = makeField(
+            store: InMemoryShellStore(serverURL: server),
+            answer: .throttled(waitMs: 42_000),
+            clock: clock
+        )
+        field.typed = token
+        _ = await field.submit()
+        XCTAssertEqual(42_000, field.waitLeftMs)
+        XCTAssertFalse(field.isEnabled)
+
+        // The screen goes away, which is the only thing that stops it.
+        field.stop()
+        XCTAssertFalse(field.isCountingDown)
+        XCTAssertFalse(field.isEnabled, "the wait is the server's and is not over yet")
+        XCTAssertEqual("Too many tries — wait 0:42 before the next one.", field.message)
+
+        // Ten minutes pass with nothing ticking at all.
+        clock.advance(600_000)
+        XCTAssertEqual(0, field.waitLeftMs, "the wait is over because the clock says so")
+        XCTAssertTrue(field.isEnabled, "and the field is usable again")
+        XCTAssertEqual("You can try again now.", field.message)
+        field.typed = token
+        XCTAssertTrue(field.canSubmit)
+    }
+
+    // MARK: - A6-01, the window the await opens
+
+    /// **A server switch during the check files the token under the server it
+    /// was checked against, and nowhere else.**
+    ///
+    /// `submit()` used to read `store.serverURL` *after* the await, with a
+    /// comment arguing the per-spelling keying made a switch harmless. A
+    /// review measured the opposite: with the store on A and a check that
+    /// switched it to B, A's household token was written under B's key
+    /// (`tokenForA=nil`, `tokenForB="household-abcdef"`) and went out with
+    /// B's next request. That is A6-01 from the inside.
+    func testASwitchDuringTheCheckDoesNotFileTheTokenUnderTheNewServer() async {
+        let other = "http://10.0.0.99:6369"
+        let store = InMemoryShellStore(serverURL: server)
+        store.trustServer(other)
+        let cleared = Shared<Int>(0)
+        let saved = Shared<[String]>([])
+        let field = PairingFieldModel(
+            store: store,
+            check: { _ in
+                // The switch lands while "checking…" is up: a `Save &
+                // reconnect` on the same panel, or a trust decision in the
+                // connection sheet.
+                XCTAssertTrue(store.setServerURL(other))
+                return .accepted
+            },
+            clearPairingRequired: { cleared.mutate { $0 += 1 } },
+            onSaved: { candidate in saved.mutate { $0.append(candidate) } }
+        )
+        field.typed = token
+
+        XCTAssertEqual(.accepted, await field.submit())
+        XCTAssertEqual(other, store.serverURL, "the switch really happened")
+        XCTAssertEqual(token, store.token(for: server), "filed where it was checked")
+        XCTAssertNil(store.token(for: other), "and NOT under the server it was never offered to")
+        XCTAssertEqual(0, cleared.current, "the pairing refusal on screen is now another server's")
+        XCTAssertEqual([], saved.current, "and nothing claims this phone is paired with it")
+    }
+
+    /// With no switch, the accepted branch does everything it always did —
+    /// so the guard above cannot be satisfied by doing nothing.
+    func testWithoutASwitchTheAcceptedBranchStillClearsAndReports() async {
+        let store = InMemoryShellStore(serverURL: server)
+        let cleared = Shared<Int>(0)
+        let saved = Shared<[String]>([])
+        let field = makeField(store: store, answer: .accepted, cleared: cleared, saved: saved)
+        field.typed = token
+        XCTAssertEqual(.accepted, await field.submit())
+        XCTAssertEqual(token, store.token(for: server))
+        XCTAssertEqual(1, cleared.current)
+        XCTAssertEqual([token], saved.current)
+    }
+
     // MARK: - editing
 
     /// Editing clears the message — but **not while a wait is running**,

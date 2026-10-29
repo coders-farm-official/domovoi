@@ -105,6 +105,24 @@ final class PhonesAndBrowsersTests: XCTestCase {
         XCTAssertFalse(body.contains("not proved on this network yet"))
     }
 
+    /// The two halves the card draws separately, so the fingerprints can be
+    /// monospace and the paragraph can be prose. Nothing is lost between
+    /// them: the pair put back together is ``ForgetActiveServerAsk/body``.
+    func testTheAskSplitsIntoAParagraphAndTheIdentityLines() {
+        let ask = ForgetActiveServerAsk(
+            url: "http://10.0.0.42:6369", pinned: "SHA256:old", proven: "SHA256:new"
+        )
+        XCTAssertTrue(ask.paragraph.hasPrefix("This phone will forget 10.0.0.42:6369:"))
+        XCTAssertFalse(ask.paragraph.contains("SHA256:"), "no key in the prose half")
+        XCTAssertEqual("pinned: SHA256:old\nit now proves: SHA256:new", ask.identityLines)
+        XCTAssertEqual(ask.body, [ask.paragraph, ask.identityLines!].joined(separator: "\n\n"))
+
+        // With no pin there is nothing to compare, so the card draws one half.
+        let bare = ForgetActiveServerAsk(url: "http://10.0.0.42:6369", pinned: nil, proven: nil)
+        XCTAssertNil(bare.identityLines)
+        XCTAssertEqual(bare.body, bare.paragraph)
+    }
+
     // MARK: - the proven fingerprint
 
     /// It answers only for **this** server's pin key: a status left over from
@@ -207,5 +225,82 @@ final class PhonesAndBrowsersTests: XCTestCase {
     /// permanently in.
     func testAServerNothingHasAskedAboutYetIsOfferedTheField() {
         XCTAssertTrue(pairingOffersTheField(verdict: nil))
+    }
+
+    /// **The two verdicts that can actually reach the pairing screen are not
+    /// told they are impostors.**
+    ///
+    /// `.unproven` and `.unavailable` are what arrives there (a mismatch goes
+    /// to the local shell; see
+    /// `ShellModelPartThreeTests.testAMismatchGoesToTheLocalShellNotThePairingScreen`),
+    /// and `.unavailable` is a box that is restarting. They get the sentence
+    /// the field's own check would have given, which neither claims a failed
+    /// identity proof nor offers the forgetting cascade.
+    func testTheVerdictsThatReachThePairingScreenAreNotCalledImpostors() {
+        for verdict: IdentityVerdict in [
+            .unproven(expected: "SHA256:pinned", reason: "offered no identity"),
+            .unavailable(expected: "SHA256:pinned", reason: "its core is not answering"),
+        ] {
+            let text = pairingWithheldText(
+                address: "10.0.0.42:6369", verdict: verdict, canTrustAgain: false
+            )
+            XCTAssertEqual(
+                "Couldn't check it with the server — try again.", text,
+                "for \(verdict) — and it is `TokenPasteField`'s own sentence for it"
+            )
+            XCTAssertEqual(TokenPasteField.message(.unavailable), text, "the same string, not a copy")
+            guard let text else { return XCTFail("nothing was said instead of the field") }
+            XCTAssertFalse(text.contains("different Domovoi"), "not an impostor")
+            XCTAssertFalse(text.contains("forget"), "and never a reason to forget it")
+            XCTAssertFalse(text.contains("trust it again"))
+            XCTAssertFalse(text.contains("showing its own media"), "this screen is not the local shell")
+        }
+    }
+
+    /// The impostor words are kept for the verdict they are true of, and for
+    /// nothing else. **Unreachable through `shellMode` today** — the reason is
+    /// at ``pairingWithheldText(address:verdict:canTrustAgain:)`` — which is
+    /// why it is pinned here, as a rule, rather than through the shell.
+    func testAMismatchStillGetsTheImpostorWordsIfItEverGetsHere() {
+        let text = pairingWithheldText(
+            address: "10.0.0.42:6369",
+            verdict: .mismatch(expected: "a", seen: "b", seenPin: nil),
+            canTrustAgain: false
+        )
+        XCTAssertEqual(
+            identityChangedText(address: "10.0.0.42:6369", canTrustAgain: false), text
+        )
+    }
+
+    /// Nothing is said where a field is offered, so the screen can never draw
+    /// both and can never draw neither.
+    func testTheVerdictsThatGetAFieldAreToldNothing() {
+        for verdict: IdentityVerdict? in [
+            .verified(fingerprint: "SHA256:a", pinnedNow: false),
+            .legacy(offered: nil),
+            nil,
+        ] {
+            XCTAssertNil(
+                pairingWithheldText(address: "10.0.0.42:6369", verdict: verdict, canTrustAgain: false),
+                "for \(String(describing: verdict))"
+            )
+            XCTAssertTrue(pairingOffersTheField(verdict: verdict))
+        }
+        // The pair is total: every verdict either gets a field or gets a word,
+        // and never both or neither.
+        for verdict: IdentityVerdict? in [
+            .verified(fingerprint: "SHA256:a", pinnedNow: true),
+            .legacy(offered: TestIdentity.real.pin),
+            .mismatch(expected: "a", seen: "b", seenPin: TestIdentity.rogue.pin),
+            .unproven(expected: nil, reason: "x"),
+            .unavailable(expected: nil, reason: "x"),
+            nil,
+        ] {
+            let said = pairingWithheldText(address: "a", verdict: verdict, canTrustAgain: true)
+            XCTAssertEqual(
+                pairingOffersTheField(verdict: verdict), said == nil,
+                "for \(String(describing: verdict))"
+            )
+        }
     }
 }

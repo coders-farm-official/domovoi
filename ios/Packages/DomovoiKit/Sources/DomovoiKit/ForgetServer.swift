@@ -28,6 +28,27 @@ public struct ForgetActiveServerAsk: Equatable, Sendable {
     public var body: String {
         forgetActiveServerText(address: address, pinned: pinned, proven: proven)
     }
+
+    /// ``body`` split where ``forgetActiveServerText(address:pinned:proven:)``
+    /// puts its blank line: the paragraph, and then the identity lines.
+    ///
+    /// **So the card can monospace the fingerprints and not the prose.** §6.4
+    /// asks for monospace on the keys a person compares with the dashboard; a
+    /// review found the card drawing the whole 40-word paragraph as a
+    /// monospace caption, which is the hardest-to-read form of the most
+    /// consequential dialog in the app. `body` is unchanged and is still what
+    /// the text test reads.
+    public var paragraph: String {
+        body.components(separatedBy: "\n\n").first ?? body
+    }
+
+    /// The `pinned: …` / `it now proves: …` lines, or nil when there is no
+    /// pin and so nothing to compare.
+    public var identityLines: String? {
+        let parts = body.components(separatedBy: "\n\n")
+        guard parts.count > 1 else { return nil }
+        return parts.dropFirst().joined(separator: "\n\n")
+    }
 }
 
 public let forgetServerTitle = "forget this server?"

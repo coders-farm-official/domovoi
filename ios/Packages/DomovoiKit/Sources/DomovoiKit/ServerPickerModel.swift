@@ -136,7 +136,7 @@ public final class ServerPickerModel {
     /// `add`, or `checking…` while a typed address is being probed.
     public var manualButtonLabel: String { manualBusy ? ShellStrings.checking : ShellStrings.add }
 
-    /// `manual.isNotBlank() && !manualBusy` (`ServerPicker.kt:289`).
+    /// `manual.isNotBlank() && !manualBusy` (`ServerPicker.kt:290`).
     public var manualButtonEnabled: Bool { !ServerCredentials.isBlank(manual) && !manualBusy }
 
     /// What the forget confirmation shows about the active server: the pin,
@@ -156,9 +156,19 @@ public final class ServerPickerModel {
     /// Tapping a row: into the gate, carrying the identity **this sweep**
     /// advertised. Returns whether the picker is done (an already-trusted
     /// server connected, so the dialog closes).
+    ///
+    /// A row the list says is not selectable is refused **here**, not only in
+    /// the view's `onTapGesture`. ``ServerPickerRow/isSelectable`` is
+    /// `clickable(enabled = !active)`, so the active row does nothing — and a
+    /// review measured what happened when the model was handed it anyway:
+    /// `selectReturned=true`, `preferLocalAfter=false`, so a person who had
+    /// chosen "this phone" was moved onto the server by tapping the row that
+    /// draws itself as untappable. The rule belongs in the tested type; a
+    /// `body` is not where a decision like that can be pinned.
     @discardableResult
     public func select(_ row: ServerPickerRow) -> Bool {
-        gate.select(url: row.url, name: row.name, identity: row.advertised)
+        guard row.isSelectable else { return false }
+        return gate.select(url: row.url, name: row.name, identity: row.advertised)
     }
 
     /// The trust dialog's yes. Returns whether the picker is done.

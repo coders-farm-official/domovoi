@@ -26,11 +26,13 @@ import Foundation
 /// Whether ``localNetworkDenied`` gets a button that opens Settings —
 /// `UIApplication.openSettingsURLString`, which lands on the app's own pane
 /// where the Local Network switch is — is the owner's call and is **not
-/// built**. ``ServerPickerNotice/offersTheSettingsButton`` is the seam: it
-/// answers false for every notice today, the picker draws no button because
-/// of it, and the day the answer is yes it is one line here and one `if` in
-/// the view. The URL constant is not referenced anywhere in this package,
-/// which is why nothing in `DomovoiKit` imports UIKit.
+/// built**. ``ServerPickerNotice/offersTheSettingsButton`` names it: it
+/// answers false for every notice today and **nothing reads it** — the
+/// picker's notice line draws no button because no button is written, which
+/// is also why flipping that property would change nothing. The day the
+/// answer is yes it is one line there and one `if` in the view. The URL
+/// constant is not referenced anywhere in this package, which is why nothing
+/// in `DomovoiKit` imports UIKit.
 public enum IOSOnlyStrings {
 
     /// The Local Network permission was refused, so nothing can answer

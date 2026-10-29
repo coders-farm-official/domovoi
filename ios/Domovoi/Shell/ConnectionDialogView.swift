@@ -417,10 +417,21 @@ struct ForgetServerCard: View {
                 .foregroundStyle(.red)
             Text(ask.address)
                 .font(.title3)
-            Text(ask.body)
-                .font(.caption.monospaced())
+            // The prose in prose and the keys in monospace: §6.4 wants the
+            // fingerprints comparable with the dashboard, and the paragraph
+            // readable. Both halves come from
+            // `forgetActiveServerText(address:pinned:proven:)`.
+            Text(ask.paragraph)
+                .font(.footnote)
                 .foregroundStyle(Color.fgMuted)
                 .fixedSize(horizontal: false, vertical: true)
+            if let identity = ask.identityLines {
+                Text(identity)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(Color.fgMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+            }
             HStack {
                 Spacer()
                 Button(forgetServerCancel, action: onCancel)

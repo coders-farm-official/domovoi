@@ -66,11 +66,18 @@ public enum ServerPickerNotice: Equatable, Sendable {
 
     /// Whether this notice comes with a button that opens Settings.
     ///
-    /// **False for every notice, including ``localNetworkDenied``.** The
-    /// button is the owner's open question (``IOSOnlyStrings``); this is the
-    /// seam, so the day the answer is yes the change is here and in one `if`,
-    /// and so that a picker drawn today cannot grow a button nobody decided
-    /// on.
+    /// **False for every notice, including ``localNetworkDenied``, and
+    /// nothing reads it.** The button is the owner's open question
+    /// (``IOSOnlyStrings``) and is not built: `NoticeLine` takes a text and a
+    /// warning flag and draws no button at all, so the picker draws none
+    /// because none is written — not because of this property. Flipping this
+    /// to true would change nothing on screen.
+    ///
+    /// It is kept as the **name of the decision**, so the day the owner says
+    /// yes there is one place to change and one `if` to add in the view. An
+    /// earlier version of this comment, and two others beside it, said the
+    /// view already drew on it; a review caught all three, which is the one
+    /// defect class this batch was told to watch for.
     public var offersTheSettingsButton: Bool { false }
 }
 
@@ -119,7 +126,7 @@ public func serverPickerNotice(
 /// The section label above the list: the sweep's progress, "no domovois
 /// found" or just "domovois".
 ///
-/// Android's `when` (`ServerPicker.kt:177-183`) including its condition that
+/// Android's `when` (`ServerPicker.kt:176-180`) including its condition that
 /// "no domovois found" needs `known` to be empty as well — a phone with a
 /// saved server it cannot see has not found nothing.
 public func serverPickerSectionLabel(
@@ -274,7 +281,7 @@ public func serverPickerRows(
 /// Which side of the switch is lit.
 ///
 /// `val onPhone = preferLocal || serverUrl.isBlank() || !choice.enabled`
-/// (`ServerPicker.kt:421`). The server card is **greyed with the reason
+/// (`ServerPicker.kt:423`). The server card is **greyed with the reason
 /// visible rather than hidden**, which is why this takes the choice and not a
 /// Bool.
 public func connectionShowsThePhone(preferLocal: Bool, serverURL: String, choice: ServerChoice) -> Bool {

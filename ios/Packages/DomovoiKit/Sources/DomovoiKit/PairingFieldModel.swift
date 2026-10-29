@@ -45,7 +45,7 @@ public final class PairingFieldModel {
             guard typed != oldValue else { return }
             // Editing clears the message — **but only when no wait is
             // running**, because a wait is a fact about the server and not
-            // about what is in the field (`PairingScreen.kt:174`).
+            // about what is in the field (`PairingScreen.kt:163`).
             if result != nil, waitLeftMs == 0 { result = nil }
         }
     }
@@ -57,14 +57,24 @@ public final class PairingFieldModel {
     /// same monotonic clock ``TokenHealth`` uses. Zero for "now".
     public private(set) var waitUntilMs: Int64 = 0
 
-    /// The clock as the countdown last read it.
+    /// The clock as the countdown last read it — **what makes the number
+    /// redraw, and not what decides the wait**.
     ///
-    /// **Stored rather than read live, and that is the whole reason the
-    /// countdown exists.** A computed `clock()` would be correct and would
-    /// never redraw: nothing observable changes, so `Observation` has no
-    /// reason to tell a view to ask again, and "wait 0:42" would sit at 0:42
-    /// until something else moved. Android's `now` is Compose state for the
-    /// same reason (`PairingScreen.kt:168`).
+    /// It is stored because a wait read only from `clock()` would be correct
+    /// and would never redraw: nothing observable changes, so `Observation`
+    /// has no reason to tell a view to ask again, and "wait 0:42" would sit
+    /// at 0:42 until something else moved. Android's `now` is Compose state
+    /// for the same reason (`PairingScreen.kt:151`).
+    ///
+    /// **It is not the only thing ``waitLeftMs`` reads, and that is a fix.**
+    /// It used to be: a review measured a field throttled, then stopped
+    /// (`PairingFieldView`'s `onDisappear`), still reading `waitLeftMs=42000`
+    /// and `isEnabled=false` ten minutes later, because `nowMs` is written
+    /// only by the countdown and nothing restarts one — `startCountdown` is
+    /// reached only from ``submit()``'s `.throttled` branch, and ``submit()``
+    /// is gated on `isEnabled`. The field was dead for the life of the model.
+    /// ``waitLeftMs`` now takes the later of this and the live clock, so the
+    /// wait ends when the wait ends whether or not anything is ticking.
     public private(set) var nowMs: Int64 = 0
 
     private var countdown: Task<Void, Never>?
@@ -109,7 +119,13 @@ public final class PairingFieldModel {
     // MARK: - what is drawn
 
     /// How long the server still makes this address wait.
-    public var waitLeftMs: Int64 { max(0, waitUntilMs - nowMs) }
+    ///
+    /// **A function of the clock**, with ``nowMs`` only as a floor: the
+    /// countdown's writes are what make a view redraw, and the live read is
+    /// what makes the wait end even when no countdown is running (see
+    /// ``nowMs``). The floor keeps a test's frozen or rewound clock from
+    /// making a wait grow back.
+    public var waitLeftMs: Int64 { max(0, waitUntilMs - max(nowMs, clock())) }
 
     /// The field and the button are off while a check is in flight and for
     /// the whole of a wait.
@@ -127,7 +143,7 @@ public final class PairingFieldModel {
     ///
     /// ``TokenPasteField/hint(_:)``, which asks only whether the text is
     /// usable and **not** whether the field is live. Android folds `enabled`
-    /// into the same question (`PairingScreen.kt:251`, `usable = isStorable
+    /// into the same question (`PairingScreen.kt:219`, `usable = isStorable
     /// && enabled`), so a perfectly good token shows "at least 12
     /// characters" while the check is in flight or a wait is counting down.
     /// I1-B ported the rule without that, which is the better behaviour;
@@ -149,21 +165,39 @@ public final class PairingFieldModel {
     public func submit() async -> TokenCheck? {
         guard canSubmit else { return nil }
         let candidate = TokenPasteField.trimmed(typed)
+        // **The server this token is being checked against, read before the
+        // await** — finding A6-01, from the inside.
+        //
+        // An earlier version read `store.serverURL` *after* the check and
+        // argued that the per-spelling keying made a switch harmless: "a
+        // server switch between the paste and the next request cannot pair
+        // the new address with this household's token". That is true of the
+        // window between the write and the next request, and says nothing
+        // about the window the await opens. A review measured it: with the
+        // store on A and a check that switched it to B before answering
+        // `.accepted`, A's household token was written under B's key and went
+        // out with B's next request.
+        let target = store.serverURL
         checking = true
         let answer = await check(candidate)
         checking = false
         result = answer
         switch answer {
         case .accepted:
-            // The one branch that writes. The token is keyed by the saved
-            // spelling, which is the key `ServerBook` reads a request's token
-            // from, so a server switch between the paste and the next request
-            // cannot pair the new address with this household's token
-            // (A6-01).
-            store.setToken(candidate, for: store.serverURL)
-            clearPairingRequired()
+            // The one branch that writes, and it writes under `target`: the
+            // token was checked against that server and belongs to that
+            // household, whatever the store says now.
+            store.setToken(candidate, for: target)
             typed = ""
             result = nil
+            // The two side effects are about the screen in front of the
+            // person, so they are only right while the person is still on the
+            // server that was asked. A switch during the check means the
+            // pairing refusal now on the client is some other server's, and
+            // "this phone is paired" would be a claim about a server this
+            // token was never offered to.
+            guard store.serverURL == target else { break }
+            clearPairingRequired()
             onSaved(candidate)
         case .throttled(let waitMs):
             nowMs = clock()
@@ -179,9 +213,15 @@ public final class PairingFieldModel {
     /// "wait 0:42" a number that moves.
     public var isCountingDown: Bool { countdown != nil }
 
+    /// Stop the countdown. The **wait** is untouched: it belongs to the
+    /// server, not to the screen, and ``waitLeftMs`` keeps reading the clock
+    /// — so a field stopped mid-wait comes back by itself when the wait ends.
+    /// The clock is read once here as well so nothing can read a `nowMs` that
+    /// was stale at the moment the ticking stopped.
     public func stop() {
         countdown?.cancel()
         countdown = nil
+        nowMs = max(nowMs, clock())
     }
 
     /// Re-read the wait once a second until there is none left.

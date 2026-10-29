@@ -305,11 +305,13 @@ public final class ShellModel {
         pairingOffersTheField(verdict: activeVerdict)
     }
 
-    /// What the pairing screen says instead, when it may not.
+    /// What the pairing screen says instead, when it may not — the true
+    /// sentence for **this** verdict (``pairingWithheldText(address:verdict:canTrustAgain:)``).
     public var pairingWithheld: String? {
         guard !pairingOffersTheTokenField else { return nil }
         return pairingWithheldText(
             address: ServerCredentials.address(inputs.serverURL),
+            verdict: activeVerdict,
             canTrustAgain: changedIdentityHere != nil
         )
     }

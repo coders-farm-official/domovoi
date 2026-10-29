@@ -238,23 +238,101 @@ final class ShellModelPartThreeTests: XCTestCase {
 
     // MARK: - §5.1, the pairing screen's own question (A6-03)
 
-    /// **A 401 may invite a paste only from a server that has proved
-    /// itself.** A mismatch gets the warning, not a field.
-    func testAServerThatProvedADifferentKeyIsNotOfferedTheTokenField() async {
+    /// Answer `/api/health` with `body` from now on, bump the network so the
+    /// cached verdict cannot stand, and take the new verdict.
+    private func reproveWith(body: String, container: AppContainer) async {
+        StubURLProtocol.dispatch { request in
+            guard request.url?.path == "/api/health" else { return .json("{}", status: 404) }
+            return .json(body)
+        }
+        container.identity.networkChanged()
+        guard let base = TokenScope.baseOf(server) else { return XCTFail("the server did not parse") }
+        await container.identity.prepare(base)
+    }
+
+    /// Raise the pairing screen the way a person does: a device-tier refusal
+    /// from a server that has proved itself. The flag is sticky, which is why
+    /// the verdict can go bad underneath it.
+    private func raisePairingScreen(container: AppContainer) async {
+        await proveIdentity(.real, container: container)
+        container.client.notePossiblePairingRefusal(
+            status: 401,
+            body: #"{"detail":"X-Device-Token or admin session required"}"#
+        )
+        XCTAssertTrue(container.client.pairingRequired, "the 401 is what raises the screen")
+    }
+
+    /// **A mismatch never reaches the pairing screen**, which is the whole
+    /// reason its words could not be the screen's words.
+    ///
+    /// `shellMode` asks `identityChanged` before `pairingRequired`, so the
+    /// local shell and its banner win. Asserted on `model.screen`, not only
+    /// on the gate: a test about this screen that does not say which screen
+    /// it is on is the test that let F1 through.
+    func testAMismatchGoesToTheLocalShellNotThePairingScreen() async {
         let store = pinnedStore(token: nil)
         let (model, container) = makeModel(store: store)
-        XCTAssertTrue(model.pairingOffersTheTokenField, "nothing asked yet")
+        await raisePairingScreen(container: container)
+        model.refresh()
+        XCTAssertEqual(.pairing, model.screen, "with a good verdict it is the pairing screen")
+        XCTAssertTrue(model.pairingOffersTheTokenField)
         XCTAssertNil(model.pairingWithheld)
 
+        container.identity.networkChanged()
         await proveIdentity(.rogue, container: container)
         model.refresh()
+        guard case .mismatch = container.identity.status?.verdict else {
+            return XCTFail("expected a mismatch, got \(String(describing: container.identity.status?.verdict))")
+        }
+        XCTAssertEqual(
+            .localMedia(.identityChanged), model.screen,
+            "the impostor warning is the local shell's, not this screen's"
+        )
+        model.stop()
+    }
+
+    /// **A server whose core is not answering is not told it is an
+    /// impostor.** This is the harm F1 named: the box is restarting, a 401
+    /// got in first, and the screen used to tell the person their Domovoi had
+    /// answered with the wrong identity and to run the forgetting cascade.
+    func testACoreThatIsNotAnsweringGetsTheCouldNotCheckWordsNotTheImpostorWords() async {
+        let store = pinnedStore(token: nil)
+        let (model, container) = makeModel(store: store)
+        await raisePairingScreen(container: container)
+        // web/backend/main.py leaves `identity` out and says why when its
+        // core did not answer in time: a restart, an update, a busy box.
+        await reproveWith(
+            body: #"{"status":"degraded","db_reachable":true,"domovoi_reachable":false,"identity":null}"#,
+            container: container
+        )
+        model.refresh()
+        guard case .unavailable = container.identity.status?.verdict else {
+            return XCTFail("expected unavailable, got \(String(describing: container.identity.status?.verdict))")
+        }
+        XCTAssertEqual(.pairing, model.screen, "and this really is the screen in front of the person")
+        XCTAssertFalse(model.pairingOffersTheTokenField, "the gate still withholds the field (A6-03)")
+        XCTAssertEqual("Couldn't check it with the server — try again.", model.pairingWithheld)
+        model.stop()
+    }
+
+    /// A pinned server that proves nothing also reaches this screen, and also
+    /// gets the honest sentence rather than the banner's.
+    func testAServerThatProvesNothingIsNotOfferedTheFieldAndIsNotCalledAnImpostor() async {
+        let store = pinnedStore(token: nil)
+        let (model, container) = makeModel(store: store)
+        await raisePairingScreen(container: container)
+        // A plain web server at the saved address: no identity block at all,
+        // with a key pinned for it.
+        await reproveWith(body: #"{"status":"ok"}"#, container: container)
+        model.refresh()
+        guard case .unproven = container.identity.status?.verdict else {
+            return XCTFail("expected unproven, got \(String(describing: container.identity.status?.verdict))")
+        }
+        XCTAssertEqual(.pairing, model.screen)
         XCTAssertFalse(model.pairingOffersTheTokenField)
         guard let withheld = model.pairingWithheld else { return XCTFail("nothing was said instead") }
-        XCTAssertTrue(withheld.contains("10.0.0.42:6369 answered, but not with the identity this phone trusted"))
-        XCTAssertTrue(
-            withheld.contains("trust it again"),
-            "and it points at the way out that exists, because this mismatch proved a key"
-        )
+        XCTAssertEqual("Couldn't check it with the server — try again.", withheld)
+        XCTAssertFalse(withheld.contains("forget"), "forgetting a server is not the answer to this")
         model.stop()
     }
 
@@ -280,7 +358,13 @@ final class ShellModelPartThreeTests: XCTestCase {
         XCTAssertEqual("first", first?.text)
         model.showToast("second")
         XCTAssertEqual("second", model.toast?.text)
-        XCTAssertNotEqual(first?.id, model.toast?.id, "two toasts, even with the same words")
+        XCTAssertNotEqual(first?.id, model.toast?.id, "a second toast, not the first one edited")
+        // The claim "even with the same words" has to be made with the same
+        // words: the id is what a view keys the animation on, so a repeat of
+        // an identical message must still be a new toast.
+        let second = model.toast
+        model.showToast("second")
+        XCTAssertNotEqual(second?.id, model.toast?.id, "two toasts, even with the same words")
 
         model.dismissToast()
         XCTAssertNil(model.toast)

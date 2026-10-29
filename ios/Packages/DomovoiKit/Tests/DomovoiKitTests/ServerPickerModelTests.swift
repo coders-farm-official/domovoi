@@ -263,4 +263,46 @@ final class ServerPickerModelTests: XCTestCase {
         picker.askToForgetActive()
         XCTAssertNil(picker.forgetActiveAsk(status: nil))
     }
+
+    // MARK: - the row the list says is not tappable
+
+    /// **The model refuses the active row itself.**
+    ///
+    /// `ServerPickerRow.isSelectable` is `clickable(enabled = !active)`, and
+    /// until a review measured it the only thing enforcing it was an
+    /// `onTapGesture` in a `body`: handed the active row directly, the model
+    /// answered `selectReturned=true` and wrote `preferLocal=false`, moving
+    /// someone who had chosen "this phone" onto the server by way of a row
+    /// drawn as untappable.
+    func testTheActiveRowIsRefusedByTheModelAndNotOnlyByTheView() {
+        let store = InMemoryShellStore(serverURL: server, preferLocal: true)
+        store.upsertKnownServer(url: server, name: "kitchen-box")
+        let picker = makePicker(store: store)
+
+        guard let active = picker.rows.first(where: { $0.active }) else {
+            return XCTFail("no active row")
+        }
+        XCTAssertFalse(active.isSelectable, "the list draws it as untappable")
+        XCTAssertFalse(picker.select(active), "and the model says so too")
+        XCTAssertTrue(store.preferLocal, "their own choice is still theirs")
+        XCTAssertNil(picker.gate.pending, "and no trust dialog was raised about a server already trusted")
+    }
+
+    /// Any other row still goes through, so the guard above is not simply
+    /// switching the picker off.
+    func testAnotherRowIsStillSelectable() {
+        let store = InMemoryShellStore(serverURL: server, preferLocal: true)
+        store.upsertKnownServer(url: server, name: "kitchen-box")
+        store.trustServer(other)
+        store.upsertKnownServer(url: other, name: "shed-box")
+        let picker = makePicker(store: store)
+
+        guard let row = picker.rows.first(where: { !$0.active }) else {
+            return XCTFail("no other row")
+        }
+        XCTAssertTrue(row.isSelectable)
+        XCTAssertTrue(picker.select(row), "already trusted, so the dialog closes")
+        XCTAssertEqual(other, store.serverURL)
+        XCTAssertFalse(store.preferLocal, "and picking a server means using it")
+    }
 }

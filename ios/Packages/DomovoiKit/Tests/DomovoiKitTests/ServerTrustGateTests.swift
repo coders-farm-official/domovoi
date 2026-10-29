@@ -138,28 +138,76 @@ final class ServerTrustGateTests: XCTestCase {
     /// actually happened. A switch that was refused leaves them where they
     /// were rather than sending them to a server the app is not talking to.
     ///
-    /// This is a **divergence**: Android's `onConnect` sets
-    /// `preferLocal = false` whatever `setServerUrl` answered. Named in
-    /// `I1C3-REPORT.md`.
+    /// This is a **divergence from Android**, whose `onConnect` sets
+    /// `preferLocal = false` whatever `setServerUrl` answered — and it is
+    /// **defence in depth, not a branch a person can reach**: over a
+    /// `TrustBook`-backed store `onTrust` trusts before `onConnect` points,
+    /// so `setServerURL` cannot refuse and
+    /// ``ServerPickerModel``'s `couldNotSwitch` toast is unreachable from the
+    /// picker. A review measured the real `overStore` answering
+    /// `switched == true` every time. `I1C3-REPORT.md` §7.6 says so now.
+    ///
+    /// It is pinned over **the real ``ServerTrustGate/overStore(_:didConnect:)``**
+    /// with a store whose `setServerURL` refuses. The version before this one
+    /// hand-wrote a copy of `overStore`'s body in its own `onConnect` and
+    /// asserted on the copy, so changing `overStore` to write
+    /// `setPreferLocal(false)` unconditionally left it green.
     func testARefusedSwitchDoesNotDropThePersonsThisPhoneChoice() {
-        let store = InMemoryShellStore(serverURL: "", preferLocal: true)
+        let store = RefusingShellStore(InMemoryShellStore(serverURL: "", preferLocal: true))
         var switchedAnswers: [Bool] = []
-        // A gate whose trust step does nothing, which is the only way the
-        // refusal below can be reached: the real one trusts first.
-        let gate = ServerTrustGate(
-            isTrusted: { _ in false },
-            onTrust: { _, _ in },
-            onConnect: { url, _ in
-                store.upsertKnownServer(url: url, name: nil)
-                let switched = store.setServerURL(url)
-                switchedAnswers.append(switched)
-                if switched { store.setPreferLocal(false) }
-            }
-        )
+        let gate = ServerTrustGate.overStore(store) { _, switched in
+            switchedAnswers.append(switched)
+        }
         _ = gate.select(url: server)
         XCTAssertTrue(gate.confirm())
-        XCTAssertEqual([false], switchedAnswers)
+        XCTAssertTrue(store.isTrusted(server), "the trust write took, as `overStore` does it first")
+        XCTAssertEqual([false], switchedAnswers, "and the refusal is reported, not swallowed")
         XCTAssertEqual("", store.serverURL)
         XCTAssertTrue(store.preferLocal, "still on the phone, because nothing changed")
     }
+}
+
+/// A store that refuses every ``ShellStore/setServerURL(_:)`` and otherwise
+/// behaves exactly like ``InMemoryShellStore``.
+///
+/// The one state the real stores cannot be put in, so the one way to pin the
+/// refusal arm of ``ServerTrustGate/overStore(_:didConnect:)`` against
+/// `overStore` itself rather than against a copy of it.
+final class RefusingShellStore: ShellStore {
+
+    private let inner: InMemoryShellStore
+
+    init(_ inner: InMemoryShellStore) {
+        self.inner = inner
+    }
+
+    func setServerURL(_ url: String) -> Bool { false }
+
+    var serverURL: String { inner.serverURL }
+    var preferLocal: Bool { inner.preferLocal }
+    var phoneBar: String? { inner.phoneBar }
+    var trustedServers: Set<String> { inner.trustedServers }
+    var knownServers: [KnownServer] { inner.knownServers }
+
+    func setPreferLocal(_ value: Bool) { inner.setPreferLocal(value) }
+    func token(for url: String) -> String? { inner.token(for: url) }
+    func setToken(_ token: String?, for url: String) { inner.setToken(token, for: url) }
+    func isTrusted(_ url: String) -> Bool { inner.isTrusted(url) }
+    func trustServer(_ url: String, identity: ServerIdentity.Pin?) {
+        inner.trustServer(url, identity: identity)
+    }
+    func upsertKnownServer(url: String, name: String?) {
+        inner.upsertKnownServer(url: url, name: name)
+    }
+    func replacePin(url: String, pin: ServerIdentity.Pin) { inner.replacePin(url: url, pin: pin) }
+    func removeKnownServer(_ url: String) -> TrustBook.ForgetReach { inner.removeKnownServer(url) }
+    func forgetActiveServer() -> String? { inner.forgetActiveServer() }
+
+    func pinFor(_ key: String) -> ServerIdentity.Pin? { inner.pinFor(key) }
+    func pin(_ key: String, _ pin: ServerIdentity.Pin) { inner.pin(key, pin) }
+    func mayPinOnFirstProof(_ key: String) -> Bool { inner.mayPinOnFirstProof(key) }
+
+    func isTokenRejected(_ url: String) -> Bool { inner.isTokenRejected(url) }
+    func markTokenRejected(_ url: String) { inner.markTokenRejected(url) }
+    func clear(_ url: String) { inner.clear(url) }
 }
