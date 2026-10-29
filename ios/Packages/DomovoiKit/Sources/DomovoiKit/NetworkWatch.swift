@@ -386,12 +386,7 @@ public final class NetworkWatch: Sendable {
             for (id, type) in Self.pathMonitors {
                 let monitor = type.map { NWPathMonitor(requiredInterfaceType: $0) } ?? NWPathMonitor()
                 monitor.pathUpdateHandler = { [weak self] path in
-                    guard let self else { return }
-                    seen(.path, id) { _ in Self.facts(of: path) }
-                    // A path update is the only event this platform gives,
-                    // and the addresses are the half that catches a new DHCP
-                    // lease, so they are re-read here rather than on a timer.
-                    readInterfaces()
+                    self?.pathReported(id, Self.facts(of: path))
                 }
                 monitor.start(queue: queue)
                 watch.seen(.path, id) { _ in Self.facts(of: monitor.currentPath) }
@@ -400,6 +395,27 @@ public final class NetworkWatch: Sendable {
             watch.readInterfaces()
         }
         monitors.withLock { $0 = started }
+    }
+
+    /// One monitor reported a path — the whole of what an `NWPathMonitor`'s
+    /// `pathUpdateHandler` does, as a value-in entry point.
+    ///
+    /// It exists so the property that matters can be tested without the
+    /// system: **a path already in the picture is not a change.** The test
+    /// that was written against that bug started three real monitors and
+    /// asserted the counter stayed at zero over a 1.5 s wall-clock window, so
+    /// any Wi-Fi event on a shared Mac — a roam, a DHCP renew, a VPN blink —
+    /// failed the suite for something that was not a defect. Feeding the same
+    /// picture back through this method pins the comparison itself and takes
+    /// microseconds.
+    ///
+    /// The interfaces are re-read here because a path update is the only event
+    /// this platform gives and the addresses are the half that catches a new
+    /// DHCP lease — on a timer they would be a second picture of the same
+    /// change.
+    func pathReported(_ id: String, _ facts: Facts) {
+        seen(.path, id) { _ in facts }
+        readInterfaces()
     }
 
     /// Stop the monitors. Only the tests need this; see ``start(queue:)`` for

@@ -363,7 +363,10 @@ public func healthChecks(
         } else {
             let all = rooms ?? []
             let on = all.filter(\.online).count
-            out.append(c.with(tone: on > 0 ? .ok : .idle, text: "\(on) of \(all.count) online"))
+            out.append(c.with(
+                tone: on > 0 ? .ok : .idle,
+                text: "\(on)\(HealthStrings.ofSeparator)\(all.count)\(HealthStrings.onlineSuffix)"
+            ))
         }
     }
 
@@ -404,7 +407,7 @@ public func healthChecks(
                     text: "\(off[0].roomID)\(HealthStrings.isOfflineSuffix)",
                     at: off[0].lastConnectedAt
                 )
-                : offlineBase.with(tone: .warn, text: "\(off.count) rooms offline")
+                : offlineBase.with(tone: .warn, text: "\(off.count)\(HealthStrings.roomsOfflineSuffix)")
         },
         okText: HealthStrings.none
     )
@@ -421,7 +424,7 @@ public func healthChecks(
                 tone: .warn,
                 text: w.count == 1
                     ? "\(w[0].roomID)\(HealthStrings.wasSetUpSuffix)"
-                    : "\(w.count) rooms were set up but haven't connected yet"
+                    : "\(w.count)\(HealthStrings.roomsWaitingSuffix)"
             )
         },
         okText: HealthStrings.none
@@ -438,8 +441,8 @@ public func healthChecks(
             kioskBase.with(
                 tone: .warn,
                 text: dead.count == 1
-                    ? "the \(dead[0].roomID) screen stopped showing anything"
-                    : "\(dead.count) screens stopped showing anything"
+                    ? "the \(dead[0].roomID)\(HealthStrings.screenStoppedSuffix)"
+                    : "\(dead.count)\(HealthStrings.screensStoppedSuffix)"
             )
         },
         okText: HealthStrings.everyScreenIsShowing
@@ -482,14 +485,14 @@ public func healthChecks(
                 out.append(c.with(
                     tone: only.tone,
                     text: only.tone == .err
-                        ? "the \(only.name) plugin failed to load"
-                        : "the \(only.name) plugin is degraded",
+                        ? "the \(only.name)\(HealthStrings.pluginFailedSuffix)"
+                        : "the \(only.name)\(HealthStrings.pluginDegradedSuffix)",
                     items: names
                 ))
             } else if bad.count > 1 {
                 out.append(c.with(
                     tone: badOrder.contains(where: { bad[$0]?.tone == .err }) ? .err : .warn,
-                    text: "\(bad.count) plugins have problems",
+                    text: "\(bad.count)\(HealthStrings.pluginsHaveProblemsSuffix)",
                     items: names
                 ))
             } else if all.isEmpty {
@@ -529,7 +532,7 @@ public func healthChecks(
                         tone: .warn,
                         text: stuck == 1
                             ? HealthStrings.oneRequestWaiting
-                            : "\(stuck) media requests are waiting\(HealthStrings.manyRequestsSuffix)"
+                            : "\(stuck)\(HealthStrings.requestsWaitingSuffix)\(HealthStrings.manyRequestsSuffix)"
                     ))
                 }
             }
@@ -567,7 +570,7 @@ public func guardCheck(_ state: ContainerGuardState?) -> HealthCheck {
     } else if state.bannerTone == .tamper {
         text = HealthStrings.tampering
     } else if state.incidentIDs.count > 1 {
-        text = "\(state.incidentIDs.count) Domovoi containers need attention"
+        text = "\(state.incidentIDs.count)\(HealthStrings.containersNeedAttentionSuffix)"
     } else {
         let only = state.incidentIDs.first.flatMap { state.incidentSummaries[$0] } ?? nil
         let words = (only ?? HealthStrings.containerNeedsAttention).trimmingTrailingFullStops()
@@ -704,6 +707,50 @@ public enum HealthStrings {
 
     /// `:215`, after `N media requests are waiting`. **U+00B7**.
     public static let manyRequestsSuffix = " · no provider plugin can fill them"
+
+    // MARK: the other interpolated tails
+    //
+    // Every one of these is the tail of a Kotlin string with a value
+    // interpolated into its head, so none can be a whole-literal match — and
+    // every one was written inline in this file and compared only against a
+    // literal in the Swift tests, which is a divergence in the source plus
+    // the same divergence in the test, passing. The containers plural was
+    // already pinned this way; these are the rest of map §6.3.
+
+    /// After the count. The single-room branch is ``isOfflineSuffix``.
+    public static let roomsOfflineSuffix = " rooms offline"
+
+    /// After the count. ASCII apostrophe in `haven't`.
+    public static let roomsWaitingSuffix = " rooms were set up but haven't connected yet"
+
+    /// After `the <room>`.
+    public static let screenStoppedSuffix = " screen stopped showing anything"
+
+    /// After the count.
+    public static let screensStoppedSuffix = " screens stopped showing anything"
+
+    /// After `the <plugin>`.
+    public static let pluginFailedSuffix = " plugin failed to load"
+
+    /// After `the <plugin>`.
+    public static let pluginDegradedSuffix = " plugin is degraded"
+
+    /// After the count.
+    public static let pluginsHaveProblemsSuffix = " plugins have problems"
+
+    /// After the count, and before ``manyRequestsSuffix``.
+    public static let requestsWaitingSuffix = " media requests are waiting"
+
+    /// `"$on of ${all.size} online"`, in two pieces because a count sits in
+    /// the middle of it.
+    public static let ofSeparator = " of "
+
+    /// …and its tail.
+    public static let onlineSuffix = " online"
+
+    /// After the count. Guarded by `> 1` on both sides, so there is no
+    /// `1 Domovoi containers` to catch.
+    public static let containersNeedAttentionSuffix = " Domovoi containers need attention"
 
     /// `:234`.
     public static let containersFine = "every container Domovoi expects looks right"

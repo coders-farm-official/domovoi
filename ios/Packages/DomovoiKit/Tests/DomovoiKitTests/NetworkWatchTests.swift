@@ -452,18 +452,67 @@ final class NetworkWatchTests: XCTestCase {
         XCTAssertTrue(watch.fingerprint.contains("P|wired"), "the wired path was not in the seed")
         XCTAssertEqual(0, watch.changeCount, "the seed is one picture, not a change")
         XCTAssertEqual(0, seen.current)
-        // Now let the monitors deliver their first updates. Each describes
-        // the network the process started on, which the seed already holds,
-        // so not one of them is a change — this is the assertion that reads
-        // three with the monitors started outside the batch.
-        let settle = Date().addingTimeInterval(1.5)
-        while Date() < settle {
-            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
-        }
-        XCTAssertEqual(0, watch.changeCount, "the network the process started on was reported as a change")
-        XCTAssertEqual(0, seen.current, "the gate's epoch was bumped for a network that had not changed")
-        XCTAssertTrue(watch.fingerprint.contains("P|default"), "no default path was reported in 5 s")
+        XCTAssertTrue(watch.fingerprint.contains("P|default"), "the default path was not in the seed")
         XCTAssertTrue(watch.fingerprint.contains("I|"), "no interface addresses in the fingerprint")
+        // **And nothing waits here.** This used to let the three real
+        // monitors deliver their first updates and assert `changeCount == 0`
+        // over a 1.5 s wall-clock window — so a Wi-Fi roam, a DHCP renew or a
+        // VPN blink on a shared Mac failed the suite for something that was
+        // not a defect. The property that was being tested is a property of
+        // the comparison, not of 1.5 s of quiet, and
+        // `testAPathAlreadyInThePictureIsNotAChange` tests it in microseconds.
+    }
+
+    /// **A path already in the picture is not a change** — the bug the test
+    /// above was written against, pinned at the comparison instead of over a
+    /// window of real network quiet.
+    ///
+    /// ``NetworkWatch/pathReported(_:_:)`` is the whole of what an
+    /// `NWPathMonitor`'s `pathUpdateHandler` does, so feeding the same facts
+    /// back is exactly what a monitor's first callback does after the seed.
+    func testAPathAlreadyInThePictureIsNotAChange() {
+        let seen = Shared<Int>(0)
+        let watch = NetworkWatch(onChange: { seen.mutate { $0 += 1 } })
+
+        var wifi = NetworkWatch.Facts()
+        wifi.status = "satisfied"
+        wifi.transports = ["wifi"]
+        wifi.iface = ["en0/wifi/14"]
+        wifi.gateways = ["192.168.0.1:0"]
+
+        // The seed: one picture, whatever it is made of. The interfaces are
+        // read inside it, exactly as `start()` does, because
+        // ``NetworkWatch/pathReported(_:_:)`` re-reads them — a seed without
+        // them would make the first callback a change for the wrong reason
+        // and the test would pass over the bug it is about.
+        watch.batch { inner in
+            inner.seen(.path, "default") { _ in wifi }
+            inner.seen(.path, "wifi") { _ in wifi }
+            inner.refresh()
+        }
+        let seeded = watch.fingerprint
+        XCTAssertNotEqual(NetworkWatch.none, seeded)
+        XCTAssertEqual(0, watch.changeCount, "the first picture is not a change")
+        XCTAssertEqual(0, seen.current)
+
+        // Each monitor's first callback describes the network the process
+        // started on. Not one of them is a change.
+        watch.pathReported("default", wifi)
+        watch.pathReported("wifi", wifi)
+        XCTAssertEqual(
+            0, watch.changeCount,
+            "the network the process started on was reported as a change"
+        )
+        XCTAssertEqual(0, seen.current, "the gate's epoch was bumped for nothing")
+
+        // …and the other half, which is what stops the assertion above from
+        // passing over a watch that can no longer see a change at all.
+        var roamed = wifi
+        roamed.gateways = ["192.168.5.1:0"]
+        watch.pathReported("wifi", roamed)
+        XCTAssertEqual(1, watch.changeCount, "a different picture is one change")
+        XCTAssertEqual(1, seen.current)
+        XCTAssertNotEqual(seeded, watch.fingerprint)
     }
 
     private func currentDefaultPath() throws -> NWPath {

@@ -1070,7 +1070,7 @@ final class ShellStringsTests: XCTestCase {
         // `HealthChecks.kt`). Guarded by `> 1` on both sides, so there is no
         // "1 Domovoi containers" to catch — unlike `stop $count rooms?`,
         // which is defect #9 and is not this batch's code.
-        assertKotlinSays(" Domovoi containers need attention")
+        assertKotlinSays(HealthStrings.containersNeedAttentionSuffix)
         XCTAssertEqual(
             "2 Domovoi containers need attention",
             guardCheck(ContainerGuardState(
@@ -1101,6 +1101,78 @@ final class ShellStringsTests: XCTestCase {
         ] {
             XCTAssertTrue(suffix.hasPrefix(" "), "a tail begins with its space: \(debugged(suffix))")
         }
+    }
+
+    /// The **other nine** interpolated tails of map §6.3, which were written
+    /// inline in `HealthChecks.swift` and compared only against literals in
+    /// the Swift tests.
+    ///
+    /// A divergence in the Swift source plus the same divergence in the Swift
+    /// test passes, which is the exact class this file exists to close. The
+    /// containers plural was already pinned this way, so the technique was
+    /// here and simply had not been applied to the rest.
+    func testTheOtherInterpolatedTailsAreTheKotlinsTails() {
+        let tails = [
+            HealthStrings.roomsOfflineSuffix,
+            HealthStrings.roomsWaitingSuffix,
+            HealthStrings.screenStoppedSuffix,
+            HealthStrings.screensStoppedSuffix,
+            HealthStrings.pluginFailedSuffix,
+            HealthStrings.pluginDegradedSuffix,
+            HealthStrings.pluginsHaveProblemsSuffix,
+            HealthStrings.requestsWaitingSuffix,
+            HealthStrings.containersNeedAttentionSuffix,
+            HealthStrings.ofSeparator,
+            HealthStrings.onlineSuffix,
+        ]
+        for tail in tails {
+            assertKotlinSays(tail)
+            XCTAssertTrue(tail.hasPrefix(" "), "a tail begins with its space: \(debugged(tail))")
+        }
+        // …and they are the strings the checks actually build, so a tail that
+        // is pinned but unused cannot stand in for one that is not.
+        let rooms = (0..<2).map { HomeRoom(roomID: "r\($0)", status: "offline") }
+        let checks = healthChecks(health: nil, rooms: rooms, plugins: nil, acq: nil)
+        XCTAssertEqual(
+            "2 rooms offline",
+            checks.first { $0.key == "offline" }?.text
+        )
+        XCTAssertEqual(
+            "0 of 2 online",
+            checks.first { $0.key == "rooms" }?.text
+        )
+    }
+
+    /// Every **label** in map §6.3 — the ten checks', the four fixes' and the
+    /// four parts' — against the Kotlin **whole**.
+    ///
+    /// All eighteen are plain literals in `HealthChecks.kt`, so every one can
+    /// be a whole-string match, and `grep` of this file for any of them used
+    /// to find nothing. Nothing Home draws today uses a label (the attention
+    /// card draws `text`), so this is coverage rather than a live defect —
+    /// but the labels are the Health screen's whole vocabulary and that screen
+    /// is the next consumer.
+    ///
+    /// Read off the checks rather than written out here, so a label changed in
+    /// the Swift fails this rather than a copy of it in a test.
+    func testEveryHealthLabelSaysWhatTheKotlinSays() {
+        let checks = healthChecks(health: nil, rooms: nil, plugins: nil, acq: nil)
+        XCTAssertEqual(10, checks.count, "ten checks, so ten labels: \(checks.map(\.key))")
+        for check in checks {
+            assertKotlinSaysWhole(check.label, "the \(check.key) check's label")
+            if let fix = check.fixLabel {
+                assertKotlinSaysWhole(fix, "the \(check.key) check's fix label")
+            }
+        }
+        XCTAssertEqual(
+            ["models", "music", "plugins", "rooms"],
+            Set(checks.compactMap(\.fixLabel)).sorted(),
+            "the four fix labels, so none is missing from the loop above"
+        )
+        for part in HealthPart.allCases {
+            assertKotlinSaysWhole(part.label, "a part label, capitalised as the Kotlin has it")
+        }
+        XCTAssertEqual(4, HealthPart.allCases.count)
     }
 
     /// The card's three ported strings. The fourth — the stale mark — is

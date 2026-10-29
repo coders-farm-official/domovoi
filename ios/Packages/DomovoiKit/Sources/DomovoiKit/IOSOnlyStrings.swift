@@ -55,12 +55,24 @@ public enum IOSOnlyStrings {
     public static let noAddressYet =
         "on wifi but no address yet — wait a moment and rescan, or add an address manually"
 
-    /// The newest health check did not get through, so what the card shows is
-    /// the previous answer.
+    /// One of the card's five sources could not be re-read, so some of what
+    /// the card shows may be a few seconds old.
     ///
     /// Used by ``HomeAttentionStrings/stale``. The separator is U+00B7, as
     /// every Home string's is, and the apostrophe is ASCII — this is in
     /// Android's voice even though Android has no such string.
-    public static let attentionStale =
-        "showing the last answer · the newest check didn't get through"
+    ///
+    /// **What it can honestly claim.** `attentionIsStale` is the OR of five
+    /// reads, and a stale `config` alone trips it — the visibility setting
+    /// being a few seconds old while every row on screen is the newest answer
+    /// there is. So the wording says only that a recheck did not get through,
+    /// not that any particular row is out of date: 42 characters that read the
+    /// same whichever of the five went stale, against the 59-character draft
+    /// that put the consequence first and asserted it of the rows. It is also
+    /// only ever drawn when the card is already there, so a house whose health
+    /// read went stale while everything was fine is told nothing at all —
+    /// which matches Android's silence and is deliberate.
+    ///
+    /// **Still a draft awaiting the owner.** See this file's heading.
+    public static let attentionStale = "couldn't recheck · showing the last answer"
 }

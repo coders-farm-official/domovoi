@@ -92,6 +92,21 @@ public final class HomeModel {
     private var focusAt: Int64 = 0
 
     private let container: AppContainer
+
+    /// Whether the socket is up **right now**, read at ``start()``.
+    ///
+    /// Android's `LaunchedEffect(live, lifecycle)` (`HomeScreen.kt:187`) runs
+    /// on composition *with the current value*, and `var wasLive by remember {
+    /// mutableStateOf(live) }` (`:177`) is seeded from it for the same reason.
+    /// A model that waited for ``socketChanged(live:)`` would start `false`
+    /// beside a working socket — `.onChange` never fires for the value already
+    /// there — and poll every thirty seconds for nothing.
+    ///
+    /// A closure rather than a stored `Bool` so that it is read at the instant
+    /// the screen appears, and injectable so a test can drive it without a
+    /// real connection.
+    private let liveNow: @Sendable () -> Bool
+
     private let clock: @Sendable () -> Int64
     private let wallClock: @Sendable () -> Int64
     private let wait: @Sendable (Int64) async throws -> Void
@@ -141,6 +156,10 @@ public final class HomeModel {
     ///     two uses.
     ///   - wait: the sleep every loop goes through, injected so a test does
     ///     not spend thirty real seconds finding out whether the poll fires.
+    ///   - liveNow: whether the socket is up, read at ``start()``. Defaults to
+    ///     `container.socket.connected`, which is the value
+    ///     ``ShellModel/connected`` mirrors — so the seeding is a property of
+    ///     having been built rather than of a view remembering a line.
     public init(
         in container: AppContainer,
         timeZone: TimeZone = .current,
@@ -148,9 +167,12 @@ public final class HomeModel {
         wallClock: @Sendable @escaping () -> Int64 = HomeModel.epochMs,
         wait: @Sendable @escaping (Int64) async throws -> Void = {
             try await Task.sleep(for: .milliseconds($0))
-        }
+        },
+        liveNow: (@Sendable () -> Bool)? = nil
     ) {
         self.container = container
+        let socket = container.socket
+        self.liveNow = liveNow ?? { socket.connected }
         self.clock = clock
         self.wallClock = wallClock
         self.wait = wait

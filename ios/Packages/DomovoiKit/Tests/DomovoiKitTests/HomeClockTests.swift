@@ -54,6 +54,66 @@ final class HomeClockTests: XCTestCase {
         )
     }
 
+    /// …and the other direction, which was untested: the week the clocks go
+    /// **forward** is an hour short of seven times twenty-four.
+    ///
+    /// 8 March 2026 is the second Sunday in March, so the week from Thursday
+    /// 5 March crosses it. A `+ 7 * 86_400_000` would be an hour long here and
+    /// an hour short in the autumn — the same bug reading correct in one
+    /// direction, which is why one direction is not coverage.
+    func testTheWindowLosesAnHourWhenTheClocksGoForward() {
+        let day = dayStartMs(ms: ms("2026-03-05T12:00:00Z"), timeZone: zone)
+        let end = dayStartMs(ms: day, timeZone: zone, plusDays: 7)
+        XCTAssertEqual(
+            7 * 86_400_000 - 3_600_000, end - day,
+            "an hour less than seven days: the clocks went forward inside it"
+        )
+        XCTAssertEqual(ms("2026-03-12T05:00:00Z"), end, "a week later, in daylight time")
+    }
+
+    /// **A zone whose DST transition is at midnight, so local midnight does
+    /// not exist.**
+    ///
+    /// Chile's clocks go forward at 24:00 on the first Saturday in September,
+    /// which is 00:00 on Sunday 6 September 2026 jumping to 01:00. There is no
+    /// 2026-09-06 00:00 in `America/Santiago`. Java's
+    /// `toLocalDate().plusDays(7).atStartOfDay(zone)` answers **01:00 local**
+    /// — `atStartOfDay` is documented to return the first valid instant of the
+    /// day — and `Calendar.startOfDay(for:)` is the Foundation call this port
+    /// uses in its place.
+    ///
+    /// Both ways in must land on the same instant: a week counted from the
+    /// Sunday before, and the day itself. 01:00 at UTC-03 is 04:00 Z.
+    ///
+    /// This is the case the review could not execute. It is pinned rather than
+    /// reasoned about because the calendar read's **key** is this number: a
+    /// window that starts an hour early on one day a year in one country is
+    /// the kind of thing nobody ever traces back.
+    func testAZoneWhoseMidnightDoesNotExistStartsTheDayAtTheFirstValidInstant() {
+        let santiago = TimeZone(identifier: "America/Santiago")!
+        let expected = ms("2026-09-06T04:00:00Z")
+
+        let sundayBefore = ms("2026-08-30T16:00:00Z")  // 2026-08-30 noon, UTC-04
+        XCTAssertEqual(
+            expected,
+            dayStartMs(ms: sundayBefore, timeZone: santiago, plusDays: 7),
+            "a week later is the first instant of 6 September, which is 01:00 local"
+        )
+        let onTheDay = ms("2026-09-06T15:00:00Z")  // 2026-09-06 noon, UTC-03
+        XCTAssertEqual(
+            expected,
+            dayStartMs(ms: onTheDay, timeZone: santiago),
+            "and the day itself starts at the same instant, so the window does not shift"
+        )
+        // The transition itself, so a wrong answer cannot be right by
+        // coincidence: the day before starts at local 00:00 under UTC-04.
+        XCTAssertEqual(
+            ms("2026-09-05T04:00:00Z"),
+            dayStartMs(ms: ms("2026-09-05T16:00:00Z"), timeZone: santiago),
+            "5 September has a midnight, and it is 04:00 Z"
+        )
+    }
+
     /// Midnight is midnight **in the given zone**, not in the device's.
     func testLocalMidnightIsTheGivenZonesMidnight() {
         let noonUTC = ms("2026-06-15T12:00:00Z")

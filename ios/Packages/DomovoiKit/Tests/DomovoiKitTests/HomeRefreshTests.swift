@@ -139,11 +139,19 @@ final class HomeRefreshTests: XCTestCase {
         XCTAssertEqual(5_000, homeFreshMs)
     }
 
-    /// A read that has **never** answered is older than any window, so a
-    /// reconnect reads it. `Int64.max` is the safe direction and it must not
-    /// overflow on the way.
-    func testAReadThatNeverAnsweredIsAlwaysReReadOnAReconnect() {
+    /// A read that has **never been asked** is older than any window, so a
+    /// reconnect reads it, and `Int64.max` must not overflow on the way.
+    ///
+    /// This is the only case `.max` stands for now. A read that *has* been
+    /// asked and has not come back yet is as old as its attempt
+    /// (``ApiRead/firstAttemptAt``) — and the test above, which says the
+    /// socket's first open costs nothing, is the truth about that case.
+    /// Previously both tests passed while describing different rules: this one
+    /// called `.max` "the safe direction" for a read in flight, and that is
+    /// what made a cold open nine requests instead of seven.
+    func testAReadThatWasNeverEvenAskedIsReReadOnAReconnect() {
         XCTAssertEqual([.rooms, .timers], plan(.socketCameUp, HomeRefreshContext()).now)
+        XCTAssertEqual(.max, HomeRefreshContext().sinceRoomsReadMs)
     }
 
     /// The socket coming up does **not** read health, config, plugins,

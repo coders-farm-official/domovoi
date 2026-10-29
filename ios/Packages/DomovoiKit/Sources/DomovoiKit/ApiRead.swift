@@ -86,13 +86,46 @@ public final class ApiRead<Value: Sendable> {
     /// same reason ``StateSocket``'s budget is monotonic.
     public private(set) var dataAt: Int64?
 
-    /// How long ago ``data`` arrived, or `Int64.max` while it never has —
-    /// which reads as "older than any freshness window", and so as "re-read
-    /// it", which is the safe direction.
+    /// When this read was **first asked**, on ``clock``'s scale, or nil while
+    /// it never has been.
+    ///
+    /// This is the other half of what `remember(sats.data)` holds. Android's
+    /// `satsAt` is a composition timestamp keyed on the data *object*, and on
+    /// the first composition that object is `null` — so the stamp it takes is
+    /// the **mount instant**, not "infinitely long ago". A read that has been
+    /// asked and has not come back yet is therefore as old as the mount, which
+    /// is what makes the socket's first open a no-op (``homeFreshMs``).
+    ///
+    /// Stamped in ``refresh()`` and never moved again, so a retry of a read
+    /// that has still never produced a value does not make it look fresher
+    /// than it is.
+    public private(set) var firstAttemptAt: Int64?
+
+    /// How long ago this read last produced a value — or, while it never has,
+    /// how long ago it was **first asked**.
+    ///
+    /// `Int64.max` is kept for the one case that really is unbounded: a read
+    /// that has not been asked at all. "The read has not come back yet" is not
+    /// "the read is infinitely old", and treating the two the same is what
+    /// made the socket's first open repeat the mount's own rooms and timers
+    /// reads — nine requests on a cold open where Android makes seven.
     public func dataAgeMs(now: Int64? = nil) -> Int64 {
         guard let dataAt else { return .max }
         return max(0, (now ?? clock()) - dataAt)
     }
+
+    /// Run when a value lands, **in the read's own success path**.
+    ///
+    /// The one consumer today is Home's server-clock offset, which Android
+    /// recomputes with `remember(timers.data)` — keyed on the data object, so
+    /// it moves when a read returns and not when one fails. That is this hook,
+    /// exactly: there is no second mechanism for a view to remember to call,
+    /// which is how the offset came to have no caller at all.
+    ///
+    /// Deliberately not `public`: it is a wiring point for a model in this
+    /// module, not an API a screen should reach for. A screen that wants to
+    /// know a read landed observes ``data``.
+    var onValue: (@MainActor () -> Void)?
 
     private let fetch: @Sendable () async throws -> Value
     private let base: @Sendable () -> String
@@ -189,6 +222,7 @@ public final class ApiRead<Value: Sendable> {
         inFlight?.cancel()
         loading = data == nil
         fetches += 1
+        if firstAttemptAt == nil { firstAttemptAt = clock() }
         inFlight = Task { @MainActor [weak self] in
             await self?.run()
         }
@@ -242,6 +276,9 @@ public final class ApiRead<Value: Sendable> {
             data = value
             dataAt = clock()
             error = nil
+            loading = false
+            onValue?()
+            return
         } catch is CancellationError {
             return
         } catch let trouble {

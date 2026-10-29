@@ -52,7 +52,8 @@ final class HomeModelTests: XCTestCase {
         token: String? = "household-abc",
         waits: Waits = Waits(),
         clock: Shared<Int64> = Shared(0),
-        wall: Shared<Int64> = Shared(1_762_000_000_000)
+        wall: Shared<Int64> = Shared(1_762_000_000_000),
+        liveNow: Shared<Bool> = Shared(false)
     ) -> (HomeModel, AppContainer, InMemoryShellStore, Waits) {
         let store = InMemoryShellStore(serverURL: serverURL ?? server, token: token)
         let container = AppContainer(
@@ -67,7 +68,8 @@ final class HomeModelTests: XCTestCase {
             timeZone: TimeZone(secondsFromGMT: 0)!,
             clock: { clock.current },
             wallClock: { wall.current },
-            wait: waits.sleeper
+            wait: waits.sleeper,
+            liveNow: { liveNow.current }
         )
         return (model, container, store, waits)
     }
@@ -515,6 +517,131 @@ final class HomeModelTests: XCTestCase {
         XCTAssertEqual(2, model.timers.fetches, "a frame after the screen has gone reads nothing")
     }
 
+    /// **A resume that arrives while Home is off screen must not resurrect
+    /// it**, and coming back to Home must re-join the socket's fan-out.
+    ///
+    /// The sequence this is written against is the ordinary one: tap an
+    /// attention row, Settings is pushed, `onDisappear` → ``HomeModel/stop()``.
+    /// Home is the root of a `NavigationStack`, so it stays in the view tree
+    /// with its `onChange(of: scenePhase)` live — and anything that takes the
+    /// scene inactive and back (backgrounding, the app switcher, Control
+    /// Centre, Face ID, a share sheet) then called ``cameBackOnScreen()`` on a
+    /// screen nobody was looking at. That set `onScreen` back to `true`
+    /// **without re-joining the event sink**, and `start()`'s
+    /// `guard !onScreen` then made the return to Home a no-op: no
+    /// `timers.changed`, no `plugins.changed`, no room presence and no
+    /// `calendar.events.changed` for the rest of the process, while the phone
+    /// polled `/api/satellites` every thirty seconds — one MPD connection per
+    /// room — for a screen that was not on display.
+    ///
+    /// Android cannot reach it: `LifecycleEventEffect(ON_RESUME)` is scoped to
+    /// the composable, so a resume while Home is not composed does nothing at
+    /// all. That is what this pins.
+    func testAResumeWhileHomeIsOffScreenDoesNotCostItTheSocket() async {
+        answerEveryPath()
+        let (model, container, _, waits) = rig()
+        model.start()
+        await settleUntil { model.timers.answered }
+        XCTAssertEqual(1, container.stateEventSinkCount, "the screen joined the fan-out")
+
+        // A row was tapped and Settings was pushed.
+        model.stop()
+        XCTAssertEqual(0, container.stateEventSinkCount)
+        XCTAssertFalse(model.onScreen)
+
+        // The app was backgrounded and foregrounded while Settings was on top.
+        waits.requested.set([])
+        model.cameBackOnScreen()
+        for _ in 0..<2_000 { await Task.yield() }
+        XCTAssertFalse(model.onScreen, "a resume cannot put back a screen that is not there")
+        XCTAssertTrue(
+            waits.requested.current.isEmpty,
+            "and it must start no loop: \(waits.requested.current)"
+        )
+
+        // Back to Home: `.task` runs again, which is `start()`.
+        model.start()
+        defer { model.stop() }
+        XCTAssertEqual(
+            1, container.stateEventSinkCount,
+            "without this Home receives no push at all for the life of the process"
+        )
+        XCTAssertTrue(model.onScreen)
+        // …and the mount's re-read happened, which is "a route holds nothing".
+        await settleUntil { model.timers.fetches == 2 }
+        // …and a push now reaches it.
+        container.stateEventArrived(StateEvent(type: "timers.changed", frame: "{}"))
+        await settleUntil { model.timers.fetches == 3 }
+    }
+
+    /// **`live` is seeded at `start()`**, so a Home built beside a socket that
+    /// is already up does not run the thirty-second poll next to it.
+    ///
+    /// ``HomeModel/socketChanged(live:)`` is the only writer and its caller is
+    /// an `.onChange`, which by definition never fires for the value already
+    /// there. Android does not have the hole: `LaunchedEffect(live, lifecycle)`
+    /// (`HomeScreen.kt:187`) runs on composition with the current value, and
+    /// `wasLive` is seeded from it (`:177`) for the same reason.
+    ///
+    /// Reachable whenever the workspace reaches Home after the socket has
+    /// connected — a deep link into another route and then Home, a re-pair, a
+    /// `HomeModel` built on a second workspace appearance. The cost is twice
+    /// the rooms traffic and one MPD connection per room every thirty seconds
+    /// on a phone whose socket is working.
+    ///
+    /// The tick loop is put on its counting period (1 s) so that the poll's
+    /// thirty seconds cannot be confused with the tick's.
+    func testAHomeBuiltBesideALiveSocketDoesNotPoll() async {
+        answerEveryPath()
+        let (model, _, _, waits) = rig(liveNow: Shared(true))
+        model.setCounting(true)
+        model.start()
+        defer { model.stop() }
+        await settleUntil { waits.requested.current.count >= 2 }
+        XCTAssertTrue(model.live, "the socket was already up when Home appeared")
+        for _ in 0..<2_000 { await Task.yield() }
+        XCTAssertEqual(
+            [1_000, 60_000], waits.requested.current.sorted(),
+            "the tick and the health tick, and no 30 s poll: \(waits.requested.current)"
+        )
+    }
+
+    /// **The socket's first open costs nothing**, because a read that has been
+    /// asked and has not come back yet is as old as the attempt and not
+    /// infinitely old.
+    ///
+    /// On a cold open the socket is up in a few hundred milliseconds, before
+    /// the mount's own seven reads have landed. With `dataAgeMs` answering
+    /// `Int64.max` while `dataAt` was nil, `.socketCameUp` re-read **both**
+    /// rooms and timers — nine requests where Android makes seven, two of them
+    /// cancelling an in-flight sibling. Android's
+    /// `satsAt = remember(sats.data) { System.currentTimeMillis() }`
+    /// (`HomeScreen.kt:146`) evaluates on the first composition, with
+    /// `sats.data == null`, so it holds the mount instant.
+    ///
+    /// `testAColdOpenIsSevenRequestsAndNotFourteen` never raises the socket,
+    /// which is why nothing caught this.
+    func testTheSocketsFirstOpenDoesNotRepeatTheMountsReads() async {
+        answerEveryPath()
+        let (model, _, _, _) = rig()
+        model.start()
+        defer { model.stop() }
+        // The socket comes up while the mount's reads are still in flight.
+        model.socketChanged(live: true)
+        await settleUntil { self.allSeven(model).allSatisfy(\.answered) }
+
+        XCTAssertEqual(1, model.rooms.fetches, "the mount asked a moment ago")
+        XCTAssertEqual(1, model.timers.fetches, "and so did this one")
+        let asked = StubURLProtocol.recorded.compactMap { request -> String? in
+            guard let path = request.url?.path else { return nil }
+            return path == "/api/health" && request.url?.query != nil ? nil : path
+        }
+        XCTAssertEqual(
+            7, asked.count,
+            "seven requests on a cold open, not nine: \(asked.sorted())"
+        )
+    }
+
     /// The first appearance is a mount **and not also a resume**: Android
     /// stamps `lastFocus` at composition (`HomeScreen.kt:209`) so the
     /// `ON_RESUME` that fires a moment later finds the fifteen-second gap
@@ -564,7 +691,12 @@ final class HomeModelTests: XCTestCase {
         model.start()
         defer { model.stop() }
         await settleUntil { model.timers.answered }
-        model.refreshServerOffset()
+        // **Nothing calls anything here.** The offset is recomputed in the
+        // timers read own success path, which is where Android keys it
+        // (`remember(timers.data)`), so there is no second mechanism for a
+        // view to forget — and it was forgotten: the method had no caller at
+        // all and its own documentation named the view as the party that
+        // called it.
         XCTAssertEqual(
             30_000, model.serverNowMs - model.nowMs,
             "the server is thirty seconds ahead, and every timer figure counts against it"
@@ -582,7 +714,6 @@ final class HomeModelTests: XCTestCase {
         model.start()
         defer { model.stop() }
         await settleUntil { model.timers.answered }
-        model.refreshServerOffset()
         XCTAssertEqual(0, model.serverNowMs - model.nowMs)
     }
 

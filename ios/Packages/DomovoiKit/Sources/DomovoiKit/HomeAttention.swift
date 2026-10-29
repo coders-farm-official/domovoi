@@ -179,6 +179,27 @@ public struct HomeAttentionState: Equatable, Sendable {
         return "+\(extra) more"
     }
 
+    /// The dot beside the summary branch's one neutral line.
+    ///
+    /// **Here and not in the view.** The view had it as a literal, and
+    /// `swift test` cannot see a literal in a view: it drew amber where
+    /// `HomeSections.kt:282` draws `StatusDot(Tone.Idle)` and map §3.2 says
+    /// "a card titled `needs attention` with an **idle dot**".
+    ///
+    /// Grey is the whole point of this branch. It is what a shared screen and
+    /// a `summary` house get, so a passer-by learns that something needs the
+    /// admin and **nothing about how bad it is**. Amber grades a problem for a
+    /// viewer the house has deliberately decided not to tell.
+    public var summaryTone: HealthTone { .warn }
+
+    /// The minimum height of a row's tap target, in points —
+    /// `heightIn(min = if (compact) 44.dp else 40.dp)` (`HomeSections.kt:309`).
+    ///
+    /// 44 is also Apple's figure. Here rather than in the view for the same
+    /// reason ``summaryTone`` is: a control whose whole job is to be tapped
+    /// was about 20 pt tall, and nothing in the package suite could say so.
+    public var rowMinHeight: Double { 40 }
+
     /// The summary branch's count, in monospace on the right of the line.
     public var summaryCount: String? {
         guard case .summary(let count) = view else { return nil }

@@ -192,6 +192,59 @@ final class HomeAttentionTests: XCTestCase {
             HomeAttentionStrings.stale.contains("\u{2019}"),
             "ASCII apostrophe, as every Home string has"
         )
-        XCTAssertTrue(HomeAttentionStrings.stale.contains("didn't"))
+        XCTAssertTrue(
+            HomeAttentionStrings.stale.contains("'"),
+            "an ASCII apostrophe, not a curly one — and there is one to check"
+        )
+        // **Not the words.** This string is a draft the owner has not taken,
+        // and a test that spells it out hard-pins a draft: the wording changed
+        // once already and this assertion was the only thing that failed for
+        // it. What is pinned is the voice.
+    }
+
+    // MARK: - the decisions that were left in the view
+
+    /// **The summary branch's dot is grey.**
+    ///
+    /// `HomeSections.kt:282` draws `StatusDot(Tone.Idle)` and map §3.2 says so
+    /// — "a card titled `needs attention` with an **idle dot**". iOS drew
+    /// amber, because the tone was a literal in the view where `swift test`
+    /// could not see it.
+    ///
+    /// Grey is the point of the branch: it is the neutral line a shared screen
+    /// and a `summary` house get, so a passer-by learns that something needs
+    /// the admin and nothing about how bad it is. Amber grades a problem for a
+    /// viewer the house has deliberately decided not to tell what it is.
+    func testTheSummaryDotIsNeutralAndDoesNotGradeTheProblem() {
+        let summary = HomeAttentionState(view: .summary(count: 4))
+        XCTAssertEqual(
+            .idle, summary.summaryTone,
+            "a kitchen wall tablet must not be told how bad the thing it is not being told about is"
+        )
+        // And it is not the rows' tone: a row grades, because a row says what
+        // the problem is.
+        let rows = HomeAttentionState(view: .rows([
+            AttentionRow(key: "core", tone: .err, text: "x", target: .settings("health")),
+        ]))
+        XCTAssertEqual(.err, rows.shownRows[0].tone)
+    }
+
+    /// **A row is big enough to tap** —
+    /// `heightIn(min = if (compact) 44.dp else 40.dp)` (`HomeSections.kt:309`).
+    ///
+    /// The iOS row was a `Button` over an `HStack` of a subheadline and a
+    /// footnote: about 20 pt at default type, with no minimum at all, on a
+    /// control whose whole job is to be tapped. 44 pt is Apple's figure too.
+    /// It lives here rather than in the view for the same reason
+    /// ``HomeAttentionState/summaryTone`` does.
+    func testARowIsBigEnoughToTap() {
+        XCTAssertEqual(
+            44, HomeAttentionState(view: .rows([]), compact: true).rowMinHeight,
+            "a phone: Android's 44 dp, and Apple's 44 pt minimum"
+        )
+        XCTAssertEqual(
+            40, HomeAttentionState(view: .rows([]), compact: false).rowMinHeight,
+            "a wide pane: Android's 40 dp"
+        )
     }
 }

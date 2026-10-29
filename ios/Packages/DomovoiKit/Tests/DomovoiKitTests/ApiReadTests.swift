@@ -198,6 +198,59 @@ final class ApiReadTests: XCTestCase {
         XCTAssertEqual(["satellites.wifi.changed"], seen.current)
     }
 
+    /// **"The read has not come back yet" is not "the read is infinitely
+    /// old".**
+    ///
+    /// `Int64.max` is kept for the one case that really is unbounded — a read
+    /// nothing has asked for. Once it has been asked, its age is measured from
+    /// the attempt, which is what Android's
+    /// `remember(sats.data) { System.currentTimeMillis() }` holds on the first
+    /// composition (`HomeScreen.kt:146`): `sats.data` is null there, so the
+    /// stamp is the mount instant. Treating the two cases the same made the
+    /// socket's first open repeat the mount's rooms and timers reads.
+    ///
+    /// The attempt stamp is taken once and never moved, so a retry of a read
+    /// that has still produced nothing does not look fresher than it is.
+    func testAReadInFlightIsAsOldAsItsAttemptAndNotInfinitelyOld() async {
+        let clock = Shared<Int64>(0)
+        let base = Shared(server)
+        let answer = Shared<Result<String, DomovoiError>>(.success("one"))
+        let calls = Shared(0)
+        let park = Shared(false)
+        let read = ApiRead(base: { base.current }, clock: { clock.current }) {
+            calls.mutate { $0 += 1 }
+            for _ in 0..<settleYieldLimit {
+                if park.current { break }
+                await Task.yield()
+            }
+            return try answer.current.get()
+        }
+        XCTAssertEqual(.max, read.dataAgeMs(), "nothing has asked for it at all")
+        XCTAssertNil(read.firstAttemptAt)
+
+        clock.set(1_000)
+        read.refresh()
+        XCTAssertEqual(1_000, read.firstAttemptAt)
+        clock.set(2_200)
+        XCTAssertEqual(
+            1_200, read.dataAgeMs(),
+            "asked 1.2 s ago and still waiting — under homeFreshMs, so no re-read"
+        )
+
+        // A second attempt before anything has ever landed keeps the first
+        // stamp: the read is still as old as the first time it was wanted.
+        read.refresh()
+        XCTAssertEqual(1_000, read.firstAttemptAt)
+        XCTAssertEqual(1_200, read.dataAgeMs())
+
+        // And once a value lands, that is what the age is measured from.
+        park.set(true)
+        await yieldUntil { read.data != nil }
+        XCTAssertEqual(2_200, read.dataAt)
+        clock.set(2_500)
+        XCTAssertEqual(300, read.dataAgeMs())
+    }
+
     /// Bounded, like `settle(for:what:)` — a condition that never comes is a
     /// failing test and never a hung suite.
     private func yieldUntil(
