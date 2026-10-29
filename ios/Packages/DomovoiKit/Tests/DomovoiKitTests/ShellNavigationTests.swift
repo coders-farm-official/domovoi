@@ -161,7 +161,7 @@ final class ShellNavigationTests: XCTestCase {
         state.go(.calendar)
         XCTAssertEqual("Calendar", state.restorableRoute)
 
-        let restored = NavigationState.restored(route: state.restorableRoute)
+        var restored = NavigationState.restored(route: state.restorableRoute)
         XCTAssertEqual(.calendar, restored.route)
         XCTAssertEqual([.calendar], restored.path)
         // The history is **not** restored, and the one step the path does have
