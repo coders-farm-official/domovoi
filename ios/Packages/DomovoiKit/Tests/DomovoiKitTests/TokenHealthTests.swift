@@ -59,7 +59,12 @@ final class TokenHealthTests: XCTestCase {
             clock: { clock.current },
             log: { line in log.mutate { $0.append(line) } }
         )
-        StubURLProtocol.dispatch { [self] request in answer(request) }
+        let ledger = self.ledger
+        let clockBox = self.now
+        let arrival = self.onArrival
+        StubURLProtocol.dispatch { request in
+            Self.answer(request, ledger: ledger, now: clockBox, onArrival: arrival)
+        }
         let held = token
         let address = server
         client = DomovoiClient(
@@ -76,7 +81,7 @@ final class TokenHealthTests: XCTestCase {
     )
 
     /// What the ledger still makes this address wait, in ms.
-    private func serverWaitMs() -> Int64 {
+    private static func serverWaitMs(_ ledger: Shared<Ledger>, _ now: Shared<Int64>) -> Int64 {
         ledger.mutate { ledger in
             let charged = ledger.failures - 5
             guard charged > 0 else { return 0 }
@@ -85,7 +90,17 @@ final class TokenHealthTests: XCTestCase {
         }
     }
 
-    private func answer(_ request: URLRequest) -> StubURLProtocol.Answer {
+    private func serverWaitMs() -> Int64 { Self.serverWaitMs(ledger, now) }
+
+    /// Static, and handed its state, so the dispatcher closure it is called
+    /// from captures no `XCTestCase` — which is not `Sendable`, and which
+    /// Swift 6 is right to refuse to let a background request touch.
+    private static func answer(
+        _ request: URLRequest,
+        ledger: Shared<Ledger>,
+        now: Shared<Int64>,
+        onArrival: Shared<(@Sendable (String?) -> Void)?>
+    ) -> StubURLProtocol.Answer {
         let path = request.url?.path ?? ""
         let sent = request.value(forHTTPHeaderField: deviceTokenHeader)
         onArrival.current?(sent)
@@ -113,7 +128,7 @@ final class TokenHealthTests: XCTestCase {
             )
         }
         guard let sent else { return Self.refusal }
-        let wait = serverWaitMs()
+        let wait = serverWaitMs(ledger, now)
         if wait > 0 {
             let seconds = (wait + 999) / 1000
             return .json(
@@ -138,11 +153,11 @@ final class TokenHealthTests: XCTestCase {
         do {
             _ = try await client.raw(method: "GET", path: path)
             return nil
-        } catch let error as DomovoiError {
-            return error
         } catch {
-            XCTFail("not a DomovoiError: \(error)")
-            return nil
+            // `raw` has typed throws, so this is already a DomovoiError —
+            // `catch let error as DomovoiError` would be a tautology the
+            // compiler warns about.
+            return error
         }
     }
 
