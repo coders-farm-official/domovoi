@@ -176,6 +176,54 @@ public final class NetworkWatch: Sendable {
         { [self] in fingerprint }
     }
 
+    // ---- "on a LAN", which is a question about TRANSPORT -------------------
+
+    /// Whether the phone is on Wi-Fi or Ethernet, and so plausibly on the
+    /// home LAN: Android's `Discovery.onLan(context)`, which is
+    /// `TRANSPORT_WIFI || TRANSPORT_ETHERNET` of the active network.
+    ///
+    /// **It is a transport question and nothing else answers it.** The first
+    /// port of this batch left it out and said ``Discovery/localIPv4()``
+    /// answered the same thing better. It does not:
+    /// ``NetworkInterfaces/Address/isSiteLocalIPv4`` admits 10/8, and several
+    /// US carriers hand out 10.x addresses on cellular IPv4 — so on a phone
+    /// with Wi-Fi off, an address gate would have let ``Discovery/scan``
+    /// fire 254 probes into the carrier's private range on a metered link.
+    /// Android's picker cannot do that, because it asks this question first
+    /// (`ui/shell/ServerPicker.kt`, the auto-scan and the "not on wifi"
+    /// banner).
+    ///
+    /// It lives here, and not on ``Discovery``, because this is where the
+    /// path facts already are — and because the Kotlin's `onLan` is
+    /// load-bearing in four more places that are later batches'
+    /// (`alerts/IncidentAlerts.kt`, `alerts/RoomBatteryAlerts.kt`,
+    /// `alerts/TimerAlerts.kt`, `alerts/TimerSync.kt`: a background tick
+    /// that is off the LAN does not poll the house). I1-C and I1-D read it
+    /// from here.
+    ///
+    /// **Every path entry is asked, not only `default`.** On Android a VPN's
+    /// `NetworkCapabilities` carry the underlying transport, so `onLan` stays
+    /// true under a tunnel. Here the default path over a tunnel reports
+    /// `.other` and nothing else, and the Wi-Fi monitor restricted to
+    /// `.wifi` is what still sees Wi-Fi — so asking all three keeps the two
+    /// phones answering the same way under a VPN.
+    public var onLan: Bool {
+        state.withLock { Self.onLan($0.entries) }
+    }
+
+    /// ``onLan`` as a closure, the shape ``Discovery/scan`` takes it in.
+    public var lanReader: @Sendable () -> Bool {
+        { [self] in onLan }
+    }
+
+    private static func onLan(_ entries: [Key: Facts]) -> Bool {
+        entries.contains { key, facts in
+            key.source == .path
+                && facts.status == "satisfied"
+                && (facts.transports.contains("wifi") || facts.transports.contains("wired"))
+        }
+    }
+
     // ---- the pure state machine --------------------------------------------
 
     /// `source` reported `id`; `update` adds what the report said.

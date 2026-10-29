@@ -480,6 +480,25 @@ final class IdentityGateTests: XCTestCase {
         XCTAssertEqual(.verified(fingerprint: TestIdentity.real.fingerprint, pinnedNow: false), gate.status?.verdict)
     }
 
+    func testAStaleCoreIsNotAnsweringIsNotSaidOfAServerThatHasGoneAway() async throws {
+        // `lastNonVerdict` exists for wording, so wrong wording is its one
+        // possible bug. A core that is down files "its core is not
+        // answering"; the box then leaves the network, and the next probe
+        // throws at the transport, so `record` is never reached — the stale
+        // wording would stand for the rest of its 30 s and tell a person
+        // their box was restarting when nothing at all is answering.
+        // (Android says "offline" here, through the probe's own IOException.)
+        try await read()
+        gate.networkChanged()
+        coreDown.set(true)
+        let first = await failedRead()
+        XCTAssertTrue(heldMessage(first).contains("its core is not answering"), heldMessage(first))
+        healthFails.set(true)
+        let second = await failedRead()
+        XCTAssertFalse(heldMessage(second).contains("core is not answering"), heldMessage(second))
+        XCTAssertTrue(heldMessage(second).contains("has not proved itself"), heldMessage(second))
+    }
+
     func testAServerWhoseCoreIsDownHoldsTheTokenEvenWhenNothingIsPinned() async throws {
         // No pin yet (an upgraded install's first contact happens to meet a
         // core restart): still not Legacy — the token waits for the proof.
@@ -578,6 +597,19 @@ final class IdentityGateTests: XCTestCase {
 
     // ---- the other paths through the same client ---------------------------
 
+    /// The Kotlin's `aRoguesRefusalDoesNotRaiseThePairingScreen`, under the
+    /// Kotlin's conditions: `token = null` is set once and **stays** null for
+    /// both halves, because an unpaired phone meeting a `401` is the whole of
+    /// the onboarding path (map §8 step 5).
+    ///
+    /// The first version of this test was adapted to the implementation
+    /// instead: its first half passed because no verdict existed at all (set
+    /// `identity.set(TestIdentity.real)` there and it still passed), and its
+    /// second half restored the token and called `prepareIdentity` by hand —
+    /// neither of which an unpaired phone does. So it could not see that the
+    /// pairing screen was unreachable. The `guard case .mismatch` below is
+    /// what makes the first half about the rogue, and the second half now
+    /// runs with nothing saved, as Android's does.
     func testARoguesRefusalDoesNotRaiseThePairingScreen() async throws {
         try await read()
         gate.networkChanged()
@@ -591,21 +623,31 @@ final class IdentityGateTests: XCTestCase {
         } catch {
             XCTAssertEqual(false, error.failure?.deviceTokenRequired, "not a pairing refusal from a server that is not ours")
         }
+        // ...and it is refused because the gate asked and the ROGUE answered,
+        // not because nobody asked anything.
+        guard case .mismatch = gate.status?.verdict else {
+            return XCTFail("the gate should hold a rogue's verdict, not an empty cache: \(String(describing: gate.status?.verdict))")
+        }
         XCTAssertFalse(client.pairingRequired)
         client.notePossiblePairingRefusal(status: 401, body: "X-Device-Token or admin session required")
         XCTAssertFalse(client.pairingRequired)
 
-        // From the real server the same refusal does ask the phone to pair.
+        // From the real server the same refusal does ask the phone to pair —
+        // with nothing saved and nothing prepared by hand, which is the state
+        // a phone is in when it is about to be paired.
         identity.set(TestIdentity.real)
         gate.networkChanged()
-        token.set("household-abc")
-        await client.prepareIdentity(forAddress: server)
         do {
             _ = try await client.get("/api/refuse", as: [String: String].self)
             XCTFail("expected a refusal")
         } catch {
             XCTAssertEqual(true, error.failure?.deviceTokenRequired)
         }
+        XCTAssertTrue(client.pairingRequired)
+        // And the socket listeners' path, which is synchronous and cannot
+        // probe, reads the same warm verdict.
+        client.clearPairingRequired()
+        client.notePossiblePairingRefusal(status: 401, body: "X-Device-Token or admin session required")
         XCTAssertTrue(client.pairingRequired)
     }
 
@@ -615,18 +657,57 @@ final class IdentityGateTests: XCTestCase {
         XCTAssertTrue(probes.isEmpty, "no probe anywhere")
     }
 
-    func testAnUnpairedPhoneProbesNoServerAboutItsIdentity() async throws {
-        // The five rules in front of the gate are what keeps this true, and
-        // `prepareIdentity` applies them: a phone with no token has nothing
-        // to protect, so it asks nobody to prove anything and the request
-        // goes out bare, exactly as Android's interceptor never reaches its
-        // gate in that case.
+    /// An unpaired phone asks the server it is **already talking to** to
+    /// prove itself, and asks nobody else.
+    ///
+    /// This is the behaviour the review's blocker A is about. Before it, a
+    /// phone that had trusted a server but not yet pasted a token sent
+    /// everything bare, the gate was never asked, the cache stayed empty for
+    /// ever — and `admitsPairingPrompt`, which reads only the cache, could
+    /// never answer yes. So the device-tier `401` could not raise the pairing
+    /// screen and map §8 step 5 was unreachable. Android gets there because
+    /// its `admitsPairingPrompt` is allowed to probe; the synchronous reader
+    /// here cannot, so the proof is taken in front of the request instead.
+    ///
+    /// What has NOT changed: the request still goes out bare, and the proof
+    /// is only ever asked of the active server — never of a foreign host
+    /// (`testTheGateIsNotAskedForAForeignHost`), never in room mode
+    /// (`testRoomModeProbesNoServerEither`) and never by a sweep
+    /// (`DiscoveryTests`).
+    func testAnUnpairedPhoneStillAsksTheActiveServerToProveItself() async throws {
         token.set(nil)
         try await read()
-        XCTAssertTrue(probes.isEmpty)
+        XCTAssertEqual(1, probes.count, "the active server was never asked, so its 401 can never raise the pairing screen")
+        XCTAssertNil(probes[0].value(forHTTPHeaderField: deviceTokenHeader), "a probe carries no token, paired or not")
         XCTAssertEqual(1, reads.count)
-        XCTAssertNil(reads[0].value(forHTTPHeaderField: deviceTokenHeader))
-        XCTAssertNil(gate.status)
+        XCTAssertNil(reads[0].value(forHTTPHeaderField: deviceTokenHeader), "and the read itself still goes out bare")
+        XCTAssertTrue(gate.admitsPairingPrompt(base), "the verdict is warm for the refusal path to read")
+        // One proof, not one per request: the verdict stands for the network.
+        try await read()
+        XCTAssertEqual(1, probes.count)
+    }
+
+    func testARefusedTokenStillLetsTheServerProveItselfSoThePhoneCanBePairedAgain() async throws {
+        // The other half of the same hole: once `TokenHealth` has marked the
+        // token rejected the decision is bare again, so before the fix the
+        // cache went cold and a `401` could not raise the pairing screen
+        // either — a phone whose token the household had rotated could never
+        // be told to paste the new one.
+        let token = self.token
+        let server = self.server
+        let rejected = TokenHealth.InMemoryBook()
+        rejected.markTokenRejected(server)
+        let client = DomovoiClient(
+            book: ServerBook(activeServer: { server }, tokenForServer: { _ in token.current }),
+            gate: gate,
+            health: TokenHealth(book: rejected),
+            lock: HouseholdLock(),
+            configuration: StubURLProtocol.session(timeout: 2)
+        )
+        _ = try await client.get("/api/timers", as: [String: String].self)
+        XCTAssertEqual(1, probes.count, "a refused token still leaves a server to prove itself")
+        XCTAssertNil(reads[0].value(forHTTPHeaderField: deviceTokenHeader), "a refused token is never sent again")
+        XCTAssertTrue(gate.admitsPairingPrompt(base))
     }
 
     func testRoomModeProbesNoServerEither() async throws {
@@ -693,6 +774,20 @@ final class IdentityGateTests: XCTestCase {
         XCTAssertTrue(IdentityVerdict.unproven(expected: nil, reason: "r").cacheable)
         XCTAssertFalse(IdentityVerdict.unavailable(expected: nil, reason: "r").cacheable)
     }
+
+    func testTheFingerprintAVerdictOffersTheShellIsNeverTheImpostorsKey() {
+        XCTAssertEqual("f", IdentityVerdict.verified(fingerprint: "f", pinnedNow: false).fingerprint)
+        XCTAssertEqual(TestIdentity.real.fingerprint, IdentityVerdict.legacy(offered: TestIdentity.real.pin).fingerprint)
+        XCTAssertNil(IdentityVerdict.legacy(offered: nil).fingerprint)
+        XCTAssertEqual("pinned", IdentityVerdict.unproven(expected: "pinned", reason: "r").fingerprint)
+        XCTAssertEqual("pinned", IdentityVerdict.unavailable(expected: "pinned", reason: "r").fingerprint)
+        // A mismatch has TWO fingerprints and neither alone is the truth.
+        // Handing the shell `seen` would print the impostor's key beside the
+        // address as if the server had proved it, which is the one thing the
+        // mismatch card must not do — so it is nil, and a shell that wants to
+        // say anything about a mismatch has to destructure both halves.
+        XCTAssertNil(IdentityVerdict.mismatch(expected: "a", seen: "b", seenPin: nil).fingerprint)
+    }
     // ---- the wiring cycle --------------------------------------------------
 
     /// A probe wired back into its own gate must FAIL, not hang.
@@ -711,13 +806,15 @@ final class IdentityGateTests: XCTestCase {
     /// fail, it hangs, which is exactly why it is worth having.
     func testAProbeWiredBackIntoItsOwnGateFailsInsteadOfHanging() async throws {
         let box = Shared<IdentityGate?>(nil)
+        let log = self.log
         let cycling = IdentityGate(
             probe: { base, _ in
                 // The mistake this guards: asking the gate that is asking.
                 _ = try await box.current!.verdict(for: base)
                 return nil
             },
-            pins: pins
+            pins: pins,
+            log: { line in log.mutate { $0.append(line) } }
         )
         box.set(cycling)
 
@@ -731,6 +828,24 @@ final class IdentityGateTests: XCTestCase {
             XCTAssertTrue(why.contains(key), "the reason should name the server: \(why)")
             // A person is told the server could not be checked, not the wiring.
             XCTAssertEqual(failureText("Check", error), "Check failed: this server could not be checked")
+        }
+
+        // ...and `prepare`, the ONE production caller, must not swallow it in
+        // silence. `prepare` discards every error by design (an unreachable
+        // server is not a verdict), so without these two the wiring fault
+        // would read as a permanent "has not proved itself" with nothing in
+        // the log and nothing in the toast to go on.
+        await cycling.prepare(base)
+        XCTAssertTrue(logged("asked the same gate"), "nothing was logged: \(log.current)")
+        guard case .unavailable(_, let reason) = cycling.status?.verdict else {
+            return XCTFail("prepare should have filed a non-verdict, got \(String(describing: cycling.status?.verdict))")
+        }
+        XCTAssertTrue(reason.contains("wiring"), reason)
+        do {
+            try cycling.requireAdmitted(base)
+            XCTFail("a gate that could not check anything must hold the token")
+        } catch let error as DomovoiError {
+            XCTAssertTrue(error.message.contains("wiring"), "a held request should say what went wrong: \(error.message)")
         }
     }
 }

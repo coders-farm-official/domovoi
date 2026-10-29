@@ -131,11 +131,28 @@ final class DiscoveryTests: XCTestCase {
         XCTAssertTrue(Discovery.sweepTargets(localIPv4: "no dots").isEmpty)
     }
 
+    func testACellularOnlyPhoneSweepsNothingHoweverPrivateItsAddressIs() async {
+        // The sweep is gated on the TRANSPORT, as Android's picker gates it
+        // (`Discovery.onLan` = `TRANSPORT_WIFI || TRANSPORT_ETHERNET`), and
+        // not on the address. `localIPv4` admits 10/8 and several US carriers
+        // hand out 10.x on cellular IPv4, so an address gate would have fired
+        // 254 probes into the carrier's private range on a metered link.
+        let outcome = await Discovery.scan(makeClient().unauthenticatedProbe, onLan: { false })
+        XCTAssertEqual(.notOnLan, outcome)
+        XCTAssertEqual(0, StubURLProtocol.requestCount, "probes went out on a phone that is not on a LAN")
+        XCTAssertEqual([], SweepOutcome.notOnLan.servers)
+        // ...and it is a case of its own, so I1-C can say "join your home
+        // network" where Android's picker says it, rather than "nothing
+        // answered".
+        XCTAssertNotEqual(SweepOutcome.notOnLan, .noLocalNetwork)
+        XCTAssertNotEqual(SweepOutcome.notOnLan, .swept(servers: []))
+    }
+
     func testTheSweepOfAPhoneWithNoLanIsItsOwnAnswerAndNotAnEmptyList() async {
         // Android returns an empty list here and the picker says "nothing
-        // answered", which is the wrong thing to say to someone on cellular.
-        // Nothing is probed either way.
-        let outcome = await Discovery.scan(makeClient().unauthenticatedProbe, port: 6369)
+        // answered", which is the wrong thing to say to someone whose Wi-Fi
+        // has no lease yet. Nothing is probed either way.
+        let outcome = await Discovery.scan(makeClient().unauthenticatedProbe, onLan: { true }, port: 6369)
         if Discovery.localIPv4() == nil {
             XCTAssertEqual(.noLocalNetwork, outcome)
             XCTAssertEqual(0, StubURLProtocol.requestCount)
@@ -157,7 +174,7 @@ final class DiscoveryTests: XCTestCase {
             // the hit is the one a token WOULD have gone to.
             request.url?.host == "10.0.0.9" ? .json(#"{"status":"ok"}"#) : .json("", status: 404)
         }
-        let outcome = await Discovery.scan(makeClient().unauthenticatedProbe)
+        let outcome = await Discovery.scan(makeClient().unauthenticatedProbe, onLan: { true })
         let health = StubURLProtocol.recorded.filter { $0.url?.path == "/api/health" }
         XCTAssertEqual(254, health.count)
         XCTAssertTrue(StubURLProtocol.recorded.allSatisfy { $0.value(forHTTPHeaderField: deviceTokenHeader) == nil },

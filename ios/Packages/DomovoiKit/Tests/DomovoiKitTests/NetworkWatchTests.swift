@@ -288,6 +288,59 @@ final class NetworkWatchTests: XCTestCase {
         XCTAssertEqual(["en0", "default", "wifi"], entries.map(String.init), "I before P, then by id")
     }
 
+    // ---- "on a LAN", which is a question about TRANSPORT -------------------
+
+    private func cellularPath() -> (NetworkWatch.Facts) -> NetworkWatch.Facts {
+        { facts in
+            var next = facts
+            next.status = "satisfied"
+            next.transports = ["cellular", "ipv4", "dns", "expensive"]
+            next.iface = ["pdp_ip0/cellular/18"]
+            return next
+        }
+    }
+
+    func testOnLanAsksAboutTheTransportAndNotAboutTheAddress() {
+        // Android's `Discovery.onLan` is `TRANSPORT_WIFI || TRANSPORT_ETHERNET`
+        // and the sweep is gated on it. The address cannot answer the same
+        // question: several US carriers hand out **10.x** on cellular IPv4,
+        // which is site-local, so a phone with Wi-Fi off and a carrier lease
+        // would sweep the carrier's /24 on a metered link.
+        XCTAssertFalse(watch.onLan, "nothing has been reported yet")
+        watch.batch { watch in
+            watch.seen(.path, "default", self.cellularPath())
+            watch.seen(.interfaces, "pdp_ip0", self.addresses("10.183.44.9/30"))
+        }
+        XCTAssertFalse(watch.onLan, "cellular is not a LAN, whatever address the carrier handed out")
+        // Wi-Fi comes up: the restricted monitor sees it even when a tunnel
+        // owns the default route, which is why every path entry is asked and
+        // not just `default`.
+        watch.seen(.path, "wifi", wifiPath())
+        XCTAssertTrue(watch.onLan)
+        watch.lost(.path, "wifi")
+        XCTAssertFalse(watch.onLan)
+    }
+
+    func testAWiredPathIsALanAndAnUnsatisfiedOneIsNot() {
+        watch.seen(.path, "wired") { facts in
+            var next = facts
+            next.status = "satisfied"
+            next.transports = ["wired", "ipv4"]
+            next.iface = ["en5/wiredEthernet/16"]
+            return next
+        }
+        XCTAssertTrue(watch.onLan, "Ethernet counts, as it does on Android")
+        // A monitor restricted to an interface type that is not there reports
+        // an unsatisfied path, and an unsatisfied path reaches nothing.
+        watch.replace(.path, with: ["wifi": {
+            var facts = NetworkWatch.Facts()
+            facts.status = "unsatisfied(NWPath.UnsatisfiedReason.notAvailable)"
+            facts.transports = ["wifi"]
+            return facts
+        }()])
+        XCTAssertFalse(watch.onLan, "an unsatisfied wifi path is not a LAN")
+    }
+
     // ---- the platform, measured rather than assumed ------------------------
 
     func testASatisfiedPathReportsNotAvailableAsItsUnsatisfiedReason() throws {
@@ -372,24 +425,43 @@ final class NetworkWatchTests: XCTestCase {
         XCTAssertTrue(CleartextPolicy.cleartextPermitted("100.64.0.5"))
     }
 
-    func testTheAdapterSeedsAPictureAndThenKeepsItUpToDate() throws {
-        // The one test of `start()`: a real monitor, no connections made.
-        let reported = XCTestExpectation(description: "a path update arrived")
+    func testTheAdapterSeedsEveryMonitorInOnePictureAndCountsNoChangeForIt() throws {
+        // The one test of `start()`: real monitors, no connections made.
+        //
+        // The bug this is written against: the seed used to hold only the
+        // interface list, and the three `NWPathMonitor`s were started AFTER
+        // the batch closed — so `reported` was already true and each
+        // monitor's first `pathUpdateHandler` counted as a change. Measured
+        // at three changes per launch, which is three wasted proofs and a
+        // cold-start request whose proof is discarded between hops.
+        //
+        // It also had no assertion on the change counter at all, and an
+        // `XCTestExpectation` fulfilled unconditionally after a polling loop
+        // that was doing the real waiting. Both are gone.
         let seen = Shared<Int>(0)
         let watch = NetworkWatch(onChange: { seen.mutate { $0 += 1 } })
         defer { watch.stop() }
-        // The seed happens synchronously, from `getifaddrs`: by the time
-        // `start` returns there is already a fingerprint, so the first
-        // verdict is never keyed to `none`.
         watch.start()
+        // The whole seed is synchronous: `getifaddrs` needs no monitor, and
+        // `currentPath` is readable the moment a monitor is started. So by
+        // the time `start` returns, both halves of the picture are in the
+        // fingerprint — the first verdict is keyed neither to `none` nor to a
+        // picture with no path in it.
         XCTAssertNotEqual(NetworkWatch.none, watch.fingerprint, "the seed is synchronous")
-        // And the monitors then report, which adds the path entries.
-        let deadline = Date().addingTimeInterval(5)
-        while Date() < deadline, !watch.fingerprint.contains("P|default") {
+        XCTAssertTrue(watch.fingerprint.contains("P|wifi"), "the wifi path was not in the seed")
+        XCTAssertTrue(watch.fingerprint.contains("P|wired"), "the wired path was not in the seed")
+        XCTAssertEqual(0, watch.changeCount, "the seed is one picture, not a change")
+        XCTAssertEqual(0, seen.current)
+        // Now let the monitors deliver their first updates. Each describes
+        // the network the process started on, which the seed already holds,
+        // so not one of them is a change — this is the assertion that reads
+        // three with the monitors started outside the batch.
+        let settle = Date().addingTimeInterval(1.5)
+        while Date() < settle {
             RunLoop.current.run(until: Date().addingTimeInterval(0.05))
         }
-        reported.fulfill()
-        wait(for: [reported], timeout: 1)
+        XCTAssertEqual(0, watch.changeCount, "the network the process started on was reported as a change")
+        XCTAssertEqual(0, seen.current, "the gate's epoch was bumped for a network that had not changed")
         XCTAssertTrue(watch.fingerprint.contains("P|default"), "no default path was reported in 5 s")
         XCTAssertTrue(watch.fingerprint.contains("I|"), "no interface addresses in the fingerprint")
     }

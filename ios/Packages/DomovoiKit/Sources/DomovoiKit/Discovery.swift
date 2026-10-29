@@ -29,10 +29,18 @@ public enum SweepOutcome: Equatable, Sendable {
     /// It ran. `servers` may be empty — nothing answered.
     case swept(servers: [FoundDomovoi])
 
-    /// The phone has no site-local IPv4 address, so there is no /24 to
-    /// sweep: cellular only, or Wi-Fi with no lease yet. Android returns an
-    /// empty list here and the picker says "nothing answered", which is the
-    /// wrong thing to say about a phone that is not on a LAN at all.
+    /// The phone is not on Wi-Fi or Ethernet, so there is no LAN to sweep at
+    /// all — Android's `Discovery.onLan` being false, which is what its
+    /// picker shows "not on wifi — join your home network to scan, or add an
+    /// address manually" for. **A transport fact, not an address one**: see
+    /// ``NetworkWatch/onLan``.
+    case notOnLan
+
+    /// The phone is on a LAN but has no site-local IPv4 address, so there is
+    /// no /24 to sweep: Wi-Fi with no lease yet, or an IPv6-only network.
+    /// Android returns an empty list here and the picker says "nothing
+    /// answered", which is the wrong thing to say about a phone that has no
+    /// address to sweep around.
     case noLocalNetwork
 
     /// **iOS only, and the reason this type exists.** The person refused the
@@ -177,6 +185,7 @@ public enum Discovery {
     /// `done` monotonic, which is the other half of what `ServerScan` does.
     public static func scan(
         _ probe: UnauthenticatedProbe,
+        onLan: @Sendable () -> Bool,
         port: Int = Discovery.defaultPort,
         timeout: TimeInterval = Discovery.sweepTimeout,
         onProgress: @Sendable @escaping (Int, Int, Int) -> Void = { _, _, _ in }
