@@ -470,7 +470,12 @@ public enum NetworkInterfaces {
         guard getnameinfo(socketAddress, size, &buffer, socklen_t(buffer.count), nil, 0, NI_NUMERICHOST) == 0 else {
             return nil
         }
-        return String(cString: buffer)
+        // `String(cString: [CChar])` is deprecated on this toolchain, and the
+        // replacement it names wants the NUL gone first — `getnameinfo`
+        // leaves the rest of the buffer as zeros, so the prefix up to the
+        // first one is the whole answer.
+        let bytes = buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
+        return String(decoding: bytes, as: UTF8.self)
     }
 
     /// How many leading one-bits the netmask has. Counted over the mask's

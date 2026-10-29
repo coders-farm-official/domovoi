@@ -71,7 +71,13 @@ final class NetworkWatchTests: XCTestCase {
     func testTheSameFactsReportedAgainAreNotAChange() {
         // A path update repeats the whole picture every time the system
         // thinks something might have moved, and most of those are the same
-        // facts again.
+        // facts again. The seed is one picture (`batch`), because reporting
+        // the path and then the addresses IS two pictures — which is the
+        // next test.
+        watch.batch { watch in
+            watch.seen(.path, "default", self.wifiPath())
+            watch.seen(.interfaces, "en0", self.addresses("192.168.1.57/24"))
+        }
         for _ in 0..<3 {
             watch.seen(.path, "default", wifiPath())
             watch.seen(.interfaces, "en0", addresses("192.168.1.57/24"))
