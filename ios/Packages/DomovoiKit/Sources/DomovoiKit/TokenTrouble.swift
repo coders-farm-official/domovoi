@@ -46,7 +46,10 @@ public func tokenTrouble(
     waitMs: Int64,
     identityChanged: Bool = false
 ) -> TokenTrouble? {
-    if ServerCredentials.normalize(serverURL).isEmpty || !paired { return nil }
+    // `isBlank`, not `normalize(…).isEmpty`: see ``ServerCredentials/isBlank(_:)``
+    // for the one input where the two disagree and why the Kotlin's question
+    // is the one to ask.
+    if ServerCredentials.isBlank(serverURL) || !paired { return nil }
     if identityChanged { return nil }
     if rejected { return .notRecognised(waitMs: max(0, waitMs)) }
     if waitMs > 0 { return .waiting(waitMs: waitMs) }

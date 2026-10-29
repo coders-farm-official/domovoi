@@ -52,6 +52,19 @@ public final class TokenHealth: Sendable {
     public protocol RejectedBook: Sendable {
         func isTokenRejected(_ url: String) -> Bool
         func markTokenRejected(_ url: String)
+
+        /// What `Prefs.clearTokenRejected` does: the person asked to try the
+        /// old token once more, or a new one arrived.
+        ///
+        /// A requirement and **not** an extension with a no-op default,
+        /// added when ``AppContainer`` gave the protocol a second
+        /// implementation (I1-C part 1). ``TokenHealth`` itself never calls
+        /// it — the only caller is the token-trouble card's `try the old
+        /// token again`, which is part 2's — and a conformance that silently
+        /// did nothing would leave that button unable to do what it says,
+        /// with nothing to notice it. A missing method is a compile error
+        /// instead.
+        func clear(_ url: String)
     }
 
     /// For tests and for a client with no settings store.
