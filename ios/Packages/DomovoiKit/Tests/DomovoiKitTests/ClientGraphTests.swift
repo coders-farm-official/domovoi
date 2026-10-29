@@ -138,12 +138,52 @@ final class ClientGraphTests: XCTestCase {
         XCTAssertEqual([], gate.required.current, "the probe must not ask the gate to admit it")
     }
 
-    /// The gate's own probe, wired through the container, reaches the
-    /// transport once and asks the gate nothing — no cycle error, no hang.
+    /// An ordinary `.scoped` request through the probe client still asks no
+    /// gate and still carries no token — **the property `gate: nil` is
+    /// actually for.**
     ///
-    /// If the probe client held the gate this would either recurse or come
-    /// back as ``DomovoiError/probeWiringCycle(_:)``; the assertion is that
-    /// it is a plain verdict instead.
+    /// The probe client is public so the picker and anything else that has to
+    /// ask a host which is not the active server can use it rather than build
+    /// one, and those callers are not confined to `TokenMode.none`. A probe
+    /// client that held a gate would, on a plain `get`, take a proof and
+    /// could carry the household token — A6-02/A6-03. This is the test that
+    /// catches that, and the one in front of it only catches the wiring.
+    ///
+    /// Watched failing by returning the app's client as the probe client in
+    /// `graph`: the gate is asked to prepare, and the token goes out.
+    func testAnOrdinaryRequestThroughTheProbeClientStillAsksNoGate() async throws {
+        let gate = RecordingGate()
+        let graph = DomovoiClient.graph(
+            book: .fixed(server: "http://10.0.0.42:6369", token: "household-abc"),
+            health: TokenHealth(),
+            lock: HouseholdLock(),
+            configuration: StubURLProtocol.session()
+        ) { _ in gate }
+        StubURLProtocol.enqueue(.json("{}"))
+        _ = try await graph.probe.raw(method: "GET", path: "/api/state", trackPairing: false)
+        XCTAssertEqual(1, StubURLProtocol.requestCount)
+        XCTAssertEqual([], gate.prepared.current, "no proof is taken for a client with no gate")
+        XCTAssertEqual([], gate.required.current)
+        XCTAssertNil(
+            StubURLProtocol.header("X-Device-Token", at: 0),
+            "a client with no gate must not carry the household token either"
+        )
+        // ...and the app's client, with the gate, does both.
+        StubURLProtocol.enqueue(.json("{}"))
+        _ = try await graph.app.raw(method: "GET", path: "/api/state", trackPairing: false)
+        XCTAssertEqual(["10.0.0.42"], gate.prepared.current, "the app's client takes the proof")
+        XCTAssertEqual("household-abc", StubURLProtocol.header("X-Device-Token", at: 1))
+    }
+
+    /// The gate's own probe, wired through the container, reaches the
+    /// transport once and comes back with a plain verdict.
+    ///
+    /// **This does not test the absence of the gate**, and the comment that
+    /// said it did was wrong: `TokenMode.none` means `perform` never reaches
+    /// `prepareIdentity` at all, so a probe client that held a gate would
+    /// pass this too — I watched it do so. What it does pin is that the
+    /// container's own wiring reaches the network once, with no token, and
+    /// produces a verdict rather than ``DomovoiError/probeWiringCycle(_:)``.
     func testTheContainersGateProvesAServerWithoutReenteringItself() async {
         let identity = TestIdentity.real
         let store = InMemoryShellStore(serverURL: "http://10.0.0.42:6369", token: "tttttttttttt")

@@ -53,21 +53,41 @@ public extension DomovoiClient {
     /// than two calls to a factory that someone might later make take an
     /// argument.
     ///
-    /// ### What goes wrong without this
+    /// ### What goes wrong without this, stated accurately
     ///
-    /// If the gate's probe client carried the gate, the probe's own request
-    /// would ask the gate to admit it, which needs a verdict, which needs a
-    /// probe: unbounded recursion, or a deadlock on the per-server probe
-    /// coalescing the gate is holding while it probes. I1-B added
-    /// ``DomovoiError/probeWiringCycle`` and a `@TaskLocal` guard so that
-    /// throws instead of hanging — that is a net, not the design, and
-    /// `ClientGraphTests` asserts the wiring rather than the net.
+    /// The danger usually described — the gate's probe asks the gate, which
+    /// needs a verdict, which needs a probe, so it recurses or deadlocks on
+    /// the per-server probe coalescing — **would not happen today even with
+    /// the wiring wrong**, and saying otherwise would be a comment that
+    /// states a fact nobody checked. ``unauthenticatedProbe`` performs its
+    /// request with `TokenMode.none`, and `perform` reaches neither
+    /// `prepareIdentity` nor `tokenOutcome` in that mode, and gives the
+    /// redirect chain a decider that answers `.bare` for every hop. So a
+    /// probe never consults a gate, present or absent. I watched this: a
+    /// sabotage run that handed the gate the app's client left
+    /// `testTheContainersGateProvesAServerWithoutReenteringItself` passing,
+    /// and only the two assertions about the wiring itself failed.
     ///
-    /// It would also send the household token to a server that has not proved
-    /// itself, which is findings A6-02/A6-03 — although for the probe
-    /// specifically, ``unauthenticatedProbe`` is `TokenMode.none` and carries
-    /// nothing on any hop whatever gate it holds, so that half is closed
-    /// twice over.
+    /// What `gate: nil` is actually for, then:
+    ///
+    ///  - **Android parity, as a rule rather than as a coincidence.** There,
+    ///    removing `DeviceAuthInterceptor` is the *only* thing that stops the
+    ///    probe consulting the gate and carrying the token; here two
+    ///    independent mechanisms would have to fail. Keeping both means the
+    ///    two apps can be reasoned about the same way.
+    ///  - **The probe client is public**, so the picker and anything else
+    ///    that must ask a host which is not the active server can use it
+    ///    instead of building one. Those callers are not confined to
+    ///    `TokenMode.none`: an ordinary `.scoped` request through a probe
+    ///    client that held a gate *would* take a proof and could carry the
+    ///    token, which is findings A6-02/A6-03. `gate: nil` is what makes the
+    ///    client safe for any request, not just for the one shape of request
+    ///    it is used for today — and
+    ///    `ClientGraphTests.testAnOrdinaryRequestThroughTheProbeClientStillAsksNoGate`
+    ///    is that property.
+    ///  - I1-B's ``DomovoiError/probeWiringCycle`` and its `@TaskLocal` guard
+    ///    remain the net under a future probe that is not `.none`. A net, not
+    ///    the design.
     ///
     /// - Parameter gate: given the finished probe client, returns the gate.
     ///   Non-escaping and called exactly once, before the app's client
