@@ -1,15 +1,16 @@
 import DomovoiKit
 import SwiftUI
 
-/// Home, as far as I1-D part 1 goes: **the header and nothing else**.
+/// Home, as far as I1-D part 2 goes: **the header and the needs-attention
+/// card**.
 ///
 /// Android's `HomeScreen` is a `LazyColumn` of nine fixed `item` slots —
 /// header, first run, app update, needs attention, timers, rooms, announce,
 /// today, everything — and "a section with nothing to say gets no slot at
-/// all" (`HomeScreen.kt:490`). This is the first slot. The other eight, the
-/// health checks, the timer book and every string they need are **not
-/// written**, and `design-notes/ios/I1D1-REPORT.md` lists them as what part 2
-/// has to build rather than a comment here claiming somebody will.
+/// all" (`HomeScreen.kt:490`). This is the first slot and the fourth. The
+/// other seven — first run, app update, timers, rooms, announce, today, the
+/// everything grid — are **not written**, and `design-notes/ios/I1D2-REPORT.md`
+/// lists them as part 3's rather than a comment here claiming somebody will.
 ///
 /// ### No pull-to-refresh, no page fetch, no pager
 ///
@@ -24,21 +25,48 @@ import SwiftUI
 ///
 /// ### What it reads
 ///
-/// One read: `GET /api/config`, for the house's name. The other six of
-/// Android's seven are part 2's. The read is an ``ApiRead``, so it carries
-/// the five behaviours of `rememberApi` — including that a failure keeps the
-/// last value, which is why a header that has shown a name once never falls
-/// back to `domovoi` on a hiccup.
+/// All seven of Android's reads, through ``HomeModel``: the config, the
+/// health, the rooms, the timers, the plugins, the pending acquisitions and
+/// the calendar's week. Each is an ``ApiRead``, so each carries the five
+/// behaviours of `rememberApi` — including that a failure keeps the last
+/// value, which is why a header that has shown a name once never falls back
+/// to `domovoi` on a hiccup.
+///
+/// **The reads stay seven.** `HomeModel`'s own comment says why: collapsing
+/// them into one loading/loaded/failed value loses the property the whole
+/// screen is built on, that the rooms read failing must not blank the
+/// timers.
 struct HomeView: View {
 
     let model: ShellModel
 
-    @State private var config: ApiRead<HomeConfig>?
+    @State private var home: HomeModel?
+
+    /// `rememberSaveable` on Android: the `+N more` tap, which expands the
+    /// attention list in place. Home's state dies when the route leaves, on
+    /// both phones.
+    @State private var attentionExpanded = false
+
+    @Environment(\.horizontalSizeClass) private var sizeClass
+
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 HomeHeaderView(state: headerState, onPair: openPairing)
+                if let home {
+                    HomeAttentionView(
+                        state: home.attention(
+                            shared: model.visibility.sharedScreen,
+                            compact: sizeClass != .regular,
+                            expanded: attentionExpanded
+                        ),
+                        nowMs: home.nowMs,
+                        onRow: open,
+                        onMore: { attentionExpanded = true }
+                    )
+                }
                 Spacer(minLength: 0)
             }
             .padding(16)
@@ -51,35 +79,78 @@ struct HomeView: View {
             // leaves, which is "a route holds nothing": leaving Home and
             // coming back re-reads, exactly as `rememberApi`'s state dying
             // with the composable does.
-            if config == nil {
-                let container = model.container
-                // `init(in:)`, not `init(base:)`: the read joins the
-                // container's server-address registry in its own
-                // initialiser, so a switch re-keys it without this view
-                // having to remember a line. Part 2's six further reads must
-                // be built the same way and get it for nothing.
-                config = ApiRead(in: container) {
-                    try await HomeApi.config(container.client)
-                }
+            if home == nil {
+                // `init(in:)`, which builds all seven reads against the
+                // container's server-address registry, so a switch re-keys
+                // every one of them without this view having to remember a
+                // line.
+                home = HomeModel(in: model.container)
             }
-            config?.refresh()
+            // `start()` is the `.mount` trigger: the seven reads, the clock,
+            // the poll fallback and the health tick. Which reads a trigger
+            // fires is ``homeRefreshPlan(for:in:)``'s decision and not this
+            // view's — the one place a trigger turns into reads.
+            home?.start()
         }
-        .onDisappear { config?.stop() }
+        // `repeatOnLifecycle(STARTED)` on Android: the loops stop with the
+        // screen rather than polling a screen nobody is looking at.
+        .onDisappear { home?.stop() }
+        // `LifecycleEventEffect(ON_RESUME)` (`HomeScreen.kt:211`), which the
+        // fifteen-second focus gap then throws away if the screen was only
+        // away for a moment.
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { home?.cameBackOnScreen() }
+        }
+        .onChange(of: model.connected) { _, live in
+            home?.socketChanged(live: live)
+        }
+    }
+
+    /// Where an attention row goes — Settings → Health for every row Home
+    /// draws today (``healthTarget``), and **Home fixes nothing itself**: the
+    /// per-check `fix` targets are Health's rows, not Home's.
+    private func open(_ row: AttentionRow) {
+        switch row.target {
+        case .settings(let tab):
+            model.openSettingsTab(tab)
+        case .screen(let route):
+            model.navigate(route)
+        case .dashboard:
+            // **No Home row carries one**, and this is not an assumption:
+            // every ``AttentionRow`` targets ``healthTarget``, which
+            // `HealthChecksTests` asserts for every check at once
+            // (`rows.allSatisfy { $0.target == .settings("health") }`). The
+            // `.dashboard` targets in `HealthChecks.swift` are the per-check
+            // `fix` links, which are *Health's* rows and not Home's.
+            //
+            // So this branch is unreachable rather than unimplemented, and
+            // the test is what keeps it that way: a part-3 row with a
+            // dashboard target fails that assertion instead of shipping a tap
+            // that silently does nothing, which is the owner's
+            // no-misleading-controls rule. There is also no in-app dashboard
+            // opener to call — opening one means a web view or Safari, and
+            // that is a decision nobody has made.
+            break
+        }
     }
 
     private var headerState: HomeHeaderState {
         HomeHeaderState(
-            name: HomeConfig.name(of: config?.data),
-            date: homeDate(ms: Int64(Date().timeIntervalSince1970 * 1000), timeZone: .current),
-            // The counts come from the rooms and timer reads, which part 2
-            // writes. **`countsReady: true` with no counts**, which is the
-            // date alone: `countsReady` is `sats.answered()`, so `false`
-            // means "a read is pending", and there is no read. Passing
-            // `false` here — which this batch did ship — drew Android's
-            // loading skeleton beside the date on the only screen in the
-            // batch, permanently, for a read that does not exist. Part 2
-            // passes its real `answered()` and the skeleton comes back with
-            // something behind it.
+            name: HomeConfig.name(of: home?.config.data),
+            // ``HomeModel/nowMs``, not `Date()` — one clock for the screen,
+            // and the one the attention rows' times are counted against.
+            date: homeDate(
+                ms: home?.nowMs ?? Int64(Date().timeIntervalSince1970 * 1000),
+                timeZone: .current
+            ),
+            // **Still empty, and `countsReady` still `true`.** The counts
+            // themselves — "3 rooms · 2 timers" — are §3.1 and part 3's: the
+            // status line's words are not ported and nothing here can
+            // compose them. `countsReady` is Android's `sats.answered()`, so
+            // `false` means "a read is pending" and draws the loading
+            // skeleton; passing `false` with nothing coming (which part 1
+            // shipped) drew that skeleton permanently. Part 3 passes
+            // `home.rooms.answered` with real counts behind it.
             counts: [],
             countsReady: true,
             live: model.connected,
