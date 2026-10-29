@@ -341,6 +341,8 @@ public final class Reachability: Sendable {
         /// When the current foreground stretch of asking began (or last got
         /// an answer); nil while not asking.
         var askingSince: Int64?
+        /// Which stretch this is, counted from 1. See ``pause(_:stretch:)``.
+        var stretch: Int64 = 0
     }
 
     private let state = Mutex(State())
@@ -354,14 +356,40 @@ public final class Reachability: Sendable {
 
     /// The app is on screen with the live socket down: asking starts (or
     /// starts again).
-    public func resume(_ now: Int64) {
-        state.withLock { if $0.askingSince == nil { $0.askingSince = now } }
+    ///
+    /// Answers **which stretch** this is, for a caller that will pause the one
+    /// it opened and no other — see ``pause(_:stretch:)``. Asking again while
+    /// already asking changes nothing and answers the stretch in progress.
+    @discardableResult
+    public func resume(_ now: Int64) -> Int64 {
+        state.withLock {
+            if $0.askingSince == nil {
+                $0.askingSince = now
+                $0.stretch += 1
+            }
+            return $0.stretch
+        }
     }
 
     /// The app left the screen (or the socket came back): asking stops, the
     /// stretch so far is kept.
-    public func pause(_ now: Int64) {
+    ///
+    /// - Parameter stretch: the stretch this call means to close, from
+    ///   ``resume(_:)``. A stale one is ignored, and that is not tidiness:
+    ///   ``askWhileOnScreen(reach:probe:clock:wait:publish:)`` pauses in a
+    ///   `defer`, which runs **after** its task is cancelled — by which time
+    ///   ``ReachabilityDriver`` may already have paused this tracker (it does
+    ///   so synchronously, with the right timestamp) and started a new loop
+    ///   that resumed it. Without the token that late `defer` closes the new
+    ///   stretch, the next ``missed(_:)`` finds nothing open and returns, and
+    ///   a server that really is gone never falls back. Watched happening:
+    ///   `ShellLifecycleTests.testAnInterruptionKeepsWhatIsOwedRatherThan`
+    ///   `ClearingIt` fails without this.
+    ///
+    ///   Omitted (the driver's own call), it closes whatever is open.
+    public func pause(_ now: Int64, stretch: Int64? = nil) {
         state.withLock {
+            if let stretch, stretch != $0.stretch { return }
             if let since = $0.askingSince { $0.spentMs += max(0, now - since) }
             $0.askingSince = nil
         }
@@ -427,8 +455,8 @@ public func askWhileOnScreen(
     wait: @Sendable (Int64) async throws -> Void = { try await Task.sleep(for: .milliseconds($0)) },
     publish: @Sendable (Bool) -> Void
 ) async {
-    reach.resume(clock())
-    defer { reach.pause(clock()) }
+    let stretch = reach.resume(clock())
+    defer { reach.pause(clock(), stretch: stretch) }
     while !Task.isCancelled {
         let answered = await probe()
         // See the note on the type: this is the dropped straddling probe.

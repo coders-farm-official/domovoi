@@ -162,6 +162,33 @@ final class ShellLifecycleTests: XCTestCase {
         XCTAssertTrue(rig.driver.unreachable, "and the 9 s already owed still count")
     }
 
+    /// **A cancelled loop's `defer` must not close a stretch it did not
+    /// open.** The driver pauses synchronously and starts the next loop at
+    /// once; the cancelled task's `defer` runs some time after that, so by
+    /// then the tracker is asking again. Unticketed, that late `pause` closes
+    /// the new stretch, every later ``Reachability/missed(_:)`` returns
+    /// early, and a server that really is gone never falls back.
+    ///
+    /// Found by `testAnInterruptionKeepsWhatIsOwedRatherThanClearingIt`
+    /// failing on the Mac, which is why the ticket exists; this is the same
+    /// thing without the race, so it cannot pass by luck.
+    func testALatePauseFromACancelledLoopIsIgnored() {
+        let reach = Reachability(graceMs: 10_000)
+        let first = reach.resume(0)
+        reach.pause(9_000, stretch: first)       // the driver, on the way out
+        let second = reach.resume(600_000)       // the next loop, on the way in
+        XCTAssertNotEqual(first, second)
+        reach.pause(600_000, stretch: first)     // the cancelled loop's `defer`
+        reach.missed(601_300)
+        XCTAssertTrue(reach.unreachable, "9 s owed plus 1.3 s is past a 10 s grace")
+        // And the driver's own untokened call still closes whatever is open.
+        let third = Reachability(graceMs: 10_000)
+        third.resume(0)
+        third.pause(5_000)
+        third.missed(600_000)
+        XCTAssertFalse(third.unreachable, "nothing is being timed")
+    }
+
     /// The live socket coming up is better evidence than any probe: the loop
     /// stops and what was owed is **cleared**, so the verdict goes back to
     /// reachable at once.
