@@ -50,6 +50,32 @@ ADMIN = [Depends(require_requested_with), Depends(require_admin_mutation)]
 MAX_PRINT_BYTES = 100 * 1024 * 1024
 DOCUMENTS_LIBRARY_ID = "core:documents"
 
+# What a phone app registers itself as (POST /api/devices/register). Until
+# 2026-10-28 this was the single string "android", written when Android was
+# the only app there was; an iPhone registering honestly as "ios" was then
+# labelled "dashboard", which is not where its job came from.
+PHONE_APP_PLATFORMS = frozenset({"android", "ios"})
+
+# The marks a phone app leaves on a user agent, for a device that has not
+# registered (or whose row we could not read). OkHttp is Android's HTTP
+# library; the two product names are ours.
+PHONE_APP_USER_AGENTS = ("okhttp", "domovoi-android", "domovoi-ios")
+
+
+def source_label(platform: str, user_agent: str) -> str:
+    """`"app"` or `"dashboard"`: where a print or scan job came from.
+
+    Pure, so the rule is tested as written rather than through a request, a
+    database and a printer. Both arguments are taken already lowercased, as
+    `_caller` has them.
+
+    Cosmetic — it is the word shown beside a job in the print queue — so it
+    guesses rather than refuses, and a device we know nothing about reads
+    "dashboard".
+    """
+    return "app" if (platform in PHONE_APP_PLATFORMS
+                     or any(mark in user_agent for mark in PHONE_APP_USER_AGENTS)) else "dashboard"
+
 
 async def _caller(request: Request) -> tuple[str | None, str, str]:
     """(device id, its name, "app"|"dashboard") as far as the request says."""
@@ -72,8 +98,7 @@ async def _caller(request: Request) -> tuple[str | None, str, str]:
         except Exception as e:  # noqa: BLE001 — the label is cosmetic
             log.debug("printers: device lookup failed: %s", e)
     ua = (request.headers.get("user-agent") or "").lower()
-    source = "app" if platform == "android" or "okhttp" in ua or "domovoi-android" in ua else "dashboard"
-    return ident, name, source
+    return ident, name, source_label(platform, ua)
 
 
 _SCAN_ID = re.compile(r"^[0-9a-f]{32}$")

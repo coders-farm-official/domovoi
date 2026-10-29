@@ -776,8 +776,9 @@ def build(source: Path = SOURCE) -> dict:
                           "internet_answered (GET /api/config internet_access not ''), rooms "
                           "(GET /api/satellites not empty), room_heard (a room has a session: GET "
                           "/api/satellites/<room>/sessions), people (GET /api/people not empty), "
-                          "music (GET /api/music/library/stats total_tracks > 0), phone_app (an "
-                          "android device in GET /api/devices, admin only), this_phone_paired (the "
+                          "music (GET /api/music/library/stats total_tracks > 0), phone_app (a "
+                          "device in GET /api/devices whose platform is one of our phone apps — "
+                          "android or ios — admin only), this_phone_paired (the "
                           "app, paired). A read that fails leaves the line unticked, never ticked."),
             "doc_ref": ("More-detail links open the docs of the version the server runs: the tag "
                         "v<label> when the version label is a release exactly (1.0.0, 1.0.0-rc2), "

@@ -192,9 +192,13 @@ async def test_an_artist_search_sends_the_query_and_the_project_user_agent(monke
     (call,) = calls
     assert call["url"] == "https://musicbrainz.org/ws/2/artist"
     assert call["params"] == {"query": 'artist:"deadmau5"', "fmt": "json", "limit": "5"}
-    assert call["headers"]["User-Agent"] == (
-        "domovoi/1.0.0rc3 (+https://github.com/coders-farm-official/domovoi)"
-    )
+    assert call["headers"]["User-Agent"] == HttpMusicBrainzClient.USER_AGENT
+    # MusicBrainz asks every client to name itself and give a contact
+    # address; the point of this assertion is that we do, not what the
+    # version happens to be. Spelling it out literally meant the release
+    # that dropped the `rc` from the user agent left this test behind.
+    assert call["headers"]["User-Agent"].startswith("domovoi/")
+    assert "github.com/coders-farm-official/domovoi" in call["headers"]["User-Agent"]
     assert call["headers"]["Accept"] == "application/json"
 
 
