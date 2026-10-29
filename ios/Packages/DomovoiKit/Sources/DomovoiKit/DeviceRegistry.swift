@@ -402,6 +402,28 @@ public enum DeviceIdentity {
         return "ios-" + bytes.map { String(format: "%02x", $0) }.joined()
     }
 
+    /// `UserDefaults`, which is the app's store.
+    ///
+    /// In this module rather than in the app target so it is compiled and
+    /// testable by `ios/scripts/pkgtest.sh` — `UserDefaults` is Foundation,
+    /// and a store written beside `DomovoiApp` would be one more thing
+    /// nothing checks.
+    public struct UserDefaultsStore: Store {
+
+        /// The key. Android's is `Prefs.deviceId`; this one names the app so
+        /// a shared suite could never collide.
+        public static let key = "domovoi.deviceID"
+
+        private let defaults: UserDefaults
+
+        public init(defaults: UserDefaults = .standard) {
+            self.defaults = defaults
+        }
+
+        public func read() -> String? { defaults.string(forKey: Self.key) }
+        public func write(_ deviceID: String) { defaults.set(deviceID, forKey: Self.key) }
+    }
+
     /// The server's own rule, so a malformed id is caught here rather than as
     /// a `400` the person cannot act on: a leading letter or digit, then 2 to
     /// 63 more of letters, digits, `.`, `_`, `:` or `-`.

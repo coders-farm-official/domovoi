@@ -32,6 +32,10 @@ struct RouteScreen: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             .padding(24)
+        } else if route == .home {
+            // I1-D part 1 replaces exactly one branch, which is Android's
+            // shape too: `ScreenRouter.kt:57` → `Route.Home -> HomeScreen(…)`.
+            HomeView(model: model)
         } else if route == .settings {
             SettingsPlaceholder(model: model)
         } else {

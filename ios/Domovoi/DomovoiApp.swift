@@ -36,11 +36,39 @@ struct DomovoiApp: App {
 
     init() {
         let container = AppContainer(store: InMemoryShellStore())
-        // Registering the path monitors is a side effect on the process, which
-        // is why it is a separate call the app makes and not something a
-        // container does to whoever builds one.
+        // The device id, and the two things only UIKit can answer. Read HERE,
+        // on the main actor, once: ``DeviceSelf`` exists so that a `Sendable`
+        // closure running anywhere never reads `UIDevice`, which
+        // ``DomovoiKit`` cannot even import.
+        //
+        // The id is kept in `UserDefaults` and deliberately not the Keychain
+        // (``DeviceIdentity``), and `ownerPersonID` is nil because no
+        // preference holds one yet — see ``DeviceSelf``, which says what the
+        // route does with a null and which batch has to fill it in.
+        let model = UIDevice.current.model
+        let who = DeviceSelf(
+            deviceID: DeviceIdentity.stable(in: DeviceIdentity.UserDefaultsStore()),
+            name: DeviceRegistry.suggestedDeviceName(model: model),
+            userAgent: DeviceRegistry.userAgent(
+                systemVersion: UIDevice.current.systemVersion,
+                model: model
+            ),
+            ownerPersonID: nil
+        )
+        let model = ShellModel(container: container, deviceSelf: { who })
+        self.model = model
+        // **Subscribed before the socket is opened**, in this order and not
+        // in a view's `.task`, which runs later: a connect that landed in
+        // between would be a connect whose capability refresh and device
+        // register never happened. ``SocketRelay/missedConnections`` is the
+        // number that says whether that window was ever entered, and these
+        // two lines are why it should read zero.
+        model.watchSocket()
+        // Registering the path monitors, and opening the state socket, are
+        // side effects on the process, which is why they are a separate call
+        // the app makes and not something a container does to whoever builds
+        // one.
         container.start()
-        model = ShellModel(container: container)
     }
 
     var body: some Scene {

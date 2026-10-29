@@ -99,7 +99,7 @@ public final class URLSessionStateSocketTransport: StateSocketTransport {
         /// out on `opened` either way, and the server treats "no frame" as
         /// subscribed to everything anyway (`web/backend/main.py:704`).
         func run(pingMs: Int64) {
-            let pump = Task { [weak self] in
+            let pump = Task<Void, Never> { [weak self] in
                 await self?.pump(pingMs: pingMs)
             }
             let stale = state.withLock { current -> Task<Void, Never>? in

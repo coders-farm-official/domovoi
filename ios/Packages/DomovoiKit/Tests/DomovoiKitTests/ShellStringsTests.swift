@@ -73,6 +73,10 @@ final class ShellStringsTests: XCTestCase {
         "ui/screens/settings/LocalSettingsScreen.kt",
         "ui/screens/settings/ConnectionPanel.kt",
         "alerts/ContainerIncidents.kt",
+        // Home's header (I1-D part 1). The rest of `ui/screens/home/` comes
+        // with part 2's sections.
+        "ui/screens/home/HomeSections.kt",
+        "ui/screens/home/HomeModels.kt",
     ]
 
     /// Every literal in every file above, decoded, concatenated per file.
@@ -978,5 +982,45 @@ final class ShellStringsTests: XCTestCase {
     func testForgettingTheActiveServerAlsoAsksForTheList() {
         XCTAssertEqual("forgot box:6369", ShellStrings.forgot(address: "box:6369"))
         XCTAssertEqual("forgot box:6369 — pick a server", ShellStrings.forgotActive(address: "box:6369"))
+    }
+
+    // MARK: - Home's header (map §6.1)
+
+    /// The header's seven strings, each against the Kotlin whole.
+    ///
+    /// The map says of all of `ui/screens/home/`: "The apostrophe is ASCII
+    /// U+0027 in every single Home string … there is **no** curly apostrophe
+    /// anywhere". `HomeHeaderStrings.explainUnpaired` has two of them, so a
+    /// curly one typed here is what this catches — along with the U+00B7
+    /// middle dots and the separator's four spaces.
+    func testTheHomeHeaderSaysWhatTheKotlinSays() {
+        assertKotlinSaysWhole(HomeHeaderStrings.live)
+        assertKotlinSaysWhole(HomeHeaderStrings.notLive, "U+00B7, one space each side")
+        assertKotlinSaysWhole(HomeHeaderStrings.explainLive)
+        assertKotlinSaysWhole(HomeHeaderStrings.explainUnpaired, "both apostrophes ASCII")
+        assertKotlinSaysWhole(HomeHeaderStrings.explainDown)
+        assertKotlinSaysWhole(HomeHeaderStrings.pairLink)
+        assertKotlinSaysWhole(HomeHeaderStrings.countsSeparator, "two spaces, U+00B7, two spaces")
+        assertKotlinSaysWhole(HomeHeaderStrings.defaultName)
+    }
+
+    /// Spelt out rather than left to the whole-string check, because these
+    /// are the characters a careless copy loses and the map flagged this
+    /// exact file for it.
+    func testTheHomeHeaderKeepsItsMiddleDotsAndAsciiApostrophes() {
+        for string in [
+            HomeHeaderStrings.notLive,
+            HomeHeaderStrings.explainLive,
+            HomeHeaderStrings.explainUnpaired,
+            HomeHeaderStrings.explainDown,
+            HomeHeaderStrings.countsSeparator,
+        ] {
+            XCTAssertTrue(string.contains("\u{00B7}"), "U+00B7 middle dot: \(debugged(string))")
+            XCTAssertFalse(string.contains("\u{2022}"), "a bullet is not a middle dot")
+        }
+        XCTAssertTrue(HomeHeaderStrings.explainUnpaired.contains("isn't"))
+        XCTAssertTrue(HomeHeaderStrings.explainUnpaired.contains("doesn't"))
+        XCTAssertFalse(HomeHeaderStrings.explainUnpaired.contains("\u{2019}"), "no curly apostrophe")
+        XCTAssertEqual("  \u{00B7}  ", HomeHeaderStrings.countsSeparator)
     }
 }

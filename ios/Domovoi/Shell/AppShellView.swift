@@ -67,9 +67,22 @@ struct AppShellView: View {
                 }
             }
             .onChange(of: scenePhase, initial: true) { _, phase in
-                model.scenePhaseChanged(to: ShellPhase(phase))
+                // The sender is passed, so the decision and the send are one
+                // call: with no sender the cadence slot is not consumed at
+                // all (``ShellModel/registerSender``, and I1-C part 2's F9).
+                model.scenePhaseChanged(to: ShellPhase(phase), sendRegister: model.registerSender)
             }
             .task {
+                // The socket is subscribed to in `DomovoiApp.init`, before it
+                // is opened, and NOT here — this runs later, and a connect
+                // that landed in between would be one whose capability
+                // refresh and device register never happened.
+                //
+                // What is here is the first manifest fetch at launch, which
+                // Android does by having `rememberCapabilities()` read once
+                // when the shell composes. The socket's connect refreshes it
+                // again; a manifest fetched twice costs one Open GET, and a
+                // manifest never fetched hides both gated screens.
                 await model.refreshCapabilities()
             }
     }

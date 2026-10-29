@@ -141,9 +141,9 @@ public final class ApiRead<Value: Sendable> {
             error = nil
         } catch is CancellationError {
             return
-        } catch {
+        } catch let trouble {
             guard !Task.isCancelled else { return }
-            error = message(of: error)
+            error = message(of: trouble)
         }
         loading = false
     }
