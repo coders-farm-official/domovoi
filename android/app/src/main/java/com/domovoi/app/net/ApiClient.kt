@@ -82,6 +82,15 @@ fun failureText(action: String, e: Throwable): String {
         // A cleartext refusal (CleartextPolicy or the platform) is not an
         // outage: say why, so the address can be corrected.
         e is UnknownServiceException -> "$action failed: ${detail ?: "not permitted"}"
+        // Neither is a request this app refused to send. Both of these are
+        // IOExceptions so that every caller's existing failure path applies,
+        // which is right — but it put them in the "(offline?)" branch below,
+        // where the phone blamed the network for its own decision. The server
+        // asking us to wait, and an address that has not proved it is the
+        // Domovoi we paired with, each say so in their own message (found
+        // 2026-10-29 while porting this layer to iOS).
+        e is TokenThrottledException -> "$action failed: ${detail ?: "waiting before the next try"}"
+        e is ServerIdentityException -> "$action failed: ${detail ?: "the server has not proved who it is"}"
         e is IOException -> "$action failed (offline?)"
         else -> "$action failed: ${detail ?: e.javaClass.simpleName}"
     }

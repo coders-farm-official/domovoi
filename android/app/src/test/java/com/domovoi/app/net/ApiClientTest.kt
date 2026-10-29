@@ -141,6 +141,29 @@ class ApiClientTest {
         )
     }
 
+    /**
+     * A request this app decided not to send is not an outage.
+     *
+     * Both of these are IOExceptions so that every caller's existing failure
+     * path applies, and that put them in the "(offline?)" branch, where the
+     * phone blamed the network for its own decision — a control saying
+     * something untrue. Each now says what actually happened.
+     */
+    @Test fun failureText_doesNotBlameTheNetworkForOurOwnRefusals() {
+        val throttled = failureText("Poll", TokenThrottledException(60_000))
+        assertFalse(throttled.contains("offline"))
+        assertEquals("Poll failed: Domovoi asked this phone to wait 60 s before it tries "
+                     + "the household token again", throttled)
+
+        val unproven = failureText(
+            "Poll",
+            ServerIdentityException("server identity unproven: 10.0.0.9:6369 offered no identity "
+                                    + "(this phone pinned SHA256:aaa)"),
+        )
+        assertFalse(unproven.contains("offline"))
+        assertTrue(unproven.contains("server identity unproven"))
+    }
+
     // ---- F-A009: subscribe / discover / news mutations use the same shape ----
 
     @Test fun failureText_namesTheServerReasonForSubscribeAndFeedFailures() = runBlocking {
