@@ -39,9 +39,11 @@ final class DiscoveryTests: XCTestCase {
     // ---- the probe carries nothing -----------------------------------------
 
     func testAProbeCarriesNoTokenEvenToTheActiveServer() async throws {
+        // Hoisted: the dispatcher is `@Sendable` and an XCTestCase is not.
+        let block = identityBlock
         StubURLProtocol.dispatch { request in
             switch request.url?.path {
-            case "/api/health": return .json(#"{"status":"ok","identity":\#(self.identityBlock)}"#)
+            case "/api/health": return .json(#"{"status":"ok","identity":\#(block)}"#)
             case "/api/config": return .json(#"{"bot_name":"kitchen-box"}"#)
             default: return .json("{}", status: 404)
             }
@@ -68,14 +70,16 @@ final class DiscoveryTests: XCTestCase {
 
     func testAHostThatIsNotADashboardIsNotAHit() async throws {
         StubURLProtocol.enqueue(.json("nope", status: 404))
-        XCTAssertNil(await Discovery.probe(makeClient().unauthenticatedProbe, base: server))
+        let miss = await Discovery.probe(makeClient().unauthenticatedProbe, base: server)
+        XCTAssertNil(miss)
         XCTAssertEqual(1, StubURLProtocol.requestCount, "no /api/config after a miss")
         XCTAssertNil(StubURLProtocol.header(deviceTokenHeader, at: 0))
     }
 
     func testAHostThatDoesNotAnswerIsNotAHitAndIsNotAnError() async throws {
         StubURLProtocol.enqueue(.init(error: URLError(.cannotConnectToHost)))
-        XCTAssertNil(await Discovery.probe(makeClient().unauthenticatedProbe, base: server))
+        let silent = await Discovery.probe(makeClient().unauthenticatedProbe, base: server)
+        XCTAssertNil(silent)
     }
 
     func testAnyTwoHundredIsAHitWhateverTheBodyIs() async throws {

@@ -75,7 +75,8 @@ final class TokenPasteFieldTests: XCTestCase {
     func testNoParseableServerRefusesBeforeSendingAnything() async {
         for server in ["", "   ", "nonsense", "http://"] {
             StubURLProtocol.reset()
-            XCTAssertEqual(.unavailable, await makeClient(server: server).checkDeviceToken(candidate), server)
+            let result = await makeClient(server: server).checkDeviceToken(candidate)
+            XCTAssertEqual(.unavailable, result, server)
             XCTAssertEqual(0, StubURLProtocol.requestCount)
         }
     }
@@ -85,7 +86,8 @@ final class TokenPasteFieldTests: XCTestCase {
         // `.unavailable`: the phone knows this one is wrong without asking.
         for bad in ["", "   ", "abc\ndef-123456", "abc\u{7F}def-123456", "héllo-token-123", "tab\there-123456"] {
             StubURLProtocol.reset()
-            XCTAssertEqual(.refused, await makeClient().checkDeviceToken(bad), bad.debugDescription)
+            let result = await makeClient().checkDeviceToken(bad)
+            XCTAssertEqual(.refused, result, bad.debugDescription)
             XCTAssertEqual(0, StubURLProtocol.requestCount)
         }
     }
@@ -106,7 +108,8 @@ final class TokenPasteFieldTests: XCTestCase {
 
     func testAGateThatAdmitsLetsTheCheckThrough() async {
         StubURLProtocol.enqueue(.json("{}"))
-        XCTAssertEqual(.accepted, await makeClient(gate: OpenGate()).checkDeviceToken(candidate))
+        let admitted = await makeClient(gate: OpenGate()).checkDeviceToken(candidate)
+        XCTAssertEqual(.accepted, admitted)
     }
 
     func testTheRealGateHasItsProofTakenBeforeTheCheckRatherThanBeingRefused() async throws {
@@ -141,7 +144,8 @@ final class TokenPasteFieldTests: XCTestCase {
             configuration: StubURLProtocol.session(timeout: 2)
         )
         box.set(client)
-        XCTAssertEqual(.accepted, await client.checkDeviceToken(candidate))
+        let checked = await client.checkDeviceToken(candidate)
+        XCTAssertEqual(.accepted, checked)
         XCTAssertEqual(1, probes.current, "the check took its own proof")
     }
 
@@ -158,7 +162,8 @@ final class TokenPasteFieldTests: XCTestCase {
         for status in [200, 201, 204, 299] {
             StubURLProtocol.reset()
             StubURLProtocol.enqueue(.json("{}", status: status))
-            XCTAssertEqual(.accepted, await makeClient().checkDeviceToken(candidate), "\(status)")
+            let result = await makeClient().checkDeviceToken(candidate)
+            XCTAssertEqual(.accepted, result, "\(status)")
         }
     }
 
@@ -168,7 +173,8 @@ final class TokenPasteFieldTests: XCTestCase {
         // question the check is asking.
         StubURLProtocol.reset()
         StubURLProtocol.enqueue(.json(#"{"detail":"Not Found"}"#, status: 404))
-        XCTAssertEqual(.accepted, await makeClient().checkDeviceToken(candidate))
+        let older = await makeClient().checkDeviceToken(candidate)
+        XCTAssertEqual(.accepted, older)
     }
 
     func testOnlyTheServersOwnTwoRefusalsAreARefusal() async {
@@ -179,7 +185,8 @@ final class TokenPasteFieldTests: XCTestCase {
             for status in [401, 403] {
                 StubURLProtocol.reset()
                 StubURLProtocol.enqueue(.json(#"{"detail":"\#(detail)"}"#, status: status))
-                XCTAssertEqual(.refused, await makeClient().checkDeviceToken(candidate), "\(status) \(detail)")
+                let result = await makeClient().checkDeviceToken(candidate)
+                XCTAssertEqual(.refused, result, "\(status) \(detail)")
             }
         }
         // The em dash is load-bearing: a hyphen is a different string and
@@ -187,12 +194,14 @@ final class TokenPasteFieldTests: XCTestCase {
         // plugin's 401 as one is how a good token gets thrown away.
         StubURLProtocol.reset()
         StubURLProtocol.enqueue(.json(#"{"detail":"X-Device-Token required - the dashboard cookie does not authorize device-tier actions"}"#, status: 401))
-        XCTAssertEqual(.unavailable, await makeClient().checkDeviceToken(candidate))
+        let hyphen = await makeClient().checkDeviceToken(candidate)
+        XCTAssertEqual(.unavailable, hyphen)
         // A 401 from somewhere else that merely mentions the header is not
         // the server's verdict either (Android review N-T2).
         StubURLProtocol.reset()
         StubURLProtocol.enqueue(.json(#"{"detail":"a plugin wants an X-Device-Token"}"#, status: 403))
-        XCTAssertEqual(.unavailable, await makeClient().checkDeviceToken(candidate))
+        let plugin = await makeClient().checkDeviceToken(candidate)
+        XCTAssertEqual(.unavailable, plugin)
     }
 
     func testAFiveOhThreeIsCouldNotCheckAndNotRefused() async {
@@ -200,18 +209,21 @@ final class TokenPasteFieldTests: XCTestCase {
         // "refused". A box that is restarting must not make a person throw
         // away a token that works.
         StubURLProtocol.enqueue(.json(#"{"detail":"starting"}"#, status: 503))
-        XCTAssertEqual(.unavailable, await makeClient().checkDeviceToken(candidate))
+        let restarting = await makeClient().checkDeviceToken(candidate)
+        XCTAssertEqual(.unavailable, restarting)
     }
 
     func testEveryOtherStatusAndAnUnreachableServerAreCouldNotCheck() async {
         for status in [400, 418, 500, 502, 504] {
             StubURLProtocol.reset()
             StubURLProtocol.enqueue(.json("{}", status: status))
-            XCTAssertEqual(.unavailable, await makeClient().checkDeviceToken(candidate), "\(status)")
+            let result = await makeClient().checkDeviceToken(candidate)
+            XCTAssertEqual(.unavailable, result, "\(status)")
         }
         StubURLProtocol.reset()
         StubURLProtocol.enqueue(.init(error: URLError(.cannotConnectToHost)))
-        XCTAssertEqual(.unavailable, await makeClient().checkDeviceToken(candidate))
+        let silent = await makeClient().checkDeviceToken(candidate)
+        XCTAssertEqual(.unavailable, silent)
     }
 
     func testAThrottleThatNamesTheTokenIsAWaitAndIsRemembered() async {
@@ -231,7 +243,8 @@ final class TokenPasteFieldTests: XCTestCase {
     func testAThrottleThatDoesNotNameTheTokenIsCouldNotCheck() async {
         let health = TokenHealth(clock: { 0 })
         StubURLProtocol.enqueue(.json(#"{"detail":"slow down"}"#, status: 429, headers: ["Retry-After": "120"]))
-        XCTAssertEqual(.unavailable, await makeClient(health: health).checkDeviceToken(candidate))
+        let result = await makeClient(health: health).checkDeviceToken(candidate)
+        XCTAssertEqual(.unavailable, result)
         XCTAssertEqual(0, health.waitMs(server), "a rate limit that is not about the token teaches nothing")
     }
 
@@ -250,7 +263,8 @@ final class TokenPasteFieldTests: XCTestCase {
             var headers: [String: String] = [:]
             if let header { headers["Retry-After"] = header }
             StubURLProtocol.enqueue(.json(#"{"detail":"too many wrong device tokens"}"#, status: 429, headers: headers))
-            XCTAssertEqual(.throttled(waitMs: expected), await makeClient(health: TokenHealth(clock: { 0 })).checkDeviceToken(candidate), header ?? "nil")
+            let result = await makeClient(health: TokenHealth(clock: { 0 })).checkDeviceToken(candidate)
+            XCTAssertEqual(.throttled(waitMs: expected), result, header ?? "nil")
         }
     }
 

@@ -509,7 +509,12 @@ final class IdentityGateTests: XCTestCase {
             // a Swift 6.3 SILGen crash on `catch DomovoiError.x` inside an
             // `async` function calling a typed-throws function, which is
             // exactly this shape.
-            XCTAssertTrue((error as? DomovoiError)?.message.contains("has not proved itself") == true, "\(error)")
+            // `tokenForDownload` has typed throws, so `error` is already a
+            // `DomovoiError` and a cast would warn. Matched by message
+            // rather than by pattern: I1-A's report §6 records a Swift 6.3
+            // SILGen crash on `catch DomovoiError.x` inside an `async`
+            // function calling a typed-throws function, which is this shape.
+            XCTAssertTrue(error.message.contains("has not proved itself"), error.message)
         }
         // After a proof it is handed over — which is why the method's doc
         // comment tells the caller to `await prepareIdentity` first.
@@ -567,7 +572,7 @@ final class IdentityGateTests: XCTestCase {
         do {
             _ = try await client.get("/api/refuse", as: [String: String].self)
             XCTFail("expected a refusal")
-        } catch let error as DomovoiError {
+        } catch {
             XCTAssertEqual(false, error.failure?.deviceTokenRequired, "not a pairing refusal from a server that is not ours")
         }
         XCTAssertFalse(client.pairingRequired)
@@ -582,7 +587,7 @@ final class IdentityGateTests: XCTestCase {
         do {
             _ = try await client.get("/api/refuse", as: [String: String].self)
             XCTFail("expected a refusal")
-        } catch let error as DomovoiError {
+        } catch {
             XCTAssertEqual(true, error.failure?.deviceTokenRequired)
         }
         XCTAssertTrue(client.pairingRequired)
