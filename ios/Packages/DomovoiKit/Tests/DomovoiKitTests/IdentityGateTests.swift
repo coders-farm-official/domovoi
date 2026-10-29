@@ -631,9 +631,14 @@ final class IdentityGateTests: XCTestCase {
     func testOneProbePerServerWhenRequestsRace() async throws {
         // Twenty reads at once: the Kotlin holds a per-key lock so the others
         // wait for the first probe's answer. Here they share its task.
+        // The client, not `self`: an XCTestCase is not `Sendable` and a task
+        // group's closure is.
+        let client = self.client!
         await withTaskGroup(of: Void.self) { group in
             for _ in 0..<20 {
-                group.addTask { [self] in _ = try? await read() }
+                group.addTask {
+                    _ = try? await client.get("/api/timers", as: [String: String].self)
+                }
             }
         }
         XCTAssertEqual(1, probes.count, "twenty racing reads, one proof")
