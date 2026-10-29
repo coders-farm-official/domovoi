@@ -1,5 +1,6 @@
 import Foundation
 import Synchronization
+@testable import DomovoiKit
 
 /// A server that is not a server: a `URLProtocol` the test session loads
 /// instead of the network.
