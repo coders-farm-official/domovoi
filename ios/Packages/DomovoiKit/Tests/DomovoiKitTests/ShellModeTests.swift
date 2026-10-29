@@ -257,10 +257,25 @@ final class ShellModeTests: XCTestCase {
         XCTAssertEqual(.localMedia(.noServer), screen(serverURL: "", pairingRequired: true, pairingDismissed: true))
     }
 
-    /// `shellScreen` must agree with `shellMode` on which shell it is, over
-    /// the whole input space: it is one decision, and the `if`s are only
-    /// written once.
-    func testShellScreenNeverDisagreesWithShellMode() {
+    /// **Every one of the 64 inputs lands on the leaf the documented order
+    /// says it should**, and the two surprising orderings are pinned for the
+    /// *reason* as well as for the shell.
+    ///
+    /// This used to assert only `isLocal == (mode == .local)`, which **cannot
+    /// fail**: every `mode == .local` branch of `shellScreen` returns
+    /// `.localMedia(_)` and nothing else does, so that equality holds by
+    /// construction. What was unconstrained is the re-asked `if` chain that
+    /// names the ``LocalReason`` (`ShellMode.swift:169-172`) — a review
+    /// swapped `identityChanged` ahead of `preferLocal` there and all 426
+    /// tests stayed green, because the shell was still local and no test
+    /// asked *why*. The table now carries the expected leaf, so the rule the
+    /// file documents — the person's own choice beats everything after it —
+    /// is checked over the whole input space.
+    ///
+    /// The agreement with `shellMode` is still asserted, as a cross-check
+    /// that the two functions cannot drift apart; it is just no longer the
+    /// only thing asserted.
+    func testEveryCombinationLandsOnTheLeafTheOrderingSays() {
         for bits in 0..<64 {
             let blank = bits & 1 != 0
             let preferLocal = bits & 2 != 0
@@ -285,6 +300,22 @@ final class ShellModeTests: XCTestCase {
                 identityChanged: identityChanged,
                 trouble: trouble
             )
+            // The ordering written out longhand, leaf and all. The first
+            // three are `shellMode`'s local branches, in its order, each
+            // naming its own reason; then `ShellContent`'s two early returns
+            // (the card before the pairing screen); then the probe.
+            let expected: ShellScreen
+            if blank { expected = .localMedia(.noServer) }
+            else if preferLocal { expected = .localMedia(.choseThisPhone) }
+            else if identityChanged { expected = .localMedia(.identityChanged) }
+            else if let trouble { expected = .tokenTroubleCard(trouble) }
+            else if pairing { expected = .pairing }
+            else if unreachable { expected = .localMedia(.outOfReach) }
+            else { expected = .workspace }
+            let inputs = "blank=\(blank) preferLocal=\(preferLocal) identityChanged=\(identityChanged) "
+                + "pairing=\(pairing) trouble=\(trouble != nil) unreachable=\(unreachable)"
+            XCTAssertEqual(expected, leaf, inputs)
+            // And the two functions still agree on which shell it is.
             let isLocal: Bool
             if case .localMedia = leaf { isLocal = true } else { isLocal = false }
             XCTAssertEqual(mode == .local, isLocal, "bits \(bits): \(mode) vs \(leaf)")
@@ -372,8 +403,23 @@ final class ShellModeTests: XCTestCase {
     }
 
     /// `coreDownDefaultsToFalseForEveryOlderCaller`
+    ///
+    /// **Called without `coreDown:` at all**, which is the whole subject. The
+    /// `choice` helper above always passes the argument, so a test written
+    /// through it could not fail for the default changing — and did not: the
+    /// Kotlin original has the identical weakness (`ShellModeTest`'s own
+    /// helper passes `coreDown` too), reported and left alone during the v1
+    /// soak.
     func testCoreDownDefaultsToFalseForEveryOlderCaller() {
-        XCTAssertTrue(choice().isEnabled)
+        let olderCaller = DomovoiKit.serverChoice(
+            serverURL: url,
+            label: "Domovoi",
+            unreachable: false,
+            notOurs: false,
+            pairingRequired: false
+        )
+        XCTAssertEqual(.available(label: "Domovoi", needsPairing: false), olderCaller)
+        XCTAssertTrue(olderCaller.isEnabled)
     }
 
     /// `TokenTroubleTest.theConnectionDialogSaysItTheSameWay`

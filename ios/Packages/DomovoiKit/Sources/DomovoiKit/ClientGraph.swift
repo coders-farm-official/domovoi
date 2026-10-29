@@ -44,14 +44,40 @@ public extension DomovoiClient {
     /// one of them, because there is nothing to forget: it never names them
     /// twice.
     ///
-    /// The `configuration` is the **same object** for both. `URLSession` makes
-    /// its own copy at init (Apple documents the session as copying the
-    /// configuration, and ``DomovoiClient`` holds no reference to it after
-    /// init), so sharing it cannot let one session's settings drift into the
-    /// other's; it does mean the cleartext and redirect rules, the cookie and
-    /// cache refusals and the timeouts are literally the same settings rather
-    /// than two calls to a factory that someone might later make take an
-    /// argument.
+    /// The `configuration` is **one object, copied once for the probe client
+    /// and changed in exactly one field**. `URLSession` makes its own copy at
+    /// init (Apple documents the session as copying the configuration, and
+    /// ``DomovoiClient`` holds no reference to it after init), so sharing it
+    /// cannot let one session's settings drift into the other's; copying it
+    /// here keeps the cleartext and redirect rules, the cookie and cache
+    /// refusals and everything else literally the same settings rather than
+    /// two calls to a factory that someone might later make take an argument.
+    ///
+    /// ### The one field: the probe client's fuse is short
+    ///
+    /// Android's probe client is `Discovery.client(http, timeoutMs)`, which
+    /// copies the real client, removes `DeviceAuthInterceptor` **and shortens
+    /// `connectTimeout` and `readTimeout`** to the caller's number — 3 s for
+    /// the gate (`IdentityGate.PROBE_TIMEOUT_MS`), 700 ms–1 s for a sweep.
+    /// Ours copied only the first half: the probe client shared the app's 60 s
+    /// `timeoutIntervalForRequest` and relied on **every** caller setting
+    /// `URLRequest.timeoutInterval` itself.
+    ///
+    /// They all do today — ``IdentityGate/probeTimeout`` on the gate's probe,
+    /// ``Discovery/sweepTimeout`` on a sweep — so this was not a defect, and
+    /// it is written down as a narrowing rather than a fix: the copy's
+    /// `timeoutIntervalForRequest` is ``probeRequestTimeout``, so a caller
+    /// that forgets gets Android's number instead of a minute of a spinner on
+    /// an address that will never answer. Nothing relies on it: a probe that
+    /// sets its own `timeoutInterval` is unaffected either way.
+    ///
+    /// The **second** difference from Android stays, and is named here
+    /// because there is no iOS knob for it: `URLSession` has no connect
+    /// timeout at all (see the timeout notes on ``DomovoiClient``), so
+    /// Android's shortened `connectTimeout` has no counterpart. A host that
+    /// accepts a connection and then says nothing is covered;
+    /// `timeoutIntervalForRequest` is the nearest thing to the read timeout,
+    /// and it is what is set.
     ///
     /// ### What goes wrong without this, stated accurately
     ///
@@ -115,6 +141,12 @@ public extension DomovoiClient {
     ///   Non-escaping and called exactly once, before the app's client
     ///   exists — so the gate cannot be handed the app's client by accident.
     /// - Returns: the gate's probe client, the app's client, and the gate.
+    /// What a request through the probe client gets if its caller sets no
+    /// `timeoutInterval` of its own: Android's `IdentityGate.PROBE_TIMEOUT_MS`,
+    /// which is also ``IdentityGate/probeTimeout``. A probe is one short JSON
+    /// body from a machine on the same LAN or nothing at all.
+    static var probeRequestTimeout: TimeInterval { IdentityGate.probeTimeout }
+
     static func graph<Gate: TokenGate>(
         book: ServerBook,
         health: TokenHealth? = nil,
@@ -122,12 +154,23 @@ public extension DomovoiClient {
         configuration: URLSessionConfiguration = DomovoiClient.defaultConfiguration(),
         gate: (DomovoiClient) -> Gate
     ) -> (probe: DomovoiClient, app: DomovoiClient, gate: Gate) {
+        // Android's `newBuilder()`, as near as this platform gets: the same
+        // settings with one field changed. `copy()` and not a second
+        // `defaultConfiguration()` call, so a caller's own configuration (the
+        // tests' stubbed `URLProtocol`, for one) carries over whole.
+        let probeConfiguration = (configuration.copy() as? URLSessionConfiguration) ?? configuration
+        // SHORTEN, never lengthen: a caller whose own configuration is
+        // tighter than a probe's fuse (the tests' one-second stubs) keeps its
+        // number. `<= 0` is not a number to take a minimum of.
+        let theirs = configuration.timeoutIntervalForRequest
+        probeConfiguration.timeoutIntervalForRequest =
+            theirs > 0 ? min(theirs, probeRequestTimeout) : probeRequestTimeout
         let probe = DomovoiClient(
             book: book,
             gate: AdmitsNoServer(),
             health: health,
             lock: lock,
-            configuration: configuration
+            configuration: probeConfiguration
         )
         let built = gate(probe)
         let app = DomovoiClient(

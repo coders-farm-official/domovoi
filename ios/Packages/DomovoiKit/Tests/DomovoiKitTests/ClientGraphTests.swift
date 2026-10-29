@@ -95,6 +95,55 @@ final class ClientGraphTests: XCTestCase {
         XCTAssertTrue(graph.app.lock === lock)
     }
 
+    /// **The probe client's fuse is short, and everything else about it is
+    /// the app's.** Android's `Discovery.client(http, timeoutMs)` shortens
+    /// `connectTimeout` and `readTimeout`; ours shortens the one knob
+    /// `URLSession` has, and the copy must carry every other setting —
+    /// including the test target's stubbed `URLProtocol`, which is how this
+    /// test knows `copy()` keeps `protocolClasses`.
+    func testTheProbeClientKeepsEverythingButTheTimeout() {
+        let configuration = StubURLProtocol.session()
+        let graph = DomovoiClient.graph(
+            book: .fixed(server: "http://10.0.0.42:6369"),
+            configuration: configuration
+        ) { _ in RecordingGate() }
+        XCTAssertEqual(
+            IdentityGate.probeTimeout,
+            graph.probe.session.configuration.timeoutIntervalForRequest,
+            "Android's PROBE_TIMEOUT_MS, for a caller that sets no timeoutInterval of its own"
+        )
+        XCTAssertEqual(
+            60, graph.app.session.configuration.timeoutIntervalForRequest,
+            "the app's client keeps Android's read timeout"
+        )
+        // The caller's own configuration is otherwise untouched, and the
+        // stub survived the copy — without this the probe client would reach
+        // the network in every test that uses it.
+        XCTAssertEqual(
+            configuration.protocolClasses?.count,
+            graph.probe.session.configuration.protocolClasses?.count
+        )
+        XCTAssertTrue(
+            graph.probe.session.configuration.protocolClasses?.contains(where: {
+                ObjectIdentifier($0) == ObjectIdentifier(StubURLProtocol.self)
+            }) ?? false,
+            "the copy kept the stubbed URLProtocol"
+        )
+        XCTAssertEqual(
+            configuration.httpShouldSetCookies,
+            graph.probe.session.configuration.httpShouldSetCookies
+        )
+        XCTAssertEqual(60, configuration.timeoutIntervalForRequest, "the caller's object was not modified")
+        // Shortening only: a caller tighter than a probe's fuse keeps its own
+        // number, which is what the one-second stubs in `AppContainerTests`
+        // rely on.
+        let tight = DomovoiClient.graph(
+            book: .fixed(server: "http://10.0.0.42:6369"),
+            configuration: StubURLProtocol.session(timeout: 1)
+        ) { _ in RecordingGate() }
+        XCTAssertEqual(1, tight.probe.session.configuration.timeoutIntervalForRequest)
+    }
+
     /// The cleartext policy is the one the map singles out: a hand-built
     /// second client is how you lose it. Both clients refuse a public address
     /// in the clear, before any connection is made.

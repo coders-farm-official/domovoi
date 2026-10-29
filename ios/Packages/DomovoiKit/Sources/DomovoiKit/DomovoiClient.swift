@@ -99,6 +99,13 @@ public enum TokenCheck: Equatable, Sendable {
 ///    that request. It is not a call timeout — a trickling response could
 ///    outlive it — but for a probe whose answer is one short JSON body, it is
 ///    the same thing in practice.
+///  * **The gate's probe client gets a shorter one.**
+///    ``graph(book:health:lock:configuration:gate:)`` copies this
+///    configuration for it and sets `timeoutIntervalForRequest` to
+///    ``IdentityGate/probeTimeout`` (shortening only, never lengthening),
+///    which is Android's `Discovery.client(http, timeoutMs)`. Every probe
+///    sets its own `URLRequest.timeoutInterval` as well, so this is the floor
+///    under a caller that forgets rather than something relied on.
 ///  * `URLSessionWebSocketTask` has no automatic ping: Apple gives
 ///    `sendPing(pongReceiveHandler:)` and the app must call it. Android's 15 s
 ///    ping exists because walking out of Wi-Fi range leaves the state socket
@@ -127,7 +134,24 @@ public final class DomovoiClient: Sendable {
     /// watches is I1-C's, and reads this.
     private let pairing = Mutex<Bool>(false)
 
-    public init(
+    /// **Internal, so that ``graph(book:health:lock:configuration:gate:)`` is
+    /// the only way to build one of these from outside the module.**
+    ///
+    /// Part 2 closed the fail-open — ``gate`` is non-optional with no default,
+    /// so a client cannot be built without saying which identity rules apply.
+    /// What it left open was the *capability*: this initialiser was `public`
+    /// and ``TokenGate`` is a `public` protocol whose `admitsPairingPrompt`
+    /// and `prepare` have permissive and no-op default bodies, so three lines
+    /// in the app target — a type conforming with `requireAdmitted` doing
+    /// nothing — were a client that puts the household token on any address.
+    /// A6-03 by a different route.
+    ///
+    /// Nothing legitimate wanted it: ``AppContainer`` is the production path
+    /// and is in this module, and every other call is a test with
+    /// `@testable import` (which reaches an internal initialiser). The one
+    /// public constructor left is `graph`, which hands the probe client
+    /// ``AdmitsNoServer`` itself and takes the gate as a closure it calls once.
+    init(
         book: ServerBook,
         gate: any TokenGate,
         health: TokenHealth? = nil,

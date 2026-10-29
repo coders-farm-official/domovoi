@@ -357,9 +357,12 @@ final class AppContainerTests: XCTestCase {
             (.unavailable(expected: "SHA256:a", reason: "its core is not answering"), false, true, false),
         ]
         for (verdict, notOurs, coreDown, changed) in cases {
-            // `shellInputs` reads `identity.status`, so the mapping is
-            // exercised through the real switch by giving the gate a status
-            // and reading the inputs back.
+            // The mapping itself, called directly on each verdict: this is
+            // the `switch` that `shellInputs` feeds `identity.status` into,
+            // and no gate is involved here. The path from a real gate's
+            // status through `shellInputs` is covered by the tests above,
+            // which take an actual proof; this one is about all five
+            // verdicts in one table.
             let readings = AppContainer.readings(of: verdict)
             XCTAssertEqual(notOurs, readings.notOurs, "\(verdict)")
             XCTAssertEqual(coreDown, readings.coreDown, "\(verdict)")

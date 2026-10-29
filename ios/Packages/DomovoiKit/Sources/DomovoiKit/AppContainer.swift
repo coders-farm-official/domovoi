@@ -109,15 +109,28 @@ public final class InMemoryShellStore: ShellStore {
 /// **What happens to a change that arrives before it is connected.** It is
 /// counted in ``missed`` and logged; it is not silently dropped and it is not
 /// a crash. In ``AppContainer`` it cannot happen for a reason worth stating
-/// precisely rather than asserting: ``NetworkWatch/onChange`` is only called
-/// from `recompute`, which is only reached from `seen`/`lost`/`replace`, and
-/// the only things that call those are ``NetworkWatch/start(queue:)`` (which
-/// creates the `NWPathMonitor`s — before it, none exist) and a caller holding
-/// the watch. `AppContainer.init` connects the sink before it returns, and
-/// `start()` is a separate call the app makes afterwards, so nothing can
-/// report a network change in between. ``missed`` exists anyway, because that
-/// is an argument about today's code and a reader six months from now
-/// deserves a number to look at instead of this paragraph.
+/// precisely rather than asserting, and the enumeration has to be the real
+/// one — an earlier version of this paragraph said `onChange` was "only
+/// called from `recompute`, which is only reached from `seen`/`lost`/`replace`",
+/// and both halves were wrong:
+///
+///  - ``NetworkWatch/onChange`` is called **by** `seen`, `lost`, `replace`
+///    and the `public` ``NetworkWatch/batch(_:)``, each of them after
+///    `recompute` — which returns whether the picture changed — has said so,
+///    and outside the lock. `recompute` itself calls nothing.
+///  - so `recompute` is reached from those same four, `batch(_:)` included.
+///
+/// The conclusion survives all four. ``NetworkWatch/batch(_:)``'s only caller
+/// outside the tests is ``NetworkWatch/start(queue:)`` (checked by grep over
+/// `ios/` on 2026-10-29; `NetworkWatchTests` drives it directly), which also
+/// creates the `NWPathMonitor`s whose handlers call `seen` — before it, none
+/// exist. ``NetworkWatch/refresh()`` reaches `replace`, and the only other
+/// way in is a caller holding the watch. `AppContainer.init` connects the sink
+/// before it returns and calls neither `start()` nor `refresh()`: both are
+/// separate calls the app makes afterwards, so nothing can report a network
+/// change in between. ``missed`` exists anyway, because that is an argument
+/// about today's code and a reader six months from now deserves a number to
+/// look at instead of this paragraph.
 final class DeferredSink: Sendable {
 
     private struct State {
