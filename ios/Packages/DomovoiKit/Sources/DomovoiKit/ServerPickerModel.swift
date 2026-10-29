@@ -184,15 +184,30 @@ public final class ServerPickerModel {
         outcome = nil
         let sweep = self.sweep
         sweeping = Task { @MainActor [weak self] in
+            // A strong reference for the sweep's lifetime, and it has to be a
+            // `let`: the report closure is `@Sendable` and cannot recapture
+            // the `weak var self` the task's capture list makes (the compiler
+            // says so, `#SendableClosureCaptures`). The class is
+            // `@MainActor`-isolated and therefore `Sendable`, so handing the
+            // reference to the closure is allowed; reaching its state from
+            // there is not, which is what the hop below is for.
+            guard let model = self else { return }
             let result = await sweep { done, total, hits in
-                Task { @MainActor [weak self] in
-                    self?.progress.report(done: done, total: total, found: hits)
+                Task { @MainActor in
+                    model.progress.report(done: done, total: total, found: hits)
                 }
             }
-            guard let self else { return }
-            self.found = result.servers
-            self.outcome = result
-            self.progress.finish()
+            guard !Task.isCancelled else {
+                // Android's `finally { scanning = false }`. A cancelled sweep
+                // leaves no outcome — it has nothing to report about what was
+                // probed — but it must not leave the panel saying "scanning"
+                // and refusing the next rescan.
+                model.progress.finish()
+                return
+            }
+            model.found = result.servers
+            model.outcome = result
+            model.progress.finish()
         }
     }
 

@@ -201,14 +201,15 @@ public final class PairingFieldModel {
         let generation = countdownGeneration
         let ticksAllowed = Int(waitLeftMs / tokenTroubleTickMs) + 2
         countdown = Task { @MainActor [weak self] in
+            guard let model = self else { return }
             var ticked = 0
-            while let self, !Task.isCancelled, self.waitLeftMs > 0, ticked < ticksAllowed {
-                do { try await self.tick(tokenTroubleTickMs) } catch { break }
+            while !Task.isCancelled, model.waitLeftMs > 0, ticked < ticksAllowed {
+                do { try await model.tick(tokenTroubleTickMs) } catch { break }
                 ticked += 1
-                self.nowMs = self.clock()
+                model.nowMs = model.clock()
             }
-            guard let self, self.countdownGeneration == generation else { return }
-            self.countdown = nil
+            guard model.countdownGeneration == generation else { return }
+            model.countdown = nil
         }
     }
 }
