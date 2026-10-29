@@ -163,8 +163,16 @@ final class ShellNavigationTests: XCTestCase {
 
         let restored = NavigationState.restored(route: state.restorableRoute)
         XCTAssertEqual(.calendar, restored.route)
-        XCTAssertFalse(restored.canGoBack)
         XCTAssertEqual([.calendar], restored.path)
+        // The history is **not** restored, and the one step the path does have
+        // is not history: a `NavigationStack` draws a non-root screen by
+        // having it in the path, so the back chevron goes to Home rather than
+        // to Music. That is better than Android, where the same state puts a
+        // single back press outside the app (map section 11.2).
+        XCTAssertTrue(restored.canGoBack)
+        XCTAssertTrue(restored.back())
+        XCTAssertEqual(startRoute, restored.route)
+        XCTAssertFalse(restored.canGoBack)
 
         // Home restores to the root rather than to a one-deep stack of it.
         XCTAssertEqual([], NavigationState.restored(route: "Home").path)

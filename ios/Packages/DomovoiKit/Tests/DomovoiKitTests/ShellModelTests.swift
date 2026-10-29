@@ -82,6 +82,25 @@ final class ShellModelTests: XCTestCase {
             parked.set(false)
         }
 
+        /// The server refuses the token this phone holds, through a real
+        /// request, so the client latches `pairingRequired` the way it does on
+        /// a phone: the gate admits a pairing prompt only for a server that
+        /// has proved itself, so the stub answers the identity probe as the
+        /// real server and everything else with a 401 (A6-03 - a rogue's 401
+        /// must not invite a paste).
+        func serverRefusesTheToken() async {
+            let identity = TestIdentity.real
+            StubURLProtocol.dispatch { request in
+                let challenge = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?
+                    .queryItems?.first { $0.name == "challenge" }?.value
+                if let challenge {
+                    return .json((try? identity.healthBody(challenge: challenge)) ?? "{}")
+                }
+                return .json(#"{"detail":"X-Device-Token or admin session required"}"#, status: 401)
+            }
+            _ = try? await container.client.get("/api/devices/me", as: [String: String].self)
+        }
+
         /// Give the main-actor hop a chance to land. Bounded, so a wiring
         /// that never publishes fails rather than hangs.
         func settleVerdict(_ condition: () -> Bool) async -> Bool {
@@ -165,7 +184,8 @@ final class ShellModelTests: XCTestCase {
         await rig.model.refreshCapabilities()
         XCTAssertFalse(rig.model.everything.contains(.stations))
         XCTAssertFalse(rig.model.everything.contains(.images))
-        XCTAssertTrue(rig.model.everything.contains(.music))
+        XCTAssertTrue(rig.model.everything.contains(.podcasts), "an ungated screen is still offered")
+        XCTAssertFalse(rig.model.everything.contains(.music), "Music is on the bar, so it is not also a tile")
         rig.model.stop()
     }
 
@@ -336,12 +356,9 @@ final class ShellModelTests: XCTestCase {
 
     /// The pairing screen and the token card can navigate nowhere, so a
     /// request waits for a shell that can.
-    func testAScreenThatReplacesTheShellLeavesTheRequestPending() {
+    func testAScreenThatReplacesTheShellLeavesTheRequestPending() async {
         let rig = Rig(serverURL: server)
-        rig.container.client.notePossiblePairingRefusal(
-            status: 401,
-            body: "X-Device-Token or admin session required"
-        )
+        await rig.serverRefusesTheToken()
         XCTAssertTrue(rig.container.requestRoute("chat"))
         rig.model.refresh()
         XCTAssertEqual(.pairing, rig.model.screen)
@@ -377,9 +394,12 @@ final class ShellModelTests: XCTestCase {
         XCTAssertNil(rig.container.pendingChatThread, "taken, so a redraw does not open it twice")
 
         // The key is the **normalised** URL's, so the same server written
-        // another way still matches.
+        // with a trailing slash still matches. Only the trailing slash:
+        // ``ServerCredentials/normalize(_:)`` does not fold the scheme's
+        // case, so "HTTP://" is a different key - which is the Kotlin's
+        // behaviour too, and both ends build the key the same way.
         XCTAssertTrue(rig.container.requestChatThread(
-            serverKey: AppContainer.serverKey("HTTP://10.0.0.42:6369/"),
+            serverKey: AppContainer.serverKey("http://10.0.0.42:6369/"),
             thread: 9,
             title: "Satellite"
         ))
@@ -430,12 +450,9 @@ final class ShellModelTests: XCTestCase {
     /// "not now" on the pairing screen lasts exactly as long as the token it
     /// was tapped with: a new token puts the screen back, and so does a fresh
     /// launch (Android's `remember(deviceToken)`).
-    func testNotNowLastsAsLongAsTheTokenItWasTappedWith() {
+    func testNotNowLastsAsLongAsTheTokenItWasTappedWith() async {
         let rig = Rig(serverURL: server)
-        rig.container.client.notePossiblePairingRefusal(
-            status: 401,
-            body: "X-Device-Token or admin session required"
-        )
+        await rig.serverRefusesTheToken()
         rig.model.refresh()
         XCTAssertEqual(.pairing, rig.model.screen)
 
@@ -468,8 +485,11 @@ final class ShellModelTests: XCTestCase {
         rig.model.stop()
     }
 
-    /// `try the old token again` drops the held token so the next request
-    /// goes bare and the server can say what it wants afresh.
+    /// `try the old token again` drops the **rejection** and keeps the
+    /// token: it means "send the same one once more", which is what a person
+    /// wants after a server restart that lost its device table for a moment.
+    /// A version of it that cleared the token would be a different button
+    /// wearing this one's label.
     func testTryingTheOldTokenAgainDropsTheRejection() {
         let rig = Rig(serverURL: server, token: "household-abc")
         rig.store.markTokenRejected(server)
@@ -479,7 +499,8 @@ final class ShellModelTests: XCTestCase {
 
         rig.model.tryTheOldTokenAgain()
         XCTAssertFalse(rig.container.tokenHealth.isRejected(server))
-        XCTAssertFalse(rig.model.isPaired, "the token went with it, so the next screen asks for one")
+        XCTAssertTrue(rig.model.isPaired, "the same token, sent again")
+        XCTAssertEqual(.workspace, rig.model.screen, "and the card is gone until the server refuses it again")
         rig.model.stop()
     }
 

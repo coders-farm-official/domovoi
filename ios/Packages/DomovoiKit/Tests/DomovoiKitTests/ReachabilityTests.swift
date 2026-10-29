@@ -313,7 +313,9 @@ final class ReachabilityTests: XCTestCase {
         clock.advance(120_000)
         driver.update(serverURL: server, connected: false, phase: .active)
         await settle()
-        XCTAssertEqual([false, false], verdicts.current, "two minutes away is not evidence")
+        // Three: the driver tells the shell "reachable" when it adopts the
+        // server, then one verdict per probe.
+        XCTAssertEqual([false, false, false], verdicts.current, "two minutes away is not evidence")
         XCTAssertFalse(driver.unreachable, "and the stale probe on the way back costs nothing")
         driver.stop()
     }

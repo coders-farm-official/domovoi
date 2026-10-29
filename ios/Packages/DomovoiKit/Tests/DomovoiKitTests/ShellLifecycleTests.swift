@@ -101,7 +101,9 @@ final class ShellLifecycleTests: XCTestCase {
         let rig = Rig(answers: { $0 == 0 })
         rig.driver.update(serverURL: server, connected: false, phase: .active)
         await rig.settle()
-        XCTAssertEqual([false], rig.verdicts.current)
+        // Two: adopting a server tells the shell it is reachable (a fresh
+        // grace, not last server's verdict), and then the probe answers.
+        XCTAssertEqual([false, false], rig.verdicts.current)
 
         // Off screen. The process then freezes for two minutes.
         rig.driver.update(serverURL: server, connected: false, phase: .background)
@@ -111,7 +113,7 @@ final class ShellLifecycleTests: XCTestCase {
         // Back on screen: a fresh probe runs first, and it fails.
         rig.driver.update(serverURL: server, connected: false, phase: .active)
         await rig.settle()
-        XCTAssertEqual([false, false], rig.verdicts.current, "two minutes away is not evidence")
+        XCTAssertEqual([false, false, false], rig.verdicts.current, "two minutes away is not evidence")
         XCTAssertFalse(rig.driver.unreachable)
         XCTAssertEqual(2, rig.probes.current, "one probe on the way back, before any verdict")
     }
