@@ -18,8 +18,10 @@ import XCTest
 /// driven through the connection sheet. Opening that sheet starts the LAN
 /// discovery sweep, and a Simulator shares the Mac's network — the first
 /// run of this file reached `scanning 80/254…` across a real home network
-/// before it was stopped. `-domovoi-server` writes exactly what the picker
-/// would have written. See `DomovoiApp.seededStore()`.
+/// before it was stopped. `-domovoi-server` is put through the picker's own
+/// normaliser, so the address this file passes is normalised by the code that
+/// normalises a typed one — see `DomovoiApp.seededStore()`, which says what
+/// happened when that was a comment's promise rather than a call.
 ///
 /// ### Evidence before verdict
 ///
@@ -66,6 +68,25 @@ final class StubHouseUITests: XCTestCase {
         app.staticTexts["stub house"]
     }
 
+    /// Whether the shell gave up on the server and fell back to local media.
+    ///
+    /// Worth its own check, and its own message, because it is a *different
+    /// failure* from a read that did not land: the workspace is gone, Home is
+    /// not on screen at all, and asserting on the header's name reports the
+    /// symptom four layers from the cause. The first run of this file said
+    /// "the config read did not land" when the truth was that the app had
+    /// never sent a request — and it took a request log and five files of
+    /// reading to find that out.
+    ///
+    /// `localBanner(for:canTrustAgain:)`'s `.unreachable` wording, which
+    /// appears only in that fallback.
+    private func fellBackToLocalMedia(in app: XCUIApplication) -> Bool {
+        app.descendants(matching: .staticText)
+            .matching(NSPredicate(format: "label CONTAINS %@", "Can't reach"))
+            .firstMatch
+            .exists
+    }
+
     /// Screenshot plus the accessibility tree, kept whatever happens next.
     ///
     /// The tree is the half that answers *why*: the picture of the first run
@@ -95,6 +116,13 @@ final class StubHouseUITests: XCTestCase {
         // verdict, not the evidence.
         let named = houseName(in: app).waitForExistence(timeout: 20)
         evidence(app, "10-home-large")
+        // The shell first, because a workspace that is gone explains a header
+        // that never drew and not the other way round.
+        XCTAssertFalse(
+            fellBackToLocalMedia(in: app),
+            "the shell gave up on the server and showed local media — the "
+                + "saved address or the server, not Home"
+        )
         XCTAssertTrue(
             named,
             "the header never drew the house's name — the config read did not land"

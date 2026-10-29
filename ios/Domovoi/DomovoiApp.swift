@@ -45,8 +45,32 @@ struct DomovoiApp: App {
     /// is on. Measured, not feared: the first run of `StubHouseUITests`
     /// reached `scanning 80/254…` before it was stopped.
     ///
-    /// So the test seeds the store instead, which is the same thing the
-    /// picker would have written and nothing the picker could not write.
+    /// So the test seeds the store instead — **through the picker's own
+    /// normaliser**, ``ServerAddress/fromTyped(_:defaultPort:)``, the one
+    /// that turns what a person types into what gets saved.
+    ///
+    /// That used to be a claim rather than a mechanism: this method wrote the
+    /// launch argument into the store verbatim and a comment asserted it was
+    /// "the same thing the picker would have written". It was not. A saved
+    /// address carries its scheme (`http://10.0.0.42:6369`, as every test in
+    /// the package spells it) because ``ServerURL/parse(_:)`` requires
+    /// `"://"` and returns nil without it, while the *displayed* address has
+    /// the scheme stripped (``ServerCredentials/address(_:)``) — and the
+    /// launch argument was written in the displayed form.
+    ///
+    /// What that cost: `ServerCredentials.isBlank` is false for
+    /// `127.0.0.1:6601`, so the shell believed a server was saved; nothing
+    /// could parse it, so ``DomovoiClient/answers()`` returned false without
+    /// sending a byte; and after ``unreachableGraceMs`` the app dropped to
+    /// local media saying "Can't reach 127.0.0.1:6601" about a server it had
+    /// never contacted. Two Simulator runs went into that. The stub house's
+    /// own request log is what settled it — the only two requests it ever saw
+    /// came from `stub_run.sh`'s readiness `curl`.
+    ///
+    /// Going through `fromTyped` executes the claim instead of making it: the
+    /// scheme, the default port and ``CleartextPolicy`` are the picker's
+    /// rules, applied by the picker's code. An address it refuses trips an
+    /// assertion rather than booting into a plausible-looking lie.
     ///
     /// `#if DEBUG` keeps it out of any build that could ship. It is also
     /// why this reads `ProcessInfo` rather than `UserDefaults`: a launch
@@ -62,7 +86,13 @@ struct DomovoiApp: App {
             return arguments[arguments.index(after: index)]
         }
         if let server = value(after: "-domovoi-server"), !server.isEmpty {
-            return InMemoryShellStore(serverURL: server, token: value(after: "-domovoi-token"))
+            guard case .ok(let url)? = ServerAddress.fromTyped(server) else {
+                assertionFailure(
+                    "-domovoi-server \(server) is not an address the picker would accept"
+                )
+                return InMemoryShellStore()
+            }
+            return InMemoryShellStore(serverURL: url, token: value(after: "-domovoi-token"))
         }
         #endif
         return InMemoryShellStore()
