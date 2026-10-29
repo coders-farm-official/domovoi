@@ -30,6 +30,36 @@ final class HomeHeaderTests: XCTestCase {
         XCTAssertNil(sparse.botName)
     }
 
+    /// **`GET /api/config` is an Open route, so its 200 must not clear a
+    /// pairing screen.**
+    ///
+    /// `docs/API_REFERENCE.md:1107` lists its tier as Open and
+    /// `web/backend/api/config.py:71` takes no dependency, so the answer says
+    /// nothing about whether this phone is paired. Android reads it tracked
+    /// (`HomeIo.kt:29`) and a tracked 200 clears `pairingRequired`
+    /// (`ApiClient.kt:334`) — the same defect `d1fd984c` fixed for
+    /// `/api/capabilities` the day before. Reported, not fixed there; this is
+    /// the iOS side of it, and this test is what stops the word being
+    /// "corrected" back.
+    func testTheConfigReadCannotClearThePairingScreen() async throws {
+        StubURLProtocol.reset()
+        defer { StubURLProtocol.reset() }
+        StubURLProtocol.dispatch { _ in .json(#"{"bot_name":"the burrow"}"#) }
+        let address = "http://10.0.0.42:6369"
+        let client = DomovoiClient(
+            book: ServerBook(activeServer: { address }, tokenForServer: { _ in nil }),
+            gate: AdmitsAnyServer(),
+            lock: HouseholdLock(),
+            configuration: StubURLProtocol.session(timeout: 1)
+        )
+        client.notePossiblePairingRefusal(status: 401, body: "X-Device-Token or admin session required")
+        XCTAssertTrue(client.pairingRequired, "a household read was refused")
+
+        let config = try await HomeApi.config(client)
+        XCTAssertEqual("the burrow", config.botName)
+        XCTAssertTrue(client.pairingRequired, "an Open route's 200 is not evidence of pairing")
+    }
+
     // MARK: - the date
 
     /// `mon 28 sep`: lower case, no padding, and the weekday table is
