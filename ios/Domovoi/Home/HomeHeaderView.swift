@@ -27,6 +27,15 @@ import SwiftUI
 /// cannot answer for itself: that the name wraps rather than clipping at
 /// AX5, and that VoiceOver reads the date-and-counts line as one phrase
 /// rather than three.
+///
+/// ### It also branches on pane width, because the Kotlin does
+///
+/// A compact pane gets the bare 44-point dot; **a wide one gets the bordered
+/// pill with the words in it** (`HomeSections.kt:211-238`). I1-D part 1
+/// branched on `isAccessibilitySize` alone, so on an iPad the two strings
+/// `HomeHeaderStrings.live` and `.notLive` — both pinned against the Kotlin,
+/// both tested — reached a person through VoiceOver and nowhere else. See
+/// ``showsLiveWords``.
 struct HomeHeaderView: View {
 
     let state: HomeHeaderState
@@ -165,14 +174,17 @@ struct HomeHeaderView: View {
     /// The dot and its label, as a pill on a wide pane and as a plain row at
     /// the accessibility sizes.
     ///
-    /// The pill's shape is the Kotlin's: a 6 dp corner, a 1 dp border, the
-    /// card fill, 10 × 7 dp of padding (`HomeSections.kt:221-238`). The
-    /// border and fill are SwiftUI's `.separator` and `.background.secondary`
-    /// rather than `Domovoi.colors.border` / `.card`, because the asset
-    /// catalogue generated from `web/static/colors_and_type.css` is plan
-    /// 1.1's and this target still has exactly one hand-written token
-    /// (``Color/fgMuted``). That is a divergence in two colours, written down
-    /// here, and not one in the layout or the words.
+    /// The pill's shape is the Kotlin's: a 6 dp corner, a 1 dp border, a
+    /// faint fill, 10 × 7 dp of padding (`HomeSections.kt:221-238`).
+    ///
+    /// **Two colours diverge**, and that is written down rather than argued
+    /// away: `Domovoi.colors.card` and `.border` do not exist in this target
+    /// yet — the asset catalogue generated from
+    /// `web/static/colors_and_type.css` is plan 1.1's, and until it lands
+    /// this target has exactly one hand-written token (``Color/fgMuted``). So
+    /// the fill is `.quaternary`, which this file already uses for the
+    /// counts skeleton, and the border is the one token at low opacity. The
+    /// layout, the branch and the words are the Kotlin's exactly.
     @ViewBuilder private func words(beside mark: some View) -> some View {
         let row = HStack(spacing: 8) {
             mark
@@ -187,11 +199,11 @@ struct HomeHeaderView: View {
                 .padding(.vertical, 7)
                 .background(
                     RoundedRectangle(cornerRadius: 6)
-                        .fill(.background.secondary)
+                        .fill(.quaternary)
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 6)
-                        .strokeBorder(.separator, lineWidth: 1)
+                        .strokeBorder(Color.fgMuted.opacity(0.35), lineWidth: 1)
                 )
         } else {
             row
@@ -211,6 +223,42 @@ struct HomeHeaderView: View {
             name: "domovoi",
             date: "mon 28 sep",
             counts: ["3 online", "1 timer"],
+            countsReady: true,
+            live: true,
+            paired: true
+        ),
+        onPair: {}
+    )
+    .padding(16)
+}
+
+/// The wide-pane branch — the bordered pill with the words in it, which is
+/// what Android draws on anything that is not a compact pane
+/// (`HomeSections.kt:221-238`). The size class cannot be forced in a preview,
+/// so this is the one to look at on an iPad or in a wide split view.
+#Preview("wide pane: the labelled pill") {
+    HomeHeaderView(
+        state: HomeHeaderState(
+            name: "domovoi",
+            date: "mon 28 sep",
+            counts: ["3 online", "1 timer"],
+            countsReady: true,
+            live: false,
+            paired: true
+        ),
+        onPair: {}
+    )
+    .padding(16)
+}
+
+/// What Home draws at this commit: no rooms read, so **no skeleton** — the
+/// date alone beside the dot.
+#Preview("no counts read at all") {
+    HomeHeaderView(
+        state: HomeHeaderState(
+            name: "domovoi",
+            date: "mon 28 sep",
+            counts: [],
             countsReady: true,
             live: true,
             paired: true
