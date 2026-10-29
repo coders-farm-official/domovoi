@@ -145,7 +145,8 @@ final class DomovoiClientTests: XCTestCase {
         XCTAssertNil(token(at: 1))
         XCTAssertNil(client.webSocketRequest("ws://10.0.0.9:6369/ws/state")?.value(forHTTPHeaderField: deviceTokenHeader))
         XCTAssertNil(try client.tokenForDownload(URL(string: "http://10.0.0.9:6369/api/videos/1/stream")!))
-        XCTAssertEqual(await client.checkDeviceToken("household-abc"), .unavailable)
+        let check = await client.checkDeviceToken("household-abc")
+        XCTAssertEqual(check, .unavailable)
 
         lock.setRoomModeActive(false)
         _ = try await client.get("/api/music/library", as: [String: String].self)
@@ -163,10 +164,8 @@ final class DomovoiClientTests: XCTestCase {
 
     func testAPublicNameOverPlainHttpIsRefusedAndHttpsToItIsNot() async throws {
         let refused = makeClient(server: "http://domovoi.example")
-        XCTAssertEqual(
-            await failure { try await refused.get("/api/x", as: [String: String].self) },
-            .notPermitted(CleartextPolicy.refusalMessage("domovoi.example"))
-        )
+        let error = await failure { try await refused.get("/api/x", as: [String: String].self) }
+        XCTAssertEqual(error, .notPermitted(CleartextPolicy.refusalMessage("domovoi.example")))
         StubURLProtocol.enqueue(.json("{}"))
         _ = try await makeClient(server: "https://domovoi.example").get("/api/x", as: [String: String].self)
         XCTAssertEqual(StubURLProtocol.requestCount, 1)
@@ -400,14 +399,17 @@ final class DomovoiClientTests: XCTestCase {
 
     func testAnswersIsFalseOnlyWhenNothingAnswers() async {
         StubURLProtocol.enqueue(StubURLProtocol.Answer(error: URLError(.timedOut)))
-        XCTAssertFalse(await makeClient().answers())
-        XCTAssertFalse(await makeClient(server: "").answers())
+        let unreachable = await makeClient().answers()
+        XCTAssertFalse(unreachable)
+        let noServer = await makeClient(server: "").answers()
+        XCTAssertFalse(noServer)
     }
 
     func testAnswersCountsACleartextRefusalAsAnAnswerToFix() async {
         // Not an outage: a setting to correct, and the workspace stays up to
         // say so.
-        XCTAssertTrue(await makeClient(server: "http://203.0.113.5:6369").answers())
+        let answered = await makeClient(server: "http://203.0.113.5:6369").answers()
+        XCTAssertTrue(answered)
         XCTAssertEqual(StubURLProtocol.requestCount, 0)
     }
 
