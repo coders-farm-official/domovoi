@@ -34,8 +34,42 @@ struct DomovoiApp: App {
 
     private let model: ShellModel
 
+    /// A server and token handed in on the command line, for a UI test.
+    ///
+    /// **Why this exists.** With no server saved the shell is `.local`, so
+    /// Home, the pairing screens and the token-trouble card are unreachable
+    /// and a Simulator can only photograph the music placeholder. The
+    /// obvious way in — drive the connection sheet and type an address —
+    /// **starts the LAN discovery sweep**, and a Simulator shares the Mac's
+    /// network, so that is 254 probes across whatever real network the Mac
+    /// is on. Measured, not feared: the first run of `StubHouseUITests`
+    /// reached `scanning 80/254…` before it was stopped.
+    ///
+    /// So the test seeds the store instead, which is the same thing the
+    /// picker would have written and nothing the picker could not write.
+    ///
+    /// `#if DEBUG` keeps it out of any build that could ship. It is also
+    /// why this reads `ProcessInfo` rather than `UserDefaults`: a launch
+    /// argument lives for one process, where a default would persist and
+    /// could outlive the test that set it.
+    private static func seededStore() -> InMemoryShellStore {
+        #if DEBUG
+        let arguments = ProcessInfo.processInfo.arguments
+        func value(after flag: String) -> String? {
+            guard let index = arguments.firstIndex(of: flag),
+                  arguments.index(after: index) < arguments.endIndex
+            else { return nil }
+            return arguments[arguments.index(after: index)]
+        }
+        if let server = value(after: "-domovoi-server"), !server.isEmpty {
+            return InMemoryShellStore(serverURL: server, token: value(after: "-domovoi-token"))
+        }
+        #endif
+        return InMemoryShellStore()
+    }
+
     init() {
-        let container = AppContainer(store: InMemoryShellStore())
+        let container = AppContainer(store: Self.seededStore())
         // The device id, and the two things only UIKit can answer. Read HERE,
         // on the main actor, once: ``DeviceSelf`` exists so that a `Sendable`
         // closure running anywhere never reads `UIDevice`, which
