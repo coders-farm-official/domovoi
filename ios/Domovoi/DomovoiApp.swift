@@ -19,21 +19,43 @@ struct DomovoiApp: App {
 }
 
 struct FirstRunView: View {
+    /// Centred when it fits, scrollable when it doesn't.
+    ///
+    /// Apple's accessibility audit failed this screen with "Text clipped" on
+    /// 2026-10-28, because it re-renders at the largest Dynamic Type size and
+    /// a plain `VStack` cannot grow past the screen — it clips instead. A
+    /// household has people who turn text up; this is the layout every screen
+    /// from I1 on needs, so it is worth getting right on the one with three
+    /// labels rather than discovering it on Home.
+    ///
+    /// `minHeight: proxy.size.height` keeps the content centred at ordinary
+    /// text sizes and lets it scroll past the bottom at large ones.
+    /// `fixedSize(vertical:)` stops the text being squeezed instead of
+    /// wrapping. Never `minimumScaleFactor` here: shrinking text to fit is
+    /// the opposite of what someone who turned it up asked for.
     var body: some View {
-        VStack(spacing: 16) {
-            Text("Domovoi")
-                .font(.largeTitle.weight(.semibold))
-            Text("The app for your house. Nothing is set up yet.")
-                .font(.body)
-                .multilineTextAlignment(.center)
-                .foregroundStyle(Color.fgMuted)
-            Text(Self.state)
-                .font(.footnote)
-                .multilineTextAlignment(.center)
-                .foregroundStyle(Color.fgMuted)
+        GeometryReader { proxy in
+            ScrollView {
+                VStack(spacing: 16) {
+                    Text("Domovoi")
+                        .font(.largeTitle.weight(.semibold))
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text("The app for your house. Nothing is set up yet.")
+                        .font(.body)
+                        .multilineTextAlignment(.center)
+                        .foregroundStyle(Color.fgMuted)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(Self.state)
+                        .font(.footnote)
+                        .multilineTextAlignment(.center)
+                        .foregroundStyle(Color.fgMuted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(24)
+                .frame(maxWidth: 420)
+                .frame(maxWidth: .infinity, minHeight: proxy.size.height)
+            }
         }
-        .padding(24)
-        .frame(maxWidth: 420)
     }
 
     /// Proof that the package is linked, and the one fact worth showing on a
