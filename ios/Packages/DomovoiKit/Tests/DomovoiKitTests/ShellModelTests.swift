@@ -25,6 +25,7 @@ final class ShellModelTests: XCTestCase {
 
     /// A model over a fake clock, a counted probe and a `wait` that parks, so
     /// nothing here waits on real time or on how two tasks interleave.
+    @MainActor
     private final class Rig {
         let clock = Shared<Int64>(0)
         let probes = Shared<Int>(0)
@@ -83,7 +84,7 @@ final class ShellModelTests: XCTestCase {
 
         /// Give the main-actor hop a chance to land. Bounded, so a wiring
         /// that never publishes fails rather than hangs.
-        func settleVerdict(_ condition: @MainActor () -> Bool) async -> Bool {
+        func settleVerdict(_ condition: () -> Bool) async -> Bool {
             for _ in 0..<5_000 {
                 if condition() { return true }
                 await Task.yield()
@@ -179,7 +180,8 @@ final class ShellModelTests: XCTestCase {
         // already a fallback.
         let rig = Rig(serverURL: server, token: "household-abc", answers: false, costMs: 20_000)
         rig.model.refresh()
-        XCTAssertTrue(await rig.settleVerdict { rig.model.unreachable }, "the verdict never arrived")
+        let arrived = await rig.settleVerdict { rig.model.unreachable }
+        XCTAssertTrue(arrived, "the verdict never arrived")
         XCTAssertEqual(0, rig.model.verdicts.missed)
         XCTAssertEqual(.localMedia(.outOfReach), rig.model.screen, "and the shell swapped under it")
         rig.model.stop()
@@ -267,10 +269,8 @@ final class ShellModelTests: XCTestCase {
             next.addresses = ["10.1.2.3/24"]
             return next
         }
-        XCTAssertTrue(
-            await rig.settleVerdict { rig.model.networkGeneration == 1 },
-            "the shell was not told; generation is \(rig.model.networkGeneration)"
-        )
+        let told = await rig.settleVerdict { rig.model.networkGeneration == 1 }
+        XCTAssertTrue(told, "the shell was not told; generation is \(rig.model.networkGeneration)")
         rig.model.stop()
     }
 
