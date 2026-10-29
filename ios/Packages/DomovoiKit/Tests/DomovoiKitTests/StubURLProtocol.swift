@@ -32,9 +32,15 @@ final class StubURLProtocol: URLProtocol {
             Answer(status: status, headers: headers, body: Data(text.utf8))
         }
 
-        /// A redirect whose proposed follow-up carries the headers across —
-        /// which is what the platform really does, and the trap the delegate
-        /// has to not fall into.
+        /// A redirect whose proposed follow-up carries the headers across.
+        ///
+        /// That the real platform does this is measured against a socket, in
+        /// `PlatformFactsTests` fact 2, and **not here**: the copying below is
+        /// this file imitating the measurement so that the rules can be tested
+        /// against the same trap without a network. An assertion that the
+        /// proposal carries `X-Device-Token`, made through this stub, would be
+        /// an assertion about `startLoading` a few lines down — which is how
+        /// two tests that could not fail got written in the first place.
         static func moved(_ status: Int, to location: String) -> Answer {
             Answer(status: status, headers: ["Location": location], redirect: location)
         }
@@ -146,11 +152,13 @@ final class StubURLProtocol: URLProtocol {
         ) else { return }
 
         if let redirect = answer.redirect, let next = URL(string: redirect, relativeTo: url) {
-            // The platform's proposal: the same method, and the headers
-            // copied across — `X-Device-Token` among them. A delegate that
-            // refined this proposal instead of rebuilding the request would
-            // carry the token to the new host, which is the whole reason
-            // `RedirectPolicy` exists.
+            // The platform's proposal, imitated: the same method, and the
+            // headers copied across — `X-Device-Token` among them. A delegate
+            // that refined this proposal instead of rebuilding the request
+            // would carry the token to the new host, which is the whole reason
+            // `RedirectPolicy` exists. The real platform's version of this is
+            // measured over a socket (`PlatformFactsTests` fact 2); these
+            // lines are what lets the rules be exercised against it offline.
             var proposed = URLRequest(url: next.absoluteURL)
             proposed.httpMethod = request.httpMethod
             proposed.allHTTPHeaderFields = request.allHTTPHeaderFields

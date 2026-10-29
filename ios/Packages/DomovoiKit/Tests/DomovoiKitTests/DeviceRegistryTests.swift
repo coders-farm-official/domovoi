@@ -257,16 +257,20 @@ final class DeviceRegistryTests: XCTestCase {
         XCTAssertEqual(DeviceRegistry.pathEscaped("ios-1a2b3c4d5e6f7a8b"), "ios-1a2b3c4d5e6f7a8b", "a well-formed id is untouched")
     }
 
-    /// Android's `Uri.encode` safe set is ASCII letters and digits plus
-    /// `_-!.~'()*`, and nothing else. `CharacterSet.alphanumerics` is
-    /// Unicode-wide — "é", "д" and the Arabic-Indic digit "٣" are all
-    /// alphanumeric to it — so an id holding any of them went into the path
-    /// unescaped here and percent-encoded there. An id is self-asserted, so
-    /// this is the half of `pathEscaped` that is not decoration.
-    func testTheEscapedSetIsAsciiAsAndroidsIsAndNotUnicodeWide() {
-        XCTAssertEqual(DeviceRegistry.pathEscaped("ios-café"), "ios-caf%C3%A9")
-        XCTAssertEqual(DeviceRegistry.pathEscaped("ios-д"), "ios-%D0%B4")
-        XCTAssertEqual(DeviceRegistry.pathEscaped("ios-٣"), "ios-%D9%A3")
+    /// What `pathEscaped` produces for an id with non-ASCII in it, which is
+    /// the half of it that is not decoration: an id is self-asserted, and this
+    /// is a path segment.
+    ///
+    /// It is a characterisation test, not a guard on the safe set, and the
+    /// difference is worth stating: it passes under the Unicode-wide
+    /// `CharacterSet.alphanumerics` too, because `addingPercentEncoding`
+    /// encodes non-ASCII whatever the set says (`PlatformFactsTests` fact 5
+    /// measures that). What it does hold is that these ids come out encoded
+    /// exactly as Android's `Uri.encode` encodes them.
+    func testANonAsciiDeviceIdIsPercentEncodedAsAndroidEncodesIt() {
+        XCTAssertEqual(DeviceRegistry.pathEscaped("ios-caf\u{00E9}"), "ios-caf%C3%A9")
+        XCTAssertEqual(DeviceRegistry.pathEscaped("ios-\u{0434}"), "ios-%D0%B4")
+        XCTAssertEqual(DeviceRegistry.pathEscaped("ios-\u{0663}"), "ios-%D9%A3")
         XCTAssertEqual(
             DeviceRegistry.pathEscaped("aZ09_-!.~'()*"), "aZ09_-!.~'()*",
             "and the whole safe set still goes through untouched"

@@ -175,9 +175,17 @@ public enum DeviceRegistry {
     ///
     /// The safe set is written out rather than taken from
     /// `CharacterSet.alphanumerics`, which is Unicode-wide: it contains "é",
-    /// "д" and "٣", so a device id holding any of them would have gone into
-    /// the path unescaped where Android's `Uri.encode` — whose safe set is
-    /// ASCII letters and digits plus `_-!.~'()*` — percent-encodes it.
+    /// "д" and "٣", where Android's `Uri.encode` safe set is ASCII letters and
+    /// digits plus `_-!.~'()*` and nothing else.
+    ///
+    /// **This is for the reader, not a fix.** The two spellings produce the
+    /// same bytes today, because `addingPercentEncoding` encodes every scalar
+    /// outside ASCII however generous the set is — measured, in
+    /// `PlatformFactsTests` fact 5 — and the two sets' ASCII halves are
+    /// identical. What the explicit set buys is that the Kotlin's safe set and
+    /// this one can be compared by reading them, and that the day Foundation
+    /// stops encoding non-ASCII for a set that admits it, this app does not
+    /// start spelling device ids differently from the Android app.
     static let pathSafeCharacters = CharacterSet(
         charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-!.~'()*"
     )

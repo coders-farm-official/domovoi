@@ -5,21 +5,49 @@ import XCTest
 /// assume, measured.
 ///
 /// The I0-A review's standing rule is that a comment stating a fact must
-/// state a fact somebody checked. Four of this batch's decisions rest on
+/// state a fact somebody checked. Several of this batch's decisions rest on
 /// claims about the platform that are easy to get wrong and expensive to get
 /// wrong, so each one is measured here — and stays measured, so that an SDK
 /// which changes one of them fails a test instead of quietly carrying the
 /// household token somewhere.
 ///
-/// Measured on the build Mac, macOS 26.4.1 / Swift 6.3, 2026-10-28. Two of
-/// the four came out against the guess that was written down first; both
-/// comments were corrected to match the measurement, not the other way
-/// about.
+/// Measured on the build Mac, macOS 26.4.1 / Swift 6.3, 2026-10-28, and
+/// re-measured 2026-10-29 (the I1-A review). Facts that came out against the
+/// guess written down first had their comments corrected to match the
+/// measurement, not the other way about.
+///
+/// **What each fact is measured against, because it decides whether the test
+/// can fail at all.**
+///
+///  * Facts 1, 4 and 5 run through ``StubURLProtocol`` and are real: the stub
+///    answers, and what is asserted is what CFNetwork does with that answer —
+///    whether a *task* delegate is consulted at all, whether a WebSocket
+///    upgrade goes through a custom protocol and comes out as `http://`, and
+///    what `addingPercentEncoding` makes of a character set. The stub fakes
+///    none of that.
+///  * Facts 2 and 3 are about the transport itself, so they cannot be: a
+///    `URLProtocol` *is* the transport. The first version of them asserted
+///    that the redirect proposal arrives carrying `X-Device-Token` — but the
+///    proposal was built by `StubURLProtocol.Answer.moved`, which copies the
+///    headers across itself, so the assertion measured the test folder and
+///    could not have failed however the SDK changed. They now run against
+///    ``LoopbackServer``, a real socket on 127.0.0.1, and read the token off
+///    the bytes the other origin received.
 final class PlatformFactsTests: XCTestCase {
 
     override func setUp() {
         super.setUp()
         StubURLProtocol.reset()
+    }
+
+    /// A session that really connects — no `URLProtocol` in front of it — for
+    /// the two facts that have to go down a socket.
+    private static func overASocket() -> URLSessionConfiguration {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 5
+        configuration.urlCache = nil
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        return configuration
     }
 
     /// **Fact 1: a per-task delegate IS asked about a redirect.**
@@ -42,26 +70,43 @@ final class PlatformFactsTests: XCTestCase {
         XCTAssertEqual(asked.locations, ["http://10.0.0.9:6369/api/y"])
     }
 
-    /// **Fact 2: the proposed request arrives with our headers copied onto
-    /// it.**
+    /// **Fact 2: the platform's proposed follow-up really does deliver
+    /// `X-Device-Token` to another origin.**
     ///
     /// This is the one the port depends on most. `RedirectPolicy` throws the
-    /// platform's proposal away and rebuilds the follow-up from the request
-    /// we sent, and the reason is exactly this: the proposal arrives carrying
-    /// `X-Device-Token`, for a host that is not the active server.
-    func testTheProposedRequestArrivesCarryingOurHeaders() async throws {
-        StubURLProtocol.enqueue(
-            .moved(302, to: "http://10.0.0.99:6369/api/y"),
-            .json("{}")
-        )
+    /// platform's proposal away and rebuilds the follow-up from the request we
+    /// sent, and the reason is exactly this: left alone, the token goes where
+    /// the `Location` said.
+    ///
+    /// Measured end to end, against two real sockets: the redirect's target is
+    /// a **second** server, which is asked for the header it received, so what
+    /// is asserted is the bytes that arrived somewhere they should not have.
+    /// Two loopback ports are two origins to ``TokenScope`` and to the browser
+    /// rule it follows, which is the hazard — a `302` to another port on the
+    /// same machine is how a reverse proxy and the drop-in socket both look.
+    ///
+    /// The delegate here follows the proposal exactly as offered, which is
+    /// what a client that "refined" the proposal rather than rebuilding it
+    /// would be doing.
+    func testTheProposedFollowUpCarriesTheTokenToAnotherOriginOnTheWire() async throws {
+        let elsewhere = try LoopbackServer(.init(body: "{}"))
+        defer { elsewhere.stop() }
+        let server = try LoopbackServer(.init(status: 302, location: elsewhere.url("/api/y").absoluteString))
+        defer { server.stop() }
+
         let asked = Asked()
-        let session = URLSession(configuration: StubURLProtocol.session())
-        var request = URLRequest(url: URL(string: "http://10.0.0.9:6369/api/x")!)
+        var request = URLRequest(url: server.url("/api/x"))
         request.setValue("household-abc", forHTTPHeaderField: deviceTokenHeader)
-        _ = try await session.data(for: request, delegate: asked)
+        _ = try await URLSession(configuration: Self.overASocket()).data(for: request, delegate: asked)
+
+        XCTAssertEqual(server.header(deviceTokenHeader, at: 0), "household-abc", "hop 1 carried it, as asked")
         XCTAssertEqual(
             asked.proposedTokens, ["household-abc"],
-            "the platform offers a follow-up to another host with the token already on it"
+            "the platform offers a follow-up to another origin with the token already on it"
+        )
+        XCTAssertEqual(
+            elsewhere.header(deviceTokenHeader, at: 0), "household-abc",
+            "and following that proposal really does put the household token on another origin's socket"
         )
     }
 
@@ -75,14 +120,25 @@ final class PlatformFactsTests: XCTestCase {
     /// reason and the client raises it after the task is done. A client that
     /// trusted the status alone here would report a 301 to the screens as
     /// though the server had sent one on purpose.
-    func testRefusingARedirectHandsBackThe3xxRatherThanAnError() async throws {
-        StubURLProtocol.enqueue(.moved(301, to: "http://10.0.0.99:6369/api/y"))
+    ///
+    /// Against sockets for the same reason as Fact 2, and it buys a second
+    /// assertion the stub could not make honestly: the host the `Location`
+    /// named is a real server, and it accepted no connection at all.
+    func testRefusingARedirectHandsBackThe3xxAndReachesNothing() async throws {
+        let elsewhere = try LoopbackServer(.init(body: "{}"))
+        defer { elsewhere.stop() }
+        let server = try LoopbackServer(.init(status: 301, location: elsewhere.url("/api/y").absoluteString))
+        defer { server.stop() }
+
         let asked = Asked(refuse: true)
-        let session = URLSession(configuration: StubURLProtocol.session(timeout: 5))
-        let request = URLRequest(url: URL(string: "http://10.0.0.9:6369/api/x")!)
-        let (_, response) = try await session.data(for: request, delegate: asked)
-        XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 301)
-        XCTAssertEqual(StubURLProtocol.requestCount, 1, "nothing was sent to the host it named")
+        let request = URLRequest(url: server.url("/api/x"))
+        let (_, response) = try await URLSession(configuration: Self.overASocket())
+            .data(for: request, delegate: asked)
+
+        XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 301, "the 3xx itself, not an error")
+        XCTAssertEqual(asked.redirections, 1, "and the delegate was the one that declined it")
+        XCTAssertEqual(server.requestCount, 1)
+        XCTAssertEqual(elsewhere.requestCount, 0, "nothing opened a connection to the host it named")
     }
 
     /// **Fact 4: a WebSocket upgrade IS redirected, and the delegate IS
@@ -130,6 +186,47 @@ final class PlatformFactsTests: XCTestCase {
         XCTAssertEqual(StubURLProtocol.requestCount, 1)
         XCTAssertEqual(StubURLProtocol.recorded.first?.url?.host, "10.0.0.9")
         socket.cancel()
+    }
+
+    /// **Fact 5: `addingPercentEncoding` encodes a non-ASCII scalar whatever
+    /// the allowed set says.**
+    ///
+    /// Measured 2026-10-29, for ``DeviceRegistry/pathEscaped(_:)``, which
+    /// escapes a self-asserted device id for a path segment. It used to name
+    /// `CharacterSet.alphanumerics`, which is Unicode-wide — "é", "д" and the
+    /// Arabic-Indic digit "٣" are all alphanumeric to it — where Android's
+    /// `Uri.encode` safe set is ASCII letters and digits plus `_-!.~'()*`. The
+    /// review called that a difference between the two phones. **It is not**,
+    /// and this is why: Foundation encodes every scalar outside ASCII however
+    /// generous the set is, so the two spellings of the safe set produce the
+    /// same bytes.
+    ///
+    /// `pathEscaped` names its set explicitly anyway, because a reader should
+    /// not have to know this to check it against the Kotlin — and if this
+    /// fact ever stops being true, the explicit set is what keeps the two
+    /// apps agreeing and this test is what says so.
+    func testPercentEncodingEncodesNonAsciiHoweverWideTheAllowedSetIs() {
+        var unicodeWide = CharacterSet.alphanumerics
+        unicodeWide.insert(charactersIn: "_-!.~'()*")
+        XCTAssertTrue(unicodeWide.contains("\u{00E9}"), "the set really does claim to allow it")
+        XCTAssertEqual(
+            "ios-caf\u{00E9}".addingPercentEncoding(withAllowedCharacters: unicodeWide), "ios-caf%C3%A9",
+            "and Foundation encodes it regardless"
+        )
+        XCTAssertEqual(
+            "ios-caf\u{00E9}".addingPercentEncoding(withAllowedCharacters: DeviceRegistry.pathSafeCharacters),
+            "ios-caf%C3%A9",
+            "so the ASCII set this app names agrees with it, byte for byte"
+        )
+        // The ASCII halves of the two sets are identical, which is the part
+        // that does decide what goes on the wire.
+        for scalar in "aZ09_-!.~'()*".unicodeScalars {
+            XCTAssertTrue(unicodeWide.contains(scalar), "\(scalar)")
+            XCTAssertTrue(DeviceRegistry.pathSafeCharacters.contains(scalar), "\(scalar)")
+        }
+        for scalar in "/?#:@&=+$, %\"<>[]{}|\\^`".unicodeScalars {
+            XCTAssertFalse(DeviceRegistry.pathSafeCharacters.contains(scalar), "\(scalar)")
+        }
     }
 
     /// A delegate that only watches, and optionally declines.
