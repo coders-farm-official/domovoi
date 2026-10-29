@@ -45,13 +45,13 @@ struct DomovoiApp: App {
         // (``DeviceIdentity``), and `ownerPersonID` is nil because no
         // preference holds one yet — see ``DeviceSelf``, which says what the
         // route does with a null and which batch has to fill it in.
-        let model = UIDevice.current.model
+        let deviceModel = UIDevice.current.model
         let who = DeviceSelf(
             deviceID: DeviceIdentity.stable(in: DeviceIdentity.UserDefaultsStore()),
-            name: DeviceRegistry.suggestedDeviceName(model: model),
+            name: DeviceRegistry.suggestedDeviceName(model: deviceModel),
             userAgent: DeviceRegistry.userAgent(
                 systemVersion: UIDevice.current.systemVersion,
-                model: model
+                model: deviceModel
             ),
             ownerPersonID: nil
         )
