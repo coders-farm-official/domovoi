@@ -7,8 +7,9 @@ import PackageDescription
 // no Simulator (plan 5.1). macOS 15 is here only so those tests can run; the
 // app ships for iOS 18 and up (owner answer Q1).
 //
-// Nothing in this package has been compiled yet: there was no Mac when it was
-// written.
+// It compiles and its tests run: `ios/scripts/pkgtest.sh` pushes the current
+// commit to the Mac and runs `swift test` there, which is the loop every batch
+// in this package works to.
 let package = Package(
     name: "DomovoiKit",
     platforms: [

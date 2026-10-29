@@ -7,10 +7,23 @@ plan, the research and the decisions are in
 
 ## The state of this track
 
-**Nothing here has been compiled.** This folder was written on a Windows PC
-before the Mac existed, so every Swift file in it is unproven: it has not been
-through a compiler, a test or a Simulator. The first `swift test` is the next
-batch's first job, and it is expected to find things.
+**The packages compile and their tests run.** `ios/scripts/pkgtest.sh` is the
+loop: it pushes your current commit to the Mac, checks it out there and runs
+`swift test` for every package under `Packages/`. It takes about a minute, it
+needs no Simulator and so no Mac lock, and it is what every DomovoiKit batch
+works to. Commit first — it tests HEAD, not your working tree.
+
+```
+ios/scripts/pkgtest.sh                 # every package
+ios/scripts/pkgtest.sh DomovoiKit      # one package
+ios/scripts/pkgtest.sh --lines 400     # more of the run's output
+```
+
+It reads the Mac's address from `DOMOVOI_MAC_HOST`, the same variables
+`remote.sh` uses, and needs a git remote pointing at the Mac's bare repository
+(`mac` by default). **The app target, the Simulator and the UI tests are still
+unproven**: nothing in `Domovoi/`, `DomovoiTests/` or `DomovoiUITests/` has
+been through `xcodebuild`, and that is a batch of its own.
 
 What is here:
 
@@ -20,14 +33,13 @@ What is here:
 | `PrivacyInfo.xcprivacy` | The privacy manifest: no tracking, no collected data, four required-reason APIs. |
 | `Domovoi/` | The app. One screen, enough to launch and to show the Local Network prompt. |
 | `DomovoiTests/`, `DomovoiUITests/` | The app's own tests: the Info.plist keys pairing depends on, and a launch plus Apple's accessibility audit. |
-| `Packages/DomovoiKit/` | The logic the screens sit on. Four ports from the Kotlin so far: `ServerAddress`, `CleartextPolicy`, `TokenScope`, `Ed25519Verify`, each with its Kotlin test mirrored, plus the licences test. |
+| `Packages/DomovoiKit/` | The logic the screens sit on, green under `swift test`. I0-A's `ServerAddress`, `CleartextPolicy`, `TokenScope`, `Ed25519Verify`; I1-A's client and token layer (`DomovoiClient`, `RedirectPolicy`, `DeviceToken`, `TokenHealth`, `TokenTrouble`, `TokenVault`, `DeviceRegistry`, `Capabilities`, `HouseholdLock`). Each with its Kotlin test mirrored, case for case. |
 | `Packages/DomovoiPhonemizer/` | A skeleton. The 1,730-line port is its own milestone. |
-| `scripts/` | `remote.sh`, `build-sim.sh`, `test.sh`, `install-on-phone.sh`. |
+| `scripts/` | `pkgtest.sh` (the loop above), `remote.sh`, `build-sim.sh`, `test.sh`, `install-on-phone.sh`. |
 | `licences/` | The licence rule and the per-package table. **Read it before adding a package.** |
 
-Not here yet, on purpose: `IdentityGate`, `Discovery`, `NetworkWatch`,
-`ApiClient`, the Keychain vault, the shell, and `release.sh`. They wait for a
-batch that can compile what it writes.
+Not here yet, on purpose: `IdentityGate`, `Discovery`, `NetworkWatch`, the
+shell, and `release.sh`.
 
 ## The layout it is growing into
 
@@ -61,7 +73,8 @@ builds and tests.
 
 1. An agent commits on a `wf/ios-*` branch here.
 2. The branch is pushed **over SSH to a bare repository in the build user's
-   home on the Mac** — never through GitHub.
+   home on the Mac** — never through GitHub. `scripts/pkgtest.sh` does steps
+   2 and 3's first half by itself, and is the whole loop for package work.
 3. On the Mac, as the build user, through `scripts/remote.sh`:
    - `scripts/test.sh --packages-only` runs `swift test` for the packages. No
      Simulator, no screen, no signing: this is the fast, reliable half.

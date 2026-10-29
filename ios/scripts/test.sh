@@ -76,7 +76,10 @@ if [ "$packages" -eq 1 ]; then
 fi
 
 if [ "$app" -eq 1 ]; then
-	command -v xcodegen >/dev/null 2>&1 || die "xcodegen is not installed. On the Mac: brew install xcodegen"
+	# Built from source into ~/tools, not installed by Homebrew: the build
+	# user is a standard account and there is no Homebrew on this Mac.
+	# remote.sh puts that directory first on PATH.
+	command -v xcodegen >/dev/null 2>&1 || die "xcodegen is not on PATH. It is built from source at ~/tools/XcodeGen/.build/release; run this through remote.sh, which puts that on PATH, or add it yourself."
 	say "test.sh: generating Domovoi.xcodeproj from project.yml"
 	xcodegen generate --spec project.yml --project .
 

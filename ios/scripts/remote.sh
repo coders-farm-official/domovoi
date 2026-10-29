@@ -124,15 +124,17 @@ fi
 # command runs; `nice` and `taskpolicy -b` put it in the background band so
 # Kamron's own work on the Mac comes first (plan 5.1, step 6).
 #
-# An ssh session with no login shell gets a short PATH, and Homebrew's bin —
-# where xcodegen lands — is not on it, so it is added here rather than in
-# every script.
+# An ssh session with no login shell gets a short PATH, and neither the place
+# xcodegen lands nor Homebrew's bin is on it, so they are added here rather
+# than in every script. On Kamron's Mac there is no Homebrew and the build
+# user is a standard account that cannot install one, so XcodeGen is BUILT
+# FROM SOURCE into ~/tools (MIT, a build tool only) — that path comes first.
 argv=""
 for argument in "$@"; do
 	quoted="'$(printf '%s' "$argument" | sed "s/'/'\\\\''/g")'"
 	argv="${argv:+$argv }$quoted"
 done
-remote_command="export PATH=\"/opt/homebrew/bin:/usr/local/bin:\$PATH\"; cd \"\$HOME\" && exec caffeinate -i nice -n 10 taskpolicy -b $argv"
+remote_command="export PATH=\"\$HOME/tools/XcodeGen/.build/release:/opt/homebrew/bin:/usr/local/bin:\$PATH\"; cd \"\$HOME\" && exec caffeinate -i nice -n 10 taskpolicy -b $argv"
 
 [ "$quiet" -eq 1 ] || say "remote.sh: $user@$host: $*"
 
