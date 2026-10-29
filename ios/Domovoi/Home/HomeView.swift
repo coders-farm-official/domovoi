@@ -53,7 +53,12 @@ struct HomeView: View {
             // with the composable does.
             if config == nil {
                 let container = model.container
-                config = ApiRead(base: { container.store.serverURL }) {
+                // `init(in:)`, not `init(base:)`: the read joins the
+                // container's server-address registry in its own
+                // initialiser, so a switch re-keys it without this view
+                // having to remember a line. Part 2's six further reads must
+                // be built the same way and get it for nothing.
+                config = ApiRead(in: container) {
                     try await HomeApi.config(container.client)
                 }
             }
@@ -67,12 +72,16 @@ struct HomeView: View {
             name: HomeConfig.name(of: config?.data),
             date: homeDate(ms: Int64(Date().timeIntervalSince1970 * 1000), timeZone: .current),
             // The counts come from the rooms and timer reads, which part 2
-            // writes; `countsReady: false` is what Android draws while the
-            // rooms read has not answered — the date with a skeleton beside
-            // it — and it is the honest state of a screen with no rooms read
-            // at all.
+            // writes. **`countsReady: true` with no counts**, which is the
+            // date alone: `countsReady` is `sats.answered()`, so `false`
+            // means "a read is pending", and there is no read. Passing
+            // `false` here — which this batch did ship — drew Android's
+            // loading skeleton beside the date on the only screen in the
+            // batch, permanently, for a read that does not exist. Part 2
+            // passes its real `answered()` and the skeleton comes back with
+            // something behind it.
             counts: [],
-            countsReady: false,
+            countsReady: true,
             live: model.connected,
             paired: model.isPaired
         )

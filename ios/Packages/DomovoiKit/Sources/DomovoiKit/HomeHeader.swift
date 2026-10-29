@@ -32,6 +32,13 @@ public struct HomeHeaderState: Equatable, Sendable {
     /// `lineReady = sats.answered()`: false while the rooms read has not
     /// answered, which replaces the counts with a skeleton rather than a
     /// spinner (`HomeSections.kt:205`).
+    ///
+    /// **It means "a read is pending", and that is the whole of what it
+    /// means.** It does not mean "there are no counts": a screen with no
+    /// rooms read at all is not waiting for one, and passing `false` there
+    /// draws a loading skeleton that nothing will ever resolve. The default
+    /// is `false` because it is `sats.answered()`'s value before the first
+    /// answer; a caller with no read to wait on passes `true`.
     public let countsReady: Bool
 
     /// ``StateSocket``'s `connected`. **Not** whether the server is
@@ -78,6 +85,19 @@ public struct HomeHeaderState: Equatable, Sendable {
         if !paired { return HomeHeaderStrings.explainUnpaired }
         return HomeHeaderStrings.explainDown
     }
+
+    /// Whether the header draws the grey box beside the date instead of the
+    /// counts — Android's 140 × 12 dp `Box` (`HomeSections.kt:205`).
+    ///
+    /// Here so the decision is in the package, where `swift test` can see it;
+    /// the box itself is in `HomeHeaderView` and is layout.
+    ///
+    /// **A skeleton is a promise**, which is why this is worth a named
+    /// property and a test rather than one `if` in a view. I1-D part 1
+    /// shipped `countsReady: false` on a screen with no rooms read, so the
+    /// only screen in the batch drew a loading skeleton that nothing could
+    /// ever fill — the owner's no-misleading-controls rule, in its UI form.
+    public var showsCountsSkeleton: Bool { !countsReady }
 
     /// `if (!paired) HomeLink("pair this phone…")` (`HomeSections.kt:240`).
     public var showsPairLink: Bool { !paired }

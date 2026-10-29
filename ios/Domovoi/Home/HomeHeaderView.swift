@@ -85,8 +85,11 @@ struct HomeHeaderView: View {
     /// The date in monospace, then each count behind a faint separator — the
     /// `AnnotatedString` of `HomeSections.kt:186-192`, as one `Text` so
     /// VoiceOver reads one phrase.
+    /// The branch is ``HomeHeaderState/showsCountsSkeleton``'s, not this
+    /// view's, so that `swift test` can see the decision — the skeleton
+    /// itself is layout and it cannot.
     @ViewBuilder private var line: some View {
-        if state.countsReady {
+        if !state.showsCountsSkeleton {
             state.counts
                 .reduce(Text(state.date).monospaced()) { so_far, part in
                     so_far

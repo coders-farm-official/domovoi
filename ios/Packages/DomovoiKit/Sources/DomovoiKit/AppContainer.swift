@@ -428,7 +428,7 @@ public final class AppContainer: Sendable {
     ) {
         self.store = store
         self.vault = vault
-        let observers = NetworkObservers()
+        let observers = SinkRegistry()
         self.networkObservers = observers
 
         let book = ServerBook(
@@ -513,7 +513,12 @@ public final class AppContainer: Sendable {
     /// defect §11.4 lives — `Discovery.onLan` is read once into a `remember`
     /// when the picker opens, so a picker left open across a Wi-Fi drop keeps
     /// saying it is on the LAN until the person taps rescan.
-    final class NetworkObservers: Sendable {
+    /// Whoever wants telling, with a token that takes them off again.
+    ///
+    /// Two instances of this on a container: the network observers, and the
+    /// server-address observers ``onServerChange(_:)`` registers. The shape
+    /// is the same and the lesson it carries is the same, so it is one type.
+    final class SinkRegistry: Sendable {
         private struct State {
             var sinks: [Int: @Sendable () -> Void] = [:]
             var next = 1
@@ -548,7 +553,10 @@ public final class AppContainer: Sendable {
         }
     }
 
-    private let networkObservers: NetworkObservers
+    private let networkObservers: SinkRegistry
+
+    /// The reads keyed to the saved server's address — ``onServerChange(_:)``.
+    private let serverObservers = SinkRegistry()
 
     /// Be told when the network picture changes — after the identity epoch
     /// has been bumped, so a sink that asks the server something gets a fresh
@@ -581,6 +589,49 @@ public final class AppContainer: Sendable {
     public func removeNetworkChangeSink(_ token: Int) {
         networkObservers.remove(token)
     }
+
+    /// Whoever has to be re-keyed when the saved server changes.
+    ///
+    /// **This is the port of Compose's implicit key**, and the reason it is a
+    /// registry rather than a line in a view. `rememberApi`'s
+    /// `LaunchedEffect(app.prefs.serverUrl.value, tick, *keys)`
+    /// (`net/ApiHooks.kt:40`) re-keys every read on a switch *for free*,
+    /// because Compose checks the key on every recomposition. On iOS it is an
+    /// explicit call, and an explicit call is a thing that can be left out —
+    /// which it was: ``ApiRead/serverChanged()`` shipped with **no caller at
+    /// all**, and its own doc comment claimed one existed ("called by the
+    /// thing that knows the address changed"). Nothing knew. Home showed the
+    /// previous house's name until the route was left and re-entered, and
+    /// ``ApiRead/isStale`` read clean over it.
+    ///
+    /// So the call is not in a view and not per read. ``ApiRead`` joins here
+    /// **in its own initialiser** and leaves in ``ApiRead/stop()``, so Home's
+    /// other six reads — and every read any later screen adds — are keyed by
+    /// existing rather than by somebody remembering a line.
+    /// ``ShellModel/refresh()`` fires it, beside the two calls it already
+    /// makes to the socket for the same reason.
+    ///
+    /// - Returns: the token that removes this sink again.
+    @discardableResult
+    public func onServerChange(_ sink: @Sendable @escaping () -> Void) -> Int {
+        serverObservers.add(sink)
+    }
+
+    public func removeServerChangeSink(_ token: Int) {
+        serverObservers.remove(token)
+    }
+
+    /// Tell every read that the saved server may have moved. Each decides for
+    /// itself whether it actually did — ``ApiRead/serverChanged()`` compares
+    /// the address to the one its last read was for, so a caller that shouts
+    /// on every redraw costs nothing.
+    public func serverAddressChanged() {
+        serverObservers.fire()
+    }
+
+    /// How many reads are keyed to the server address, for a test that has to
+    /// say a read really joined and really left.
+    public var serverChangeSinkCount: Int { serverObservers.count }
 
     /// How many network changes ``NetworkWatch`` has reported to this
     /// container.

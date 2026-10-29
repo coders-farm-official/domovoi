@@ -31,6 +31,11 @@ public final class URLSessionStateSocketTransport: StateSocketTransport {
 
     public func open(_ request: URLRequest, reporting events: StateSocketEvents) -> any StateSocketLink {
         let task = session.webSocketTask(with: request)
+        // Chosen rather than inherited — see ``stateSocketMaximumFrameBytes``.
+        // The platform's own default is this same 1 MiB today; setting it
+        // means a platform that changes its default does not change this app,
+        // and it is the bound ``StateEvent/parse(_:)`` also applies itself.
+        task.maximumMessageSize = stateSocketMaximumFrameBytes
         let link = Link(task: task, events: events)
         task.resume()
         link.run(pingMs: pingMs)
@@ -110,13 +115,49 @@ public final class URLSessionStateSocketTransport: StateSocketTransport {
             stale?.cancel()
         }
 
+        /// **Nothing below here waits on the first ping.** It used to: `pump`
+        /// was `await ping()` and then, *afterwards*, the ping loop and the
+        /// receive loop. `ping()` is `withCheckedContinuation` around
+        /// `sendPing`, with no deadline and no cancellation handler, so a
+        /// server that completed the `101` and then answered nothing
+        /// suspended this function for ever — and the 15 s ping loop that
+        /// exists precisely to notice a half-open socket was never started,
+        /// because it was downstream of the thing it was meant to catch.
+        ///
+        /// Now the first ping is just the pinger's first iteration, the
+        /// receive loop starts immediately, and a **watchdog** ends the link
+        /// if nothing has reported `opened` within
+        /// ``stateSocketConnectBudgetMs``.
+        ///
+        /// It is a watchdog and deliberately **not** a race: a task group
+        /// around `ping()` would have to await that child before returning,
+        /// and `ping()`'s continuation is not cancellation-aware, so the
+        /// group would hang in exactly the case the bound exists for.
+        ///
+        /// One consequence, stated because the report got it wrong the other
+        /// way round: a refused upgrade can now end through `receive()`
+        /// throwing as well as through the failed ping, so
+        /// ``endedFromTask()`` sometimes does read the upgrade's real status.
+        /// Which of the two wins is a race, and `claimFinish()` means exactly
+        /// one does. Nothing downstream depends on it — a `403` on `/ws/state`
+        /// still cannot raise the pairing screen, because
+        /// ``DomovoiClient/notePossiblePairingRefusal(status:body:)`` needs
+        /// the server's wording and an `HTTPURLResponse` carries none. That
+        /// was map §11.6's real reason all along; it used to also be true by
+        /// accident, because the status was never read at all.
         private func pump(pingMs: Int64) async {
-            await ping()
-            guard !Task.isCancelled else { return }
+            let watchdog = Task { [weak self] in
+                do {
+                    try await Task.sleep(for: .milliseconds(stateSocketConnectBudgetMs))
+                } catch { return }
+                self?.failIfNeverOpened()
+            }
+            defer { watchdog.cancel() }
             // The ping's own loop, beside the receive loop: `receive()` blocks
             // until a frame arrives, and a half-open socket sends none, so the
             // thing that notices has to be elsewhere.
             let pinger = Task { [weak self] in
+                await self?.ping()
                 while !Task.isCancelled {
                     do { try await Task.sleep(for: .milliseconds(pingMs)) } catch { return }
                     guard !Task.isCancelled else { return }
@@ -158,6 +199,19 @@ public final class URLSessionStateSocketTransport: StateSocketTransport {
             }
         }
 
+        /// The connect watchdog's verdict: an upgrade the server accepted and
+        /// then said nothing on is a failure, not a connection.
+        ///
+        /// Reported as `failed(nil, nil)`, which is the same shape as every
+        /// other answerless outcome, so ``StateSocket`` puts it on the
+        /// backoff ladder — which is right: unlike a held token, this *is* a
+        /// transport failure and retrying it is the thing to do.
+        private func failIfNeverOpened() {
+            let never = state.withLock { current in !current.finished && !current.opened }
+            guard never else { return }
+            fail(nil, nil)
+        }
+
         /// `opened` exactly once per link, whichever of the ping and the first
         /// frame arrives first.
         private func reportOpenedOnce() {
@@ -186,8 +240,9 @@ public final class URLSessionStateSocketTransport: StateSocketTransport {
         /// written down.
         private func endedFromTask() {
             if task.closeCode != .invalid {
-                let first = claimFinish()
-                if first { events.closed() }
+                guard claimFinish() else { return }
+                tearDown()
+                events.closed()
                 return
             }
             fail((task.response as? HTTPURLResponse)?.statusCode, nil)
@@ -195,7 +250,29 @@ public final class URLSessionStateSocketTransport: StateSocketTransport {
 
         private func fail(_ status: Int?, _ body: String?) {
             guard claimFinish() else { return }
+            tearDown()
             events.failed(status, body)
+        }
+
+        /// Put the real socket down, on the link's own initiative.
+        ///
+        /// ``cancel()`` is ``StateSocket`` telling this link to go; this is
+        /// the link having decided for itself, and before it existed the two
+        /// were not symmetrical: `endedFromTask()` and `fail()` set `finished`
+        /// and reported, and **nothing cancelled the task or the pinger**. The
+        /// only thing that actually tore the socket down was `StateSocket`
+        /// dropping the link (`advance`'s `carry.drop?.cancel()`), which it
+        /// does today — but that was a second undocumented cross-component
+        /// dependency, and the watchdog above adds a path where this link
+        /// decides to end while the socket still believes in it.
+        private func tearDown() {
+            let pump = state.withLock { current -> Task<Void, Never>? in
+                let pump = current.pump
+                current.pump = nil
+                return pump
+            }
+            pump?.cancel()
+            task.cancel(with: .goingAway, reason: nil)
         }
 
         /// Whether this caller is the first to end the link. One end per

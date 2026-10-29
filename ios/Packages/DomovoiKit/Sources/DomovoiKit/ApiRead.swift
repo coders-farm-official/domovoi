@@ -15,8 +15,11 @@ import Observation
 ///
 /// 1. **The server URL is an implicit key.** `rememberApi`'s
 ///    `LaunchedEffect(app.prefs.serverUrl.value, tick, *keys)` re-reads
-///    everything on a switch. Here that is ``serverChanged()``, called by the
-///    thing that knows the address changed.
+///    everything on a switch. Here that is ``serverChanged()``, and what
+///    calls it is ``AppContainer/onServerChange(_:)``, which this read joins
+///    in its own initialiser — so the key belongs to the read rather than to
+///    a line in whichever view happened to build it. It did not, once, and
+///    the consequence was Home showing the previous house's name.
 /// 2. **`loading` is only true while there is no data yet**
 ///    (`loading = data == null`). A refresh of a section that already has
 ///    rows never shows a spinner.
@@ -73,25 +76,85 @@ public final class ApiRead<Value: Sendable> {
     private var inFlight: Task<Void, Never>?
     private var lastBase: String?
 
+    /// The container this read is keyed against, and its ticket, so
+    /// ``stop()`` can leave again. A read that could only join would keep a
+    /// closure on the container for every read any screen ever built.
+    private let keyedTo: AppContainer?
+    private var serverSink: Int?
+
+    /// A read of `container`'s server, **keyed to its address**.
+    ///
+    /// This is the initialiser to use. It is the one that does what
+    /// `rememberApi` does for free: joining
+    /// ``AppContainer/onServerChange(_:)`` here means the key is a property
+    /// of having been built, not of somebody remembering a line in a view.
+    /// See that method for what went wrong when it was the latter.
+    ///
     /// - Parameters:
-    ///   - base: the saved server's address, the implicit key.
+    ///   - container: whose `store.serverURL` is the key, and whose registry
+    ///     this read joins.
     ///   - eventTypes: the pushes that mean "re-read this". Every consumer
     ///     filters by `type` client-side, exactly as the web hooks do; nothing
     ///     ever sends a narrower subscription (map §1.2).
     ///   - fetch: the request. It must not swallow its own errors — the
     ///     message is what ``error`` holds.
+    public convenience init(
+        in container: AppContainer,
+        eventTypes: Set<String> = [],
+        fetch: @Sendable @escaping () async throws -> Value
+    ) {
+        let store = container.store
+        self.init(
+            base: { store.serverURL },
+            eventTypes: eventTypes,
+            keyedTo: container,
+            fetch: fetch
+        )
+    }
+
+    /// A read over a `base` of the caller's own, for a test that drives the
+    /// address by hand.
+    ///
+    /// **Not keyed to anything** unless `keyedTo` is given: a read built this
+    /// way is re-keyed only by whoever built it. Prefer ``init(in:eventTypes:fetch:)``
+    /// anywhere there is a container.
+    ///
+    /// - Parameters:
+    ///   - base: the saved server's address, the implicit key.
     public init(
         base: @Sendable @escaping () -> String,
         eventTypes: Set<String> = [],
+        keyedTo: AppContainer? = nil,
         fetch: @Sendable @escaping () async throws -> Value
     ) {
         self.base = base
         self.eventTypes = eventTypes
         self.fetch = fetch
+        self.keyedTo = keyedTo
+        // Last, because it captures `self`.
+        joinTheServerKey()
+    }
+
+    /// Join ``AppContainer/onServerChange(_:)``, once, if there is a
+    /// container and this read is not on it already.
+    ///
+    /// Weakly, so that a read whose screen has gone is not kept alive by the
+    /// container — the leak a review found in the network sinks, which this
+    /// registry is the other instance of.
+    private func joinTheServerKey() {
+        guard serverSink == nil, let keyedTo else { return }
+        serverSink = keyedTo.onServerChange { [weak self] in
+            Task { @MainActor in self?.serverChanged() }
+        }
     }
 
     /// Read it now, cancelling any read in flight.
     public func refresh() {
+        // Re-join if ``stop()`` took this read off the registry and its screen
+        // has come back. A read that is being used is a read that has to be
+        // re-keyed, and SwiftUI does not promise that `@State` dies on every
+        // disappearance — a tab switch may keep it.
+        joinTheServerKey()
         let address = base()
         lastBase = address
         inFlight?.cancel()
@@ -108,6 +171,12 @@ public final class ApiRead<Value: Sendable> {
     /// not the event: a `LaunchedEffect` keyed on a URL that has not changed
     /// does not re-run. A caller that shouts "the server changed" on every
     /// redraw would otherwise re-read seven endpoints every frame.
+    ///
+    /// **Called by ``AppContainer/serverAddressChanged()``**, which
+    /// ``ShellModel/refresh()`` fires, for every read that joined
+    /// ``AppContainer/onServerChange(_:)`` — which is every read built with
+    /// ``init(in:eventTypes:fetch:)``. It used to say a caller existed and
+    /// have none.
     public func serverChanged() {
         guard lastBase != base() else { return }
         refresh()
@@ -126,6 +195,10 @@ public final class ApiRead<Value: Sendable> {
     public func stop() {
         inFlight?.cancel()
         inFlight = nil
+        if let serverSink {
+            keyedTo?.removeServerChangeSink(serverSink)
+            self.serverSink = nil
+        }
     }
 
     private func run() async {

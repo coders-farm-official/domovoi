@@ -37,7 +37,24 @@ public struct StateEvent: Equatable, Sendable {
     /// (`web/backend/main.py` pushes `{"type": "<name>", …}`), so no frame
     /// behaves differently; `testAFrameWhoseTypeIsANumberIsDropped` is the
     /// record of which way it goes.
+    /// ### The two bounds on a frame, and which one Foundation already gives
+    ///
+    /// **Size** is this app's: ``stateSocketMaximumFrameBytes``, checked here
+    /// before `JSONSerialization` is handed anything, and set on the task as
+    /// well so an over-size frame is usually refused by the transport first.
+    ///
+    /// **Nesting depth** is Foundation's, and it is enough. Measured
+    /// 2026-10-29 on a cooperative-pool thread, whose stack is far smaller
+    /// than the main thread's and is where a real frame is parsed:
+    /// `JSONSerialization` parses **512** levels of nesting and **drops 513**,
+    /// and it drops rather than crashing at every depth up to 600 000
+    /// (a 1.2 MB frame) — see `testADeeplyNestedFrameIsDroppedRatherThanCrashing`.
+    /// So there is no depth cap here: there is nothing left to cap.
     public static func parse(_ text: String) -> StateEvent? {
+        // Counted before any allocation of a parse tree, and on the UTF-8
+        // view rather than `text.count`, because the maximum is a number of
+        // bytes on a wire and not a number of characters.
+        guard text.utf8.count <= stateSocketMaximumFrameBytes else { return nil }
         guard let bytes = text.data(using: .utf8),
               let object = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any],
               let type = object["type"] as? String
@@ -535,9 +552,45 @@ public final class StateSocket: Sendable {
     /// calls it once a second while a wait is counting —
     /// `testAWaitingSocketSendsNothingHoweverOftenItIsWoken` is what says
     /// that costs the server nothing.
+    ///
+    /// ### It also rescues an attempt that never came back
+    ///
+    /// A park is not the only state nothing else gets out of. An upgrade that
+    /// the server **accepts** and then answers nothing on leaves
+    /// `started == true`, `paused == nil`, `retry == nil`,
+    /// `connected == false` — a state `start()`, `serverChanged()` and the
+    /// old `wake()` were all no-ops against, and which from outside is
+    /// indistinguishable from "connecting". Only backgrounding the app and
+    /// coming back recovered it.
+    ///
+    /// So the invariant is stated as the thing the socket actually wants:
+    /// **an attempt that has neither opened nor ended, and has had
+    /// ``stateSocketConnectBudgetMs`` to do one of them, is not a
+    /// connection.** That removes the structural dependency on the transport
+    /// ever calling back, which is worth more than
+    /// ``URLSessionStateSocketTransport``'s own watchdog: the watchdog fixes
+    /// the one transport this app ships, and this fixes every transport.
+    ///
+    /// **Where the line is, and why it has to be time and not state.**
+    /// ``ShellModel`` calls this on every reachability verdict, so a rescue
+    /// that fired on `paused == nil && !connected` alone would tear down and
+    /// re-dial a socket that is legitimately still shaking hands, once per
+    /// probe — worse than the bug. The budget is that line, and
+    /// `testWakingASocketThatIsStillConnectingDoesNotThrashIt` is the
+    /// measurement rather than the argument.
+    ///
+    /// A countdown to a retry is excluded too (`retry != nil`): the ladder
+    /// owns the next attempt there, and a wake that jumped it would collapse
+    /// the backoff into a spin.
     public func wake() {
-        let parked = state.withLock { current in current.started && current.paused != nil }
-        guard parked else { return }
+        let now = clock()
+        let go = state.withLock { current -> Bool in
+            guard current.started else { return false }
+            if current.paused != nil { return true }
+            guard current.retry == nil, !current.connected else { return false }
+            return now - current.attemptStartedMs >= stateSocketConnectBudgetMs
+        }
+        guard go else { return }
         connect()
     }
 

@@ -736,6 +736,10 @@ public final class ShellModel {
         updateWaitTick()
         container.socket.serverChanged()
         container.socket.wake()
+        // And every read keyed to the address, for the same reason and in the
+        // same place: `AppContainer.onServerChange`'s own note says why this
+        // is a registry rather than a line in Home.
+        container.serverAddressChanged()
     }
 
     /// Whether the token-trouble card's countdown is actually being written.
@@ -870,6 +874,12 @@ public final class ShellModel {
     func register() async {
         guard let deviceSelf else { return }
         let who = deviceSelf()
+        // **Captured before the await, not read after it.** The address is
+        // read off the store rather than off `inputs`, because `inputs` is
+        // itself a snapshot taken at the last `refresh()` and can lag the
+        // store by one switch — and the client reads the store, so the store
+        // is what the request was actually aimed at.
+        let asked = container.store.serverURL
         let row = await DeviceRegistry.register(
             with: container.client,
             deviceID: who.deviceID,
@@ -878,7 +888,7 @@ public final class ShellModel {
             ownerPersonID: who.ownerPersonID
         )
         guard let row else { return }
-        sharedScreenAnswered(DeviceRegistry.sharedScreenAnswer(row))
+        sharedScreenAnswered(DeviceRegistry.sharedScreenAnswer(row), for: asked)
     }
 
     /// Fetch the capability manifest. Android fetches it at connect and again
@@ -888,16 +898,35 @@ public final class ShellModel {
     /// After it lands, the open route is re-checked: a route that just lost
     /// its capability sends the shell home rather than rendering a stub
     /// (`AppShell.kt:395`).
+    /// **Keyed the same way ``register()`` is**, and for the same reason.
+    /// This had no key at all: server A's manifest was applied to whatever
+    /// server was active when it landed, so a switch mid-fetch could show B's
+    /// shell with A's gated screens — plugins B does not have, or missing
+    /// ones it does. Pre-existing, but this batch newly fires it on **every**
+    /// socket connect, so the exposure is new.
+    ///
+    /// A manifest from a server the phone has left is **dropped**, not
+    /// applied: the connect to the new server fetches its own, and
+    /// ``Capabilities/empty`` — gated screens hidden, neutral tones — is the
+    /// right thing to show in between.
     public func refreshCapabilities() async {
-        capabilities = await Capabilities.fetch(using: container.client)
+        let asked = container.store.serverURL
+        let fetched = await Capabilities.fetch(using: container.client)
+        guard asked == container.store.serverURL else { return }
+        capabilities = fetched
         _ = navigation.capabilitiesChanged(visibility)
     }
 
     /// The server's answer about whether this install is a shared screen,
     /// recorded against the server that gave it.
-    public func sharedScreenAnswered(_ answer: Bool?) {
+    ///
+    /// - Parameter server: the address the request was **sent to**, captured
+    ///   before the await. Omitted, it falls back to the active server, which
+    ///   is right only for a caller that is not coming back from an await —
+    ///   and getting that wrong is what the review's M1 was.
+    public func sharedScreenAnswered(_ answer: Bool?, for server: String? = nil) {
         sharedAnswer = answer
-        sharedAnswerFor = inputs.serverURL
+        sharedAnswerFor = server ?? container.store.serverURL
         _ = navigation.capabilitiesChanged(visibility)
     }
 
@@ -972,12 +1001,48 @@ public final class ShellModel {
         if waitTickGeneration == generation { waitTick = nil }
     }
 
+    /// A reachability verdict landed.
+    ///
+    /// **The `wake()` is not about reachability, it is about the gate.** The
+    /// probe is `DomovoiClient.answers()`, which goes through
+    /// `perform(_:mode:.scoped)`, which `await`s `prepareIdentity(…)` — so by
+    /// the time a verdict exists, the identity gate's cache is warm for this
+    /// server. The socket cannot take that proof itself: its `mint()` goes
+    /// through the **synchronous** `tokenOutcome(for:wsUpgrade:)`, which can
+    /// only read the cache.
+    ///
+    /// Without this line, a cold process on a correctly paired phone parked
+    /// `.notNow` on the empty cache and stayed parked for ever, with a
+    /// permanently grey live dot whose own explanation claimed it was
+    /// reconnecting. ``StateSocket/wake()`` would have fixed it in one call
+    /// and nobody made the call.
+    ///
+    /// It cannot spin: a wake over a question whose answer has not changed
+    /// asks `mint()` again, which reads two caches and sends nothing
+    /// (`testAWaitingSocketSendsNothingHoweverOftenItIsWoken`: 300 wakes, 0
+    /// requests). And a wake now also rescues an attempt that never came
+    /// back, which a probe's cadence could thrash — so that rescue is bounded
+    /// by ``stateSocketConnectBudgetMs`` and the bound is measured
+    /// (`testWakingASocketThatIsStillConnectingDoesNotThrashIt`).
     private func verdictArrived(_ verdict: Bool) {
         unreachable = verdict
+        container.socket.wake()
     }
 
+    /// The network picture changed.
+    ///
+    /// A new network invalidates every cached identity verdict
+    /// (`AppContainer`'s sink calls `gate.networkChanged()` first), so the
+    /// socket's question has a new answer whichever way it goes.
+    ///
+    /// This path is **not** the one H1 was about, and the review was right to
+    /// say so: a network drop reaches the socket as a transport `.lost` and
+    /// retries on the ladder rather than parking. It is wired because the
+    /// state it describes really did change, not because anything was
+    /// observed to be stuck on it.
     private func networkChanged() {
         networkGeneration += 1
+        container.socket.wake()
     }
 
     /// Act on a route asked for from outside the UI.
