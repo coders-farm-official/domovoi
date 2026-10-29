@@ -81,3 +81,57 @@ func settle(
     XCTFail("\(what) never parked: nothing set the flag in \(settleYieldLimit) yields", file: file, line: line)
     return false
 }
+
+/// One request held open at the server, so a test can make something happen
+/// **inside** a round trip rather than after it.
+///
+/// Moved here from `ShellModelSocketTests` on 2026-10-29, where it was
+/// private, because the shape it tests — **a value read after an await that
+/// should have been captured before it** — has now come up three times on
+/// this track, and the only honest test of it needs the switch to happen
+/// inside the round trip. A second copy of this helper would be the second
+/// mechanism that nobody reads.
+final class ParkedRequest: Sendable {
+
+    /// Set when the request reached the stub, so a test waits on the park
+    /// itself rather than on `StubURLProtocol.recorded`.
+    let arrived = Shared<Bool>(false)
+
+    let release = Shared<Bool>(false)
+
+    /// Set when the park hit its bound instead of being released — which
+    /// means the request timed out and whatever the test asserted afterwards
+    /// was asserted over an answer that never came. **Assert this is false**:
+    /// a park that outlasts the session timeout turns the test it serves into
+    /// one that cannot fail, which is what happened on 2026-10-29 when
+    /// `StubURLProtocol` still called its dispatcher inside its own lock.
+    let ranOut = Shared<Bool>(false)
+}
+
+/// A dispatcher that holds `path` open until the park is released.
+///
+/// It blocks one `URLSession` worker thread and nothing else — a
+/// `URLProtocol`'s `startLoading` is synchronous, so there is nowhere else to
+/// hold it. **Bounded**, like every wait in this suite, and the bound is
+/// **under** the session's own `timeoutIntervalForRequest` (1 s in these
+/// rigs): a wiring that never releases fails the test rather than leaving an
+/// orphaned `xctest` on the shared Mac, which an unbounded spin loop once did
+/// for three and a half hours.
+func parkRequest(
+    to path: String,
+    answering answer: @Sendable @escaping () -> StubURLProtocol.Answer,
+    otherwise: @Sendable @escaping (URLRequest) -> StubURLProtocol.Answer = { _ in .json("{}") }
+) -> ParkedRequest {
+    let park = ParkedRequest()
+    StubURLProtocol.dispatch { request in
+        guard request.url?.path == path else { return otherwise(request) }
+        park.arrived.set(true)
+        for step in 0..<400 {
+            if park.release.current { return answer() }
+            if step == 399 { park.ranOut.set(true) }
+            Thread.sleep(forTimeInterval: 0.002)
+        }
+        return answer()
+    }
+    return park
+}

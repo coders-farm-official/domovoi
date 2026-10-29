@@ -411,6 +411,35 @@ public final class HomeModel {
         health.isStale || rooms.isStale || plugins.isStale || acquisitions.isStale || config.isStale
     }
 
+    /// All ten checks, green or not, from the same values the card uses —
+    /// and **with `rooms.data` as it is, nil included**.
+    ///
+    /// Home draws only the problems among them
+    /// (``attention(shared:compact:expanded:guard:)``), so this is not what
+    /// the card reads. It exists for two reasons, both named rather than
+    /// implied:
+    ///
+    /// 1. **It is the seam Settings → Health plugs into.** That screen does
+    ///    not exist on iOS and this batch does not stub one; `healthChecks`
+    ///    is a pure function and this is the one call that gives a second
+    ///    consumer the whole list from Home's own reads. What that consumer
+    ///    will additionally need is in `design-notes/ios/I1D2-REPORT.md`.
+    /// 2. **It is what the trap-1 test asserts on.** The difference between
+    ///    passing `rooms.data` and passing `rooms.data ?? []` is invisible in
+    ///    the card — a green `offline` check and a grey one are both "not a
+    ///    problem", so neither draws a row — and visible here, as
+    ///    `not checked yet` against `none`. A test that could only see the
+    ///    card could not catch Android's line 275 at all.
+    public func checks(guard guardState: ContainerGuardState? = nil) -> [HealthCheck] {
+        healthChecks(
+            health: health.data,
+            rooms: rooms.data,
+            plugins: plugins.data,
+            acq: acquisitions.data,
+            guard: guardState
+        )
+    }
+
     /// The needs-attention card — §3.2.
     ///
     /// **`rooms.data` is passed as it is, nil included.** That is trap 1:

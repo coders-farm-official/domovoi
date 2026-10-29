@@ -406,50 +406,17 @@ final class ShellModelSocketTests: XCTestCase {
 
     /// One request held open at the server, so a test can make something
     /// happen **inside** a round trip rather than after it.
-    private final class Park: Sendable {
-        /// Set when the request reached the stub, so the test waits on the
-        /// park itself rather than on `StubURLProtocol.recorded`.
-        let arrived = Shared<Bool>(false)
-        let release = Shared<Bool>(false)
-        /// Set when the park hit its bound instead of being released — which
-        /// means the request timed out and whatever the test asserted
-        /// afterwards was asserted over an answer that never came.
-        let ranOut = Shared<Bool>(false)
-    }
-
-    /// A dispatcher that holds `path` open until the park is released.
     ///
-    /// It blocks one `URLSession` worker thread and nothing else — a
-    /// `URLProtocol`'s `startLoading` is synchronous, so there is nowhere
-    /// else to hold it. **Bounded**, like every wait in this suite: a wiring
-    /// that never releases fails the test rather than leaving an orphaned
-    /// `xctest` on the shared Mac, which an unbounded spin loop once did for
-    /// three and a half hours.
-    ///
-    /// The bound is **under** the session's own
-    /// `timeoutIntervalForRequest` (1 s in this rig), and ``Park/ranOut``
-    /// records when it was hit, because a park that outlasts the timeout
-    /// turns the test it serves into one that cannot fail: measured
-    /// 2026-10-29, when `StubURLProtocol` still called its dispatcher inside
-    /// its own lock and both of the tests below passed over a register that
-    /// had never answered.
+    /// ``ParkedRequest`` and ``parkRequest(to:answering:otherwise:)`` in
+    /// `Shared.swift`, where they moved on 2026-10-29 so that the Home
+    /// tests — which need the same shape for the same reason — use the one
+    /// helper rather than a second copy of it.
     private func parking(
         _ path: String,
         answer: @Sendable @escaping () -> StubURLProtocol.Answer,
         otherwise: @Sendable @escaping (URLRequest) -> StubURLProtocol.Answer = { _ in .json("{}") }
-    ) -> Park {
-        let park = Park()
-        StubURLProtocol.dispatch { request in
-            guard request.url?.path == path else { return otherwise(request) }
-            park.arrived.set(true)
-            for step in 0..<400 {
-                if park.release.current { return answer() }
-                if step == 399 { park.ranOut.set(true) }
-                Thread.sleep(forTimeInterval: 0.002)
-            }
-            return answer()
-        }
-        return park
+    ) -> ParkedRequest {
+        parkRequest(to: path, answering: answer, otherwise: otherwise)
     }
 
     /// **The switch happens inside the round trip, which is the only place it
