@@ -119,7 +119,34 @@ public final class IdentityGate: TokenGate {
         /// epoch is stale whatever the network says.
         var epoch: Int64 = 0
         var backgroundedAt: Int64?
+
+        /// Verdicts that STAND: the cacheable ones, which is everything
+        /// except ``IdentityVerdict/unavailable(expected:reason:)``. This is
+        /// the Kotlin's `verdicts` map exactly, and ``cachedVerdict(_:)``
+        /// reads it.
         var verdicts: [String: Entry] = [:]
+
+        /// The last **non-verdict**, which is a different thing and is kept
+        /// for one reason only: so a refusal can be worded properly.
+        ///
+        /// `unavailable` is deliberately not cached — the next request asks
+        /// again at once rather than waiting out the refusal window. On
+        /// Android that costs nothing, because `requireAdmitted` is handed
+        /// the verdict its own probe just produced. Here the probe happens in
+        /// ``prepare(_:)`` and the throw happens in ``requireAdmitted(_:)``,
+        /// so without this slot the iPhone would say "has not proved itself"
+        /// where the Android phone says "its core is not answering (starting,
+        /// updating or busy); the token is held until it is" — the same
+        /// refusal, in words that do not tell the person their box is
+        /// restarting.
+        ///
+        /// It never admits the token (`unavailable.admitsToken` is false), it
+        /// never stops a re-probe (``attempt(_:_:)`` does not look at it), and
+        /// it is ignored once the epoch or the network moves or it ages past
+        /// the refusal window. So it changes what a held request SAYS and
+        /// nothing about what it DOES.
+        var lastNonVerdict: [String: Entry] = [:]
+
         var status: Status?
     }
 
@@ -264,24 +291,36 @@ public final class IdentityGate: TokenGate {
                 log("the network changed while \(key) was proving itself; asking again")
                 continue
             }
-            let status = Status(base: key, verdict: verdict)
-            state.withLock { state in
-                if verdict.cacheable {
-                    state.verdicts[key] = Entry(epoch: generation, network: net, verdict: verdict, atMs: now)
-                }
-                state.status = status
-            }
-            onStatus(status)
+            record(key, verdict, epoch: generation, network: net, at: now)
             return verdict
         }
         let verdict = IdentityVerdict.unavailable(
             expected: pins.pinFor(key)?.fingerprint,
             reason: "the network kept changing while it was proving itself"
         )
-        let status = Status(base: key, verdict: verdict)
-        state.withLock { $0.status = status }
-        onStatus(status)
+        record(key, verdict, epoch: state.withLock { $0.epoch }, network: network(), at: clock())
         return verdict
+    }
+
+    /// File a verdict: in ``State/verdicts`` when it stands, in
+    /// ``State/lastNonVerdict`` when it does not, and in the status either
+    /// way.
+    private func record(_ key: String, _ verdict: IdentityVerdict, epoch: Int64, network net: String, at now: Int64) {
+        let status = Status(base: key, verdict: verdict)
+        let entry = Entry(epoch: epoch, network: net, verdict: verdict, atMs: now)
+        state.withLock { state in
+            if verdict.cacheable {
+                state.verdicts[key] = entry
+                // A verdict that stands replaces the reason a held request
+                // would have given, so an old "its core is not answering"
+                // cannot outlive the core coming back.
+                state.lastNonVerdict[key] = nil
+            } else {
+                state.lastNonVerdict[key] = entry
+            }
+            state.status = status
+        }
+        onStatus(status)
     }
 
     /// One probe and the verdict it produces. The pin is written here, which
@@ -360,7 +399,7 @@ public final class IdentityGate: TokenGate {
     /// out of the decision, so no caller needs a new branch.
     public func requireAdmitted(_ base: ServerURL) throws {
         let where_ = "\(base.host):\(base.port)"
-        guard let verdict = cachedVerdict(base) else {
+        guard let verdict = cachedVerdict(base) ?? lastNonVerdict(base) else {
             throw DomovoiError.identityHeld(
                 "server identity not proved: \(where_) has not proved itself on this network; "
                     + "the token is held until it does"
@@ -411,6 +450,22 @@ public final class IdentityGate: TokenGate {
             guard let entry = state.verdicts[key], Self.holds(entry, state.epoch, net, now, ttlMs: ttlMs, retryAfterMs: retryAfterMs) else {
                 return nil
             }
+            return entry.verdict
+        }
+    }
+
+    /// The last non-verdict for `base`, if it is still from this epoch and
+    /// network and younger than the refusal window — see
+    /// ``State/lastNonVerdict``. Private: it is wording, not a verdict, and
+    /// nothing outside this type should be able to mistake it for one.
+    private func lastNonVerdict(_ base: ServerURL) -> IdentityVerdict? {
+        let key = Self.pinKey(base)
+        let now = clock()
+        let net = network()
+        return state.withLock { state -> IdentityVerdict? in
+            guard let entry = state.lastNonVerdict[key],
+                  entry.epoch == state.epoch, entry.network == net,
+                  now - entry.atMs < retryAfterMs else { return nil }
             return entry.verdict
         }
     }
