@@ -108,6 +108,15 @@ extension ShellIdiom {
     /// not on the size class, because an iPhone Pro Max in landscape reports
     /// a regular width and must keep its bar all the same
     /// (``shellLayout(idiom:width:)``).
+    ///
+    /// `@MainActor` because `UIDevice.current` is: without it this reads
+    /// UIKit state from wherever the caller happens to be, which Swift 6
+    /// warns about and a future language mode refuses. The only caller is a
+    /// `View`'s `body`, which is already on the main actor, so this costs
+    /// nothing. `swift test` cannot see the mistake — this type's package
+    /// builds without UIKit, and the app target is compiled only by
+    /// `build-sim.sh`.
+    @MainActor
     static var current: ShellIdiom {
         UIDevice.current.userInterfaceIdiom == .pad ? .pad : .phone
     }
