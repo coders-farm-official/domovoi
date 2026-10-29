@@ -148,6 +148,55 @@ final class ReachabilityTests: XCTestCase {
             await task.value
         }
 
+        /// The app is suspended **without the loop being cancelled**: the
+        /// process freezes while the loop sits in its `wait`, so the clock
+        /// jumps forward with the stopwatch still running, and the loop
+        /// carries straight on when it thaws.
+        ///
+        /// The first probe answers (the server is fine and always was); the
+        /// one after the thaw fails, as a request on a torn-down connection
+        /// does. Then the stretch parks, as `onScreen`'s does.
+        func suspendedWithoutCancelling(suspensionMs: Int64) async {
+            let clock = self.clock
+            let verdicts = self.verdicts
+            let probes = self.probes
+            let reach = self.reach
+            let parked = Shared<Bool>(false)
+            let task = Task {
+                await askWhileOnScreen(
+                    reach: reach,
+                    probe: {
+                        clock.advance(300)
+                        let index = probes.mutate { (n: inout Int) -> Int in
+                            let was = n
+                            n += 1
+                            return was
+                        }
+                        // Probe 0: on screen, the server answers. Probe 1:
+                        // the first one after the thaw, failing on a stale
+                        // connection. The server was healthy throughout.
+                        return index == 0
+                    },
+                    clock: { clock.current },
+                    wait: { _ in
+                        if probes.current == 1 {
+                            // The process freezes HERE, for `suspensionMs`.
+                            // Nothing cancelled the task, so nothing called
+                            // `pause`.
+                            clock.advance(suspensionMs)
+                        } else {
+                            parked.set(true)
+                            try await Task.sleep(for: .seconds(3600))
+                        }
+                    },
+                    publish: { verdict in verdicts.mutate { $0.append(verdict) } }
+                )
+            }
+            while !parked.current { await Task.yield() }
+            task.cancel()
+            await task.value
+        }
+
         /// On screen with a probe out when the app leaves: it never answers.
         func leavesMidProbe() async {
             let clock = self.clock
@@ -192,6 +241,54 @@ final class ReachabilityTests: XCTestCase {
         await rig.onScreen(3, answers: { $0 != 0 })
         XCTAssertEqual([false, false, false], rig.verdicts.current)
         XCTAssertFalse(rig.reach.unreachable)
+    }
+
+    /// **The hazard part 2 has to prevent, written as the thing that happens
+    /// if it does not.**
+    ///
+    /// The test above is the one the design is for: the app leaves the screen,
+    /// the loop is cancelled, two minutes pass, and the stale first probe on
+    /// the way back costs nothing. This one is the same two minutes with the
+    /// **loop left running** — which is what part 2 will have built if it
+    /// starts `askWhileOnScreen` in a long-lived `Task` and does not cancel it
+    /// when `scenePhase` leaves `.active`.
+    ///
+    /// The result is the bug, and it is asserted here rather than described in
+    /// a comment: the server answered, was never asked again until the thaw,
+    /// and one failed probe reports it out of reach — because
+    /// ``askWhileOnScreen(reach:probe:clock:wait:publish:)`` takes
+    /// ``Reachability/resume(_:)`` on itself, so the stopwatch ran for the
+    /// whole suspension and `missed` charged all of it against a ten-second
+    /// grace. Android's
+    /// `ReachabilityTest.twoMinutesInTheBackgroundWithTheServerFineStaysOnTheWorkspace`
+    /// exists to stop this reaching a person.
+    ///
+    /// **If this test ever fails, read it before changing it.** Two different
+    /// changes make it red, and they want opposite answers:
+    ///
+    ///  - a batch that makes the tracker itself notice a suspension (a
+    ///    monotonic clock that stops when the process does, say) has *fixed*
+    ///    this: replace the assertion with the fixed behaviour and say so;
+    ///  - a batch that merely moved the `resume`/`pause` calls around has
+    ///    changed where the obligation lives, and the note on
+    ///    ``Reachability`` has to move with it.
+    ///
+    /// What it cannot do is fail when part 2 forgets the cancellation — that
+    /// would need part 2's lifecycle wiring, which does not exist yet. It
+    /// pins the hazard so the cancellation cannot be removed as a tidy-up by
+    /// someone who believes the stopwatch stops by itself.
+    func testAnUncancelledLoopMeasuresTheSuspensionWhichPartTwoMustPrevent() async {
+        let rig = Rig()
+        await rig.suspendedWithoutCancelling(suspensionMs: 120_000)
+        XCTAssertEqual(
+            [false, true], rig.verdicts.current,
+            "answered, then two minutes suspended, then one stale probe — and the verdict flips"
+        )
+        XCTAssertTrue(
+            rig.reach.unreachable,
+            "the whole suspension was charged against a 10 s grace: this is what the missing cancel costs"
+        )
+        XCTAssertEqual(2, rig.probes.current, "the server was asked twice and answered the first time")
     }
 
     /// `backOnScreenAFreshProbeRunsFirst`

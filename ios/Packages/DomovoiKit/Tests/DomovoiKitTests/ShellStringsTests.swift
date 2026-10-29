@@ -10,7 +10,16 @@ import XCTest
 /// two Swift literals could not see any of that, so this one reads
 /// `android/.../*.kt` off disk at test time — the way `LicencesTests` reads
 /// `ios/licences/README.md` — pulls every string literal out of them, and
-/// asks whether ours is in there.
+/// asks whether ours is one of them.
+///
+/// **"One of them", not "in there", since 2026-10-29.** It used to ask
+/// whether ours appeared *somewhere* in the Kotlin's strings, which proves
+/// only that ours is a subset: a review cut the second sentence off
+/// `ShellStrings.localSettingsSub` and the suite stayed green. A plain string
+/// now has to match a Kotlin string end to end
+/// (``assertKotlinSaysWhole(_:_:file:line:)``), and the concatenated haystack
+/// is kept for the fragments that honestly are fragments — the pieces either
+/// side of an interpolated value.
 ///
 /// ### How the haystack is built
 ///
@@ -67,6 +76,11 @@ final class ShellStringsTests: XCTestCase {
     ]
 
     /// Every literal in every file above, decoded, concatenated per file.
+    ///
+    /// **Only for the checks that are honestly about a fragment**: a piece of
+    /// a string with a value interpolated into the middle of it, where the
+    /// edges are all there is to compare. A whole string is checked against
+    /// ``wholeStrings`` instead — see ``assertKotlinSaysWhole(_:_:file:line:)``.
     private static let haystack: String = {
         let base = repositoryRoot.appendingPathComponent("android/app/src/main/java/com/domovoi/app")
         return kotlinFiles.map { name -> String in
@@ -74,22 +88,98 @@ final class ShellStringsTests: XCTestCase {
             guard let text = try? String(contentsOf: url, encoding: .utf8) else { return "" }
             // A sentinel between files so a fragment cannot be satisfied by
             // the end of one file plus the start of the next.
-            return literals(in: text).joined() + "\u{0}"
+            return literals(in: text).map(\.value).joined() + "\u{0}"
         }.joined()
     }()
 
+    /// Every **complete** string the Kotlin writes down: each literal joined
+    /// to its neighbours exactly as the source joins them with `+`, and
+    /// nothing else.
+    ///
+    /// This is the set a whole string is looked up in, and the difference
+    /// from ``haystack`` is the whole point of the 2026-10-29 fix. A
+    /// containment test on the haystack proves that ours is a **subset** of
+    /// what the Kotlin says: cut the second sentence off
+    /// `ShellStrings.localSettingsSub` and the suite stayed green, because the
+    /// first sentence is still in there. Every one of those assertions had the
+    /// hole — a dropped trailing clause, or a sentence shortened at either
+    /// edge, was invisible.
+    ///
+    /// A whole-string lookup has to match a literal from its first character
+    /// to its last, so a truncation at either end fails unless it lands
+    /// exactly on a `+` boundary in the Kotlin *and* the remainder is itself a
+    /// complete group — which is why the groups are built by concatenation
+    /// rather than by letting any sub-run count.
+    ///
+    /// ``wholeLiterals`` is the looser sibling, for the clauses of a string
+    /// whose group also contains an interpolation (the token-trouble hints):
+    /// there the Kotlin's own literal IS the clause, and the group is the
+    /// rendered sentence with a value in the middle of it.
+    private static let wholeStrings: Set<String> = {
+        var out: Set<String> = []
+        for file in sources {
+            var group = ""
+            for (index, piece) in file.enumerated() {
+                if index > 0 && !piece.joinsPrevious {
+                    out.insert(group)
+                    group = ""
+                }
+                group += piece.value
+            }
+            if !file.isEmpty { out.insert(group) }
+        }
+        return out
+    }()
+
+    /// Every individual Kotlin literal, whole.
+    private static let wholeLiterals: Set<String> = Set(sources.flatMap { $0 }.map(\.value))
+
+    /// Each file's literals, in source order, read once.
+    private static let sources: [[Literal]] = {
+        let base = repositoryRoot.appendingPathComponent("android/app/src/main/java/com/domovoi/app")
+        return kotlinFiles.map { name in
+            let url = base.appendingPathComponent(name)
+            guard let text = try? String(contentsOf: url, encoding: .utf8) else { return [] }
+            return literals(in: text)
+        }
+    }()
+
+    /// One Kotlin string literal, and whether the source joins it to the
+    /// literal before it with `+` — which is how Kotlin writes a sentence too
+    /// long for one line, and the only way two literals become one string.
+    struct Literal {
+        let value: String
+        let joinsPrevious: Bool
+    }
+
     /// Pull every double-quoted Kotlin string literal out of `source`, in
-    /// order, with its escapes decoded. Line and block comments are skipped;
-    /// a `//` inside a literal is not a comment.
+    /// order, with its escapes decoded, and with each one carrying whether the
+    /// source joins it to the one before it. Line and block comments are
+    /// skipped; a `//` inside a literal is not a comment.
+    ///
+    /// **`joinsPrevious`** is true when everything between the previous
+    /// literal's closing quote and this one's opening quote is whitespace and
+    /// a single `+`. That is Kotlin's only way of making two literals one
+    /// string, and it is what lets a sentence written over four lines be
+    /// matched whole. Anything else between them — a comma, a `)`, an
+    /// `append(`, an identifier, a `+` with a comment after it — means two
+    /// different strings, and they are kept apart.
     ///
     /// Kotlin's raw strings (`"""…"""`) are read as raw: no escape decoding,
     /// which is what raw means. None of the files above uses one for a
     /// user-facing string, so this is for completeness rather than for a case
     /// that exists.
-    private static func literals(in source: String) -> [String] {
-        var out: [String] = []
+    private static func literals(in source: String) -> [Literal] {
+        var out: [Literal] = []
         let chars = Array(source)
         var i = 0
+        /// Where the previous literal ended; nil before the first one.
+        var previousEnd: Int?
+        func joins(_ start: Int) -> Bool {
+            guard let previousEnd, previousEnd <= start else { return false }
+            let gap = String(chars[previousEnd..<start]).trimmingCharacters(in: .whitespacesAndNewlines)
+            return gap == "+"
+        }
         while i < chars.count {
             let c = chars[i]
             if c == "/" && i + 1 < chars.count && chars[i + 1] == "/" {
@@ -103,6 +193,7 @@ final class ShellStringsTests: XCTestCase {
                 continue
             }
             guard c == "\"" else { i += 1; continue }
+            let start = i
             // A raw string?
             if i + 2 < chars.count && chars[i + 1] == "\"" && chars[i + 2] == "\"" {
                 i += 3
@@ -113,7 +204,8 @@ final class ShellStringsTests: XCTestCase {
                     i += 1
                 }
                 i = min(i + 3, chars.count)
-                out.append(raw)
+                out.append(Literal(value: raw, joinsPrevious: joins(start)))
+                previousEnd = i
                 continue
             }
             i += 1
@@ -133,13 +225,66 @@ final class ShellStringsTests: XCTestCase {
                 }
             }
             i += 1
-            out.append(value)
+            out.append(Literal(value: value, joinsPrevious: joins(start)))
+            previousEnd = i
         }
         return out
     }
 
     // MARK: - the helpers every assertion goes through
 
+    /// **A whole string of ours is a whole string of the Kotlin's.** The
+    /// helper every plain string goes through: no interpolation, no branch,
+    /// nothing to split — so there is no reason to accept a substring, and
+    /// every reason not to (see ``wholeStrings``).
+    private func assertKotlinSaysWhole(
+        _ string: String,
+        _ note: String = "",
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        if Self.wholeStrings.contains(string) { return }
+        // Say which of the two failures it is, because they want different
+        // fixes: a wrong character means ours is wrong, and a string the
+        // Kotlin only contains means ours has been shortened (or the
+        // Kotlin's has grown).
+        let shortened = Self.haystack.contains(string)
+            ? " — the Kotlin CONTAINS this but does not say exactly this: a clause has been dropped off one end"
+            : ""
+        XCTFail(
+            "not a whole string in the Kotlin: \(debugged(string))\(shortened)"
+                + (note.isEmpty ? "" : " — \(note)"),
+            file: file,
+            line: line
+        )
+    }
+
+    /// A whole Kotlin **literal**, for the clause of a string whose Kotlin
+    /// group also holds an interpolation: there the literal is the clause, so
+    /// this is still an end-to-end match and not a containment.
+    private func assertKotlinSaysWholeLiteral(
+        _ string: String,
+        _ note: String = "",
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        XCTAssertTrue(
+            Self.wholeLiterals.contains(string),
+            "not a whole literal in the Kotlin: \(debugged(string))\(note.isEmpty ? "" : " — \(note)")",
+            file: file,
+            line: line
+        )
+    }
+
+    /// Containment, which is the **weak** one.
+    ///
+    /// Left for the only subjects it is honest about: a piece of a string with
+    /// a value interpolated into it, where the piece genuinely is a fragment
+    /// of a Kotlin literal and nothing stronger is available. Every call site
+    /// that uses it says which value sits beside the fragment. A plain string
+    /// must use ``assertKotlinSaysWhole(_:_:file:line:)``: a containment check
+    /// on a plain string cannot see a dropped trailing clause, which is
+    /// 2026-10-29's finding F-4.
     private func assertKotlinSays(
         _ fragment: String,
         _ note: String = "",
@@ -156,6 +301,13 @@ final class ShellStringsTests: XCTestCase {
 
     /// Check a rendered string that has values interpolated into it, by
     /// splitting on the sentinel those values were.
+    ///
+    /// Containment is right here and stays: each piece **is** a fragment of a
+    /// Kotlin literal, because the value that follows it is not in the source
+    /// at all. What it cannot catch is a clause dropped from an *end* of such
+    /// a string, and there is no way for it to: the Kotlin never writes that
+    /// string down whole either. The plain strings, which it does write down
+    /// whole, go through ``assertKotlinSaysWhole(_:_:file:line:)``.
     private func assertKotlinSaysAround(
         _ rendered: String,
         sentinel: String = "\u{1}",
@@ -217,6 +369,51 @@ final class ShellStringsTests: XCTestCase {
         XCTAssertGreaterThan(Self.haystack.count, 5_000, "the haystack is far smaller than measured")
     }
 
+    /// **The guard on the fix for F-4**: a string shortened at either end is
+    /// rejected, where the old containment check accepted it.
+    ///
+    /// The three subjects are the three shapes the hole had. The first is the
+    /// review's own sabotage, so it stays in the suite rather than in a
+    /// report: one Kotlin literal with its second sentence cut off. The second
+    /// is a `+`-joined sentence with its last clause dropped — the shape a
+    /// tidy-up produces. The third is a sentence shortened at the front.
+    ///
+    /// Each is asserted twice over: the real string passes, the cut one fails.
+    /// A test that only checked the cut ones would pass if the lookup were
+    /// broken outright.
+    func testAShortenedStringIsNotAWholeString() {
+        let cases: [(whole: String, cut: String, shape: String)] = [
+            (
+                ShellStrings.localSettingsSub,
+                "This phone's voice and its problem reports.",
+                "a single literal with its second sentence cut off (the review's sabotage)"
+            ),
+            (
+                ShellStrings.pairExplanation,
+                "This Domovoi asks devices to prove they belong to the household before they can change anything.",
+                "a +-joined sentence with its last clause dropped"
+            ),
+            (
+                ShellStrings.settingsSub,
+                "in groups. Search to jump straight to a setting.",
+                "shortened at the front"
+            ),
+        ]
+        for (whole, cut, shape) in cases {
+            XCTAssertTrue(Self.wholeStrings.contains(whole), "the real string: \(debugged(whole))")
+            XCTAssertFalse(
+                Self.wholeStrings.contains(cut),
+                "accepted a shortened string (\(shape)): \(debugged(cut))"
+            )
+            // And the proof that this is a real tightening: the old check
+            // accepted every one of them.
+            XCTAssertTrue(
+                Self.haystack.contains(cut),
+                "this case is not testing anything: containment rejects it too (\(shape))"
+            )
+        }
+    }
+
     func testTheHaystackCanFail() {
         // An em dash typed as a hyphen.
         XCTAssertFalse(Self.haystack.contains("not on wifi - join your home network"))
@@ -253,7 +450,7 @@ final class ShellStringsTests: XCTestCase {
             ShellStrings.adminAttention,
             ShellStrings.badgeOverflow,
         ] {
-            assertKotlinSays(s)
+            assertKotlinSaysWhole(s)
         }
     }
 
@@ -277,7 +474,7 @@ final class ShellStringsTests: XCTestCase {
     /// can drift into the other by accident — and flagged in `I1C1-REPORT.md`
     /// as a choice for Kamron rather than a transcription.
     func testThePlatformIsTheOneWordThatDiffers() {
-        assertKotlinSays("/ android", "the Kotlin's word, which ours replaces")
+        assertKotlinSaysWhole("/ android", "the Kotlin's word, which ours replaces")
         XCTAssertEqual("/ iphone", ShellStrings.platformCrumb)
         XCTAssertFalse(Self.haystack.contains("/ iphone"))
     }
@@ -285,7 +482,7 @@ final class ShellStringsTests: XCTestCase {
     // MARK: - §7.2 the picker
 
     func testThePickerSaysWhatAndroidSays() {
-        assertKotlinSays(ShellStrings.notOnWifi)
+        assertKotlinSaysWhole(ShellStrings.notOnWifi)
         assertKotlinSaysAround(ShellStrings.scanning(done: 137, total: 254).replacingOccurrences(of: "137/254", with: sentinel))
         for s in [
             ShellStrings.noDomovoisFound,
@@ -301,7 +498,7 @@ final class ShellStringsTests: XCTestCase {
             ShellStrings.forget,
             ShellStrings.unnamedServer,
         ] {
-            assertKotlinSays(s)
+            assertKotlinSaysWhole(s)
         }
         assertKotlinSaysAround(
             ShellStrings.nothingAnswered(port: 6369).replacingOccurrences(of: "6369", with: sentinel)
@@ -327,10 +524,12 @@ final class ShellStringsTests: XCTestCase {
             ShellStrings.inUse,
             ShellStrings.close,
         ] {
-            assertKotlinSays(s)
+            assertKotlinSaysWhole(s)
         }
-        // "use " is four characters, so it is checked whole rather than
-        // split: the splitter skips pieces too short to mean anything.
+        // `use $title`: the Kotlin literal is "use " with the title
+        // interpolated after it, so this fragment is all there is to compare
+        // and containment is the honest check. Four characters, so the
+        // splitter would skip it — hence it is asserted by hand.
         assertKotlinSays("use ")
     }
 
@@ -345,9 +544,9 @@ final class ShellStringsTests: XCTestCase {
             .available(label: "x"),
             .available(label: "x", needsPairing: true),
         ] {
-            assertKotlinSays(choice.reason)
+            assertKotlinSaysWhole(choice.reason)
         }
-        assertKotlinSays(ServerChoice.noServer.title)
+        assertKotlinSaysWhole(ServerChoice.noServer.title)
         XCTAssertTrue(ServerChoice.noServer.reason.contains("·"), "middle dot")
         XCTAssertTrue(
             ServerChoice.available(label: "x", needsPairing: true).reason.contains("·"),
@@ -366,13 +565,21 @@ final class ShellStringsTests: XCTestCase {
 
     /// Checked clause by clause: the two branches' literals are neighbours in
     /// `IdentityChanged.kt`, so a whole rendering of one runs into the other.
+    ///
+    /// Five of the six clauses are whole `append(…)` literals, so they are
+    /// matched end to end. The first is the only containment check in the
+    /// group, and it has to be: its Kotlin literal is
+    /// `"…reinstalled. $address answered, but not with "`, so the clause is a
+    /// genuine fragment of it. The assertion below that the rendered text
+    /// contains `"…reinstalled. A answered, but not with "` is what pins the
+    /// other end of it.
     func testTheIdentityChangedBannerSaysWhatAndroidSays() {
         assertKotlinSays("This looks like a different Domovoi, or it was reinstalled. ")
-        assertKotlinSays("the identity this phone trusted, so this phone sent it nothing and is showing its own media. ")
-        assertKotlinSays("If you reinstalled Domovoi or moved it to a new machine, trust it again. ")
-        assertKotlinSays("If you're away from home, don't.")
-        assertKotlinSays("If you replaced the server, forget it (the X next to it in the server list, or under ")
-        assertKotlinSays("Settings → Phones & browsers → Trusted servers), then trust and pair it again.")
+        assertKotlinSaysWhole("the identity this phone trusted, so this phone sent it nothing and is showing its own media. ")
+        assertKotlinSaysWhole("If you reinstalled Domovoi or moved it to a new machine, trust it again. ")
+        assertKotlinSaysWhole("If you're away from home, don't.")
+        assertKotlinSaysWhole("If you replaced the server, forget it (the X next to it in the server list, or under ")
+        assertKotlinSaysWhole("Settings → Phones & browsers → Trusted servers), then trust and pair it again.")
         // And every clause is actually in what we render, so the clauses
         // above cannot drift away from the function.
         let yes = identityChangedText(address: "A", canTrustAgain: true)
@@ -386,7 +593,7 @@ final class ShellStringsTests: XCTestCase {
 
     func testTheTrustAgainDialogSaysWhatAndroidSays() {
         for s in [trustAgainButton, trustAgainTitle, trustAgainNo, trustAgainYes] {
-            assertKotlinSays(s)
+            assertKotlinSaysWhole(s)
         }
         XCTAssertTrue(trustAgainButton.contains("—"), "em dash")
         assertKotlinSaysAround(trustAgainText(pinned: sentinel, now: sentinel))
@@ -398,17 +605,17 @@ final class ShellStringsTests: XCTestCase {
 
     func testTheTrustDialogSaysWhatAndroidSays() {
         for s in [ShellStrings.trustTitle, ShellStrings.trustCancel, ShellStrings.trustConfirm] {
-            assertKotlinSays(s)
+            assertKotlinSaysWhole(s)
         }
         // The common part, and each tail on its own: the two tails are
         // neighbours in the Kotlin.
-        assertKotlinSays("Check that this address is your Domovoi before you continue: the app "
+        assertKotlinSaysWhole("Check that this address is your Domovoi before you continue: the app "
             + "will load the screens this server advertises and send it your "
             + "requests. Nothing is saved until you confirm.")
-        assertKotlinSays(" The identity above should match Settings → About & updates on the dashboard; "
+        assertKotlinSaysWhole(" The identity above should match Settings → About & updates on the dashboard; "
             + "trusting pins it, and the household token goes out only after the "
             + "server proves it holds that key.")
-        assertKotlinSays(" This server offers no identity (an older web backend), so nothing "
+        assertKotlinSaysWhole(" This server offers no identity (an older web backend), so nothing "
             + "can be pinned: the app will not be able to tell it from another "
             + "server at the same address.")
         assertKotlinSaysAround("It calls itself \"\(sentinel)\". ")
@@ -431,7 +638,7 @@ final class ShellStringsTests: XCTestCase {
 
     func testTheTokenTroubleCardSaysWhatAndroidSays() {
         for trouble: TokenTrouble in [.notRecognised(waitMs: 0), .waiting(waitMs: 125_000)] {
-            assertKotlinSays(tokenTroubleTitle(trouble))
+            assertKotlinSaysWhole(tokenTroubleTitle(trouble))
         }
         assertKotlinSaysAround(
             tokenTroubleText(.notRecognised(waitMs: 0), address: sentinel)
@@ -449,13 +656,20 @@ final class ShellStringsTests: XCTestCase {
                 .replacingOccurrences(of: "0:38", with: sentinel)
         )
         // The hints branch three ways, and all three end with the same
-        // sentence about the old browser tab.
-        assertKotlinSays("Paste the household token to pair again. An admin finds it on the dashboard under ")
-        assertKotlinSays("Settings → Phones & browsers → Household token.")
+        // sentence about the old browser tab. Each clause here is a whole
+        // Kotlin literal — the group it belongs to is the rendered sentence
+        // with a wait clock interpolated into it, which is why these are
+        // literal matches rather than group matches.
+        assertKotlinSaysWholeLiteral("Paste the household token to pair again. An admin finds it on the dashboard under ")
+        assertKotlinSaysWholeLiteral("Settings → Phones & browsers → Household token.")
+        // These two sit either side of the interpolated wait clock
+        // (`TokenTroubleScreen.kt:83-84`): the first is the tail of one
+        // literal, the second the head of the next, so each is a fragment and
+        // containment is all there is.
         assertKotlinSays("Domovoi still wants this phone to wait ")
         assertKotlinSays(" after the wrong token, so the new one is tried when that is over.")
-        assertKotlinSays("If the household token changed, paste the new one now: it is tried when the wait is over. ")
-        assertKotlinSays(" If a browser on this phone has the dashboard open from before, close that tab or pair it "
+        assertKotlinSaysWholeLiteral("If the household token changed, paste the new one now: it is tried when the wait is over. ")
+        assertKotlinSaysWhole(" If a browser on this phone has the dashboard open from before, close that tab or pair it "
             + "again too: it still sends the old token.")
         for buttons in [
             ShellStrings.pairAgain,
@@ -464,7 +678,7 @@ final class ShellStringsTests: XCTestCase {
             ShellStrings.tryingOldTokenToast,
             ShellStrings.useThisPhonesMedia,
         ] {
-            assertKotlinSays(buttons)
+            assertKotlinSaysWhole(buttons)
         }
     }
 
@@ -502,7 +716,7 @@ final class ShellStringsTests: XCTestCase {
             ShellStrings.pair,
             ShellStrings.replace,
         ] {
-            assertKotlinSays(s)
+            assertKotlinSaysWhole(s)
         }
         XCTAssertTrue(ShellStrings.pairExplanation.contains("—"), "em dash")
         XCTAssertEqual(2, ShellStrings.pairHint.components(separatedBy: "→").count - 1, "two arrows")
@@ -513,13 +727,13 @@ final class ShellStringsTests: XCTestCase {
     func testTheTokenFieldSaysWhatAndroidSays() {
         // A control character the field refuses, and that `trimmed` does
         // NOT strip (so the hint is about the alphabet, not the length).
-        assertKotlinSays(TokenPasteField.hint("abc\u{7}")!)
+        assertKotlinSaysWhole(TokenPasteField.hint("abc\u{7}")!)
         assertKotlinSaysAround(
             TokenPasteField.hint("abc")!.replacingOccurrences(of: "12", with: sentinel)
         )
-        assertKotlinSays(TokenPasteField.message(.refused)!)
-        assertKotlinSays(TokenPasteField.message(.unavailable)!)
-        assertKotlinSays(TokenPasteField.message(.throttled(waitMs: 0), waitLeftMs: 0)!)
+        assertKotlinSaysWhole(TokenPasteField.message(.refused)!)
+        assertKotlinSaysWhole(TokenPasteField.message(.unavailable)!)
+        assertKotlinSaysWhole(TokenPasteField.message(.throttled(waitMs: 0), waitLeftMs: 0)!)
         assertKotlinSaysAround(
             TokenPasteField.message(.throttled(waitMs: 42_000), waitLeftMs: 42_000)!
                 .replacingOccurrences(of: "0:42", with: sentinel)
@@ -548,7 +762,7 @@ final class ShellStringsTests: XCTestCase {
             ShellStrings.localSettingsSub,
             ShellStrings.back,
         ] {
-            assertKotlinSays(s)
+            assertKotlinSaysWhole(s)
         }
         assertKotlinSaysAround(ShellStrings.backTo(sentinel))
         assertKotlinSaysAround(ShellStrings.changedOnTheDashboard(section: sentinel))
@@ -561,6 +775,8 @@ final class ShellStringsTests: XCTestCase {
     /// the Kotlin does.
     func testTheNoMatchLineUsesCurlyQuotes() {
         XCTAssertEqual("nothing matches “foo”", ShellStrings.nothingMatches("  foo  "))
+        // The prefix of `"nothing matches “${query.trim()}”"`
+        // (`SettingsScreen.kt:340`): a fragment, so containment.
         assertKotlinSays("nothing matches “")
     }
 
@@ -574,19 +790,21 @@ final class ShellStringsTests: XCTestCase {
             ShellStrings.fiveTabsAtMost,
             ShellStrings.sharedScreenNote,
         ] {
-            assertKotlinSays(s)
+            assertKotlinSaysWhole(s)
         }
         assertKotlinSaysAround(
             ShellStrings.phoneBarSub()
                 .replacingOccurrences(of: "2", with: sentinel)
                 .replacingOccurrences(of: "5", with: sentinel)
         )
+        // Fragments either side of the route label in
+        // `"move ${route.label} left"` (`PhoneBarPanel.kt:182-183`).
         assertKotlinSays("move ")
         assertKotlinSays(" left")
         assertKotlinSays(" right")
         assertKotlinSaysAround(ShellStrings.takeOffTheBar(sentinel))
         assertKotlinSaysAround(ShellStrings.addLabelToTheBar(sentinel))
-        assertKotlinSays("phone bar back to ")
+        assertKotlinSaysWhole("phone bar back to ")
         // The toast's list is joined with the middle dot, and `"everything"`
         // is in ASCII quotes.
         XCTAssertEqual(
@@ -603,12 +821,16 @@ final class ShellStringsTests: XCTestCase {
         let off = ShellStrings.unavailableNote(label: "Chat", isChat: true, aiEnabled: false)
         XCTAssertEqual("chat is turned off", off.title)
         XCTAssertEqual("this server has its AI features turned off", off.detail)
+        // The tail of `"${label.lowercase()} is turned off"`
+        // (`RouteNotes.kt:11`); the detail beside it is a whole string.
         assertKotlinSays(" is turned off")
-        assertKotlinSays(off.detail)
+        assertKotlinSaysWhole(off.detail)
         let missing = ShellStrings.unavailableNote(label: "Stations", isChat: false, aiEnabled: true)
         XCTAssertEqual("stations isn't available", missing.title)
+        // The tail of `"${label.lowercase()} isn't available"`
+        // (`RouteNotes.kt:13`).
         assertKotlinSays(" isn't available")
-        assertKotlinSays(missing.detail)
+        assertKotlinSaysWhole(missing.detail)
         // Chat with the AI on is "isn't available", not "is turned off".
         XCTAssertEqual(
             "chat isn't available",
@@ -622,16 +844,16 @@ final class ShellStringsTests: XCTestCase {
         XCTAssertEqual(14, SettingsSection.all.count)
         XCTAssertEqual(5, SettingsGroup.allCases.count)
         for group in SettingsGroup.allCases {
-            assertKotlinSays(group.label)
-            assertKotlinSays(group.key)
+            assertKotlinSaysWhole(group.label)
+            assertKotlinSaysWhole(group.key)
         }
         for section in SettingsSection.all {
-            assertKotlinSays(section.label)
-            assertKotlinSays(section.sub)
-            assertKotlinSays(section.key)
-            if !section.words.isEmpty { assertKotlinSays(section.words) }
-            for alias in section.aliases { assertKotlinSays(alias) }
-            if let dashboard = section.dashboard { assertKotlinSays(dashboard) }
+            assertKotlinSaysWhole(section.label)
+            assertKotlinSaysWhole(section.sub)
+            assertKotlinSaysWhole(section.key)
+            if !section.words.isEmpty { assertKotlinSaysWhole(section.words) }
+            for alias in section.aliases { assertKotlinSaysWhole(alias) }
+            if let dashboard = section.dashboard { assertKotlinSaysWhole(dashboard) }
         }
         // The keys are unique, and every alias resolves.
         XCTAssertEqual(14, Set(SettingsSection.all.map(\.key)).count)
@@ -649,6 +871,10 @@ final class ShellStringsTests: XCTestCase {
 
     func testTheToastsSayWhatAndroidSays() {
         assertKotlinSaysAround(ShellStrings.forgotActive(address: sentinel))
+        // The prefix of both `"forgot $address"` toasts
+        // (`ForgetServer.kt:74`, `ConnectionPanel.kt:247`); the whole of
+        // either is checked by `assertKotlinSaysAround` above and by
+        // `testForgettingTheActiveServerAlsoAsksForTheList`.
         assertKotlinSays("forgot ")
         for s in [
             ShellStrings.noLongerPaired,
@@ -659,8 +885,10 @@ final class ShellStringsTests: XCTestCase {
             ShellStrings.listeningAsThisDevice,
             ShellStrings.pairedToast,
         ] {
-            assertKotlinSays(s)
+            assertKotlinSaysWhole(s)
         }
+        // The prefix of `"pinned ${offered.fingerprint}"`
+        // (`ConnectionPanel.kt:188`).
         assertKotlinSays("pinned ")
         assertKotlinSaysAround(ShellStrings.deviceRenamed(to: sentinel))
         assertKotlinSaysAround(ShellStrings.renameFailed(sentinel))

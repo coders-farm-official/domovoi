@@ -287,13 +287,40 @@ public let reachProbeEveryMs: Int64 = 4_000
 /// **iOS has the same hazard in a different shape**, which is why the rule is
 /// ported even though the lifecycle API is not: a suspended app's
 /// `URLSession` connections are torn down or go stale, and the first request
-/// after a resume can fail for that reason alone. What this batch has *not*
-/// done is wire it to a lifecycle: `scenePhase` (or
-/// `UIApplication.didBecomeActiveNotification`) is part 2's, and until
-/// something calls ``resume(_:)``/``pause(_:)`` at the right moments the
-/// grace is simply never counted — ``missed(_:)`` ignores everything while
-/// `askingSince` is nil, so the failure mode of the missing wiring is "the
-/// app never falls back", not "it falls back wrongly".
+/// after a resume can fail for that reason alone.
+///
+/// ### What the wiring owes this type is CANCELLATION
+///
+/// ``askWhileOnScreen(reach:probe:clock:wait:publish:)`` calls ``resume(_:)``
+/// **on itself** and takes ``pause(_:)`` in its own `defer`. So the moment
+/// any caller starts that loop the stopwatch is running, and **nothing else
+/// stops it**: a suspended process's `Task` is not cancelled, it is merely
+/// not running, and this type has no clock of its own — it believes the one
+/// it is handed, which is the wall clock.
+///
+/// An uncancelled loop therefore **measures the suspension**. Two minutes in
+/// the background with the loop still live, the first probe after the thaw
+/// failing on a stale connection, and ``missed(_:)`` charges the whole two
+/// minutes against a 10 s grace: a person sitting beside a healthy server is
+/// dropped to local media. That is exactly the bug Android's
+/// `ReachabilityTest.twoMinutesInTheBackgroundWithTheServerFineStaysOnTheWorkspace`
+/// exists to prevent, and
+/// `ReachabilityTests.testAnUncancelledLoopMeasuresTheSuspensionWhichPartTwoMustPrevent`
+/// pins what happens here when it is not prevented.
+///
+/// So part 2's obligation is explicit, and it is one line of lifecycle: the
+/// `Task` running the loop **must be cancelled when the scene leaves
+/// `.active`** (`scenePhase`, or
+/// `UIApplication.didEnterBackgroundNotification`), and started again when it
+/// comes back. Calling ``pause(_:)`` by hand would do as well, but nothing
+/// calls it today except that `defer`, so cancellation is the whole of it.
+///
+/// It is only true that "the grace is never counted" while **nothing has
+/// started the loop at all** — part 1's state, not the state part 2 edits in.
+/// An earlier version of this comment said the failure mode of the missing
+/// wiring was "the app never falls back, not it falls back wrongly"; that was
+/// true of a part 1 where nothing ran the loop, and false of part 2, which is
+/// the reader it was written for.
 ///
 /// What it does not change: out of the house, on screen, the server not
 /// answering, the app still falls back after `graceMs`; once out of reach it
@@ -369,6 +396,11 @@ public final class Reachability: Sendable {
 /// cancels that task when the app leaves the screen, which is the same shape:
 /// leaving cancels it (and ``Reachability`` stops counting, in the `defer`),
 /// coming back starts it again with a fresh probe first.
+///
+/// **That cancellation is not optional.** This function takes
+/// ``Reachability/resume(_:)`` on itself, so a caller that starts the loop and
+/// does not cancel it has a stopwatch running across every suspension — see
+/// the note on ``Reachability`` for what that does to the person.
 ///
 /// **A probe still out when the app left is dropped with it.** On Android
 /// that is automatic: cancelling the coroutine abandons the suspended

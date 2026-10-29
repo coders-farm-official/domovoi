@@ -8,9 +8,13 @@ import Foundation
 /// the same person**, so these are transcribed character for character, which
 /// includes the characters that do not survive a careless copy: `—` U+2014 em
 /// dash, `→` U+2192 rightwards arrow, `…` U+2026 ellipsis, `·` U+00B7 middle
-/// dot, `“ ”` U+201C/201D curly quotes, `’` U+2019 right single quote, and
-/// the handful with **two leading spaces**, which are the chrome's spacing and
-/// not an accident.
+/// dot, `“ ”` U+201C/201D curly quotes, and the handful with **two leading
+/// spaces**, which are the chrome's spacing and not an accident.
+///
+/// `’` U+2019 is **not** in that list, although the map's §7 header had it:
+/// no user-facing string in the fourteen Kotlin files has one. Every
+/// apostrophe in the copy of both apps is ASCII `'`. See ``adminAttention``,
+/// which is where that flag was and what it nearly caused.
 ///
 /// `ShellStringsTests` reads the Kotlin files out of `android/` at test time
 /// and fails if a string here is not in them, rather than comparing one copy
@@ -71,7 +75,17 @@ public enum ShellStrings {
 
     /// The container banner on a shared screen: a passer-by learns that an
     /// admin is needed, not which container or why
-    /// (`alerts/ContainerIncidents.kt` `ADMIN_ATTENTION_TEXT`). **`’`.**
+    /// (`alerts/ContainerIncidents.kt:43`, `ADMIN_ATTENTION_TEXT`).
+    ///
+    /// **The apostrophe is ASCII `'` (U+0027), and the Kotlin's is too.** This
+    /// line used to be flagged `’`, which was wrong twice over: the string
+    /// here is right, and the flag invited the next reader to "fix" it into a
+    /// curly quote that the Kotlin does not have. The map taught it that
+    /// (§7.1), and the map is corrected. There is no U+2019 in any
+    /// user-facing string in the fourteen Kotlin files this port reads: the
+    /// only one in them is in `searchWords`' strip list
+    /// (`SettingsScreen.kt:164`), which removes both kinds of apostrophe
+    /// before matching and is not shown to anyone.
     public static let adminAttention = "Something needs an admin's attention."
 
     /// A badge count above 99.
