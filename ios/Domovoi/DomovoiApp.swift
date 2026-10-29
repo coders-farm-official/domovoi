@@ -1,23 +1,64 @@
 import DomovoiKit
 import SwiftUI
 
-/// The app, as little of it as the I0 gate needs: it launches, it says what
-/// it is, and it is the thing Kamron installs on his iPhone 14 so the Local
-/// Network prompt can be read in his own words (`project.yml`,
-/// `NSLocalNetworkUsageDescription`).
+/// The app: one container, one shell model, one scene.
 ///
-/// The shell — the tab bar, Home's grid, the phone bar — is I1. Nothing here
-/// talks to a server, and nothing here has been compiled: there was no Mac
-/// when it was written.
+/// The counterpart of `DomovoiApplication.onCreate` plus `MainActivity`
+/// (`android/.../AppContainer.kt`, `MainActivity.kt`). As there, there is no
+/// dependency-injection framework: a small graph, built once, in an order a
+/// reader can check — and the order is ``AppContainer``'s own documentation.
+///
+/// ### The store is in memory, and that is the one thing to know here
+///
+/// ``InMemoryShellStore`` is still the only ``ShellStore`` there is, so **the
+/// saved server does not survive a launch**. Part 1 left the persisted store
+/// to the batch that has something to write (the picker and Settings → App
+/// layout, part 3's), and a half-ported settings store is worse than none.
+///
+/// What that means on a Simulator today: every launch is a fresh install with
+/// no server, which is §2.11's first row — the local shell with a `connect`
+/// pill, no banner, and nothing opening by itself. That is the right screen
+/// for that state, and it is the only state this build can reach without a
+/// picker. The other states are reachable in the previews beside each view.
+///
+/// ### Room mode is not here
+///
+/// Android reads `RoomStore.isActive` in `onCreate` and sends the phone to a
+/// different activity **before a container exists**, so nothing can make a
+/// request first. ``HouseholdLock`` is the seam here
+/// (`AppContainerTests.testRoomModeSealsTheTokenBeforeAnyRequestIsBuilt`) and
+/// the scene that reads it is a later batch's; until then this app has no
+/// room mode rather than a half of one.
 @main
 struct DomovoiApp: App {
+
+    private let model: ShellModel
+
+    init() {
+        let container = AppContainer(store: InMemoryShellStore())
+        // Registering the path monitors is a side effect on the process, which
+        // is why it is a separate call the app makes and not something a
+        // container does to whoever builds one.
+        container.start()
+        model = ShellModel(container: container)
+    }
+
     var body: some Scene {
         WindowGroup {
-            FirstRunView()
+            AppShellView(model: model)
         }
     }
 }
 
+/// The I0 gate's screen: it launched, it said what it was, and it showed the
+/// Local Network prompt's wording on Kamron's own iPhone.
+///
+/// **No longer the app's root** — the shell is — and kept because the two
+/// things it documents are still true of every screen from here on: the
+/// scroll-when-it-does-not-fit layout that Apple's audit failed this screen
+/// for, and ``Color/fgMuted``, which is the only design token this target has
+/// until the asset catalogue generated from `web/static/colors_and_type.css`
+/// lands (plan 1.1).
 struct FirstRunView: View {
     /// Centred when it fits, scrollable when it doesn't.
     ///

@@ -243,52 +243,79 @@ final class ReachabilityTests: XCTestCase {
         XCTAssertFalse(rig.reach.unreachable)
     }
 
-    /// **The hazard part 2 has to prevent, written as the thing that happens
-    /// if it does not.**
+    /// **The hazard, and its discharge.** Part 1 left this as a negative test
+    /// — the cost of the missing cancellation, asserted rather than described
+    /// — because nothing yet prevented it. ``ReachabilityDriver`` now does,
+    /// so, as that test's own note asked, the assertion has become the
+    /// positive one and the negative half is kept only as the first of the two
+    /// halves below, so that the obligation cannot be tidied away by someone
+    /// who believes the stopwatch stops by itself.
     ///
-    /// The test above is the one the design is for: the app leaves the screen,
-    /// the loop is cancelled, two minutes pass, and the stale first probe on
-    /// the way back costs nothing. This one is the same two minutes with the
-    /// **loop left running** — which is what part 2 will have built if it
-    /// starts `askWhileOnScreen` in a long-lived `Task` and does not cancel it
-    /// when `scenePhase` leaves `.active`.
+    /// 1. A raw loop left running across a suspension **still** measures it:
+    ///    ``askWhileOnScreen(reach:probe:clock:wait:publish:)`` takes
+    ///    ``Reachability/resume(_:)`` on itself, so the whole two minutes is
+    ///    charged against a ten-second grace and one stale probe reports a
+    ///    healthy server out of reach.
+    /// 2. The same two minutes through the driver costs nothing, because the
+    ///    phase change cancels the loop **and stops the stopwatch in the same
+    ///    call** — synchronously, since `Task.cancel()` returns at once and
+    ///    the loop's own `defer` would run later, with a later timestamp.
     ///
-    /// The result is the bug, and it is asserted here rather than described in
-    /// a comment: the server answered, was never asked again until the thaw,
-    /// and one failed probe reports it out of reach — because
-    /// ``askWhileOnScreen(reach:probe:clock:wait:publish:)`` takes
-    /// ``Reachability/resume(_:)`` on itself, so the stopwatch ran for the
-    /// whole suspension and `missed` charged all of it against a ten-second
-    /// grace. Android's
-    /// `ReachabilityTest.twoMinutesInTheBackgroundWithTheServerFineStaysOnTheWorkspace`
-    /// exists to stop this reaching a person.
-    ///
-    /// **If this test ever fails, read it before changing it.** Two different
-    /// changes make it red, and they want opposite answers:
-    ///
-    ///  - a batch that makes the tracker itself notice a suspension (a
-    ///    monotonic clock that stops when the process does, say) has *fixed*
-    ///    this: replace the assertion with the fixed behaviour and say so;
-    ///  - a batch that merely moved the `resume`/`pause` calls around has
-    ///    changed where the obligation lives, and the note on
-    ///    ``Reachability`` has to move with it.
-    ///
-    /// What it cannot do is fail when part 2 forgets the cancellation — that
-    /// would need part 2's lifecycle wiring, which does not exist yet. It
-    /// pins the hazard so the cancellation cannot be removed as a tidy-up by
-    /// someone who believes the stopwatch stops by itself.
-    func testAnUncancelledLoopMeasuresTheSuspensionWhichPartTwoMustPrevent() async {
-        let rig = Rig()
-        await rig.suspendedWithoutCancelling(suspensionMs: 120_000)
+    /// The lifecycle's own cases — `.inactive`, a switch, the socket, the
+    /// register's cadence — are `ShellLifecycleTests`.
+    func testTheSuspensionCostsNothingNowThatTheDriverCancelsTheLoop() async {
+        // 1. the cost, if nothing cancels.
+        let raw = Rig()
+        await raw.suspendedWithoutCancelling(suspensionMs: 120_000)
         XCTAssertEqual(
-            [false, true], rig.verdicts.current,
+            [false, true], raw.verdicts.current,
             "answered, then two minutes suspended, then one stale probe — and the verdict flips"
         )
         XCTAssertTrue(
-            rig.reach.unreachable,
-            "the whole suspension was charged against a 10 s grace: this is what the missing cancel costs"
+            raw.reach.unreachable,
+            "an uncancelled loop charges the whole suspension against a 10 s grace"
         )
-        XCTAssertEqual(2, rig.probes.current, "the server was asked twice and answered the first time")
+        XCTAssertEqual(2, raw.probes.current, "the server was asked twice and answered the first time")
+
+        // 2. the same two minutes, driven.
+        let clock = Shared<Int64>(0)
+        let probes = Shared<Int>(0)
+        let parked = Shared<Bool>(false)
+        let verdicts = Shared<[Bool]>([])
+        let driver = ReachabilityDriver(
+            probe: {
+                clock.advance(300)
+                let index = probes.mutate { (n: inout Int) -> Int in
+                    let was = n
+                    n += 1
+                    return was
+                }
+                // The server is healthy throughout; the probe after the thaw
+                // fails on a torn-down connection, as the raw loop's did.
+                return index == 0
+            },
+            clock: { clock.current },
+            wait: { _ in
+                parked.set(true)
+                try await Task.sleep(for: .seconds(3600))
+            },
+            publish: { verdict in verdicts.mutate { $0.append(verdict) } }
+        )
+        func settle() async {
+            while !parked.current { await Task.yield() }
+            parked.set(false)
+        }
+        let server = "http://10.0.0.42:6369"
+        driver.update(serverURL: server, connected: false, phase: .active)
+        await settle()
+        driver.update(serverURL: server, connected: false, phase: .background)
+        XCTAssertFalse(driver.isAsking, "the loop is cancelled on the way out")
+        clock.advance(120_000)
+        driver.update(serverURL: server, connected: false, phase: .active)
+        await settle()
+        XCTAssertEqual([false, false], verdicts.current, "two minutes away is not evidence")
+        XCTAssertFalse(driver.unreachable, "and the stale probe on the way back costs nothing")
+        driver.stop()
     }
 
     /// `backOnScreenAFreshProbeRunsFirst`

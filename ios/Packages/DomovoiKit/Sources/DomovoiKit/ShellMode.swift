@@ -289,38 +289,44 @@ public let reachProbeEveryMs: Int64 = 4_000
 /// `URLSession` connections are torn down or go stale, and the first request
 /// after a resume can fail for that reason alone.
 ///
-/// ### What the wiring owes this type is CANCELLATION
+/// ### What this type is owed is CANCELLATION, and ``ReachabilityDriver`` owes it
 ///
 /// ``askWhileOnScreen(reach:probe:clock:wait:publish:)`` calls ``resume(_:)``
 /// **on itself** and takes ``pause(_:)`` in its own `defer`. So the moment
-/// any caller starts that loop the stopwatch is running, and **nothing else
-/// stops it**: a suspended process's `Task` is not cancelled, it is merely
-/// not running, and this type has no clock of its own — it believes the one
-/// it is handed, which is the wall clock.
+/// any caller starts that loop the stopwatch is running, and **this type
+/// cannot stop it**: a suspended process's `Task` is not cancelled, it is
+/// merely not running, and this type has no clock of its own — it believes
+/// the one it is handed, which is the wall clock.
 ///
 /// An uncancelled loop therefore **measures the suspension**. Two minutes in
 /// the background with the loop still live, the first probe after the thaw
 /// failing on a stale connection, and ``missed(_:)`` charges the whole two
 /// minutes against a 10 s grace: a person sitting beside a healthy server is
-/// dropped to local media. That is exactly the bug Android's
-/// `ReachabilityTest.twoMinutesInTheBackgroundWithTheServerFineStaysOnTheWorkspace`
-/// exists to prevent, and
-/// `ReachabilityTests.testAnUncancelledLoopMeasuresTheSuspensionWhichPartTwoMustPrevent`
-/// pins what happens here when it is not prevented.
+/// dropped to local media.
 ///
-/// So part 2's obligation is explicit, and it is one line of lifecycle: the
-/// `Task` running the loop **must be cancelled when the scene leaves
-/// `.active`** (`scenePhase`, or
-/// `UIApplication.didEnterBackgroundNotification`), and started again when it
-/// comes back. Calling ``pause(_:)`` by hand would do as well, but nothing
-/// calls it today except that `defer`, so cancellation is the whole of it.
+/// **Who stops it, as of I1-C part 2:** ``ReachabilityDriver``, which is the
+/// only thing in this package that starts the loop. It cancels the `Task`
+/// when the scene leaves `.active` and — the part that is not obvious — calls
+/// ``pause(_:)`` **synchronously in the same call**, because `Task.cancel()`
+/// returns at once and the loop's own `defer` would run later, with a later
+/// timestamp, charging the gap it was meant to avoid. The `defer`'s `pause`
+/// is then a no-op (``pause(_:)`` guards on whether a stretch is open), which
+/// is why both can stand.
 ///
-/// It is only true that "the grace is never counted" while **nothing has
-/// started the loop at all** — part 1's state, not the state part 2 edits in.
+/// So a caller's obligation is now one of two things: use
+/// ``ReachabilityDriver``, or, if something ever drives
+/// ``askWhileOnScreen(reach:probe:clock:wait:publish:)`` directly, cancel its
+/// `Task` and pause this tracker together whenever the app leaves the screen.
+/// The cost of not doing so is asserted, not described, in
+/// `ReachabilityTests.testTheSuspensionCostsNothingNowThatTheDriverCancelsThe`
+/// `Loop`, whose first half still drives a raw uncancelled loop; the wired
+/// behaviour is `ShellLifecycleTests`.
+///
 /// An earlier version of this comment said the failure mode of the missing
 /// wiring was "the app never falls back, not it falls back wrongly"; that was
-/// true of a part 1 where nothing ran the loop, and false of part 2, which is
-/// the reader it was written for.
+/// true of a part 1 where nothing ran the loop, and false of the part 2 it
+/// was written for. A review caught it. The sentence "the grace is never
+/// counted" was only ever true while nothing had started the loop at all.
 ///
 /// What it does not change: out of the house, on screen, the server not
 /// answering, the app still falls back after `graceMs`; once out of reach it

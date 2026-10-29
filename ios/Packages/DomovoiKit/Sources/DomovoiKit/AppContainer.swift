@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Synchronization
 
@@ -26,6 +27,31 @@ public protocol ShellStore: IdentityGate.PinStore, TokenHealth.RejectedBook {
     /// here must be too.
     var preferLocal: Bool { get }
 
+    /// Write that choice.
+    ///
+    /// Part 1 left the write side out as "the connection dialog's job", and
+    /// the dialog is part 3's — but the **token-trouble card** has a
+    /// `use this phone's media` button of its own (`TokenTroubleScreen.kt:155`,
+    /// `app.prefs.setPreferLocal(true)`), and that card is drawn in this
+    /// batch. A button that cannot do what it says is the one thing Kamron
+    /// has asked for twice not to ship, so the write comes with the button.
+    func setPreferLocal(_ value: Bool)
+
+    /// This phone's saved phone bar, exactly as it is stored: a JSON array of
+    /// route names, or nil for "never saved" (the default).
+    ///
+    /// The raw string rather than `[Route]` because that is what Android's
+    /// `Prefs` key `phone_bar` holds (`data/Prefs.kt:81`) and because
+    /// ``PhoneBar/decode(_:)`` is where an unknown name is dropped — a store
+    /// that decoded it would have to own that rule too. **It is per install
+    /// and never synced**: "another phone keeps its own".
+    ///
+    /// Still **no persisted implementation**, for the reason part 1 gives:
+    /// the editor that writes it is Settings → App layout, a later batch, and
+    /// a half-ported settings store is worse than none. This is the read seam
+    /// the bar is drawn from.
+    var phoneBar: String? { get }
+
     /// The household token this phone holds for the server at `url`, keyed by
     /// the **saved spelling** and not by the pin key.
     ///
@@ -49,6 +75,7 @@ public final class InMemoryShellStore: ShellStore {
     private struct State {
         var serverURL = ""
         var preferLocal = false
+        var phoneBar: String?
         var tokens: [String: String] = [:]
         var pins: [String: ServerIdentity.Pin] = [:]
         var rejected: Set<String> = []
@@ -69,8 +96,11 @@ public final class InMemoryShellStore: ShellStore {
     public var serverURL: String { state.withLock { $0.serverURL } }
     public var preferLocal: Bool { state.withLock { $0.preferLocal } }
 
+    public var phoneBar: String? { state.withLock { $0.phoneBar } }
+
     public func setServerURL(_ url: String) { state.withLock { $0.serverURL = url } }
     public func setPreferLocal(_ value: Bool) { state.withLock { $0.preferLocal = value } }
+    public func setPhoneBar(_ raw: String?) { state.withLock { $0.phoneBar = raw } }
 
     public func token(for url: String) -> String? {
         state.withLock { $0.tokens[ServerCredentials.normalize(url)] }
@@ -269,6 +299,8 @@ public final class AppContainer: Sendable {
     ) {
         self.store = store
         self.vault = vault
+        let observers = NetworkObservers()
+        self.networkObservers = observers
 
         let book = ServerBook(
             activeServer: { store.serverURL },
@@ -316,9 +348,67 @@ public final class AppContainer: Sendable {
         // The other half of the circularity, in the other direction. After
         // this line a network change invalidates every verdict; before it,
         // nothing can report one (see ``DeferredSink``).
+        //
+        // The order inside the closure is Android's (`AppContainer.kt:65`):
+        // the identity epoch first, so that every cached verdict is stale
+        // before anything else can act on the change. The observers after it
+        // are the shell's, and are what Android does **not** have — see
+        // ``onNetworkChange(_:)``.
         let gate = graph.gate
-        sink.connect { gate.networkChanged() }
+        sink.connect {
+            gate.networkChanged()
+            observers.fire()
+        }
     }
+
+    /// Whoever wants telling when the network picture changes.
+    ///
+    /// `AppContainer.kt:65` has no such list: its `onChange` does three fixed
+    /// things and the **shell is not one of them** (map §9.1, "the shell
+    /// itself has no network-change handler"). That is also where Android's
+    /// defect §11.4 lives — `Discovery.onLan` is read once into a `remember`
+    /// when the picker opens, so a picker left open across a Wi-Fi drop keeps
+    /// saying it is on the LAN until the person taps rescan.
+    final class NetworkObservers: Sendable {
+        private let sinks = Mutex<[@Sendable () -> Void]>([])
+
+        var count: Int { sinks.withLock { $0.count } }
+
+        func add(_ sink: @Sendable @escaping () -> Void) {
+            sinks.withLock { $0.append(sink) }
+        }
+
+        func fire() {
+            for sink in sinks.withLock({ $0 }) { sink() }
+        }
+    }
+
+    private let networkObservers: NetworkObservers
+
+    /// Be told when the network picture changes — after the identity epoch
+    /// has been bumped, so a sink that asks the server something gets a fresh
+    /// proof rather than the stale verdict.
+    ///
+    /// **This is the §9.1 seam, and it is deliberately more than Android
+    /// has.** Android's picker caches `onLan` and never hears about the
+    /// change (§11.4); ``NetworkWatch/onLan`` is a live read here, so the
+    /// value is never stale — but a SwiftUI view reading it does not re-draw
+    /// by itself, so without this the right answer would simply not be on
+    /// screen. The invalidation is what was missing, not the value.
+    ///
+    /// Registered **once per container** (the shell's model does it in its
+    /// initialiser) and never removed; a sink should capture its owner weakly
+    /// so a model that has gone away does nothing rather than being kept
+    /// alive by the container.
+    public func onNetworkChange(_ sink: @Sendable @escaping () -> Void) {
+        networkObservers.add(sink)
+    }
+
+    /// How many network changes have been reported. Anything whose answer
+    /// depends on **which** network this is — the picker's `onLan`, the
+    /// addresses a sweep would cover — keys its read on this, so a cached
+    /// answer from another network cannot be mistaken for this one's.
+    public var networkGeneration: Int { network.changeCount }
 
     /// Register with the system and seed the first network picture.
     ///
@@ -388,6 +478,123 @@ public final class AppContainer: Sendable {
 
     /// The route waiting to be taken, if any.
     public var pendingRoute: String? { pending.withLock { $0 } }
+
+    // MARK: - the other three payload flows (map §1.5)
+
+    /// Nothing travels **in** a route on either platform: a route is a leaf
+    /// with no parameters, and everything a destination needs beyond its
+    /// identity travels out of band, written from outside the UI and cleared
+    /// by the screen that takes it (`AppContainer.kt:142-164`).
+    ///
+    /// Four flows, of which ``pendingRoute`` is the first.
+    private struct Payloads {
+        var chatThread: PendingChatThread?
+        var phoneChat = false
+        var chat: ChatOpenRequest?
+    }
+
+    private let payloads = Mutex(Payloads())
+
+    /// A short, stable name for a server: the first 8 hex digits of
+    /// SHA-256 of its normalised URL.
+    ///
+    /// A port of `serverKey` in `android/.../alerts/FireModels.kt:192`, which
+    /// tags notifications and keys the dedupe book "so two households never
+    /// share one". The normalisation is ``ServerCredentials/normalize(_:)``,
+    /// as there.
+    ///
+    /// Answers **nil for a blank address**, which is the `takeIf {
+    /// it.isNotBlank() }` in `MainActivity.kt:136`.
+    public static func serverKey(_ url: String) -> String? {
+        guard !ServerCredentials.isBlank(url) else { return nil }
+        let digest = SHA256.hash(data: Data(ServerCredentials.normalize(url).utf8))
+        let hex = digest.map { String(format: "%02x", $0) }.joined()
+        return String(hex.prefix(8))
+    }
+
+    /// The home-server chat thread a help notification asked for.
+    public var pendingChatThread: PendingChatThread? { payloads.withLock { $0.chatThread } }
+
+    /// A help notification was tapped: open its thread, **but only if this
+    /// phone is still on the server that sent it**.
+    ///
+    /// `MainActivity.kt:131-141`. The notification carries the thread id and
+    /// the server's key, and the thread is handed to the shell only when that
+    /// key equals the key of the saved server, and only when the id is
+    /// positive.
+    ///
+    /// **This is a privacy rule, not a tidiness one.** The id means nothing
+    /// outside the household that minted it; handed over regardless, it would
+    /// be looked up on whichever server the phone is on now, and that server
+    /// would answer with *its* thread of that number. So a help notification
+    /// from one house cannot open a thread in another.
+    ///
+    /// Answers whether it was taken.
+    ///
+    /// ### One narrowing from the Kotlin, with the evidence for it
+    ///
+    /// Kotlin compares `intent.getStringExtra(EXTRA_SERVER_KEY)` with
+    /// `serverUrl.takeIf { isNotBlank() }?.let { serverKey(it) }` — two
+    /// nullable strings — so **a notification carrying no key at all matches a
+    /// phone with no server saved**, and the thread is accepted. This requires
+    /// both to be present. Nothing is lost: `HelpNotifier.openIntent`
+    /// (`alerts/HelpNotifier.kt:64-73`) is the only thing that builds such a
+    /// notification and it always puts a key in, so no real tap takes the
+    /// `nil == nil` branch — and a phone with no server has nowhere to look a
+    /// thread up anyway.
+    @discardableResult
+    public func requestChatThread(serverKey: String?, thread: Int64, title: String?) -> Bool {
+        guard thread > 0 else { return false }
+        guard let serverKey, let mine = Self.serverKey(store.serverURL), serverKey == mine else { return false }
+        let row = PendingChatThread(thread: thread, title: title ?? PendingChatThread.defaultTitle)
+        payloads.withLock { $0.chatThread = row }
+        return true
+    }
+
+    /// Chat takes the thread, which clears it, so a later redraw does not
+    /// open it twice (Android removes the intent extra, `MainActivity.kt:140`).
+    public func takePendingChatThread() -> PendingChatThread? {
+        payloads.withLock { current in
+            let row = current.chatThread
+            current.chatThread = nil
+            return row
+        }
+    }
+
+    /// Whether a new phone chat has been asked for.
+    public var pendingPhoneChat: Bool { payloads.withLock { $0.phoneChat } }
+
+    /// "Ask Domovoi for help" in Settings → About & updates: start a chat on
+    /// **this phone**, because there may be no home-server chat to start
+    /// (`AppContainer.kt:159`).
+    public func requestPhoneChat() {
+        payloads.withLock { $0.phoneChat = true }
+    }
+
+    public func takePendingPhoneChat() -> Bool {
+        payloads.withLock { current in
+            let asked = current.phoneChat
+            current.phoneChat = false
+            return asked
+        }
+    }
+
+    /// A particular chat something asked Chat to open.
+    public var pendingChat: ChatOpenRequest? { payloads.withLock { $0.chat } }
+
+    /// "Ask about this document" in Files (`FilesScreen.kt:325`, `:333`):
+    /// Files knows which chat, in which place, and Chat opens it.
+    public func requestChat(_ request: ChatOpenRequest) {
+        payloads.withLock { $0.chat = request }
+    }
+
+    public func takePendingChat() -> ChatOpenRequest? {
+        payloads.withLock { current in
+            let request = current.chat
+            current.chat = nil
+            return request
+        }
+    }
 
     /// Take it: the screen that acts on a pending route clears it, so a later
     /// recomposition does not navigate twice (Android removes the intent

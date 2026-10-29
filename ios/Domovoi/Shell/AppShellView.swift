@@ -1,0 +1,91 @@
+import DomovoiKit
+import SwiftUI
+
+/// The root of the app: whichever of the shell's states is current, plus the
+/// things that are owned **above** both shells.
+///
+/// Every decision this file looks like it is making has already been made in
+/// `DomovoiKit` and tested there: which state the shell is in
+/// (``ShellModel/screen``), what it looks like (``ShellModel/chrome``), which
+/// launcher to draw (``shellLayout(idiom:width:)``), which tabs the bar has
+/// (``ShellModel/phoneBar``). **Nothing in this target is compiled by
+/// `ios/scripts/pkgtest.sh`** — it tests the packages, and the app target has
+/// never been through `xcodebuild` (`ios/README.md`) — so a view here that
+/// decided anything would be a decision nothing checks.
+///
+/// ### What a person has to confirm on a Simulator
+///
+/// Listed in `design-notes/ios/I1C2-REPORT.md` §6, because this file could
+/// not be run, let alone looked at, in the batch that wrote it.
+struct AppShellView: View {
+
+    @State private var model: ShellModel
+    @Environment(\.scenePhase) private var scenePhase
+
+    init(model: ShellModel) {
+        _model = State(initialValue: model)
+    }
+
+    var body: some View {
+        content
+            // The connection dialog is owned HERE, above both shells, and
+            // that is not stylistic (map §10.4): picking a side, or the
+            // server dropping out of reach, swaps the shell underneath it,
+            // and a dialog owned by a shell would vanish mid-use.
+            .sheet(isPresented: $model.showConnection) {
+                ConnectionDialogPlaceholder(model: model)
+            }
+            .sheet(isPresented: trustAgainShowing) {
+                TrustAgainPlaceholder(model: model)
+            }
+            .onChange(of: scenePhase, initial: true) { _, phase in
+                model.scenePhaseChanged(to: ShellPhase(phase))
+            }
+            .task {
+                await model.refreshCapabilities()
+            }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        switch model.screen {
+        case .localMedia:
+            LocalShellView(model: model)
+        case .workspace:
+            WorkspaceView(model: model)
+        case .pairing:
+            PairingPlaceholder(model: model)
+        case .tokenTroubleCard(let trouble):
+            TokenTroubleCard(model: model, trouble: trouble)
+        }
+    }
+
+    /// `ChangedIdentity` is not `Identifiable`, and making it so for a sheet
+    /// would be the view's taste leaking into the package.
+    private var trustAgainShowing: Binding<Bool> {
+        Binding(
+            get: { model.trustAgain != nil },
+            set: { showing in if !showing { model.dismissTrustAgain() } }
+        )
+    }
+}
+
+extension ShellPhase {
+
+    /// SwiftUI's phase, as the package's.
+    ///
+    /// `@unknown default` answers ``ShellPhase/background``, which is the safe
+    /// direction: a phase this build has never heard of stops the
+    /// reachability loop rather than leaving it running across something that
+    /// might be a suspension. Stopping early costs a later fallback; stopping
+    /// late drops a person beside a healthy server
+    /// (``reachabilityAction(serverURL:connected:phase:)``).
+    init(_ phase: ScenePhase) {
+        switch phase {
+        case .active: self = .active
+        case .inactive: self = .inactive
+        case .background: self = .background
+        @unknown default: self = .background
+        }
+    }
+}

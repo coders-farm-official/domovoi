@@ -18,10 +18,20 @@ final class LaunchUITests: XCTestCase {
         continueAfterFailure = false
     }
 
+    /// The first screen is the **local shell**: a build with no saved server
+    /// is a fresh install, and a fresh install lands on its own media with a
+    /// `connect` pill and nothing opening by itself (`ANDROID-SHELL-MAP.md`
+    /// §2.11's first row, §10.1). `connect` is `ShellStrings.connectPill` and
+    /// is also the pill's accessibility label, so it is one button either
+    /// way; it is written out here because this target does not link
+    /// `DomovoiKit`.
+    ///
+    /// It used to look for `Domovoi`, the title of the I0 gate's screen,
+    /// which I1-C part 2 stopped being the root.
     func testTheAppLaunchesAndSaysWhatItIs() {
         let app = XCUIApplication()
         app.launch()
-        XCTAssertTrue(app.staticTexts["Domovoi"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["connect"].waitForExistence(timeout: 10))
     }
 
     /// First run, 2026-10-28: it failed, with "Contrast nearly passed" — and
@@ -37,7 +47,7 @@ final class LaunchUITests: XCTestCase {
     func testTheFirstScreenPassesApplesAccessibilityAudit() throws {
         let app = XCUIApplication()
         app.launch()
-        XCTAssertTrue(app.staticTexts["Domovoi"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["connect"].waitForExistence(timeout: 10))
         try app.performAccessibilityAudit()
     }
 }
