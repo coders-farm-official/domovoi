@@ -89,12 +89,12 @@ public enum DeviceRegistry {
             deviceID: deviceID,
             name: name,
             userAgent: userAgent,
-            ownerPersonID: ownerPersonID(ownerPersonID)
+            ownerPersonID: personID(ownerPersonID)
         ))
     }
 
     /// Kotlin's `ownerPersonId?.trim()?.toLongOrNull()?.takeIf { it >= 1 }`.
-    static func ownerPersonID(_ raw: String?) -> Int64? {
+    static func personID(_ raw: String?) -> Int64? {
         guard let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
               let value = Int64(trimmed), value >= 1 else { return nil }
         return value

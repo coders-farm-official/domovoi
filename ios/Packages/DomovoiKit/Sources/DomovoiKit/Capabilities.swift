@@ -184,6 +184,10 @@ public struct PluginAccent: Equatable, Sendable, Decodable {
         self.dark = dark
     }
 
+    enum CodingKeys: String, CodingKey {
+        case source, light, dark
+    }
+
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         source = try c.decodeIfPresent(String.self, forKey: .source) ?? "default"
@@ -204,6 +208,10 @@ public struct HandlerDisplay: Equatable, Sendable, Decodable {
         self.name = name
         self.label = label
         self.tone = tone
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case name, label, tone
     }
 
     public init(from decoder: any Decoder) throws {
