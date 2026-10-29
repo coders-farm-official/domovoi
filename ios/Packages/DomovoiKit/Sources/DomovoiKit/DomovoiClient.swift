@@ -683,6 +683,17 @@ final class RedirectDelegate: NSObject, URLSessionTaskDelegate, @unchecked Senda
     /// The decision, apart from the callback, so a test can drive it without
     /// a live task.
     ///
+    /// **About sockets, measured rather than assumed** (the brief's open
+    /// question; `PlatformFactsTests` holds the measurement). A
+    /// `URLSessionWebSocketTask` goes through the same machinery as any other
+    /// task: its upgrade is sent as the `http://` GET it starts as, and when
+    /// that is answered with a `302` this delegate method IS called. So iOS
+    /// can refuse a socket redirect, and `isWebSocketUpgrade` does — the
+    /// socket lands where it was aimed or it fails, with nothing sent to the
+    /// host the `Location` named. (For completeness: I1-D has to put one of
+    /// these on the socket task it creates — `task.delegate` — or the
+    /// platform will follow that redirect on its own.)
+    ///
     /// **What the platform hands us is a trap.** `newRequest` is a *proposed*
     /// request that has already copied this request's headers onto the new
     /// URL — `X-Device-Token` among them — so it is ignored entirely. The
