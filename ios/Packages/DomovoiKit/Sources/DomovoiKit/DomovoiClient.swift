@@ -209,26 +209,157 @@ public final class DomovoiClient: Sendable {
         case held(reason: String)
     }
 
-    func tokenOutcome(for url: ServerURL, wsUpgrade: Bool) -> TokenOutcome {
-        // Room mode: the household token goes nowhere (HouseholdLock).
+    /// The decision as far as the gate, and no further.
+    ///
+    /// Split out because the gate is asked in two places that cannot share
+    /// one call: ``prepareIdentity(for:wsUpgrade:)``, which is `async` and
+    /// takes the proof, and ``tokenOutcome(for:wsUpgrade:)``, which is
+    /// synchronous and reads it. Both have to apply the five rules in front
+    /// of the gate, in the same order, and there is one copy of them here.
+    ///
+    /// **Why "send it bare" is two cases.** The rules refuse the token for
+    /// two quite different kinds of reason, and only the first means "ask
+    /// this server nothing":
+    ///
+    ///  * ``bare`` — room mode (``HouseholdLock``'s seal), a host that is not
+    ///    the active server, an address that does not parse. Nothing about
+    ///    this server's identity is any of this phone's business right now.
+    ///  * ``unpaired(base:)`` — this request IS aimed at the active server
+    ///    and the only reason the token is not going is that this phone has
+    ///    not been given one yet, or the one it has was refused. The proof is
+    ///    still taken, because the answer to "may this server's 401 ask for a
+    ///    paste?" is read from the cache and nothing else fills it.
+    enum PreGate: Equatable {
+        /// Send it bare and ask nobody anything.
+        case bare
+
+        /// Send it bare, and still take the proof: see above. `base` is the
+        /// active server.
+        case unpaired(base: ServerURL)
+
+        case wait(ms: Int64)
+
+        /// The rules so far admit it; the gate decides. `base` is the active
+        /// server, which is what the gate is asked about — never the hop's
+        /// own URL, which may be another port on the same host.
+        case ask(base: ServerURL, token: String, server: String)
+    }
+
+    func tokenDecision(for url: ServerURL, wsUpgrade: Bool) -> PreGate {
+        // Room mode: the household token goes nowhere (HouseholdLock), and a
+        // room asks nobody about the household's server either.
         if lock.roomModeActive { return .bare }
         let raw = book.activeServer()
         guard let base = TokenScope.baseOf(raw) else { return .bare }
         guard TokenScope.admits(base, url, wsUpgrade: wsUpgrade) else { return .bare }
-        guard let token = headerSafeToken(book.tokenForServer(raw)) else { return .bare }
+        // No token yet: an unpaired phone, which is the state the whole
+        // pairing path starts from.
+        guard let token = headerSafeToken(book.tokenForServer(raw)) else { return .unpaired(base: base) }
         if let health {
             // Refused once: never again, until a new token (or the person)
             // says otherwise. Without this the request is an unpaired
-            // phone's, which the server's wrong-token count never sees.
-            if health.isRejected(raw) { return .bare }
+            // phone's, which the server's wrong-token count never sees — and
+            // it is an unpaired phone's in the other sense too, so the server
+            // still gets to prove itself and ask for a fresh paste.
+            if health.isRejected(raw) { return .unpaired(base: base) }
             let wait = health.waitMs(raw)
             if wait > 0 { return .wait(ms: wait) }
         }
-        if let gate {
-            do { try gate.requireAdmitted(base) }
-            catch { return .held(reason: (error as? DomovoiError)?.message ?? "\(error)") }
+        return .ask(base: base, token: token, server: raw)
+    }
+
+    func tokenOutcome(for url: ServerURL, wsUpgrade: Bool) -> TokenOutcome {
+        switch tokenDecision(for: url, wsUpgrade: wsUpgrade) {
+        case .bare, .unpaired:
+            return .bare
+        case .wait(let ms):
+            return .wait(ms: ms)
+        case .ask(let base, let token, let server):
+            if let gate {
+                do { try gate.requireAdmitted(base) }
+                catch { return .held(reason: (error as? DomovoiError)?.message ?? "\(error)") }
+            }
+            return .send(token: token, server: server)
         }
-        return .send(token: token, server: raw)
+    }
+
+    /// Take or refresh the identity proof this request will need, before it
+    /// is sent.
+    ///
+    /// The `async` half of the gate's split (see ``TokenGate``): the proof is
+    /// a network call, the per-hop reader is a synchronous platform callback,
+    /// so the call happens here and the callback reads what it left. One call
+    /// covers a whole redirect chain that stays within the active server,
+    /// because every hop of it asks about the same `base` — and a chain that
+    /// does not is divergence 9, at the bottom of this comment.
+    ///
+    /// It asks nothing when the request has nothing to do with the active
+    /// server's identity — room mode, a foreign host, an address that does
+    /// not parse, or a server that has asked this phone to wait — so a
+    /// sweep, a radio stream and a room probe no server about its identity.
+    ///
+    /// **It DOES take the proof when the phone is unpaired** (``PreGate``
+    /// explains, and it is the review's blocker A). An unpaired phone sends
+    /// everything bare, so the token decision never reaches the gate; if the
+    /// proof were skipped for that reason the cache would stay empty for
+    /// ever, and ``IdentityGate/admitsPairingPrompt(_:)`` — which can only
+    /// read the cache — would answer no to every device-tier `401` from the
+    /// real server. The pairing screen would be unreachable (map §8 step 5),
+    /// and so would re-pairing after a refused token. Android gets there
+    /// because its `admitsPairingPrompt` is allowed to probe on the spot
+    /// (`IdentityGate.kt:232-235`); the synchronous reader here cannot, so
+    /// the proof is taken in front of the request instead. That costs one
+    /// token-less `GET /api/health` per network per ten minutes on a phone
+    /// that is not paired yet, which is the phone most likely to want one.
+    ///
+    /// A **wait** takes nothing, which is the one place this is deliberately
+    /// stricter than the Kotlin: Android's interceptor throws
+    /// `TokenThrottledException` before it reaches the gate
+    /// (`DeviceAuth.kt:118-120`), but its `admitsPairingPrompt` does not
+    /// consult `TokenHealth` at all, so a refusal arriving while the phone is
+    /// throttled would still be probed there. Nothing this phone sends can
+    /// produce such a refusal — every request throws before it leaves — and
+    /// probing a server that has just asked this phone to stop asking is the
+    /// wrong instinct, so the cache stays cold until the wait is over.
+    ///
+    /// **It covers the whole redirect chain only when the chain starts on the
+    /// active server**, which is divergence 9: a first hop to a foreign host
+    /// takes no proof (correctly — it is not our server's business), so if
+    /// that host redirects ONTO the active server, the hop asks, finds
+    /// nothing and is held. Android's per-hop interceptor would probe and
+    /// send the token. iOS is the stricter of the two, which is the safe
+    /// direction for a redirect this app did not choose.
+    func prepareIdentity(for url: ServerURL, wsUpgrade: Bool) async {
+        guard let gate else { return }
+        switch tokenDecision(for: url, wsUpgrade: wsUpgrade) {
+        case .ask(let base, _, _), .unpaired(let base):
+            await gate.prepare(base)
+        case .bare, .wait:
+            return
+        }
+    }
+
+    /// ``prepareIdentity(for:wsUpgrade:)`` for a caller that is about to ask
+    /// a **synchronous** question about `address`: ``tokenForDownload(_:)``
+    /// and ``SocketUpgrade/mint()``, neither of which can take a proof of its
+    /// own.
+    ///
+    /// I1-D must `await` this immediately before each `mint()`, and I1-C
+    /// before handing a URL to the system downloader. Without it the first
+    /// such call after a network change is refused — correctly, and
+    /// needlessly.
+    ///
+    /// **`wsUpgrade` has no default on purpose.** It did, and the default was
+    /// `false`, which is wrong for the caller most likely to take it: the
+    /// drop-in call socket. A socket prepared with `false` fails
+    /// ``TokenScope/admits(_:_:wsUpgrade:)`` — the socket runs on the core's
+    /// own port, which the scope admits only for an upgrade — so the decision
+    /// is bare, no proof is taken, `mint()` then returns nil and the socket
+    /// never opens, with nothing anywhere saying why. Every caller says which
+    /// it is.
+    public func prepareIdentity(forAddress address: String, wsUpgrade: Bool) async {
+        guard let parsed = ServerURL.parseAllowingWebSocket(address) else { return }
+        await prepareIdentity(for: parsed, wsUpgrade: wsUpgrade)
     }
 
     // ---- making a request --------------------------------------------------
@@ -291,6 +422,10 @@ public final class DomovoiClient: Sendable {
             outgoing.setValue(candidate, forHTTPHeaderField: deviceTokenHeader)
             sentToken = candidate
         case .scoped:
+            // The proof, taken here because this is the last place that can
+            // `await` before the task — and before the token decision, which
+            // only reads it. See ``TokenGate``.
+            await prepareIdentity(for: parsed, wsUpgrade: wsUpgrade)
             switch tokenOutcome(for: parsed, wsUpgrade: wsUpgrade) {
             case .bare:
                 break
@@ -566,6 +701,20 @@ public final class DomovoiClient: Sendable {
             if wait > 0 { return .throttled(waitMs: wait) }
         }
         if let gate {
+            // Android asks the gate here unconditionally — not through the
+            // token decision, because the candidate is not the saved token
+            // and none of the five rules in front of the gate is about it.
+            // So the proof is taken here too, directly, rather than through
+            // `prepareIdentity`: this call is not a request whose scope the
+            // decision can judge, and the room-mode and wait rules it does
+            // share are applied above, in this method's own words.
+            //
+            // (Since the review's fix A, `prepareIdentity` would also take
+            // the proof for a phone with no saved token, so this is no longer
+            // the only way to a warm cache on the pairing screen. It stays
+            // explicit because this method must take it whether or not there
+            // is a token, which is a stronger rule than the decision's.)
+            await gate.prepare(base)
             do { try gate.requireAdmitted(base) } catch { return .unavailable }
         }
         guard let url = URL(string: "\(base.scheme)://\(hostForURL(base.host)):\(base.port)\(Self.tokenCheckPath)") else {
@@ -606,8 +755,11 @@ public final class DomovoiClient: Sendable {
     ///
     /// Android's version suspends because its gate takes a fresh network
     /// proof on the spot. This one does not, because the gate here is
-    /// synchronous (see ``TokenGate``) — if I1-B needs to take a proof at
-    /// this point, this is a function that will have to grow an `await`.
+    /// synchronous (see ``TokenGate``): **the caller must
+    /// `await prepareIdentity(forAddress:)` first**, or the first call after
+    /// a network change throws ``DomovoiError/identityHeld(_:)`` — which is
+    /// the right answer to "is this proved?" and the wrong answer to "may
+    /// this download go ahead?".
     public func tokenForDownload(_ url: URL) throws(DomovoiError) -> String? {
         guard let parsed = ServerURL.parse(url.absoluteString) else { return nil }
         switch tokenOutcome(for: parsed, wsUpgrade: false) {

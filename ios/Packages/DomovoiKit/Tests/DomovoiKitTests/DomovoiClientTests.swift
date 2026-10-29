@@ -726,9 +726,18 @@ final class DomovoiClientTests: XCTestCase {
         )
     }
 
-    func testTheGateIsOnlyAskedWhenThereIsATokenToProtect() async throws {
+    /// `requireAdmitted` is asked only when a token would actually go out —
+    /// which is not the same question as whether the gate is asked anything
+    /// at all. Since the review's fix A, `prepare` IS called for an unpaired
+    /// phone's request to the active server, so that a refusal from it can
+    /// raise the pairing screen (`IdentityGateTests`). What must never happen
+    /// is the one this pins: a request going out held, or bare-but-refused,
+    /// because a gate was consulted about a token that was never going to be
+    /// sent.
+    func testTheGateIsNotAskedToADMITWhenThereIsNoTokenToProtect() async throws {
         StubURLProtocol.enqueue(.json("{}"), .json("{}"))
-        // No token: nothing to protect, so the request goes out bare.
+        // No token: nothing to protect, so the request goes out bare even
+        // though this gate refuses everything.
         _ = try await makeClient(token: nil, gate: ClosedGate()).get("/api/x", as: [String: String].self)
         // Another host: out of scope, so there is nothing to ask about.
         _ = try await makeClient(gate: ClosedGate()).get("http://10.0.0.10:6369/x", as: [String: String].self)
