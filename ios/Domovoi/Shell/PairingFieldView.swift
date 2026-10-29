@@ -70,7 +70,7 @@ struct CheckedPairingFieldView: View {
             if let message = field.message {
                 Text(message)
                     .font(.footnote)
-                    .foregroundStyle(field.messageIsRefusal ? .red : .orange)
+                    .foregroundStyle(field.messageIsRefusal ? Color.errInk : Color.warnInk)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }

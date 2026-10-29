@@ -260,7 +260,7 @@ struct ServerPickerPanel: View {
             if let error = picker.manualError {
                 Text(error)
                     .font(.footnote)
-                    .foregroundStyle(.red)
+                    .foregroundStyle(Color.errInk)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -279,11 +279,11 @@ private struct NoticeLine: View {
             if warning {
                 Image(systemName: "wifi.slash")
                     .font(.caption)
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(Color.warnInk)
             }
             Text(text)
                 .font(.footnote)
-                .foregroundStyle(warning ? AnyShapeStyle(.orange) : AnyShapeStyle(Color.fgMuted))
+                .foregroundStyle(warning ? AnyShapeStyle(Color.warnInk) : AnyShapeStyle(Color.fgMuted))
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -378,7 +378,7 @@ struct TrustServerCard: View {
         VStack(alignment: .leading, spacing: 10) {
             Label(ShellStrings.trustTitle, systemImage: "externaldrive.connected.to.line.below")
                 .font(.headline)
-                .foregroundStyle(.orange)
+                .foregroundStyle(Color.warnInk)
             Text(server.address)
                 .font(.title3)
             if let fingerprint = server.fingerprint {
@@ -414,7 +414,7 @@ struct ForgetServerCard: View {
         VStack(alignment: .leading, spacing: 10) {
             Label(forgetServerTitle, systemImage: "externaldrive.badge.xmark")
                 .font(.headline)
-                .foregroundStyle(.red)
+                .foregroundStyle(Color.errInk)
             Text(ask.address)
                 .font(.title3)
             // The prose in prose and the keys in monospace: §6.4 wants the

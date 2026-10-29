@@ -99,7 +99,7 @@ struct ShellTopBar<Trailing: View>: View {
                     if pill.unverified {
                         Text(ShellStrings.unverified)
                             .font(.caption2)
-                            .foregroundStyle(.orange)
+                            .foregroundStyle(Color.warnInk)
                             .fixedSize(horizontal: false, vertical: wraps)
                     }
                 }

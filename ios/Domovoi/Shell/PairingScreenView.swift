@@ -65,7 +65,7 @@ struct PairingScreenView: View {
                     if let withheld = model.pairingWithheld {
                         Text(withheld)
                             .font(.footnote)
-                            .foregroundStyle(.orange)
+                            .foregroundStyle(Color.warnInk)
                             .fixedSize(horizontal: false, vertical: true)
                     } else {
                         CheckedPairingFieldView(field: PairingFieldModel(
@@ -111,7 +111,7 @@ struct TrustAgainSheet: View {
         VStack(alignment: .leading, spacing: 12) {
             Label(trustAgainTitle, systemImage: "externaldrive.badge.questionmark")
                 .font(.headline)
-                .foregroundStyle(.orange)
+                .foregroundStyle(Color.warnInk)
             Text(ServerCredentials.address(model.inputs.serverURL))
                 .font(.title3)
             if let changed = model.trustAgain {

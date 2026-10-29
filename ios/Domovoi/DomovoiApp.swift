@@ -222,6 +222,50 @@ extension Color {
             ? UIColor(red: 0.6555, green: 0.6434, blue: 0.6238, alpha: 1)   // oklch(0.72 0.008 80)
             : UIColor(red: 0.3458, green: 0.3323, blue: 0.3104, alpha: 1)   // oklch(0.45 0.01 80)
     })
+
+    /// `--warn-ink`: the amber hue **as text or an icon**, which is not the
+    /// amber used for dots and fills.
+    ///
+    /// `web/static/colors_and_type.css:166-170` already draws this
+    /// distinction and says why: the status fills are "for buttons, dots and
+    /// washes; at their lightness amber and green read about 2:1 as text on
+    /// white", so there is a second, deeper token for text. The iOS port used
+    /// SwiftUI's `.orange` — `systemOrange`, `#FF9500` — for the text role at
+    /// every site, and Apple's accessibility audit failed Home with "Contrast
+    /// failed" because of it.
+    ///
+    /// Measured, not assumed: `systemOrange` on white is **2.20:1**, which is
+    /// the stylesheet's "about 2:1" exactly. This token is **5.73:1** on
+    /// white and **9.84:1** on the dark canvas. Body text needs 4.5:1.
+    ///
+    /// Dark mode takes `--warn` itself, because the dark block of that
+    /// stylesheet says `--warn-ink: var(--warn)` — on a dark canvas the fill
+    /// already reads.
+    static let warnInk = Color(UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? UIColor(red: 1.0000, green: 0.6604, blue: 0.2897, alpha: 1)   // oklch(0.82 0.16 60)
+            : UIColor(red: 0.6167, green: 0.3244, blue: 0.0000, alpha: 1)   // oklch(0.52 0.13 60)
+    })
+
+    /// `--ok-ink`: the same rule for green, which is the worst of the three.
+    /// `systemGreen` (`#34C759`) is **2.22:1** on white. This is **5.65:1**,
+    /// and **10.01:1** on the dark canvas.
+    static let okInk = Color(UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? UIColor(red: 0.3807, green: 0.8332, blue: 0.4147, alpha: 1)   // oklch(0.78 0.18 145)
+            : UIColor(red: 0.1169, green: 0.4659, blue: 0.1627, alpha: 1)   // oklch(0.50 0.14 145)
+    })
+
+    /// `--err-ink`: the same rule for red. SwiftUI's `.red` is `systemRed`,
+    /// **3.55:1** on white — the near miss rather than the gross one, and
+    /// still under the 4.5:1 body text needs.
+    ///
+    /// **6.08:1** on white, **6.30:1** on the dark canvas.
+    static let errInk = Color(UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? UIColor(red: 1.0000, green: 0.3718, blue: 0.3577, alpha: 1)   // oklch(0.70 0.20 25)
+            : UIColor(red: 0.7451, green: 0.1339, blue: 0.1637, alpha: 1)   // oklch(0.52 0.19 25)
+    })
 }
 
 #Preview {
