@@ -150,10 +150,20 @@ final class HomeModelTests: XCTestCase {
         defer { model.stop() }
         await settleUntil { self.allSeven(model).allSatisfy(\.answered) }
 
-        let asked = Set(StubURLProtocol.recorded.compactMap { request -> String? in
+        let every = Set(StubURLProtocol.recorded.compactMap { request -> String? in
             guard let url = request.url else { return nil }
             return url.path + (url.query.map { "?" + $0 } ?? "")
         })
+        // One request on the wire is **not Home's**: the identity gate probes
+        // `/api/health?challenge=<nonce>` on a client of its own before the
+        // household token may go anywhere (`IdentityGate.swift`, finding
+        // A6-03's fix). Naming it rather than widening the count below is the
+        // point — a count of 8 would absorb an eighth Home read silently.
+        XCTAssertEqual(
+            1, every.filter { $0.hasPrefix("/api/health?challenge=") }.count,
+            "the identity probe, once: \(every)"
+        )
+        let asked = every.filter { !$0.hasPrefix("/api/health?challenge=") }
         XCTAssertTrue(asked.contains("/api/config"))
         XCTAssertTrue(asked.contains("/api/health"))
         XCTAssertTrue(asked.contains("/api/satellites"), "all rooms in one call, no cap")
@@ -188,38 +198,70 @@ final class HomeModelTests: XCTestCase {
     /// (`ANDROID-DEFECTS-FOUND-BY-IOS.md` #10); the other four are in this
     /// batch's report.
     func testTheOpenReadsCannotClearThePairingScreenAndTheDeviceOnesRaiseIt() async {
-        answerEveryPath()
-        let (model, container, _, _) = rig()
-        // A household read was refused a moment ago, in the server's own
-        // words — the only wording `notePossiblePairingRefusal` accepts.
-        container.client.notePossiblePairingRefusal(
-            status: 401, body: "X-Device-Token or admin session required"
-        )
-        XCTAssertTrue(container.client.pairingRequired)
+        // The rooms read is refused; the five Open ones answer every
+        // anonymous caller, as the real server does.
+        StubURLProtocol.dispatch { request in
+            let path = request.url?.path ?? ""
+            // BOTH device-tier reads are refused: a tracked 200 on the
+            // calendar would clear the screen too, and legitimately, so
+            // leaving it answering would hide what the five Open ones do.
+            if path == "/api/satellites" || path == "/api/calendar/events" {
+                return .json(#"{"detail":"X-Device-Token or admin session required"}"#, status: 401)
+            }
+            switch path {
+            case "/api/config": return .json(#"{"home_problems_visibility":"everyone"}"#)
+            case "/api/timers": return .json(#"{"timers":[],"fires":[]}"#)
+            case "/api/plugins": return .json(#"{"plugins":[]}"#)
+            case "/api/acquisitions": return .json(#"{"acquisitions":[],"core_reachable":true}"#)
+            default: return .json("{}")
+            }
+        }
+        // The rooms debounce is the one wait this test lets through.
+        let waits = Waits()
+        waits.passThrough.set([homeRoomDebounceMs])
+        let (model, container, _, _) = rig(waits: waits)
+        XCTAssertFalse(container.client.pairingRequired)
 
         model.start()
         defer { model.stop() }
         await settleUntil { self.allSeven(model).allSatisfy(\.answered) }
+        // Raised by the device-tier read, which is the honest signal: its 401
+        // IS evidence about this phone's credential.
         XCTAssertTrue(
             container.client.pairingRequired,
-            "five Open 200s are not evidence that this phone is paired"
+            "the rooms read is Device tier, and its refusal is what raises the screen"
         )
 
-        // …and the device-tier reads are the ones that put it up in the first
-        // place. A fresh client, refused on `/api/satellites` only.
-        StubURLProtocol.reset()
-        StubURLProtocol.dispatch { request in
-            guard request.url?.path == "/api/satellites" else { return .json("{}") }
-            return .json(#"{"detail":"household device token required"}"#, status: 401)
+        // Now the five Open reads read again and the rooms read does not —
+        // each driven through its own trigger so nothing else is in the way.
+        // Their 200s must leave the screen up, because `/api/config` and the
+        // rest answer an unpaired phone exactly as they answer a paired one.
+        let before = model.rooms.fetches
+        model.apply(.healthTick)                        // config + health
+        model.apply(.push("timers.changed"))
+        model.apply(.push("plugins.changed"))
+        model.apply(.push("acquisitions.changed"))
+        await settleUntil {
+            model.config.fetches == 2 && model.health.fetches == 2
+                && model.timers.fetches == 2 && model.plugins.fetches == 2
+                && model.acquisitions.fetches == 2
         }
-        let (second, secondContainer, _, _) = rig()
-        XCTAssertFalse(secondContainer.client.pairingRequired)
-        second.start()
-        defer { second.stop() }
-        await settleUntil { second.rooms.answered }
+        XCTAssertEqual(before, model.rooms.fetches, "and the rooms read was not re-asked")
         XCTAssertTrue(
-            secondContainer.client.pairingRequired,
-            "the rooms read is Device read, and its 401 is the honest signal"
+            container.client.pairingRequired,
+            "five Open 200s are not evidence that this phone is paired — "
+                + "on Android every one of them clears this screen (ApiClient.kt:334)"
+        )
+
+        // …and the thing that makes the assertion above mean something: a
+        // **tracked** 200 really does clear the screen, so the five are not
+        // being let off by a client that never clears it at all.
+        StubURLProtocol.dispatch { _ in .json("[]") }
+        model.apply(.roomActionFinished)
+        await settleUntil { model.rooms.fetches > before && model.rooms.error == nil }
+        XCTAssertFalse(
+            container.client.pairingRequired,
+            "the rooms read answering IS evidence about this phone, and clears it"
         )
     }
 
@@ -570,10 +612,11 @@ final class HomeModelTests: XCTestCase {
             model.appliedTriggers.contains(.dayRolledOver),
             "and it went through the table, not round it"
         )
-        XCTAssertTrue(
-            StubURLProtocol.recorded.contains { ($0.url?.query ?? "").contains("2026-10-30T00%3A00%3A00Z") },
-            "the next read asks for the new day"
-        )
+        // `fetches` is bumped before the request goes out, so this waits for
+        // the request itself rather than for the count.
+        await settleUntil {
+            StubURLProtocol.recorded.contains { ($0.url?.query ?? "").contains("2026-10-30T00%3A00%3A00Z") }
+        }
     }
 
     // MARK: - helpers
