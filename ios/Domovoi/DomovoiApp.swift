@@ -26,11 +26,11 @@ struct FirstRunView: View {
             Text("The app for your house. Nothing is set up yet.")
                 .font(.body)
                 .multilineTextAlignment(.center)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Color.fgMuted)
             Text(Self.state)
                 .font(.footnote)
                 .multilineTextAlignment(.center)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Color.fgMuted)
         }
         .padding(24)
         .frame(maxWidth: 420)
@@ -43,6 +43,29 @@ struct FirstRunView: View {
         let suffixes = CleartextPolicy.privateNameSuffixes.joined(separator: " ")
         return "Plain http goes to the home network only: \(suffixes), and private addresses."
     }
+}
+
+extension Color {
+    /// `--fg-muted` from `web/static/colors_and_type.css`, the ink the
+    /// dashboard already uses for labels and meta, in both themes.
+    ///
+    /// Not SwiftUI's `.secondary`. On 2026-10-28 Apple's own accessibility
+    /// audit failed this screen with "Contrast nearly passed", and it was
+    /// right: iOS `secondaryLabel` is `rgba(60, 60, 67, 0.6)`, which over
+    /// white is **3.44:1** — under the 4.5:1 that body text needs. The token
+    /// measures **7.44:1** on the light canvas and **7.88:1** on the dark one.
+    ///
+    /// The audit's finding was in our own content, not SwiftUI's chrome, so
+    /// the fix is the colour, not narrowing the audit (`LaunchUITests`).
+    ///
+    /// I1 replaces this with a real asset catalogue generated from the CSS,
+    /// as plan 1.1 describes; one colour written out by hand is enough for a
+    /// screen with three labels on it.
+    static let fgMuted = Color(UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? UIColor(red: 0.6555, green: 0.6434, blue: 0.6238, alpha: 1)   // oklch(0.72 0.008 80)
+            : UIColor(red: 0.3458, green: 0.3323, blue: 0.3104, alpha: 1)   // oklch(0.45 0.01 80)
+    })
 }
 
 #Preview {

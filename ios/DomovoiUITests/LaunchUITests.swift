@@ -24,10 +24,16 @@ final class LaunchUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Domovoi"].waitForExistence(timeout: 10))
     }
 
-    /// TODO(verify-at-mac): `performAccessibilityAudit` is iOS 17+ and throws.
-    /// If the first run reports findings in SwiftUI's own chrome rather than
-    /// ours, narrow the audit with the `for:` option set rather than deleting
-    /// it.
+    /// First run, 2026-10-28: it failed, with "Contrast nearly passed" — and
+    /// it was right. The finding was in our own text, not SwiftUI's chrome:
+    /// the two labels used `.secondary`, which over white is 3.44:1, under
+    /// the 4.5:1 body text needs. Fixed in the colour (`Color.fgMuted`), not
+    /// by narrowing the audit with `for:`. The audit stays unnarrowed so the
+    /// next screen gets the same scrutiny.
+    ///
+    /// `@MainActor` because `performAccessibilityAudit` is main-actor
+    /// isolated; without it Swift 6 warns here and will eventually refuse.
+    @MainActor
     func testTheFirstScreenPassesApplesAccessibilityAudit() throws {
         let app = XCUIApplication()
         app.launch()
