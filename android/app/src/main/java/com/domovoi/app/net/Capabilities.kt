@@ -113,9 +113,18 @@ data class Capabilities(
 val LocalCapabilities = staticCompositionLocalOf { Capabilities.EMPTY }
 
 /** Fetch the capability manifest for the active server. Errors decode to
- *  `data == null`; callers treat that as [Capabilities.EMPTY]. */
+ *  `data == null`; callers treat that as [Capabilities.EMPTY].
+ *
+ *  Through [ApiClient.getUntracked], not `get`: `/api/capabilities` is an
+ *  **Open** route, so it answers 200 to an unpaired phone — and this fetch
+ *  runs at connect and again on every socket reconnect, exactly when a
+ *  household read's 401 has raised the pairing screen. A tracked 200 clears
+ *  `pairingRequired`, so the person watching would see the pairing screen
+ *  appear and then vanish with nothing paired. That is the flicker
+ *  [ApiClient.getUntracked] was written for (found 2026-10-29 while porting
+ *  this layer to iOS, which does it the other way round). */
 @Composable
 fun rememberCapabilities(): ApiState<Capabilities> =
     rememberApi {
-        it.api.get("/api/capabilities").decode<Capabilities>()
+        it.api.getUntracked("/api/capabilities").decode<Capabilities>()
     }

@@ -6,6 +6,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 
 /** The capability manifest (design section 8): decoding and the gates built on it. */
 class CapabilitiesTest {
@@ -74,5 +75,27 @@ class CapabilitiesTest {
     @Test fun emptyManifestDecodesFromEmptyObject() {
         val caps = DomovoiJson.parseToJsonElement("{}").jsonObject.decode<Capabilities>()
         assertEquals(Capabilities.EMPTY, caps)
+    }
+
+    /**
+     * The capability fetch must not clear the pairing screen.
+     *
+     * `/api/capabilities` is an Open route, so it answers 200 to a phone that
+     * is not paired, and `rememberCapabilities` runs at connect and again on
+     * every socket reconnect — exactly when a household read's 401 has just
+     * raised the pairing screen. Through the tracked `get`, that 200 clears
+     * `pairingRequired` and the screen vanishes with nothing paired.
+     *
+     * Read from the source because the call sits inside a `@Composable`, and
+     * a unit test cannot run one; `NetworkSecurityConfigTest` reads the
+     * module's files the same way.
+     */
+    @Test fun theCapabilityFetchDoesNotClearThePairingScreen() {
+        val rel = "src/main/java/com/domovoi/app/net/Capabilities.kt"
+        val source = (listOf(File(rel), File("app/$rel")).firstOrNull { it.isFile }
+            ?: error("cannot find $rel from ${File(".").absolutePath}")).readText()
+        assertTrue("rememberCapabilities must use getUntracked: /api/capabilities is Open, and a "
+                   + "tracked 200 clears pairingRequired while the pairing screen is up",
+                   source.contains("getUntracked(\"/api/capabilities\")"))
     }
 }
