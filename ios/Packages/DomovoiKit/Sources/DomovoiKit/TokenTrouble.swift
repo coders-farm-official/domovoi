@@ -56,6 +56,32 @@ public func tokenTrouble(
     return nil
 }
 
+/// How often the card's countdown is re-read while a wait runs. Android's
+/// `delay(1000)` (`AppShell.kt:185-192`).
+public let tokenTroubleTickMs: Int64 = 1_000
+
+/// **Whether anything has to tick for this screen** — the decision "when does
+/// the card stop waiting", as a function rather than a `Timer` buried in a
+/// view.
+///
+/// Android ticks a `clockNow` every second and re-derives `trouble`
+/// (`AppShell.kt:185-198`), so its card counts down and then becomes the
+/// workspace, or the `notRecognised` card with its `try the old token again`
+/// button. iOS had neither: ``AppContainer/shellInputs()`` answers the wait as
+/// it is at the moment it is called, and nothing called it again — so
+/// ``tokenTroubleText(_:address:)``'s *"this phone tries again by itself when
+/// the wait is over"* and ``tokenTroubleWaitLine(_:)``'s *"trying again in
+/// 4:05"* were both promises the code did not keep. A review caught it;
+/// ``ShellModel`` drives this.
+///
+/// True only for a token-trouble card **with a wait left**: a refused token
+/// with no wait is not counting anything down, and no other screen has a
+/// clock on it.
+public func tokenTroubleTicks(_ screen: ShellScreen) -> Bool {
+    guard case .tokenTroubleCard(let trouble) = screen else { return false }
+    return trouble.waitMs > 0
+}
+
 /// `4:05` — minutes and seconds, rounded up so it never reads 0:00 while the
 /// server still waits.
 public func waitClock(_ waitMs: Int64) -> String {

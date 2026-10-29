@@ -41,7 +41,7 @@ struct WorkspaceView: View {
             ShellTopBar(
                 leading: "\(ShellStrings.homeCrumb) / \(model.navigation.route.label.lowercased())",
                 pill: model.chrome.pill,
-                onPill: { model.showConnection = true }
+                onPill: { model.openConnection() }
             ) {
                 EmptyView()
             }

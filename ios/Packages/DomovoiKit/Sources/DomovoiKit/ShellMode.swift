@@ -341,8 +341,13 @@ public final class Reachability: Sendable {
         /// When the current foreground stretch of asking began (or last got
         /// an answer); nil while not asking.
         var askingSince: Int64?
-        /// Which stretch this is, counted from 1. See ``pause(_:stretch:)``.
-        var stretch: Int64 = 0
+        /// The last ticket ``resume(_:)`` handed out, counted from 1. Every
+        /// call gets its own, whether or not it opened anything.
+        var lastTicket: Int64 = 0
+        /// The ticket of the call that **opened** the stretch now in
+        /// progress; nil while nothing is being timed. See
+        /// ``pause(_:stretch:)``.
+        var openedBy: Int64?
     }
 
     private let state = Mutex(State())
@@ -367,41 +372,65 @@ public final class Reachability: Sendable {
     /// The app is on screen with the live socket down: asking starts (or
     /// starts again).
     ///
-    /// Answers **which stretch** this is, for a caller that will pause the one
-    /// it opened and no other — see ``pause(_:stretch:)``. Asking again while
-    /// already asking changes nothing and answers the stretch in progress.
+    /// Answers **a ticket of this caller's own**, for a caller that will pause
+    /// the stretch it opened and no other — see ``pause(_:stretch:)``. Asking
+    /// again while already asking changes nothing about the stopwatch, and the
+    /// ticket it answers is a fresh one that **opened nothing**, so pausing
+    /// with it does nothing.
+    ///
+    /// That last sentence is the fix for a review finding, and the shape it
+    /// replaced is worth recording because its own comment argued it was
+    /// safe. This used to increment only when it opened a stretch and
+    /// otherwise answer *the stretch in progress*, so two callers whose
+    /// `resume` calls overlapped were handed **the same number** — and a
+    /// token that identifies the stretch rather than its opener cannot tell
+    /// the opener from a bystander. `pause`'s "a stale one is ignored" was
+    /// true and beside the point: a bystander's token was not stale, it was
+    /// identical, and its late `pause` closed the live loop's stretch.
+    /// `ShellLifecycleTests.testPhaseChurnNeverClosesTheStopwatchUnderALive`
+    /// `Loop` is that race, and it fails on the old shape.
     @discardableResult
     public func resume(_ now: Int64) -> Int64 {
         state.withLock {
+            $0.lastTicket += 1
             if $0.askingSince == nil {
                 $0.askingSince = now
-                $0.stretch += 1
+                $0.openedBy = $0.lastTicket
             }
-            return $0.stretch
+            return $0.lastTicket
         }
     }
 
     /// The app left the screen (or the socket came back): asking stops, the
     /// stretch so far is kept.
     ///
-    /// - Parameter stretch: the stretch this call means to close, from
-    ///   ``resume(_:)``. A stale one is ignored, and that is not tidiness:
+    /// - Parameter stretch: the ticket ``resume(_:)`` answered **this**
+    ///   caller. The stretch is closed only when that ticket is the one that
+    ///   opened it, and that is not tidiness:
     ///   ``askWhileOnScreen(reach:probe:clock:wait:publish:)`` pauses in a
     ///   `defer`, which runs **after** its task is cancelled — by which time
     ///   ``ReachabilityDriver`` may already have paused this tracker (it does
     ///   so synchronously, with the right timestamp) and started a new loop
-    ///   that resumed it. Without the token that late `defer` closes the new
+    ///   that resumed it. Without the ticket that late `defer` closes the new
     ///   stretch, the next ``missed(_:)`` finds nothing open and returns, and
     ///   a server that really is gone never falls back. Watched happening:
     ///   `ShellLifecycleTests.testAnInterruptionKeepsWhatIsOwedRatherThan`
     ///   `ClearingIt` fails without this.
     ///
+    ///   **A bystander's ticket is not "stale"; it is simply not the
+    ///   opener's.** An earlier version of this compared against a counter
+    ///   that named the stretch rather than its opener, so two overlapping
+    ///   `resume` calls shared one number and either loop's `defer` could
+    ///   close the other's stretch — the thing the parameter exists to stop.
+    ///   The comparison is against ``State/openedBy`` for that reason.
+    ///
     ///   Omitted (the driver's own call), it closes whatever is open.
     public func pause(_ now: Int64, stretch: Int64? = nil) {
         state.withLock {
-            if let stretch, stretch != $0.stretch { return }
+            if let stretch, stretch != $0.openedBy { return }
             if let since = $0.askingSince { $0.spentMs += max(0, now - since) }
             $0.askingSince = nil
+            $0.openedBy = nil
         }
     }
 
@@ -419,6 +448,7 @@ public final class Reachability: Sendable {
         state.withLock {
             $0.spentMs = 0
             $0.askingSince = nil
+            $0.openedBy = nil
             $0.unreachable = false
         }
     }
@@ -455,6 +485,13 @@ public final class Reachability: Sendable {
 /// `ReachabilityTests.testTwoMinutesInTheBackgroundWithTheServerFineStaysOnTheWorkspace`
 /// fails without it.
 ///
+/// **A task cancelled before it ran does not start the stopwatch either.**
+/// That is the `Task.isCancelled` check on the *first* line, and it is a
+/// different hazard from the one after the probe: a cancelled Swift task still
+/// runs its body, so a loop the driver cancelled in the same main-actor turn
+/// it started it would otherwise call ``Reachability/resume(_:)`` alongside
+/// the live loop's.
+///
 /// `probe` is not throwing, which matches Android: its probe is
 /// `api.answers()`, which returns false rather than throwing
 /// (``DomovoiClient/answers()``).
@@ -465,6 +502,16 @@ public func askWhileOnScreen(
     wait: @Sendable (Int64) async throws -> Void = { try await Task.sleep(for: .milliseconds($0)) },
     publish: @Sendable (Bool) -> Void
 ) async {
+    // A task that was cancelled before it ran an instruction must not start
+    // the stopwatch at all. Swift runs a cancelled task's body, so
+    // `.active → .background → .active` inside one main-actor turn — a launch
+    // straight into the background, a flick through the app switcher — gets
+    // here on a task the driver has already cancelled, and without this guard
+    // its `resume` races the live loop's. See
+    // `ShellLifecycleTests.testPhaseChurnNeverClosesTheStopwatchUnderALiveLoop`:
+    // the stretch ticket makes that race harmless, and this makes it not
+    // happen.
+    if Task.isCancelled { return }
     let stretch = reach.resume(clock())
     defer { reach.pause(clock(), stretch: stretch) }
     while !Task.isCancelled {

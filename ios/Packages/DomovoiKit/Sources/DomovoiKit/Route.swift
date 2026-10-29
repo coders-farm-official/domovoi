@@ -81,7 +81,7 @@ public enum Route: String, CaseIterable, Sendable {
     }
 
     /// The capability this route needs before it renders; nil = always.
-    /// Only the two plugin-backed screens are gated (`Routes.kt:76`).
+    /// Only the two plugin-backed screens are gated (`Routes.kt:74-80`).
     public var requiredCapability: String? {
         switch self {
         case .stations: return capStations
@@ -115,7 +115,7 @@ public let workspaceRoutes: [Route] = [
 ]
 
 /// The phone bar's default, left to right: home · music · videos · chat
-/// (`Routes.kt:148`, and Kamron's decision of 2026-10 that the bar is these
+/// (`Routes.kt:150`, and Kamron's decision of 2026-10 that the bar is these
 /// four and is customisable).
 public let defaultPhoneBar: [Route] = [.home, .music, .videos, .chat]
 
@@ -147,7 +147,7 @@ public func settingsTabFor(_ route: Route) -> String? {
 /// Everything the three visibility filters need, in one value.
 ///
 /// Android reads the third from a **mutable global** that its tests
-/// overwrite (`internal var onDeviceAssistant`, `Routes.kt:84`). That is not
+/// overwrite (`internal var onDeviceAssistant`, `Routes.kt:86`). That is not
 /// portable: a `var` at file scope is not `Sendable` under strict
 /// concurrency, and a global a test mutates is a global production code can
 /// mutate. It is a parameter here, with **no default**, so a caller cannot
@@ -228,7 +228,7 @@ public extension Route {
 
 /// Home's "everything" grid: every screen that is not on this phone's bar,
 /// that this server allows, and — on a shared screen — that is not somebody's
-/// own (`ui/screens/home/HomeModels.kt:699`).
+/// own (`ui/screens/home/HomeModels.kt:703`).
 ///
 /// Satellites is not here and neither is Containers: they are Settings
 /// sections (``launcherlessRoutes``).
@@ -238,7 +238,7 @@ public func everythingTiles(_ visibility: RouteVisibility, bar: [Route]) -> [Rou
 
 /// The local shell's tabs, left to right: the phone's own music, videos and
 /// files, the saved audiobooks once there are any, and Chat where this
-/// install has the engine (`Routes.kt:186`).
+/// install has the engine (`Routes.kt:183`).
 ///
 /// A shared screen leaves off what the workspace's launchers leave off
 /// (delta review N7): its own files and the chats kept on it.

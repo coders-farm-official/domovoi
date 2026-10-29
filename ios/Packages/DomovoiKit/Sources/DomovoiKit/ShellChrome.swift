@@ -70,6 +70,30 @@ public struct ShellChrome: Equatable, Sendable {
     public let serverCard: ServerChoice
 }
 
+/// Which one sheet is up over the shell.
+///
+/// **One enum rather than two booleans, because two `.sheet` modifiers on one
+/// SwiftUI view is a long-standing hazard**: the later modifier commonly wins
+/// and the earlier silently never presents. It compiles, and no unit test in
+/// this package can see it — part 2 attached both to `AppShellView`, and a
+/// review found it by reading. A single `.sheet(item:)` over this makes
+/// "which sheet is up" a value with one answer, and `ShellModelTests`
+/// asserts that the two cannot both be raised.
+///
+/// `Identifiable` because `.sheet(item:)` wants it; the conformance is here
+/// rather than in the view because it is not taste, it is what makes the one
+/// presentation possible.
+public enum ShellSheet: String, Identifiable, Equatable, Sendable, CaseIterable {
+    /// The connection dialog: the phone/server switch and the picker
+    /// (map §10.4). Owned above both shells, so it survives the shell
+    /// swapping underneath it.
+    case connection
+    /// The "trust it again" confirmation, for a mismatch that proved a key.
+    case trustAgain
+
+    public var id: String { rawValue }
+}
+
 /// Whether the token-trouble card offers `try the old token again`.
 ///
 /// `TokenTroubleScreen.kt:149` draws that button only for

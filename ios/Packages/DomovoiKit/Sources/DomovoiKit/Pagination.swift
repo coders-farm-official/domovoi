@@ -36,12 +36,12 @@ public enum Paging {
     public static let reloadCap = 1000
 
     /// Android's `LoadMoreNearEnd` thresholds: 8 rows for a list, 12 for a
-    /// grid (`Paged.kt:91`, `:105`).
+    /// grid (`Paged.kt:89`, `:102`).
     public static let listThreshold = 8
     public static let gridThreshold = 12
 
     /// Whether the last visible row is within `threshold` of the end, and so
-    /// whether to ask for the next page (`Paged.kt:87`, `nearEnd`).
+    /// whether to ask for the next page (`Paged.kt:79`, `nearEnd`).
     ///
     /// ### The guard, which is the whole reason this is a function
     ///

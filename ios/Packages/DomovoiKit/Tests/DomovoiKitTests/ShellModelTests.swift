@@ -30,6 +30,8 @@ final class ShellModelTests: XCTestCase {
         let clock = Shared<Int64>(0)
         let probes = Shared<Int>(0)
         let parked = Shared<Bool>(false)
+        /// How many times the token-trouble countdown has ticked.
+        let ticks = Shared<Int>(0)
         let lines = Shared<[String]>([])
         let store: InMemoryShellStore
         let container: AppContainer
@@ -38,28 +40,41 @@ final class ShellModelTests: XCTestCase {
         /// - Parameters:
         ///   - answers: whether the server answers the probe.
         ///   - costMs: how long each probe takes on the fake clock.
+        ///   - sharesClock: whether the **container** reads the same fake
+        ///     clock as the model. Off by default, because every test written
+        ///     before the countdown existed was written against a container
+        ///     frozen at 0; on for the ones that have to watch a token wait
+        ///     run out, since ``TokenHealth/waitMs(_:)`` is derived from the
+        ///     container's clock.
+        ///   - tickAdvancesMs: when non-zero, the model's countdown tick
+        ///     advances the fake clock by this much instead of sleeping, so a
+        ///     wait that is minutes long runs out in a handful of yields and
+        ///     nothing waits on real time.
         init(
             serverURL: String,
             token: String? = nil,
             preferLocal: Bool = false,
             phoneCanChat: Bool = false,
             answers: Bool = true,
-            costMs: Int64 = 300
+            costMs: Int64 = 300,
+            sharesClock: Bool = false,
+            tickAdvancesMs: Int64 = 0
         ) {
             let store = InMemoryShellStore(serverURL: serverURL, preferLocal: preferLocal, token: token)
             self.store = store
             let lines = self.lines
+            let clock = self.clock
             container = AppContainer(
                 store: store,
                 vault: TokenVault(items: InMemoryKeychain()),
                 lock: HouseholdLock(),
-                clock: { 0 },
+                clock: sharesClock ? { clock.current } : { 0 },
                 configuration: StubURLProtocol.session(timeout: 1),
                 log: { who, what in lines.mutate { $0.append("\(who): \(what)") } }
             )
-            let clock = self.clock
             let probes = self.probes
             let parked = self.parked
+            let ticks = self.ticks
             model = ShellModel(
                 container: container,
                 phoneCanChat: phoneCanChat,
@@ -72,6 +87,15 @@ final class ShellModelTests: XCTestCase {
                 wait: { _ in
                     parked.set(true)
                     try await Task.sleep(for: .seconds(3600))
+                },
+                tick: { ms in
+                    ticks.mutate { $0 += 1 }
+                    guard tickAdvancesMs > 0 else {
+                        try await Task.sleep(for: .seconds(3600))
+                        return
+                    }
+                    clock.advance(tickAdvancesMs)
+                    _ = ms
                 }
             )
         }
@@ -520,6 +544,169 @@ final class ShellModelTests: XCTestCase {
         XCTAssertNil(rig.model.changedIdentityHere)
         rig.model.askTrustAgain()
         XCTAssertNil(rig.model.trustAgain)
+        XCTAssertNil(rig.model.sheet, "and no empty sheet comes up either")
         rig.model.stop()
+    }
+
+    // MARK: - the one sheet (F8)
+
+    /// **The two sheets cannot both be up.** Part 2 attached two `.sheet`
+    /// modifiers to one view, which is a SwiftUI hazard — the later one
+    /// commonly wins and the earlier silently never presents — and which no
+    /// test in this package can see. The fix is that "which sheet is up" is
+    /// one optional value, so there is no state in which both are raised.
+    func testTheTwoSheetsCannotBothBeUp() {
+        let rig = Rig(serverURL: server, token: "household-abc")
+        rig.model.openConnection()
+        XCTAssertEqual(.connection, rig.model.sheet)
+        XCTAssertTrue(rig.model.showConnection)
+
+        // Asking for the other one with nothing to trust changes nothing,
+        // so the picker is still the one that is up.
+        rig.model.askTrustAgain()
+        XCTAssertEqual(.connection, rig.model.sheet)
+
+        rig.model.sheet = .trustAgain
+        XCTAssertFalse(rig.model.showConnection, "one at a time, by construction")
+        // And the payload cannot outlive the sheet it is about.
+        rig.model.sheet = .connection
+        XCTAssertNil(rig.model.trustAgain)
+
+        rig.model.dismissSheet()
+        XCTAssertNil(rig.model.sheet)
+        XCTAssertFalse(rig.model.showConnection)
+        rig.model.stop()
+    }
+
+    // MARK: - the waiting card's countdown (F2)
+
+    /// **The card stops waiting by itself when the clock passes the wait.**
+    ///
+    /// `tokenTroubleText` promises "this phone tries again by itself when the
+    /// wait is over" and `tokenTroubleWaitLine` renders "trying again in
+    /// 4:05". Part 2 drew both and nothing ticked: the countdown was frozen
+    /// wherever the last `refresh()` left it, and the only ways out were
+    /// "use this phone's media" or backgrounding the app and coming back. A
+    /// shipped string making a promise the code does not keep is the house
+    /// rule against misleading controls in a different coat.
+    func testTheCardStopsWaitingWhenTheClockPassesTheWait() async {
+        let rig = Rig(
+            serverURL: server,
+            token: "household-abc",
+            sharesClock: true,
+            tickAdvancesMs: tokenTroubleTickMs
+        )
+        rig.container.tokenHealth.noteWait(server, waitMs: 5_000)
+        rig.model.refresh()
+        XCTAssertEqual(.tokenTroubleCard(.waiting(waitMs: 5_000)), rig.model.screen)
+        XCTAssertTrue(rig.model.isCountingDownAWait, "something has to write the countdown")
+
+        let left = await rig.settleVerdict { rig.model.screen == .workspace }
+        XCTAssertTrue(left, "the card never stopped waiting; it is \(rig.model.screen)")
+        XCTAssertFalse(rig.model.isCountingDownAWait, "and nothing is left counting")
+        XCTAssertGreaterThanOrEqual(rig.ticks.current, 5, "a second at a time, as Android does")
+        rig.model.stop()
+    }
+
+    /// A **refused** token with a wait is not tried again, so its card stays
+    /// — but `try the old token again` has to appear when the wait ends,
+    /// because that is the moment the button can do what it says. Nothing
+    /// re-evaluated `tokenTroubleOffersOldTokenRetry`, so it never appeared.
+    func testTheRetryButtonAppearsWhenARefusedTokensWaitRunsOut() async {
+        let rig = Rig(
+            serverURL: server,
+            token: "household-abc",
+            sharesClock: true,
+            tickAdvancesMs: tokenTroubleTickMs
+        )
+        rig.store.markTokenRejected(server)
+        rig.container.tokenHealth.noteWait(server, waitMs: 3_000)
+        rig.model.refresh()
+        XCTAssertEqual(.tokenTroubleCard(.notRecognised(waitMs: 3_000)), rig.model.screen)
+        XCTAssertFalse(tokenTroubleOffersOldTokenRetry(.notRecognised(waitMs: 3_000)))
+
+        let ran = await rig.settleVerdict {
+            rig.model.screen == .tokenTroubleCard(.notRecognised(waitMs: 0))
+        }
+        XCTAssertTrue(ran, "the wait never ran out; it is \(rig.model.screen)")
+        XCTAssertTrue(tokenTroubleOffersOldTokenRetry(.notRecognised(waitMs: 0)))
+        XCTAssertFalse(rig.model.isCountingDownAWait, "nothing left to count, so nothing ticks")
+        rig.model.stop()
+    }
+
+    /// **Nothing ticks when there is nothing to count.** A timer on every
+    /// screen would be the other way to get this wrong.
+    func testNothingTicksWhenThereIsNothingToCount() {
+        let workspace = Rig(serverURL: server, token: "household-abc", sharesClock: true)
+        XCTAssertEqual(.workspace, workspace.model.screen)
+        XCTAssertFalse(workspace.model.isCountingDownAWait)
+        XCTAssertEqual(0, workspace.ticks.current)
+        workspace.model.stop()
+
+        // A refused token with no wait is a card, but not a countdown.
+        let refused = Rig(serverURL: server, token: "household-abc", sharesClock: true)
+        refused.store.markTokenRejected(server)
+        refused.model.refresh()
+        XCTAssertEqual(.tokenTroubleCard(.notRecognised(waitMs: 0)), refused.model.screen)
+        XCTAssertFalse(refused.model.isCountingDownAWait)
+        XCTAssertEqual(0, refused.ticks.current)
+        refused.model.stop()
+
+        // And the pure decision on its own, for every leaf.
+        XCTAssertFalse(tokenTroubleTicks(.workspace))
+        XCTAssertFalse(tokenTroubleTicks(.pairing))
+        XCTAssertFalse(tokenTroubleTicks(.localMedia(.outOfReach)))
+        XCTAssertFalse(tokenTroubleTicks(.tokenTroubleCard(.notRecognised(waitMs: 0))))
+        XCTAssertTrue(tokenTroubleTicks(.tokenTroubleCard(.notRecognised(waitMs: 1))))
+        XCTAssertTrue(tokenTroubleTicks(.tokenTroubleCard(.waiting(waitMs: 1))))
+    }
+
+    /// The countdown is cancelled with the scene phase, like the reachability
+    /// loop: a card nobody is looking at has nothing to count down for
+    /// anybody, and a `Task` nobody cancels keeps a timer alive across a
+    /// suspension.
+    func testTheCountdownStopsWhenTheAppLeavesTheScreen() {
+        let rig = Rig(serverURL: server, token: "household-abc", sharesClock: true)
+        rig.container.tokenHealth.noteWait(server, waitMs: 60_000)
+        rig.model.refresh()
+        XCTAssertTrue(rig.model.isCountingDownAWait)
+
+        rig.model.scenePhaseChanged(to: .background)
+        XCTAssertFalse(rig.model.isCountingDownAWait, "nothing counts while the app is away")
+        rig.model.scenePhaseChanged(to: .active)
+        XCTAssertTrue(rig.model.isCountingDownAWait, "and it starts again on the way back")
+        rig.model.stop()
+        XCTAssertFalse(rig.model.isCountingDownAWait, "stop() means stop")
+    }
+
+    // MARK: - the register's cadence (F9)
+
+    /// **The cadence slot is not burnt while nothing sends a registration.**
+    ///
+    /// `scenePhaseChanged` used to call `registerIfDue(reason: .changed)` on
+    /// every `.active` and throw the answer away, which records the ask. I1-D
+    /// writes the sender; it would have been handed `false` for the next 15 s
+    /// and concluded the register was broken. With no sender there is no ask,
+    /// and with one the decision and the send are the same call.
+    func testNoSenderMeansNoAskAndSoNoCadenceSlotBurnt() {
+        let rig = Rig(serverURL: server, token: "household-abc")
+        rig.model.scenePhaseChanged(to: .background)
+        rig.model.scenePhaseChanged(to: .active)
+        XCTAssertTrue(
+            rig.model.registerIfDue(reason: .changed),
+            "the slot is still free, because nothing asked for it"
+        )
+
+        var sent = 0
+        let withSender = Rig(serverURL: server, token: "household-abc")
+        withSender.model.scenePhaseChanged(to: .background)
+        withSender.model.scenePhaseChanged(to: .active, sendRegister: { sent += 1 })
+        XCTAssertEqual(1, sent, "the decision and the send are one call")
+        XCTAssertFalse(
+            withSender.model.registerIfDue(reason: .changed),
+            "and now the slot IS taken, by something that really sent it"
+        )
+        rig.model.stop()
+        withSender.model.stop()
     }
 }

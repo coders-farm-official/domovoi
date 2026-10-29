@@ -28,15 +28,25 @@ struct AppShellView: View {
 
     var body: some View {
         content
-            // The connection dialog is owned HERE, above both shells, and
-            // that is not stylistic (map §10.4): picking a side, or the
-            // server dropping out of reach, swaps the shell underneath it,
-            // and a dialog owned by a shell would vanish mid-use.
-            .sheet(isPresented: $model.showConnection) {
-                ConnectionDialogPlaceholder(model: model)
-            }
-            .sheet(isPresented: trustAgainShowing) {
-                TrustAgainPlaceholder(model: model)
+            // Both sheets are owned HERE, above both shells, and that is not
+            // stylistic (map §10.4): picking a side, or the server dropping
+            // out of reach, swaps the shell underneath it, and a dialog owned
+            // by a shell would vanish mid-use.
+            //
+            // **ONE `.sheet` modifier, over ``ShellSheet``.** This had two —
+            // one per dialog — and two sheet presentations on a single view is
+            // a long-standing SwiftUI hazard: the later modifier commonly
+            // wins and the earlier silently never presents. It compiles, and
+            // nothing in `pkgtest.sh` can see it, which is why a review found
+            // it rather than a test. Which sheet is up is now one value with
+            // one answer, decided in the package.
+            .sheet(item: $model.sheet) { sheet in
+                switch sheet {
+                case .connection:
+                    ConnectionDialogPlaceholder(model: model)
+                case .trustAgain:
+                    TrustAgainPlaceholder(model: model)
+                }
             }
             .onChange(of: scenePhase, initial: true) { _, phase in
                 model.scenePhaseChanged(to: ShellPhase(phase))
@@ -60,14 +70,6 @@ struct AppShellView: View {
         }
     }
 
-    /// `ChangedIdentity` is not `Identifiable`, and making it so for a sheet
-    /// would be the view's taste leaking into the package.
-    private var trustAgainShowing: Binding<Bool> {
-        Binding(
-            get: { model.trustAgain != nil },
-            set: { showing in if !showing { model.dismissTrustAgain() } }
-        )
-    }
 }
 
 extension ShellPhase {

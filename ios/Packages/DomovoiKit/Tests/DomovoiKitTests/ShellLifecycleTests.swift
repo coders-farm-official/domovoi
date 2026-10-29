@@ -213,9 +213,10 @@ final class ShellLifecycleTests: XCTestCase {
     /// reachable for ever, and the app never fell back to local media —
     /// a workspace with every panel failing and no banner.
     ///
-    /// 200 cycles, because it is a race: on stock `fefa3d9b` it bit 11 of
-    /// them (the reviewer measured 13 of 200), and one cycle would pass by
-    /// luck most of the time.
+    /// 200 cycles, because it is a race: on stock `fefa3d9b` (this test alone,
+    /// commit `ab283086`) it bit **2 of 200** on the Mac, and the reviewer
+    /// measured 13 of 200. One cycle would pass by luck almost every time,
+    /// which is why the count is the assertion rather than a single case.
     func testPhaseChurnNeverClosesTheStopwatchUnderALiveLoop() async {
         let rig = Rig(answers: { _ in false })
         var closedUnderALiveLoop = 0

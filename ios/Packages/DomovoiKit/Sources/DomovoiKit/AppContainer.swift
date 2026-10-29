@@ -370,16 +370,37 @@ public final class AppContainer: Sendable {
     /// when the picker opens, so a picker left open across a Wi-Fi drop keeps
     /// saying it is on the LAN until the person taps rescan.
     final class NetworkObservers: Sendable {
-        private let sinks = Mutex<[@Sendable () -> Void]>([])
+        private struct State {
+            var sinks: [Int: @Sendable () -> Void] = [:]
+            var next = 1
+        }
 
-        var count: Int { sinks.withLock { $0.count } }
+        private let state = Mutex(State())
 
-        func add(_ sink: @Sendable @escaping () -> Void) {
-            sinks.withLock { $0.append(sink) }
+        var count: Int { state.withLock { $0.sinks.count } }
+
+        /// Answers the token that removes this sink again. Keyed rather than
+        /// appended because a sink that can only be added is a leak: a test
+        /// that builds fifty models over one container left fifty closures
+        /// here, each holding a `Task`-making block for a model that had gone.
+        func add(_ sink: @Sendable @escaping () -> Void) -> Int {
+            state.withLock { current in
+                let token = current.next
+                current.next += 1
+                current.sinks[token] = sink
+                return token
+            }
+        }
+
+        func remove(_ token: Int) {
+            state.withLock { $0.sinks.removeValue(forKey: token) }
         }
 
         func fire() {
-            for sink in sinks.withLock({ $0 }) { sink() }
+            // Sorted, so the order sinks are told in is the order they were
+            // added in and not the dictionary's.
+            let sinks = state.withLock { $0.sinks.sorted { $0.key < $1.key }.map(\.value) }
+            for sink in sinks { sink() }
         }
     }
 
@@ -396,19 +417,37 @@ public final class AppContainer: Sendable {
     /// by itself, so without this the right answer would simply not be on
     /// screen. The invalidation is what was missing, not the value.
     ///
-    /// Registered **once per container** (the shell's model does it in its
-    /// initialiser) and never removed; a sink should capture its owner weakly
-    /// so a model that has gone away does nothing rather than being kept
-    /// alive by the container.
-    public func onNetworkChange(_ sink: @Sendable @escaping () -> Void) {
+    /// Registered **once per observer** (the shell's model does it in its
+    /// initialiser) and **removed with
+    /// ``removeNetworkChangeSink(_:)``** when the observer goes away. A sink
+    /// should capture its owner weakly as well, so that a model which has
+    /// gone is not kept alive by the container.
+    ///
+    /// - Returns: the token that removes this sink again. Discardable only
+    ///   for a sink that genuinely lives as long as the container; a review
+    ///   found that the shell's did not, and a test that builds many models
+    ///   over one container was leaking a closure per model.
+    @discardableResult
+    public func onNetworkChange(_ sink: @Sendable @escaping () -> Void) -> Int {
         networkObservers.add(sink)
     }
 
-    /// How many network changes have been reported. Anything whose answer
-    /// depends on **which** network this is — the picker's `onLan`, the
-    /// addresses a sweep would cover — keys its read on this, so a cached
-    /// answer from another network cannot be mistaken for this one's.
-    public var networkGeneration: Int { network.changeCount }
+    /// Stop telling this sink. Unknown or already-removed tokens are ignored,
+    /// so a teardown path can call it without knowing whether it ran before.
+    public func removeNetworkChangeSink(_ token: Int) {
+        networkObservers.remove(token)
+    }
+
+    /// How many network changes ``NetworkWatch`` has reported to this
+    /// container.
+    ///
+    /// **Renamed from `networkGeneration`** because that was also the name of
+    /// ``ShellModel/networkGeneration``, which counts something else — how
+    /// many changes the *model* has been told about — and a review found two
+    /// different numbers under one name. This one is the container's own
+    /// tally and nothing reads it yet; the model's is the key a SwiftUI view
+    /// observes so that a read of ``NetworkWatch/onLan`` is drawn again.
+    public var networkChangeCount: Int { network.changeCount }
 
     /// Register with the system and seed the first network picture.
     ///
@@ -653,9 +692,19 @@ public final class AppContainer: Sendable {
     /// The identity verdict is only read when it belongs to **this** server's
     /// pin key; another server's verdict is ignored (`AppShell.kt:172`). The
     /// `waitMs` comes from ``TokenHealth/waitMs(_:)`` rather than from a
-    /// ticking copy of the clock: Android holds a `clockNow` it ticks every
-    /// second so the card counts down on screen, which is the screen's job
-    /// and so part 2's; this answers the wait as it is right now.
+    /// ticking copy of the clock: this answers the wait as it is **at the
+    /// moment it is called**, and Android's `clockNow`
+    /// (`AppShell.kt:185-192`) becomes somebody calling this again once a
+    /// second.
+    ///
+    /// An earlier version of this comment said the ticking "is the screen's
+    /// job and so part 2's". Part 2 drew the screen and did not do it, so the
+    /// card's countdown was frozen wherever the last `refresh()` left it and
+    /// its *"this phone tries again by itself when the wait is over"* was a
+    /// promise nothing kept. The tick is now ``ShellModel``'s, driven by
+    /// ``tokenTroubleTicks(_:)`` and cancelled with the scene phase — not the
+    /// screen's, because a `Timer` in a view is a decision nothing here
+    /// compiles or tests.
     public func shellInputs() -> ShellInputs {
         let serverURL = store.serverURL
         let activeVerdict: IdentityVerdict? = {
@@ -690,7 +739,7 @@ public final class AppContainer: Sendable {
     ///
     /// `pairingRequired` is `pairingRequired || trouble is NotRecognised`, so
     /// the card says `available · needs the household token` for a refused
-    /// token too (`AppShell.kt:203`).
+    /// token too (`AppShell.kt:205`).
     ///
     /// `unreachable` is passed in, not read from the container: it is the
     /// ``Reachability`` verdict, and the container does not own the loop that

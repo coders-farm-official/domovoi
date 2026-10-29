@@ -182,7 +182,7 @@ final class ShellChromeTests: XCTestCase {
         XCTAssertNil(refused.pill)
         XCTAssertNil(refused.banner)
         // A refused token says the same thing the picker says for an unpaired
-        // server (`AppShell.kt:203`).
+        // server (`AppShell.kt:205`).
         XCTAssertEqual("available · needs the household token", refused.serverCard.reason)
 
         let waiting = chrome(Row(serverURL: server, trouble: .waiting(waitMs: 30_000)))

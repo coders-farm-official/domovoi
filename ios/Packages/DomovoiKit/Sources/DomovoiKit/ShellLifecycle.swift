@@ -115,6 +115,18 @@ public final class ReachabilityDriver: Sendable {
         var serverURL: String?
         var task: Task<Void, Never>?
         var reach: Reachability
+        /// The ticket of the ``update(serverURL:connected:phase:)`` call that
+        /// has **reserved the loop's slot** and is between the two lock
+        /// acquisitions, building its `Task`; nil when nobody holds it.
+        ///
+        /// The slot is reserved inside the *first* acquisition, because
+        /// without it two concurrent `update(.ask)` calls both read
+        /// `task == nil` and both start a loop. ``ShellModel`` is
+        /// `@MainActor` and serialises today, but this type is `public`,
+        /// `Sendable` and documented as safe to call on every change, so it
+        /// has to hold on its own.
+        var starting: Int64?
+        var nextTicket: Int64 = 1
     }
 
     private let state: Mutex<State>
@@ -145,7 +157,12 @@ public final class ReachabilityDriver: Sendable {
         self.clock = clock
         self.wait = wait
         self.publish = publish
-        self.state = Mutex(State(serverURL: nil, task: nil, reach: Reachability(graceMs: graceMs)))
+        self.state = Mutex(State(
+            serverURL: nil,
+            task: nil,
+            reach: Reachability(graceMs: graceMs),
+            starting: nil
+        ))
     }
 
     /// The verdict right now.
@@ -180,6 +197,10 @@ public final class ReachabilityDriver: Sendable {
                 current.serverURL = serverURL
                 cancelled = current.task
                 current.task = nil
+                // Any reservation in flight was for the old server, so it is
+                // void: whoever holds it will cancel its loop instead of
+                // storing it.
+                current.starting = nil
                 current.reach = Reachability(graceMs: graceMs)
                 tellReachable = true
             }
@@ -187,39 +208,52 @@ public final class ReachabilityDriver: Sendable {
             case .inReach:
                 if cancelled == nil { cancelled = current.task }
                 current.task = nil
+                current.starting = nil
                 current.reach.connected()
                 tellReachable = true
             case .stopCounting:
                 if cancelled == nil { cancelled = current.task }
                 current.task = nil
+                current.starting = nil
                 // The stopwatch stops HERE, with this timestamp. See the note
                 // on the type: the cancelled task's own `defer` may not run
                 // until later, and by then the clock has moved.
                 current.reach.pause(now)
             case .ask:
+                // Reserve the slot HERE, in the same acquisition that found
+                // it free, so a second caller cannot also find it free. See
+                // ``State/starting``.
+                guard current.task == nil, current.starting == nil else { break }
+                let ticket = current.nextTicket
+                current.nextTicket += 1
+                current.starting = ticket
                 return Decision(
                     cancelled: cancelled,
                     tellReachable: tellReachable,
-                    start: current.task == nil ? current.reach : nil
+                    start: current.reach,
+                    ticket: ticket
                 )
             }
-            return Decision(cancelled: cancelled, tellReachable: tellReachable, start: nil)
+            return Decision(cancelled: cancelled, tellReachable: tellReachable, start: nil, ticket: nil)
         }
 
         decision.cancelled?.cancel()
         if decision.tellReachable { publish(false) }
-        guard let reach = decision.start else { return }
+        guard let reach = decision.start, let ticket = decision.ticket else { return }
 
         // Started outside the lock, then stored. `askWhileOnScreen` resumes
         // the stopwatch itself, so the stretch begins when the loop does.
         let task = Task { [probe, clock, wait, publish] in
             await askWhileOnScreen(reach: reach, probe: probe, clock: clock, wait: wait, publish: publish)
         }
-        // Another caller may have got here first, or the phase may have
-        // changed back while this one was between the two locks; whichever
-        // task is not wanted is cancelled rather than left running.
+        // The reservation is still this call's only if nothing has happened
+        // in between. A phase change, a live socket or a server switch voids
+        // it — and that matters as much as the double start does: without the
+        // check, a loop built here would be stored into a slot the app has
+        // since left the screen on, and nothing would ever cancel it.
         let stale: Task<Void, Never>? = state.withLock { current in
-            guard current.task == nil else { return task }
+            guard current.starting == ticket else { return task }
+            current.starting = nil
             current.task = task
             return nil
         }
@@ -233,14 +267,22 @@ public final class ReachabilityDriver: Sendable {
         let tellReachable: Bool
         /// The tracker to start a loop against, or nil for "do not start one".
         let start: Reachability?
+        /// The slot reservation this call holds, from ``State/starting``.
+        let ticket: Int64?
     }
 
     /// Stop for good: the shell is going away. Keeps nothing.
     public func stop() {
+        // Read above the lock, as `update` does, because `clock` is injected
+        // and running someone else's closure under this lock would break the
+        // invariant stated on `update` 70 lines up. Nothing deadlocks today;
+        // the point is that the sentence is true.
+        let now = clock()
         let cancelled = state.withLock { current -> Task<Void, Never>? in
             let task = current.task
             current.task = nil
-            current.reach.pause(clock())
+            current.starting = nil
+            current.reach.pause(now)
             return task
         }
         cancelled?.cancel()

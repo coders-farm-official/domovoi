@@ -71,14 +71,35 @@ public final class ShellModel {
     /// Where the workspace is.
     public var navigation = NavigationState()
 
-    /// Whether the connection dialog is up. It is owned **here, above both
-    /// shells**, and that is not stylistic (map §10.4): picking a side, or
-    /// the server dropping out of reach, swaps the shell underneath it, and a
-    /// dialog owned by a shell would vanish mid-use.
-    public var showConnection = false
+    /// Which sheet is up over the shell, or nil for none — **at most one, by
+    /// construction** (``ShellSheet``).
+    ///
+    /// Both of them are owned **here, above both shells**, and that is not
+    /// stylistic (map §10.4): picking a side, or the server dropping out of
+    /// reach, swaps the shell underneath, and a dialog owned by a shell would
+    /// vanish mid-use.
+    ///
+    /// Settable so one `.sheet(item:)` can bind to it; the setter is also
+    /// what drops the trust-again payload when that sheet goes away, so the
+    /// payload cannot outlive the sheet that is about it.
+    public var sheet: ShellSheet? {
+        get { sheetUp }
+        set {
+            sheetUp = newValue
+            if newValue != .trustAgain { trustAgain = nil }
+        }
+    }
 
-    /// The "trust it again" confirmation, when the person has asked for it.
-    /// Only ever non-nil for a mismatch that proved a key.
+    private var sheetUp: ShellSheet?
+
+    /// Whether the connection dialog is the sheet that is up. Kept as a
+    /// question because three call sites ask it; it is no longer a second
+    /// piece of state.
+    public var showConnection: Bool { sheetUp == .connection }
+
+    /// The "trust it again" confirmation's payload, when the person has asked
+    /// for it. Only ever non-nil for a mismatch that proved a key, and only
+    /// while ``sheet`` is ``ShellSheet/trustAgain``.
     public private(set) var trustAgain: ChangedIdentity?
 
     /// Which of the local shell's tabs is showing.
@@ -89,10 +110,16 @@ public final class ShellModel {
     /// is false until something answers.
     public private(set) var savedBooks = false
 
-    /// Bumped on every network change. A view that reads anything whose
-    /// answer depends on which network this is — ``NetworkWatch/onLan`` —
-    /// reads this too, so it is re-drawn when the answer could have changed.
-    /// See ``AppContainer/onNetworkChange(_:)``.
+    /// Bumped on every network change this model has been told about. A view
+    /// that reads anything whose answer depends on which network this is —
+    /// ``NetworkWatch/onLan`` — reads this too, so it is re-drawn when the
+    /// answer could have changed. See ``AppContainer/onNetworkChange(_:)``.
+    ///
+    /// **This is the redraw key and not a staleness guard.** The values
+    /// themselves are live reads, so nothing here can be stale; what was
+    /// missing was any reason for SwiftUI to ask again.
+    /// ``AppContainer/networkChangeCount`` is the container's own tally and a
+    /// different number — they shared this name until a review said so.
     public private(set) var networkGeneration = 0
 
     /// "not now" on the pairing screen, and the token it was tapped with.
@@ -108,6 +135,17 @@ public final class ShellModel {
     private let driver: ReachabilityDriver
     private let registering = RegisterCadence()
     private let clock: @Sendable () -> Int64
+    private let tick: @Sendable (Int64) async throws -> Void
+
+    /// The once-a-second re-read the token-trouble card's countdown needs.
+    /// Nil whenever there is nothing to count — see ``isCountingDownAWait``.
+    private var waitTick: Task<Void, Never>?
+    private var waitTickGeneration = 0
+
+    /// The container's network-change sink, so ``stop()`` can take it off
+    /// again. Added and never removed until a review pointed out that a test
+    /// building many models over one container leaks a closure per model.
+    private var networkSink: Int?
 
     /// - Parameters:
     ///   - probe: one question to the server, for the reachability loop.
@@ -116,17 +154,22 @@ public final class ShellModel {
     ///     ``ReachabilityDriver/init(graceMs:probe:clock:wait:publish:)``
     ///     describes.
     ///   - wait: how the loop sleeps between probes. A test replaces it.
+    ///   - tick: how the token-trouble card's countdown sleeps between
+    ///     re-reads. Separate from `wait` because the two are driven by
+    ///     different things and a test of one must not park the other.
     public init(
         container: AppContainer,
         phoneCanChat: Bool = false,
         probe: (@Sendable () async -> Bool)? = nil,
         clock: @Sendable @escaping () -> Int64 = TokenHealth.monotonicMs,
-        wait: @Sendable @escaping (Int64) async throws -> Void = { try await Task.sleep(for: .milliseconds($0)) }
+        wait: @Sendable @escaping (Int64) async throws -> Void = { try await Task.sleep(for: .milliseconds($0)) },
+        tick: @Sendable @escaping (Int64) async throws -> Void = { try await Task.sleep(for: .milliseconds($0)) }
     ) {
         self.container = container
         self.phoneCanChat = phoneCanChat
         self.inputs = container.shellInputs()
         self.clock = clock
+        self.tick = tick
         let client = container.client
         let relay = VerdictRelay()
         self.verdicts = relay
@@ -144,9 +187,13 @@ public final class ShellModel {
         relay.connect { [weak self] verdict in
             Task { @MainActor in self?.verdictArrived(verdict) }
         }
-        container.onNetworkChange { [weak self] in
+        self.networkSink = container.onNetworkChange { [weak self] in
             Task { @MainActor in self?.networkChanged() }
         }
+        // A launch straight onto a waiting card has to count down too, and
+        // the first `.active` is not a return, so `scenePhaseChanged` will
+        // not refresh.
+        updateWaitTick()
     }
 
     /// The reachability loop's verdict, on its way to the main actor.
@@ -395,11 +442,24 @@ public final class ShellModel {
     /// is nothing to trust**: an `Unproven` verdict reads as `notOurs` too but
     /// proved no key, so there is no key to pin and no yes to offer.
     public func askTrustAgain() {
-        trustAgain = changedIdentityHere
+        guard let changed = changedIdentityHere else { return }
+        trustAgain = changed
+        sheetUp = .trustAgain
     }
 
     public func dismissTrustAgain() {
         trustAgain = nil
+        if sheetUp == .trustAgain { sheetUp = nil }
+    }
+
+    /// Open the connection dialog, from the pill or from a `"picker"` request.
+    public func openConnection() {
+        sheet = .connection
+    }
+
+    /// Close whichever sheet is up.
+    public func dismissSheet() {
+        sheet = nil
     }
 
     // MARK: - the lifecycle (map §9.2, and the hazard part 1 left)
@@ -421,7 +481,19 @@ public final class ShellModel {
     ///
     /// `.inactive` is treated as off screen; the reasoning is on
     /// ``reachabilityAction(serverURL:connected:phase:)``.
-    public func scenePhaseChanged(to phase: ShellPhase) {
+    ///
+    /// - Parameter sendRegister: what actually sends the registration, when
+    ///   there is something that does. **The cadence slot is only consumed
+    ///   when this is given**, and that is the whole point: without it this
+    ///   used to call ``registerIfDue(reason:)`` and throw the answer away on
+    ///   every `.active`, so I1-D — the batch that writes the sender — would
+    ///   have been told `false` for the next 15 s and concluded the register
+    ///   was broken. The decision and the send are one call now, so they
+    ///   cannot drift apart.
+    public func scenePhaseChanged(
+        to phase: ShellPhase,
+        sendRegister: (@MainActor () -> Void)? = nil
+    ) {
         let was = self.phase
         self.phase = phase
         switch phase {
@@ -439,7 +511,14 @@ public final class ShellModel {
             }
         }
         updateReachability()
-        if phase == .active { registerIfDue(reason: .changed) }
+        // The countdown is cancelled with the scene phase, like the
+        // reachability loop and for the same reason: a `Task` nobody cancels
+        // keeps a timer alive across a suspension, and a card that is not on
+        // screen has nothing to count down for anybody.
+        updateWaitTick()
+        if phase == .active, let sendRegister, registerIfDue(reason: .changed) {
+            sendRegister()
+        }
     }
 
     /// Whether the device register should go out now, recording the ask.
@@ -462,14 +541,29 @@ public final class ShellModel {
         inputs = container.shellInputs()
         takePendingRoute()
         updateReachability()
+        updateWaitTick()
     }
+
+    /// Whether the token-trouble card's countdown is actually being written.
+    ///
+    /// The card says *"this phone tries again by itself when the wait is
+    /// over"* and renders *"trying again in 4:05"*. Both of those are
+    /// promises, and this is the property that says whether anything keeps
+    /// them. It was false in every state when part 2 shipped the card.
+    public var isCountingDownAWait: Bool { waitTick != nil }
 
     /// The live socket came up or went down. I1-D's input; here so the loop's
     /// one other condition has a way in.
-    public func socketChanged(connected: Bool) {
+    ///
+    /// `sendRegister` is as on
+    /// ``scenePhaseChanged(to:sendRegister:)``: no sender, no ask, and so no
+    /// cadence slot burnt for nothing.
+    public func socketChanged(connected: Bool, sendRegister: (@MainActor () -> Void)? = nil) {
         self.connected = connected
         updateReachability()
-        if connected { registerIfDue(reason: .changed) }
+        if connected, let sendRegister, registerIfDue(reason: .changed) {
+            sendRegister()
+        }
     }
 
     /// Fetch the capability manifest. Android fetches it at connect and again
@@ -493,12 +587,65 @@ public final class ShellModel {
     /// Tear the loop down: the shell is going away.
     public func stop() {
         driver.stop()
+        waitTick?.cancel()
+        waitTick = nil
+        if let networkSink {
+            container.removeNetworkChangeSink(networkSink)
+            self.networkSink = nil
+        }
     }
 
     // MARK: - the plumbing
 
     private func updateReachability() {
         driver.update(serverURL: inputs.serverURL, connected: connected, phase: phase)
+    }
+
+    /// Start or stop the countdown, from the one decision that says whether
+    /// there is anything to count (``tokenTroubleTicks(_:)``).
+    ///
+    /// **This is the only place `waitTick` is assigned**, and it is the only
+    /// arbiter: the loop itself never decides to stop, it calls
+    /// ``refresh()``, which comes back here, which cancels it once the wait
+    /// has run out. One owner, so a finished task cannot be left in the slot
+    /// blocking the next one.
+    private func updateWaitTick() {
+        let wanted = phase == .active && tokenTroubleTicks(screen)
+        guard wanted != (waitTick != nil) else { return }
+        guard wanted else {
+            waitTick?.cancel()
+            waitTick = nil
+            return
+        }
+        waitTickGeneration += 1
+        let generation = waitTickGeneration
+        waitTick = Task { @MainActor [weak self] in
+            await self?.countDownTheWait(generation: generation)
+        }
+    }
+
+    /// Re-read the wait once a second until there is nothing left to count.
+    ///
+    /// Android's `LaunchedEffect(waitUntil) { while (…) { delay(1000);
+    /// clockNow = … } }` (`AppShell.kt:186-192`). The wait itself is not
+    /// stored anywhere here: ``AppContainer/shellInputs()`` derives it from
+    /// ``TokenHealth/waitMs(_:)`` against the container's clock, so one
+    /// ``refresh()`` is the whole tick, and when the wait runs out `trouble`
+    /// comes back nil (for a ``TokenTrouble/waiting(waitMs:)``) or with
+    /// `waitMs: 0` (for a ``TokenTrouble/notRecognised(waitMs:)``, which then
+    /// offers `try the old token again`).
+    /// - Parameter generation: which start this task is, so that a task
+    ///   finishing after it was superseded does not empty the slot its
+    ///   successor is in.
+    private func countDownTheWait(generation: Int) async {
+        while !Task.isCancelled {
+            do { try await tick(tokenTroubleTickMs) } catch { break }
+            if Task.isCancelled { break }
+            // Which calls `updateWaitTick()`, which cancels this task the
+            // moment there is nothing left to count.
+            refresh()
+        }
+        if waitTickGeneration == generation { waitTick = nil }
     }
 
     private func verdictArrived(_ verdict: Bool) {
@@ -530,7 +677,7 @@ public final class ShellModel {
         guard let asked = container.pendingRoute else { return }
         if asked == AppContainer.pickerRoute {
             _ = container.takePendingRoute()
-            showConnection = true
+            openConnection()
             return
         }
         switch screen {

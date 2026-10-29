@@ -22,7 +22,7 @@ struct LocalShellView: View {
             ShellTopBar(
                 leading: ShellStrings.localTopbar,
                 pill: model.chrome.pill,
-                onPill: { model.showConnection = true }
+                onPill: { model.openConnection() }
             ) {
                 // This phone's own settings — voice, problem reports, the
                 // app's version — which need no server. The screen itself is

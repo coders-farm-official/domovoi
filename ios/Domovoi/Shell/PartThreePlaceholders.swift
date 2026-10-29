@@ -6,9 +6,24 @@ import SwiftUI
 // every state; the batch that builds them replaces each file-local view and
 // changes nothing about how it is reached.
 //
-// `DomovoiKitTests.ShellGraphTests` is what holds the graph to reaching them:
-// the picker from the pill and from a forget, the trust-again dialog only
-// where a key was proved, and the pairing screen from `pairingRequired`.
+// What holds the graph to reaching them, test by test — there is no
+// `ShellGraphTests` and there never was, which a review caught and which is a
+// named defect class on this project: a comment citing a test that does not
+// exist is worse than no comment, because the next reader trusts it and stops
+// looking.
+//
+//  - the picker opens from either shell, from the pill or from a forget:
+//    `ShellModelTests.testThePickerOpensFromEitherShell`;
+//  - the trust-again dialog is only raised where a key was proved:
+//    `ShellModelTests.testTrustAgainCannotBeRaisedWithNothingToTrust`;
+//  - a screen that replaces the whole shell leaves an out-of-band route
+//    request pending rather than dropping it:
+//    `ShellModelTests.testAScreenThatReplacesTheShellLeavesTheRequestPending`.
+//
+// The pairing screen's own arrival from `pairingRequired` is part 1's
+// `shellScreen`, asserted in `ShellModeTests` and, through a real refusal on
+// the wire, in
+// `ShellModelTests.testNotNowLastsAsLongAsTheTokenItWasTappedWith`.
 //
 // Part 3 also waits on two wording decisions (`IOS-ONLY-STRINGS.md`), which
 // is the other reason nothing here writes a sentence a person will read: the
@@ -39,7 +54,7 @@ struct ConnectionDialogPlaceholder: View {
             Text("the picker is part 3")
                 .font(.caption)
                 .foregroundStyle(Color.fgMuted)
-            Button(ShellStrings.close) { model.showConnection = false }
+            Button(ShellStrings.close) { model.dismissSheet() }
         }
         .padding(24)
     }
