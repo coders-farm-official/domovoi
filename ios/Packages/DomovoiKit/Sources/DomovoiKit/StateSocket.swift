@@ -392,6 +392,11 @@ public final class StateSocket: Sendable {
     /// The ladder's current rung, for a test.
     var backoffMs: Int64 { state.withLock { $0.backoff.delayMs } }
 
+    /// How many times the rule has been asked. The measurement behind
+    /// "a scene return re-mints rather than believing the flag": the effect
+    /// is otherwise invisible from outside when the answer has not changed.
+    var attemptCount: Int64 { state.withLock { $0.attempt } }
+
     public var isStarted: Bool { state.withLock { $0.started } }
 
     /// Whether a reconnect is counting down.

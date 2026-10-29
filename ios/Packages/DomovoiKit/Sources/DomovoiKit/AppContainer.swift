@@ -613,7 +613,17 @@ public final class AppContainer: Sendable {
     /// `HouseholdLockTest.anUpgradeThatSetTheHeaderItselfLosesItInRoomMode`).
     public func start() {
         network.start()
-        if !lock.roomModeActive { socket.start() }
+        startSocketUnlessARoom()
+    }
+
+    /// The socket half of ``start()``, separately so a test can drive it
+    /// without registering the process's real `NWPathMonitor`s. That is not
+    /// tidiness: `NetworkWatchTests` measures the real network's first
+    /// updates over a 1.5 s settle, and extra monitors in flight from another
+    /// test's container made it read a change where there was none.
+    func startSocketUnlessARoom() {
+        guard !lock.roomModeActive else { return }
+        socket.start()
     }
 
     // MARK: - the foreground epoch (map §9.2)

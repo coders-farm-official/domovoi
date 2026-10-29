@@ -60,7 +60,7 @@ final class ShellModelSocketTests: XCTestCase {
     /// callers taking the sender as a parameter so no slot was burnt while
     /// nothing could send; ``ShellModel/registerSender`` is what is passed
     /// now. One decision, not two.
-    func testTheRegisterSenderGoesOutWhenTheSocketComesUp() async {
+    func testTheRegisterSenderGoesOutWhenTheSocketComesUp() async throws {
         let bodies = Shared<[String]>([])
         let paths = Shared<[String]>([])
         StubURLProtocol.dispatch { request in
@@ -78,9 +78,18 @@ final class ShellModelSocketTests: XCTestCase {
             paths.current.filter { $0 == "/api/devices/register" }.count,
             "one register, not one per effect"
         )
-        let body = try? XCTUnwrap(bodies.current.first)
-        XCTAssertEqual(true, body?.contains(#""platform":"ios""#))
-        XCTAssertEqual(true, body?.contains(#""owner_person_id":null"#), "the field is THERE and null")
+        // Read off `StubURLProtocol.recorded`, not off the dispatcher's own
+        // `request`: a `URLProtocol` is handed the body as a **stream**, and
+        // `httpBody` is nil there. The stub reads the stream back for exactly
+        // this (`StubURLProtocol.body(of:)`, measured 2026-10-28), and
+        // `bodies` below is the record of what the dispatcher could see.
+        XCTAssertTrue(bodies.current.isEmpty, "the dispatcher sees a stream, not httpBody")
+        let sent = try XCTUnwrap(
+            StubURLProtocol.recorded.first { $0.url?.path == "/api/devices/register" }?.httpBody
+        )
+        let body = String(decoding: sent, as: UTF8.self)
+        XCTAssertTrue(body.contains(#""platform":"ios""#))
+        XCTAssertTrue(body.contains(#""owner_person_id":null"#), "the field is THERE and null")
 
         // The answer is taken: the kitchen tablet learns it is one.
         await settleUntil { model.sharedScreenAnswer == true }
@@ -203,8 +212,13 @@ final class ShellModelSocketTests: XCTestCase {
         XCTAssertEqual(false, model.sharedScreenAnswer)
         XCTAssertFalse(model.visibility.sharedScreen)
 
-        _ = store.setServerURL("http://10.0.0.77:6369")
-        store.setToken("household-xyz", for: "http://10.0.0.77:6369")
+        // `setServerURL` refuses an untrusted address (`TrustBook:126`), so
+        // the switch is made the way the picker makes one.
+        let next = "http://10.0.0.77:6369"
+        store.trustServer(next)
+        store.upsertKnownServer(url: next, name: nil)
+        XCTAssertTrue(store.setServerURL(next))
+        store.setToken("household-xyz", for: next)
         model.refresh()
         XCTAssertNil(model.sharedScreenAnswer, "server A's answer is not about server B")
         XCTAssertTrue(
@@ -261,58 +275,65 @@ final class ShellModelSocketTests: XCTestCase {
 
     // MARK: - the scene phase, and the socket it comes back to
 
-    /// Coming back re-mints and reconnects rather than believing `connected`
-    /// (map §1.6's mirror image). Driven through the model, because the scene
-    /// phase is ``ReachabilityDriver``'s and the socket belongs beside it.
-    func testComingBackDropsTheSocketItLeftRatherThanTrustingIt() async {
-        let fake = FakeSocketTransport()
-        let store = InMemoryShellStore(serverURL: server, token: "household-abc")
-        let container = AppContainer(
-            store: store,
-            vault: TokenVault(items: InMemoryKeychain()),
-            lock: HouseholdLock(),
-            clock: { 0 },
-            configuration: StubURLProtocol.session(timeout: 1)
-        )
-        // The container's own socket uses the real transport; this test is
-        // about the model's call reaching a socket, so it drives one of its
-        // own through the same two methods the model calls.
-        let socket = StateSocket(
-            base: { store.serverURL },
-            upgrade: { container.client.webSocketUpgrade($0) },
-            transport: fake
-        )
-        socket.start()
-        fake.last?.reportOpen()
-        XCTAssertTrue(socket.connected)
+    /// Coming back **re-asks the rule** rather than believing `connected`
+    /// (map §1.6's mirror image), through the model, because the scene phase
+    /// is ``ReachabilityDriver``'s and the socket belongs beside it.
+    ///
+    /// The measurement is ``StateSocket/attemptCount``: with the real
+    /// ``IdentityGate`` and an unproven server the answer does not change —
+    /// the socket parks both times — so the only visible difference between
+    /// "re-asked" and "remembered" is that it was asked again.
+    func testComingBackReAsksTheSocketsRuleRatherThanTrustingItsFlag() {
+        let (model, container, _) = model(deviceSelf: nil)
+        container.startSocketUnlessARoom()
+        XCTAssertTrue(container.socket.isStarted)
+        let asked = container.socket.attemptCount
 
-        socket.sceneReturned()
-        XCTAssertFalse(socket.connected)
-        XCTAssertEqual(2, fake.opens)
-
-        // And the model's own path: a return calls `sceneReturned()` on the
-        // container's socket before `refresh()`, so a socket that is parked
-        // is re-asked and one that claims to be up is dropped.
-        let model = ShellModel(container: container, probe: { true }, wait: { _ in
-            try await Task.sleep(for: .seconds(3600))
-        })
         model.scenePhaseChanged(to: .background)
         model.scenePhaseChanged(to: .active)
-        XCTAssertFalse(container.socket.isStarted, "nothing started it, so nothing was woken")
+        XCTAssertGreaterThan(
+            container.socket.attemptCount, asked,
+            "the return re-minted; it did not read the flag it came back holding"
+        )
+        container.socket.stop()
         model.stop()
     }
 
-    /// The container starts the socket, and room mode is the one thing that
-    /// stops it starting — Android's `if (!RoomStore.isActive(this))`.
+    /// With the **real** identity gate and a server that has proved nothing,
+    /// the container's socket holds: no request is built, and it parks rather
+    /// than counting down to asking the same question again.
+    ///
+    /// This is §8.2's held row reached through the production graph rather
+    /// than through a stub gate, which is what says the wiring applies the
+    /// rule and not just that the rule exists.
+    func testTheContainersSocketHoldsUntilTheServerHasProvedItself() {
+        let (_, container, _) = model(deviceSelf: nil)
+        container.startSocketUnlessARoom()
+        XCTAssertTrue(container.socket.isStarted)
+        XCTAssertEqual(.notNow, container.socket.paused)
+        XCTAssertFalse(container.socket.connected)
+        XCTAssertFalse(container.socket.isWaitingToRetry, "no timer on a question a timer cannot answer")
+        XCTAssertTrue(
+            StubURLProtocol.recorded.allSatisfy { $0.url?.path != stateSocketPath },
+            "the request never left the phone"
+        )
+        container.socket.stop()
+    }
+
+    /// Room mode is the one thing that stops the socket starting — Android's
+    /// `if (!RoomStore.isActive(this))` (`DomovoiApplication.kt:53`).
+    ///
+    /// Driven through ``AppContainer/startSocketUnlessARoom()`` rather than
+    /// `start()`, so this test does not register the process's real network
+    /// monitors beside `NetworkWatchTests`, which measures them.
     func testTheContainerStartsTheSocketUnlessThePhoneIsARoom() {
-        let store = InMemoryShellStore(serverURL: server, token: "household-abc")
         let open = AppContainer(
-            store: store,
+            store: InMemoryShellStore(serverURL: server, token: "household-abc"),
             vault: TokenVault(items: InMemoryKeychain()),
             lock: HouseholdLock(),
             configuration: StubURLProtocol.session(timeout: 1)
         )
-        open.start()
+        open.startSocketUnlessARoom()
         XCTAssertTrue(open.socket.isStarted)
         open.socket.stop()
 
@@ -322,7 +343,7 @@ final class ShellModelSocketTests: XCTestCase {
             lock: HouseholdLock(roomModeActive: true),
             configuration: StubURLProtocol.session(timeout: 1)
         )
-        room.start()
+        room.startSocketUnlessARoom()
         XCTAssertFalse(room.socket.isStarted, "the household side is off while the phone is a room")
     }
 

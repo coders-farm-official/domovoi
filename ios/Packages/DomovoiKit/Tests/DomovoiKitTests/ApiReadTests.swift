@@ -131,7 +131,7 @@ final class ApiReadTests: XCTestCase {
 
         base.set("http://10.0.0.77:6369")
         read.serverChanged()
-        XCTAssertEqual(2, calls.current)
+        await yieldUntil { calls.current == 2 }
     }
 
     /// Only the named pushes re-read. Every consumer filters by `type`
@@ -154,7 +154,7 @@ final class ApiReadTests: XCTestCase {
         XCTAssertEqual(1, calls.current, "not ours")
 
         read.received(StateEvent(type: "timer_fires.changed", frame: "{}"))
-        XCTAssertEqual(2, calls.current)
+        await yieldUntil { calls.current == 2 }
     }
 
     /// A read with no event types listens for nothing, which is what
