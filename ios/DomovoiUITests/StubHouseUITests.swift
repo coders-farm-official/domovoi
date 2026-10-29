@@ -20,6 +20,15 @@ import XCTest
 /// run of this file reached `scanning 80/254…` across a real home network
 /// before it was stopped. `-domovoi-server` writes exactly what the picker
 /// would have written. See `DomovoiApp.seededStore()`.
+///
+/// ### Evidence before verdict
+///
+/// Every test here takes its picture and dumps the tree **before** it
+/// asserts anything. The first run of this file asserted first, three cases
+/// failed, and `continueAfterFailure = false` meant the screenshots were
+/// never taken — so a run whose entire purpose was to produce pictures of a
+/// screen nobody had seen produced none of the screen under test. A failing
+/// check here is a question about a screen, and the answer is the picture.
 final class StubHouseUITests: XCTestCase {
 
     /// Long enough to be storable: `TokenPasteField` refuses anything under
@@ -48,28 +57,48 @@ final class StubHouseUITests: XCTestCase {
         return app
     }
 
-    private func shot(_ app: XCUIApplication, _ name: String) {
-        let attachment = XCTAttachment(screenshot: app.screenshot())
-        attachment.name = name
-        attachment.lifetime = .keepAlways
-        add(attachment)
+    /// The house's name in the header, which is the one thing on this screen
+    /// only a *completed read* can produce: `HomeConfig.name(of:)` draws
+    /// `bot_name` when it is non-blank and the literal `domovoi` otherwise,
+    /// so `domovoi` on a server called `stub house` means the config read
+    /// did not land — whatever the network did.
+    private func houseName(in app: XCUIApplication) -> XCUIElement {
+        app.staticTexts["stub house"]
+    }
+
+    /// Screenshot plus the accessibility tree, kept whatever happens next.
+    ///
+    /// The tree is the half that answers *why*: the picture of the first run
+    /// would have shown a header reading `domovoi`, and only the tree said
+    /// the header had also drawn `offline` and `not live` beside a server
+    /// address that was plainly reachable.
+    private func evidence(_ app: XCUIApplication, _ name: String) {
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = name
+        shot.lifetime = .keepAlways
+        add(shot)
+
+        let tree = XCTAttachment(string: app.debugDescription)
+        tree.name = "\(name)-tree"
+        tree.lifetime = .keepAlways
+        add(tree)
+
+        print("=== TREE: \(name) ===")
+        print(app.debugDescription)
     }
 
     /// Home, drawn against a server, at the ordinary type size.
-    ///
-    /// Asserts something only a working read can produce before taking the
-    /// picture, so a screenshot of a blank screen cannot pass for a
-    /// screenshot of Home. `stub house` is the stub's `bot_name`, which the
-    /// header draws from `/api/config`.
     func testHomeDrawsAgainstAServer() throws {
         let app = launch()
+        // Give the reads a chance to land before the picture is taken, but
+        // photograph either way: `waitForExistence`'s return value is the
+        // verdict, not the evidence.
+        let named = houseName(in: app).waitForExistence(timeout: 20)
+        evidence(app, "10-home-large")
         XCTAssertTrue(
-            app.staticTexts["stub house"].waitForExistence(timeout: 20),
-            "the header never drew the house's name — Home did not reach the server"
+            named,
+            "the header never drew the house's name — the config read did not land"
         )
-        shot(app, "10-home-large")
-        print("=== TREE: HOME ===")
-        print(app.debugDescription)
     }
 
     /// The same screen at the largest accessibility type size.
@@ -79,17 +108,24 @@ final class StubHouseUITests: XCTestCase {
     /// I1-D part 2's divergence list.
     func testHomeAtTheLargestTypeSize() throws {
         let app = launch(mode: "UICTContentSizeCategoryAccessibilityXXXL")
-        XCTAssertTrue(
-            app.staticTexts["stub house"].waitForExistence(timeout: 20),
-            "the header never drew the house's name"
-        )
-        shot(app, "11-home-ax5")
+        let named = houseName(in: app).waitForExistence(timeout: 20)
+        evidence(app, "11-home-ax5")
+        XCTAssertTrue(named, "the header never drew the house's name")
     }
 
     /// Apple's own audit, on Home rather than on the launch screen.
+    ///
+    /// `@MainActor` because `performAccessibilityAudit` is main-actor
+    /// isolated and calling it from a `nonisolated` test warns under Swift 6.
+    @MainActor
     func testHomePassesApplesAccessibilityAudit() throws {
         let app = launch()
-        XCTAssertTrue(app.staticTexts["stub house"].waitForExistence(timeout: 20))
+        let named = houseName(in: app).waitForExistence(timeout: 20)
+        evidence(app, "12-home-audited")
+        // The audit runs on whatever is on screen. It is worth running even
+        // when the read did not land — a header with a fallback name in it
+        // is still a header, and contrast and touch targets do not depend on
+        // the server answering.
         if #available(iOS 17.0, *) {
             try app.performAccessibilityAudit { issue in
                 // Print every issue rather than only failing on the first:
@@ -99,7 +135,7 @@ final class StubHouseUITests: XCTestCase {
                 return false
             }
         }
-        shot(app, "12-home-audited")
+        XCTAssertTrue(named, "the header never drew the house's name")
     }
 
     /// An unpaired phone: the device reads 401 and the pairing screen is
@@ -113,8 +149,6 @@ final class StubHouseUITests: XCTestCase {
         // Whatever it shows, photograph it: the point of this one is the
         // words, which no test has ever read on a screen.
         _ = app.staticTexts.firstMatch.waitForExistence(timeout: 20)
-        shot(app, "20-unpaired")
-        print("=== TREE: UNPAIRED ===")
-        print(app.debugDescription)
+        evidence(app, "20-unpaired")
     }
 }
