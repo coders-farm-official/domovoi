@@ -159,37 +159,69 @@ struct PhoneBarView: View {
 
     let model: ShellModel
 
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    /// Four equal columns at ordinary sizes; a horizontally scrolling row of
+    /// natural-width tabs at the accessibility ones.
+    ///
+    /// Apple's audit failed Home with **"Dynamic Type font sizes are
+    /// partially unsupported"**, and a Simulator at
+    /// `AccessibilityXXXL` showed what it meant: `mus…` and `vide…`. Four
+    /// equal columns of a 393-point screen is 98 points each, and `music` at
+    /// that type size does not fit in 98 points, so `.lineLimit(1)` cut it.
+    ///
+    /// Text that shrinks to an ellipsis is not text that scaled. The two
+    /// obvious answers are both wrong for a household: `minimumScaleFactor`
+    /// makes the word smaller for the person who asked for bigger words —
+    /// rejected once already at the I0 gate — and dropping to icons only
+    /// takes the word away from the sighted person who turned it up, while
+    /// leaving it for VoiceOver.
+    ///
+    /// So the bar scrolls instead. Every tab keeps its whole word at its
+    /// natural width and its 44-point target, and a person who needs four
+    /// large tabs swipes for the fourth.
     var body: some View {
-        let bar = model.phoneBar
-        HStack(alignment: .top, spacing: 0) {
-            ForEach(bar, id: \.self) { route in
-                let selected = model.barSelects(route)
-                Button {
-                    model.navigate(route)
-                } label: {
-                    VStack(spacing: 2) {
-                        Image(systemName: route.systemImage)
-                            .font(.body)
-                        Text(route.label.lowercased())
-                            .font(.caption2)
-                            .lineLimit(1)
-                    }
-                    .frame(maxWidth: .infinity, minHeight: 44)
-                    // The frame is the space; `contentShape` is the target.
-                    // Without it SwiftUI hit-tests the drawn icon and caption
-                    // only, and a Simulator measured these at
-                    // `{{34.5, 779.7}, {29.3, 33.8}}` — under 44 in both
-                    // directions, on the app's primary navigation. Same
-                    // defect as the header's live dot, found the same way.
-                    .contentShape(Rectangle())
-                    .foregroundStyle(selected ? Color.brandInk : Color.fgMuted)
+        Group {
+            if typeSize.isAccessibilitySize {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(alignment: .top, spacing: 0) { tabs(equalWidth: false) }
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel(route.label)
-                .accessibilityAddTraits(selected ? [.isButton, .isSelected] : [.isButton])
+            } else {
+                HStack(alignment: .top, spacing: 0) { tabs(equalWidth: true) }
             }
         }
         .padding(.top, 4)
         .background(.bar)
+    }
+
+    @ViewBuilder private func tabs(equalWidth: Bool) -> some View {
+        ForEach(model.phoneBar, id: \.self) { route in
+            let selected = model.barSelects(route)
+            Button {
+                model.navigate(route)
+            } label: {
+                VStack(spacing: 2) {
+                    Image(systemName: route.systemImage)
+                        .font(.body)
+                    Text(route.label.lowercased())
+                        .font(.caption2)
+                        .lineLimit(equalWidth ? 1 : nil)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.horizontal, equalWidth ? 0 : 14)
+                .frame(maxWidth: equalWidth ? .infinity : nil, minHeight: 44)
+                // The frame is the space; `contentShape` is the target.
+                // Without it SwiftUI hit-tests the drawn icon and caption
+                // only, and a Simulator measured these at
+                // `{{34.5, 779.7}, {29.3, 33.8}}` — under 44 in both
+                // directions, on the app's primary navigation. Same
+                // defect as the header's live dot, found the same way.
+                .contentShape(Rectangle())
+                .foregroundStyle(selected ? Color.brandInk : Color.fgMuted)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(route.label)
+            .accessibilityAddTraits(selected ? [.isButton, .isSelected] : [.isButton])
+        }
     }
 }
