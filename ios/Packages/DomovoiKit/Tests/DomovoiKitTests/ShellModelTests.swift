@@ -296,17 +296,26 @@ final class ShellModelTests: XCTestCase {
 
     /// Coming back re-asks the device register, no more often than the gap —
     /// and never for a phone that has no server at all.
+    ///
+    /// Driven **with a sender**, because that is now what consumes the
+    /// cadence slot: a phase change with nothing to send does not ask, so it
+    /// cannot leave I1-D's first real sender looking at a `false` it did not
+    /// cause (F9, and `testNoSenderMeansNoAskAndSoNoCadenceSlotBurnt`).
     func testComingBackReAsksTheRegisterAtTheRightCadence() {
         let rig = Rig(serverURL: server, token: "household-abc")
+        var sent = 0
         rig.model.scenePhaseChanged(to: .background)
-        rig.model.scenePhaseChanged(to: .active)
+        rig.model.scenePhaseChanged(to: .active, sendRegister: { sent += 1 })
+        XCTAssertEqual(1, sent, "coming back asks")
         XCTAssertFalse(rig.model.registerIfDue(reason: .changed), "just asked")
         rig.clock.advance(DeviceRegistry.reaskGapMs)
         XCTAssertTrue(rig.model.registerIfDue(reason: .changed))
 
         let noServer = Rig(serverURL: "")
+        var sentWithNoServer = 0
         noServer.model.scenePhaseChanged(to: .background)
-        noServer.model.scenePhaseChanged(to: .active)
+        noServer.model.scenePhaseChanged(to: .active, sendRegister: { sentWithNoServer += 1 })
+        XCTAssertEqual(0, sentWithNoServer, "nowhere to register, so nothing is sent")
         XCTAssertFalse(noServer.model.registerIfDue(reason: .changed), "nowhere to register")
         rig.model.stop()
         noServer.model.stop()
