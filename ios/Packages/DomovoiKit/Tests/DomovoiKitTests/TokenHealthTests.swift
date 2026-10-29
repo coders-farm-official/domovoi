@@ -1,5 +1,4 @@
 import XCTest
-import Synchronization
 @testable import DomovoiKit
 
 /// A server that no longer knows this phone (2026-10-17): reinstalled at the
@@ -20,98 +19,25 @@ final class TokenHealthTests: XCTestCase {
     /// A Domovoi web backend's device tier with `DEVICE_TOKEN_BACKOFF`
     /// (domovoi/admin_auth.py): a throttled attempt is not looked at and not
     /// counted; a checked wrong token is a failure; a right one clears it.
-    private final class FakeHousehold: Sendable {
-        struct Ledger {
-            var goodToken = "rotated-household-phrase"
-            var failures = 0
-            var lastFailure: Int64 = 0
-            /// The credential check cannot reach its database: 503, never a
-            /// verdict.
-            var dbDown = false
-            /// Every token the ledger actually LOOKED AT.
-            var evaluated: [String] = []
-            /// Called when the request arrives, before the answer (a re-pair
-            /// racing it).
-            var onArrival: (@Sendable (String?) -> Void)?
-        }
-
-        let state = Mutex(Ledger())
-        let now: Mutex<Int64>
-
-        init(now: Mutex<Int64>) {
-            self.now = now
-        }
-
-        func waitMs() -> Int64 {
-            state.withLock { ledger in
-                let charged = ledger.failures - 5
-                guard charged > 0 else { return 0 }
-                let delay = min(Int64(1000) << min(charged - 1, 20), 300_000)
-                return max(0, ledger.lastFailure + delay - now.withLock { $0 })
-            }
-        }
-
-        private static let refusal = StubURLProtocol.Answer.json(
-            #"{"detail":"X-Device-Token or admin session required"}"#,
-            status: 401
-        )
-
-        /// The dispatcher, as Android's `MockWebServer.dispatcher`.
-        func answer(_ request: URLRequest) -> StubURLProtocol.Answer {
-            let path = request.url?.path ?? ""
-            let token = request.value(forHTTPHeaderField: deviceTokenHeader)
-            state.withLock { $0.onArrival }?(token)
-
-            if path.hasPrefix("/api/health") { return .json(#"{"status":"ok"}"#) }
-            if path.hasPrefix("/api/admin") {
-                return .json(#"{"detail":"admin session required"}"#, status: 401)
-            }
-            if path.hasPrefix("/api/plugins/") {
-                // A plugin's own refusal that happens to name the header.
-                return .json(#"{"detail":"this plugin wants a fresh X-Device-Token"}"#, status: 401)
-            }
-            if state.withLock({ $0.dbDown }) {
-                return .json(
-                    #"{"detail":"auth check unavailable — the server could not check credentials just now; try again shortly"}"#,
-                    status: 503,
-                    headers: ["Retry-After": "5"]
-                )
-            }
-            if path.hasPrefix("/api/fetch") {
-                return .json(
-                    #"{"detail":"too many failed attempts — retry in 30s"}"#,
-                    status: 429,
-                    headers: ["Retry-After": "30"]
-                )
-            }
-            guard let token else { return Self.refusal }
-            let wait = waitMs()
-            if wait > 0 {
-                let seconds = (wait + 999) / 1000
-                return .json(
-                    #"{"detail":"too many wrong X-Device-Token values — retry in \#(seconds)s, or sign in as an admin"}"#,
-                    status: 429,
-                    headers: ["Retry-After": "\(seconds)"]
-                )
-            }
-            return state.withLock { ledger in
-                ledger.evaluated.append(token)
-                if token == ledger.goodToken {
-                    ledger.failures = 0
-                    return .json("{}")
-                }
-                ledger.failures += 1
-                ledger.lastFailure = now.withLock { $0 }
-                return Self.refusal
-            }
-        }
+    private struct Ledger: Sendable {
+        var goodToken = "rotated-household-phrase"
+        var failures = 0
+        var lastFailure: Int64 = 0
+        /// The credential check cannot reach its database: 503, never a
+        /// verdict.
+        var dbDown = false
+        /// Every token the ledger actually LOOKED AT.
+        var evaluated: [String] = []
     }
 
     private let server = "http://10.0.0.9:6369"
-    private let now = Mutex<Int64>(5_000_000)
-    private let token = Mutex<String?>("old-household-phrase")
-    private let logged = Mutex<[String]>([])
-    private var fake: FakeHousehold!
+    private let now = Shared<Int64>(5_000_000)
+    private let token = Shared<String?>("old-household-phrase")
+    private let logged = Shared<[String]>([])
+    private let ledger = Shared(Ledger())
+    /// Called when a request arrives, before the answer — a re-pair racing
+    /// one in flight.
+    private let onArrival = Shared<(@Sendable (String?) -> Void)?>(nil)
     private var book: TokenHealth.InMemoryBook!
     private var health: TokenHealth!
     private var client: DomovoiClient!
@@ -119,27 +45,93 @@ final class TokenHealthTests: XCTestCase {
     override func setUp() {
         super.setUp()
         StubURLProtocol.reset()
-        now.withLock { $0 = 5_000_000 }
-        token.withLock { $0 = "old-household-phrase" }
-        logged.withLock { $0 = [] }
-        fake = FakeHousehold(now: now)
+        now.set(5_000_000)
+        token.set("old-household-phrase")
+        logged.set([])
+        ledger.set(Ledger())
+        onArrival.set(nil)
+
         book = TokenHealth.InMemoryBook()
         let clock = now
         let log = logged
         health = TokenHealth(
             book: book,
-            clock: { clock.withLock { $0 } },
-            log: { line in log.withLock { $0.append(line) } }
+            clock: { clock.current },
+            log: { line in log.mutate { $0.append(line) } }
         )
-        let household = fake!
-        StubURLProtocol.dispatch { household.answer($0) }
+        StubURLProtocol.dispatch { [self] request in answer(request) }
         let held = token
+        let address = server
         client = DomovoiClient(
-            book: ServerBook(activeServer: { [server] in server }, tokenForServer: { _ in held.withLock { $0 } }),
+            book: ServerBook(activeServer: { address }, tokenForServer: { _ in held.current }),
             health: health,
             lock: HouseholdLock(),
             configuration: StubURLProtocol.session(timeout: 5)
         )
+    }
+
+    private static let refusal = StubURLProtocol.Answer.json(
+        #"{"detail":"X-Device-Token or admin session required"}"#,
+        status: 401
+    )
+
+    /// What the ledger still makes this address wait, in ms.
+    private func serverWaitMs() -> Int64 {
+        ledger.mutate { ledger in
+            let charged = ledger.failures - 5
+            guard charged > 0 else { return 0 }
+            let delay = min(Int64(1000) << min(charged - 1, 20), 300_000)
+            return max(0, ledger.lastFailure + delay - now.current)
+        }
+    }
+
+    private func answer(_ request: URLRequest) -> StubURLProtocol.Answer {
+        let path = request.url?.path ?? ""
+        let sent = request.value(forHTTPHeaderField: deviceTokenHeader)
+        onArrival.current?(sent)
+
+        if path.hasPrefix("/api/health") { return .json(#"{"status":"ok"}"#) }
+        if path.hasPrefix("/api/admin") {
+            return .json(#"{"detail":"admin session required"}"#, status: 401)
+        }
+        if path.hasPrefix("/api/plugins/") {
+            // A plugin's own refusal that happens to name the header.
+            return .json(#"{"detail":"this plugin wants a fresh X-Device-Token"}"#, status: 401)
+        }
+        if ledger.current.dbDown {
+            return .json(
+                #"{"detail":"auth check unavailable — the server could not check credentials just now; try again shortly"}"#,
+                status: 503,
+                headers: ["Retry-After": "5"]
+            )
+        }
+        if path.hasPrefix("/api/fetch") {
+            return .json(
+                #"{"detail":"too many failed attempts — retry in 30s"}"#,
+                status: 429,
+                headers: ["Retry-After": "30"]
+            )
+        }
+        guard let sent else { return Self.refusal }
+        let wait = serverWaitMs()
+        if wait > 0 {
+            let seconds = (wait + 999) / 1000
+            return .json(
+                #"{"detail":"too many wrong X-Device-Token values — retry in \#(seconds)s, or sign in as an admin"}"#,
+                status: 429,
+                headers: ["Retry-After": "\(seconds)"]
+            )
+        }
+        return ledger.mutate { ledger in
+            ledger.evaluated.append(sent)
+            if sent == ledger.goodToken {
+                ledger.failures = 0
+                return .json("{}")
+            }
+            ledger.failures += 1
+            ledger.lastFailure = now.current
+            return Self.refusal
+        }
     }
 
     private func get(_ path: String = "/api/rooms") async -> DomovoiError? {
@@ -154,9 +146,17 @@ final class TokenHealthTests: XCTestCase {
         }
     }
 
-    private var evaluated: [String] { fake.state.withLock { $0.evaluated } }
+    private var evaluated: [String] { ledger.current.evaluated }
+    private var goodToken: String { ledger.current.goodToken }
     private var withToken: Int {
         StubURLProtocol.recorded.filter { $0.value(forHTTPHeaderField: deviceTokenHeader) != nil }.count
+    }
+
+    private func deepInTheLedgersDoubling(failures: Int) {
+        ledger.mutate { ledger in
+            ledger.failures = failures
+            ledger.lastFailure = now.current
+        }
     }
 
     // ---- token wrong: stop at once ------------------------------------------
@@ -165,31 +165,32 @@ final class TokenHealthTests: XCTestCase {
         let first = await get()
         XCTAssertEqual(first?.failure?.status, 401)
         XCTAssertTrue(health.isRejected(server), "the refusal is remembered")
-        XCTAssertTrue(logged.withLock { $0 }.contains { $0.contains("refused this phone's household token") })
+        XCTAssertTrue(logged.current.contains { $0.contains("refused this phone's household token") })
 
         for _ in 0..<4 { _ = await get() }
         XCTAssertEqual(evaluated, ["old-household-phrase"], "the ledger looked at the old token once")
         XCTAssertEqual(withToken, 1)
         XCTAssertEqual(StubURLProtocol.requestCount, 5, "every later request went out without it")
-        XCTAssertEqual(fake.state.withLock { $0.failures }, 1)
+        XCTAssertEqual(ledger.current.failures, 1)
     }
 
     func testNoTokenAtAllIsNotAWrongToken() async {
-        token.withLock { $0 = nil }
+        token.set(nil)
         _ = await get()
         XCTAssertFalse(health.isRejected(server), "an unpaired phone is the pairing screen's business")
     }
 
     func testAnAdminTierRefusalIsNotAboutTheHouseholdToken() async {
-        token.withLock { $0 = fake.state.withLock { $0.goodToken } }
+        token.set(goodToken)
         _ = await get("/api/admin/x")
         XCTAssertFalse(health.isRejected(server))
-        XCTAssertNil(await get())
+        let after = await get()
+        XCTAssertNil(after)
     }
 
     func testOnlyTheServersOwnRefusalDropsTheToken() async {
         // N-T2: a plugin's 401 naming the header is not the core's verdict.
-        token.withLock { $0 = fake.state.withLock { $0.goodToken } }
+        token.set(goodToken)
         _ = await get("/api/plugins/x/thing")
         XCTAssertFalse(health.isRejected(server))
         XCTAssertTrue(isServerDeviceRefusal(status: 401, body: #"{"detail":"X-Device-Token or admin session required"}"#))
@@ -212,26 +213,26 @@ final class TokenHealthTests: XCTestCase {
         // The person pastes the new token while a request with the old one is
         // in flight; the old one's 401 must not mark the new one refused.
         let held = token
-        let good = fake.state.withLock { $0.goodToken }
-        fake.state.withLock { ledger in
-            ledger.onArrival = { sent in
-                if sent == "old-household-phrase" { held.withLock { $0 = good } }
-            }
+        let good = goodToken
+        onArrival.set { sent in
+            if sent == "old-household-phrase" { held.set(good) }
         }
         _ = await get()
         XCTAssertFalse(health.isRejected(server))
-        fake.state.withLock { $0.onArrival = nil }
-        XCTAssertNil(await get())
+        onArrival.set(nil)
+        let after = await get()
+        XCTAssertNil(after)
         XCTAssertEqual(StubURLProtocol.recorded.last?.value(forHTTPHeaderField: deviceTokenHeader), good)
     }
 
     func testANewTokenIsSentAgainOnceTheRefusalIsCleared() async {
         _ = await get()
         XCTAssertTrue(health.isRejected(server))
-        let good = fake.state.withLock { $0.goodToken }
-        token.withLock { $0 = good }
+        let good = goodToken
+        token.set(good)
         book.clear(server)
-        XCTAssertNil(await get())
+        let after = await get()
+        XCTAssertNil(after)
         XCTAssertEqual(StubURLProtocol.recorded.last?.value(forHTTPHeaderField: deviceTokenHeader), good)
     }
 
@@ -248,11 +249,9 @@ final class TokenHealthTests: XCTestCase {
     func testTheServersWaitIsHonouredAndThePhoneNeverExtendsItsOwnLockout() async {
         // The owner's phone: it has already sent wrong tokens all day and the
         // ledger is deep in its doubling (14 failures: a 256 s step).
-        fake.state.withLock { ledger in
-            ledger.failures = 14
-            ledger.lastFailure = now.withLock { $0 }
-        }
-        XCTAssertEqual(await get()?.failure?.status, 429)
+        deepInTheLedgersDoubling(failures: 14)
+        let first = await get()
+        XCTAssertEqual(first?.failure?.status, 429)
         let wait = health.waitMs(server)
         XCTAssertTrue((255_000...256_000).contains(wait), "waits what Retry-After said, \(wait)")
 
@@ -261,7 +260,7 @@ final class TokenHealthTests: XCTestCase {
         // there.
         let before = StubURLProtocol.requestCount
         for _ in 0..<12 {
-            now.withLock { $0 += 5_000 }
+            now.advance(5_000)
             let error = await get()
             guard case .tokenThrottled = error else {
                 return XCTFail("held here, got \(String(describing: error))")
@@ -274,8 +273,9 @@ final class TokenHealthTests: XCTestCase {
 
         // Past the wait: the next request is checked once, refused, and the
         // phone stops. Over the whole session the ledger saw ONE attempt.
-        now.withLock { $0 += 200_000 }
-        XCTAssertEqual(await get()?.failure?.status, 401)
+        now.advance(200_000)
+        let past = await get()
+        XCTAssertEqual(past?.failure?.status, 401)
         for _ in 0..<5 { _ = await get() }
         XCTAssertEqual(evaluated, ["old-household-phrase"])
         XCTAssertTrue(health.isRejected(server))
@@ -284,38 +284,39 @@ final class TokenHealthTests: XCTestCase {
     func testARightTokenWaitsOutTheServersWindowThenWorks() async {
         // Paired again with the right token, but the address is still inside
         // the wait the old token earned: the phone waits, then it works.
-        let good = fake.state.withLock { $0.goodToken }
-        fake.state.withLock { ledger in
-            ledger.failures = 9
-            ledger.lastFailure = now.withLock { $0 }
-        }
-        token.withLock { $0 = good }
-        XCTAssertEqual(await get()?.failure?.status, 429)
+        let good = goodToken
+        deepInTheLedgersDoubling(failures: 9)
+        token.set(good)
+        let first = await get()
+        XCTAssertEqual(first?.failure?.status, 429)
         guard case .tokenThrottled = await get() else { return XCTFail("not held") }
-        now.withLock { $0 += health.waitMs(server) + 1 }
-        XCTAssertNil(await get())
+        now.advance(health.waitMs(server) + 1)
+        let after = await get()
+        XCTAssertNil(after)
         XCTAssertEqual(evaluated, [good])
     }
 
     func testATooManyRequestsAboutSomethingElseDoesNotHoldTheToken() async {
-        let good = fake.state.withLock { $0.goodToken }
-        token.withLock { $0 = good }
+        token.set(goodToken)
         _ = await get("/api/fetch")
         XCTAssertEqual(health.waitMs(server), 0)
-        XCTAssertNil(await get())
+        let after = await get()
+        XCTAssertNil(after)
     }
 
     func testADatabaseBlipIsNotARefusal() async {
         // S-T2: the server answers 503 when it cannot check credentials; a
         // good token must survive it.
-        let good = fake.state.withLock { $0.goodToken }
-        token.withLock { $0 = good }
-        fake.state.withLock { $0.dbDown = true }
-        XCTAssertEqual(await get()?.failure?.status, 503)
+        let good = goodToken
+        token.set(good)
+        ledger.mutate { $0.dbDown = true }
+        let blip = await get()
+        XCTAssertEqual(blip?.failure?.status, 503)
         XCTAssertFalse(health.isRejected(server))
         XCTAssertEqual(health.waitMs(server), 0)
-        fake.state.withLock { $0.dbDown = false }
-        XCTAssertNil(await get())
+        ledger.mutate { $0.dbDown = false }
+        let after = await get()
+        XCTAssertNil(after)
         XCTAssertEqual(StubURLProtocol.recorded.last?.value(forHTTPHeaderField: deviceTokenHeader), good)
     }
 
@@ -325,10 +326,7 @@ final class TokenHealthTests: XCTestCase {
         XCTAssertNil(try client.tokenForDownload(file))
 
         book.clear(server)
-        fake.state.withLock { ledger in
-            ledger.failures = 9
-            ledger.lastFailure = now.withLock { $0 }
-        }
+        deepInTheLedgersDoubling(failures: 9)
         _ = await get()
         do {
             _ = try client.tokenForDownload(file)
@@ -341,14 +339,14 @@ final class TokenHealthTests: XCTestCase {
     // ---- a pasted token is checked before it is saved ------------------------
 
     func testAPastedTokenTheServerTakesIsAccepted() async {
-        token.withLock { $0 = nil }
-        let good = fake.state.withLock { $0.goodToken }
+        token.set(nil)
+        let good = goodToken
         let check = await client.checkDeviceToken(good)
         XCTAssertEqual(check, .accepted)
-        let probe = try? XCTUnwrap(StubURLProtocol.recorded.last)
-        XCTAssertEqual(probe??.url?.path, DomovoiClient.tokenCheckPath)
+        let probe = StubURLProtocol.recorded.last
+        XCTAssertEqual(probe?.url?.path, DomovoiClient.tokenCheckPath)
         XCTAssertEqual(
-            probe??.value(forHTTPHeaderField: deviceTokenHeader), good,
+            probe?.value(forHTTPHeaderField: deviceTokenHeader), good,
             "the candidate, not the stored token"
         )
         XCTAssertEqual(StubURLProtocol.requestCount, 1)
@@ -363,11 +361,8 @@ final class TokenHealthTests: XCTestCase {
     }
 
     func testAPasteDuringTheServersWaitIsNotSentAndSaysHowLong() async {
-        let good = fake.state.withLock { $0.goodToken }
-        fake.state.withLock { ledger in
-            ledger.failures = 9
-            ledger.lastFailure = now.withLock { $0 }
-        }
+        let good = goodToken
+        deepInTheLedgersDoubling(failures: 9)
         let first = await client.checkDeviceToken(good)
         guard case .throttled(let waitMs) = first, (7_000...8_000).contains(waitMs) else {
             return XCTFail("not throttled with the server's countdown: \(first)")
@@ -379,13 +374,13 @@ final class TokenHealthTests: XCTestCase {
     }
 
     func testAPasteTheServerCouldNotCheckIsUnavailable() async {
-        fake.state.withLock { $0.dbDown = true }
-        let good = fake.state.withLock { $0.goodToken }
-        var check = await client.checkDeviceToken(good)
-        XCTAssertEqual(check, .unavailable)
+        ledger.mutate { $0.dbDown = true }
+        let good = goodToken
+        let unchecked = await client.checkDeviceToken(good)
+        XCTAssertEqual(unchecked, .unavailable)
         StubURLProtocol.dispatch { _ in StubURLProtocol.Answer(error: URLError(.cannotConnectToHost)) }
-        check = await client.checkDeviceToken(good)
-        XCTAssertEqual(check, .unavailable)
+        let unanswered = await client.checkDeviceToken(good)
+        XCTAssertEqual(unanswered, .unavailable)
     }
 
     func testAPasteThatCouldNotBeAHeaderIsRefusedWithoutAsking() async {
@@ -394,7 +389,7 @@ final class TokenHealthTests: XCTestCase {
         XCTAssertEqual(StubURLProtocol.requestCount, 0, "nothing was sent")
     }
 
-    // ---- pure -----------------------------------------------------------------
+    // ---- pure ---------------------------------------------------------------
 
     func testRetryAfterIsReadAsSecondsOrADateClampedAndDefaulted() {
         XCTAssertEqual(TokenHealth.retryAfterMs("120"), 120_000)
@@ -404,11 +399,11 @@ final class TokenHealthTests: XCTestCase {
         XCTAssertEqual(TokenHealth.retryAfterMs("86400"), TokenHealth.maxWaitMs)
         XCTAssertEqual(TokenHealth.retryAfterMs(" 30 "), 30_000, "the header is trimmed")
         let wall: Int64 = 1_800_000_000_000
-        let date = DateFormatter()
-        date.locale = Locale(identifier: "en_US_POSIX")
-        date.timeZone = TimeZone(identifier: "GMT")
-        date.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
-        let header = date.string(from: Date(timeIntervalSince1970: Double(wall + 30_000) / 1000))
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(identifier: "GMT")
+        formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
+        let header = formatter.string(from: Date(timeIntervalSince1970: Double(wall + 30_000) / 1000))
         XCTAssertEqual(TokenHealth.retryAfterMs(header, now: { wall }), 30_000)
     }
 
@@ -425,25 +420,28 @@ final class TokenHealthTests: XCTestCase {
     }
 
     func testAWaitIsKeyedByTheNormalisedAddressAndNeverShortened() {
-        let clock = Mutex<Int64>(1_000)
-        let health = TokenHealth(clock: { clock.withLock { $0 } })
+        let clock = Shared<Int64>(1_000)
+        let health = TokenHealth(clock: { clock.current })
         health.noteWait("http://10.0.0.9:6369/", waitMs: 60_000)
         XCTAssertEqual(health.waitMs("http://10.0.0.9:6369"), 60_000, "one spelling, one wait")
         health.noteWait("http://10.0.0.9:6369", waitMs: 1_000)
         XCTAssertEqual(health.waitMs("http://10.0.0.9:6369"), 60_000, "the longer wait wins")
         health.noteWait("http://10.0.0.9:6369", waitMs: 120_000)
         XCTAssertEqual(health.waitMs("http://10.0.0.9:6369"), 120_000)
-        clock.withLock { $0 += 200_000 }
+        XCTAssertEqual(health.activeWaits()["http://10.0.0.9:6369"], 120_000)
+        clock.advance(200_000)
         XCTAssertEqual(health.waitMs("http://10.0.0.9:6369"), 0, "a wait in the past is no wait")
         XCTAssertTrue(health.activeWaits().isEmpty)
+        health.clearWait("http://10.0.0.9:6369")
+        XCTAssertEqual(health.waitMs("http://10.0.0.9:6369"), 0)
     }
 
     /// The default clock is the one the comment claims: Darwin's
-    /// `CLOCK_MONOTONIC`, which keeps running while the phone sleeps. There is
-    /// no way to put a Mac to sleep from a unit test, so what is checked here
-    /// is the part that can be: that it moves forward and is not the wall
-    /// clock (a monotonic clock measured from boot is far smaller than the
-    /// epoch's milliseconds).
+    /// `CLOCK_MONOTONIC`, which `man 3 clock_gettime` says keeps running
+    /// while the system sleeps. A unit test cannot put a Mac to sleep, so
+    /// what is checked here is the part that can be — that it moves forward
+    /// and is not the wall clock (a clock measured from boot is far smaller
+    /// than the epoch's milliseconds).
     func testTheDefaultClockIsMonotonicAndNotTheWallClock() {
         let first = TokenHealth.monotonicMs()
         XCTAssertGreaterThan(first, 0)

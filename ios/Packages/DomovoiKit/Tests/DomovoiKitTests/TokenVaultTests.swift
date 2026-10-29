@@ -177,15 +177,14 @@ final class TokenVaultTests: XCTestCase {
     /// delete-then-add" can be asserted rather than hoped for.
     private final class WatchfulKeychain: KeychainItems {
         private let inner = InMemoryKeychain()
-        private let counts = NSLock()
-        private var _removals = 0
+        private let counted = Shared(0)
 
-        var removals: Int { counts.withLock { _removals } }
+        var removals: Int { counted.current }
 
         func set(_ secret: Data, account: String) throws { try inner.set(secret, account: account) }
         func get(account: String) throws -> Data? { try inner.get(account: account) }
         func remove(account: String) throws {
-            counts.withLock { _removals += 1 }
+            counted.mutate { $0 += 1 }
             try inner.remove(account: account)
         }
     }

@@ -1,5 +1,5 @@
 import XCTest
-import Synchronization
+
 @testable import DomovoiKit
 
 /// This phone's row on the server.
@@ -191,18 +191,23 @@ final class DeviceRegistryTests: XCTestCase {
     }
 
     private final class Box: DeviceIdentity.Store {
-        private let state: Mutex<(saved: String?, writes: Int)>
-
-        init(saved: String? = nil) {
-            state = Mutex((saved: saved, writes: 0))
+        private struct State: Sendable {
+            var saved: String?
+            var writes = 0
         }
 
-        var writes: Int { state.withLock { $0.writes } }
+        private let state: Shared<State>
 
-        func read() -> String? { state.withLock { $0.saved } }
+        init(saved: String? = nil) {
+            state = Shared(State(saved: saved))
+        }
+
+        var writes: Int { state.current.writes }
+
+        func read() -> String? { state.current.saved }
 
         func write(_ deviceID: String) {
-            state.withLock { state in
+            state.mutate { state in
                 state.saved = deviceID
                 state.writes += 1
             }
