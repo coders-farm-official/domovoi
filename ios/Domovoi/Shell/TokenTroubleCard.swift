@@ -17,13 +17,11 @@ import SwiftUI
 ///  - `use this phone's media` writes the person's own choice
 ///    (``ShellModel/chooseThisPhone()``), which is sticky and beats the card.
 ///
-/// **The paste field is not here.** Android's card embeds
-/// `CheckedPairingField`, the same component the pairing screen uses — and
-/// the pairing screen is part 3's, along with the paste check and the vault
-/// write that make a field do anything. A field that looked like it took a
-/// token and did not would be exactly the misleading control this project has
-/// a rule against, so the card says where the token goes and part 3 adds the
-/// field.
+/// The paste field is ``CheckedPairingFieldView``, the same component the
+/// pairing screen and Settings use, with `pair again` on its button — which
+/// is Android's arrangement: one `CheckedPairingField` in all three places, so
+/// the words and the rules cannot drift between them. Part 2 drew a disabled
+/// row here instead, because the check and the vault write did not exist yet.
 struct TokenTroubleCard: View {
 
     let model: ShellModel
@@ -42,7 +40,13 @@ struct TokenTroubleCard: View {
                         .font(.footnote)
                         .foregroundStyle(.orange)
                 }
-                PairingFieldPlaceholder(label: ShellStrings.pairAgain)
+                CheckedPairingFieldView(field: PairingFieldModel(
+                    container: model.container,
+                    label: ShellStrings.pairAgain
+                ) { _ in
+                    model.showToast(ShellStrings.pairedAgainToast)
+                    model.pairingDone()
+                })
                 Text(tokenTroubleHint(trouble))
                     .font(.caption)
                     .foregroundStyle(Color.fgMuted)

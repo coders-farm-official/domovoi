@@ -899,6 +899,80 @@ final class ShellStringsTests: XCTestCase {
         XCTAssertEqual(2400, ShellStrings.toastMs)
     }
 
+    /// §6: Settings → Phones & browsers' three cards, and the forget
+    /// confirmation, against `ConnectionPanel.kt` and `ForgetServer.kt` —
+    /// both of which this file already reads.
+    func testPhonesAndBrowsersSaysWhatAndroidSays() {
+        for s in [
+            ShellStrings.serverCard,
+            ShellStrings.householdTokenCard,
+            ShellStrings.trustedServersCard,
+            ShellStrings.serverCardSub,
+            ShellStrings.householdTokenCardSub,
+            ShellStrings.trustedServersCardSub,
+            ShellStrings.notConnected,
+            ShellStrings.serverURLPlaceholder,
+            ShellStrings.saveAndReconnect,
+            ShellStrings.paired,
+            ShellStrings.notPaired,
+            ShellStrings.pairedExplanation,
+            ShellStrings.forgetTheToken,
+            ShellStrings.identityLabel,
+            ShellStrings.pinThisIdentity,
+            ShellStrings.identityNotPinnedYet,
+            ShellStrings.noTrustedServersYet,
+            forgetServerTitle,
+            forgetServerCancel,
+            forgetServerConfirm,
+        ] {
+            assertKotlinSaysWhole(s)
+        }
+        XCTAssertTrue(ShellStrings.serverCardSub.contains("—"), "em dash")
+        XCTAssertTrue(ShellStrings.trustedServersCardSub.contains("—"), "em dash")
+        XCTAssertTrue(ShellStrings.householdTokenCardSub.contains("→"), "arrow")
+    }
+
+    /// The four paragraphs of the identity section (§4.4), each of which has
+    /// a branch in the Kotlin's `when` and sits beside its neighbours, so
+    /// each is checked as the whole string the Kotlin builds.
+    func testTheIdentitySectionSaysWhatAndroidSays() {
+        for display: IdentityDisplay in [
+            .pinned(fingerprint: "SHA256:a"),
+            .offered(ServerIdentity.Pin(publicKey: "k", fingerprint: "SHA256:a")),
+            .noIdentityOffered,
+            .notPinnedYet,
+        ] {
+            assertKotlinSaysWhole(display.detail, "the identity section's \(display) paragraph")
+        }
+    }
+
+    /// The forget confirmation's opening and its three identity lines. The
+    /// opening carries the address in the middle of it, so it is checked
+    /// around the sentinel; the three lines are whole literals.
+    func testTheForgetConfirmationSaysWhatAndroidSays() {
+        assertKotlinSaysAround(forgetActiveServerText(address: sentinel, pinned: nil, proven: nil))
+        assertKotlinSaysWholeLiteral("\nnot proved on this network yet")
+        assertKotlinSaysWholeLiteral("\nit still proves that key — forgetting is not needed for identity's sake")
+        XCTAssertTrue(
+            forgetActiveServerText(address: "a", pinned: "p", proven: "q").contains("\nit now proves: q")
+        )
+        XCTAssertTrue(
+            forgetActiveServerText(address: "a", pinned: "p", proven: "p").contains("—"),
+            "em dash"
+        )
+    }
+
+    /// The two sentences Android has no words for are **not** in the Kotlin,
+    /// and that is the point: this is the test that fails if someone
+    /// "ports" one of them into `ShellStrings` as though it were Android's.
+    func testTheTwoIOSOnlySentencesAreNotInTheKotlin() {
+        XCTAssertFalse(Self.haystack.contains(IOSOnlyStrings.localNetworkDenied))
+        XCTAssertFalse(Self.haystack.contains(IOSOnlyStrings.noAddressYet))
+        // And the one Android does say about an empty sweep is still ours
+        // too, unchanged.
+        assertKotlinSaysAround(ShellStrings.nothingAnswered(port: 6369))
+    }
+
     /// `ShellStrings.forgot` is a prefix of `forgotActive`, so the shorter one
     /// must not be checked by containment alone; this pins the pair.
     func testForgettingTheActiveServerAlsoAsksForTheList() {

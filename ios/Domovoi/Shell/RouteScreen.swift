@@ -105,9 +105,16 @@ struct SettingsPlaceholder: View {
                     .font(.footnote)
                     .foregroundStyle(Color.fgMuted)
                     .fixedSize(horizontal: false, vertical: true)
-                Text("not built yet")
-                    .font(.footnote)
-                    .foregroundStyle(Color.fgMuted)
+                if section.key == "phones-and-browsers" {
+                    // The one section with a screen. Its first three cards
+                    // are part 3's; §6.5's four are a batch of their own, as
+                    // ``PhonesAndBrowsersPanel`` says and the report sizes.
+                    PhonesAndBrowsersPanel(model: model)
+                } else {
+                    Text("not built yet")
+                        .font(.footnote)
+                        .foregroundStyle(Color.fgMuted)
+                }
                 Button(ShellStrings.backTo(section.group.label)) { place = place.up ?? .index }
             }
             Spacer()

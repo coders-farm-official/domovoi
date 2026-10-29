@@ -28,6 +28,24 @@ struct AppShellView: View {
 
     var body: some View {
         content
+            // The toast is here for the same reason the sheets are: it is
+            // raised by the picker, by the pairing screen and by Settings,
+            // and the shell underneath any of them can swap while it is up
+            // (map §7.10, ``ShellModel/toast``).
+            .overlay(alignment: .bottom) {
+                if let toast = model.toast {
+                    Text(toast.text)
+                        .font(.footnote)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 9)
+                        .background(.thickMaterial, in: Capsule())
+                        .padding(.bottom, 28)
+                        .transition(.opacity)
+                        .onTapGesture { model.dismissToast() }
+                        .accessibilityAddTraits(.isStaticText)
+                        .id(toast.id)
+                }
+            }
             // Both sheets are owned HERE, above both shells, and that is not
             // stylistic (map §10.4): picking a side, or the server dropping
             // out of reach, swaps the shell underneath it, and a dialog owned
@@ -43,9 +61,9 @@ struct AppShellView: View {
             .sheet(item: $model.sheet) { sheet in
                 switch sheet {
                 case .connection:
-                    ConnectionDialogPlaceholder(model: model)
+                    ConnectionDialogView(model: model)
                 case .trustAgain:
-                    TrustAgainPlaceholder(model: model)
+                    TrustAgainSheet(model: model)
                 }
             }
             .onChange(of: scenePhase, initial: true) { _, phase in
@@ -64,7 +82,7 @@ struct AppShellView: View {
         case .workspace:
             WorkspaceView(model: model)
         case .pairing:
-            PairingPlaceholder(model: model)
+            PairingScreenView(model: model)
         case .tokenTroubleCard(let trouble):
             TokenTroubleCard(model: model, trouble: trouble)
         }
