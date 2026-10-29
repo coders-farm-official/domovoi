@@ -209,22 +209,29 @@ public final class AppContainer: Sendable {
     /// The app's client: the only one that carries the household token.
     public let client: DomovoiClient
 
-    /// The gate's probe client: the same client with no gate.
+    /// The gate's probe client: the same client, carrying ``AdmitsNoServer``
+    /// in place of the real gate.
     ///
     /// **Not public, and that is a correction rather than a style choice.** I
     /// made it public so the picker's sweep could use it instead of building
-    /// its own client, and the test written for that found the hazard: a
-    /// client with no gate still sends the household token on an ordinary
-    /// `.scoped` request, because ``DomovoiClient/tokenOutcome(for:wsUpgrade:)``
-    /// is `if let gate { try gate.requireAdmitted(base) }` and an absent gate
-    /// is therefore an absent check, not a refusal. So a public gate-less
-    /// client is a way to send the token to a server that has not proved
-    /// itself — finding A6-03 again, through a convenience.
+    /// its own client, and the test written for that found the hazard it had
+    /// then: the probe client was built `gate: nil`, and a client with no
+    /// gate still sent the household token on an ordinary `.scoped` request,
+    /// because ``DomovoiClient/tokenOutcome(for:wsUpgrade:)`` read
+    /// `if let gate { try gate.requireAdmitted(base) }` — an absent gate was
+    /// an absent check, not a refusal. A public client of that shape was a
+    /// way to send the token to a server that had not proved itself: finding
+    /// A6-03 again, through a convenience.
     ///
-    /// What callers outside this module get instead is
-    /// ``unauthenticatedProbe``, which is a type that cannot carry a token
-    /// whatever it is pointed at. `ClientGraphTests.testAGateLessClientStillSendsTheTokenOnAScopedRequest`
-    /// pins the measurement this paragraph rests on.
+    /// I1-C part 2 closed the fail-open itself — ``DomovoiClient/gate`` is
+    /// non-optional with no default, and this client's gate refuses
+    /// everything, so a `.scoped` request through it is now **held** rather
+    /// than sent unproven
+    /// (`ClientGraphTests.testNoClientPutsTheTokenOnTheActiveServerWithoutAGateAdmittingIt`).
+    /// This stays internal anyway: callers outside this module get
+    /// ``unauthenticatedProbe``, a type that cannot carry a token whatever it
+    /// is pointed at, and one wrong `gate:` argument here should not be able
+    /// to turn an exported convenience into an unproven token.
     let probeClient: DomovoiClient
 
     /// The one way outside this module to ask a host that is not (yet) the

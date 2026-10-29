@@ -67,8 +67,14 @@ final class TokenHealthTests: XCTestCase {
         }
         let held = token
         let address = server
+        // `AdmitsAnyServer`: this file's subject is rule 5 and rule 6 (a
+        // refused token, and a server that asked this phone to wait), both of
+        // which sit in front of the gate, so the gate must admit everything
+        // or nothing here would reach them. Said out loud because
+        // ``DomovoiClient/gate`` has no default argument.
         client = DomovoiClient(
             book: ServerBook(activeServer: { address }, tokenForServer: { _ in held.current }),
+            gate: AdmitsAnyServer(),
             health: health,
             lock: HouseholdLock(),
             configuration: StubURLProtocol.session(timeout: 5)

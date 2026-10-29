@@ -19,13 +19,24 @@ final class DomovoiClientTests: XCTestCase {
         StubURLProtocol.reset()
     }
 
+    /// The default gate is `AdmitsAnyServer`, not an absent one:
+    /// ``DomovoiClient/gate`` is non-optional with no default argument since
+    /// I1-C part 2, so the choice is stated here, once, for the many tests
+    /// below whose subject is one of the six rules **in front** of the gate —
+    /// the cleartext policy, the scope, room mode, the saved token, token
+    /// health, the wait — or the redirect chain, or the error mapping. The
+    /// tests whose subject IS the gate pass `ClosedGate` and say so.
+    ///
+    /// It is deliberately not ``AdmitsNoServer``: with that, every ordinary
+    /// request in this file would be held and the rules in front of the gate
+    /// would never be reached.
     private func makeClient(
         server: String? = nil,
         token: String? = "household-abc",
         book: ServerBook? = nil,
         health: TokenHealth? = nil,
         lock: HouseholdLock = HouseholdLock(),
-        gate: (any TokenGate)? = nil,
+        gate: any TokenGate = AdmitsAnyServer(),
         timeout: TimeInterval? = nil
     ) -> DomovoiClient {
         DomovoiClient(

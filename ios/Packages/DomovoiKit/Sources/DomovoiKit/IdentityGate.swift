@@ -728,7 +728,7 @@ private actor ProbeQueue {
         // say so instead of stopping. See `httpProbe(_:)`.
         if ProbeCycle.inFlight.contains(key) {
             let why = "the identity probe for \(key) asked the same gate to prove \(key); "
-                + "the probe has to go through a client that holds no gate"
+                + "the probe has to go through a client that does not hold this gate"
             // Logged as well as thrown. `prepare` is the only production
             // caller and it discards what it catches (an unreachable server
             // is not a verdict), so without this line the one failure here

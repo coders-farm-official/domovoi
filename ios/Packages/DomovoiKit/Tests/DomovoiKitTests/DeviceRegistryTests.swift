@@ -192,9 +192,13 @@ final class DeviceRegistryTests: XCTestCase {
 
     // ---- the calls ------------------------------------------------------------
 
+    /// `AdmitsAnyServer`: the registration call is the subject here, not the
+    /// identity rules, so this client applies none — said out loud, because
+    /// ``DomovoiClient/gate`` has no default argument (see `AdmitsAnyServer`).
     private func client() -> DomovoiClient {
         DomovoiClient(
             book: .fixed(server: "http://10.0.0.9:6369", token: "household-abc"),
+            gate: AdmitsAnyServer(),
             configuration: StubURLProtocol.session(timeout: 5)
         )
     }

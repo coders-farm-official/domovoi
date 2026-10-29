@@ -88,9 +88,15 @@ func headerSafeToken(_ token: String?) -> String? {
 /// what `prepare` left and a device-tier `401` from that server is how
 /// pairing starts. See ``DomovoiClient/prepareIdentity(for:wsUpgrade:)``.
 ///
-/// ``IdentityGate`` is the implementation; the client takes this as an
-/// optional and a nil gate means "nothing beyond being the active server",
-/// which is the shape Android's own tests use.
+/// ``IdentityGate`` is the implementation, and ``DomovoiClient/gate`` is
+/// **not optional and has no default argument**: every client says which gate
+/// it has. It used to be `(any TokenGate)? = nil`, and then an absent gate
+/// was an absent *check* rather than a refusal — a client written without a
+/// `gate:` argument put the household token on the active server with no
+/// identity proof taken, which is finding A6-03 reachable by omission (I1-C
+/// part 1 measured it; part 2 closed it). A call site that wants no identity
+/// rules now writes ``AdmitsNoServer`` or, in the test target,
+/// `AdmitsAnyServer`, and the reader can see which was meant.
 ///
 /// ### Why there are two methods and not one
 ///
@@ -130,6 +136,42 @@ public extension TokenGate {
     /// A gate with nothing to take: the shape the tests' stubs want, and the
     /// reason adding ``prepare(_:)`` did not break them.
     func prepare(_ base: ServerURL) async {}
+}
+
+/// A gate that admits no server: every token-bearing request is held, and no
+/// refusal may invite a paste.
+///
+/// This is what ``DomovoiClient/graph(book:health:lock:configuration:gate:)``
+/// hands its probe client — the client the identity gate itself probes
+/// through, which must have no identity rules applied to it because it is how
+/// the rules are decided in the first place.
+///
+/// **It is never consulted, because `TokenMode.none` never asks.** The probe
+/// reaches the network only through ``DomovoiClient/unauthenticatedProbe``,
+/// and `perform` in that mode reaches neither `prepareIdentity` nor
+/// `tokenOutcome` and gives every redirect hop a decider that answers
+/// `.bare`. So this gate exists to refuse, not to be asked: it is here so
+/// that **nothing escapes if that ever changes** — the day a probe needs a
+/// POST, or a `.scoped` request, or anything else that does reach the token
+/// decision, the probe client holds the token rather than sending it
+/// unproven. `ClientGraphTests`'
+/// `testNoClientPutsTheTokenOnTheActiveServerWithoutAGateAdmittingIt` is the
+/// measurement, and it drives the probe client through exactly that path.
+///
+/// Not "the permissive gate under another name": a permissive gate on the
+/// probe client would be the old fail-open with a type annotation. A test
+/// that genuinely wants no identity rules wants the test target's
+/// `AdmitsAnyServer` instead, and has to say so.
+public struct AdmitsNoServer: TokenGate {
+    public init() {}
+
+    public func requireAdmitted(_ base: ServerURL) throws {
+        throw DomovoiError.identityHeld("this client admits no server")
+    }
+
+    /// No. A client that admits no server has no business telling the person
+    /// to paste the household token into it (A6-03).
+    public func admitsPairingPrompt(_ base: ServerURL?) -> Bool { false }
 }
 
 /// True when a refusal is the server asking to be **paired** rather than

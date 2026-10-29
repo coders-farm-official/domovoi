@@ -21,12 +21,17 @@ final class TokenPasteFieldTests: XCTestCase {
         StubURLProtocol.reset()
     }
 
+    /// The default gate is `AdmitsAnyServer`, stated rather than left out:
+    /// most of this file's subject is the paste check's own rules — room
+    /// mode, the wait, a candidate that is not header-safe, the `.candidate`
+    /// mode on the first hop and nothing on any hop after it — and the tests
+    /// whose subject is the gate pass `ClosedGate` or a real ``IdentityGate``.
     private func makeClient(
         server: String? = nil,
         token: String? = "household-saved",
         health: TokenHealth? = nil,
         lock: HouseholdLock = HouseholdLock(),
-        gate: (any TokenGate)? = nil
+        gate: any TokenGate = AdmitsAnyServer()
     ) -> DomovoiClient {
         DomovoiClient(
             book: .fixed(server: server ?? self.server, token: token),

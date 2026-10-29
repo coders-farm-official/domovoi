@@ -22,11 +22,11 @@ public extension DomovoiClient {
     /// deferral is not available and is not wanted: a `lazy var` or an
     /// `unowned` back-reference read during `init` is the same null
     /// dereference in a different suit. Instead the order is reversed — the
-    /// gate-less client is built **first**, the gate is built with it, and the
-    /// real client is built last, with the gate:
+    /// probe client is built **first**, with a gate that is not the real one,
+    /// the gate is built with that client, and the real client is built last:
     ///
     /// ```
-    /// probe = DomovoiClient(gate: nil)      ← no gate, by construction
+    /// probe = DomovoiClient(gate: AdmitsNoServer())   ← not the real gate
     /// gate  = Gate(probe.unauthenticatedProbe)
     /// app   = DomovoiClient(gate: gate)
     /// ```
@@ -68,7 +68,7 @@ public extension DomovoiClient {
     /// `testTheContainersGateProvesAServerWithoutReenteringItself` passing,
     /// and only the two assertions about the wiring itself failed.
     ///
-    /// What `gate: nil` is actually for, then:
+    /// What keeping the real gate off the probe client is actually for, then:
     ///
     ///  - **Android parity, as a rule rather than as a coincidence.** There,
     ///    removing `DeviceAuthInterceptor` is the *only* thing that stops the
@@ -78,24 +78,38 @@ public extension DomovoiClient {
     ///  - **It keeps the gate out of its own answer.** A verdict the gate
     ///    reached while consulting itself would be a verdict about nothing,
     ///    and the day a probe stops being `TokenMode.none` — a probe that
-    ///    needs a POST, say — `gate: nil` is the one of the two mechanisms
-    ///    that still holds.
+    ///    needs a POST, say — this is the one of the two mechanisms that
+    ///    still holds.
     ///  - I1-B's ``DomovoiError/probeWiringCycle`` and its `@TaskLocal` guard
     ///    remain the net under that day. A net, not the design.
     ///
-    /// **What `gate: nil` does NOT buy, measured:** a gate-less client still
-    /// puts the household token on an ordinary `.scoped` request to the
-    /// active server, because ``DomovoiClient/tokenOutcome(for:wsUpgrade:)``
-    /// is `if let gate { try gate.requireAdmitted(base) }` — an absent gate
-    /// is an absent *check*, not a refusal. So a gate-less client is not a
-    /// safe client, and
-    /// `ClientGraphTests.testAGateLessClientStillSendsTheTokenOnAScopedRequest`
-    /// asserts exactly that. It is why ``AppContainer`` keeps its probe
-    /// client internal and hands out ``AppContainer/unauthenticatedProbe``
-    /// instead, and it is reported in `I1C1-REPORT.md` as a fail-open worth
-    /// a decision: in production there is one app client and it has the gate,
-    /// so nothing is wrong today, but the default direction of the `if` is
-    /// the permissive one.
+    /// ### Why the probe client's gate is ``AdmitsNoServer`` and not nothing
+    ///
+    /// Until I1-C part 2 this was `gate: nil`, and part 1 measured what that
+    /// bought: **nothing at all about the token.**
+    /// ``DomovoiClient/tokenOutcome(for:wsUpgrade:)`` read
+    /// `if let gate { try gate.requireAdmitted(base) }`, so an absent gate
+    /// was an absent *check* rather than a refusal, and a client built
+    /// without a `gate:` argument put the household token on an ordinary
+    /// `.scoped` request to the active server with no proof taken — finding
+    /// A6-03 reachable by omission, and the default argument made the
+    /// omission the easiest thing to write.
+    ///
+    /// So ``DomovoiClient/gate`` is now non-optional with no default, and the
+    /// probe client's choice is written down here: ``AdmitsNoServer``, which
+    /// holds every token-bearing request. It is **never consulted**, because
+    /// `TokenMode.none` never asks; it refuses so that nothing escapes if
+    /// that ever changes.
+    /// `ClientGraphTests.testNoClientPutsTheTokenOnTheActiveServerWithoutAGateAdmittingIt`
+    /// drives the probe client down the `.scoped` path on purpose and asserts
+    /// the token is held, and that test was watched failing against the old
+    /// optional, against the optional restored, and against the probe client
+    /// handed the test target's permissive `AdmitsAnyServer`.
+    ///
+    /// ``AppContainer`` still keeps its probe client internal and hands out
+    /// ``AppContainer/unauthenticatedProbe`` instead. That is now belt and
+    /// braces rather than the only thing standing between a caller and an
+    /// unproven token.
     ///
     /// - Parameter gate: given the finished probe client, returns the gate.
     ///   Non-escaping and called exactly once, before the app's client
@@ -110,7 +124,7 @@ public extension DomovoiClient {
     ) -> (probe: DomovoiClient, app: DomovoiClient, gate: Gate) {
         let probe = DomovoiClient(
             book: book,
-            gate: nil,
+            gate: AdmitsNoServer(),
             health: health,
             lock: lock,
             configuration: configuration

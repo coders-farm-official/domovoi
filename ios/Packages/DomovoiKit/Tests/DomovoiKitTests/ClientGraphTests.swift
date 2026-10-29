@@ -37,9 +37,16 @@ final class ClientGraphTests: XCTestCase {
     // MARK: - the property the brief asks for
 
     /// **The one that must fail if the wiring is wrong.** Watched failing by
-    /// changing `graph`'s first `DomovoiClient(… gate: nil …)` to pass the
-    /// gate: it reports the gate.
-    func testTheGatesProbeClientHoldsNoGate() {
+    /// changing `graph`'s first `DomovoiClient(… gate: AdmitsNoServer() …)`
+    /// to pass the gate: it reports the gate.
+    ///
+    /// The property used to be "the probe client holds **no** gate", because
+    /// ``DomovoiClient/gate`` was an optional and `graph` passed `nil`. Since
+    /// I1-C part 2 it is non-optional, and the property is the sharper one:
+    /// the probe client holds a gate that is not the real one and admits
+    /// nothing. "No gate" was never the safe state — see
+    /// ``testNoClientPutsTheTokenOnTheActiveServerWithoutAGateAdmittingIt``.
+    func testTheGatesProbeClientDoesNotHoldTheRealGate() {
         let gate = RecordingGate()
         let graph = DomovoiClient.graph(
             book: .fixed(server: "http://10.0.0.42:6369", token: "tttttttttttt"),
@@ -47,11 +54,14 @@ final class ClientGraphTests: XCTestCase {
             lock: HouseholdLock(),
             configuration: StubURLProtocol.session()
         ) { probe in
-            XCTAssertNil(probe.gate, "the client handed to the gate must not already hold one")
+            XCTAssertTrue(
+                probe.gate is AdmitsNoServer,
+                "the client handed to the gate must admit no server, not \(type(of: probe.gate))"
+            )
             return gate
         }
-        XCTAssertNil(graph.probe.gate, "the gate's probe client must carry no gate")
-        XCTAssertNotNil(graph.app.gate, "the app's client must carry the gate")
+        XCTAssertTrue(graph.probe.gate is AdmitsNoServer, "the gate's probe client must admit no server")
+        XCTAssertTrue(graph.app.gate as? RecordingGate === gate, "the app's client must carry the gate")
         XCTAssertTrue(graph.gate === gate, "the gate the call returns is the one that was built")
     }
 
@@ -60,8 +70,7 @@ final class ClientGraphTests: XCTestCase {
     /// case that would recurse.
     func testTheContainerWiresItTheSameWay() {
         let container = makeContainer()
-        XCTAssertNil(container.probeClient.gate)
-        XCTAssertNotNil(container.client.gate)
+        XCTAssertTrue(container.probeClient.gate is AdmitsNoServer)
         XCTAssertTrue((container.client.gate as? IdentityGate) === container.identity)
     }
 
@@ -113,8 +122,9 @@ final class ClientGraphTests: XCTestCase {
     /// A probe through the derived client sends no token and asks no gate.
     ///
     /// Two things at once, and both matter: `TokenMode.none` means nothing is
-    /// carried (I1-A/B), and the absent gate means nothing is asked — so the
-    /// recursion the whole shape exists to prevent has no way to start.
+    /// carried (I1-A/B), and the probe client not holding the real gate means
+    /// nothing is asked of it — so the recursion the whole shape exists to
+    /// prevent has no way to start.
     func testAProbeThroughTheDerivedClientSendsNoTokenAndAsksNoGate() async throws {
         let gate = RecordingGate()
         let graph = DomovoiClient.graph(
@@ -138,23 +148,23 @@ final class ClientGraphTests: XCTestCase {
         XCTAssertEqual([], gate.required.current, "the probe must not ask the gate to admit it")
     }
 
-    /// **A gate-less client still sends the household token on an ordinary
-    /// `.scoped` request.** Measured, not assumed, and it is why
-    /// ``AppContainer/probeClient`` is not public.
+    /// **Neither client asks the OTHER one's gate.** The probe client's gate
+    /// is never the real one, and the app's client is the only one that takes
+    /// the real proof.
     ///
-    /// ``DomovoiClient/tokenOutcome(for:wsUpgrade:)`` reads
-    /// `if let gate { try gate.requireAdmitted(base) }`, so an absent gate is
-    /// an absent check rather than a refusal. `gate: nil` therefore buys the
-    /// probe client exactly one thing — it asks no gate — and buys it
-    /// **nothing** about the token. The token is kept off the probe by
-    /// ``UnauthenticatedProbe``'s `TokenMode.none`, which is a different
-    /// mechanism entirely.
-    ///
-    /// I wrote the opposite in a comment first, and this test is what
-    /// corrected it. It is left asserting the uncomfortable truth rather than
-    /// the comfortable one, so the next person to reach for a gate-less
-    /// client as a "safe" client finds out here.
-    func testAGateLessClientStillSendsTheTokenOnAScopedRequest() async throws {
+    /// This is what is left of
+    /// `testAGateLessClientStillSendsTheTokenOnAScopedRequest`, whose subject
+    /// no longer exists. That test measured the fail-open — a client built
+    /// without a `gate:` argument put the household token on the active
+    /// server with nothing having admitted it — and said so on purpose, so
+    /// that the next person to reach for a gate-less client as a "safe"
+    /// client found out. I1-C part 2 removed the state it measured:
+    /// ``DomovoiClient/gate`` is non-optional with no default, so there is no
+    /// gate-less client to build. Its assertion about the token moved to
+    /// ``testNoClientPutsTheTokenOnTheActiveServerWithoutAGateAdmittingIt``
+    /// with the sign reversed, and what remains here is the half that is
+    /// still about the wiring.
+    func testOnlyTheAppsClientTakesTheRealProof() async throws {
         let gate = RecordingGate()
         let graph = DomovoiClient.graph(
             book: .fixed(server: "http://10.0.0.42:6369", token: "household-abc"),
@@ -163,18 +173,25 @@ final class ClientGraphTests: XCTestCase {
             configuration: StubURLProtocol.session()
         ) { _ in gate }
         StubURLProtocol.enqueue(.json("{}"))
-        _ = try await graph.probe.raw(method: "GET", path: "/api/state", trackPairing: false)
-        XCTAssertEqual([], gate.prepared.current, "no proof is taken for a client with no gate")
-        XCTAssertEqual([], gate.required.current, "and no gate is asked to admit it")
-        XCTAssertEqual(
-            "household-abc", StubURLProtocol.header("X-Device-Token", at: 0),
-            "an absent gate is an absent CHECK, not a refusal: the token goes out unproven"
-        )
+        // The probe client's `.scoped` request is held by its own gate, and
+        // the real gate hears nothing about it either way.
+        do {
+            _ = try await graph.probe.raw(method: "GET", path: "/api/state", trackPairing: false)
+            XCTFail("the probe client's gate admits no server; the request should have been held")
+        } catch {
+            guard case .identityHeld = error else {
+                return XCTFail("expected the request to be held, got \(error)")
+            }
+        }
+        XCTAssertEqual([], gate.prepared.current, "the probe client must not ask the real gate for a proof")
+        XCTAssertEqual([], gate.required.current, "nor ask it to admit anything")
         // The app's client, with the gate, takes the proof first.
         StubURLProtocol.enqueue(.json("{}"))
         _ = try await graph.app.raw(method: "GET", path: "/api/state", trackPairing: false)
         XCTAssertEqual(["10.0.0.42"], gate.prepared.current, "the app's client takes the proof")
-        XCTAssertEqual("household-abc", StubURLProtocol.header("X-Device-Token", at: 1))
+        XCTAssertEqual(["10.0.0.42"], gate.required.current, "and is admitted before the token goes out")
+        XCTAssertEqual("household-abc", StubURLProtocol.header("X-Device-Token", at: 0))
+        XCTAssertEqual(1, StubURLProtocol.requestCount, "only the app's client reached the transport")
     }
 
     /// **The default-deny property, and the one test that must fail if it is
@@ -228,11 +245,12 @@ final class ClientGraphTests: XCTestCase {
     /// So what the container hands out is the probe, not the client: a type
     /// that carries no token whatever it is pointed at.
     ///
-    /// The test above is the other half of this one: it points the *client*
-    /// at the same path and finds the token on it. I did not sabotage this
-    /// one separately, because the pair is the measurement — the same request
-    /// through the probe carries nothing and through the client carries the
-    /// token.
+    /// ``testOnlyTheAppsClientTakesTheRealProof`` is the other half of this
+    /// one: it points the app's *client* at the same path and finds the token
+    /// on it, after the proof. I did not sabotage this one separately,
+    /// because the pair is the measurement — the same request through the
+    /// probe carries nothing, and through the app's client carries the token
+    /// only once the gate has admitted it.
     func testTheContainerHandsOutAProbeAndNotAClient() async throws {
         let container = makeContainer()
         StubURLProtocol.enqueue(.json("{}"))

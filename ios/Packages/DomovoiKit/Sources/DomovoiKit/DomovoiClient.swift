@@ -108,7 +108,11 @@ public enum TokenCheck: Equatable, Sendable {
 public final class DomovoiClient: Sendable {
 
     public let book: ServerBook
-    let gate: (any TokenGate)?
+    /// Not optional, and the initialiser gives it no default: see
+    /// ``TokenGate``. A client with no identity rules says so with
+    /// ``AdmitsNoServer``, which refuses, rather than by leaving the argument
+    /// out, which used to admit.
+    let gate: any TokenGate
     public let health: TokenHealth?
     let lock: HouseholdLock
     let session: URLSession
@@ -125,7 +129,7 @@ public final class DomovoiClient: Sendable {
 
     public init(
         book: ServerBook,
-        gate: (any TokenGate)? = nil,
+        gate: any TokenGate,
         health: TokenHealth? = nil,
         lock: HouseholdLock = .shared,
         configuration: URLSessionConfiguration = DomovoiClient.defaultConfiguration()
@@ -185,7 +189,6 @@ public final class DomovoiClient: Sendable {
 
     func isPairingRefusalFromOurServer(status: Int, body: String?) -> Bool {
         guard isDeviceTokenRefusal(status: status, body: body) else { return false }
-        guard let gate else { return true }
         return gate.admitsPairingPrompt(TokenScope.baseOf(baseURL))
     }
 
@@ -275,10 +278,8 @@ public final class DomovoiClient: Sendable {
         case .wait(let ms):
             return .wait(ms: ms)
         case .ask(let base, let token, let server):
-            if let gate {
-                do { try gate.requireAdmitted(base) }
-                catch { return .held(reason: (error as? DomovoiError)?.message ?? "\(error)") }
-            }
+            do { try gate.requireAdmitted(base) }
+            catch { return .held(reason: (error as? DomovoiError)?.message ?? "\(error)") }
             return .send(token: token, server: server)
         }
     }
@@ -330,7 +331,6 @@ public final class DomovoiClient: Sendable {
     /// send the token. iOS is the stricter of the two, which is the safe
     /// direction for a redirect this app did not choose.
     func prepareIdentity(for url: ServerURL, wsUpgrade: Bool) async {
-        guard let gate else { return }
         switch tokenDecision(for: url, wsUpgrade: wsUpgrade) {
         case .ask(let base, _, _), .unpaired(let base):
             await gate.prepare(base)
@@ -700,23 +700,21 @@ public final class DomovoiClient: Sendable {
             let wait = health.waitMs(raw)
             if wait > 0 { return .throttled(waitMs: wait) }
         }
-        if let gate {
-            // Android asks the gate here unconditionally — not through the
-            // token decision, because the candidate is not the saved token
-            // and none of the five rules in front of the gate is about it.
-            // So the proof is taken here too, directly, rather than through
-            // `prepareIdentity`: this call is not a request whose scope the
-            // decision can judge, and the room-mode and wait rules it does
-            // share are applied above, in this method's own words.
-            //
-            // (Since the review's fix A, `prepareIdentity` would also take
-            // the proof for a phone with no saved token, so this is no longer
-            // the only way to a warm cache on the pairing screen. It stays
-            // explicit because this method must take it whether or not there
-            // is a token, which is a stronger rule than the decision's.)
-            await gate.prepare(base)
-            do { try gate.requireAdmitted(base) } catch { return .unavailable }
-        }
+        // Android asks the gate here unconditionally — not through the token
+        // decision, because the candidate is not the saved token and none of
+        // the five rules in front of the gate is about it. So the proof is
+        // taken here too, directly, rather than through `prepareIdentity`:
+        // this call is not a request whose scope the decision can judge, and
+        // the room-mode and wait rules it does share are applied above, in
+        // this method's own words.
+        //
+        // (Since the review's fix A, `prepareIdentity` would also take the
+        // proof for a phone with no saved token, so this is no longer the
+        // only way to a warm cache on the pairing screen. It stays explicit
+        // because this method must take it whether or not there is a token,
+        // which is a stronger rule than the decision's.)
+        await gate.prepare(base)
+        do { try gate.requireAdmitted(base) } catch { return .unavailable }
         guard let url = URL(string: "\(base.scheme)://\(hostForURL(base.host)):\(base.port)\(Self.tokenCheckPath)") else {
             return .unavailable
         }

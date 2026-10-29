@@ -24,9 +24,22 @@ final class DiscoveryTests: XCTestCase {
         StubURLProtocol.reset()
     }
 
+    /// ``AdmitsNoServer``, which is what the identity gate's own probe client
+    /// carries in production — every use of this client in this file is
+    /// `.unauthenticatedProbe`, so this is the real wiring and not a stand-in
+    /// for it.
+    ///
+    /// It is never consulted: `TokenMode.none` reaches neither
+    /// `prepareIdentity` nor `tokenOutcome`, which is exactly why the probe
+    /// carries no token. It is here so the file keeps testing what it says it
+    /// tests — if a probe ever stopped being `.none`, the token would be
+    /// **held** rather than sent to all 254 addresses, and
+    /// `testAProbeCarriesNoTokenEvenToTheActiveServer` would fail rather than
+    /// quietly pass with the token on it.
     private func makeClient(token: String? = "household-abc") -> DomovoiClient {
         DomovoiClient(
             book: .fixed(server: server, token: token),
+            gate: AdmitsNoServer(),
             lock: HouseholdLock(),
             configuration: StubURLProtocol.session(timeout: 2)
         )
