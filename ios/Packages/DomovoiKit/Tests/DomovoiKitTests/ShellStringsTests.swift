@@ -968,9 +968,9 @@ final class ShellStringsTests: XCTestCase {
     func testTheTwoIOSOnlySentencesAreNotInTheKotlin() {
         XCTAssertFalse(Self.haystack.contains(IOSOnlyStrings.localNetworkDenied))
         XCTAssertFalse(Self.haystack.contains(IOSOnlyStrings.noAddressYet))
-        // And the one Android does say about an empty sweep is still ours
-        // too, unchanged.
-        assertKotlinSaysAround(ShellStrings.nothingAnswered(port: 6369))
+        // The one Android does say about an empty sweep is checked against
+        // the Kotlin by `testThePickersTwoInterpolations`, which splits it on
+        // the sentinel where the port goes; it is not repeated here.
     }
 
     /// `ShellStrings.forgot` is a prefix of `forgotActive`, so the shorter one

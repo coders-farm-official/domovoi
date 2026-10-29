@@ -188,22 +188,49 @@ final class TrustBookTests: XCTestCase {
     /// (P2-at-01 review).
     func testForgettingAnotherSpellingKeepsTheActiveServersPin() {
         var book = TrustBook()
-        let slashed = "http://10.0.0.42:6369/"
+        // **The scheme's case is what makes two spellings**, and finding that
+        // out failed this test once: `normalize` strips every trailing slash,
+        // so `"…:6369/"` is not a second spelling at all. It does not fold
+        // the scheme's case, while ``ServerURL/parse(_:)`` lowercases it — so
+        // `HTTP://…` and `http://…` have **separate trust and separate
+        // tokens** and **one shared pin**, which is exactly the shape §4.4
+        // describes.
+        let shouty = "HTTP://10.0.0.42:6369"
+        XCTAssertNotEqual(ServerCredentials.normalize(shouty), ServerCredentials.normalize(server))
+        XCTAssertEqual(IdentityGate.pinKey(shouty), IdentityGate.pinKey(server))
+
         book.trust(server, identity: pin)
         book.upsertKnown(url: server, name: nil)
         XCTAssertTrue(book.setServerURL(server))
-        // The same server, saved a second time with a trailing slash — which
-        // normalises to the same thing, so build the drift by hand the way a
-        // pre-trust-list install or a harness write would.
-        book.trusted.insert(slashed)
-        book.known.append(KnownServer(url: slashed, name: nil))
-        book.tokens[slashed] = "household-slashed"
+        book.trust(shouty)
+        book.upsertKnown(url: shouty, name: nil)
+        book.setToken("household-shouty", for: shouty)
 
-        let reach = book.forget(slashed)
+        let reach = book.forget(shouty)
         XCTAssertFalse(reach.pin, "the pin is shared with the active spelling, so it stays")
         XCTAssertEqual(pin, book.pin(forServer: server))
-        XCTAssertNil(book.tokens[slashed], "that spelling's own token goes")
+        XCTAssertTrue(reach.token)
+        XCTAssertNil(book.token(for: shouty), "that spelling's own token goes")
+        XCTAssertFalse(book.isTrusted(shouty), "and so does its own trust")
+        XCTAssertTrue(book.isTrusted(server))
         XCTAssertEqual(server, book.serverURL)
+    }
+
+    /// The trailing-slash spelling is **not** a second spelling, which is
+    /// what the test above was written against before it failed: forgetting
+    /// it forgets the server itself.
+    func testATrailingSlashIsNotASecondSpelling() {
+        var book = TrustBook()
+        book.trust(server, identity: pin)
+        book.upsertKnown(url: server, name: nil)
+        XCTAssertTrue(book.setServerURL(server))
+        book.setToken("household-abc", for: server)
+
+        let reach = book.forget("\(server)/")
+        XCTAssertTrue(reach.row)
+        XCTAssertTrue(reach.token)
+        XCTAssertTrue(reach.pin)
+        XCTAssertNil(book.token(for: server))
     }
 
     /// Forgetting the **active** server clears its pin, and the order inside
