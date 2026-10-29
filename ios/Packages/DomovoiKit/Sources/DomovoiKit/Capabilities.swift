@@ -95,6 +95,28 @@ public struct Capabilities: Equatable, Sendable, Decodable {
         handlerDisplay.first { $0.name == name }?.label ?? name
     }
 
+    /// Fetch the manifest for the active server.
+    ///
+    /// Never throws, and that is the rule rather than laziness: Android's
+    /// `rememberCapabilities` decodes an error to `data == null` and every
+    /// caller treats that as ``empty``, because a manifest that did not load
+    /// must hide the gated screens rather than take the app down. A caller
+    /// that wants to know *why* it failed should ask the client directly.
+    ///
+    /// **One deliberate difference from Android.** This read is untracked.
+    /// `GET /api/capabilities` is an **Open** route (docs/API_REFERENCE.md),
+    /// so its 200 says nothing about whether this phone is paired — and
+    /// Android fetches it with a tracked `api.get`, which means its 200
+    /// *clears* the pairing screen that a household read's 401 had just
+    /// raised. That is precisely the flicker `getUntracked` exists to
+    /// prevent, and the manifest is fetched at connect and on every socket
+    /// reconnect, which is when an unpaired phone is most likely to be doing
+    /// both at once. Reported to the owner as an Android finding rather than
+    /// fixed there; `android/` is out of bounds for this batch.
+    public static func fetch(using client: DomovoiClient) async -> Capabilities {
+        (try? await client.getUntracked("/api/capabilities", as: Capabilities.self)) ?? .empty
+    }
+
     /// False only when the server says its AI features are off
     /// (`features.ai == false`). Absent means on: an older server has no
     /// switch, and a manifest that failed to load (``empty``) must not hide

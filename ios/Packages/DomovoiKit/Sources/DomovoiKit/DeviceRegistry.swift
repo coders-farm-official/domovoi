@@ -132,6 +132,52 @@ public enum DeviceRegistry {
         try JSONEncoder().encode(["name": name])
     }
 
+    /// Upsert this device's row and refresh `last_seen_at`.
+    ///
+    /// Returns nil on any failure, as Android's `registerDevice` does — the
+    /// app works unnamed, its queue entries just carry no tag — so no caller
+    /// has to decide what to do about a registration that did not happen.
+    /// Whether it should be called at all is ``shouldRegister(now:lastAskedAt:reason:connected:paired:)``.
+    public static func register(
+        with client: DomovoiClient,
+        deviceID: String,
+        name: String,
+        userAgent: String,
+        ownerPersonID: String?
+    ) async -> DeviceRow? {
+        guard let body = try? registerPayload(
+            deviceID: deviceID,
+            name: name,
+            userAgent: userAgent,
+            ownerPersonID: ownerPersonID
+        ) else { return nil }
+        return try? await client.post("/api/devices/register", body: body, as: DeviceRow.self)
+    }
+
+    /// Rename this device. Throws, so the Settings panel can report the
+    /// failure — this one is a person pressing a button, not a background
+    /// upsert.
+    public static func rename(
+        with client: DomovoiClient,
+        deviceID: String,
+        name: String
+    ) async throws(DomovoiError) -> DeviceRow {
+        guard let body = try? renamePayload(name: name) else {
+            throw DomovoiError.notPermitted("that name cannot be sent")
+        }
+        return try await client.patch("/api/devices/\(pathEscaped(deviceID))", body: body, as: DeviceRow.self)
+    }
+
+    /// A device id in a path, escaped as Android's `Uri.encode` escapes it:
+    /// everything but the unreserved set and `!.~'()*`. A well-formed id has
+    /// nothing in it that needs escaping except `:`, but an id is
+    /// self-asserted and this is a path segment, so it is escaped anyway.
+    static func pathEscaped(_ text: String) -> String {
+        var allowed = CharacterSet.alphanumerics
+        allowed.insert(charactersIn: "_-!.~'()*")
+        return text.addingPercentEncoding(withAllowedCharacters: allowed) ?? text
+    }
+
     // ---- the name and the user agent ---------------------------------------
 
     /// "iPhone" rather than a model identifier — a SEED only; the real answer

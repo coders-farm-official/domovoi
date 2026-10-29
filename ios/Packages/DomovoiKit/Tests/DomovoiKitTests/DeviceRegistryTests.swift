@@ -190,6 +190,73 @@ final class DeviceRegistryTests: XCTestCase {
         XCTAssertNotEqual(id, "a b c")
     }
 
+    // ---- the calls ------------------------------------------------------------
+
+    private func client() -> DomovoiClient {
+        DomovoiClient(
+            book: .fixed(server: "http://10.0.0.9:6369", token: "household-abc"),
+            configuration: StubURLProtocol.session(timeout: 5)
+        )
+    }
+
+    func testRegisteringPostsTheBodyAndReadsTheRowBack() async throws {
+        StubURLProtocol.reset()
+        StubURLProtocol.enqueue(.json(#"{"device_id":"ios-1a2b","name":"Kitchen","shared_screen":true}"#))
+        let row = await DeviceRegistry.register(
+            with: client(),
+            deviceID: "ios-1a2b",
+            name: "iPhone",
+            userAgent: "iOS 18.3; iPhone",
+            ownerPersonID: "7"
+        )
+        XCTAssertEqual(row?.deviceID, "ios-1a2b")
+        XCTAssertEqual(row?.name, "Kitchen", "the name the server already had, not the seed we sent")
+        XCTAssertTrue(DeviceRegistry.sharedScreenAnswer(try XCTUnwrap(row)))
+        let sent = try XCTUnwrap(StubURLProtocol.recorded.first)
+        XCTAssertEqual(sent.httpMethod, "POST")
+        XCTAssertEqual(sent.url?.path, "/api/devices/register")
+        XCTAssertEqual(sent.value(forHTTPHeaderField: deviceTokenHeader), "household-abc")
+        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: try XCTUnwrap(sent.httpBody)) as? [String: Any])
+        XCTAssertEqual(body["platform"] as? String, "ios")
+        XCTAssertEqual(body["owner_person_id"] as? Int, 7)
+    }
+
+    /// Android swallows every registration failure: the app works unnamed,
+    /// its queue entries just carry no tag.
+    func testARegistrationThatFailsIsNotAnError() async {
+        StubURLProtocol.reset()
+        StubURLProtocol.enqueue(.json(#"{"detail":"X-Device-Token or admin session required"}"#, status: 401))
+        let row = await DeviceRegistry.register(
+            with: client(), deviceID: "ios-1a2b", name: "iPhone", userAgent: "iOS 18.3; iPhone", ownerPersonID: nil
+        )
+        XCTAssertNil(row)
+    }
+
+    /// Rename throws instead, because a person pressed a button and has to
+    /// be told.
+    func testRenamingThrowsSoTheSettingsPanelCanSayWhatHappened() async {
+        StubURLProtocol.reset()
+        StubURLProtocol.enqueue(.json(#"{"detail":"no such device"}"#, status: 404))
+        do {
+            _ = try await DeviceRegistry.rename(with: client(), deviceID: "ios-1a2b", name: "Kitchen")
+            XCTFail("expected a failure")
+        } catch {
+            XCTAssertEqual(error.failure?.status, 404)
+        }
+    }
+
+    func testRenamingPatchesTheDevicesOwnRouteWithItsIdEscaped() async throws {
+        StubURLProtocol.reset()
+        StubURLProtocol.enqueue(.json(#"{"device_id":"a:b","name":"Kitchen"}"#))
+        let row = try await DeviceRegistry.rename(with: client(), deviceID: "a:b", name: "Kitchen")
+        XCTAssertEqual(row.name, "Kitchen")
+        let sent = try XCTUnwrap(StubURLProtocol.recorded.first)
+        XCTAssertEqual(sent.httpMethod, "PATCH")
+        XCTAssertEqual(sent.url?.absoluteString, "http://10.0.0.9:6369/api/devices/a%3Ab")
+        XCTAssertEqual(DeviceRegistry.pathEscaped("a:b/c?d"), "a%3Ab%2Fc%3Fd")
+        XCTAssertEqual(DeviceRegistry.pathEscaped("ios-1a2b3c4d5e6f7a8b"), "ios-1a2b3c4d5e6f7a8b", "a well-formed id is untouched")
+    }
+
     private final class Box: DeviceIdentity.Store {
         private struct State: Sendable {
             var saved: String?

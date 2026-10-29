@@ -115,6 +115,52 @@ final class CapabilitiesTests: XCTestCase {
         XCTAssertEqual(PluginAccent().source, "default", "the neutral plugin slate")
     }
 
+    // ---- the fetch rule -------------------------------------------------------
+
+    private func client() -> DomovoiClient {
+        DomovoiClient(
+            book: .fixed(server: "http://10.0.0.9:6369", token: "household-abc"),
+            configuration: StubURLProtocol.session(timeout: 5)
+        )
+    }
+
+    func testTheManifestIsFetchedFromTheOpenRoute() async throws {
+        StubURLProtocol.reset()
+        StubURLProtocol.enqueue(StubURLProtocol.Answer(status: 200, body: manifest))
+        let caps = await Capabilities.fetch(using: client())
+        XCTAssertTrue(caps.has(capStations))
+        XCTAssertEqual(StubURLProtocol.recorded.first?.url?.path, "/api/capabilities")
+    }
+
+    /// A manifest that did not load hides the gated screens rather than
+    /// taking the app down — and it is an untracked read, so its 200 can
+    /// never clear a pairing screen a household read has raised (see the
+    /// comment on `Capabilities.fetch`).
+    func testAFetchThatFailsIsAnEmptyManifestAndNeverAnError() async {
+        StubURLProtocol.reset()
+        StubURLProtocol.enqueue(StubURLProtocol.Answer(status: 404))
+        var caps = await Capabilities.fetch(using: client())
+        XCTAssertEqual(caps, .empty)
+        StubURLProtocol.enqueue(StubURLProtocol.Answer(error: URLError(.cannotConnectToHost)))
+        caps = await Capabilities.fetch(using: client())
+        XCTAssertEqual(caps, .empty)
+        StubURLProtocol.enqueue(.json("<html>a router's login page</html>"))
+        caps = await Capabilities.fetch(using: client())
+        XCTAssertEqual(caps, .empty)
+        XCTAssertFalse(caps.has(capStations))
+        XCTAssertTrue(caps.aiEnabled, "and Chat is not hidden by a manifest that never arrived")
+    }
+
+    func testAnUnpairedPhonesPairingScreenSurvivesACapabilityFetch() async {
+        StubURLProtocol.reset()
+        let client = client()
+        client.notePossiblePairingRefusal(status: 401, body: "X-Device-Token or admin session required")
+        XCTAssertTrue(client.pairingRequired)
+        StubURLProtocol.enqueue(StubURLProtocol.Answer(status: 200, body: manifest))
+        _ = await Capabilities.fetch(using: client)
+        XCTAssertTrue(client.pairingRequired, "an Open route's 200 says nothing about pairing")
+    }
+
     /// The wire name is Android's, and iOS reads it. There is no
     /// `ios_capabilities` on the server, and a plugin that declares
     /// `stations` means the same thing to both phones.
