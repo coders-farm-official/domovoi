@@ -101,10 +101,33 @@ final class StubURLProtocol: URLProtocol {
 
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
+    /// A `URLProtocol` is handed the body as a stream, not as `httpBody`:
+    /// measured 2026-10-28, where a test asserting on `recorded[0].httpBody`
+    /// saw nil for a POST that plainly had one. So the recorded copy gets the
+    /// stream read back into `httpBody`, and a test can assert on the bytes
+    /// that left.
+    private static func body(of request: URLRequest) -> Data? {
+        if let body = request.httpBody { return body }
+        guard let stream = request.httpBodyStream else { return nil }
+        stream.open()
+        defer { stream.close() }
+        var data = Data()
+        let size = 4096
+        var buffer = [UInt8](repeating: 0, count: size)
+        while stream.hasBytesAvailable {
+            let read = stream.read(&buffer, maxLength: size)
+            if read <= 0 { break }
+            data.append(contentsOf: buffer[0..<read])
+        }
+        return data.isEmpty ? nil : data
+    }
+
     override func startLoading() {
         let request = self.request
+        var recordedCopy = request
+        recordedCopy.httpBody = Self.body(of: request)
         let answer = Self.script.withLock { script -> Answer in
-            script.recorded.append(request)
+            script.recorded.append(recordedCopy)
             if let dispatch = script.dispatch { return dispatch(request) }
             if script.queued.isEmpty { return Answer.json("{}") }
             return script.queued.removeFirst()

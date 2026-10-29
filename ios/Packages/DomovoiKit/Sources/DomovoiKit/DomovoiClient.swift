@@ -618,6 +618,16 @@ public final class DomovoiClient: Sendable {
         switch url.code {
         case .appTransportSecurityRequiresSecureConnection:
             return .notPermitted("this address needs https")
+        case .httpTooManyRedirects:
+            // Measured on 2026-10-28: `URLSession` follows at most 20
+            // redirects and then reports this — the same ceiling
+            // ``RedirectPolicy/maxHops`` names, so the delegate's own counter
+            // (which fires at 21) is belt and braces the platform never lets
+            // us need. Android throws `ProtocolException` here, an
+            // IOException, whose toast reads "(offline?)", so mapping this to
+            // `.unreachable` is what keeps the two apps saying the same
+            // thing about the same chain.
+            return .unreachable("too many redirects")
         case .cancelled:
             return .unreachable("cancelled")
         default:

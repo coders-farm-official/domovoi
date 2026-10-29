@@ -222,18 +222,21 @@ final class DomovoiClientTests: XCTestCase {
         XCTAssertEqual(StubURLProtocol.requestCount, 1)
     }
 
+    /// A chain that never ends is stopped, and measurably so: `URLSession`
+    /// follows exactly 20 redirects — the same number ``RedirectPolicy``
+    /// names — and then reports `.httpTooManyRedirects`, which the client
+    /// maps the way Android's `ProtocolException` reads. The delegate's own
+    /// counter would fire one hop later and so never does; it stays because
+    /// nothing in Apple's documentation promises that ceiling.
     func testTheHopCeilingStopsAChainThatNeverEnds() async {
-        StubURLProtocol.dispatch { request in
-            .moved(302, to: "/api/\(Int.random(in: 1...1_000_000))")
-        }
+        StubURLProtocol.dispatch { _ in .moved(302, to: "/api/\(Int.random(in: 1...1_000_000))") }
         let client = makeClient()
         let error = await failure { try await client.get("/api/x", as: [String: String].self) }
-        XCTAssertNotNil(error, "the chain was stopped")
-        XCTAssertLessThanOrEqual(
+        XCTAssertEqual(error, .unreachable("too many redirects"))
+        XCTAssertEqual(
             StubURLProtocol.requestCount, RedirectPolicy.maxHops + 1,
-            "no more hops than the ceiling allows"
+            "one request, then twenty hops, then no more"
         )
-        print("MEASURED endless chain: \(StubURLProtocol.requestCount) requests, error \(String(describing: error))")
     }
 
     // ---- what the answers become --------------------------------------------
