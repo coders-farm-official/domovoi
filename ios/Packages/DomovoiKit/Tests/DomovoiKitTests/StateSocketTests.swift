@@ -818,7 +818,7 @@ final class StateSocketTests: XCTestCase {
         // On the cooperative pool, whose stack is far smaller than the main
         // thread's — which is where a real frame is parsed, so it is where
         // this is measured.
-        for depth in [100, 1_000, 10_000, 50_000, 600_000] {
+        for depth in [100, 500, 511, 512, 513, 1_000, 10_000, 50_000, 600_000] {
             let text = frame(depth: depth)
             let outcome = await Task.detached {
                 StateEvent.parse(text) == nil ? "dropped" : "parsed"

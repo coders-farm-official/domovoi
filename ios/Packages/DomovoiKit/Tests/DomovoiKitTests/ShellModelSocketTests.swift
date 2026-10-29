@@ -374,8 +374,20 @@ final class ShellModelSocketTests: XCTestCase {
 
     // MARK: - the answer is filed under the server that was ASKED (the review's M1)
 
-    /// A dispatcher that holds `path` until `release` is set, so a test can
-    /// make something happen **inside** a round trip rather than after it.
+    /// One request held open at the server, so a test can make something
+    /// happen **inside** a round trip rather than after it.
+    private final class Park: Sendable {
+        /// Set when the request reached the stub, so the test waits on the
+        /// park itself rather than on `StubURLProtocol.recorded`.
+        let arrived = Shared<Bool>(false)
+        let release = Shared<Bool>(false)
+        /// Set when the park hit its bound instead of being released — which
+        /// means the request timed out and whatever the test asserted
+        /// afterwards was asserted over an answer that never came.
+        let ranOut = Shared<Bool>(false)
+    }
+
+    /// A dispatcher that holds `path` open until the park is released.
     ///
     /// It blocks one `URLSession` worker thread and nothing else — a
     /// `URLProtocol`'s `startLoading` is synchronous, so there is nowhere
@@ -383,20 +395,31 @@ final class ShellModelSocketTests: XCTestCase {
     /// that never releases fails the test rather than leaving an orphaned
     /// `xctest` on the shared Mac, which an unbounded spin loop once did for
     /// three and a half hours.
+    ///
+    /// The bound is **under** the session's own
+    /// `timeoutIntervalForRequest` (1 s in this rig), and ``Park/ranOut``
+    /// records when it was hit, because a park that outlasts the timeout
+    /// turns the test it serves into one that cannot fail: measured
+    /// 2026-10-29, when `StubURLProtocol` still called its dispatcher inside
+    /// its own lock and both of the tests below passed over a register that
+    /// had never answered.
     private func parking(
         _ path: String,
-        until release: Shared<Bool>,
         answer: @Sendable @escaping () -> StubURLProtocol.Answer,
         otherwise: @Sendable @escaping (URLRequest) -> StubURLProtocol.Answer = { _ in .json("{}") }
-    ) {
+    ) -> Park {
+        let park = Park()
         StubURLProtocol.dispatch { request in
             guard request.url?.path == path else { return otherwise(request) }
-            for _ in 0..<2_500 {
-                if release.current { break }
+            park.arrived.set(true)
+            for step in 0..<400 {
+                if park.release.current { return answer() }
+                if step == 399 { park.ranOut.set(true) }
                 Thread.sleep(forTimeInterval: 0.002)
             }
             return answer()
         }
+        return park
     }
 
     /// **The switch happens inside the round trip, which is the only place it
@@ -415,19 +438,15 @@ final class ShellModelSocketTests: XCTestCase {
     /// I1-C part 3's F2 for the third time on this track. The shape is **a
     /// value read after an await that should have been captured before it**.
     func testARegistersAnswerIsFiledUnderTheServerItWasAskedOf() async {
-        let release = Shared<Bool>(false)
-        parking(
+        let park = parking(
             "/api/devices/register",
-            until: release,
             answer: { .json(#"{"device_id":"ios-0123456789abcdef","name":"iPhone","shared_screen":false}"#) }
         )
         let (model, _, store) = model()
 
         // A's register is in flight and parked at the server.
         let pending = Task { @MainActor in await model.register() }
-        await settleUntil {
-            StubURLProtocol.recorded.contains { $0.url?.path == "/api/devices/register" }
-        }
+        await settleUntil { park.arrived.current }
 
         // The person switches houses while it is in flight.
         let next = "http://10.0.0.77:6369"
@@ -437,8 +456,9 @@ final class ShellModelSocketTests: XCTestCase {
         store.setToken("household-xyz", for: next)
         model.refresh()
 
-        release.set(true)
+        park.release.set(true)
         await pending.value
+        XCTAssertFalse(park.ranOut.current, "the answer landed; it did not time out")
         XCTAssertNil(
             model.sharedScreenAnswer,
             "server A's answer is not about server B, whenever it lands"
@@ -447,6 +467,14 @@ final class ShellModelSocketTests: XCTestCase {
             model.visibility.sharedScreen,
             "and B with no answer counts as shared, which is the conservative side"
         )
+
+        // **And this is what stops the assertion above passing over a request
+        // that simply failed:** switch back, and A's answer is still there,
+        // under A. So the answer landed and was filed under the server it was
+        // asked of, rather than being dropped.
+        XCTAssertTrue(store.setServerURL(server))
+        model.refresh()
+        XCTAssertEqual(false, model.sharedScreenAnswer, "A asked, A answered, A's answer")
         model.stop()
     }
 
@@ -454,18 +482,14 @@ final class ShellModelSocketTests: XCTestCase {
     /// this batch newly fires on every socket connect, so the exposure is
     /// new even though the code is not.
     func testACapabilityManifestIsNotAppliedToAServerItIsNotFrom() async {
-        let release = Shared<Bool>(false)
-        parking(
+        let park = parking(
             "/api/capabilities",
-            until: release,
             answer: { .json(#"{"server_version":"from-server-a","plugins":[],"features":{}}"#) }
         )
         let (model, _, store) = model(deviceSelf: nil)
 
         let pending = Task { @MainActor in await model.refreshCapabilities() }
-        await settleUntil {
-            StubURLProtocol.recorded.contains { $0.url?.path == "/api/capabilities" }
-        }
+        await settleUntil { park.arrived.current }
 
         let next = "http://10.0.0.77:6369"
         store.trustServer(next)
@@ -473,12 +497,21 @@ final class ShellModelSocketTests: XCTestCase {
         XCTAssertTrue(store.setServerURL(next))
         model.refresh()
 
-        release.set(true)
+        park.release.set(true)
         await pending.value
+        XCTAssertFalse(park.ranOut.current, "the answer landed; it did not time out")
         XCTAssertNil(
             model.capabilities.serverVersion,
             "A's manifest is not B's: gated screens stay hidden until B answers"
         )
+
+        // **And the discard was a discard, not a broken fetch:** B's own
+        // manifest lands through the same plumbing a moment later.
+        StubURLProtocol.dispatch { _ in
+            .json(#"{"server_version":"from-server-b","plugins":[],"features":{}}"#)
+        }
+        await model.refreshCapabilities()
+        XCTAssertEqual("from-server-b", model.capabilities.serverVersion)
         model.stop()
     }
 

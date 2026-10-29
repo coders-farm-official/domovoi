@@ -132,11 +132,30 @@ final class StubURLProtocol: URLProtocol {
         let request = self.request
         var recordedCopy = request
         recordedCopy.httpBody = Self.body(of: request)
-        let answer = Self.script.withLock { script -> Answer in
+        // The dispatcher is called **outside** the lock, and the recording is
+        // made before it. Measured 2026-10-29: with `dispatch` called inside
+        // `withLock`, a test whose dispatcher parked a request until it was
+        // released held this mutex for the whole park — so the test's own
+        // `StubURLProtocol.recorded` read blocked the main actor, the park ran
+        // to its bound, the request hit `timeoutIntervalForRequest` and the
+        // register it was testing failed instead of landing. The test then
+        // asserted nil over a request that never answered and could not fail.
+        //
+        // This is the same rule the library itself follows — `StateSocket`
+        // runs every injected closure outside `state.withLock` — and it is
+        // why a test may hold a request open at all.
+        let decided = Self.script.withLock { script -> (@Sendable (URLRequest) -> Answer)? in
             script.recorded.append(recordedCopy)
-            if let dispatch = script.dispatch { return dispatch(request) }
-            if script.queued.isEmpty { return Answer.json("{}") }
-            return script.queued.removeFirst()
+            if let dispatch = script.dispatch { return dispatch }
+            return nil
+        }
+        let answer: Answer
+        if let decided {
+            answer = decided(request)
+        } else {
+            answer = Self.script.withLock { script -> Answer in
+                script.queued.isEmpty ? Answer.json("{}") : script.queued.removeFirst()
+            }
         }
         guard let client, let url = request.url else { return }
 
