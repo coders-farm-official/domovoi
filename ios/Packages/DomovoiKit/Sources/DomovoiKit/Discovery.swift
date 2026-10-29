@@ -98,7 +98,14 @@ public enum Discovery {
 
     // ---- where to look -----------------------------------------------------
 
-    /// The device's site-local IPv4, e.g. `192.168.1.57`.
+    /// The device's site-local IPv4, e.g. `192.168.1.57` — **which /24 to
+    /// sweep, and not whether to sweep at all**.
+    ///
+    /// Those are two questions and this answers only the second-best one:
+    /// 10/8 is site-local and several US carriers hand out 10.x on cellular,
+    /// so a phone on cellular alone has an address here and no LAN. Whether
+    /// to sweep is ``NetworkWatch/onLan``, which ``scan(_:onLan:port:timeout:onProgress:)``
+    /// asks first.
     ///
     /// Kotlin takes the first interface that is **up**, is **not loopback**,
     /// and has a **site-local** IPv4 (10/8, 172.16/12, 192.168/16). The same
@@ -153,6 +160,13 @@ public enum Discovery {
     ///
     /// Two GETs, as on Android: `/api/health`, and on a 2xx `/api/config` for
     /// `bot_name` (best-effort, may be nil).
+    ///
+    /// **The default timeout is the sweep's 700 ms, which is not the Kotlin's
+    /// default.** `Discovery.probe`'s own default there is 1,000 ms; its two
+    /// call sites pass 700 (the sweep) and 3,000 (a typed address), and so do
+    /// both of this file's, so no behaviour turns on the difference — but the
+    /// numbers in this file are Android's *call sites'*, not its signature's,
+    /// and the default is the one place that was claiming otherwise.
     public static func probe(
         _ probe: UnauthenticatedProbe,
         base: String,
@@ -176,6 +190,18 @@ public enum Discovery {
     /// ``defaultPort``. ~254 probes at ``concurrency``-way parallelism with
     /// sub-second timeouts — a few seconds on a quiet network.
     ///
+    /// **`onLan` is asked first and there is no default for it.** It is
+    /// ``NetworkWatch/onLan`` (or ``NetworkWatch/lanReader``), the transport
+    /// question Android's picker asks before its auto-scan, and the sweep
+    /// does not run when it answers false. The first port of this batch had
+    /// no gate at all and claimed ``localIPv4()`` answered the same thing: it
+    /// does not — ``NetworkInterfaces/Address/isSiteLocalIPv4`` admits 10/8,
+    /// and several US carriers hand out 10.x on cellular IPv4, so a phone
+    /// with Wi-Fi off would have fired **254 probes into the carrier's
+    /// private range on a metered link**. A caller must answer the question;
+    /// a default of `true` would be the same bug with an excuse, and one of
+    /// `false` would be a sweep that silently never runs.
+    ///
     /// `onProgress` is called with `(done, total, found)` after each probe.
     /// On Android that happens in the caller's context — the main thread,
     /// where the picker writes Compose state, and getting that wrong crashed
@@ -190,6 +216,7 @@ public enum Discovery {
         timeout: TimeInterval = Discovery.sweepTimeout,
         onProgress: @Sendable @escaping (Int, Int, Int) -> Void = { _, _, _ in }
     ) async -> SweepOutcome {
+        guard onLan() else { return .notOnLan }
         guard let address = localIPv4() else { return .noLocalNetwork }
         let targets = sweepTargets(localIPv4: address, port: port)
         let found = await sweep(targets, onProgress: onProgress) { base in

@@ -70,12 +70,25 @@ public final class IdentityGate: TokenGate {
 
         /// Whether a server with no pin may be pinned from its first proof.
         ///
-        /// True for a server trusted before 2026-10-08 (an upgraded install,
-        /// whose trust dialog showed no identity); false once the trust
-        /// decision was taken with the identity in view — the dialog pinned
-        /// what the server advertised, or recorded that it advertised none.
-        /// That is what stops a server trusted *without* an identity from
-        /// being pinned silently later.
+        /// **On this app it must always answer false, and here is why the
+        /// Kotlin's rationale is quoted rather than inherited.** Android
+        /// answers true for a server trusted before 2026-10-08 — an upgraded
+        /// install, whose trust dialog showed no identity and so pinned
+        /// nothing — and false once the trust decision was taken with the
+        /// identity in view. No iPhone install can predate that date: this
+        /// app has never had a trust dialog that did not show the identity,
+        /// so every trust decision it has ever taken either pinned what the
+        /// server advertised or recorded that it advertised none. There is no
+        /// upgraded install for the exception to be about.
+        ///
+        /// So I1-C's store answers false, always, and the
+        /// `pins.pin(key, proved)` / `pinnedNow: true` branch in ``ask`` is
+        /// dead code on iOS. It is kept because it mirrors the Kotlin and
+        /// because the tests drive it (`TestPins.undecide`), **not** as an
+        /// invitation to `return true` for convenience: that would reinstate
+        /// trust-on-first-use, which is exactly what A6-03 is about — the
+        /// first server to answer at the saved address would get itself
+        /// pinned, and the token would follow.
         func mayPinOnFirstProof(_ key: String) -> Bool
     }
 
@@ -250,8 +263,41 @@ public final class IdentityGate: TokenGate {
     /// Take or refresh the proof for `base`, so the synchronous readers have
     /// a verdict to read. Never throws: a server that cannot be reached is
     /// not a verdict, and the request that follows will fail on its own.
+    ///
+    /// **One error is not the network's and is not swallowed.** This is the
+    /// only production caller of ``verdict(for:)``, and discarding everything
+    /// it throws is right for a server that did not answer and wrong for
+    /// ``DomovoiError/probeWiringCycle(_:)``, which is a fault in the app's
+    /// own wiring. Left silent, a miswired probe reads as a permanent "has
+    /// not proved itself" with nothing in the log and nothing in the toast to
+    /// go on. So it is filed as a non-verdict naming the wiring —
+    /// ``requireAdmitted(_:)`` then says it — and ``ProbeQueue`` logs it as
+    /// well, beside the throw.
     public func prepare(_ base: ServerURL) async {
-        _ = try? await verdict(for: base)
+        do {
+            _ = try await verdict(for: base)
+        } catch {
+            // Caught untyped and matched afterwards, not as
+            // `catch DomovoiError.probeWiringCycle`: I1-A's report §6 records
+            // a Swift 6.3 SILGen crash on that shape inside an `async`
+            // function, and this is an `async` function.
+            //
+            // Everything other than the wiring cycle is not a verdict about
+            // who the server is — the request that follows fails on its own.
+            guard let failure = error as? DomovoiError,
+                  case .probeWiringCycle(let why) = failure else { return }
+            let key = Self.pinKey(base)
+            record(
+                key,
+                .unavailable(
+                    expected: pins.pinFor(key)?.fingerprint,
+                    reason: "could not be checked by this phone at all (a wiring fault in the app, not the server: \(why))"
+                ),
+                epoch: state.withLock { $0.epoch },
+                network: network(),
+                at: clock()
+            )
+        }
     }
 
     /// The verdict for `base` on the current network, asking the server when
@@ -273,7 +319,7 @@ public final class IdentityGate: TokenGate {
     @discardableResult
     public func verdict(for base: ServerURL) async throws -> IdentityVerdict {
         let key = Self.pinKey(base)
-        return try await probes.coalesced(key) { [self] in
+        return try await probes.coalesced(key, log: log) { [self] in
             try await attempt(base, key)
         }
     }
@@ -286,7 +332,21 @@ public final class IdentityGate: TokenGate {
             if let entry = state.withLock({ $0.verdicts[key] }), holds(entry, generation, net, now) {
                 return entry.verdict
             }
-            let verdict = try await ask(base, key)
+            let verdict: IdentityVerdict
+            do {
+                verdict = try await ask(base, key)
+            } catch {
+                // The probe failed at the transport: nothing is answering.
+                // `record` is never reached, so a last non-verdict from a
+                // previous probe would stand for the rest of its 30 s — and
+                // the refusal would say "its core is not answering (starting,
+                // updating or busy)" about a box that has left the network
+                // altogether, where Android says "offline". Wording is the
+                // only thing `lastNonVerdict` is for, so a wording it can no
+                // longer vouch for goes.
+                state.withLock { $0.lastNonVerdict[key] = nil }
+                throw error
+            }
             if state.withLock({ $0.epoch }) != generation || network() != net {
                 log("the network changed while \(key) was proving itself; asking again")
                 continue
@@ -337,6 +397,10 @@ public final class IdentityGate: TokenGate {
             if pinned != nil {
                 return .verified(fingerprint: proved.fingerprint, pinnedNow: false)
             }
+            // Always false on iOS — see ``PinStore/mayPinOnFirstProof(_:)``:
+            // there is no pre-identity install for the exception to be
+            // about, so this branch mirrors the Kotlin and never runs in the
+            // app. It is not a switch to flip.
             if pins.mayPinOnFirstProof(key) {
                 pins.pin(key, proved)
                 log("identity: pinned \(proved.fingerprint) for \(key)")
@@ -429,12 +493,29 @@ public final class IdentityGate: TokenGate {
     /// screen: only from a server that proved itself (or has nothing to
     /// prove). A rogue's refusal must not invite a fresh paste of the token.
     ///
-    /// Android probes here if it has to. This reads the cache, like its
-    /// sibling above, and **no verdict is a no**. The same reasoning, and the
-    /// same direction: the worst case of answering no is a pairing screen
-    /// that appears one request later than it might have; the worst case of
-    /// answering yes is a rogue asking a person to paste the household token
-    /// into it.
+    /// Android probes here if it has to (`IdentityGate.kt:232-235`). This
+    /// reads the cache, like its sibling above, and **no verdict is a no** —
+    /// because this is also called from the socket listeners' synchronous
+    /// path (``DomovoiClient/notePossiblePairingRefusal(status:body:)``,
+    /// where a refused WebSocket upgrade is a status and not a body), and
+    /// nothing there can `await`.
+    ///
+    /// **So who fills the cache matters, and the answer is not "whoever had a
+    /// token".** It was, and that was the review's blocker A: an unpaired
+    /// phone's requests never reached the gate, so the cache stayed empty for
+    /// ever and this answered no to every `401` the real server could send.
+    /// Not "one request later" — never, which is the whole onboarding path
+    /// (map §8 step 5) and re-pairing after a refused token with it.
+    /// ``DomovoiClient/prepareIdentity(for:wsUpgrade:)`` now takes the proof
+    /// whenever the request is aimed at the active server, paired or not, so
+    /// the verdict is already here when the refusal arrives.
+    ///
+    /// What the cost of a cold cache still is, where one is possible (a
+    /// refusal that arrives before anything has prepared anything, a proof
+    /// that has just expired): a pairing screen one request later than it
+    /// might have been. The cost of answering yes without a verdict is a
+    /// rogue asking a person to paste the household token into it. So no
+    /// verdict stays a no.
     public func admitsPairingPrompt(_ base: ServerURL?) -> Bool {
         guard let base else { return false }
         return cachedVerdict(base)?.admitsToken == true
@@ -571,13 +652,24 @@ public enum IdentityVerdict: Equatable, Sendable {
         }
     }
 
-    /// The fingerprint this verdict is about, when it has one: what the
-    /// shell shows beside the address.
+    /// The ONE fingerprint it makes sense to show beside the address: the key
+    /// the server proved where it proved one (``verified(fingerprint:pinnedNow:)``,
+    /// ``legacy(offered:)``), and otherwise the key this phone pinned and
+    /// expected (``unproven(expected:reason:)``, ``unavailable(expected:reason:)``).
+    ///
+    /// **Nil for a mismatch, deliberately.** A mismatch has two fingerprints
+    /// and neither of them alone is the truth: this returned `seen`, so a
+    /// shell reading "the fingerprint" would have printed **the impostor's
+    /// key** beside the address, in the one state where the person must be
+    /// shown that the key is not the one they trusted. There is no single
+    /// honest answer, so there is no answer — a shell that wants to say
+    /// anything about a mismatch has to destructure `expected` and `seen`,
+    /// and `requireAdmitted`'s message already names both.
     public var fingerprint: String? {
         switch self {
         case .verified(let fingerprint, _): return fingerprint
         case .legacy(let offered): return offered?.fingerprint
-        case .mismatch(_, let seen, _): return seen
+        case .mismatch: return nil
         case .unproven(let expected, _), .unavailable(let expected, _): return expected
         }
     }
@@ -596,8 +688,19 @@ public enum IdentityVerdict: Equatable, Sendable {
 ///
 /// A `@TaskLocal` and not state on the actor, because the question this
 /// answers is "is THIS chain inside that probe", not "is anyone". An
-/// unstructured `Task` copies task-local values at creation, so the binding
-/// reaches the body and everything the body awaits.
+/// unstructured `Task { }` copies the task-local values that are bound where
+/// it is created, so the binding reaches the body and everything the body
+/// awaits.
+///
+/// **What it does not reach**, because "copies task-local values" is not a
+/// general guarantee about escaping work: `Task.detached`, which inherits
+/// nothing by design, and anything handed to a `DispatchQueue` (or any other
+/// non-Swift-concurrency callback), which does not run as a child of the task
+/// that scheduled it. A probe that posted its own work that way would lose
+/// the binding and the guard below would not see a cycle it was inside. The
+/// production probe does not — it is one `await` on a `URLSession` — and a
+/// probe that needs a detached task should be rewritten rather than trusted
+/// to this.
 private enum ProbeCycle {
     @TaskLocal static var inFlight: Set<String> = []
 }
@@ -605,7 +708,11 @@ private enum ProbeCycle {
 private actor ProbeQueue {
     private var running: [String: Task<IdentityVerdict, any Error>] = [:]
 
-    func coalesced(_ key: String, _ body: @Sendable @escaping () async throws -> IdentityVerdict) async throws -> IdentityVerdict {
+    func coalesced(
+        _ key: String,
+        log: @Sendable (String) -> Void = { _ in },
+        _ body: @Sendable @escaping () async throws -> IdentityVerdict
+    ) async throws -> IdentityVerdict {
         // A probe must never need the gate it belongs to. If it does, this is
         // re-entered for a key whose task has not finished, and the line below
         // would wait on the task it is running inside: a hang, with no error
@@ -614,9 +721,15 @@ private actor ProbeQueue {
         // because the gate needs a client and the client needs the gate — so
         // say so instead of stopping. See `httpProbe(_:)`.
         if ProbeCycle.inFlight.contains(key) {
-            throw DomovoiError.probeWiringCycle(
-                "the identity probe for \(key) asked the same gate to prove \(key); "
-                + "the probe has to go through a client that holds no gate")
+            let why = "the identity probe for \(key) asked the same gate to prove \(key); "
+                + "the probe has to go through a client that holds no gate"
+            // Logged as well as thrown. `prepare` is the only production
+            // caller and it discards what it catches (an unreachable server
+            // is not a verdict), so without this line the one failure here
+            // that is a BUG rather than a condition of the network would
+            // reach nobody at all.
+            log("identity: \(why)")
+            throw DomovoiError.probeWiringCycle(why)
         }
         if let existing = running[key] { return try await existing.value }
         // An unstructured `Task` on purpose: it does not inherit the calling

@@ -115,10 +115,15 @@ final class TokenPasteFieldTests: XCTestCase {
     func testTheRealGateHasItsProofTakenBeforeTheCheckRatherThanBeingRefused() async throws {
         // The split (``TokenGate``) in the one place it would have bitten:
         // the pairing screen may have NO saved token, so the token decision
-        // never reaches the gate and `prepareIdentity` declines — which is
-        // why `checkDeviceToken` prepares the gate itself. Without that, a
-        // fresh install's very first paste would always read "couldn't check
-        // it with the server".
+        // never gets as far as `.ask` — which is why `checkDeviceToken`
+        // prepares the gate itself. Without that, a fresh install's very
+        // first paste would always have read "couldn't check it with the
+        // server".
+        //
+        // (The review's fix A means `prepareIdentity` would now take a proof
+        // for an unpaired phone too, so this is belt and braces rather than
+        // the only route — but `checkDeviceToken` must take it whether or not
+        // a token is saved, and that is its own rule, not the decision's.)
         let probes = Shared<Int>(0)
         StubURLProtocol.dispatch { request in
             switch request.url?.path {

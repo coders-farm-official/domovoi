@@ -553,7 +553,10 @@ final class IdentityGateTests: XCTestCase {
         }
         // After a proof it is handed over — which is why the method's doc
         // comment tells the caller to `await prepareIdentity` first.
-        await client.prepareIdentity(forAddress: server)
+        // `wsUpgrade:` has no default (a download is not an upgrade, and the
+        // drop-in socket is — the default that used to be here was wrong for
+        // the one caller most likely to take it).
+        await client.prepareIdentity(forAddress: server, wsUpgrade: false)
         XCTAssertEqual("household-abc", try client.tokenForDownload(file))
     }
 

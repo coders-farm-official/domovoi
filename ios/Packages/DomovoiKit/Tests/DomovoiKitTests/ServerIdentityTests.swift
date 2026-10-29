@@ -312,8 +312,15 @@ final class ServerIdentityTests: XCTestCase {
     }
 
     func testThePinBookJsonUsesTheKotlinsFieldNames() {
-        // So the two apps' stored blobs are the same shape and a person can
-        // compare them. `public_key`, not `publicKey`.
+        // So the two apps' stored blobs have the same STRUCTURE and the same
+        // field names: `public_key`, not `publicKey`.
+        //
+        // Not the same TEXT, and the expectation below is where that shows:
+        // `JSONEncoder` escapes a forward slash, so the key reads
+        // `http:\/\/x:1` where `kotlinx.serialization` writes `http://x:1`.
+        // Both decode to the same book (the second assertion reads the
+        // Kotlin's spelling back), and `.withoutEscapingSlashes` is
+        // deliberately not set — see `encodePins`.
         let blob = ServerIdentity.encodePins(["http://x:1": ServerIdentity.Pin(publicKey: "k", fingerprint: "f")])
         XCTAssertEqual(#"{"http:\/\/x:1":{"fingerprint":"f","public_key":"k"}}"#, blob)
         XCTAssertEqual(

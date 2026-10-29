@@ -79,8 +79,14 @@ func headerSafeToken(_ token: String?) -> String? {
 /// (security round 3, A6-03: its identity, after every network change).
 ///
 /// ``requireAdmitted(_:)`` returns normally when a token-bearing request to
-/// `base` may go out now and throws otherwise — the request never leaves.
-/// Consulted only when there is a token to protect.
+/// `base` may go out now and throws otherwise — the request never leaves. It
+/// is consulted only when there is a token to protect.
+///
+/// ``prepare(_:)`` is asked more often than that, and deliberately: also for
+/// a request to the active server from a phone that has **no** token yet or
+/// whose token was refused, because ``admitsPairingPrompt(_:)`` can only read
+/// what `prepare` left and a device-tier `401` from that server is how
+/// pairing starts. See ``DomovoiClient/prepareIdentity(for:wsUpgrade:)``.
 ///
 /// ``IdentityGate`` is the implementation; the client takes this as an
 /// optional and a nil gate means "nothing beyond being the active server",

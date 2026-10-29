@@ -156,6 +156,24 @@ public final class NetworkWatch: Sendable {
     /// reference would leak a monitor that still calls back.
     private let monitors = Mutex<[NWPathMonitor]>([])
 
+    /// - Parameters:
+    ///   - onChange: the picture changed, so every proof taken on the old one
+    ///     is stale. I1-C wires this to ``IdentityGate/networkChanged()``.
+    ///
+    ///     **It is also the only hook that can carry the map's §3 second
+    ///     obligation, which this batch has no way to honour: a network
+    ///     change CANCELS IN-FLIGHT TOKEN-BEARING SYSTEM DOWNLOADS** (and
+    ///     kicks audiobook sync — "the fingerprint is not only an identity
+    ///     concern"). On Android that is `DeviceDownloads`, cancelled from
+    ///     the same callback that invalidates the gate. I1-B has no download
+    ///     to cancel: ``DomovoiClient/tokenForDownload(_:)`` hands a token to
+    ///     a caller that does not exist yet. So the obligation is recorded
+    ///     here, at the one place that will be able to meet it — **I1-C must
+    ///     cancel its `URLSession` background downloads from this closure**,
+    ///     not only bump the epoch, or a download that started on the home
+    ///     network keeps carrying the household token after the phone has
+    ///     moved, which is the thing the epoch cannot reach.
+    ///   - log: one line per change, for the diagnostics screen.
     public init(
         onChange: @Sendable @escaping () -> Void = {},
         log: @Sendable @escaping (String) -> Void = { _ in }
@@ -345,24 +363,41 @@ public final class NetworkWatch: Sendable {
     /// watching would hand the gate a stale fingerprint, which is the one
     /// failure mode that matters here.
     public func start(queue: DispatchQueue = DispatchQueue(label: "domovoi.networkwatch")) {
-        // Seed first, as one picture: `currentPath` is readable the moment a
-        // monitor is started, and the interface list needs no monitor at all.
-        batch { watch in
-            watch.readInterfaces()
-        }
+        // **Everything is seeded INSIDE one batch**, the monitors' own view
+        // included. `currentPath` is readable the moment a monitor is
+        // started, and the interface list needs no monitor at all, so the
+        // whole network the process started on fits in the first picture —
+        // which `recompute` does not count as a change.
+        //
+        // Started outside the batch, as this was, the monitors came up after
+        // the batch had closed and `reported` was already true, so each
+        // monitor's FIRST `pathUpdateHandler` counted as a change: measured
+        // at three changes per launch, which is three bumps of the gate's
+        // epoch, three wasted proofs, and a cold-start request whose proof is
+        // thrown away between hops and fails with "has not proved itself".
+        // Android has never had it: its `seed()` reads every network's
+        // capabilities and link properties inside `watch.batch`.
+        //
+        // A handler that fires while the batch is still open is harmless: it
+        // takes the same lock, `batching` suppresses its recompute, and the
+        // facts it writes are another picture of the same monitor.
         var started: [NWPathMonitor] = []
-        for (id, type) in Self.pathMonitors {
-            let monitor = type.map { NWPathMonitor(requiredInterfaceType: $0) } ?? NWPathMonitor()
-            monitor.pathUpdateHandler = { [weak self] path in
-                guard let self else { return }
-                seen(.path, id) { _ in Self.facts(of: path) }
-                // A path update is the only event this platform gives, and
-                // the addresses are the half that catches a new DHCP lease,
-                // so they are re-read here rather than on a timer.
-                readInterfaces()
+        batch { watch in
+            for (id, type) in Self.pathMonitors {
+                let monitor = type.map { NWPathMonitor(requiredInterfaceType: $0) } ?? NWPathMonitor()
+                monitor.pathUpdateHandler = { [weak self] path in
+                    guard let self else { return }
+                    seen(.path, id) { _ in Self.facts(of: path) }
+                    // A path update is the only event this platform gives,
+                    // and the addresses are the half that catches a new DHCP
+                    // lease, so they are re-read here rather than on a timer.
+                    readInterfaces()
+                }
+                monitor.start(queue: queue)
+                watch.seen(.path, id) { _ in Self.facts(of: monitor.currentPath) }
+                started.append(monitor)
             }
-            monitor.start(queue: queue)
-            started.append(monitor)
+            watch.readInterfaces()
         }
         monitors.withLock { $0 = started }
     }

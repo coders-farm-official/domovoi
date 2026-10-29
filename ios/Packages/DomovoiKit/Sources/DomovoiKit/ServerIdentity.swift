@@ -204,6 +204,15 @@ public enum ServerIdentity {
     /// The pin book as it is stored. Pins live in plain storage, not the
     /// vault: a public key and its fingerprint are public, and the dashboard
     /// shows the fingerprint to anyone who can read it.
+    /// The two apps' blobs have the same **structure** and not the same
+    /// **text**: `JSONEncoder` escapes a forward slash, so a pin key lands
+    /// here as `{"http:\/\/x:1":…}` where `kotlinx.serialization` writes
+    /// `{"http://x:1":…}`. Both decode to the same book on either side, and
+    /// nothing compares the strings. `.withoutEscapingSlashes` would make
+    /// them identical and is deliberately NOT set: it would change the shape
+    /// of every pin book already written by this app for a cosmetic gain.
+    /// Flagged rather than fixed, in case a later batch wants a blob that can
+    /// be diffed against an Android phone's.
     public static func encodePins(_ pins: [String: Pin]) -> String {
         // Sorted keys so one book has one spelling: the Kotlin's map order is
         // its insertion order, and a blob that changes every write for no
@@ -241,12 +250,18 @@ public enum ServerIdentity {
     /// string of a JSON string, and nil for an object, an array or null.
     ///
     /// Kotlin's version also stringifies a number or a boolean (`25519`
-    /// becomes `"25519"`), where this returns nil for them. **No verdict
-    /// turns on the difference**: every field this is used for is compared
-    /// against a fixed string (`"ed25519"`, our hex challenge) or decoded as
-    /// base64, and neither a number's digits nor "true" can be any of those,
-    /// so both platforms reach the same step and the same refusal. Checked
-    /// field by field rather than assumed, and a test pins each one.
+    /// becomes `"25519"`), where this returns nil for them. **The two reach
+    /// the same refusal in every case the core can produce**, which is a
+    /// narrower claim than "no verdict turns on the difference" and is the
+    /// true one: every field this is used for is compared against a fixed
+    /// string (`"ed25519"`, our hex challenge) or decoded as base64, and
+    /// nothing the core emits as a number or a boolean can pass any of those
+    /// — so both platforms refuse, iOS one step earlier. In principle a
+    /// `public_key` emitted as a bare JSON number whose digits happened to be
+    /// the base64 of the pinned 32-byte key would be read by Android and
+    /// refused here; the core writes that field as a string and could not
+    /// produce it, and the difference is in the safe direction either way.
+    /// Checked field by field rather than assumed, and a test pins each one.
     static func jsonString(_ value: Any?) -> String? {
         value as? String
     }
