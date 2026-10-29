@@ -177,6 +177,54 @@ final class ClientGraphTests: XCTestCase {
         XCTAssertEqual("household-abc", StubURLProtocol.header("X-Device-Token", at: 1))
     }
 
+    /// **The default-deny property, and the one test that must fail if it is
+    /// lost: no client this module builds puts the household token on the
+    /// active server without a gate having admitted it.**
+    ///
+    /// The probe client is the case that proves it, because it is the one
+    /// client in the graph that has no identity rules to apply — so if a
+    /// missing or permissive gate could let the token out, this is where it
+    /// would. ``DomovoiClient/gate`` is non-optional with no default
+    /// argument, so "no gate" is not a state a call site can reach by
+    /// forgetting one; the probe client's choice is ``AdmitsNoServer``, and
+    /// the token is held.
+    ///
+    /// Watched failing three ways (I1-C part 2):
+    ///
+    ///  * against the code this replaced — `let gate: (any TokenGate)?` with
+    ///    `gate: (any TokenGate)? = nil` and `graph` passing `nil` — where
+    ///    the request left with `X-Device-Token: household-abc` on it;
+    ///  * with the optional restored and `graph` passing `nil` again;
+    ///  * with `graph` handing the probe client ``AdmitsAnyServer``, the
+    ///    test target's explicitly permissive gate.
+    ///
+    /// Each time it reported the token that went out, which is the failure
+    /// this test exists to name.
+    func testNoClientPutsTheTokenOnTheActiveServerWithoutAGateAdmittingIt() async {
+        let graph = DomovoiClient.graph(
+            book: .fixed(server: "http://10.0.0.42:6369", token: "household-abc"),
+            health: TokenHealth(),
+            lock: HouseholdLock(),
+            configuration: StubURLProtocol.session()
+        ) { _ in RecordingGate() }
+        StubURLProtocol.enqueue(.json("{}"))
+        do {
+            _ = try await graph.probe.raw(method: "GET", path: "/api/state", trackPairing: false)
+            XCTFail(
+                """
+                the probe client sent a token-bearing request to the active server \
+                with nothing having admitted it: X-Device-Token: \
+                \(StubURLProtocol.header("X-Device-Token", at: 0) ?? "<none>")
+                """
+            )
+        } catch {
+            guard case .identityHeld = error else {
+                return XCTFail("expected the gate to hold it, got \(error)")
+            }
+        }
+        XCTAssertEqual(0, StubURLProtocol.requestCount, "a held request never leaves")
+    }
+
     /// So what the container hands out is the probe, not the client: a type
     /// that carries no token whatever it is pointed at.
     ///
