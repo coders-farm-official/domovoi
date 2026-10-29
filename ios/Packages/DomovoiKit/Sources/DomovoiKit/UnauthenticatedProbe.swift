@@ -21,10 +21,15 @@ import Foundation
 ///  - Inside the module the type could be constructed with any closure. The
 ///    test target does exactly that, because a stubbed probe is how the
 ///    verdicts and the sweep are tested at all. So the claim is about
-///    production call sites, of which there is one — and
-///    `DiscoveryTests.testASweepCarriesNoTokenEvenToTheActiveServer` drives
-///    the real one through the stubbed transport and reads the headers of all
-///    254 requests to prove it.
+///    production call sites, of which there is one — and two tests drive
+///    that one through the stubbed transport and read the headers off the
+///    requests, rather than asking you to trust this paragraph:
+///    `DiscoveryTests.testAProbeCarriesNoTokenEvenToTheActiveServer` for a
+///    single probe of the active server, and that file's
+///    `testAScanOfAPhoneThatIsOnALanProbesTwoHundredAndFiftyFourAddressesWithNoToken`
+///    for all 254 of a sweep, arranged so that the one address which answers
+///    is the active server's — the address a token would have gone to. The
+///    second skips, announcing it, on a machine with no site-local IPv4.
 public struct UnauthenticatedProbe: Sendable {
 
     public struct Answer: Equatable, Sendable {
