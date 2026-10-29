@@ -104,6 +104,13 @@ struct PhonesAndBrowsersPanel: View {
     /// still probed first, and the identity it advertises at that moment is
     /// what the trust decision pins (A6-03 review); an address nothing
     /// answers at is not saved.
+    ///
+    /// `@MainActor` is written out rather than inferred from `View`: this is
+    /// the only `async` method in the app target, it touches a `@MainActor`
+    /// model across an `await`, and `swift test` cannot see the mistake if
+    /// the inference ever stops holding (part 2 shipped two main-actor
+    /// warnings in a view for exactly that reason).
+    @MainActor
     private func save() async {
         switch ServerAddress.fromTyped(typedURL) {
         case nil:

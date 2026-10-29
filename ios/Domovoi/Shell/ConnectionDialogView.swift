@@ -66,8 +66,12 @@ struct ConnectionDialogView: View {
             // sheet is on screen and is forgotten when it closes — the
             // lifetime Android's `remember` inside the dialog gives it.
             if picker == nil {
-                picker = ServerPickerModel(container: model.container) { [weak model] text in
-                    model?.showToast(text)
+                // A plain capture, not `[weak model]`: a capture list cannot
+                // name a member without `self.`, and there is no cycle to
+                // break — the shell owns no reference to this picker, which
+                // this view's `@State` owns and `onDisappear` stops.
+                picker = ServerPickerModel(container: model.container) { text in
+                    model.showToast(text)
                 }
             }
             picker?.scanOnOpen()
