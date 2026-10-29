@@ -343,11 +343,20 @@ final class TokenHealthTests: XCTestCase {
         book.clear(server)
         deepInTheLedgersDoubling(failures: 9)
         _ = await get()
+        // `catch DomovoiError.tokenThrottled { }` here crashed the Swift
+        // 6.3 compiler — "Found outside of lifetime use?!" in SILGenCleanup,
+        // signal 6, measured 2026-10-29 on Xcode 26.4's toolchain. The same
+        // pattern compiles in a non-async function (`DomovoiClient.answers`
+        // has one), so the trigger is narrower than "pattern-matching a
+        // typed throw"; what it is exactly is not something this batch can
+        // say. Catching everything and matching afterwards is the
+        // workaround, and it asserts the same thing. Written up in the batch
+        // report.
         do {
             _ = try client.tokenForDownload(file)
             XCTFail("expected a wait")
-        } catch DomovoiError.tokenThrottled {
-            // As it should.
+        } catch {
+            guard case .tokenThrottled = error else { return XCTFail("not a wait: \(error)") }
         }
     }
 
