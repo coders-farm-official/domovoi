@@ -45,9 +45,12 @@ import Synchronization
 ///  - ``prepare(_:)`` is `async` and **takes or refreshes the proof**. The
 ///    client calls it once, in the async entry point, before the task
 ///    starts — ``DomovoiClient/perform(_:mode:wsUpgrade:)`` and
-///    ``DomovoiClient/checkDeviceToken(_:)`` both do, and only when the
-///    decision has got as far as needing the gate, so a phone with no token
-///    to protect still probes nothing.
+///    ``DomovoiClient/checkDeviceToken(_:)`` both do — and only for a
+///    request aimed at the ACTIVE SERVER, so a sweep, a radio stream and a
+///    room still probe nothing. Note "the active server" and not "a request
+///    carrying a token": an unpaired phone's bare request prepares too,
+///    because ``admitsPairingPrompt(_:)`` has nowhere else to read from and
+///    that is how pairing starts.
 ///  - ``requireAdmitted(_:)`` is synchronous and **reads the cached verdict
 ///    and nothing else**. Every hop of a redirect chain asks it, which is
 ///    where Android re-reads its own state per hop, so the two phones decide
@@ -708,9 +711,12 @@ private enum ProbeCycle {
 private actor ProbeQueue {
     private var running: [String: Task<IdentityVerdict, any Error>] = [:]
 
+    /// `log` has no default: the whole point of it is that the one failure in
+    /// here that is a BUG rather than a condition of the network must not be
+    /// able to happen silently, and a default would be a way to make it so.
     func coalesced(
         _ key: String,
-        log: @Sendable (String) -> Void = { _ in },
+        log: @Sendable (String) -> Void,
         _ body: @Sendable @escaping () async throws -> IdentityVerdict
     ) async throws -> IdentityVerdict {
         // A probe must never need the gate it belongs to. If it does, this is

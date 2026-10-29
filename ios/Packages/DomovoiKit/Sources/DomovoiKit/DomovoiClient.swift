@@ -289,9 +289,9 @@ public final class DomovoiClient: Sendable {
     /// The `async` half of the gate's split (see ``TokenGate``): the proof is
     /// a network call, the per-hop reader is a synchronous platform callback,
     /// so the call happens here and the callback reads what it left. One call
-    /// covers the whole redirect chain, because every hop that may carry the
-    /// token is on the active server by definition and so asks about the same
-    /// `base`.
+    /// covers a whole redirect chain that stays within the active server,
+    /// because every hop of it asks about the same `base` — and a chain that
+    /// does not is divergence 9, at the bottom of this comment.
     ///
     /// It asks nothing when the request has nothing to do with the active
     /// server's identity — room mode, a foreign host, an address that does
