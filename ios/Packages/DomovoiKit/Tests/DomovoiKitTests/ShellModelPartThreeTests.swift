@@ -176,7 +176,10 @@ final class ShellModelPartThreeTests: XCTestCase {
         // `refresh()` takes the picker request, which opens the sheet — above
         // both shells, so it survives the workspace dropping to local media.
         XCTAssertEqual(.connection, model.sheet)
-        XCTAssertEqual(.localMedia, model.screen)
+        XCTAssertEqual(
+            .localMedia(.noServer), model.screen,
+            "the workspace is gone the instant the server is"
+        )
         model.stop()
     }
 

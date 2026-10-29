@@ -68,7 +68,8 @@ final class PairingFieldModelTests: XCTestCase {
         let calls = Shared<Int>(0)
         let field = makeField(store: InMemoryShellStore(serverURL: server), answer: .accepted, calls: calls)
         field.typed = "short"
-        XCTAssertNil(await field.submit())
+        let answer = await field.submit()
+        XCTAssertNil(answer)
         XCTAssertEqual(0, calls.current)
     }
 
@@ -82,7 +83,8 @@ final class PairingFieldModelTests: XCTestCase {
         let field = makeField(store: store, answer: .accepted, cleared: cleared, saved: saved)
         field.typed = "  \(token)  "
 
-        XCTAssertEqual(.accepted, await field.submit())
+        let answer = await field.submit()
+        XCTAssertEqual(.accepted, answer)
         XCTAssertEqual(token, store.token(for: server), "trimmed, as the field submits it")
         XCTAssertEqual(1, cleared.current)
         XCTAssertEqual([token], saved.current)
@@ -98,7 +100,8 @@ final class PairingFieldModelTests: XCTestCase {
         let field = makeField(store: store, answer: .refused, saved: saved)
         field.typed = token
 
-        XCTAssertEqual(.refused, await field.submit())
+        let answer = await field.submit()
+        XCTAssertEqual(.refused, answer)
         XCTAssertNil(store.token(for: server))
         XCTAssertEqual([], saved.current)
         XCTAssertTrue(field.messageIsRefusal)
@@ -118,7 +121,8 @@ final class PairingFieldModelTests: XCTestCase {
         let field = makeField(store: store, answer: .unavailable)
         field.typed = token
 
-        XCTAssertEqual(.unavailable, await field.submit())
+        let answer = await field.submit()
+        XCTAssertEqual(.unavailable, answer)
         XCTAssertNil(store.token(for: server))
         XCTAssertFalse(field.messageIsRefusal)
         XCTAssertEqual("Couldn't check it with the server — try again.", field.message)
@@ -138,7 +142,8 @@ final class PairingFieldModelTests: XCTestCase {
             tickAdvancesMs: 1_000
         )
         field.typed = token
-        XCTAssertEqual(.throttled(waitMs: 42_000), await field.submit())
+        let answer = await field.submit()
+        XCTAssertEqual(.throttled(waitMs: 42_000), answer)
 
         XCTAssertNil(store.token(for: server))
         XCTAssertFalse(field.isEnabled, "the field and the button are off")
@@ -232,7 +237,8 @@ final class PairingFieldModelTests: XCTestCase {
         XCTAssertFalse(field.isEnabled)
 
         release.set(true)
-        XCTAssertEqual(.accepted, await submitting.value)
+        let answer = await submitting.value
+        XCTAssertEqual(.accepted, answer)
         XCTAssertEqual(ShellStrings.replace, field.buttonLabel, "and back again afterwards")
         XCTAssertFalse(field.checking)
     }

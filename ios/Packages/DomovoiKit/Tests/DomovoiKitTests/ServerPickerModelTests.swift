@@ -134,7 +134,8 @@ final class ServerPickerModelTests: XCTestCase {
     func testABlankTypedAddressIsNothing() async {
         let picker = makePicker(store: InMemoryShellStore())
         picker.manual = "   "
-        XCTAssertEqual(.ignored, await picker.addManual())
+        let outcome = await picker.addManual()
+        XCTAssertEqual(.ignored, outcome)
         XCTAssertNil(picker.manualError)
         XCTAssertNil(picker.gate.pending)
     }
