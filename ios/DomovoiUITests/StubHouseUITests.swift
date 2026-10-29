@@ -179,4 +179,44 @@ final class StubHouseUITests: XCTestCase {
         _ = app.staticTexts.firstMatch.waitForExistence(timeout: 20)
         evidence(app, "20-unpaired")
     }
+
+    /// The screen behind the pairing link — and the app's prominent buttons,
+    /// which nothing has ever photographed.
+    ///
+    /// Worth its own case because of what the brand change rests on:
+    /// `.borderedProminent` draws a **white** label, and white on the brand
+    /// amber is 2.05:1, so those buttons were given `Color.brandFg`
+    /// explicitly. Whether a button style lets a caller override its label
+    /// colour is not something the compiler or `swift test` can answer, and
+    /// if it does not, the fix is to tint the button with `brandInk` instead.
+    /// Either way the picture decides it.
+    ///
+    /// Reached by **tapping**, not by opening the connection sheet: that
+    /// sheet starts the LAN discovery sweep across whatever network the Mac
+    /// is on. This route is `onPair` → `openSettingsTab("phones-and-browsers")`
+    /// and touches nothing but the stub.
+    func testThePairingScreenAndItsButtons() throws {
+        let app = launch(paired: false)
+        let link = app.buttons[ShellStringsUnderTest.pairLink]
+        XCTAssertTrue(
+            link.waitForExistence(timeout: 20),
+            "no pairing link on Home — the unpaired header did not draw"
+        )
+        link.tap()
+        // Proof that the tap went somewhere, rather than a screenshot of the
+        // screen we started on: the link belongs to Home and Home is gone.
+        let left = link.waitForNonExistence(timeout: 10)
+        evidence(app, "30-pairing")
+        XCTAssertTrue(left, "the pairing link did nothing — still on Home")
+    }
+}
+
+/// Strings this file matches on, kept together and named so that a change in
+/// the app that breaks a query is a one-line fix here rather than a hunt.
+///
+/// Deliberately **not** `@testable import DomovoiKit`: a UI test drives the
+/// app through the same surface a person does, and a query that silently
+/// followed a renamed string would stop testing what it claims to.
+private enum ShellStringsUnderTest {
+    static let pairLink = "pair this phone for live updates and controls"
 }
