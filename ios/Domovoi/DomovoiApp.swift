@@ -223,6 +223,54 @@ extension Color {
             : UIColor(red: 0.3458, green: 0.3323, blue: 0.3104, alpha: 1)   // oklch(0.45 0.01 80)
     })
 
+    /// `--brand`: Domovoi's one accent, amber.
+    ///
+    /// Also the app's `AccentColor` asset, so `.tint` and `.accentColor`
+    /// resolve to it without a call site asking. This constant exists for the
+    /// few places that name the brand explicitly rather than inheriting it.
+    ///
+    /// `#F2A618` light and `#F9AD26` dark — the two values Android ships,
+    /// which is how the conversion from the stylesheet's `oklch` was checked.
+    ///
+    /// **A fill, never text.** It is **2.05:1** on white, which is under the
+    /// 3:1 that even a meaningful *graphic* needs, let alone text. Use
+    /// ``Color/brandInk`` for anything a person has to read or interpret on a
+    /// light surface, and ``Color/brandFg`` for text drawn **on** this.
+    static let brand = Color(UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? UIColor(red: 0.9758, green: 0.6765, blue: 0.1471, alpha: 1)   // oklch(0.80 0.16 75)
+            : UIColor(red: 0.9491, green: 0.6513, blue: 0.0950, alpha: 1)   // oklch(0.78 0.16 75)
+    })
+
+    /// `--brand-fg`: text drawn **on** the amber, which the stylesheet calls
+    /// "text on amber buttons". Near-black, not white: white on amber is
+    /// 2.05:1, this is **8.49:1** light and **9.87:1** dark.
+    ///
+    /// `#281600` light, matching Android's `brandFg`.
+    static let brandFg = Color(UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? UIColor(red: 0.1084, green: 0.0566, blue: 0.0000, alpha: 1)   // oklch(0.18 0.04 75)
+            : UIColor(red: 0.1561, green: 0.0879, blue: 0.0000, alpha: 1)   // oklch(0.22 0.05 75)
+    })
+
+    /// `--brand-ink`: the brand **as text or a meaningful graphic** on a light
+    /// surface — links, the selected tab, the live dot.
+    ///
+    /// **5.65:1** on white and **9.84:1** on the dark canvas. Dark mode is
+    /// `--brand` itself, because that stylesheet's dark block says
+    /// `--brand-ink: var(--brand)`.
+    ///
+    /// The dots take this and not ``Color/brand``: a dot that is the only
+    /// thing saying whether the house is live is a graphic that has to be
+    /// seen, and 2.05:1 is under the 3:1 such a graphic needs. That is the
+    /// one place this port departs from a literal reading of the token
+    /// names, and the reason is a measurement.
+    static let brandInk = Color(UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? UIColor(red: 0.9758, green: 0.6765, blue: 0.1471, alpha: 1)   // oklch(0.80 0.16 75)
+            : UIColor(red: 0.5923, green: 0.3456, blue: 0.0000, alpha: 1)   // oklch(0.52 0.13 70)
+    })
+
     /// `--warn-ink`: the amber hue **as text or an icon**, which is not the
     /// amber used for dots and fills.
     ///

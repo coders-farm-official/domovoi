@@ -61,6 +61,7 @@ struct CheckedPairingFieldView: View {
                 }
                 .disabled(!field.canSubmit)
                 .buttonStyle(.borderedProminent)
+                .foregroundStyle(Color.brandFg)
             }
             if let hint = field.hint {
                 Text(hint)

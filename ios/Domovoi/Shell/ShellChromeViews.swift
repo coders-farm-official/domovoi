@@ -182,7 +182,7 @@ struct PhoneBarView: View {
                     // directions, on the app's primary navigation. Same
                     // defect as the header's live dot, found the same way.
                     .contentShape(Rectangle())
-                    .foregroundStyle(selected ? Color.accentColor : Color.fgMuted)
+                    .foregroundStyle(selected ? Color.brandInk : Color.fgMuted)
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(route.label)

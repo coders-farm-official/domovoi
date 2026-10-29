@@ -252,7 +252,7 @@ struct HomeAttentionView: View {
         case .warn: return .orange
         case .ok: return .green
         case .idle: return .secondary
-        case .brand: return .accentColor
+        case .brand: return Color.brandInk
         }
     }
 }

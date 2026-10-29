@@ -239,7 +239,7 @@ struct HomeHeaderView: View {
 
     private var circle: some View {
         Circle()
-            .fill(state.live ? Color.accentColor : Color.fgMuted)
+            .fill(state.live ? Color.brandInk : Color.fgMuted)
             .frame(width: 10, height: 10)
     }
 }

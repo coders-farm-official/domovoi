@@ -82,6 +82,7 @@ struct PairingScreenView: View {
                     }
                     Button(ShellStrings.notNow) { model.dismissPairing() }
                         .buttonStyle(.bordered)
+                        .tint(Color.brandInk)
                 }
                 .padding(24)
                 .frame(maxWidth: 480)
@@ -125,8 +126,10 @@ struct TrustAgainSheet: View {
                 Spacer()
                 Button(trustAgainNo) { model.dismissTrustAgain() }
                     .buttonStyle(.bordered)
+                    .tint(Color.brandInk)
                 Button(trustAgainYes) { model.confirmTrustAgain() }
                     .buttonStyle(.borderedProminent)
+                    .foregroundStyle(Color.brandFg)
             }
         }
         .padding(24)

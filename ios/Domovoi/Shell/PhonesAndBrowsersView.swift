@@ -90,6 +90,7 @@ struct PhonesAndBrowsersPanel: View {
                 Task { await save() }
             }
             .buttonStyle(.borderedProminent)
+            .foregroundStyle(Color.brandFg)
             .disabled(ServerCredentials.isBlank(typedURL) || saving)
 
             if !ServerCredentials.isBlank(model.inputs.serverURL) {
@@ -166,6 +167,7 @@ struct PhonesAndBrowsersPanel: View {
             if display.offersPinning {
                 Button(ShellStrings.pinThisIdentity) { model.pinTheOfferedIdentity() }
                     .buttonStyle(.bordered)
+                    .tint(Color.brandInk)
             }
         }
     }
@@ -210,6 +212,7 @@ struct PhonesAndBrowsersPanel: View {
                     model.refresh()
                 }
                 .buttonStyle(.bordered)
+                .tint(Color.brandInk)
             }
         }
     }
@@ -248,7 +251,7 @@ struct PhonesAndBrowsersPanel: View {
                     if row.active {
                         Text(ShellStrings.connected)
                             .font(.caption)
-                            .foregroundStyle(.tint)
+                            .foregroundStyle(Color.brandInk)
                     } else if !ServerCredentials.isBlank(store.token(for: row.url) ?? "") {
                         Text(ShellStrings.paired)
                             .font(.caption)

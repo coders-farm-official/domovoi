@@ -256,6 +256,7 @@ struct ServerPickerPanel: View {
                 }
                 .disabled(!picker.manualButtonEnabled)
                 .buttonStyle(.borderedProminent)
+                .foregroundStyle(Color.brandFg)
             }
             if let error = picker.manualError {
                 Text(error)
@@ -314,7 +315,7 @@ private struct ServerRow: View {
             Spacer()
             Text(row.affordance(inUse: inUse).text)
                 .font(.caption)
-                .foregroundStyle(.tint)
+                .foregroundStyle(Color.brandInk)
             if row.forgetAffordance != .none {
                 Button(action: onForget) {
                     Image(systemName: "xmark")
@@ -333,7 +334,7 @@ private struct ServerRow: View {
     }
 
     private var dot: Color {
-        if row.active { return .accentColor }
+        if row.active { return Color.brandInk }
         return row.online ? .green : .gray
     }
 }
@@ -395,8 +396,10 @@ struct TrustServerCard: View {
                 Spacer()
                 Button(ShellStrings.trustCancel, action: onCancel)
                     .buttonStyle(.bordered)
+                    .tint(Color.brandInk)
                 Button(ShellStrings.trustConfirm, action: onConfirm)
                     .buttonStyle(.borderedProminent)
+                    .foregroundStyle(Color.brandFg)
             }
         }
     }
@@ -436,6 +439,12 @@ struct ForgetServerCard: View {
                 Spacer()
                 Button(forgetServerCancel, action: onCancel)
                     .buttonStyle(.bordered)
+                    .tint(Color.brandInk)
+                // **No brand colour here.** A destructive role draws itself
+                // red whatever the tint is, and forgetting a server is the
+                // one button on this sheet that should not look like the
+                // friendly one. `--danger` is its own token in
+                // `colors_and_type.css` for the same reason.
                 Button(forgetServerConfirm, role: .destructive, action: onConfirm)
                     .buttonStyle(.borderedProminent)
             }
