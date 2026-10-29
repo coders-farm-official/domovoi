@@ -689,7 +689,7 @@ public final class StateSocket: Sendable {
             current.connected = connected
             return true
         }
-        _ = changed; publish(connected)
+        if changed { publish(connected) }
     }
 }
 
