@@ -55,7 +55,13 @@ public final class ShellModel {
     /// follow.
     public private(set) var capabilities: Capabilities = .empty
 
-    /// The live socket. Always false in this batch; see the type's note.
+    /// The live socket, as ``AppContainer/socket`` last reported it.
+    ///
+    /// **Not whether the server is reachable.** An unpaired phone's upgrade
+    /// is refused `403`, so this is permanently false beside a server that
+    /// plainly answers ``DomovoiClient/answers()`` — map §1.6, and the
+    /// asymmetry ``reachabilityAction(serverURL:connected:phase:)`` depends
+    /// on. The two facts stay two.
     public private(set) var connected = false
 
     /// The scene phase, as last reported.
@@ -63,10 +69,25 @@ public final class ShellModel {
 
     /// Whether this install is a shared screen (the kitchen tablet). A paired
     /// install counts as shared until the server says otherwise
-    /// (``DeviceRegistry/isSharedScreen(answer:paired:)``); the answer itself
-    /// arrives with the device register, whose caller is a later batch, so it
-    /// is nil here and a paired install reads as shared.
-    public private(set) var sharedScreenAnswer: Bool?
+    /// (``DeviceRegistry/isSharedScreen(answer:paired:)``); the answer
+    /// arrives with the device register, which this batch now sends.
+    ///
+    /// **Nil for any server but the one that answered.** Android keeps these
+    /// per server (`prefs.sharedScreens`, read back with
+    /// `ServerCredentials.sharedAnswerFor(sharedAnswers, shellServerUrl)` —
+    /// `AppShell.kt:390`), and one value under one name would carry server
+    /// A's answer onto server B until B's register landed. One direction of
+    /// that is actively wrong: a `false` from A would un-mask a paired
+    /// install on B, where the conservative default is `shared` until the
+    /// server says otherwise. So the answer is kept with the address it is
+    /// about. `testASharedScreenAnswerDoesNotFollowTheServerSwitch` is that.
+    public var sharedScreenAnswer: Bool? {
+        guard sharedAnswerFor == inputs.serverURL else { return nil }
+        return sharedAnswer
+    }
+
+    private var sharedAnswer: Bool?
+    private var sharedAnswerFor: String?
 
     /// Where the workspace is.
     public var navigation = NavigationState()
@@ -161,9 +182,13 @@ public final class ShellModel {
     ///   - tick: how the token-trouble card's countdown sleeps between
     ///     re-reads. Separate from `wait` because the two are driven by
     ///     different things and a test of one must not park the other.
+    ///   - deviceSelf: what this install calls itself, for the device
+    ///     register. Nil means nothing can send one, and
+    ///     ``registerSender`` is then nil — see its note.
     public init(
         container: AppContainer,
         phoneCanChat: Bool = false,
+        deviceSelf: (@Sendable () -> DeviceSelf)? = nil,
         probe: (@Sendable () async -> Bool)? = nil,
         clock: @Sendable @escaping () -> Int64 = TokenHealth.monotonicMs,
         wait: @Sendable @escaping (Int64) async throws -> Void = { try await Task.sleep(for: .milliseconds($0)) },
@@ -171,6 +196,7 @@ public final class ShellModel {
     ) {
         self.container = container
         self.phoneCanChat = phoneCanChat
+        self.deviceSelf = deviceSelf
         self.inputs = container.shellInputs()
         self.clock = clock
         self.tick = tick
@@ -642,6 +668,15 @@ public final class ShellModel {
         case .active:
             if was != .active {
                 container.appForegrounded()
+                // Before `refresh()`, because `connected` is **not to be
+                // believed** across a return: a cached, frozen app misses
+                // every callback, so the flag it comes back holding is
+                // whatever was true before it was suspended (map §1.6's
+                // mirror image). This drops the link and re-mints rather than
+                // waking a socket that reports itself up. `refresh()`'s
+                // `wake()` afterwards is then a no-op, because the socket is
+                // connecting rather than parked.
+                container.socket.sceneReturned()
                 refresh()
             }
         case .inactive, .background:
@@ -679,11 +714,28 @@ public final class ShellModel {
 
     /// Re-read everything the container can answer, and act on anything
     /// waiting out of band.
+    ///
+    /// It is also where the socket is told the world may have moved. A nil
+    /// ``SocketUpgrade/mint()`` parks the socket on a question — a wait, a
+    /// held identity, a token it has not got — whose answer cannot change by
+    /// itself, so **nothing but a state change may un-park it**
+    /// (``StateSocket/wake()``, map §8.3). This method is where every one of
+    /// those changes is already noticed: a server switch, a token arriving, a
+    /// verdict changing, a wait running out (the token-trouble countdown
+    /// calls this once a second), and the foreground return, which calls it
+    /// too.
+    ///
+    /// ``StateSocket/serverChanged()`` first, because a switch has to
+    /// reconnect to the new address rather than wake on the old one; it is a
+    /// no-op when the address has not changed, and then ``wake()`` is a no-op
+    /// unless the socket is parked.
     public func refresh() {
         inputs = container.shellInputs()
         takePendingRoute()
         updateReachability()
         updateWaitTick()
+        container.socket.serverChanged()
+        container.socket.wake()
     }
 
     /// Whether the token-trouble card's countdown is actually being written.
@@ -708,6 +760,115 @@ public final class ShellModel {
         }
     }
 
+    // MARK: - the socket, and what a connect sets off (map §1.7, §7.3)
+
+    /// Start listening to ``AppContainer/socket``.
+    ///
+    /// Called by ``AppShellView`` once, and by nothing else: the socket is the
+    /// container's and lives for the process, so a model does not own it — it
+    /// subscribes, and ``stop()`` unsubscribes.
+    ///
+    /// - Parameter event: where frames go. This batch has no consumer of one
+    ///   — Home's seven reads are part 2's — so the default drops them, which
+    ///   is also what Android does with a frame nobody is collecting: `events`
+    ///   has no replay and `tryEmit` into a buffer with no collector is
+    ///   dropped (map §1.1). ``ApiRead/received(_:)`` is the consumer that
+    ///   takes them.
+    public func watchSocket(event: (@MainActor (StateEvent) -> Void)? = nil) {
+        container.socketRelay.connect(
+            connection: { [weak self] up in
+                Task { @MainActor in self?.socketConnectionChanged(up) }
+            },
+            event: { [weak self] frame in
+                Task { @MainActor in
+                    guard self != nil else { return }
+                    event?(frame)
+                }
+            }
+        )
+        // The socket may already be up — `AppContainer.start()` opens it, and
+        // whether that happened before this call is the app's build order,
+        // not a fact this method can assume. So the current value is taken
+        // rather than waited for, and `SocketRelay.missedConnections` is what
+        // says whether the window was ever entered.
+        socketConnectionChanged(container.socket.connected)
+    }
+
+    /// The socket's own report, and the three things that follow a connect.
+    ///
+    /// Android does these in three separate `LaunchedEffect`s keyed on
+    /// `connected` (`AppShell.kt:341`, `:356`, and the reachability loop at
+    /// `:130`); they are one call here so they cannot drift apart or fire in
+    /// an order nobody chose:
+    ///
+    ///  1. ``socketChanged(connected:sendRegister:)`` — the flag, the
+    ///     reachability loop's short-circuit, and the device register.
+    ///  2. ``refreshCapabilities()`` **on every connect, including every
+    ///     reconnect, and never on a disconnect** —
+    ///     `LaunchedEffect(connected) { if (connected) capsState.refresh() }`
+    ///     (`AppShell.kt:341`). A manifest fetch that lived inside the
+    ///     capability fetcher instead of here would lose that trigger (map
+    ///     §12.2).
+    public func socketConnectionChanged(_ up: Bool) {
+        socketChanged(connected: up, sendRegister: registerSender)
+        guard up else { return }
+        Task { @MainActor [weak self] in
+            await self?.refreshCapabilities()
+        }
+    }
+
+    /// What this install tells the server about itself, or nil when nothing
+    /// can say — which is the state an app built without one is in.
+    private let deviceSelf: (@Sendable () -> DeviceSelf)?
+
+    /// The device register's sender, or nil when there is nothing to send.
+    ///
+    /// **This is the thing I1-C part 2's F9 left a hole for.** It wrote the
+    /// cadence and then made both callers take the sender as a parameter, so
+    /// that "no sender, no ask, and so no cadence slot burnt for nothing"
+    /// (`I1C2-REPORT.md` F9). Passing this is what fills it; the decision is
+    /// still ``registerIfDue(reason:)``'s and there is not a second one.
+    ///
+    /// Nil when no ``DeviceSelf`` was given, and that stays meaningful rather
+    /// than becoming vestigial: a model built in a test has no device to
+    /// introduce, and `testNoSenderMeansNoAskAndSoNoCadenceSlotBurnt` is
+    /// still about a real state.
+    public var registerSender: (@MainActor () -> Void)? {
+        guard deviceSelf != nil else { return nil }
+        return { [weak self] in self?.sendRegister() }
+    }
+
+    /// Introduce this install to the server, and take the shared-screen
+    /// answer that comes back.
+    ///
+    /// `registerDevice(app)` (`net/DeviceRegistry.kt:56`). Two details of the
+    /// Kotlin are load-bearing and copied:
+    ///
+    ///  - **A failure records nothing.** The `.also { setSharedScreen(…) }` is
+    ///    *inside* the `runCatching`, so a register that did not land leaves
+    ///    the last answer standing. Writing a nil here instead would un-mask
+    ///    a shared screen every time the network hiccupped.
+    ///  - **The answer is read with ``DeviceRegistry/sharedScreenAnswer(_:)``,
+    ///    which reads an absent `shared_screen` as "no"**, not as unknown: a
+    ///    server older than V014 cannot mark a device, and "unknown" on a
+    ///    paired install means shared for ever.
+    public func sendRegister() {
+        guard let deviceSelf else { return }
+        let who = deviceSelf()
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let row = await DeviceRegistry.register(
+                with: container.client,
+                deviceID: who.deviceID,
+                name: who.name,
+                userAgent: who.userAgent,
+                ownerPersonID: who.ownerPersonID
+            )
+            guard let row else { return }
+            sharedScreenAnswered(DeviceRegistry.sharedScreenAnswer(row))
+        }
+    }
+
     /// Fetch the capability manifest. Android fetches it at connect and again
     /// on every socket reconnect, and treats a failure as
     /// ``Capabilities/empty``; so does this.
@@ -720,14 +881,21 @@ public final class ShellModel {
         _ = navigation.capabilitiesChanged(visibility)
     }
 
-    /// The server's answer about whether this install is a shared screen.
+    /// The server's answer about whether this install is a shared screen,
+    /// recorded against the server that gave it.
     public func sharedScreenAnswered(_ answer: Bool?) {
-        sharedScreenAnswer = answer
+        sharedAnswer = answer
+        sharedAnswerFor = inputs.serverURL
         _ = navigation.capabilitiesChanged(visibility)
     }
 
     /// Tear the loop down: the shell is going away.
     public func stop() {
+        // Unsubscribe, do NOT stop the socket: it is ``AppContainer``'s and
+        // lives for the process, exactly as Android's `bus` does, whose only
+        // `stop()` caller is room mode. What has to go is the pair of
+        // closures reaching back into this object.
+        container.socketRelay.disconnect()
         driver.stop()
         waitTick?.cancel()
         waitTick = nil

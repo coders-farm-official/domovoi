@@ -362,6 +362,25 @@ public final class AppContainer: Sendable {
     /// The app's client: the only one that carries the household token.
     public let client: DomovoiClient
 
+    /// Room mode's seal, kept so ``start()`` can ask it. Android reads
+    /// `RoomStore.isActive` in `DomovoiApplication.onCreate` and starts the
+    /// state socket only when the phone is not a room (`:53`).
+    let lock: HouseholdLock
+
+    /// The app's one state socket, for the process, as Android's `bus` is
+    /// (`AppContainer.kt:95`). **Here and not on ``ShellModel``**, because it
+    /// outlives every screen and eight things read it: Home's live dot and
+    /// re-reads, the capability manifest, the device register, four alert
+    /// engines and every paged list (map §1.7, §7.2).
+    ///
+    /// Nothing is connected to it by `init`: ``socketRelay`` is the seam, for
+    /// the same forward reference ``DeferredSink`` exists for.
+    /// ``ShellModel`` connects to it and ``start()`` opens it.
+    public let socket: StateSocket
+
+    /// Where the socket's two outputs go once something is listening.
+    public let socketRelay: SocketRelay
+
     /// The gate's probe client: the same client, carrying ``AdmitsNoServer``
     /// in place of the real gate.
     ///
@@ -454,6 +473,21 @@ public final class AppContainer: Sendable {
         self.probeClient = graph.probe
         self.client = graph.app
         self.identity = graph.gate
+        self.lock = lock
+
+        // The socket, built from the client that was just made rather than
+        // from `self.client`, because not every stored property is set yet.
+        let app = graph.app
+        let relay = SocketRelay()
+        self.socketRelay = relay
+        self.socket = StateSocket(
+            base: { store.serverURL },
+            upgrade: { app.webSocketUpgrade($0) },
+            transport: app.webSocketTransport,
+            noteRefusal: { status, body in app.notePossiblePairingRefusal(status: status, body: body) },
+            publish: { relay.connectionChanged($0) },
+            event: { relay.arrived($0) }
+        )
 
         // The other half of the circularity, in the other direction. After
         // this line a network change invalidates every verdict; before it,
@@ -566,8 +600,20 @@ public final class AppContainer: Sendable {
     /// the container: starting a monitor is a side effect on the process, and
     /// a container built in a test should not take one. Called once, by the
     /// app, after the container exists.
+    /// Android: `if (!RoomStore.isActive(this)) { container.bus.start(); … }`
+    /// (`DomovoiApplication.kt:53`). The guard is kept with the same meaning
+    /// — the household side is off while the phone is a room — read off
+    /// ``HouseholdLock`` rather than off a room store, because that is the
+    /// iOS seam and there is no room mode here yet.
+    ///
+    /// Belt and braces either way: even a socket started inside room mode
+    /// would mint bare, because ``DomovoiClient/tokenDecision(for:wsUpgrade:)``
+    /// asks the lock first (`AppContainerTests
+    /// .testRoomModeSealsTheTokenBeforeAnyRequestIsBuilt`, and Android's
+    /// `HouseholdLockTest.anUpgradeThatSetTheHeaderItselfLosesItInRoomMode`).
     public func start() {
         network.start()
+        if !lock.roomModeActive { socket.start() }
     }
 
     // MARK: - the foreground epoch (map §9.2)

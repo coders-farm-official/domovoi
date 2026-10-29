@@ -315,6 +315,41 @@ public enum DeviceRegistry {
     }
 }
 
+/// What this install tells the server about itself, as one value.
+///
+/// The four arguments of ``DeviceRegistry/register(with:deviceID:name:userAgent:ownerPersonID:)``,
+/// collected so that ``ShellModel``'s sender takes one closure rather than
+/// four and so that the **two that cannot be read in `DomovoiKit` at all**
+/// have an obvious home. `name` and `userAgent` come from `UIDevice`
+/// (``DeviceRegistry/suggestedDeviceName(model:)``,
+/// ``DeviceRegistry/userAgent(systemVersion:model:)``), and this package does
+/// not import UIKit — so the app reads them on the main actor and hands them
+/// over, which is also what keeps the UIKit read out of a `Sendable` closure
+/// that runs anywhere.
+///
+/// `ownerPersonID` is this server's "This phone belongs to", which Android
+/// keeps per server in its prefs
+/// (`ServerCredentials.ownerFor(prefs.owners.value, server)`,
+/// `AppShell.kt:354`). **There is no such preference on iOS yet** — nothing
+/// in ``ShellStore`` holds one — so every caller today passes nil, which the
+/// route reads as "nobody" and clears. That is the right wire value for a
+/// phone nobody has claimed; the batch that ports Settings → Connection's
+/// owner field has to fill this in, and `I1D1-REPORT.md` lists it.
+public struct DeviceSelf: Equatable, Sendable {
+
+    public let deviceID: String
+    public let name: String
+    public let userAgent: String
+    public let ownerPersonID: String?
+
+    public init(deviceID: String, name: String, userAgent: String, ownerPersonID: String? = nil) {
+        self.deviceID = deviceID
+        self.name = name
+        self.userAgent = userAgent
+        self.ownerPersonID = ownerPersonID
+    }
+}
+
 /// This install's device id: stable for the install, and **ours**.
 ///
 /// Not `identifierForVendor`. Three reasons, in order of weight:
