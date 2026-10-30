@@ -88,9 +88,10 @@ struct ShellTopBar<Trailing: View>: View {
     /// The server pill and its status word, which both layouts share so there
     /// is one copy of what the pill is rather than two that can drift.
     ///
-    /// The labels keep `.lineLimit(1)` at ordinary sizes and wrap at the
-    /// accessibility ones, for the reason on this type: the audit's complaint
-    /// was a cut line, and a wrapped line is not cut.
+    /// The labels wrap at every size, for the reason on this type: the
+    /// audit's complaint was a cut line, and a wrapped line is not cut. The
+    /// comment inside says why that is not the same as the bar growing taller
+    /// at ordinary sizes.
     @ViewBuilder private var pillAndStatus: some View {
         if let pill {
             // These used to keep `.lineLimit(1)` below the accessibility

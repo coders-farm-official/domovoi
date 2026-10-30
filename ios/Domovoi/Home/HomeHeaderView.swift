@@ -237,34 +237,34 @@ struct HomeHeaderView: View {
         }
     }
 
-    /// Drawn as an SF Symbol rather than a `Circle()` shape, which looks the
-    /// same and audits differently.
+    /// ### Tried and ruled out: this is not Home's "Contrast failed"
     ///
-    /// With the bare shape, this button is a **leaf element with an
-    /// accessibility label and no drawn text** — the tree shows `Button,
-    /// {{333, 119}, {44, 44}}, label: 'live'` with no children — and Apple's
-    /// audit returned "Contrast failed for element" on Home while naming no
-    /// element. Every piece of text on that screen measures 5.31:1 or better
-    /// off the screenshot, and ``LocalShellView``, which has the same top bar
-    /// and neither this dot nor a phone bar, passed the same audit in I1-C.
-    /// By elimination this is the element, and the shape of it is that a 10pt
-    /// mark sits in a 44pt frame that is 98% canvas — the frame being 44pt
-    /// because a tap target has to be, which is not negotiable.
+    /// Home carries an audit issue Apple names nothing about —
+    /// `issue.element` is nil and the detail is "Contrast failed for
+    /// element" — and every text on that screen measures 5.31:1 or better
+    /// off the screenshot. That left this: a leaf `Button` with an
+    /// accessibility label and nothing drawn under it, `Button,
+    /// {{333, 119}, {44, 44}}, label: 'live'`, a 10pt mark in a 44pt frame
+    /// that is 98% canvas — the frame being 44pt because a tap target has
+    /// to be.
     ///
-    /// An `Image` gives the audit the same thing the phone bar's buttons
-    /// give it, and those pass: a `Button` with an `Image` child it can
-    /// measure, rather than a label with nothing drawn under it. The colour
-    /// is unchanged, and `brandInk` on the canvas is 5.65:1 where a
-    /// meaningful graphic needs 3:1.
+    /// Drawing the mark as `Image(systemName: "circle.fill")` was the test of
+    /// that, since the audit would then see what the phone bar's buttons give
+    /// it and those pass. **It did not clear the issue.** The tree showed the
+    /// button had picked up `identifier: 'circle.fill'`, so the change was
+    /// live and the audit returned the same contrast issue anyway. The shape
+    /// is back to `Circle()` — the simpler of the two — and the elimination
+    /// is recorded here rather than left in the code as a change whose reason
+    /// turned out to be wrong.
     ///
-    /// **This is elimination, not a measurement**, and the run after it is
-    /// what says whether it was right. If the audit still returns a contrast
-    /// issue with this in place, the element is something else and the
-    /// elimination was wrong.
+    /// `brandInk` on the canvas measures 5.65:1 where a meaningful graphic
+    /// needs 3:1, so the colour was never it either. What narrows it next is
+    /// the pairing screen's audit in `StubHouseUITests`: same chrome,
+    /// different content.
     private var circle: some View {
-        Image(systemName: "circle.fill")
-            .font(.system(size: 10))
-            .foregroundStyle(state.live ? Color.brandInk : Color.fgMuted)
+        Circle()
+            .fill(state.live ? Color.brandInk : Color.fgMuted)
+            .frame(width: 10, height: 10)
     }
 }
 

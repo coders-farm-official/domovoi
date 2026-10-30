@@ -141,6 +141,42 @@ final class StubHouseUITests: XCTestCase {
         XCTAssertTrue(named, "the header never drew the house's name")
     }
 
+    /// Apple's audit on a screen, with every issue it has — not the first.
+    ///
+    /// Two things this gets right that the inline version did not.
+    ///
+    /// `continueAfterFailure` is **true for the duration**. The handler
+    /// returning `true` is documented to suppress an issue, and for the two
+    /// "Text clipped" ones it did; a "Contrast failed" with a nil element was
+    /// recorded by XCTest anyway, and `setUp`'s `continueAfterFailure = false`
+    /// then ended the test inside `performAccessibilityAudit` — before the
+    /// assertion that lists everything, and before any later screen was
+    /// looked at. Whatever the suppression rule really is, the list is
+    /// complete this way.
+    ///
+    /// It returns the issues rather than asserting, so a caller can audit
+    /// **two screens and compare**. That is the only tool here that narrows a
+    /// contrast issue: Apple names no element, `issue.element` is nil, and
+    /// two screens that share chrome but not content say which half it is in.
+    @MainActor
+    @available(iOS 17.0, *)
+    private func auditIssues(_ app: XCUIApplication, _ name: String) throws -> [String] {
+        let wasContinuing = continueAfterFailure
+        continueAfterFailure = true
+        defer { continueAfterFailure = wasContinuing }
+        var found: [String] = []
+        try app.performAccessibilityAudit { issue in
+            found.append("\(issue.compactDescription): \(issue.detailedDescription)")
+            print("""
+                AUDIT [\(name)] type=\(issue.auditType) \(issue.compactDescription)
+                  detail: \(issue.detailedDescription)
+                  element: \(issue.element?.debugDescription ?? "nil")
+                """)
+            return true
+        }
+        return found
+    }
+
     /// Apple's own audit, on Home rather than on the launch screen.
     ///
     /// `@MainActor` because `performAccessibilityAudit` is main-actor
@@ -155,45 +191,7 @@ final class StubHouseUITests: XCTestCase {
         // is still a header, and contrast and touch targets do not depend on
         // the server answering.
         if #available(iOS 17.0, *) {
-            // **Every issue, in one run.** The handler used to return `false`,
-            // which has XCTest record the issue as a failure — and `setUp`
-            // sets `continueAfterFailure = false`, so the first one ended the
-            // test. Three runs in a row therefore reported one issue each and
-            // looked like a queue of distinct problems being worked through;
-            // the screenshots say Home was unchanged and both issues were
-            // there the whole time. Collecting them and asserting once is the
-            // difference between "the audit is now failing on X" and knowing
-            // what the audit actually has against this screen.
-            var found: [String] = []
-            try app.performAccessibilityAudit { issue in
-                // Print every issue rather than only failing on the first:
-                // the result bundle names none of them, and finding out
-                // which element is at fault took a throwaway test last time.
-                //
-                // **`element` comes back nil and `compactDescription` is four
-                // words**, so neither says *what* is at fault. That gap cost
-                // a wrong fix: "Contrast nearly passed" was attributed to
-                // `.secondary` in `HomeAttentionView` on the strength of a
-                // grep and an earlier failure with the same wording, the
-                // `.secondary` was removed from the whole app target, and the
-                // audit said "Contrast nearly passed" again. So
-                // `detailedDescription` is printed too. It turned out to add
-                // one sentence and still no element — "Text of this element
-                // may be clipped at larger Dynamic Type sizes" names no
-                // element — so finding the culprit means measuring the
-                // screenshot `evidence` attached, not reading this line. It
-                // is kept because the sentence says which *rule* was broken,
-                // which the four-word summary does not.
-                found.append("\(issue.compactDescription): \(issue.detailedDescription)")
-                print("""
-                    AUDIT type=\(issue.auditType) \(issue.compactDescription)
-                      detail: \(issue.detailedDescription)
-                      element: \(issue.element?.debugDescription ?? "nil")
-                    """)
-                // Handled here, so XCTest records nothing and the audit goes
-                // on to the next issue.
-                return true
-            }
+            let found = try auditIssues(app, "home")
             XCTAssertTrue(
                 found.isEmpty,
                 "Apple's audit has \(found.count) against Home: "
@@ -267,6 +265,20 @@ final class StubHouseUITests: XCTestCase {
     /// sheet starts the LAN discovery sweep across whatever network the Mac
     /// is on. This route is `onPair` → `openSettingsTab("phones-and-browsers")`
     /// and touches nothing but the stub.
+    ///
+    /// ### It also audits, and that is the point of auditing it
+    ///
+    /// Home has a "Contrast failed" that nothing names: `issue.element` is
+    /// nil, the detail is one sentence, and every text on Home measures
+    /// 5.31:1 or better off the screenshot. Two eliminations have already
+    /// been wrong about it.
+    ///
+    /// This screen and Home share the top bar and the phone bar and share
+    /// nothing else — no live dot, none of Home's scrolling content. So the
+    /// same issue here puts it in the chrome, and its absence here puts it in
+    /// Home's own content. That narrows it without guessing, which is more
+    /// than the audit itself offers.
+    @MainActor
     func testThePairingScreenAndItsButtons() throws {
         let app = launch(paired: false)
         let link = app.buttons[ShellStringsUnderTest.pairLink]
@@ -279,6 +291,14 @@ final class StubHouseUITests: XCTestCase {
         // screen we started on: the link belongs to Home and Home is gone.
         let left = link.waitForNonExistence(timeout: 10)
         evidence(app, "30-pairing")
+        if #available(iOS 17.0, *) {
+            let found = try auditIssues(app, "pairing")
+            XCTAssertTrue(
+                found.isEmpty,
+                "Apple's audit has \(found.count) against the pairing screen: "
+                    + found.joined(separator: " | ")
+            )
+        }
         XCTAssertTrue(left, "the pairing link did nothing — still on Home")
     }
 }
