@@ -434,6 +434,121 @@ final class StubHouseUITests: XCTestCase {
         }
         XCTAssertTrue(left, "the pairing link did nothing — still on Home")
     }
+
+    /// **Where do the eight live?** A bisect that changes nothing in the app.
+    ///
+    /// The eight are "Dynamic Type font sizes are partially unsupported" and
+    /// the audit does not name their elements, so they have to be found by
+    /// difference. The obvious way — a launch argument that hides one card at
+    /// a time — means diagnostic `if` statements in shipping view code, and
+    /// the obvious second way, auditing a sub-element rather than the whole
+    /// app, rests on an API this track has not confirmed exists.
+    ///
+    /// Neither is needed. ``SettingsPlaceholder`` already has three states
+    /// and the app already has buttons that walk between them, so one run can
+    /// audit four screens that differ in known ways:
+    ///
+    /// | Screen | Draws | Panel? |
+    /// |---|---|---|
+    /// | `A-phones` | the pairing screen — the known eight | **yes** |
+    /// | `B-group` | title, sub, a headline, four section buttons, `all settings` | no |
+    /// | `C-no-panel` | `Printers & scanners`: title, sub, headline, sub, `not built yet`, a back button | no |
+    /// | `D-index` | title, sub, five group buttons | no |
+    ///
+    /// `C` is the one that matters. It is the **same `SettingsPlaceholder`
+    /// state** as the pairing screen — `.section`, so the same headline, the
+    /// same `sub`, the same back button — with `PhonesAndBrowsersPanel`
+    /// swapped for the words `not built yet`. So:
+    ///
+    ///  - `C` near eight ⇒ the findings are `SettingsPlaceholder`'s own, and
+    ///    the no-scroll hypothesis in `STUB-HOUSE-FINDINGS-01.md` is the
+    ///    live one: that `VStack` has no `ScrollView` in any state.
+    ///  - `C` near zero ⇒ they are the panel's, and the nested `ScrollView`
+    ///    is where to look rather than the missing one.
+    ///  - `B` and `D` then say whether what is left is the title and `sub`
+    ///    every state shares, or the buttons.
+    ///
+    /// **Deliberately not an equality assertion.** Three of these four counts
+    /// are unknown — that is the point of running it — so this asserts only
+    /// the baseline, which ``knownPairingIssues`` already pins, and otherwise
+    /// prints. A diagnostic that fails on an unknown it was written to
+    /// discover tells you nothing you did not put there.
+    @MainActor
+    func testWhereTheEightDynamicTypeFindingsLive() throws {
+        let app = launch(paired: false)
+        let link = app.buttons[ShellStringsUnderTest.pairLink]
+        XCTAssertTrue(
+            link.waitForExistence(timeout: 20),
+            "no pairing link on Home — the unpaired header did not draw"
+        )
+        link.tap()
+        XCTAssertTrue(link.waitForNonExistence(timeout: 10), "the pairing link did nothing")
+
+        // No `#available` check: `IPHONEOS_DEPLOYMENT_TARGET` is 18.0
+        // (`project.yml:40`), so ``auditIssues``' `@available(iOS 17.0, *)` is
+        // already satisfied. The `if #available` blocks elsewhere in this file
+        // are vestigial and this one would be too.
+        var counts: [(String, Int)] = []
+
+        /// Audit whatever is on screen now, photograph it, and record the
+        /// count. The screenshot and the tree are what attribute a count to a
+        /// screen afterwards — a number on its own would leave the next
+        /// session guessing which screen it came from, which is the mistake
+        /// this file's header is about.
+        func step(_ name: String) throws {
+            evidence(app, "50-bisect-\(name)")
+            let found = try auditIssues(app, "bisect-\(name)")
+            counts.append((name, found.count))
+            print("BISECT [\(name)] \(found.count) issue(s)")
+            for line in found { print("BISECT [\(name)]   \(line)") }
+        }
+
+        try step("A-phones")
+
+        // `.section` → `.group`, via the button the audit itself flagged for
+        // clipping. `place.up` is what it calls, so this is the app's own
+        // navigation and not a relaunch into a different state.
+        let backToRooms = app.buttons[ShellStringsUnderTest.backToRooms]
+        XCTAssertTrue(backToRooms.waitForExistence(timeout: 10), "no back button on the pairing screen")
+        backToRooms.tap()
+        let printers = app.buttons[ShellStringsUnderTest.printersSection]
+        XCTAssertTrue(printers.waitForExistence(timeout: 10), "tapping back did not reach the group list")
+        try step("B-group")
+
+        // The same `.section` shape as the pairing screen, with `not built
+        // yet` where the panel was.
+        printers.tap()
+        XCTAssertTrue(
+            app.staticTexts[ShellStringsUnderTest.notBuilt].waitForExistence(timeout: 10),
+            "Printers & scanners did not draw its placeholder"
+        )
+        try step("C-no-panel")
+
+        // Back up one and out to the index.
+        let backAgain = app.buttons[ShellStringsUnderTest.backToRooms]
+        XCTAssertTrue(backAgain.waitForExistence(timeout: 10), "no back button on the printers section")
+        backAgain.tap()
+        let allSettings = app.buttons[ShellStringsUnderTest.allSettings]
+        XCTAssertTrue(allSettings.waitForExistence(timeout: 10), "no all-settings button on the group list")
+        allSettings.tap()
+        XCTAssertTrue(
+            app.buttons[ShellStringsUnderTest.roomsGroup].waitForExistence(timeout: 10),
+            "all settings did not reach the index"
+        )
+        try step("D-index")
+
+        print("BISECT SUMMARY " + counts.map { "\($0.0)=\($0.1)" }.joined(separator: " "))
+
+        // The one count that is already known. If this drifts, the other
+        // three are being read against a baseline that moved.
+        XCTAssertEqual(
+            counts.first?.1,
+            Self.knownPairingIssues,
+            "the pairing screen audited \(counts.first?.1 ?? -1), not the known "
+                + "\(Self.knownPairingIssues) — the other three counts in this run "
+                + "are measured against a baseline that has changed"
+        )
+    }
 }
 
 /// Strings this file matches on, kept together and named so that a change in
@@ -448,4 +563,18 @@ private enum ShellStringsUnderTest {
     /// ``ShellPill/accessibilityLabel`` for a saved server, which is what the
     /// pill button answers to in the tree.
     static let pillLabel = "switch server"
+
+    static let allSettings = "all settings"
+
+    /// ``ShellStrings/backTo(_:)`` for the group every section the bisect
+    /// visits belongs to.
+    static let backToRooms = "back to Rooms & devices"
+
+    static let roomsGroup = "Rooms & devices"
+
+    /// A section in the same group as `Phones & browsers` with **no screen**,
+    /// which is what makes it the control.
+    static let printersSection = "Printers & scanners"
+
+    static let notBuilt = "not built yet"
 }
