@@ -669,15 +669,22 @@ final class StubHouseUITests: XCTestCase {
         let root = try auditIssues(app, "push-root")
         print("PUSH [root] \(root.count)")
 
-        // The phone bar's `music` tab. `Route/label` is the raw value and the
-        // tab carries it as its accessibility label, which is how a person
-        // reaches it too.
-        let tab = app.buttons["music"]
-        XCTAssertTrue(tab.waitForExistence(timeout: 10), "no music tab in the phone bar")
+        // **`Music`, not `music`.** The tab's accessibility label is
+        // ``Route/label`` — the raw value, capitalised — while the caption
+        // drawn under the icon is the lower-cased one. The tree says so:
+        // `Button … label: 'Music'` holding `StaticText … label: 'music'`.
+        // The first run of this test asked for the caption and found no
+        // button.
+        let tab = app.buttons[ShellStringsUnderTest.musicTab]
+        XCTAssertTrue(tab.waitForExistence(timeout: 10), "no Music tab in the phone bar")
         tab.tap()
+        // The breadcrumb, **not** Home's absence. Home is the stack's root and
+        // stays in the hierarchy under a pushed screen, so
+        // `waitForNonExistence` on its content is not a test of having left
+        // it. The top bar's leading text is rebuilt from the current route.
         XCTAssertTrue(
-            houseName(in: app).waitForNonExistence(timeout: 10),
-            "the music tab did not leave Home"
+            app.staticTexts[ShellStringsUnderTest.musicCrumb].waitForExistence(timeout: 10),
+            "the Music tab did not push — the breadcrumb still shows Home"
         )
         evidence(app, "70-push-music")
         let pushed = try auditIssues(app, "push-music")
@@ -723,4 +730,12 @@ private enum ShellStringsUnderTest {
     static let printersSection = "Printers & scanners"
 
     static let notBuilt = "not built yet"
+
+    /// The phone bar tab's accessibility label (``Route/label``), which is
+    /// capitalised. The lower-cased `music` in the tree is the caption drawn
+    /// under the icon, and querying that finds no button.
+    static let musicTab = "Music"
+
+    /// ``ShellTopBar``'s leading text once the Music route is pushed.
+    static let musicCrumb = "domovoi / music"
 }
