@@ -847,20 +847,50 @@ final class StubHouseUITests: XCTestCase {
     func testWhichPieceOfAPushedScreenCarriesTheEight() throws {
         var counts: [(String, Int)] = []
         for variant in [
-            "none", "topBar", "phoneBar", "navBar", "root", "plainRoot",
+            // The three arrivals, measured against each other before any
+            // piece is removed. See the note on `tap` below.
+            "none", "tap", "tapAfterHomeAudit",
+            "topBar", "phoneBar", "navBar", "root", "plainRoot",
             "content", "lazyGrid",
         ] {
-            let app = launch(
-                strip: variant == "none" ? nil : variant,
-                push: "Music",
-                // Long enough for Home's seven sections to land against the
-                // stub, because a push that beats them measures an empty root
-                // and reads 0 for the wrong reason. `Self.pushDelay` is
-                // deliberately larger than the 20 s this file allows Home
-                // elsewhere would suggest is needed; a slow variant costs
-                // seconds, a fast one costs a wrong answer.
-                pushDelay: Self.pushDelay
-            )
+            // **Three ways to arrive, because the delay was not the
+            // difference either.** With the push held 12 seconds and
+            // `root drew first: true` on every variant that has a Home, this
+            // harness still read 0 across the board while
+            // ``testWhetherAPushedScreenIsWhatCarriesTheEight`` read
+            // `music=8` from the same build. Two differences remain between
+            // the two tests, and both are in this test rather than in the
+            // app:
+            //
+            //  - **how the push happens** — a seeded `path` versus a tap on
+            //    the phone bar's tab;
+            //  - **how many times the app is audited** — this test audits
+            //    once, and that one audits Home *first* and the pushed screen
+            //    second.
+            //
+            // The second is the live suspicion. `performAccessibilityAudit`
+            // drives the content size category through its range and puts it
+            // back; an audit of Home that leaves anything behind would be
+            // found by the next audit in the same process, and `music=8` has
+            // only ever been measured as a *second* audit. If that is it, the
+            // eight on `music` are an artefact of this test file and the
+            // question goes back to `SettingsPlaceholder`, which has only
+            // ever been measured as a first audit.
+            //
+            //  - `tap` is `none` arriving the other way, audited once.
+            //  - `tapAfterHomeAudit` is the push test exactly: Home audited,
+            //    then the tab tapped, then the pushed screen audited.
+            let arrivesByTap = variant.hasPrefix("tap")
+            let app = arrivesByTap
+                ? launch()
+                : launch(
+                    strip: variant == "none" ? nil : variant,
+                    push: "Music",
+                    // Long enough for Home's seven sections to land against
+                    // the stub, because a push that beats them measures an
+                    // empty root and reads 0 for the wrong reason.
+                    pushDelay: Self.pushDelay
+                )
             // **Recorded, not assumed.** The confound that wasted the first
             // run was invisible in its own log: every count was 0 and nothing
             // said the root had been blank. This prints whether the house name
@@ -869,6 +899,19 @@ final class StubHouseUITests: XCTestCase {
             let house = houseName(in: app)
             let drew = house.waitForExistence(timeout: Self.pushDelay + 10)
             print("STRIP [\(variant)] root drew first: \(drew)")
+
+            if variant == "tapAfterHomeAudit" {
+                let before = try auditIssues(app, "strip-\(variant)-home")
+                print("STRIP [\(variant)] home audited first: \(before.count)")
+            }
+            if arrivesByTap {
+                let tab = app.buttons[ShellStringsUnderTest.musicTab]
+                XCTAssertTrue(
+                    tab.waitForExistence(timeout: 10),
+                    "no Music tab in the phone bar for \(variant)"
+                )
+                tab.tap()
+            }
             // Two markers, because no single one survives every variant: the
             // breadcrumb is gone in `topBar` and the placeholder is gone in
             // `content`. Between them every variant has one.
