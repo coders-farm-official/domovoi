@@ -101,19 +101,30 @@ struct PhonesAndBrowsersPanel: View {
                     }
                 }
                 .font(.footnote.monospaced())
-                .textFieldStyle(.roundedBorder)
-                // A vertical field sizes to its text, and `.roundedBorder`
-                // gave it **18 points** — which Apple's audit then failed as
-                // "Hit area is too small", a finding the single-line field
-                // never had. The minimum is stated so growing with the type
-                // size is the only direction it goes.
+                // **The border is drawn here rather than by
+                // `.textFieldStyle(.roundedBorder)`.** That style with
+                // `axis: .vertical` produces an 18-point control, which
+                // Apple's audit fails as "Hit area is too small" — a finding
+                // the single-line field never had. `.frame(minHeight: 34)`
+                // does not reach it from either side of the style modifier:
+                // measured at 18 points with the frame before it and 18
+                // points with the frame after it, because a field style
+                // builds the control around what it is handed and the frame
+                // lands on the text inside the border either way.
                 //
-                // **After the style, not before.** The first attempt put this
-                // above `.textFieldStyle` and the field measured 18 points
-                // again: a field style builds the control around what it is
-                // given, so a frame set first is a frame set on the thing
-                // inside the border rather than on the control.
-                .frame(minHeight: 34)
+                // So the padding is the height. It grows with the type size,
+                // as padding does, and the border is `.quaternary` and an
+                // 8-point radius like the app's other boxes
+                // (`ConnectionDialogView.swift:329`).
+                .padding(.horizontal, 8)
+                .padding(.vertical, 10)
+                .background(
+                    Color(.secondarySystemBackground),
+                    in: RoundedRectangle(cornerRadius: 8)
+                )
+                .overlay {
+                    RoundedRectangle(cornerRadius: 8).strokeBorder(.quaternary)
+                }
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .keyboardType(.URL)
