@@ -115,6 +115,16 @@ final class StubHouseUITests: XCTestCase {
     /// (``AuditStrip/pushDelay``).
     private static let pushDelay: Double = 12
 
+    /// **The companion houses, one per failure mode.** `stub_run.sh` starts
+    /// these beside the primary house on 6601; a test picks the state it
+    /// wants by port rather than by a mode it cannot set from here. All
+    /// inside 6600-6699, which is the range the stub itself enforces and the
+    /// only range this track may bind.
+    private static let throttledPort = 6602
+    private static let roomsDownPort = 6603
+    private static let silentSocketPort = 6604
+    private static let unpairedPort = 6605
+
     override func setUp() {
         continueAfterFailure = false
     }
@@ -486,9 +496,10 @@ final class StubHouseUITests: XCTestCase {
     /// an unpaired phone is handed `/ws/state` anyway and the header reads
     /// `live` with no token saved. That cannot happen against a real house,
     /// so this case has to be run a **second** time under `--mode unpaired`,
-    /// where the socket behaves like the server it stands in for. Nothing in
-    /// this file can pin that: `stub_run.sh` gives one mode to the whole
-    /// class. The assertions below hold under either, which is the point —
+    /// where the socket behaves like the server it stands in for. `stub_run.sh` now starts a house per
+    /// mode, each on its own port, so this *is* pinnable from here — see
+    /// ``testTheStatesTheAuditHadNeverSeen()``, which audits against the
+    /// `unpaired` house on 6605. The assertions below hold under either, which is the point —
     /// the mode decides what the *picture* shows, and whether a socket's own
     /// 403 can raise the pairing screen (map §11.6) is only answerable
     /// there.
@@ -1086,6 +1097,174 @@ final class StubHouseUITests: XCTestCase {
         )
     }
 
+    /// Any element with this exact label, whatever kind it is.
+    ///
+    /// The markers below are drawn variously as a `Text`, a `Label` and a
+    /// button, and which of those a query has to ask for is an implementation
+    /// detail of the view rather than anything a person experiences. Asking
+    /// `descendants(matching: .any)` means a marker that moves from a `Text`
+    /// to a `Label` does not read as a screen that never drew.
+    @MainActor
+    private func anything(_ app: XCUIApplication, labelled label: String) -> XCUIElement {
+        app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label == %@", label))
+            .firstMatch
+    }
+
+    /// **Every state in this app the audit had never been pointed at.**
+    ///
+    /// The findings this file is built on all came from the two screens it
+    /// happened to audit. An inventory turned up seven states that no audit
+    /// had ever rendered, for three different reasons:
+    ///
+    /// | State | Why it had never been audited |
+    /// |---|---|
+    /// | Home at AX5 | ``testHomeAtTheLargestTypeSize()`` measures the pill's height and Home's `minY` and **never calls the audit** |
+    /// | the auto-raised `pair this phone` screen | every test taps `not now` or the pair link straight past it |
+    /// | the hoisted ``ForgetServerCard`` | reachable only by tapping `forget` in the panel, which nothing did |
+    /// | Home with rooms down | `stub_run.sh` started **one** house, so a mode other than the run's was unreachable |
+    /// | the `.waiting` token card | same — it needs a 429, which only the `throttled` house serves |
+    /// | the `.notRecognised` token card | same — it needs a 401 *to a phone holding a token* |
+    /// | Home on a silent socket | same |
+    ///
+    /// The last four are what the companion houses in `stub_run.sh` are for.
+    ///
+    /// Everything is audited at **AX5**, not `large`: `large` is the size the
+    /// audited screens were already green at, and every real finding on this
+    /// track so far — the 62.7×314.3 pill, the attention card's wrapped rows
+    /// — only exists at the accessibility sizes.
+    ///
+    /// **Asserts arrival, prints findings.** Whether each state draws at all
+    /// is a claim worth failing on: a `rooms-down` house that produces no
+    /// `couldn't load rooms` card is a bug whatever the audit says. The
+    /// finding counts are unknown — that is the point of the run — and a
+    /// diagnostic that fails on an unknown it was written to discover tells
+    /// you nothing you did not put there. They are pinned in a second pass,
+    /// once each one has been read and either fixed or explained.
+    @MainActor
+    func testTheStatesTheAuditHadNeverSeen() throws {
+        var unreached: [String] = []
+        var findings: [String: [String]] = [:]
+        var floors: [String: Int] = [:]
+
+        /// Audit whatever is on screen, under a name, having first waited for
+        /// the one element that says this state is really the one on screen.
+        @MainActor
+        func sweep(
+            _ name: String,
+            _ app: XCUIApplication,
+            marker: XCUIElement,
+            timeout: TimeInterval = 25
+        ) throws {
+            let arrived = marker.waitForExistence(timeout: timeout)
+            evidence(app, "40-\(name)")
+            if !arrived {
+                unreached.append(name)
+                print("SWEEP [\(name)] NEVER ARRIVED — audited anyway, tree above")
+            }
+            guard #available(iOS 17.0, *) else { return }
+            let split = Self.floorAndRest(try auditIssues(app, name))
+            floors[name] = split.floor
+            findings[name] = split.rest
+            print("SWEEP [\(name)] floor=\(split.floor) other=\(split.rest.count)")
+            for line in split.rest { print("SWEEP [\(name)]   \(line)") }
+        }
+
+        let ax5 = "UICTContentSizeCategoryAccessibilityXXXL"
+
+        // 1. Home, at the size nothing had audited it at.
+        let home = launch(mode: ax5)
+        try sweep("home-ax5", home, marker: houseName(in: home))
+        home.terminate()
+
+        // 2. The auto-raised pairing screen, left where it raises itself.
+        //    Deliberately no `not now`, which is what every other case taps.
+        let raised = launch(mode: ax5, paired: false)
+        try sweep(
+            "pairing-raised",
+            raised,
+            marker: anything(raised, labelled: ShellStringsUnderTest.pairTitle)
+        )
+        raised.terminate()
+
+        // 3. The forget dialog, hoisted to the Settings screen's root. Its
+        //    own doc comment argues it is reachable at every type size
+        //    because `DialogCard` is a `ScrollView`; this is the first time
+        //    anything has checked that at AX5.
+        let forgetting = launch(mode: ax5, paired: false)
+        XCTAssertTrue(
+            reachPhonesAndBrowsers(forgetting),
+            "never reached Settings → Phones & browsers, so the forget dialog "
+                + "could not be opened"
+        )
+        let forgetControl = forgetting.buttons[ShellStringsUnderTest.forget]
+        if forgetControl.waitForExistence(timeout: 10) {
+            // Once. The dialog's destructive button carries the same label.
+            forgetControl.tap()
+        } else {
+            print("SWEEP no `forget` control in the panel — tree follows")
+            print(forgetting.debugDescription)
+        }
+        try sweep(
+            "forget-card",
+            forgetting,
+            marker: anything(forgetting, labelled: ShellStringsUnderTest.forgetServerTitle)
+        )
+        forgetting.terminate()
+
+        // 4-7. The houses `stub_run.sh` now starts beside the primary one.
+        let waiting = launch(mode: ax5, port: Self.throttledPort)
+        try sweep(
+            "token-waiting",
+            waiting,
+            marker: anything(waiting, labelled: ShellStringsUnderTest.tokenWaitingTitle)
+        )
+        waiting.terminate()
+
+        let roomsDown = launch(mode: ax5, port: Self.roomsDownPort)
+        try sweep(
+            "rooms-down",
+            roomsDown,
+            marker: anything(roomsDown, labelled: ShellStringsUnderTest.roomsFailed)
+        )
+        roomsDown.terminate()
+
+        let silent = launch(mode: ax5, port: Self.silentSocketPort)
+        try sweep("silent-socket", silent, marker: houseName(in: silent))
+        silent.terminate()
+
+        // A token the house refuses: `paired: true` against the `unpaired`
+        // house, which is the only combination that produces a 401 to a
+        // phone that is holding a token.
+        let refused = launch(mode: ax5, port: Self.unpairedPort)
+        try sweep(
+            "token-not-recognised",
+            refused,
+            marker: anything(refused, labelled: ShellStringsUnderTest.tokenNotRecognisedTitle)
+        )
+        refused.terminate()
+
+        let order = [
+            "home-ax5", "pairing-raised", "forget-card", "token-waiting",
+            "rooms-down", "silent-socket", "token-not-recognised",
+        ]
+        // `floor+other` per state, in one grep-able line. Nested `$0`s in a
+        // string interpolation are how a summary line becomes a compile error,
+        // so this is a plain loop.
+        var summary: [String] = []
+        for name in order {
+            let floor = floors[name].map(\.description) ?? "-"
+            summary.append("\(name)=\(floor)+\(findings[name]?.count ?? 0)")
+        }
+        print("SWEEP SUMMARY " + summary.joined(separator: " "))
+        XCTAssertTrue(
+            unreached.isEmpty,
+            "these states never drew the element that identifies them, so the "
+                + "audit above is of something else: "
+                + unreached.joined(separator: ", ")
+        )
+    }
+
     /// **Do the eight flagged leaves actually scale?** The question the audit
     /// will not answer, measured.
     ///
@@ -1271,4 +1450,23 @@ private enum ShellStringsUnderTest {
     /// ``AuditStrip/plainRootPush`` — the one button on the plain root.
     /// Spelled out rather than imported, like every other string here.
     static let plainRootPush = "push music from a plain root"
+    /// ``HomeRoomsStrings/couldNotLoadRooms`` — the card Home draws when
+    /// `/api/satellites` fails for a reason that is not the token, which is
+    /// what the `rooms-down` house serves (503).
+    static let roomsFailed = "couldn't load rooms"
+    /// ``tokenTroubleTitle(_:)`` for `.waiting`, raised by the `throttled`
+    /// house's 429 with a `Retry-After`.
+    static let tokenWaitingTitle = "Domovoi asked this phone to wait"
+    /// ``tokenTroubleTitle(_:)`` for `.notRecognised`, raised by the
+    /// `unpaired` house answering 401 to a phone that *did* send a token.
+    static let tokenNotRecognisedTitle = "Domovoi doesn't recognise this phone any more"
+    /// ``forgetServerTitle`` — the hoisted ``ForgetServerCard``'s heading.
+    static let forgetServerTitle = "forget this server?"
+    /// ``ShellStrings/forget`` — the panel's forget control.
+    ///
+    /// **Also the destructive button inside the dialog it opens**
+    /// (``forgetServerConfirm``). Two controls, one label, one of them
+    /// irreversible: a query for this is unambiguous only while the dialog is
+    /// shut, which is why the sweep taps it once and never again.
+    static let forget = "forget"
 }
