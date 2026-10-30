@@ -85,7 +85,11 @@ final class StubHouseUITests: XCTestCase {
     /// card and a pushed `music` all audited 8, so it was a property of being
     /// **pushed**. It is 0 now. What took the eight away is in
     /// ``testWhichPieceOfAPushedScreenCarriesTheEight``.
-    private static let knownPushedIssues = 0
+    private static let knownPushedIssues = 8
+
+    /// Seconds the seeded push waits for the root to draw
+    /// (``AuditStrip/pushDelay``).
+    private static let pushDelay: Double = 12
 
     override func setUp() {
         continueAfterFailure = false
@@ -100,7 +104,8 @@ final class StubHouseUITests: XCTestCase {
         server: Bool = true,
         port: Int = 6601,
         strip: String? = nil,
-        push: String? = nil
+        push: String? = nil,
+        pushDelay: Double? = nil
     ) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = server ? ["-domovoi-server", "127.0.0.1:\(port)"] : []
@@ -111,6 +116,9 @@ final class StubHouseUITests: XCTestCase {
         // at launch, so a variant cannot leak into the next case.
         if let strip { app.launchArguments += ["-domovoi-audit-strip", strip] }
         if let push { app.launchArguments += ["-domovoi-audit-push", push] }
+        if let pushDelay {
+            app.launchArguments += ["-domovoi-audit-push-delay", "\(pushDelay)"]
+        }
         // The type size, set the way the Simulator's own setting would.
         app.launchArguments += ["-UIPreferredContentSizeCategoryName", mode]
         app.launch()
@@ -783,50 +791,84 @@ final class StubHouseUITests: XCTestCase {
     /// same push a tab tap makes. It has to be seeded rather than tapped
     /// because one variant removes the bar the tab is in.
     ///
-    /// ### The first run answered a question nobody had asked
+    /// ### The first run measured an empty screen, and said so nowhere
     ///
-    /// The prediction was `root` at 0 and every other variant at 8, because a
-    /// pushed screen has the same two bars as Home and Home audits 0 with
-    /// both on screen. What came back was:
+    /// The prediction was `root` at 0 and every other variant at 8. What came
+    /// back was:
     ///
     /// ```
-    /// STRIP SUMMARY none=0 topBar=0 phoneBar=0 navBar=0 root=0 content=0
+    /// STRIP SUMMARY none=0 topBar=0 phoneBar=0 navBar=0 root=0 content=0 lazyGrid=0
     /// ```
     ///
-    /// **Zero everywhere, including the control.** The eight were not there to
-    /// take apart. They had been fixed by the batch before this one, which
-    /// did not know it was fixing them — and that batch's changes are all
-    /// changes to **Home**: the everything grid stopped being a `LazyVGrid`,
-    /// the timers countdown stopped being a literal 24-point font, and three
-    /// of Home's four reads started decoding at all.
+    /// Zero everywhere, control included — and it meant nothing. The **same
+    /// run** of the suite that printed those zeroes also printed
+    /// `PUSH SUMMARY root=0 music=8`, `BISECT … A-phones=8 … D-index=8` and
+    /// `SIZES S=8 large=8 AX5=7`. One build, one Simulator, the eight plainly
+    /// still there, and this harness alone could not see them.
     ///
-    /// A pushed `music` shares not one view with Home. What it does share is
-    /// that **Home is still mounted underneath it** — covered, not unloaded —
-    /// which makes Home's views the only thing a pushed screen has that a root
-    /// does not, besides the navigation bar and its own content. Both of those
-    /// are measured out. It also explains the one detail that made the eight
-    /// unguessable: `element: nil` on all eight, because a view behind a
-    /// pushed screen is out of the accessibility tree and has no element to
-    /// name.
+    /// The difference was **when the push happened**. Every other test waits
+    /// for the house name — Home fully drawn against the stub — and then taps
+    /// a tab. This one seeded `path` from a `.task` on the first frame and
+    /// audited as soon as the breadcrumb appeared, perhaps two seconds in,
+    /// with Home's seven sections still empty behind it. A variant harness
+    /// whose every cell reads 0 because the screen under test had not drawn
+    /// is the viewport confound again, in a new costume: a number that moves
+    /// for a reason that is not the one being varied.
     ///
-    /// ### ``AuditStrip/lazyGrid`` is what turns that into a finding
+    /// ### What the accident proved anyway
     ///
-    /// It is the only variant that *adds* something: Home's grid, back as it
-    /// was, behind a launch argument. If `lazyGrid` comes back at 8 then the
-    /// eight were Home's `LazyVGrid` seen through a push, the same defect as
-    /// Home's six, and the covered root is the mechanism. If it comes back 0
-    /// the grid is exonerated and the timers font and the fixtures are what
-    /// is left to separate.
+    /// It is the best evidence on the record for where the eight live. A
+    /// pushed screen with Home **not yet drawn** audits 0; the identical
+    /// pushed screen with Home drawn behind it audits 8. Nothing about the
+    /// pushed screen changed between those two measurements.
     ///
-    /// **Printed, not asserted**, apart from the control. The control is the
-    /// one number that is known, and it is now 0.
+    /// So the eight are Home's own views, audited while **covered** by a push
+    /// — mounted, not unloaded. That also explains the detail that made them
+    /// unguessable for three sessions: `element: nil` on all eight, where
+    /// every contrast and hit-area finding on this track names its element.
+    /// A view behind a pushed screen is out of the accessibility tree and has
+    /// no element to name.
+    ///
+    /// ### What is still open, and what each variant now decides
+    ///
+    /// Home audits **0** as the visible root. The same views audit 8 covered.
+    /// So either covering changes something about our views, or SwiftUI cannot
+    /// prove Dynamic Type support for anything behind a pushed screen at all —
+    /// a platform floor, not a defect. ``AuditStrip/plainRoot`` is the variant
+    /// that decides it: a root of three `Text`s and nothing else.
+    ///
+    /// `pushDelay` is what makes any of these numbers mean something, and each
+    /// variant now also prints whether the root drew before the push, because
+    /// the confound was invisible in its own log.
+    ///
+    /// **Printed, not asserted**, apart from the control — which is 8 again,
+    /// and is the one number that is known.
     @MainActor
     func testWhichPieceOfAPushedScreenCarriesTheEight() throws {
         var counts: [(String, Int)] = []
         for variant in [
-            "none", "topBar", "phoneBar", "navBar", "root", "content", "lazyGrid",
+            "none", "topBar", "phoneBar", "navBar", "root", "plainRoot",
+            "content", "lazyGrid",
         ] {
-            let app = launch(strip: variant == "none" ? nil : variant, push: "Music")
+            let app = launch(
+                strip: variant == "none" ? nil : variant,
+                push: "Music",
+                // Long enough for Home's seven sections to land against the
+                // stub, because a push that beats them measures an empty root
+                // and reads 0 for the wrong reason. `Self.pushDelay` is
+                // deliberately larger than the 20 s this file allows Home
+                // elsewhere would suggest is needed; a slow variant costs
+                // seconds, a fast one costs a wrong answer.
+                pushDelay: Self.pushDelay
+            )
+            // **Recorded, not assumed.** The confound that wasted the first
+            // run was invisible in its own log: every count was 0 and nothing
+            // said the root had been blank. This prints whether the house name
+            // was ever on screen before the push, per variant, so a zero can
+            // be read.
+            let house = houseName(in: app)
+            let drew = house.waitForExistence(timeout: Self.pushDelay + 10)
+            print("STRIP [\(variant)] root drew first: \(drew)")
             // Two markers, because no single one survives every variant: the
             // breadcrumb is gone in `topBar` and the placeholder is gone in
             // `content`. Between them every variant has one.

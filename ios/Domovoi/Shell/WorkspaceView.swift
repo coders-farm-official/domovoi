@@ -21,13 +21,30 @@ struct WorkspaceView: View {
     @State private var seededPush = false
 
     var body: some View {
-        layout.task { seedPushIfAsked() }
+        layout.task { await seedPushIfAsked() }
     }
 
-    /// ``AuditStrip/seededRoute``, applied when the workspace first appears.
-    /// Nil in any build that could ship, so this returns at the `guard`.
-    private func seedPushIfAsked() {
+    /// ``AuditStrip/seededRoute``, applied once the workspace has been up for
+    /// ``AuditStrip/pushDelay``. Nil in any build that could ship, so this
+    /// returns at the `guard`.
+    ///
+    /// **The delay is the whole point.** Without it this pushed on the first
+    /// frame, and the first run of the harness read 0 on every variant
+    /// including the control — not because the findings were gone but because
+    /// the push landed before Home had drawn a thing, so the covered root
+    /// underneath was empty. The same run's other tests, which wait for the
+    /// house name and then tap a tab, still read 8.
+    ///
+    /// ``seededPush`` is set **after** the sleep: a `.task` cancelled while
+    /// waiting would otherwise consume the one push and leave the test
+    /// watching for a screen that never arrives. Pushing twice is harmless —
+    /// ``NavigationState/go(_:)`` refuses a move to the open route.
+    private func seedPushIfAsked() async {
         guard !seededPush, let route = AuditStrip.seededRoute else { return }
+        if let delay = AuditStrip.pushDelay {
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+        }
+        guard !seededPush else { return }
         seededPush = true
         model.navigate(route)
     }
@@ -109,9 +126,19 @@ struct WorkspaceView: View {
     /// The stack's root. ``AuditStrip/root`` is the only way to audit a pushed
     /// screen with nothing mounted beneath it.
     @ViewBuilder private var stackRoot: some View {
-        if AuditStrip.active == .root {
+        switch AuditStrip.active {
+        case .root:
             Color.clear
-        } else {
+        case .plainRoot:
+            // Three text styles, no container worth the name, nothing of
+            // ours. If the eight follow this root they were never ours.
+            VStack(spacing: 8) {
+                Text("alpha").font(.body)
+                Text("bravo").font(.caption)
+                Text("charlie").font(.title3)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        default:
             RouteScreen(model: model, route: startRoute)
         }
     }
@@ -175,16 +202,29 @@ enum AuditStrip: String {
     /// the content is not it; this measures that rather than inheriting it.
     case content
     /// **``HomeEverythingView`` back on a `LazyVGrid`.** The one variant that
-    /// adds something rather than taking it away, and the only one that can
-    /// attribute the eight instead of merely showing them gone.
+    /// adds something rather than taking it away.
     ///
-    /// The first run of this harness found all six variants at **0** — the
-    /// eight had already been fixed, by a batch that never knew it was
-    /// fixing them. Every candidate in that batch is a change to **Home**,
-    /// and Home is the covered root beneath a pushed `music`, which shares
-    /// not one view with it. That is a mechanism and a coincidence at the
-    /// same time until the grid goes back and the eight come with it.
+    /// Measured at **0**, which exonerates the grid — though the run that
+    /// said so was the confounded one (see ``pushDelay``), so it is worth
+    /// nothing until it is measured again with the push delayed.
     case lazyGrid
+    /// **A root that is three words of plain text.** No Home, no cards, no
+    /// containers — a `VStack` of `Text` in the stack's root position.
+    ///
+    /// This separates a defect from a platform floor, which is the question
+    /// ``root`` cannot answer. Home's own audit is **0** when it is the
+    /// visible root; the eight appear when the very same views are *covered*
+    /// by a push. Either covering changes something about our views, or
+    /// SwiftUI simply cannot prove Dynamic Type support for anything behind a
+    /// pushed screen — and if it is the latter, three `Text`s will do it too.
+    ///
+    ///  - `plainRoot` above 0 ⇒ a platform floor. Nothing in this app is
+    ///    broken, the right answer is a documented suppression rather than a
+    ///    fix, and `knownPushedIssues` should be 0 with a predicate that says
+    ///    why.
+    ///  - `plainRoot` at 0 ⇒ it is something Home draws, and the next bisect
+    ///    is Home's own seven sections with the screen pushed on top.
+    case plainRoot
 
     /// Which piece this launch is without, or nil for the whole shell.
     static var active: AuditStrip? {
@@ -204,6 +244,17 @@ enum AuditStrip: String {
     static var seededRoute: Route? {
         #if DEBUG
         return value(after: "-domovoi-audit-push").flatMap(Route.init(rawValue:))
+        #else
+        return nil
+        #endif
+    }
+
+    /// Seconds to wait before the seeded push, so that the root has drawn
+    /// before anything covers it. Nil means push on the first frame, which is
+    /// what produced a run of zeroes that meant nothing.
+    static var pushDelay: Double? {
+        #if DEBUG
+        return value(after: "-domovoi-audit-push-delay").flatMap(Double.init)
         #else
         return nil
         #endif
