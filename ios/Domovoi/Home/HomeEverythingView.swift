@@ -81,9 +81,16 @@ struct HomeEverythingView: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .multilineTextAlignment(.center)
             }
-            .padding(8)
-            // Android's `≥72 dp`, which is also over Apple's 44.
-            .frame(maxWidth: .infinity, minHeight: 72)
+            .padding(.vertical, 18)
+            .padding(.horizontal, 8)
+            // DIAGNOSTIC — to be reverted or converted. Was
+            // `.frame(maxWidth: .infinity, minHeight: 72)`, Android's
+            // `≥72 dp`. Each tile's `staticText` carries the tile's own
+            // 104.3 x 72.0 frame in the audit, and 72.0 is exactly that
+            // minimum, so the question is whether Apple reads a floor on the
+            // container as a constraint on the text inside it. Padding
+            // reaches a similar height with nothing declared about it.
+            .frame(maxWidth: .infinity)
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
