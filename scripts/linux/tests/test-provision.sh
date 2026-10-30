@@ -378,9 +378,19 @@ case $url in
     echo '{"status":"verifying sha256 digest"}'
     dg=$(grep "^$tag " "$SHIM_STATE/registry" | head -n 1 | cut -d' ' -f2)
     [ ! -f "$SHIM_STATE/pull-wrong-digest" ] || dg=0000000000000000000000000000000000000000000000000000000000000000
+    # pull-wrong-digest-for: the tags (one a line) the registry now serves
+    # another build of, the others as pinned.
+    ! grep -qxF "$tag" "$SHIM_STATE/pull-wrong-digest-for" 2>/dev/null || dg=1111111111111111111111111111111111111111111111111111111111111111
     grep -v "^$tag " "$SHIM_STATE/ollama-models" >"$SHIM_STATE/om.new"; echo "$tag $dg" >>"$SHIM_STATE/om.new"
     mv "$SHIM_STATE/om.new" "$SHIM_STATE/ollama-models"
     echo '{"status":"success"}' ;;
+  http://127.0.0.1:11434/api/delete)
+    active ollama.service || exit 7
+    tag=$(printf '%s' "$data" | sed -n 's/.*"model":"\([^"]*\)".*/\1/p')
+    grep -q "^$tag " "$SHIM_STATE/ollama-models" || { echo "curl: (22) 404" >&2; exit 22; }
+    [ ! -f "$SHIM_STATE/delete-fails" ] || { echo "curl: (22) 500" >&2; exit 22; }
+    grep -v "^$tag " "$SHIM_STATE/ollama-models" >"$SHIM_STATE/om.new" || true
+    mv "$SHIM_STATE/om.new" "$SHIM_STATE/ollama-models" ;;
   http://127.0.0.1:6370/v1/health)
     # The core answers only with its database up (its health reads it).
     active domovoi-core.service && active domovoi-db.service && [ ! -f "$SHIM_STATE/core-unhealthy" ] \
@@ -1204,7 +1214,7 @@ case_dry_run_changes_nothing() {
   check "plans MUSIC_DIR (manifest beside the script)" said "MUSIC_DIR=/srv/media/music"
   check "plans the standard tier from 64 GB" said "OLLAMA_TOOL_MODEL=qwen3:8b-q4_K_M"
   check "plans the vision model" said "OLLAMA_VISION_MODEL=qwen3-vl:2b-instruct-q4_K_M"
-  check "plans its pull, by digest" said "ollama pull qwen3-vl:2b-instruct-q4_K_M ea422f1e73652a95479954d8572d3c8c6022f628ce2d38a1a04aae1b7f2d5300"
+  check "plans its pull, by digest" said "ollama pull qwen3-vl:2b-instruct-q4_K_M afc393e3572c07db0bc84aa460d928a16c75f3fbb9ca9e0dccc4fbd2dafb573e"
   check "plans MPD_HTTP_BASE" said "MPD_HTTP_BASE=http://192.168.1.50"
   check "plan lines for every step but the preflight" eq "$(grep -c '"state":"plan"' "$CASE/progress.jsonl")" 20
   check "the GPU step: a skip, asked of the helper beside the script" \
@@ -1727,6 +1737,60 @@ case_model_digest_mismatch_stops() {
   check "exit 1" eq "$RC" 1
   check "models failed" eq "$(state_of models)" fail
   check "says the digest differs" said "the manifest pins a80c4f17"
+  check "no marker" no_marker models
+  end_case
+}
+
+# 2026-10-30: the registry re-published the vision model's tag as another
+# build, and every fresh install stopped at the models step. The vision
+# model is optional: a build that fails its pin is removed (never kept)
+# and the install finishes without it, warning, while .env still names it
+# so chat says to add it. The voice models stay fatal (the case above, and
+# the router alone below).
+case_vision_digest_mismatch_installs_without_it() {
+  new_case vision_digest_mismatch_installs_without_it
+  local vision=qwen3-vl:2b-instruct-q4_K_M
+  echo "$vision" >"$STATE/pull-wrong-digest-for"
+  run_prov "${wsl_args[@]}"
+  check "exit 0" eq "$RC" 0
+  check "result ok" eq "$(final_field result)" '"ok"'
+  check "progress format" progress_ok
+  check "models done" eq "$(state_of models)" done
+  check "the vision model pulled" called "\"model\":\"$vision\""
+  check "then deleted" called "api/delete -d {\"model\":\"$vision\"}"
+  check "not left in Ollama" eq "$(grep -c "^$vision " "$STATE/ollama-models")" 0
+  check "the voice models kept" eq "$(grep -c '^llama3.2:3b-instruct-q4_K_M ' "$STATE/ollama-models")" 1
+  check "warned, with the digests" said "WARNING: $vision has digest 111111111111 after the pull, the manifest pins afc393e3572c"
+  check "says chat can't read pictures" said "chat can't read pictures"
+  check "says where to add it" said "Settings, Models"
+  check "one warning more" eq "$(final_field warnings)" 3
+  check "the step's message leaves it out"     grep -q '"step":"models".*"state":"done".*not the vision model' "$CASE/progress.jsonl"
+  check ".env names it all the same" has_line "$CHECKOUT/domovoi/.env" "OLLAMA_VISION_MODEL=$vision"
+  check "the core started" eq "$(state_of start)" done
+  # Next run: it tries the pinned build again (and the registry still
+  # serves the other one), the voice models untouched.
+  run_prov "${wsl_args[@]}"
+  check "second run exit 0" eq "$RC" 0
+  check "models re-ran" eq "$(state_of models)" done
+  check "voice models not pulled again" not_said "pulling llama3.2:3b-instruct-q4_K_M"
+  check "warned again" said "WARNING: $vision has digest 111111111111"
+  # A build that can't be removed is never kept: the run stops.
+  touch "$STATE/delete-fails"
+  run_prov "${wsl_args[@]}"
+  check "delete fails: exit 1" eq "$RC" 1
+  check "delete fails: models failed" eq "$(state_of models)" fail
+  check "delete fails: says so" said "removing it from Ollama failed"
+  end_case
+}
+
+case_router_digest_mismatch_stops() {
+  new_case router_digest_mismatch_stops
+  echo qwen3:8b-q4_K_M >"$STATE/pull-wrong-digest-for"
+  run_prov "${wsl_args[@]}"
+  check "exit 1" eq "$RC" 1
+  check "models failed" eq "$(state_of models)" fail
+  check "says the digest differs" said "the manifest pins 500a1f067a9f"
+  check "the router is not removed" not_called "api/delete"
   check "no marker" no_marker models
   end_case
 }
@@ -4407,6 +4471,8 @@ CASES=(
   case_piper_unpinned_voice_with_a_space
   case_piper_empty_configured_voice
   case_model_digest_mismatch_stops
+  case_vision_digest_mismatch_installs_without_it
+  case_router_digest_mismatch_stops
   case_docker_key_mismatch_stops
   case_manifest_missing_key_stops
   case_manifest_unknown_key_stops

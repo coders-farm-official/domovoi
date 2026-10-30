@@ -3284,8 +3284,27 @@ plan_models() {
   if [ "$PULL_VISION" = 0 ]; then echo "(--no-vision-model: $(tier_vision) is not pulled)"; fi
   echo "(--no-ai-models: none of these is pulled; Ollama itself is still installed)"
 }
+# remove_model TAG: DELETE /api/delete, so a build that failed its pin is
+# not left where chat would use it. True once Ollama no longer lists TAG.
+remove_model() {
+  curl -fsS --max-time 120 -X DELETE "$OLLAMA_API/api/delete" \
+    -H 'Content-Type: application/json' -d "{\"model\":\"$1\"}" >/dev/null 2>&1 || true
+  local left
+  left=$(model_digest "$1") || return 1
+  [ -z "$left" ]
+}
+
+# The tier's QA model and router are the voice assistant itself, so a pull
+# that brings anything but the pinned build stops the run. The vision model
+# is optional (--no-vision-model): when the registry serves another build
+# under its tag (2026-10-30: qwen3-vl:2b-instruct-q4_K_M re-published from
+# ea422f to afc393 overnight, and every fresh install stopped here), that
+# build is removed, never kept, and the install finishes without pictures
+# in chat. OLLAMA_VISION_MODEL stays in .env, so chat refuses a picture
+# with vision_model_missing and names Settings, Models, where an admin adds
+# it; the next provision run tries the pinned build again.
 do_models() {
-  local tag want got i=0 n
+  local tag want got i=0 n vision_off=""
   n=$(model_pairs | grep -c .)
   if [ "$PULL_VISION" = 1 ]; then
     log "the vision model $(tier_vision) reads pictures in chat (about 1.9 GB; --no-vision-model leaves it out)"
@@ -3302,12 +3321,22 @@ do_models() {
       pull_model "$tag" "$i" "$n" || die "ollama pull $tag failed"
       got=$(model_digest "$tag") || die "Ollama did not list its models (GET $OLLAMA_API/api/tags) after pulling $tag"
       [ -n "$got" ] || die "$tag is not among Ollama's models after the pull"
-      [ "$got" = "$want" ] || die "$tag has digest $got after the pull, the manifest pins $want: the registry now serves another build under that tag"
-      log "$tag pulled, digest matches the pin"
+      if [ "$got" != "$want" ] && [ "$PULL_VISION" = 1 ] && [ "$tag" = "$(tier_vision)" ]; then
+        remove_model "$tag" || die "$tag has digest $got after the pull, the manifest pins $want, and removing it from Ollama failed"
+        warn "$tag has digest ${got:0:12} after the pull, the manifest pins ${want:0:12}: the registry now serves another build under that tag, so it was removed. Domovoi is installed without the vision model: chat can't read pictures. An admin can add it in the dashboard, Settings, Models (that pull is not checked against the pin)."
+        vision_off=$tag
+      else
+        [ "$got" = "$want" ] || die "$tag has digest $got after the pull, the manifest pins $want: the registry now serves another build under that tag"
+        log "$tag pulled, digest matches the pin"
+      fi
     fi
     i=$((i + 1))
   done < <(model_pairs)
-  STEP_DONE_MSG="Models $(model_pairs | cut -d' ' -f1 | tr '\n' ' ')"
+  if [ -n "$vision_off" ]; then
+    STEP_DONE_MSG="Models $(model_pairs | cut -d' ' -f1 | grep -vxF "$vision_off" | tr '\n' ' ')(not the vision model: its download failed its check, so chat can't read pictures yet; add it in Settings, Models)"
+  else
+    STEP_DONE_MSG="Models $(model_pairs | cut -d' ' -f1 | tr '\n' ' ')"
+  fi
 }
 
 # ─── whisper ─────────────────────────────────────────────────────────────

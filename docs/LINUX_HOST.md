@@ -288,7 +288,11 @@ Whisper model, the Piper voice and the room image. The models include the
 vision model that reads pictures in chat (`qwen3-vl:2b-instruct-q4_K_M` on
 both tiers, about 1.9 GB more to download); `--no-vision-model` leaves it
 out, and chat then says it isn't installed until an admin installs it from
-Settings → Chat & AI → Models.
+Settings → Chat & AI → Models. Each model is checked against the digest
+`scripts/linux/provision-manifest.conf` pins. A voice model that fails the
+check stops the run; the vision model that fails it is removed again, the
+install finishes with a warning, and chat says it isn't installed, as
+with `--no-vision-model`.
 
 **AI chat and questions are optional.** Run from a terminal, the script
 asks first: *Include AI chat and questions? It downloads about 6.4 GB of

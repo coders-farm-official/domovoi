@@ -289,7 +289,7 @@ def test_the_provisioning_tiers_pin_the_default():
     for tier in ("floor", "standard"):
         assert m[f"tier_{tier}_vision_model"] == DEFAULT_VISION
         assert m[f"tier_{tier}_vision_digest"] == (
-            "ea422f1e73652a95479954d8572d3c8c6022f628ce2d38a1a04aae1b7f2d5300"
+            "afc393e3572c07db0bc84aa460d928a16c75f3fbb9ca9e0dccc4fbd2dafb573e"
         )
 
 

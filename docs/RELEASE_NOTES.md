@@ -4,6 +4,19 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-30 — the vision model's new build
+
+Ollama's registry now serves another build under the vision model's tag,
+`qwen3-vl:2b-instruct-q4_K_M` (digest `afc393e3572c…`, a llama.cpp-runner
+build; the 1.0.0 pin was `ea422f1e7365…`). A fresh install of 1.0.0 stops
+at the `models` step ("the registry now serves another build under that
+tag"). `scripts/linux/provision.sh` on main pins the new build, which reads
+pictures on the pinned Ollama 0.34.4, and a vision model that fails its
+pin no longer stops an install: it is removed, the install finishes with a
+warning, and chat says the vision model isn't installed until an admin adds
+it in Settings → Chat & AI → Models. Installed boxes are not affected:
+updates don't pull models, and the build already there keeps working.
+
 ## 2026-10-28 — 1.0.0
 
 Version 1.0.0 (the app 1.0.0, versionCode 26102801; the Windows Setup
