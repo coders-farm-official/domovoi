@@ -78,7 +78,42 @@ final class StubHouseUITests: XCTestCase {
     /// `font(.system(size:` and `UIFont.systemFont` finds none — so whatever
     /// Dynamic Type objects to there, it is not a hard-coded point size.
     private static let knownHomeIssues = 0
-    private static let knownPairingIssues = 8
+    /// **Eight false positives, measured as such.** The platform floor every
+    /// pushed screen in this app sits on.
+    ///
+    /// This was `knownPairingIssues`, and the name was wrong for three
+    /// sessions: the Settings index, the group list, a section with no panel,
+    /// the token card and a pushed `music` all audit 8, so it was never about
+    /// pairing. ``testWhichPieceOfAPushedScreenCarriesTheEight`` found where
+    /// they live — four in ``ShellTopBar`` and four in ``PhoneBarView``, one
+    /// per text leaf — and ``testTheBarsTextGrowsOnAPushedScreen`` found that
+    /// every one of them scales:
+    ///
+    /// ```
+    /// SCALE GREW Chat 13.3->48.0 | Home 13.3->48.0 | Music 13.3->48.0
+    ///            Videos 13.3->48.0 | crumb 15.7->52.7
+    /// SCALE STUCK
+    /// ```
+    ///
+    /// A 3.6x growth between `large` and AX5, on the very leaves Apple says
+    /// "User will not be able to change the font size of". The detail line is
+    /// **false** about these elements, and `element: nil` on all eight is the
+    /// audit reporting what it could not measure as what it found broken. The
+    /// same eight leaves on Home, as the stack's root, audit 0.
+    ///
+    /// ### Why this is a floor and not a suppression
+    ///
+    /// It is asserted by **signature**, not by total (``floorAndRest(_:)``):
+    /// a ninth of these fails the suite, and so does one finding of any other
+    /// kind, or one of these that arrives *with* an element — which is what a
+    /// real Dynamic Type defect would look like. Pinning the total alone would
+    /// have let a new contrast finding in unnoticed the moment one of the
+    /// eight went away, which is exactly what `knownPairingIssues` was doing.
+    private static let knownPushedBarFloor = 8
+
+    /// Seconds the seeded push waits for the root to draw
+    /// (``AuditStrip/pushDelay``).
+    private static let pushDelay: Double = 12
 
     override func setUp() {
         continueAfterFailure = false
@@ -91,18 +126,43 @@ final class StubHouseUITests: XCTestCase {
         mode: String = "large",
         paired: Bool = true,
         server: Bool = true,
-        port: Int = 6601
+        port: Int = 6601,
+        strip: String? = nil,
+        push: String? = nil,
+        pushDelay: Double? = nil
     ) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = server ? ["-domovoi-server", "127.0.0.1:\(port)"] : []
         if server, paired {
             app.launchArguments += ["-domovoi-token", Self.token]
         }
+        // ``AuditStrip``. Both are DEBUG-only on the app's side and read once
+        // at launch, so a variant cannot leak into the next case.
+        if let strip { app.launchArguments += ["-domovoi-audit-strip", strip] }
+        if let push { app.launchArguments += ["-domovoi-audit-push", push] }
+        if let pushDelay {
+            app.launchArguments += ["-domovoi-audit-push-delay", "\(pushDelay)"]
+        }
         // The type size, set the way the Simulator's own setting would.
         app.launchArguments += ["-UIPreferredContentSizeCategoryName", mode]
         app.launch()
         XCTAssertTrue(app.wait(for: .runningForeground, timeout: 30))
         return app
+    }
+
+    /// Split an audit's findings into the measured floor and everything else.
+    ///
+    /// The floor is the eight of ``knownPushedBarFloor``, identified by the
+    /// signature they have and a real defect would not: this headline, and
+    /// **no element**. Anything else — a contrast finding, a hit-area
+    /// finding, or a Dynamic Type finding that names an element — lands in
+    /// `rest`, which every caller asserts is empty.
+    private static func floorAndRest(_ found: [String]) -> (floor: Int, rest: [String]) {
+        let signature = "Dynamic Type font sizes are partially unsupported"
+        func isFloor(_ line: String) -> Bool {
+            line.hasPrefix(signature) && line.hasSuffix("| element: nil")
+        }
+        return (found.filter(isFloor).count, found.filter { !isFloor($0) })
     }
 
     /// The house's name in the header, which is the one thing on this screen
@@ -122,7 +182,7 @@ final class StubHouseUITests: XCTestCase {
     /// Not the screen titled `pair this phone`. ``HomeHeaderStrings/pairLink``
     /// opens the token card in Settings — `domovoi / settings`,
     /// `Household token`, `Save & reconnect` — and that is what
-    /// ``knownPairingIssues`` has always counted, which the bisect's own step
+    /// ``knownPushedBarFloor`` has always counted, which the bisect's own step
     /// name `A-phones` says out loud. The screen titled `pair this phone`,
     /// with `not now` on it, is a **different** one: an unpaired phone's
     /// device-tier reads come back 403 and the shell raises it by itself
@@ -293,7 +353,14 @@ final class StubHouseUITests: XCTestCase {
         defer { continueAfterFailure = wasContinuing }
         var found: [String] = []
         try app.performAccessibilityAudit { issue in
-            found.append("\(issue.compactDescription): \(issue.detailedDescription)")
+            // **The element is part of the record, not just the log.** The
+            // eight are told apart from a real Dynamic Type defect by having
+            // no element (``knownPushedBarFloor``), and a classifier that
+            // reads only the two descriptions cannot see that difference.
+            found.append(
+                "\(issue.compactDescription): \(issue.detailedDescription)"
+                    + " | element: \(Self.oneLine(issue.element))"
+            )
             // **One `print` per line, deliberately.** This was a single
             // `print` of a multi-line string, and `xcodebuild`'s output kept
             // only its first line: three runs' worth of logs showed the
@@ -451,7 +518,7 @@ final class StubHouseUITests: XCTestCase {
     /// ### It also audits, and this screen is the worse of the two
     ///
     /// Fourteen issues, against Home's one. Six of them are the phone bar's,
-    /// which ``knownPairingIssues`` says what is known about; the other
+    /// which ``knownPushedBarFloor`` says what is known about; the other
     /// **eight are this screen's own** — four "Dynamic Type font sizes are
     /// partially unsupported", three "Text clipped" and one contrast — and
     /// they are I1-D work rather than an accepted limit.
@@ -474,11 +541,18 @@ final class StubHouseUITests: XCTestCase {
         evidence(app, "30-pairing")
         if #available(iOS 17.0, *) {
             let found = try auditIssues(app, "pairing")
+            let split = Self.floorAndRest(found)
+            XCTAssertTrue(
+                split.rest.isEmpty,
+                "Apple's audit has findings against the pairing screen beyond the "
+                    + "measured floor of \(Self.knownPushedBarFloor): "
+                    + split.rest.joined(separator: " / ")
+            )
             XCTAssertEqual(
-                found.count,
-                Self.knownPairingIssues,
+                split.floor,
+                Self.knownPushedBarFloor,
                 "Apple's audit has \(found.count) against the pairing screen, "
-                    + "not the \(Self.knownPairingIssues) known: "
+                    + "not the \(Self.knownPushedBarFloor) known: "
                     + found.joined(separator: " | ")
             )
         }
@@ -519,7 +593,7 @@ final class StubHouseUITests: XCTestCase {
     ///
     /// **Deliberately not an equality assertion.** Three of these four counts
     /// are unknown — that is the point of running it — so this asserts only
-    /// the baseline, which ``knownPairingIssues`` already pins, and otherwise
+    /// the baseline, which ``knownPushedBarFloor`` already pins, and otherwise
     /// prints. A diagnostic that fails on an unknown it was written to
     /// discover tells you nothing you did not put there.
     @MainActor
@@ -614,9 +688,9 @@ final class StubHouseUITests: XCTestCase {
         let baseline = counts.first { $0.0 == "A-phones" }?.1
         XCTAssertEqual(
             baseline,
-            Self.knownPairingIssues,
+            Self.knownPushedBarFloor,
             "the pairing screen audited \(baseline.map(String.init) ?? "nothing"), not the "
-                + "known \(Self.knownPairingIssues) — every other count in this run is "
+                + "known \(Self.knownPushedBarFloor) — every other count in this run is "
                 + "measured against a baseline that has changed"
         )
     }
@@ -644,7 +718,7 @@ final class StubHouseUITests: XCTestCase {
     /// | AX5 | none | **0** |
     ///
     /// If the counts come back 10/8/0 the eight were never eight defects and
-    /// `knownPairingIssues` is a count of *sizes*, which changes what fixing
+    /// `knownPushedBarFloor` is a count of *sizes*, which changes what fixing
     /// them means. If they come back 8/8/8 the hypothesis is dead and the
     /// number is a cap.
     @MainActor
@@ -700,7 +774,7 @@ final class StubHouseUITests: XCTestCase {
     /// its views.
     ///
     ///  - `music` near 8 ⇒ the eight belong to the **push**, and Settings was
-    ///    never involved. `knownPairingIssues` is then a property of every
+    ///    never involved. `knownPushedBarFloor` is then a property of every
     ///    pushed screen in the app, which is a much larger finding than a
     ///    card that needs a `fixedSize`.
     ///  - `music` at 0 ⇒ it is Settings' own chrome after all, and what is
@@ -747,6 +821,377 @@ final class StubHouseUITests: XCTestCase {
             Self.knownHomeIssues,
             "Home audited \(root.count), not the known \(Self.knownHomeIssues) — "
                 + "the pushed count is being read against a baseline that moved"
+        )
+    }
+
+    /// **Which piece of a pushed screen carries the eight?** The removal
+    /// method, mechanised.
+    ///
+    /// Six theories have died on this. What is known: every **pushed** screen
+    /// audits 8 `Dynamic Type font sizes are partially unsupported` and every
+    /// **root** audits 0; the count does not move when the content changes
+    /// completely (`A-phones`, `B-group`, `C-no-panel`, `D-index` and `music`
+    /// are all 8); it is not one-per-larger-type-size (8/8/7 against a
+    /// prediction of 10/8/0); and `element` is nil on all eight, so the audit
+    /// will not say which view it means.
+    ///
+    /// Guessing has had its six turns. This takes the pieces away instead,
+    /// one per launch, in one build — the way Home's six were finally
+    /// explained, by removing the `LazyVGrid` rather than reasoning about it.
+    ///
+    /// Every variant arrives the same way: ``AuditStrip/seededRoute`` puts
+    /// `Music` in ``ShellModel/path`` once the workspace appears, which is the
+    /// same push a tab tap makes. It has to be seeded rather than tapped
+    /// because one variant removes the bar the tab is in.
+    ///
+    /// ### The first run measured an empty screen, and said so nowhere
+    ///
+    /// The prediction was `root` at 0 and every other variant at 8. What came
+    /// back was:
+    ///
+    /// ```
+    /// STRIP SUMMARY none=0 topBar=0 phoneBar=0 navBar=0 root=0 content=0 lazyGrid=0
+    /// ```
+    ///
+    /// Zero everywhere, control included — and it meant nothing. The **same
+    /// run** of the suite that printed those zeroes also printed
+    /// `PUSH SUMMARY root=0 music=8`, `BISECT … A-phones=8 … D-index=8` and
+    /// `SIZES S=8 large=8 AX5=7`. One build, one Simulator, the eight plainly
+    /// still there, and this harness alone could not see them.
+    ///
+    /// The difference was **when the push happened**. Every other test waits
+    /// for the house name — Home fully drawn against the stub — and then taps
+    /// a tab. This one seeded `path` from a `.task` on the first frame and
+    /// audited as soon as the breadcrumb appeared, perhaps two seconds in,
+    /// with Home's seven sections still empty behind it. A variant harness
+    /// whose every cell reads 0 because the screen under test had not drawn
+    /// is the viewport confound again, in a new costume: a number that moves
+    /// for a reason that is not the one being varied.
+    ///
+    /// ### What the accident proved anyway
+    ///
+    /// It is the best evidence on the record for where the eight live. A
+    /// pushed screen with Home **not yet drawn** audits 0; the identical
+    /// pushed screen with Home drawn behind it audits 8. Nothing about the
+    /// pushed screen changed between those two measurements.
+    ///
+    /// So the eight are Home's own views, audited while **covered** by a push
+    /// — mounted, not unloaded. That also explains the detail that made them
+    /// unguessable for three sessions: `element: nil` on all eight, where
+    /// every contrast and hit-area finding on this track names its element.
+    /// A view behind a pushed screen is out of the accessibility tree and has
+    /// no element to name.
+    ///
+    /// ### What is still open, and what each variant now decides
+    ///
+    /// Home audits **0** as the visible root. The same views audit 8 covered.
+    /// So either covering changes something about our views, or SwiftUI cannot
+    /// prove Dynamic Type support for anything behind a pushed screen at all —
+    /// a platform floor, not a defect. ``AuditStrip/plainRoot`` is the variant
+    /// that decides it: a root of three `Text`s and nothing else.
+    ///
+    /// `pushDelay` is what makes any of these numbers mean something, and each
+    /// variant now also prints whether the root drew before the push, because
+    /// the confound was invisible in its own log.
+    ///
+    /// **Printed, not asserted**, apart from the control — which is 8 again,
+    /// and is the one number that is known.
+    @MainActor
+    func testWhichPieceOfAPushedScreenCarriesTheEight() throws {
+        var counts: [(String, Int)] = []
+        for variant in [
+            // `none` is kept as the documented anomaly, not as a control: a
+            // **seeded** push measures 0 with the destination fully on screen,
+            // while the identical push by tap measures 8. Nothing explains
+            // that yet, so every variant below arrives by a tap instead.
+            "none", "tap", "tapAfterHomeAudit",
+            "topBar", "phoneBar", "navBar", "plainRoot", "content", "lazyGrid",
+        ] {
+            // **Three ways to arrive, because the delay was not the
+            // difference either.** With the push held 12 seconds and
+            // `root drew first: true` on every variant that has a Home, this
+            // harness still read 0 across the board while
+            // ``testWhetherAPushedScreenIsWhatCarriesTheEight`` read
+            // `music=8` from the same build. Two differences remain between
+            // the two tests, and both are in this test rather than in the
+            // app:
+            //
+            //  - **how the push happens** — a seeded `path` versus a tap on
+            //    the phone bar's tab;
+            //  - **how many times the app is audited** — this test audits
+            //    once, and that one audits Home *first* and the pushed screen
+            //    second.
+            //
+            // The second is the live suspicion. `performAccessibilityAudit`
+            // drives the content size category through its range and puts it
+            // back; an audit of Home that leaves anything behind would be
+            // found by the next audit in the same process, and `music=8` has
+            // only ever been measured as a *second* audit. If that is it, the
+            // eight on `music` are an artefact of this test file and the
+            // question goes back to `SettingsPlaceholder`, which has only
+            // ever been measured as a first audit.
+            //
+            //  - `tap` is `none` arriving the other way, audited once.
+            //  - `tapAfterHomeAudit` is the push test exactly: Home audited,
+            //    then the tab tapped, then the pushed screen audited.
+            // **Everything but `none` arrives by tap**, because that is the
+            // only arrival that has ever reported the eight. Which element
+            // gets tapped depends on what the variant took away:
+            //
+            //  - the phone bar's `Music` tab, normally;
+            //  - one of Home's everything tiles when the **bar itself** is
+            //    the piece removed (the tiles are
+            //    ``ShellModel/everything``, which is unaffected by the bar
+            //    not being drawn);
+            //  - the plain root's own button when **Home** is the piece
+            //    removed, which is why that root has one.
+            let arrivesByTap = variant != "none"
+            let app = arrivesByTap
+                ? launch(strip: ["tap", "tapAfterHomeAudit"].contains(variant) ? nil : variant)
+                : launch(strip: nil, push: "Music", pushDelay: Self.pushDelay)
+            // **Recorded, not assumed.** The confound that wasted the first
+            // run was invisible in its own log: every count was 0 and nothing
+            // said the root had been blank. This prints whether the house name
+            // was ever on screen before the push, per variant, so a zero can
+            // be read.
+            let house = houseName(in: app)
+            let drew = house.waitForExistence(timeout: Self.pushDelay + 10)
+            print("STRIP [\(variant)] root drew first: \(drew)")
+
+            if variant == "tapAfterHomeAudit" {
+                let before = try auditIssues(app, "strip-\(variant)-home")
+                print("STRIP [\(variant)] home audited first: \(before.count)")
+            }
+            if arrivesByTap {
+                let opener: XCUIElement
+                switch variant {
+                case "phoneBar": opener = app.buttons[ShellStringsUnderTest.filesTile]
+                case "plainRoot": opener = app.buttons[ShellStringsUnderTest.plainRootPush]
+                default: opener = app.buttons[ShellStringsUnderTest.musicTab]
+                }
+                guard opener.waitForExistence(timeout: 20) else {
+                    // The tree, not a sentence about what is missing — this
+                    // file has paid six runs for that lesson once already.
+                    print("STRIP [\(variant)] NO OPENER — tree follows")
+                    print(app.debugDescription)
+                    app.terminate()
+                    continue
+                }
+                opener.tap()
+            }
+            // ### The arrival condition, and the third timing confound
+            //
+            // This waited on the **breadcrumb**, and the breadcrumb is a lie
+            // about arrival: ``ShellTopBar`` is mounted *outside* the
+            // `NavigationStack` (``WorkspaceView/stack``), so it is rebuilt
+            // from `model.navigation.route` the instant `path` changes —
+            // before the destination has been laid out, let alone finished
+            // animating in. The audit then ran on a screen mid-push and
+            // reported 0, and every removal variant inherited that 0.
+            //
+            // A tap did not have the problem because `XCUIElement.tap()`
+            // waits for the app to go quiescent, so the push had settled
+            // before the next query ran. That is the whole of the difference
+            // between `none=0` and `tap=8` — same destination, same Home
+            // behind it, same single audit.
+            //
+            // So the condition is now something only the **destination**
+            // can satisfy:
+            //
+            //  - the `not built yet` placeholder, which every variant draws
+            //    except ``AuditStrip/content``;
+            //  - or the navigation bar's `Back` button, which exists in every
+            //    variant except ``AuditStrip/navBar``.
+            //
+            // No variant removes both, so one of the two is always a true
+            // statement that the pushed screen is on screen. The settle after
+            // it is for the transition itself, which neither marker waits
+            // out.
+            let placeholder = app.descendants(matching: .staticText)
+                .matching(NSPredicate(format: "label CONTAINS %@", ShellStringsUnderTest.notBuilt))
+                .firstMatch
+            let back = app.navigationBars.buttons.firstMatch
+            let deadline = Date().addingTimeInterval(Self.pushDelay + 25)
+            var arrived = false
+            while Date() < deadline {
+                if placeholder.exists || back.exists { arrived = true; break }
+                usleep(300_000)
+            }
+            if arrived {
+                // Crude on purpose, and printed so it can be argued with. A
+                // push animates for a third of a second; three is a margin
+                // over a Simulator under load, and the cost of being wrong
+                // the other way is another run of meaningless zeroes.
+                usleep(3_000_000)
+                print(
+                    "STRIP [\(variant)] settled — placeholder: \(placeholder.exists) "
+                        + "back: \(back.exists)"
+                )
+            }
+            guard arrived else {
+                print("STRIP [\(variant)] NEVER PUSHED — tree follows")
+                print(app.debugDescription)
+                app.terminate()
+                continue
+            }
+            // Worth saying out loud rather than silently auditing it: with the
+            // root stripped, Home's reads never start, and a shell that gives
+            // up on the server swaps the whole screen for local media. A count
+            // taken from that screen is a count of a different app.
+            if fellBackToLocalMedia(in: app) {
+                print("STRIP [\(variant)] WARNING — fell back to local media")
+            }
+            evidence(app, "80-strip-\(variant)")
+            let found = try auditIssues(app, "strip-\(variant)")
+            let dynamic = found.filter { $0.hasPrefix("Dynamic Type") }
+            counts.append((variant, dynamic.count))
+            print("STRIP [\(variant)] dynamic=\(dynamic.count) total=\(found.count)")
+            for line in found { print("STRIP [\(variant)]   \(line)") }
+            app.terminate()
+        }
+        print("STRIP SUMMARY " + counts.map { "\($0.0)=\($0.1)" }.joined(separator: " "))
+
+        // The control, and only the control. If the whole shell stops
+        // auditing 8 on a pushed screen then the five numbers beside it are
+        // differences from a baseline that moved, and the run says nothing.
+        // **`tap`, not `none`.** The seeded arrival reports 0 for reasons
+        // nothing has explained, so it cannot be the baseline the others are
+        // read against.
+        let control = counts.first { $0.0 == "tap" }?.1
+        XCTAssertEqual(
+            control,
+            Self.knownPushedBarFloor,
+            "a pushed screen with the whole shell around it audited "
+                + "\(control.map(String.init) ?? "nothing"), not the known "
+                + "\(Self.knownPushedBarFloor) — every other count in this run, "
+                + "`lazyGrid` above all, is a difference from a baseline that "
+                + "has moved"
+        )
+    }
+
+    /// **Do the eight flagged leaves actually scale?** The question the audit
+    /// will not answer, measured.
+    ///
+    /// ``testWhichPieceOfAPushedScreenCarriesTheEight`` settled where they
+    /// live. With every variant arriving by a tap:
+    ///
+    /// ```
+    /// STRIP SUMMARY tap=8 topBar=4 phoneBar=4 navBar=8 plainRoot=8 content=8 lazyGrid=8
+    /// ```
+    ///
+    /// Four in ``ShellTopBar`` and four in ``PhoneBarView``, and the tree of a
+    /// pushed screen has exactly four text leaves in each — the breadcrumb,
+    /// the pill's address, `unverified` and `live` above; `home`, `music`,
+    /// `videos` and `chat` below. **One finding per text leaf**, by
+    /// arithmetic rather than by guess.
+    ///
+    /// `plainRoot` at 8 is what kills the covered-root reading that three
+    /// write-ups of this had as its leading hypothesis: a root of three
+    /// `Text`s and a button carries all eight, so Home was never underneath
+    /// it in any sense that mattered. `content` and `navBar` at 8 rule out the
+    /// destination and the navigation bar, as before.
+    ///
+    /// ### What is left is a contradiction, and this test is its referee
+    ///
+    /// The identical eight leaves are on **Home**, where the audit reports 0 —
+    /// `tapAfterHomeAudit` measures that in the same process that then reports
+    /// 8. Same views, same text styles, same frames; 0 as a root and 8 when a
+    /// destination is pushed onto the `NavigationStack` beside them. Nothing
+    /// in either bar uses a font Dynamic Type cannot change: one grep across
+    /// the app for `Font.system(size:)`, `UIFont.systemFont` and
+    /// `Font.custom` finds nothing in them, and there is no
+    /// `.dynamicTypeSize` cap anywhere.
+    ///
+    /// So either the detail line is true and these leaves cannot be resized,
+    /// or it is false and the audit is reporting what it could not *verify*
+    /// as what it found to be broken — which would also explain `element: nil`
+    /// on all eight, where every contrast and hit-area finding on this track
+    /// names its element.
+    ///
+    /// That is not a matter of opinion. The text either gets bigger or it
+    /// does not, and the accessibility tree reports the frames. This launches
+    /// a pushed screen at `large` and again at AX5 and compares the height of
+    /// each flagged leaf it can address by name.
+    ///
+    /// **If the heights grow, the eight are a false positive** and the right
+    /// answer is a documented floor rather than a fix — and this test, not a
+    /// comment, is what keeps that claim honest.
+    @MainActor
+    func testTheBarsTextGrowsOnAPushedScreen() throws {
+        /// The flagged leaves this test can name. Five of the eight: the
+        /// breadcrumb and the four tab captions.
+        ///
+        /// The pill's `127.0.0.1:6601`, `unverified` and `live` are left out
+        /// deliberately — the first two are state the stub decides and the
+        /// third's label carries leading whitespace, so a query on them is a
+        /// query on the fixture rather than on the font. Five leaves settle
+        /// the question as well as eight would.
+        func heights(_ app: XCUIApplication) -> [String: CGFloat] {
+            var out: [String: CGFloat] = [:]
+            let crumb = app.staticTexts[ShellStringsUnderTest.musicCrumb]
+            if crumb.exists { out["crumb"] = crumb.frame.height }
+            for tab in ["Home", "Music", "Videos", "Chat"] {
+                // Scoped **through the tab's button**, because `music` is also
+                // the placeholder's own heading on this very screen and an
+                // app-wide query would measure whichever it found first.
+                let caption = app.buttons[tab].staticTexts.firstMatch
+                if caption.exists { out[tab] = caption.frame.height }
+            }
+            return out
+        }
+
+        var measured: [String: [String: CGFloat]] = [:]
+        for (label, mode) in [
+            ("large", "large"),
+            ("AX5", "UICTContentSizeCategoryAccessibilityXXXL"),
+        ] {
+            let app = launch(mode: mode)
+            XCTAssertTrue(
+                houseName(in: app).waitForExistence(timeout: 20),
+                "Home did not draw against the stub house at \(label)"
+            )
+            let tab = app.buttons[ShellStringsUnderTest.musicTab]
+            XCTAssertTrue(tab.waitForExistence(timeout: 10), "no Music tab at \(label)")
+            tab.tap()
+            XCTAssertTrue(
+                app.navigationBars.buttons.firstMatch.waitForExistence(timeout: 10),
+                "the Music tab did not push at \(label)"
+            )
+            usleep(3_000_000)
+            evidence(app, "90-scale-\(label)")
+            measured[label] = heights(app)
+            for (leaf, h) in heights(app).sorted(by: { $0.key < $1.key }) {
+                print("SCALE [\(label)] \(leaf) height=\(h)")
+            }
+            app.terminate()
+        }
+
+        guard let small = measured["large"], let big = measured["AX5"] else {
+            return XCTFail("a launch did not reach a pushed screen")
+        }
+        var grew: [String] = []
+        var stuck: [String] = []
+        for (leaf, h) in small.sorted(by: { $0.key < $1.key }) {
+            guard let tall = big[leaf] else {
+                print("SCALE [compare] \(leaf) MISSING at AX5")
+                continue
+            }
+            if tall > h {
+                grew.append("\(leaf) \(h)→\(tall)")
+            } else {
+                stuck.append("\(leaf) \(h)→\(tall)")
+            }
+        }
+        print("SCALE GREW " + grew.joined(separator: " | "))
+        print("SCALE STUCK " + stuck.joined(separator: " | "))
+
+        XCTAssertFalse(small.isEmpty, "no flagged leaf could be addressed at large")
+        XCTAssertTrue(
+            stuck.isEmpty,
+            "Apple's audit says these leaves cannot be resized, and these did not grow "
+                + "between large and AX5: \(stuck.joined(separator: ", ")) — which makes the "
+                + "eight a real defect in \(ShellStringsUnderTest.musicCrumb)'s bars rather "
+                + "than a floor, and `knownPushedBarFloor` is hiding it"
         )
     }
 
@@ -801,4 +1246,12 @@ private enum ShellStringsUnderTest {
 
     /// ``ShellTopBar``'s leading text once the Music route is pushed.
     static let musicCrumb = "domovoi / music"
+
+    /// An everything-grid tile, which is how the no-phone-bar variant leaves
+    /// Home. ``Route/label`` again, so capitalised.
+    static let filesTile = "Files"
+
+    /// ``AuditStrip/plainRootPush`` — the one button on the plain root.
+    /// Spelled out rather than imported, like every other string here.
+    static let plainRootPush = "push music from a plain root"
 }
