@@ -1016,6 +1016,132 @@ final class StubHouseUITests: XCTestCase {
         )
     }
 
+    /// **Do the eight flagged leaves actually scale?** The question the audit
+    /// will not answer, measured.
+    ///
+    /// ``testWhichPieceOfAPushedScreenCarriesTheEight`` settled where they
+    /// live. With every variant arriving by a tap:
+    ///
+    /// ```
+    /// STRIP SUMMARY tap=8 topBar=4 phoneBar=4 navBar=8 plainRoot=8 content=8 lazyGrid=8
+    /// ```
+    ///
+    /// Four in ``ShellTopBar`` and four in ``PhoneBarView``, and the tree of a
+    /// pushed screen has exactly four text leaves in each — the breadcrumb,
+    /// the pill's address, `unverified` and `live` above; `home`, `music`,
+    /// `videos` and `chat` below. **One finding per text leaf**, by
+    /// arithmetic rather than by guess.
+    ///
+    /// `plainRoot` at 8 is what kills the covered-root reading that three
+    /// write-ups of this had as its leading hypothesis: a root of three
+    /// `Text`s and a button carries all eight, so Home was never underneath
+    /// it in any sense that mattered. `content` and `navBar` at 8 rule out the
+    /// destination and the navigation bar, as before.
+    ///
+    /// ### What is left is a contradiction, and this test is its referee
+    ///
+    /// The identical eight leaves are on **Home**, where the audit reports 0 —
+    /// `tapAfterHomeAudit` measures that in the same process that then reports
+    /// 8. Same views, same text styles, same frames; 0 as a root and 8 when a
+    /// destination is pushed onto the `NavigationStack` beside them. Nothing
+    /// in either bar uses a font Dynamic Type cannot change: one grep across
+    /// the app for `Font.system(size:)`, `UIFont.systemFont` and
+    /// `Font.custom` finds nothing in them, and there is no
+    /// `.dynamicTypeSize` cap anywhere.
+    ///
+    /// So either the detail line is true and these leaves cannot be resized,
+    /// or it is false and the audit is reporting what it could not *verify*
+    /// as what it found to be broken — which would also explain `element: nil`
+    /// on all eight, where every contrast and hit-area finding on this track
+    /// names its element.
+    ///
+    /// That is not a matter of opinion. The text either gets bigger or it
+    /// does not, and the accessibility tree reports the frames. This launches
+    /// a pushed screen at `large` and again at AX5 and compares the height of
+    /// each flagged leaf it can address by name.
+    ///
+    /// **If the heights grow, the eight are a false positive** and the right
+    /// answer is a documented floor rather than a fix — and this test, not a
+    /// comment, is what keeps that claim honest.
+    @MainActor
+    func testTheBarsTextGrowsOnAPushedScreen() throws {
+        /// The flagged leaves this test can name. Five of the eight: the
+        /// breadcrumb and the four tab captions.
+        ///
+        /// The pill's `127.0.0.1:6601`, `unverified` and `live` are left out
+        /// deliberately — the first two are state the stub decides and the
+        /// third's label carries leading whitespace, so a query on them is a
+        /// query on the fixture rather than on the font. Five leaves settle
+        /// the question as well as eight would.
+        func heights(_ app: XCUIApplication) -> [String: CGFloat] {
+            var out: [String: CGFloat] = [:]
+            let crumb = app.staticTexts[ShellStringsUnderTest.musicCrumb]
+            if crumb.exists { out["crumb"] = crumb.frame.height }
+            for tab in ["Home", "Music", "Videos", "Chat"] {
+                // Scoped **through the tab's button**, because `music` is also
+                // the placeholder's own heading on this very screen and an
+                // app-wide query would measure whichever it found first.
+                let caption = app.buttons[tab].staticTexts.firstMatch
+                if caption.exists { out[tab] = caption.frame.height }
+            }
+            return out
+        }
+
+        var measured: [String: [String: CGFloat]] = [:]
+        for (label, mode) in [
+            ("large", "large"),
+            ("AX5", "UICTContentSizeCategoryAccessibilityXXXL"),
+        ] {
+            let app = launch(mode: mode)
+            XCTAssertTrue(
+                houseName(in: app).waitForExistence(timeout: 20),
+                "Home did not draw against the stub house at \(label)"
+            )
+            let tab = app.buttons[ShellStringsUnderTest.musicTab]
+            XCTAssertTrue(tab.waitForExistence(timeout: 10), "no Music tab at \(label)")
+            tab.tap()
+            XCTAssertTrue(
+                app.navigationBars.buttons.firstMatch.waitForExistence(timeout: 10),
+                "the Music tab did not push at \(label)"
+            )
+            usleep(3_000_000)
+            evidence(app, "90-scale-\(label)")
+            measured[label] = heights(app)
+            for (leaf, h) in heights(app).sorted(by: { $0.key < $1.key }) {
+                print("SCALE [\(label)] \(leaf) height=\(h)")
+            }
+            app.terminate()
+        }
+
+        guard let small = measured["large"], let big = measured["AX5"] else {
+            return XCTFail("a launch did not reach a pushed screen")
+        }
+        var grew: [String] = []
+        var stuck: [String] = []
+        for (leaf, h) in small.sorted(by: { $0.key < $1.key }) {
+            guard let tall = big[leaf] else {
+                print("SCALE [compare] \(leaf) MISSING at AX5")
+                continue
+            }
+            if tall > h {
+                grew.append("\(leaf) \(h)→\(tall)")
+            } else {
+                stuck.append("\(leaf) \(h)→\(tall)")
+            }
+        }
+        print("SCALE GREW " + grew.joined(separator: " | "))
+        print("SCALE STUCK " + stuck.joined(separator: " | "))
+
+        XCTAssertFalse(small.isEmpty, "no flagged leaf could be addressed at large")
+        XCTAssertTrue(
+            stuck.isEmpty,
+            "Apple's audit says these leaves cannot be resized, and these did not grow "
+                + "between large and AX5: \(stuck.joined(separator: ", ")) — which makes the "
+                + "eight a real defect in \(ShellStringsUnderTest.musicCrumb)'s bars rather "
+                + "than a floor, and `knownPushedIssues` is hiding it"
+        )
+    }
+
 }
 
 /// Strings this file matches on, kept together and named so that a change in
