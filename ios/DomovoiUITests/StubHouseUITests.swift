@@ -155,6 +155,16 @@ final class StubHouseUITests: XCTestCase {
         // is still a header, and contrast and touch targets do not depend on
         // the server answering.
         if #available(iOS 17.0, *) {
+            // **Every issue, in one run.** The handler used to return `false`,
+            // which has XCTest record the issue as a failure — and `setUp`
+            // sets `continueAfterFailure = false`, so the first one ended the
+            // test. Three runs in a row therefore reported one issue each and
+            // looked like a queue of distinct problems being worked through;
+            // the screenshots say Home was unchanged and both issues were
+            // there the whole time. Collecting them and asserting once is the
+            // difference between "the audit is now failing on X" and knowing
+            // what the audit actually has against this screen.
+            var found: [String] = []
             try app.performAccessibilityAudit { issue in
                 // Print every issue rather than only failing on the first:
                 // the result bundle names none of them, and finding out
@@ -167,17 +177,28 @@ final class StubHouseUITests: XCTestCase {
                 // grep and an earlier failure with the same wording, the
                 // `.secondary` was removed from the whole app target, and the
                 // audit said "Contrast nearly passed" again. So
-                // `detailedDescription` is printed too — it is the only field
-                // that has ever named a colour or a frame — along with the
-                // audit type, and the whole screen's tree is already attached
-                // by `evidence` above for cross-referencing.
+                // `detailedDescription` is printed too. It turned out to add
+                // one sentence and still no element — "Text of this element
+                // may be clipped at larger Dynamic Type sizes" names no
+                // element — so finding the culprit means measuring the
+                // screenshot `evidence` attached, not reading this line. It
+                // is kept because the sentence says which *rule* was broken,
+                // which the four-word summary does not.
+                found.append("\(issue.compactDescription): \(issue.detailedDescription)")
                 print("""
                     AUDIT type=\(issue.auditType) \(issue.compactDescription)
                       detail: \(issue.detailedDescription)
                       element: \(issue.element?.debugDescription ?? "nil")
                     """)
-                return false
+                // Handled here, so XCTest records nothing and the audit goes
+                // on to the next issue.
+                return true
             }
+            XCTAssertTrue(
+                found.isEmpty,
+                "Apple's audit has \(found.count) against Home: "
+                    + found.joined(separator: " | ")
+            )
         }
         XCTAssertTrue(named, "the header never drew the house's name")
     }

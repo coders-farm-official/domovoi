@@ -96,12 +96,6 @@ struct ShellTopBar<Trailing: View>: View {
                         .lineLimit(wraps ? nil : 1)
                         .truncationMode(.tail)
                         .fixedSize(horizontal: false, vertical: wraps)
-                    if pill.unverified {
-                        Text(ShellStrings.unverified)
-                            .font(.caption2)
-                            .foregroundStyle(Color.warnInk)
-                            .fixedSize(horizontal: false, vertical: wraps)
-                    }
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 4)
@@ -109,6 +103,26 @@ struct ShellTopBar<Trailing: View>: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel(pill.accessibilityLabel)
+            // **Outside the capsule, measured.** This sat inside it, and
+            // `Color.warnInk` is a 5.73:1 ink — on **white**. The capsule is
+            // `.quaternary`, which a Simulator screenshot measures at
+            // `#DDDDDE`, and the same ink on that grey is **4.21:1**: under
+            // the 4.5:1 body text needs, and exactly Apple's "Contrast is not
+            // high enough for element unless font size is larger".
+            //
+            // The ink is not darkened to fix it, because it is not ours to
+            // change: `--warn-ink` is `web/static/colors_and_type.css`'s and
+            // the stylesheet is the spec. What is ours is the capsule, which
+            // is an iOS invention with no counterpart on the web — so the
+            // word moves off it, onto the canvas the ink was measured
+            // against, beside `live`, which has always sat there.
+            if pill.unverified {
+                Text(ShellStrings.unverified)
+                    .font(.caption2)
+                    .foregroundStyle(Color.warnInk)
+                    .padding(.leading, 6)
+                    .fixedSize(horizontal: false, vertical: wraps)
+            }
             if let status = pill.status {
                 Text(status)
                     .font(.caption)
