@@ -303,14 +303,20 @@ private struct ServerRow: View {
             Circle()
                 .fill(dot)
                 .frame(width: 8, height: 8)
+            // The same two faults as the trusted-servers row in
+            // ``PhonesAndBrowsersView``, which Apple's audit caught there and
+            // cannot catch here: nothing in a Simulator may open this sheet,
+            // because doing so starts the LAN discovery sweep across whatever
+            // network the Mac is on. So this one is fixed by reading, not by
+            // measuring, and the numbers quoted are that row's.
             VStack(alignment: .leading, spacing: 2) {
                 Text(row.displayName)
                     .font(.subheadline)
-                    .lineLimit(1)
+                    .fixedSize(horizontal: false, vertical: true)
                 Text(row.address)
                     .font(.footnote)
                     .foregroundStyle(Color.fgMuted)
-                    .lineLimit(1)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Spacer()
             Text(row.affordance(inUse: inUse).text)
@@ -320,6 +326,12 @@ private struct ServerRow: View {
                 Button(action: onForget) {
                     Image(systemName: "xmark")
                         .font(.caption2)
+                        // 8.7 points there, and worse here than there: this
+                        // row carries its own `onTapGesture` to select the
+                        // server, so a near-miss on an 8.7-point forget does
+                        // not do nothing — it connects to the server instead.
+                        .frame(minWidth: 44, minHeight: 44)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(Color.fgMuted)

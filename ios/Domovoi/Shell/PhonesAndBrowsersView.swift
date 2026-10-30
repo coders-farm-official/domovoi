@@ -233,19 +233,32 @@ struct PhonesAndBrowsersPanel: View {
                     .foregroundStyle(Color.fgMuted)
             }
             ForEach(rows) { row in
-                HStack(spacing: 10) {
+                // **No `.lineLimit(1)` on these three.** They were the
+                // pairing screen's three "Text of this element may be clipped
+                // at larger Dynamic Type sizes": a name, an address and a
+                // fingerprint, in a row that also holds a status word and a
+                // button, so there is not much width to go round and at an
+                // accessibility size a single line of any of them is cut.
+                //
+                // A fingerprint is the one that matters. It exists to be
+                // compared against what the dashboard shows, and a truncated
+                // fingerprint is worse than no fingerprint: it looks like an
+                // answer. So it wraps, like every other long string in this
+                // app — `minimumScaleFactor` was rejected at the I0 gate for
+                // making text smaller for the person who asked for bigger.
+                HStack(alignment: .top, spacing: 10) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(row.displayName)
                             .font(.subheadline)
-                            .lineLimit(1)
+                            .fixedSize(horizontal: false, vertical: true)
                         Text(row.address)
                             .font(.footnote)
                             .foregroundStyle(Color.fgMuted)
-                            .lineLimit(1)
+                            .fixedSize(horizontal: false, vertical: true)
                         Text(store.pin(forServer: row.url)?.fingerprint ?? ShellStrings.identityNotPinnedYet)
                             .font(.caption2.monospaced())
                             .foregroundStyle(Color.fgMuted)
-                            .lineLimit(1)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                     Spacer()
                     if row.active {
@@ -271,6 +284,18 @@ struct PhonesAndBrowsersPanel: View {
                     } label: {
                         Image(systemName: "xmark")
                             .font(.caption2)
+                            // **The third time this app has got this wrong**,
+                            // after the header's live dot and the phone bar's
+                            // tabs. A Simulator measured this one at
+                            // `{{337, 1018}, {8.7, 8.7}}` — an 8.7-point
+                            // target on the control that forgets a server,
+                            // its household token and its pinned identity
+                            // together. A `caption2` glyph is 8.7 points, and
+                            // a glyph is all `.buttonStyle(.plain)` gives
+                            // SwiftUI to hit-test, so the frame is stated and
+                            // `contentShape` makes the frame the target.
+                            .frame(minWidth: 44, minHeight: 44)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(Color.fgMuted)
