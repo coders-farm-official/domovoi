@@ -86,10 +86,31 @@ struct HomeHeaderView: View {
                 }
             }
             if state.showsPairLink {
+                // ### A 44-point target, measured at 15.7
+                //
+                // Apple's audit on **unpaired** Home: "Hit area is too
+                // small", element
+                // `frame=(16.0, 178.33, 266.0, 15.666)`. One line of
+                // `.footnote` is all the height a plain text button gets, and
+                // this is the only control an unpaired phone is offered — the
+                // whole point of the header in that state is that tapping it
+                // is what pairs the phone.
+                //
+                // It took this long to see because every audit on this track
+                // ran against a **paired** app, where `showsPairLink` is
+                // false and the button does not exist. The bisect that found
+                // it was looking for something else.
+                //
+                // `.frame` alone is not a hit area — ``PhonesAndBrowsersView``
+                // learned that on the forget button — so `contentShape` is
+                // what makes the 44 points tappable rather than merely
+                // reserved.
                 Button(HomeHeaderStrings.pairLink, action: onPair)
                     .font(.footnote)
                     .fixedSize(horizontal: false, vertical: true)
                     .multilineTextAlignment(.leading)
+                    .frame(minHeight: 44)
+                    .contentShape(Rectangle())
             }
             if explaining {
                 Text(state.explanation)
