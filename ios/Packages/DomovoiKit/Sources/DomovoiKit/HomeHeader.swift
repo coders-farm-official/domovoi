@@ -21,12 +21,23 @@ public struct HomeHeaderState: Equatable, Sendable {
     /// `homeDate(nowMs, zone)` — `mon 28 sep`.
     public let date: String
 
-    /// The parts of the status line, already decided. Android's
-    /// `statusLine(rooms, coreDown, active)` builds them from the rooms and
-    /// timer reads; **neither read exists on iOS yet**, so this batch passes
-    /// an empty list and the header draws the date alone. The Kotlin
-    /// `HomeHeader` takes `line: List<String>` as a parameter too, so this is
-    /// Android's own seam rather than a new one.
+    /// The parts of the status line, already decided —
+    /// ``statusLine(rooms:coreDown:active:)`` builds them from the rooms read
+    /// and the timer view. The Kotlin `HomeHeader` takes
+    /// `line: List<String>` as a parameter too, so this is Android's own seam
+    /// rather than a new one.
+    ///
+    /// **Pass the rooms read's optional through, not an emptied copy of it.**
+    /// Android's call site is `statusLine(if (sats.data != null) rooms else
+    /// null, …)` (`HomeScreen.kt:271`), and the distinction reaches this
+    /// property: nil rooms give no room parts while the timer parts still
+    /// count, where an empty list gives the one part `no rooms yet`. A
+    /// failed rooms read is the first of those, and flattening it to the
+    /// second is map §11.2 — the bug the attention card on the same screen
+    /// still has.
+    ///
+    /// An empty `counts` is therefore a real state (nothing to count,
+    /// nothing read) and not a stub, which is what it was in part 1.
     public let counts: [String]
 
     /// `lineReady = sats.answered()`: false while the rooms read has not
