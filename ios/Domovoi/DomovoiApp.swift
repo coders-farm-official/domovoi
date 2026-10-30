@@ -139,6 +139,28 @@ struct DomovoiApp: App {
     var body: some Scene {
         WindowGroup {
             AppShellView(model: model)
+                // ### The app's tint is the **ink**, not the fill
+                //
+                // The `AccentColor` asset is ``Color/brand``, so every
+                // control that inherits a tint — which for a plain `Button`
+                // is the colour of its *label* — drew text at **2.05:1** on
+                // white. ``Color/brand``'s own doc comment says "a fill,
+                // never text" and the asset was quietly making it text
+                // everywhere.
+                //
+                // Apple's audit named the element at last: a plain
+                // `Button` reading `back to Rooms & devices` on the pairing
+                // screen, "Contrast failed". It is one of several on that
+                // screen and the same for every plain button in the app, so
+                // the fix belongs here rather than at each call site.
+                //
+                // ``Color/brandInk`` is 5.65:1 on white and is what the
+                // stylesheet has for "the brand as text or a meaningful
+                // graphic". The six `.borderedProminent` buttons name
+                // ``Color/brand`` back for their fill, because near-black
+                // ``Color/brandFg`` on the ink would be 3.08:1 — the fill
+                // role and the text role are two tokens for a reason.
+                .tint(Color.brandInk)
         }
     }
 }

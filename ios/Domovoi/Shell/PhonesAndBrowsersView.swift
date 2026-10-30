@@ -79,7 +79,27 @@ struct PhonesAndBrowsersPanel: View {
                     .font(.caption)
                     .foregroundStyle(model.connected ? AnyShapeStyle(Color.okInk) : AnyShapeStyle(Color.errInk))
             }
-            TextField(ShellStrings.serverURLPlaceholder, text: $typedURL)
+            // **`axis: .vertical`, so the whole address is on screen.**
+            // Apple's audit named this field for "Text of this element may be
+            // clipped at larger Dynamic Type sizes", and the tree shows why:
+            // 301 points of single-line field holding
+            // `http://127.0.0.1:6601`, which at an accessibility size shows
+            // about half of it. An address you can only see half of is the
+            // same fault as a truncated fingerprint — it looks like an
+            // answer — and a person checking why their phone will not connect
+            // is exactly who needs to read all of it.
+            //
+            // A vertical field accepts a newline from the Return key, which
+            // an address must never carry, so they are stripped as they
+            // arrive rather than at save time: `normalise(_:)` would see a
+            // broken address, and the person would see their own typing
+            // silently altered later instead of never accepting the newline.
+            TextField(ShellStrings.serverURLPlaceholder, text: $typedURL, axis: .vertical)
+                .onChange(of: typedURL) { _, new in
+                    if new.contains(where: \.isNewline) {
+                        typedURL = new.filter { !$0.isNewline }
+                    }
+                }
                 .font(.footnote.monospaced())
                 .textFieldStyle(.roundedBorder)
                 .textInputAutocapitalization(.never)
@@ -90,6 +110,11 @@ struct PhonesAndBrowsersPanel: View {
                 Task { await save() }
             }
             .buttonStyle(.borderedProminent)
+            // The app's tint is `brandInk` (`DomovoiApp.swift`), so
+            // a prominent button would fill with the ink and draw
+            // near-black `brandFg` on it at 3.08:1. The fill is the
+            // other token, and 8.49:1 with this label colour.
+            .tint(Color.brand)
             .foregroundStyle(Color.brandFg)
             .disabled(ServerCredentials.isBlank(typedURL) || saving)
 

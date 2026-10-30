@@ -256,6 +256,11 @@ struct ServerPickerPanel: View {
                 }
                 .disabled(!picker.manualButtonEnabled)
                 .buttonStyle(.borderedProminent)
+                // The app's tint is `brandInk` (`DomovoiApp.swift`), so
+                // a prominent button would fill with the ink and draw
+                // near-black `brandFg` on it at 3.08:1. The fill is the
+                // other token, and 8.49:1 with this label colour.
+                .tint(Color.brand)
                 .foregroundStyle(Color.brandFg)
             }
             if let error = picker.manualError {
@@ -411,6 +416,11 @@ struct TrustServerCard: View {
                     .tint(Color.brandInk)
                 Button(ShellStrings.trustConfirm, action: onConfirm)
                     .buttonStyle(.borderedProminent)
+                    // The app's tint is `brandInk` (`DomovoiApp.swift`), so
+                    // a prominent button would fill with the ink and draw
+                    // near-black `brandFg` on it at 3.08:1. The fill is the
+                    // other token, and 8.49:1 with this label colour.
+                    .tint(Color.brand)
                     .foregroundStyle(Color.brandFg)
             }
         }
@@ -459,6 +469,11 @@ struct ForgetServerCard: View {
                 // `colors_and_type.css` for the same reason.
                 Button(forgetServerConfirm, role: .destructive, action: onConfirm)
                     .buttonStyle(.borderedProminent)
+                    // The app's tint is `brandInk` (`DomovoiApp.swift`), so
+                    // a prominent button would fill with the ink and draw
+                    // near-black `brandFg` on it at 3.08:1. The fill is the
+                    // other token, and 8.49:1 with this label colour.
+                    .tint(Color.brand)
             }
         }
     }
