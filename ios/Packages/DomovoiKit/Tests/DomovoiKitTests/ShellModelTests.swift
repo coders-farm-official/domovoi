@@ -329,7 +329,7 @@ final class ShellModelTests: XCTestCase {
         rig.container.network.seen(.path, "default") { facts in
             var next = facts
             next.status = "satisfied"
-            next.addresses = ["192.168.0.5/24"]
+            next.addresses = ["192.168.1.5/24"]
             return next
         }
         XCTAssertEqual(0, rig.container.network.changeCount, "the first picture is not a change")

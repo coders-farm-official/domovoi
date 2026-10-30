@@ -241,6 +241,74 @@ final class HomeClockTests: XCTestCase {
         XCTAssertEqual("1h ago", relTime(then, nowMs: ms(then) + 3_600_000))
     }
 
+    // MARK: - what makes the clock tick every second (3b's addition)
+
+    /// ``homeCounting(timers:rooms:)`` — all three terms, each on its own.
+    ///
+    /// The `done` term is the one worth a test: a `done · kitchen` line
+    /// lingers for ``homeDoneMs`` and nothing else on the screen may be
+    /// moving, so a rule that only looked at the active timers and the playing
+    /// rooms would leave the clock at 30 s and the line would vanish up to
+    /// thirty seconds late.
+    func testTheClockCountsForATimerADoneLineOrAPlayingRoom() {
+        let quiet = HomeRoom(roomID: "kitchen", status: "online")
+        let playing = HomeRoom(
+            roomID: "office",
+            status: "online",
+            nowPlaying: HomeNowPlaying(state: "play", song: HomeSong(title: "a"))
+        )
+        let running = HomeTimer(id: 1, expiresAt: "2026-10-29T12:10:00Z")
+        let done = DoneTimer(timer: running, doneAtMs: 0)
+
+        XCTAssertFalse(homeCounting(timers: TimerView(), rooms: []))
+        XCTAssertFalse(
+            homeCounting(timers: TimerView(), rooms: [quiet]),
+            "a quiet house does not need a one-second clock"
+        )
+        XCTAssertTrue(homeCounting(timers: TimerView(active: [running]), rooms: []))
+        XCTAssertTrue(
+            homeCounting(timers: TimerView(done: [done]), rooms: []),
+            "a done line is counting too: it has sixty seconds to live"
+        )
+        XCTAssertTrue(homeCounting(timers: TimerView(), rooms: [quiet, playing]))
+
+        // And the one that reads through `roomRank`: a *stopped* room whose
+        // player still names a track is not playing, so it does not make the
+        // screen tick every second for nothing.
+        let stopped = HomeRoom(
+            roomID: "hall",
+            status: "online",
+            nowPlaying: HomeNowPlaying(state: "stop", song: HomeSong(title: "a"))
+        )
+        XCTAssertFalse(homeCounting(timers: TimerView(), rooms: [stopped]))
+
+        XCTAssertEqual(1_000, HomeClock.tickPeriodMs(counting: true))
+        XCTAssertEqual(30_000, HomeClock.tickPeriodMs(counting: false))
+    }
+
+    /// ``homeMoreLabel(extra:)`` — the one `+N more` both capped cards use.
+    ///
+    /// 3a gave the attention card its own copy and the timers card none, so
+    /// the timers header had no way to say these words without a literal in a
+    /// view. The tail `" more"` is pinned against the Kotlin by
+    /// `ShellStringsTests.testTheMoreLabelIsTheKotlinsMoreLabel`; this is the
+    /// composition.
+    func testTheMoreLabelIsBuiltOnceForBothCards() {
+        XCTAssertNil(homeMoreLabel(extra: 0), "nothing hidden, no link")
+        XCTAssertNil(homeMoreLabel(extra: -2), "and a cap larger than the list is not a link either")
+        XCTAssertEqual("+1 more", homeMoreLabel(extra: 1))
+        XCTAssertEqual("+12 more", homeMoreLabel(extra: 12))
+        // The attention card's own label goes through it, so the two cards
+        // cannot drift apart.
+        let five = HomeAttentionState(
+            view: .rows((0..<5).map {
+                AttentionRow(key: "k\($0)", tone: .warn, text: "x", target: .settings("health"))
+            }),
+            compact: true
+        )
+        XCTAssertEqual(homeMoreLabel(extra: 5 - homePhoneRows), five.moreLabel)
+    }
+
     private func isoString(_ epochMs: Int64) -> String {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime]

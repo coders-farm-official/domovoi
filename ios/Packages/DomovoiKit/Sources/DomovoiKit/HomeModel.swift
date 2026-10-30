@@ -330,9 +330,32 @@ public final class HomeModel {
     }
 
     /// A frame arrived — §2.3 items 2, 3 and 4.
+    ///
+    /// **The Wi-Fi payload is taken here, before the plan runs**, and that is
+    /// 3b's addition rather than a tidy-up: `homeRefreshPlan`'s very first
+    /// branch answers "read nothing" for ``homeWifiEvent`` *because its
+    /// payload is merged in* (map §10.3), and until now nothing merged it. The
+    /// push arrived, refreshed no read, and was dropped — so `decodeWifiPush`,
+    /// `WifiPush` and `mergeWifi` had no caller at all and a room's link only
+    /// ever changed on a whole re-read, which is the one thing the
+    /// interception exists to avoid: every `/api/satellites` read opens an MPD
+    /// connection per room, and every room pushes Wi-Fi once a minute.
+    ///
+    /// `decodeWifiPush` answering nil is the advisory rule and not an error:
+    /// "a bad one changes nothing", so the previous push stands.
     public func received(_ frame: StateEvent) {
+        if frame.type == homeWifiEvent, let rooms = decodeWifiPush(frame) {
+            // The **wall** clock, because ``WifiPush/applies(toReadAt:)``
+            // compares it with the rooms read's own wall-clock instant and a
+            // comparison between two different clocks means nothing.
+            wifiPush = WifiPush(receivedAtMs: wallClock(), rooms: rooms)
+        }
         apply(.push(frame.type))
     }
+
+    /// The latest `satellites.wifi.changed` payload, with the instant it
+    /// arrived — the **one** push whose data is used (map §1.3, §10.3).
+    public private(set) var wifiPush: WifiPush?
 
     // MARK: - the one place a trigger turns into reads
 
@@ -492,6 +515,89 @@ public final class HomeModel {
             plugins: plugins.data,
             acq: acquisitions.data,
             guard: guardState
+        )
+    }
+
+    // MARK: - what the rooms, the header and the first-run card read
+    //
+    // Four derived values 3b needed and 3a did not provide. Each is one
+    // expression, and each is here rather than in a view for a reason stated
+    // on it: two of them need the private clocks, and two of them are the
+    // nil-is-not-empty trap.
+
+    /// When the rooms read's value landed, on the **wall** clock — Android's
+    /// `satsAt` (`HomeScreen.kt:226`). Nil while it never has.
+    ///
+    /// ``ApiRead/dataAt`` is monotonic on purpose, so the wall-clock instant
+    /// is reconstructed from how long ago that was — the same arithmetic
+    /// ``refreshServerOffset()`` does, and it cannot be done outside this type
+    /// because neither clock is public.
+    public var roomsReadAtMs: Int64? {
+        guard let at = rooms.dataAt else { return nil }
+        return wallClock() - max(0, clock() - at)
+    }
+
+    /// `sinceReadSec = ((nowMs - satsAt) / 1000.0).coerceAtLeast(0.0)`
+    /// (`HomeScreen.kt:424`) — what ``roomElapsedSec(_:stale:sinceReadSec:)``
+    /// adds to a playing room's position between reads.
+    ///
+    /// Measured on the monotonic clock, which is a duration and so is exactly
+    /// what that is for. Zero while the read has never landed, which costs
+    /// nothing: with no rooms there is no song to advance.
+    public var sinceRoomsReadSec: Double {
+        guard let at = rooms.dataAt else { return 0 }
+        return Double(max(0, clock() - at)) / 1000.0
+    }
+
+    /// The rooms Home draws: the read with the Wi-Fi push merged in when the
+    /// push is newer (``homeRooms(read:readAtMs:push:)``).
+    ///
+    /// `?? 0` for a read that has not landed: a push is then newer than the
+    /// read and is merged onto an empty list, which changes nothing. That is
+    /// Android's behaviour rather than a shortcut — its `satsAt` on the first
+    /// composition is the mount instant, so a push that arrives after the
+    /// mount applies there too.
+    public var roomsForDisplay: [HomeRoom] {
+        homeRooms(read: rooms.data, readAtMs: roomsReadAtMs ?? 0, push: wifiPush)
+    }
+
+    /// Rooms online, for the announce pill and
+    /// ``announceToast(delivered:onlineCount:)``.
+    public var onlineRoomCount: Int { roomsForDisplay.filter(\.online).count }
+
+    /// The header's counts — ``statusLine(rooms:coreDown:active:)`` with the
+    /// rooms read's **optional passed through**.
+    ///
+    /// `rooms.data == nil ? nil : roomsForDisplay` is Android's
+    /// `statusLine(if (sats.data != null) rooms else null, …)`
+    /// (`HomeScreen.kt:271`) exactly, and it is here rather than in the view
+    /// because this is map §11.2's trap: a failed rooms read must give **no
+    /// room parts at all** while still counting the timers, where an empty
+    /// house gives the one part `no rooms yet`. A view that wrote
+    /// `roomsForDisplay` on its own would turn the first into the second and
+    /// report that a house nobody could read has no rooms in it.
+    ///
+    /// - Parameter active: ``TimerView/active``, which the screen derives from
+    ///   its ``TimerBook`` — a house with a running timer still says so when
+    ///   the rooms read has failed.
+    public func counts(active: [HomeTimer]) -> [String] {
+        statusLine(
+            rooms: rooms.data == nil ? nil : roomsForDisplay,
+            coreDown: coreDown,
+            active: active
+        )
+    }
+
+    /// All four of ``homeFirstRun(rooms:timers:activeTimers:events:)``'s
+    /// conditions, off this model's reads — and **with the optionals intact**,
+    /// which is the same trap once more: two of the four are false for a read
+    /// that failed, not true.
+    public func isFirstRun(active: [HomeTimer]) -> Bool {
+        homeFirstRun(
+            rooms: rooms.data,
+            timers: timers.data,
+            activeTimers: active,
+            events: calendar.data
         )
     }
 

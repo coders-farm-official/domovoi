@@ -12,14 +12,15 @@ import SwiftUI
 /// `ios/scripts/pkgtest.sh` cannot see — it tests the packages, and the app
 /// target has never been through `xcodebuild` in this session.
 ///
-/// ### The card, and why there is no shared `HomeCard` yet
+/// ### The card is ``HomeCard``'s now
 ///
-/// Android has one `HomeCard(title, action)` that all nine sections draw
-/// inside. This batch builds **one** section, so the card's chrome is here
-/// rather than in a shared view that has a single caller: a shared component
+/// Part 2 drew this card's chrome inline and said why: "a shared component
 /// with one use is a shape guessed from one example. Part 3 brings timers,
 /// rooms, announce, today and the everything grid, and that is the batch that
-/// knows what the shared card has to hold.
+/// knows what the shared card has to hold." 3b is that batch, so the chrome,
+/// the header link, the tone dot and the tone-to-colour mapping moved into
+/// `HomeCardView.swift` **unchanged** — including the measurements in the
+/// mapping's doc comment, which are the reason it is one mapping and not six.
 ///
 /// ### What a person has to confirm on a screen
 ///
@@ -58,38 +59,16 @@ struct HomeAttentionView: View {
 
     var body: some View {
         if state.shown {
-            VStack(alignment: .leading, spacing: 12) {
-                header
+            HomeCard(
+                title: HomeAttentionStrings.title,
+                actionLabel: state.moreLabel,
+                // Android's row minimum applies to the header link too
+                // (`HomeSections.kt:309`), and it is the smallest control on
+                // the card.
+                actionMinHeight: state.rowMinHeight,
+                onAction: onMore
+            ) {
                 content
-            }
-            .padding(16)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            // The same fill the rest of the app's cards use
-            // (`ConnectionDialogView.swift:330`,
-            // `PhonesAndBrowsersView.swift:303`), so Home does not introduce
-            // a second card look.
-            .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        }
-    }
-
-    // MARK: - the card's own chrome
-
-    private var header: some View {
-        HStack(alignment: .firstTextBaseline) {
-            Text(HomeAttentionStrings.title)
-                .font(.headline)
-                // A card title is a heading, so VoiceOver's heading rotor can
-                // reach it and the rows under it are read as belonging to it.
-                .accessibilityAddTraits(.isHeader)
-            Spacer(minLength: 8)
-            if let more = state.moreLabel {
-                Button(more, action: onMore)
-                    .font(.subheadline)
-                    // Android's row minimum applies to this too
-                    // (`HomeSections.kt:309`), and it is the smallest control
-                    // on the card.
-                    .frame(minHeight: state.rowMinHeight)
-                    .contentShape(.rect)
             }
         }
     }
@@ -117,7 +96,7 @@ struct HomeAttentionView: View {
             // literal in this file where `swift test` cannot see it. It drew
             // amber, which grades a problem for the one viewer the house has
             // decided not to tell what the problem is.
-            toneDot(state.summaryTone)
+            ToneDot(tone: state.summaryTone)
             Text(HomeAttentionStrings.summaryLine)
                 .font(.subheadline)
                 .fixedSize(horizontal: false, vertical: true)
@@ -182,7 +161,7 @@ struct HomeAttentionView: View {
         if typeSize.isAccessibilitySize {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    toneDot(row.tone)
+                    ToneDot(tone: row.tone)
                     rowText(row)
                 }
                 if let at = row.at {
@@ -191,7 +170,7 @@ struct HomeAttentionView: View {
             }
         } else {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                toneDot(row.tone)
+                ToneDot(tone: row.tone)
                 rowText(row)
                 Spacer(minLength: 8)
                 if let at = row.at {
@@ -226,53 +205,5 @@ struct HomeAttentionView: View {
             .font(.footnote)
             .foregroundStyle(Color.fgMuted)
             .monospacedDigit()
-    }
-
-    /// The tone, as a dot.
-    ///
-    /// **The colour is never the only carrier**: the row's words say what is
-    /// wrong, and a person who cannot tell the red dot from the amber one
-    /// still reads "kitchen is offline · it can't hear anyone right now".
-    /// The dot is also hidden from VoiceOver, because the spoken row is the
-    /// words and a stop that reads "red circle" is noise.
-    private func toneDot(_ tone: HealthTone) -> some View {
-        Circle()
-            .fill(colour(of: tone))
-            .frame(width: 8, height: 8)
-            // Lifted to the cap height of the line beside it, which
-            // `firstTextBaseline` alignment on a `Circle` cannot do by
-            // itself: a shape has no baseline.
-            .offset(y: -2)
-            .accessibilityHidden(true)
-    }
-
-    /// ### The three system colours here are a known, measured gap
-    ///
-    /// `.red`, `.orange` and `.green` are 3.55:1, **2.20:1** and **2.22:1**
-    /// on the light canvas, and a dot that carries meaning needs 3:1 — so two
-    /// of the three fail. Apple's audit does not say so, and cannot: the dot
-    /// is `.accessibilityHidden(true)` just above, so it is not an element the
-    /// audit looks at. Measured by hand, not reported.
-    ///
-    /// They are **not** swapped for ``Color/errInk``, ``Color/warnInk`` and
-    /// ``Color/okInk`` here, although those exist and pass, because the ink
-    /// tokens are *text* inks at 5.65-6.08:1 and a dot drawn in one reads
-    /// brown rather than amber. That is the open question already in front of
-    /// Kamron about the header's live dot — bright fill with a dark ring, or
-    /// the duller ink — and this is the same question, so it waits for the
-    /// same answer rather than being settled twice differently.
-    ///
-    /// `.idle` and `.brand` are tokens because neither had that trade-off:
-    /// `.secondary` was failing Apple's audit outright as *text* in this same
-    /// file (3.44:1, "Contrast nearly passed"), and `brandInk` was already
-    /// chosen for the live dot.
-    private func colour(of tone: HealthTone) -> Color {
-        switch tone {
-        case .err: return .red
-        case .warn: return .orange
-        case .ok: return .green
-        case .idle: return Color.fgMuted
-        case .brand: return Color.brandInk
-        }
     }
 }

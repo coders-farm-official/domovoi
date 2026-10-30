@@ -80,12 +80,93 @@ struct ScreenPlaceholder: View {
 /// The three levels, the search and the fourteen panels are a later batch's.
 /// What this draws is where the request landed, and takes it, so coming back
 /// to Settings later starts at the index.
+///
+/// ### The screen scrolls, and the panel inside it does not
+///
+/// Found during the audit work and fixed in 3b. This was a `VStack` ending in
+/// a `Spacer()` with **no `ScrollView`**, while ``PhonesAndBrowsersPanel`` was
+/// a `ZStack { ScrollView { … } }` — the screen that should scroll did not and
+/// the panel that should not did, which sliced the `Household token` card
+/// across the panel's viewport edge with the back link pinned underneath it.
+/// It is visible in a screenshot.
+///
+/// ### Where the forget dialog went, and why
+///
+/// **Hoisted to this screen, as a ``DialogCard`` in a `ZStack` at the root,
+/// rather than replaced with a system `confirmationDialog`.**
+///
+/// It had to move: the panel's `ZStack` was screen-sized only *because* its
+/// `ScrollView` filled the screen, so removing that would have let a centred
+/// dialog land off-screen — exactly the bug being fixed, one level down. Both
+/// homes were defensible, and `confirmationDialog` would have scaled for
+/// Dynamic Type for nothing and always been on screen.
+///
+/// The card won on what it has to show. ``ForgetActiveServerAsk`` is a
+/// forty-word paragraph **and** the `pinned:` / `it now proves:` fingerprint
+/// lines, and those lines exist to be compared character by character with
+/// what the dashboard shows: they are monospaced and selectable, and a review
+/// already found this card drawing the prose in monospace and called it the
+/// hardest-to-read form of the most consequential dialog in the app. A
+/// `confirmationDialog`'s `message:` is one small centred block with no
+/// monospace, no selection and no second paragraph, so moving there would
+/// have traded a layout bug for a legibility one on the fingerprints.
+///
+/// It is reachable at every type size because ``DialogCard`` is itself a
+/// `ScrollView` over a full-screen dim: the card grows, the backdrop does not
+/// move, and at AX5 the content scrolls rather than centring off the top.
 struct SettingsPlaceholder: View {
 
     let model: ShellModel
     @State private var place: SettingsPlace = .index
 
+    /// **The panel's, held here.** The dialog is drawn at this level, so the
+    /// state that opens it is too — a binding rather than a second copy,
+    /// because two booleans for one dialog is how a dialog comes to be shown
+    /// with nothing to confirm.
+    @State private var askingToForget = false
+
     var body: some View {
+        ZStack {
+            screen
+            if askingToForget, let ask = model.forgetActiveAsk() {
+                DialogCard {
+                    ForgetServerCard(
+                        ask: ask,
+                        onCancel: { askingToForget = false },
+                        onConfirm: {
+                            askingToForget = false
+                            // The forget asks for the picker as it goes
+                            // (``ShellModel/forgetTheActiveServer()``), which
+                            // is the only way the dialog can outlive the
+                            // screen that opened it: Settings is in the
+                            // workspace, and the workspace is gone the
+                            // instant the server is.
+                            model.forgetTheActiveServer()
+                        }
+                    )
+                }
+            }
+        }
+    }
+
+    private var screen: some View {
+        ScrollView {
+            content
+                .padding(16)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onAppear {
+            // The request is TAKEN, so a later visit starts at the index
+            // (`SettingsScreen.kt:233-236`). An unknown key lands on the
+            // index rather than nowhere.
+            if let asked = model.takeSettingsTab() {
+                place = settingsPlace(of: asked)
+            }
+        }
+    }
+
+    private var content: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text(ShellStrings.settingsTitle).font(.title2)
             Text(ShellStrings.settingsSub)
@@ -132,7 +213,7 @@ struct SettingsPlaceholder: View {
                     // The one section with a screen. Its first three cards
                     // are part 3's; §6.5's four are a batch of their own, as
                     // ``PhonesAndBrowsersPanel`` says and the report sizes.
-                    PhonesAndBrowsersPanel(model: model)
+                    PhonesAndBrowsersPanel(model: model, askingToForget: $askingToForget)
                 } else {
                     Text("not built yet")
                         .font(.footnote)
@@ -141,17 +222,10 @@ struct SettingsPlaceholder: View {
                 Button(ShellStrings.backTo(section.group.label)) { place = place.up ?? .index }
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Spacer()
-        }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .onAppear {
-            // The request is TAKEN, so a later visit starts at the index
-            // (`SettingsScreen.kt:233-236`). An unknown key lands on the
-            // index rather than nowhere.
-            if let asked = model.takeSettingsTab() {
-                place = settingsPlace(of: asked)
-            }
+            // **No `Spacer()`.** It was here to push the content up in a
+            // `VStack` that filled the screen; inside a `ScrollView` a
+            // `Spacer` has no space to take and the `frame(maxHeight:)` on the
+            // scroll view is what fills the screen now.
         }
     }
 }
