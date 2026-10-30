@@ -1,13 +1,13 @@
 import Foundation
 
-/// The two formatters Home's needs-attention card needs, ported from
+/// The formatters Home needs, ported from
 /// `android/.../ui/components/Format.kt` (read at `df658c2b`).
 ///
-/// **Only two.** `Format.kt` also holds `fmtDur`, `fmtBytes` and the rooms
-/// section's duration words; those belong to the sections that draw them and
-/// are not written here. ``relTime(_:)`` is here because an attention row
-/// carries a time — `offline · 2h ago` — and `HealthCheck.at` is the
-/// `last_connected_at` it comes from (`HealthChecks.kt:143`).
+/// ``relTime(_:nowMs:)`` is here because an attention row carries a time —
+/// `offline · 2h ago` — and `HealthCheck.at` is the `last_connected_at` it
+/// comes from (`HealthChecks.kt:143`). ``fmtDur(_:)`` arrived with the rooms
+/// section, which draws `1:12 / 3:40` under a room's song. `fmtBytes` is
+/// still not here: nothing on Home shows a size.
 
 /// Parse a server timestamp — ISO 8601, with or without an offset.
 ///
@@ -52,6 +52,27 @@ public func parseInstant(_ iso: String?) -> Date? {
 public func isoMs(_ iso: String?) -> Int64? {
     guard let date = parseInstant(iso) else { return nil }
     return Int64((date.timeIntervalSince1970 * 1000).rounded())
+}
+
+/// `3:04`, `1:02:33` — `fmtDur` (`Format.kt:43`), a room's elapsed and its
+/// song's length.
+///
+/// **A bare em dash, U+2014, for nil** — and also for a negative or
+/// non-finite number, which is Kotlin's `takeIf { it.isFinite() && it >= 0 }`
+/// and matters here: `roomElapsedSec` is arithmetic over two optionals from
+/// the wire, and a NaN rendered as `nan:0-2` would be the one thing on the
+/// row nobody could explain.
+///
+/// Seconds and minutes are two digits, the hour is not padded, and the hour
+/// only appears when there is one — `0:07`, not `0:00:07`.
+public func fmtDur(_ seconds: Double?) -> String {
+    guard let seconds, seconds.isFinite, seconds >= 0 else { return "—" }
+    let total = Int(seconds.rounded())
+    let h = total / 3600
+    let m = (total % 3600) / 60
+    let s = total % 60
+    if h > 0 { return String(format: "%d:%02d:%02d", h, m, s) }
+    return String(format: "%d:%02d", m, s)
 }
 
 /// `just now`, `4m ago`, `2h ago`, `3d ago`, then a date — `relTime`
