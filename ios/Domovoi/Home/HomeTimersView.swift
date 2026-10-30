@@ -192,15 +192,34 @@ struct HomeTimersView: View {
         return onlineRooms.contains(room)
     }
 
-    /// The countdown: **monospace at 24 points**, warn-coloured under
+    /// The countdown: **monospace, title-sized**, warn-coloured under
     /// ``homeSoonSec``.
     ///
     /// Monospace is load-bearing and not a style choice: a proportional digit
     /// changes width as it changes value, so `12m 04s` counting to `12m 03s`
     /// would shift the whole row left and right once a second.
+    ///
+    /// ### A text style, not 24 points
+    ///
+    /// This read `.system(size: 24, weight: .semibold, design: .monospaced)`,
+    /// Android's `24sp` taken literally, and **`Font.system(size:)` does not
+    /// participate in Dynamic Type at all** — it is the same size whatever the
+    /// reader asked for. Apple's audit names this exactly, in words worth
+    /// quoting because they are not about layout:
+    /// *"User will not be able to change the font size of this element."*
+    ///
+    /// It was never reported against this view, and that is the lesson rather
+    /// than a reprieve: the stub house serves no timers in the state the audit
+    /// runs in, so this card has never been rendered under it. An audit covers
+    /// the states you launch. Found by reading the detail line on six findings
+    /// elsewhere and then grepping for the construct.
+    ///
+    /// `.title2` is 22 points at the default size — the nearest scaling style
+    /// to 24, and nearer than `.title`'s 28 — so the number looks as it did
+    /// and now grows with every other word on the screen.
     private func countdown(_ left: Int64) -> some View {
         Text(fmtLeft(left))
-            .font(.system(size: 24, weight: .semibold, design: .monospaced))
+            .font(.system(.title2, design: .monospaced).weight(.semibold))
             .fixedSize(horizontal: false, vertical: true)
             // ``Color/warnInk`` and never `.orange`: `systemOrange` is 2.20:1
             // on the light canvas and this is 5.73:1. The colour grades the

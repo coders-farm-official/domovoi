@@ -29,9 +29,13 @@ struct HomeEverythingView: View {
     /// about 30 points of text width each, which is where a label gets
     /// clipped. `minimumScaleFactor` is the other answer and is rejected
     /// throughout this app.
-    private var columns: [GridItem] {
-        let count = typeSize.isAccessibilitySize ? 1 : 3
-        return Array(repeating: GridItem(.flexible(), spacing: 8), count: count)
+    private var perRow: Int { typeSize.isAccessibilitySize ? 1 : 3 }
+
+    /// ``tiles`` in rows of ``perRow``.
+    private var rows: [[Route]] {
+        stride(from: 0, to: tiles.count, by: perRow).map { start in
+            Array(tiles[start ..< min(start + perRow, tiles.count)])
+        }
     }
 
     var body: some View {
@@ -41,14 +45,27 @@ struct HomeEverythingView: View {
                 actionLabel: HomeEverythingStrings.editTheBar,
                 onAction: onEditTheBar
             ) {
-                // A **lazy** grid, which is not the hazard ``HomeView``'s note
-                // is about: that one is a lazy row holding a `Task`, and a
-                // tile holds nothing — it is a `Button` whose action
-                // navigates and returns. Thirteen tiles at most, and no fetch
-                // follows any of them (map §7.6).
-                LazyVGrid(columns: columns, spacing: 8) {
-                    ForEach(tiles, id: \.self) { route in
-                        tile(route)
+                // ### Rows, not a `LazyVGrid`
+                //
+                // DIAGNOSTIC, and also the better shape: thirteen tiles at
+                // most and no fetch behind any of them (map §7.6), so
+                // laziness was never buying anything here. The question it
+                // answers is whether a lazy container is what leaves the six
+                // tile labels advertising a font the audit says the reader
+                // cannot change.
+                //
+                // A short last row pads with clear tiles so that three tiles
+                // and two tiles are the same width.
+                VStack(spacing: 8) {
+                    ForEach(rows, id: \.self) { row in
+                        HStack(spacing: 8) {
+                            ForEach(row, id: \.self) { route in
+                                tile(route)
+                            }
+                            ForEach(Array(0 ..< max(0, perRow - row.count)), id: \.self) { _ in
+                                Color.clear.frame(maxWidth: .infinity, minHeight: 72)
+                            }
+                        }
                     }
                 }
             }
