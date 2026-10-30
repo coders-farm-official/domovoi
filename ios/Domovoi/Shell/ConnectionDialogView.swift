@@ -358,6 +358,30 @@ private struct ServerRow: View {
 
 /// A confirmation drawn as a card over a dim, which is what Android's
 /// `Dialog { DomovoiCard { … } }` is.
+///
+/// ### It has to say it is modal, and it did not
+///
+/// Android's `Dialog` is a window: the screen behind it stops being
+/// reachable. This is a `ZStack` over the screen, so the screen behind it
+/// stayed in the accessibility tree — focusable, swipeable, and read out.
+///
+/// The audit found it (2026-10-30, the `forget-card` sweep) without being
+/// asked about it. With the forget dialog open over Settings → Phones &
+/// browsers it reported two `Contrast failed`, both naming elements *behind*
+/// the card: the Trusted-servers paragraph and a `connected` badge. They were
+/// true readings. Those elements really were sitting under a 35% black scrim
+/// and really were unreadable — which is what a scrim is for, and is only a
+/// finding because they were still being offered to the person as content.
+///
+/// The worse half is what the same tree showed: the panel's own `forget`
+/// control at y=658 and the dialog's destructive `forget` at y=1409, both
+/// live, both labelled `forget`. A person moving by VoiceOver with this
+/// dialog open heard "forget", and then "forget", and one of the two deletes
+/// a server's token and identity without asking again.
+///
+/// `.isModal` is the whole fix: VoiceOver ignores everything outside the
+/// element that carries it, so the two findings and the duplicate control go
+/// together. The dim is decorative and says so.
 struct DialogCard<Content: View>: View {
 
     @ViewBuilder let content: Content
@@ -366,6 +390,7 @@ struct DialogCard<Content: View>: View {
         ZStack {
             Color.black.opacity(0.35)
                 .ignoresSafeArea()
+                .accessibilityHidden(true)
             ScrollView {
                 content
                     .padding(20)
@@ -373,6 +398,10 @@ struct DialogCard<Content: View>: View {
                     .background(.background, in: RoundedRectangle(cornerRadius: 14))
                     .padding(20)
             }
+            // **The reason this type exists rather than a `ZStack` at each
+            // call site.** Every dialog in the app gets the trait from here,
+            // so a new one cannot be added without it.
+            .accessibilityAddTraits(.isModal)
         }
     }
 }
@@ -442,6 +471,15 @@ struct ForgetServerCard: View {
                 .foregroundStyle(Color.errInk)
             Text(ask.address)
                 .font(.title3)
+                // **Apple's audit: "the accessibilityLabel of this element is
+                // not human-readable"** (2026-10-30). It is the one place in
+                // the app where an address is a bare line of text with
+                // nothing beside it saying what it is — the pill and the
+                // server rows are inside controls that name themselves — so
+                // VoiceOver announced `127.0.0.1:6601` and no more. The text
+                // on screen is unchanged: it is still the thing a person
+                // compares with the dashboard character by character.
+                .accessibilityLabel(forgetServerAddressLabel(ask.address))
             // The prose in prose and the keys in monospace: §6.4 wants the
             // fingerprints comparable with the dashboard, and the paragraph
             // readable. Both halves come from

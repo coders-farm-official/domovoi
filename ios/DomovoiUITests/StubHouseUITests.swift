@@ -161,17 +161,40 @@ final class StubHouseUITests: XCTestCase {
         return app
     }
 
+    /// The headlines the audit is known to report with **no element**, which
+    /// is the audit saying it had no measurement rather than naming a view.
+    ///
+    /// Two wordings, and they are the same finding at two type sizes. At
+    /// `large` a pushed screen reports eight "partially unsupported"; at AX5
+    /// the same screen reports seven "unsupported" and no "partially" at all
+    /// (measured 2026-10-30 across seven states). Both carry
+    /// `element: nil` and the detail "User will not be able to change the
+    /// font size of this element", which
+    /// ``testTheBarsTextGrowsOnAPushedScreen()`` measured to be false of
+    /// every leaf in those bars — 13.3 to 48.0 points, a 3.6x growth.
+    ///
+    /// A headline **not** in this set, even with no element, lands in `rest`
+    /// and fails its caller. That is deliberate: the one anonymous
+    /// `Contrast failed` this file has seen outside a modal is unattributed
+    /// and unexplained, and a classifier that swallowed "anything the audit
+    /// could not attribute" would have hidden it.
+    private static let knownAnonymousHeadlines: Set<String> = [
+        "Dynamic Type font sizes are partially unsupported",
+        "Dynamic Type font sizes are unsupported",
+    ]
+
     /// Split an audit's findings into the measured floor and everything else.
     ///
-    /// The floor is the eight of ``knownPushedBarFloor``, identified by the
-    /// signature they have and a real defect would not: this headline, and
-    /// **no element**. Anything else — a contrast finding, a hit-area
-    /// finding, or a Dynamic Type finding that names an element — lands in
-    /// `rest`, which every caller asserts is empty.
+    /// The floor is a finding with no element **and** one of the two headlines
+    /// in ``knownAnonymousHeadlines``. Everything else lands in `rest`, which
+    /// every caller asserts is empty: a finding Apple can attribute to an
+    /// element is a defect to fix — that is how the modal bug was found, by
+    /// two `Contrast failed` that named the views behind a dialog — and an
+    /// anonymous finding of an unrecognised kind is an unknown, not a floor.
     private static func floorAndRest(_ found: [String]) -> (floor: Int, rest: [String]) {
-        let signature = "Dynamic Type font sizes are partially unsupported"
         func isFloor(_ line: String) -> Bool {
-            line.hasPrefix(signature) && line.hasSuffix("| element: nil")
+            guard line.hasSuffix("| element: nil") else { return false }
+            return Self.knownAnonymousHeadlines.contains { line.hasPrefix($0) }
         }
         return (found.filter(isFloor).count, found.filter { !isFloor($0) })
     }
@@ -1177,15 +1200,24 @@ final class StubHouseUITests: XCTestCase {
         try sweep("home-ax5", home, marker: houseName(in: home))
         home.terminate()
 
-        // 2. The auto-raised pairing screen, left where it raises itself.
-        //    Deliberately no `not now`, which is what every other case taps.
-        let raised = launch(mode: ax5, paired: false)
+        // 2. An unpaired phone with no token, at AX5.
+        //
+        //    **This was `pairing-raised`, and the expectation was wrong.** It
+        //    waited for ``ShellStringsUnderTest/pairTitle`` on the theory that
+        //    a phone with no token has the pairing screen raised over it. It
+        //    does not: the tree shows Home, drawn from the open `/api/config`,
+        //    with `couldn't load rooms` where the device tier was refused and
+        //    the `pair this phone for live updates and controls` link in it.
+        //    That is the right behaviour — a phone that has never paired can
+        //    still see its house — and the pairing screen belongs to a
+        //    *refused* token, which is `token-not-recognised` below.
+        let unpairedHome = launch(mode: ax5, paired: false)
         try sweep(
-            "pairing-raised",
-            raised,
-            marker: anything(raised, labelled: ShellStringsUnderTest.pairTitle)
+            "unpaired-home",
+            unpairedHome,
+            marker: anything(unpairedHome, labelled: ShellStringsUnderTest.pairLink)
         )
-        raised.terminate()
+        unpairedHome.terminate()
 
         // 3. The forget dialog, hoisted to the Settings screen's root. Its
         //    own doc comment argues it is reachable at every type size
@@ -1221,13 +1253,23 @@ final class StubHouseUITests: XCTestCase {
         )
         waiting.terminate()
 
-        let roomsDown = launch(mode: ax5, port: Self.roomsDownPort)
-        try sweep(
-            "rooms-down",
-            roomsDown,
-            marker: anything(roomsDown, labelled: ShellStringsUnderTest.roomsFailed)
-        )
-        roomsDown.terminate()
+        // **Twice, and the second time is the point.** This state was the
+        // only one of seven to report an anonymous `Contrast failed`, and a
+        // diff of its tree against the other three Homes found nothing in it
+        // that they do not also draw: `silent-socket` has the same timers and
+        // audits clean, `token-waiting` has the same rooms failure and audits
+        // clean. An unattributable finding that appears in one of seven states
+        // and has no element to chase is first of all a question about whether
+        // it reproduces.
+        for pass in ["rooms-down", "rooms-down-again"] {
+            let roomsDown = launch(mode: ax5, port: Self.roomsDownPort)
+            try sweep(
+                pass,
+                roomsDown,
+                marker: anything(roomsDown, labelled: ShellStringsUnderTest.roomsFailed)
+            )
+            roomsDown.terminate()
+        }
 
         let silent = launch(mode: ax5, port: Self.silentSocketPort)
         try sweep("silent-socket", silent, marker: houseName(in: silent))
@@ -1245,8 +1287,9 @@ final class StubHouseUITests: XCTestCase {
         refused.terminate()
 
         let order = [
-            "home-ax5", "pairing-raised", "forget-card", "token-waiting",
-            "rooms-down", "silent-socket", "token-not-recognised",
+            "home-ax5", "unpaired-home", "forget-card", "token-waiting",
+            "rooms-down", "rooms-down-again", "silent-socket",
+            "token-not-recognised",
         ]
         // `floor+other` per state, in one grep-able line. Nested `$0`s in a
         // string interpolation are how a summary line becomes a compile error,
@@ -1263,6 +1306,125 @@ final class StubHouseUITests: XCTestCase {
                 + "audit above is of something else: "
                 + unreached.joined(separator: ", ")
         )
+        // Everything Apple could attribute, and every anonymous finding of a
+        // kind this file has not measured. Empty is the claim; the first run
+        // of this test was the discovery pass and had four.
+        let rest = order.flatMap { name in (findings[name] ?? []).map { "\(name): \($0)" } }
+        XCTAssertTrue(
+            rest.isEmpty,
+            "Apple's audit has findings outside the measured floor: "
+                + rest.joined(separator: "  //  ")
+        )
+    }
+
+    /// **Is the AX5 wording the same findings as the `large` wording?**
+    ///
+    /// At `large` a pushed screen reports eight "Dynamic Type font sizes are
+    /// **partially** unsupported", and
+    /// ``testWhichPieceOfAPushedScreenCarriesTheEight()`` placed them: four
+    /// in ``ShellTopBar``, four in ``PhoneBarView``, one per text leaf, by
+    /// stripping each bar and watching the count fall to four.
+    ///
+    /// At AX5 the same screen reports **seven**, and the word `partially` is
+    /// gone. That is the headline Apple uses for an element with no scaling
+    /// at all, so taking the two for the same finding is an assumption — and
+    /// this file has already written up one conclusion from an unproven
+    /// assumption about these findings and had to correct it twice.
+    ///
+    /// So it is measured the same way the eight were. The claim is the
+    /// **algebra**: stripping one bar leaves the other bar's findings, so
+    ///
+    /// ```
+    /// topBar + phoneBar == none
+    /// ```
+    ///
+    /// which held exactly at `large` (4 + 4 = 8). If it holds at AX5 the
+    /// seven live in the same two bars and ``knownAnonymousHeadlines`` is
+    /// right to hold both wordings. If it does not, AX5 has findings of its
+    /// own somewhere else and the floor is hiding them.
+    ///
+    /// Arrival is by **tap**, never by the seeded push: a tap waits for
+    /// quiescence, and the seeded push measures 0 on a destination that is
+    /// provably on screen for reasons still unexplained (see
+    /// ``testWhichPieceOfAPushedScreenCarriesTheEight()``).
+    @MainActor
+    func testTheAX5WordingIsTheSameBarFindings() throws {
+        let ax5 = "UICTContentSizeCategoryAccessibilityXXXL"
+        let variants = ["none", "topBar", "phoneBar"]
+        var counts: [String: Int] = [:]
+
+        for variant in variants {
+            let app = launch(mode: ax5, strip: variant == "none" ? nil : variant)
+            // With the phone bar gone there is no `Music` tab to tap, so the
+            // push comes from one of Home's everything tiles instead — the
+            // same substitution the `large` bisect makes.
+            let opener = variant == "phoneBar"
+                ? app.buttons[ShellStringsUnderTest.filesTile]
+                : app.buttons[ShellStringsUnderTest.musicTab]
+            guard opener.waitForExistence(timeout: 25) else {
+                print("AX5STRIP [\(variant)] NO OPENER — tree follows")
+                print(app.debugDescription)
+                app.terminate()
+                continue
+            }
+            opener.tap()
+
+            // Only the destination can satisfy this: the `not built yet`
+            // placeholder or the navigation bar's own Back button. The
+            // breadcrumb cannot — it is mounted outside the `NavigationStack`
+            // and flips before the destination lays out, which is the third
+            // timing confound this file paid for.
+            let placeholder = app.descendants(matching: .staticText)
+                .matching(NSPredicate(format: "label CONTAINS %@", ShellStringsUnderTest.notBuilt))
+                .firstMatch
+            let back = app.navigationBars.buttons.firstMatch
+            let deadline = Date().addingTimeInterval(25)
+            var arrived = false
+            while Date() < deadline {
+                if placeholder.exists || back.exists { arrived = true; break }
+                usleep(300_000)
+            }
+            usleep(3_000_000)  // the transition itself, which neither marker waits out
+            print("AX5STRIP [\(variant)] arrived: \(arrived)")
+            evidence(app, "41-ax5-\(variant)")
+
+            if #available(iOS 17.0, *) {
+                let split = Self.floorAndRest(try auditIssues(app, "ax5-\(variant)"))
+                counts[variant] = split.floor
+                XCTAssertTrue(
+                    split.rest.isEmpty,
+                    "a pushed screen at AX5 with `\(variant)` stripped has findings "
+                        + "outside the floor: " + split.rest.joined(separator: " / ")
+                )
+            }
+            app.terminate()
+        }
+
+        var summary: [String] = []
+        for variant in variants {
+            summary.append("\(variant)=\(counts[variant].map(\.description) ?? "-")")
+        }
+        print("AX5STRIP SUMMARY " + summary.joined(separator: " "))
+
+        guard let whole = counts["none"],
+              let withoutTop = counts["topBar"],
+              let withoutPhone = counts["phoneBar"]
+        else {
+            XCTFail("a variant never arrived, so the algebra cannot be checked")
+            return
+        }
+        XCTAssertEqual(
+            withoutTop + withoutPhone,
+            whole,
+            "stripping the top bar leaves \(withoutTop) and stripping the phone "
+                + "bar leaves \(withoutPhone), which do not add up to the "
+                + "\(whole) a whole pushed screen reports at AX5. The AX5 wording "
+                + "is then NOT the same findings as the `large` wording, and "
+                + "`knownAnonymousHeadlines` is holding one that belongs somewhere "
+                + "else"
+        )
+        XCTAssertLessThan(withoutTop, whole, "stripping the top bar changed nothing")
+        XCTAssertLessThan(withoutPhone, whole, "stripping the phone bar changed nothing")
     }
 
     /// **Do the eight flagged leaves actually scale?** The question the audit
