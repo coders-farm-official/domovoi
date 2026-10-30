@@ -348,12 +348,21 @@ final class StubHouseUITests: XCTestCase {
     /// complete this way.
     ///
     /// It returns the issues rather than asserting, so a caller can audit
-    /// **two screens and compare**. That is the only tool here that narrows a
-    /// contrast issue: Apple names no element, `issue.element` is nil, and
-    /// two screens that share chrome but not content say which half it is in.
+    /// **two screens and compare**, which is how every finding on this track
+    /// that Apple would not attribute was eventually placed.
+    ///
+    /// **`issue.element` is populated, and this comment used to say it was
+    /// not.** It claimed "Apple names no element, `issue.element` is nil" as a
+    /// general fact; it is nil for exactly one class of finding — the eight of
+    /// ``knownPushedBarFloor``, where the audit had no measurement to report —
+    /// and is named for every contrast and hit-area finding this file has
+    /// seen. The belief came from a log filter that kept the first line of a
+    /// multi-line `print` and dropped the rest, and it survived long enough to
+    /// become a method. ``floorAndRest(_:)`` now depends on the difference
+    /// being real, which is why the element is in the returned string and not
+    /// only in the log.
     @MainActor
     @available(iOS 17.0, *)
-    @MainActor
     private func auditIssues(_ app: XCUIApplication, _ name: String) throws -> [String] {
         let wasContinuing = continueAfterFailure
         continueAfterFailure = true
