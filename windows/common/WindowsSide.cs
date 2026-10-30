@@ -52,8 +52,11 @@ namespace Domovoi.Windows
     public static class LinuxUpdate
     {
         // The checkout and its venv (scripts/linux/provision.sh CHECKOUT and
-        // VENV_PY; HouseholdAi.EnvFile reads the same checkout).
-        public const string Checkout = "/opt/domovoi/domovoi";
+        // VENV_PY: /opt/domovoi and /opt/domovoi/.venv). HouseholdAi.EnvFile
+        // is the domovoi/.env inside it. Until 2026-10-30 this named the
+        // package folder, where no venv is, and every Linux-first update
+        // failed with execvpe(.../domovoi/.venv/bin/python).
+        public const string Checkout = "/opt/domovoi";
         public const string Python = Checkout + "/.venv/bin/python";
         public const int TimeoutMs = 5 * 60 * 1000;
 

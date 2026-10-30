@@ -784,7 +784,7 @@ static partial class Tests
         });
         Run("windows side: the Linux update runs the dashboard's own, as the service user", delegate
         {
-            SeqEq(new[] { "-d", "domovoi", "-u", "domovoi", "--cd", "/opt/domovoi/domovoi", "--exec", "/opt/domovoi/domovoi/.venv/bin/python", "-m", "domovoi.windows_side", "linux-update" },
+            SeqEq(new[] { "-d", "domovoi", "-u", "domovoi", "--cd", "/opt/domovoi", "--exec", "/opt/domovoi/.venv/bin/python", "-m", "domovoi.windows_side", "linux-update" },
                 LinuxUpdate.WslArgs("domovoi", "domovoi"), "wsl arguments");
             var a = LinuxUpdate.Answer("some log line\n{\"ok\": true, \"started\": true, \"to_sha\": \"abc\"}\n");
             True(a != null && Json.Bool(a, "started") == true, "the last JSON line");
