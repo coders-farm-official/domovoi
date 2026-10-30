@@ -101,6 +101,12 @@ struct PhonesAndBrowsersPanel: View {
                     }
                 }
                 .font(.footnote.monospaced())
+                // A vertical field sizes to its text, and `.roundedBorder`
+                // gave it **18 points** — which Apple's audit then failed as
+                // "Hit area is too small", a finding the single-line field
+                // never had. The minimum is stated so growing with the type
+                // size is the only direction it goes.
+                .frame(minHeight: 34)
                 .textFieldStyle(.roundedBorder)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()

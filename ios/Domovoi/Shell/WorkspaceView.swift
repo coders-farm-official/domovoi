@@ -19,8 +19,29 @@ struct WorkspaceView: View {
     var body: some View {
         switch shellLayout(idiom: .current, width: ShellWidth(width)) {
         case .phoneBar:
-            stack
-                .safeAreaInset(edge: .bottom, spacing: 0) { PhoneBarView(model: model) }
+            // **Laid out with the content, not inset over it** — the same fix
+            // the top bar needed, for the same reason, found the same way.
+            //
+            // This was `.safeAreaInset(edge: .bottom)` on ``stack``, and
+            // ``stack`` is a `VStack`, which does not hand a reduced safe
+            // area down to the `NavigationStack` inside it. So the screen
+            // below believed it had the whole window, and a Simulator
+            // measured the consequence on Settings: the
+            // `back to Rooms & devices` button at
+            // `{{16, 763.7}, {192.3, 20.3}}` with the bar starting at
+            // y = 774 — the button's last ten points drawn **underneath** the
+            // bar. Apple's audit saw it too, as "Contrast failed" on that
+            // button, because a half-occluded element has no pixels it can
+            // read.
+            //
+            // A bottom bar that content scrolls under is the conventional
+            // iOS shape and this gives it up, deliberately: it is the second
+            // occlusion bug this one modifier has produced in this file, and
+            // a bar laid out in the stack cannot produce a third.
+            VStack(spacing: 0) {
+                stack
+                PhoneBarView(model: model)
+            }
         case .sidebar:
             NavigationSplitView {
                 SidebarList(model: model)
