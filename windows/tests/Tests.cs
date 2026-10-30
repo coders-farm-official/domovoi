@@ -1715,6 +1715,15 @@ static partial class Tests
             ParsesAsPowerShell(found[0].Cleanup(), "the cleanup");
             Eq(0, LeftoverProfiles.Find(new[] { new ProfileEntry(OldSid, @"C:\Users\alex") }, new string[0], accounts).Count, "a deleted account that isn't domovoi-svc");
         });
+        Run("preflight: an update that has the Ubuntu image doesn't check the image's host", delegate
+        {
+            var all = Domovoi.Windows.Helper.Preflight.HostsToCheck(false);
+            var update = Domovoi.Windows.Helper.Preflight.HostsToCheck(true);
+            True(all.Contains("releases.ubuntu.com"), "a fresh install checks it");
+            True(!update.Contains("releases.ubuntu.com"), "an update with the image skips it");
+            Eq(all.Count - 1, update.Count, "only that host is dropped");
+            True(update.Contains("archive.ubuntu.com") && update.Contains("github.com"), "the hosts the update still uses stay");
+        });
         Run("leftover profile: the account lookup Setup uses; .wslconfig goes into the real profile", delegate
         {
             True(Domovoi.Windows.Helper.Preflight.SidIsAnAccount(System.Security.Principal.WindowsIdentity.GetCurrent().User.Value), "this account");

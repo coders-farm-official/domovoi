@@ -525,15 +525,21 @@ var
   Fatal, Warn: TArrayOfString;
   Code: Integer;
   Ran: Boolean;
+  Command: String;
 begin
   Result := False;
+  { An update that reuses the Ubuntu image already here (wpReady) downloads
+    nothing from the image's host, so the internet check skips it. }
+  Command := 'preflight';
+  if UpdateMode and FileExists(ExpandConstant('{commonappdata}\Domovoi\host\in\{#UbuntuName}')) then
+    Command := 'preflight --have-image';
   while True do
   begin
     CheckPage.SetText('Checking Windows, memory, disk, ports and the internet...', '');
     CheckPage.Show;
     try
       CheckPage.Animate;
-      Ran := RunHelper(TmpHelper, 'preflight', Preflight, Code);
+      Ran := RunHelper(TmpHelper, Command, Preflight, Code);
     finally
       CheckPage.Hide;
     end;

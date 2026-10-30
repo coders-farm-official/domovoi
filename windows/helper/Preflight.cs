@@ -37,7 +37,13 @@ namespace Domovoi.Windows.Helper
             "files.pythonhosted.org", "download.pytorch.org", "huggingface.co", "registry.ollama.ai",
         };
 
-        public static void Run(Output o, bool portsOnly, bool skipInternet, bool installing)
+        // The pinned Ubuntu image's only source. An update over an install
+        // that already holds the image (Setup passes --have-image) needs
+        // nothing from it, so it isn't checked: 2026-10-30 an update stopped
+        // because this one host was down while the house had the image.
+        public const string UbuntuImageHost = "releases.ubuntu.com";
+
+        public static void Run(Output o, bool portsOnly, bool skipInternet, bool installing, bool haveImage)
         {
             Ports(o, installing);
             if (portsOnly) return;
@@ -50,7 +56,7 @@ namespace Domovoi.Windows.Helper
             Disk(o);
             WslState(o);
             Network(o);
-            if (!skipInternet) Internet(o);
+            if (!skipInternet) Internet(o, haveImage);
         }
 
         // -- ports ------------------------------------------------------
@@ -424,12 +430,19 @@ namespace Domovoi.Windows.Helper
             if (l.Category == "Public") o.Kv("warn", "Windows treats this network as Public. Domovoi's firewall rules name your subnet, so phones and satellites on it can still connect.");
         }
 
-        static void Internet(Output o)
+        public static List<string> HostsToCheck(bool haveImage)
+        {
+            var hosts = new List<string>(InternetHosts);
+            if (haveImage) hosts.Remove(UbuntuImageHost);
+            return hosts;
+        }
+
+        static void Internet(Output o, bool haveImage)
         {
             var failed = new List<string>();
             var gate = new object();
             var threads = new List<Thread>();
-            foreach (string h in InternetHosts)
+            foreach (string h in HostsToCheck(haveImage))
             {
                 string host = h;
                 var t = new Thread(delegate ()
@@ -446,7 +459,8 @@ namespace Domovoi.Windows.Helper
             if (failed.Count > 0)
             {
                 o.Kv("internet_unreachable", string.Join(",", failed.ToArray()));
-                o.Kv("fatal", "Setup needs the internet to download Domovoi (about 10.5-13.5 GB). It could not reach " + string.Join(", ", failed.ToArray()) + ". Connect this PC and run Setup again.");
+                o.Kv("fatal", (haveImage ? "Setup needs the internet to update Domovoi." : "Setup needs the internet to download Domovoi (about 10.5-13.5 GB).")
+                    + " It could not reach " + string.Join(", ", failed.ToArray()) + ". Check this PC's connection and try again; if it is connected, one of those sites may be down for a while.");
             }
             // The core's connectivity probe dials 1.1.1.1:443 by default
             // (domovoi/config.py); some networks block it.

@@ -12,7 +12,7 @@
 // password and the setup code never reach either (the setup-code verb
 // prints the code to stdout only, for Setup's finish page).
 //
-//   preflight [--ports-only] [--skip-internet] [--installing]   read-only
+//   preflight [--ports-only] [--skip-internet] [--installing] [--have-image]   read-only
 //   vmp-status | wsl-status | host-status | plan    read-only
 //   host-stop
 //   saved-ai                 what Setup's AI page starts at (a re-run: the
@@ -109,7 +109,7 @@ namespace Domovoi.Windows.Helper
                 if (log != null) log.Write("helper " + verb + " (" + WindowsIdentity.GetCurrent().Name + ")");
                 switch (verb)
                 {
-                    case "preflight": Preflight.Run(o, a.Flag("--ports-only"), a.Flag("--skip-internet"), a.Flag("--installing")); return 0;
+                    case "preflight": Preflight.Run(o, a.Flag("--ports-only"), a.Flag("--skip-internet"), a.Flag("--installing"), a.Flag("--have-image")); return 0;
                     case "vmp-status": o.Kv("vmp", Preflight.VmpEnabled() ? "enabled" : "disabled"); return 0;
                     case "wsl-status":
                         {
@@ -166,7 +166,7 @@ namespace Domovoi.Windows.Helper
             {
                 string k = argv[i];
                 if (!k.StartsWith("--", StringComparison.Ordinal)) throw new ArgumentException("unexpected argument: " + k);
-                if (k == "--dry-run" || k == "--ports-only" || k == "--skip-internet" || k == "--no-deny-logon" || k == "--installing" || k == "--wait" || k == "--linuxfirst") { flags.Add(k); continue; }
+                if (k == "--dry-run" || k == "--ports-only" || k == "--skip-internet" || k == "--have-image" || k == "--no-deny-logon" || k == "--installing" || k == "--wait" || k == "--linuxfirst") { flags.Add(k); continue; }
                 if (i + 1 >= argv.Length) throw new ArgumentException(k + " needs a value");
                 values[k] = argv[++i];
             }
