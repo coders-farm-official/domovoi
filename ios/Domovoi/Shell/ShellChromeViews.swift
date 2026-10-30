@@ -65,10 +65,17 @@ struct ShellTopBar<Trailing: View>: View {
 
     private var oneLine: some View {
         HStack(spacing: 0) {
+            // No `.lineLimit(1)`. It does not keep this to one line — the
+            // text fits on one line when it fits — it only decides what
+            // happens when it does not, and truncating is the answer this
+            // project has already rejected twice. Apple's audit named it:
+            // "Text of this element may be clipped at larger Dynamic Type
+            // sizes", twice over, on a screen whose two `.lineLimit(1)`
+            // labels were this one and the pill's.
             Text(leading)
                 .font(.footnote)
                 .foregroundStyle(Color.fgMuted)
-                .lineLimit(1)
+                .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 8)
             pillAndStatus
             trailing()
@@ -86,16 +93,24 @@ struct ShellTopBar<Trailing: View>: View {
     /// was a cut line, and a wrapped line is not cut.
     @ViewBuilder private var pillAndStatus: some View {
         if let pill {
-            let wraps = typeSize.isAccessibilitySize
+            // These used to keep `.lineLimit(1)` below the accessibility
+            // sizes and wrap above them, on the reasoning that the bar is one
+            // line at ordinary sizes. The reasoning was sound and the
+            // mechanism was not: a label with no line limit still draws on
+            // one line whenever it fits, so the limit was never what kept the
+            // bar to one line — it only chose truncation over wrapping for
+            // the sizes in between, which Apple's audit flags as "Text of
+            // this element may be clipped at larger Dynamic Type sizes" and
+            // which the project has rejected twice on its own terms. So they
+            // wrap at every size now, and the bar is still one line whenever
+            // one line fits.
             Button(action: onPill) {
                 HStack(spacing: 6) {
                     Image(systemName: "server.rack")
                         .font(.caption2)
                     Text(pill.label)
                         .font(.caption)
-                        .lineLimit(wraps ? nil : 1)
-                        .truncationMode(.tail)
-                        .fixedSize(horizontal: false, vertical: wraps)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 4)
@@ -121,14 +136,13 @@ struct ShellTopBar<Trailing: View>: View {
                     .font(.caption2)
                     .foregroundStyle(Color.warnInk)
                     .padding(.leading, 6)
-                    .fixedSize(horizontal: false, vertical: wraps)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             if let status = pill.status {
                 Text(status)
                     .font(.caption)
                     .foregroundStyle(Color.fgMuted)
-                    .lineLimit(wraps ? nil : 1)
-                    .fixedSize(horizontal: false, vertical: wraps)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }

@@ -237,10 +237,34 @@ struct HomeHeaderView: View {
         }
     }
 
+    /// Drawn as an SF Symbol rather than a `Circle()` shape, which looks the
+    /// same and audits differently.
+    ///
+    /// With the bare shape, this button is a **leaf element with an
+    /// accessibility label and no drawn text** — the tree shows `Button,
+    /// {{333, 119}, {44, 44}}, label: 'live'` with no children — and Apple's
+    /// audit returned "Contrast failed for element" on Home while naming no
+    /// element. Every piece of text on that screen measures 5.31:1 or better
+    /// off the screenshot, and ``LocalShellView``, which has the same top bar
+    /// and neither this dot nor a phone bar, passed the same audit in I1-C.
+    /// By elimination this is the element, and the shape of it is that a 10pt
+    /// mark sits in a 44pt frame that is 98% canvas — the frame being 44pt
+    /// because a tap target has to be, which is not negotiable.
+    ///
+    /// An `Image` gives the audit the same thing the phone bar's buttons
+    /// give it, and those pass: a `Button` with an `Image` child it can
+    /// measure, rather than a label with nothing drawn under it. The colour
+    /// is unchanged, and `brandInk` on the canvas is 5.65:1 where a
+    /// meaningful graphic needs 3:1.
+    ///
+    /// **This is elimination, not a measurement**, and the run after it is
+    /// what says whether it was right. If the audit still returns a contrast
+    /// issue with this in place, the element is something else and the
+    /// elimination was wrong.
     private var circle: some View {
-        Circle()
-            .fill(state.live ? Color.brandInk : Color.fgMuted)
-            .frame(width: 10, height: 10)
+        Image(systemName: "circle.fill")
+            .font(.system(size: 10))
+            .foregroundStyle(state.live ? Color.brandInk : Color.fgMuted)
     }
 }
 

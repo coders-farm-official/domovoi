@@ -79,7 +79,17 @@ public final class ShellModel {
     ///
     /// **False at launch**, which is the whole point: nothing has departed
     /// yet, and ``AppContainer/start()`` has already done the arrival's work.
-    private var departed = false
+    ///
+    /// Readable by tests rather than private, because the consequence is not
+    /// visible from outside in a unit rig:
+    /// ``StateSocket/attemptCount`` counts a *parked* socket re-asking its
+    /// rule as well as a dial, and `refresh()`'s `wake()` does that on any
+    /// arrival at `.active` by design — `testComingBackReAsksTheSocketsRule`
+    /// depends on exactly that. So the counter moves either way and cannot
+    /// separate a launch from a return. The behaviour is proved against the
+    /// stub house instead, where a dial is a `/ws/state` upgrade in the
+    /// server's log; this flag is what that proof turns on.
+    private(set) var departed = false
 
     /// Whether this install is a shared screen (the kitchen tablet). A paired
     /// install counts as shared until the server says otherwise

@@ -322,35 +322,52 @@ final class ShellModelSocketTests: XCTestCase {
     ///
     /// The stub house measured the consequence on 2026-10-29 — two
     /// `/ws/state` upgrades on every one of five launches, both alive until
-    /// the app quit, so every push was handled twice. 643 unit tests and
+    /// the app quit, so every push was handled twice. 812 unit tests and
     /// three reviews missed it because nothing drove this pair of calls and
     /// nothing counted the dials; the sequence exists only on a real launch.
     ///
-    /// `attemptCount` is the measurement rather than an argument, and it is
-    /// the same counter the test above uses for the case that *should*
-    /// re-dial — so the pair of them says the difference is the departure and
-    /// not the arrival.
-    func testTheInactiveStepOnTheWayInIsNotAReturn() {
+    /// ### Why this counts a flag and not the sockets
+    ///
+    /// The obvious assertion — ``StateSocket/attemptCount`` does not move —
+    /// was written first and **failed against the fixed code**, which is the
+    /// useful part. `attemptCount` counts a parked socket re-asking its rule
+    /// as well as a dial, `refresh()` calls `wake()` on every arrival at
+    /// `.active`, and the socket in this rig parks because the server has
+    /// proved nothing. The test just above depends on that same behaviour —
+    /// its own doc says the socket "parks both times". So the counter moves
+    /// for both sequences and cannot tell them apart; a test built on it
+    /// would have reported a bug that was already fixed.
+    ///
+    /// The dial itself is measured where a dial is visible — the stub house's
+    /// request log, one `/ws/state` upgrade per launch instead of two. This
+    /// case holds the decision that proof turns on, and says so rather than
+    /// claiming to be the proof.
+    func testTheInactiveStepOnTheWayInIsNotADeparture() {
         let (model, container, _) = model(deviceSelf: nil)
         container.startSocketUnlessARoom()
         XCTAssertTrue(container.socket.isStarted)
-        let asked = container.socket.attemptCount
+        XCTAssertFalse(model.departed, "nothing has departed at launch")
 
         // Exactly what a launch does, in order.
         model.scenePhaseChanged(to: .inactive)
         model.scenePhaseChanged(to: .active)
-        XCTAssertEqual(
-            asked, container.socket.attemptCount,
-            "the launch's `.inactive` -> `.active` re-dialled the socket"
+        XCTAssertFalse(
+            model.departed,
+            "the launch's `.inactive` -> `.active` was taken for a return"
         )
 
-        // And the real thing still does, from the same model, so the fix is
-        // a narrower guard and not a disabled one.
+        // And a real departure still is one, from the same model, so the fix
+        // is a narrower rule and not a disabled one. The sequence is the one
+        // iOS actually delivers — `.background` then `.inactive` then
+        // `.active` — which is why `was == .background` was not the fix.
+        model.scenePhaseChanged(to: .inactive)
         model.scenePhaseChanged(to: .background)
+        XCTAssertTrue(model.departed, "`.background` is the departure")
+        model.scenePhaseChanged(to: .inactive)
         model.scenePhaseChanged(to: .active)
-        XCTAssertGreaterThan(
-            container.socket.attemptCount, asked,
-            "a return from the background stopped re-minting"
+        XCTAssertFalse(
+            model.departed,
+            "the return did not clear the flag, so the next arrival re-mints"
         )
         container.socket.stop()
         model.stop()
