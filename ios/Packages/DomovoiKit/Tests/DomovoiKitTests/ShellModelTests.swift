@@ -669,9 +669,17 @@ final class ShellModelTests: XCTestCase {
     /// The same for a **refused** token, which arrives the same way: on a
     /// read, from a server, with nothing else happening.
     ///
-    /// This one was reachable before the hook existed — a 401 also sets the
-    /// client's `pairingRequired`, which does reach the shell — so it is here
-    /// to pin that the hook has not changed which card a refusal produces.
+    /// **Both of these fail without the hook**, measured by taking the
+    /// subscription out and running them: `a refused token left the screen at
+    /// workspace`, `a 429 … left the screen at workspace`. That is worth
+    /// writing down, because the first draft of this comment said a refusal
+    /// was reachable anyway, since a 401 also sets the client's
+    /// `pairingRequired` — and `pairingRequired` is read by
+    /// ``AppContainer/shellInputs()``, which is the same *pull* nothing was
+    /// making. The Simulator did show the pairing screen for a refused token,
+    /// so the claim looked true; what it had was a reachability verdict
+    /// landing after the 401 and refreshing the shell for its own reasons.
+    /// Timing, not a mechanism.
     func testARefusalRaisesItsCardWithNobodyCallingRefresh() async {
         let rig = Rig(serverURL: server, token: "household-abc")
         rig.container.tokenHealth.observe(
