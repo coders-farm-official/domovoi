@@ -19,8 +19,17 @@ struct WorkspaceView: View {
     var body: some View {
         switch shellLayout(idiom: .current, width: ShellWidth(width)) {
         case .phoneBar:
+            // DIAGNOSTIC, to be reverted. The colour diagnostic came back
+            // negative — all four tabs drawn in `fgMuted` and Home still had
+            // its one "Contrast failed" — so it is not the selected tab's
+            // ink. What the local shell lacks, and Home and the pairing
+            // screen both have, is this bar **and** a scrolling route under
+            // it, whose tree carries two `Other, label: 'Vertical scroll bar,
+            // 1 page'` elements with a 3pt grey child. Taking the bar away
+            // separates those two: the issue surviving means it is the scroll
+            // view, and the issue going means it is the bar.
             stack
-                .safeAreaInset(edge: .bottom, spacing: 0) { PhoneBarView(model: model) }
+
         case .sidebar:
             NavigationSplitView {
                 SidebarList(model: model)
