@@ -159,7 +159,23 @@ final class StubHouseUITests: XCTestCase {
                 // Print every issue rather than only failing on the first:
                 // the result bundle names none of them, and finding out
                 // which element is at fault took a throwaway test last time.
-                print("AUDIT \(issue.compactDescription) element=\(issue.element?.debugDescription ?? "nil")")
+                //
+                // **`element` comes back nil and `compactDescription` is four
+                // words**, so neither says *what* is at fault. That gap cost
+                // a wrong fix: "Contrast nearly passed" was attributed to
+                // `.secondary` in `HomeAttentionView` on the strength of a
+                // grep and an earlier failure with the same wording, the
+                // `.secondary` was removed from the whole app target, and the
+                // audit said "Contrast nearly passed" again. So
+                // `detailedDescription` is printed too — it is the only field
+                // that has ever named a colour or a frame — along with the
+                // audit type, and the whole screen's tree is already attached
+                // by `evidence` above for cross-referencing.
+                print("""
+                    AUDIT type=\(issue.auditType) \(issue.compactDescription)
+                      detail: \(issue.detailedDescription)
+                      element: \(issue.element?.debugDescription ?? "nil")
+                    """)
                 return false
             }
         }
