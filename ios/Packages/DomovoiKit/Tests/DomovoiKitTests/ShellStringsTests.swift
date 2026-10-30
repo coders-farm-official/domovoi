@@ -87,6 +87,8 @@ final class ShellStringsTests: XCTestCase {
         // Part 2: the health checks and the two formatters a row draws.
         "ui/screens/home/HealthChecks.kt",
         "ui/components/Format.kt",
+        // Part 3a: the toasts of the four writes, which live with the calls.
+        "ui/screens/home/HomeIo.kt",
     ]
 
     /// Every literal in every file above, decoded, concatenated per file.
@@ -1217,4 +1219,148 @@ final class ShellStringsTests: XCTestCase {
         assertKotlinSaysWhole("\u{2014}", "an em dash for no time, not a hyphen")
     }
 
+    // MARK: - I1-D part 3a: the five remaining sections
+
+    /// The timers section (map §6.4).
+    ///
+    /// The two alert-hint rows are **not** here: neither is ported (owner
+    /// decision, 2026-10-30), so there is no Swift string to pin. Asserting
+    /// that `Timer alerts are off on this phone` is in the Kotlin would be
+    /// pinning a string this app does not say.
+    func testTheTimersSectionSaysWhatTheKotlinSays() {
+        assertKotlinSaysWhole(HomeTimerStrings.title)
+        assertKotlinSaysWhole(HomeTimerStrings.noRoom)
+        assertKotlinSaysWhole(HomeTimerStrings.reminder)
+        assertKotlinSaysWhole(HomeTimerStrings.timer)
+        assertKotlinSaysWhole(HomeTimerStrings.cancel)
+        assertKotlinSaysWhole(HomeTimerStrings.cancelling, "U+2026 ellipsis, not three dots")
+        // The two with a value interpolated beside them — `"done · ${room ?:
+        // "no room"}"` (`HomeSections.kt:430`) and `"reminder · ${…}"`
+        // (`HomeModels.kt:264`) — so only the head is a literal.
+        assertKotlinSaysAround("done \u{b7}\u{1}")
+        assertKotlinSaysAround("reminder \u{b7}\u{1}")
+        XCTAssertEqual(" \u{b7} ", HomeTimerStrings.middot, "U+00B7, one space each side")
+        XCTAssertEqual("done · kitchen", doneLineTitle("kitchen"))
+    }
+
+    /// The rooms section (map §6.5).
+    func testTheRoomsSectionSaysWhatTheKotlinSays() {
+        assertKotlinSaysWhole(HomeRoomStrings.title)
+        assertKotlinSaysWhole(HomeRoomStrings.stopAll)
+        assertKotlinSaysWhole(HomeRoomStrings.stopping, "U+2026")
+        assertKotlinSaysWhole(HomeRoomStrings.roomsUnavailableDBDown, "U+00B7, ASCII apostrophe in isn't")
+        assertKotlinSaysWhole(HomeRoomStrings.couldNotLoadRooms, "couldn't, ASCII")
+        assertKotlinSaysWhole(HomeRoomStrings.noRoomsYet)
+        assertKotlinSaysWhole(HomeRoomStrings.setUpARoom)
+        assertKotlinSaysWhole(HomeRoomStrings.ungrouped)
+        assertKotlinSaysWhole(HomeRoomStrings.lastKnown)
+        assertKotlinSaysWhole(HomeRoomStrings.playing)
+        assertKotlinSaysWhole(HomeRoomStrings.paused)
+        assertKotlinSaysWhole(HomeRoomStrings.waiting)
+        assertKotlinSaysWhole(HomeRoomStrings.offline)
+        assertKotlinSaysWhole(HomeRoomStrings.quiet)
+        assertKotlinSaysWhole(HomeRoomStrings.notConnectedYet)
+        assertKotlinSaysWhole(HomeRoomStrings.neverConnected)
+        assertKotlinSaysWhole(HomeRoomStrings.unknownSong)
+        assertKotlinSaysWhole(HomeRoomStrings.screenStopped)
+        assertKotlinSaysWhole(HomeRoomStrings.weakWifi, "lower case and a hyphen, not Wi-Fi")
+        // The interpolated heads, each with the value that follows it named.
+        assertKotlinSays(HomeRoomStrings.lastSeenPrefix, "before relTime(last_connected_at)")
+        assertKotlinSays(HomeRoomStrings.inCallWithPrefix, "before r.in_call_with")
+        assertKotlinSays(HomeRoomStrings.middot, "between a song's title and its artist")
+        // `stop $count rooms?`, whose plural is hard-coded (map §11.5).
+        assertKotlinSaysAround("stop \u{1} rooms?")
+        XCTAssertEqual(
+            "stop 1 rooms?",
+            StopAllArm(armedAtMs: 0).label(count: 1, busy: false, nowMs: 0),
+            "ported as it is: the Kotlin's singular reads this way too"
+        )
+        for head in [
+            HomeRoomStrings.lastSeenPrefix, HomeRoomStrings.inCallWithPrefix, HomeRoomStrings.stopPrefix,
+        ] {
+            XCTAssertTrue(head.hasSuffix(" "), "a head ends with its space: \(debugged(head))")
+        }
+        XCTAssertTrue(HomeRoomStrings.roomsQuestionSuffix.hasPrefix(" "))
+    }
+
+    /// Announce, today, everything and the first-run hint (map §6.6).
+    func testTheOtherHomeSectionsSayWhatTheKotlinSays() {
+        assertKotlinSaysWhole(HomeAnnounceStrings.title)
+        assertKotlinSaysWhole(HomeAnnounceStrings.noRoomsOnline)
+        assertKotlinSaysWhole(HomeAnnounceStrings.placeholder)
+        assertKotlinSaysWhole(HomeAnnounceStrings.send)
+        assertKotlinSaysWhole(HomeAnnounceStrings.announceInEveryRoom)
+        assertKotlinSaysWhole(HomeTodayStrings.today)
+        assertKotlinSaysWhole(HomeTodayStrings.calendar)
+        assertKotlinSaysWhole(HomeTodayStrings.tomorrow)
+        assertKotlinSaysWhole(HomeTodayStrings.busy)
+        assertKotlinSaysWhole(HomeTodayStrings.now)
+        assertKotlinSaysWhole(HomeTodayStrings.calendarUnavailable)
+        assertKotlinSaysWhole(HomeTodayStrings.nothingOnToday)
+        assertKotlinSaysWhole(HomeTodayStrings.nothingMoreToday)
+        assertKotlinSaysWhole(HomeFirstRunStrings.trySaying)
+        assertKotlinSaysWhole(HomeFirstRunStrings.startHere)
+        assertKotlinSaysWhole(homeHintFallback)
+        assertKotlinSaysWhole(HomeEverythingStrings.title)
+        assertKotlinSaysWhole(HomeEverythingStrings.editTheBar)
+        // The quotes round the hint phrase are **curly**, U+201C and U+201D,
+        // wrapped straight round it with no spaces (`HomeSections.kt:1000`).
+        assertKotlinSays(HomeFirstRunStrings.openQuote, "U+201C, not an ASCII quote")
+        assertKotlinSays(HomeFirstRunStrings.closeQuote, "U+201D")
+        XCTAssertEqual("\u{201c}tea\u{201d}", HomeFirstRunStrings.quoted("tea"))
+        XCTAssertFalse(
+            Self.haystack.contains("\"$phrase\""),
+            "an ASCII-quoted phrase is not what the Kotlin draws"
+        )
+        // The status line's and the empty line's interpolated pieces.
+        assertKotlinSays(HomeStatusStrings.onlineSuffix, "after a count, and after $onlineCount")
+        assertKotlinSays(HomeStatusStrings.offlineSuffix)
+        assertKotlinSays(HomeStatusStrings.waitingSuffix)
+        assertKotlinSays(HomeStatusStrings.playingSuffix)
+        assertKotlinSays(HomeTodayStrings.middot + HomeTodayStrings.nextPrefix, "U+00B7, then `next: `")
+        for tail in [
+            HomeStatusStrings.onlineSuffix, HomeStatusStrings.offlineSuffix,
+            HomeStatusStrings.waitingSuffix, HomeStatusStrings.playingSuffix,
+        ] {
+            XCTAssertTrue(tail.hasPrefix(" "), "a tail begins with its space: \(debugged(tail))")
+        }
+    }
+
+    /// The toasts of the four writes (map §6.7), from `HomeIo.kt` and
+    /// `HomeScreen.kt`.
+    ///
+    /// Three of Android's toasts have no Swift string and are deliberately
+    /// absent: the two `couldn't open the … settings` failures belong to
+    /// intents iOS does not have, and to the alert-hint row that is not
+    /// ported; `no browser found to open the dashboard` belongs to a Health
+    /// row's `fix`, which is Settings → Health's rather than Home's.
+    func testTheHomeToastsSayWhatTheKotlinSays() {
+        assertKotlinSaysWhole(HomeToastStrings.typeAMessageFirst)
+        assertKotlinSaysWhole(HomeToastStrings.noRoomsConnected, "U+2014 em dash, one space each side")
+        assertKotlinSaysWhole(HomeToastStrings.alreadyFinished)
+        assertKotlinSaysWhole(HomeToastStrings.noRoomsAccepted, "the parentheses and the ? inside them")
+        assertKotlinSaysWhole(HomeToastStrings.room, "the word plural() is given")
+        // The interpolated heads and middles.
+        assertKotlinSays(HomeToastStrings.cancelledPrefix, "before timerNoun(t, shared)")
+        assertKotlinSays(HomeToastStrings.stoppedPrefix, "before plural(total, room)")
+        assertKotlinSays(HomeToastStrings.ofSeparator)
+        assertKotlinSays(HomeToastStrings.roomsSuffix)
+        assertKotlinSays(HomeToastStrings.middot, "U+00B7 before the failure's own words")
+        assertKotlinSays(HomeToastStrings.broadcastPartialPrefix, "U+2014 em dash")
+        assertKotlinSays(HomeToastStrings.reachedPrefix)
+        assertKotlinSays(HomeToastStrings.broadcastedToPrefix, "broadcasted, not broadcast")
+        // The rendered forms, around their values.
+        assertKotlinSaysAround("cancelled \u{1}")
+        assertKotlinSaysAround("stopped \u{1} of \u{1} rooms \u{b7} \u{1}")
+        assertKotlinSaysAround("broadcast partial \u{2014} \u{1} reached (\u{1})")
+        assertKotlinSaysAround("broadcasted to \u{1}")
+        // And the characters this file exists for, spelt out: a hyphen where
+        // an em dash belongs must NOT be found.
+        XCTAssertFalse(
+            Self.haystack.contains("no rooms connected - nothing to broadcast to"),
+            "a hyphen is not an em dash"
+        )
+        XCTAssertFalse(Self.haystack.contains("broadcast partial - "), "a hyphen is not an em dash")
+        XCTAssertFalse(Self.haystack.contains("broadcast to "), "the Kotlin says broadcasted")
+    }
 }
