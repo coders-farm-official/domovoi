@@ -83,6 +83,14 @@ struct WorkspaceView: View {
                 RouteScreen(model: model, route: startRoute)
                     .navigationDestination(for: Route.self) { route in
                         RouteScreen(model: model, route: route)
+                            // DIAGNOSTIC — to be reverted. Attribution for
+                            // the eight Dynamic Type findings every pushed
+                            // screen carries. The tree says a push adds
+                            // exactly two pieces of chrome, a `NavigationBar`
+                            // at {{0, 93.3}, {393, 44}} and a `Back` button,
+                            // and those are all a pushed `music` screen
+                            // shares with a pushed Settings screen.
+                            .toolbar(.hidden, for: .navigationBar)
                     }
             }
         }
