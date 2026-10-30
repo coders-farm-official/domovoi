@@ -751,6 +751,169 @@ final class HomeModelTests: XCTestCase {
         }
     }
 
+    // MARK: - the four seams 3b needed (map §3.4, §3.1, §3.8)
+
+    /// **The Wi-Fi push's payload survives the push.**
+    ///
+    /// `homeRefreshPlan` answers "read nothing" for `satellites.wifi.changed`
+    /// *because* its payload is merged in — and until 3b nothing merged it, so
+    /// the one push that carries data refreshed no read and was dropped. That
+    /// is a push whose whole purpose is to avoid a re-read (every
+    /// `/api/satellites` read opens an MPD connection per room) leaving the
+    /// link it reports nowhere at all.
+    ///
+    /// The test asserts the consequence rather than the field: the room the
+    /// read gave with no Wi-Fi comes out of ``HomeModel/roomsForDisplay`` with
+    /// the push's signal on it, and ``weakWifi(_:)`` reads it.
+    func testTheWifiPushReachesTheRoomsTheScreenDraws() async {
+        answerEveryPath()
+        let (model, container, _, _) = rig()
+        model.start()
+        defer { model.stop() }
+        await settleUntil { model.rooms.answered }
+
+        XCTAssertNil(model.roomsForDisplay.first?.wifi, "the read gave no link")
+        XCTAssertFalse(weakWifi(model.roomsForDisplay[0]))
+
+        container.stateEventArrived(StateEvent(
+            type: "satellites.wifi.changed",
+            frame: #"{"type":"satellites.wifi.changed","data":{"rooms-a":{"signal_dbm":-80}}}"#
+        ))
+        await settleUntil { model.wifiPush != nil }
+
+        XCTAssertEqual(-80, model.roomsForDisplay.first?.wifi?.signalDbm)
+        XCTAssertTrue(
+            weakWifi(model.roomsForDisplay[0]),
+            "and the rule reads it, so the room says `weak wi-fi` without a re-read"
+        )
+        // And it read nothing: the interception is the point.
+        XCTAssertEqual(1, model.rooms.fetches, "no re-read followed the push")
+    }
+
+    /// A push that will not decode changes nothing — "the push is advisory; a
+    /// bad one changes nothing" — and the previous one stands.
+    func testABadWifiPushLeavesTheLastGoodOneInForce() async {
+        answerEveryPath()
+        let (model, container, _, _) = rig()
+        model.start()
+        defer { model.stop() }
+        await settleUntil { model.rooms.answered }
+
+        container.stateEventArrived(StateEvent(
+            type: "satellites.wifi.changed",
+            frame: #"{"type":"satellites.wifi.changed","data":{"rooms-a":{"signal_dbm":-80}}}"#
+        ))
+        await settleUntil { model.wifiPush != nil }
+        container.stateEventArrived(StateEvent(
+            type: "satellites.wifi.changed",
+            frame: #"{"type":"satellites.wifi.changed","data":"not an object"}"#
+        ))
+        await Task.yield()
+
+        XCTAssertEqual(
+            -80, model.roomsForDisplay.first?.wifi?.signalDbm,
+            "the undecodable push did not erase the good one"
+        )
+    }
+
+    /// **The header's counts keep the rooms read's optional**, which is map
+    /// §11.2's trap at its last call site.
+    ///
+    /// A failed rooms read must give no room parts at all while still counting
+    /// the timers; an empty house gives the one part `no rooms yet`. A view
+    /// that passed ``HomeModel/roomsForDisplay`` straight in — an empty array
+    /// either way — would turn the first into the second and tell a person
+    /// that a house nobody could read has no rooms in it.
+    func testTheCountsTellAFailedRoomsReadApartFromAnEmptyHouse() async {
+        StubURLProtocol.dispatch { request in
+            switch request.url?.path ?? "" {
+            case "/api/satellites": return .json(#"{"detail":"nope"}"#, status: 401)
+            default: return .json("{}")
+            }
+        }
+        let (model, _, _, _) = rig()
+        model.start()
+        defer { model.stop() }
+        await settleUntil { model.rooms.answered }
+
+        let running = [HomeTimer(id: 1, expiresAt: "2026-10-29T12:10:00Z")]
+        XCTAssertNil(model.rooms.data, "the read failed, so there is no list")
+        XCTAssertEqual(
+            [plural(1, HomeTimerStrings.timer)], model.counts(active: running),
+            "no room parts, and the timer still counts"
+        )
+        XCTAssertFalse(
+            model.counts(active: running).contains(HomeRoomStrings.noRoomsYet),
+            "a read nobody answered is not a house with no rooms in it"
+        )
+    }
+
+    /// …and the other half of the same call, so the test above cannot pass by
+    /// `counts` never saying `no rooms yet` at all.
+    func testAnEmptyHouseSaysNoRoomsYet() async {
+        StubURLProtocol.dispatch { request in
+            switch request.url?.path ?? "" {
+            case "/api/satellites": return .json("[]")
+            default: return .json("{}")
+            }
+        }
+        let (model, _, _, _) = rig()
+        model.start()
+        defer { model.stop() }
+        await settleUntil { model.rooms.answered }
+
+        XCTAssertEqual([HomeRoomStrings.noRoomsYet], model.counts(active: []))
+    }
+
+    /// `isFirstRun` needs all four conditions, and two of them need their read
+    /// to have **answered with data** — so the unpaired phone whose rooms and
+    /// calendar reads were refused is not a first run.
+    func testAFailedReadIsNotAnEmptyHouse() async {
+        StubURLProtocol.dispatch { request in
+            switch request.url?.path ?? "" {
+            case "/api/satellites", "/api/calendar/events":
+                return .json(#"{"detail":"nope"}"#, status: 401)
+            case "/api/timers":
+                return .json(#"{"server_now":"2026-10-29T12:00:00Z","timers":[],"fires":[]}"#)
+            default:
+                return .json("{}")
+            }
+        }
+        let (model, _, _, _) = rig()
+        model.start()
+        defer { model.stop() }
+        await settleUntil { model.rooms.answered && model.calendar.answered && model.timers.answered }
+
+        XCTAssertFalse(
+            model.isFirstRun(active: []),
+            "an unpaired phone is not a brand-new house"
+        )
+    }
+
+    /// The rooms read's instant, on the clock the Wi-Fi push is stamped
+    /// against — nil before it lands, and never ahead of the wall clock.
+    func testTheRoomsReadsInstantIsOnTheWallClock() async {
+        answerEveryPath()
+        let wall = Shared<Int64>(1_762_000_000_000)
+        let clock = Shared<Int64>(0)
+        let (model, _, _, _) = rig(clock: clock, wall: wall)
+        XCTAssertNil(model.roomsReadAtMs, "nothing has landed yet")
+
+        model.start()
+        defer { model.stop() }
+        await settleUntil { model.rooms.answered }
+
+        XCTAssertEqual(wall.current, model.roomsReadAtMs, "landed now, on the wall clock")
+        XCTAssertEqual(0, model.sinceRoomsReadSec, accuracy: 0.001)
+
+        // Five seconds of monotonic time later, the read is five seconds old
+        // and its wall-clock instant has not moved.
+        clock.set(5_000)
+        wall.set(wall.current + 5_000)
+        XCTAssertEqual(5, model.sinceRoomsReadSec, accuracy: 0.001)
+        XCTAssertEqual(wall.current - 5_000, model.roomsReadAtMs)
+    }
+
     // MARK: - helpers
 
     private func settleUntil(

@@ -172,11 +172,13 @@ public struct HomeAttentionState: Equatable, Sendable {
     /// `extra = rows.size - HOME_PHONE_ROWS` and the link is drawn only when
     /// `compact && extra > 0 && !expanded` (`HomeSections.kt:298`), so it
     /// never appears on a wide pane and never after an expansion.
+    /// The words themselves are ``homeMoreLabel(extra:)``'s, which 3b made
+    /// shared so that the timers card's identical link cannot drift from this
+    /// one. The *decision* — which cap, which panes, never after an expansion
+    /// — stays here, because it is this card's.
     public var moreLabel: String? {
         guard case .rows(let rows) = view, compact, !expanded else { return nil }
-        let extra = rows.count - homePhoneRows
-        guard extra > 0 else { return nil }
-        return "+\(extra) more"
+        return homeMoreLabel(extra: rows.count - homePhoneRows)
     }
 
     /// The dot beside the summary branch's one neutral line.

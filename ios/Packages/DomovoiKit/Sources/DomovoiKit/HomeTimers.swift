@@ -57,6 +57,37 @@ public func plural(_ n: Int, _ one: String, _ many: String? = nil) -> String {
     "\(n) \(n == 1 ? one : (many ?? one + "s"))"
 }
 
+// MARK: - `+N more`
+
+/// `+$extra more` — the header link that expands a capped section
+/// (`HomeSections.kt:300` for the attention card, and the identical label on
+/// the timers card's header, §3.3 item 2).
+///
+/// **Added in 3b, because 3a provided it for one of the two sections only.**
+/// ``HomeAttentionState/moreLabel`` built the string inline, so the timers
+/// card had no way to say the same words without a literal in a view — and a
+/// literal in a view is outside what `ShellStringsTests` can see. Both call
+/// sites now come through here, so the two cards cannot drift apart and the
+/// `" more"` tail stays pinned against the Kotlin in one place.
+///
+/// Nil when nothing is hidden, which is the caller's whole test: the link is
+/// drawn only when `extra > 0`.
+public func homeMoreLabel(extra: Int) -> String? {
+    guard extra > 0 else { return nil }
+    return HomeMoreStrings.plus + "\(extra)" + HomeMoreStrings.moreSuffix
+}
+
+/// The two halves of `+N more`, because the count sits between them.
+public enum HomeMoreStrings {
+
+    /// Not a word: the `+` of `"+$extra more"`.
+    public static let plus = "+"
+
+    /// `HomeSections.kt:300`'s literal tail — **a leading space**, which is
+    /// what makes `+2 more` rather than `+2more`.
+    public static let moreSuffix = " more"
+}
+
 // MARK: - the countdown
 
 /// `fmtLeft(sec)` (`HomeModels.kt:242`) — `2d 3h`, `1h 5m`, `12m 04s`, `40s`.

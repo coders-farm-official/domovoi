@@ -15,15 +15,11 @@ public enum HomeClock {
     /// How often the screen's clock advances (`HomeScreen.kt:262-267`):
     /// **1 s** while something is counting, **30 s** otherwise.
     ///
-    /// `counting` is "there is an active timer, a done line, or a playing
-    /// room" (`HomeScreen.kt:261`). The three things it is computed from —
-    /// the timer view's active and done lists, and the playing-room count —
-    /// belong to sections this batch does not build, so ``HomeModel`` takes
-    /// `counting` as an input that is `false` until something sets it. That
-    /// is a gap with a name, in `design-notes/ios/I1D2-REPORT.md`: until the
-    /// timers and rooms sections land, Home's clock ticks at 30 s, which is
-    /// right for a screen with no countdown on it and wrong the moment one
-    /// appears.
+    /// `counting` is ``homeCounting(timers:rooms:)``, and the screen now
+    /// passes it: `HomeView` calls ``HomeModel/setCounting(_:)`` from the same
+    /// values it draws. Part 2 shipped with nothing setting it and said so;
+    /// 3b is the batch that drew the first countdown, so it is also the batch
+    /// that had to make the clock tick for it.
     public static func tickPeriodMs(counting: Bool) -> Int64 {
         counting ? 1_000 : 30_000
     }
@@ -39,6 +35,27 @@ public enum HomeClock {
     public static func nowMs(tick: Int64, wall: Int64) -> Int64 {
         max(tick, wall)
     }
+}
+
+/// Whether anything on Home is counting, which is the only input to
+/// ``HomeClock/tickPeriodMs(counting:)`` — `HomeScreen.kt:261`:
+///
+/// ```kotlin
+/// val counting = tv.active.isNotEmpty() || tv.done.isNotEmpty() || playing > 0
+/// ```
+///
+/// **Added in 3b**: the rule is one line and 3a did not write it, because the
+/// three things it reads are the timers and rooms sections'. It is here rather
+/// than in the view for the reason every other one-line rule is — a view that
+/// forgot the `done` term would leave a `done · kitchen` line sitting for its
+/// whole sixty seconds while the clock ticked at thirty, so the line would
+/// vanish up to thirty seconds late.
+///
+/// `playing` is `roomRank == 0`, which needs a **song** as well as a state, so
+/// a stopped room whose player still names a track does not make the screen
+/// tick every second for nothing.
+public func homeCounting(timers: TimerView, rooms: [HomeRoom]) -> Bool {
+    !timers.active.isEmpty || !timers.done.isEmpty || rooms.contains { roomRank($0) == 0 }
 }
 
 /// `dayStartMs` (`HomeModels.kt:237`) — local midnight of the day `ms` falls
