@@ -174,6 +174,17 @@ enum AuditStrip: String {
     /// The pushed destination's own content. Four bisect states already say
     /// the content is not it; this measures that rather than inheriting it.
     case content
+    /// **``HomeEverythingView`` back on a `LazyVGrid`.** The one variant that
+    /// adds something rather than taking it away, and the only one that can
+    /// attribute the eight instead of merely showing them gone.
+    ///
+    /// The first run of this harness found all six variants at **0** — the
+    /// eight had already been fixed, by a batch that never knew it was
+    /// fixing them. Every candidate in that batch is a change to **Home**,
+    /// and Home is the covered root beneath a pushed `music`, which shares
+    /// not one view with it. That is a mechanism and a coincidence at the
+    /// same time until the grid goes back and the eight come with it.
+    case lazyGrid
 
     /// Which piece this launch is without, or nil for the whole shell.
     static var active: AuditStrip? {

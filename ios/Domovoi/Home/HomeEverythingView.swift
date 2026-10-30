@@ -72,14 +72,29 @@ struct HomeEverythingView: View {
                 //
                 // A short last row pads with clear tiles so that three tiles
                 // and two tiles are the same width.
-                VStack(spacing: 8) {
-                    ForEach(rows, id: \.self) { row in
-                        HStack(spacing: 8) {
-                            ForEach(row, id: \.self) { route in
-                                tile(route)
-                            }
-                            ForEach(Array(0 ..< max(0, perRow - row.count)), id: \.self) { _ in
-                                Color.clear.frame(maxWidth: .infinity, minHeight: 72)
+                if AuditStrip.active == .lazyGrid {
+                    // The grid exactly as it was, reachable only by a launch
+                    // argument that does not exist in a shipping build. It is
+                    // here to be measured, not drawn: see ``AuditStrip``.
+                    LazyVGrid(
+                        columns: Array(
+                            repeating: GridItem(.flexible(), spacing: 8),
+                            count: perRow
+                        ),
+                        spacing: 8
+                    ) {
+                        ForEach(tiles, id: \.self) { route in tile(route) }
+                    }
+                } else {
+                    VStack(spacing: 8) {
+                        ForEach(rows, id: \.self) { row in
+                            HStack(spacing: 8) {
+                                ForEach(row, id: \.self) { route in
+                                    tile(route)
+                                }
+                                ForEach(Array(0 ..< max(0, perRow - row.count)), id: \.self) { _ in
+                                    Color.clear.frame(maxWidth: .infinity, minHeight: 72)
+                                }
                             }
                         }
                     }

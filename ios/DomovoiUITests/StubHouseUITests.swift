@@ -78,7 +78,14 @@ final class StubHouseUITests: XCTestCase {
     /// `font(.system(size:` and `UIFont.systemFont` finds none — so whatever
     /// Dynamic Type objects to there, it is not a hard-coded point size.
     private static let knownHomeIssues = 0
-    private static let knownPairingIssues = 8
+    /// **Zero, and the name was wrong for three sessions.**
+    ///
+    /// This was `knownPairingIssues = 8`, and it was never about pairing: the
+    /// Settings index, the group list, a section with no panel, the token
+    /// card and a pushed `music` all audited 8, so it was a property of being
+    /// **pushed**. It is 0 now. What took the eight away is in
+    /// ``testWhichPieceOfAPushedScreenCarriesTheEight``.
+    private static let knownPushedIssues = 0
 
     override func setUp() {
         continueAfterFailure = false
@@ -128,7 +135,7 @@ final class StubHouseUITests: XCTestCase {
     /// Not the screen titled `pair this phone`. ``HomeHeaderStrings/pairLink``
     /// opens the token card in Settings — `domovoi / settings`,
     /// `Household token`, `Save & reconnect` — and that is what
-    /// ``knownPairingIssues`` has always counted, which the bisect's own step
+    /// ``knownPushedIssues`` has always counted, which the bisect's own step
     /// name `A-phones` says out loud. The screen titled `pair this phone`,
     /// with `not now` on it, is a **different** one: an unpaired phone's
     /// device-tier reads come back 403 and the shell raises it by itself
@@ -457,7 +464,7 @@ final class StubHouseUITests: XCTestCase {
     /// ### It also audits, and this screen is the worse of the two
     ///
     /// Fourteen issues, against Home's one. Six of them are the phone bar's,
-    /// which ``knownPairingIssues`` says what is known about; the other
+    /// which ``knownPushedIssues`` says what is known about; the other
     /// **eight are this screen's own** — four "Dynamic Type font sizes are
     /// partially unsupported", three "Text clipped" and one contrast — and
     /// they are I1-D work rather than an accepted limit.
@@ -482,9 +489,9 @@ final class StubHouseUITests: XCTestCase {
             let found = try auditIssues(app, "pairing")
             XCTAssertEqual(
                 found.count,
-                Self.knownPairingIssues,
+                Self.knownPushedIssues,
                 "Apple's audit has \(found.count) against the pairing screen, "
-                    + "not the \(Self.knownPairingIssues) known: "
+                    + "not the \(Self.knownPushedIssues) known: "
                     + found.joined(separator: " | ")
             )
         }
@@ -525,7 +532,7 @@ final class StubHouseUITests: XCTestCase {
     ///
     /// **Deliberately not an equality assertion.** Three of these four counts
     /// are unknown — that is the point of running it — so this asserts only
-    /// the baseline, which ``knownPairingIssues`` already pins, and otherwise
+    /// the baseline, which ``knownPushedIssues`` already pins, and otherwise
     /// prints. A diagnostic that fails on an unknown it was written to
     /// discover tells you nothing you did not put there.
     @MainActor
@@ -620,9 +627,9 @@ final class StubHouseUITests: XCTestCase {
         let baseline = counts.first { $0.0 == "A-phones" }?.1
         XCTAssertEqual(
             baseline,
-            Self.knownPairingIssues,
+            Self.knownPushedIssues,
             "the pairing screen audited \(baseline.map(String.init) ?? "nothing"), not the "
-                + "known \(Self.knownPairingIssues) — every other count in this run is "
+                + "known \(Self.knownPushedIssues) — every other count in this run is "
                 + "measured against a baseline that has changed"
         )
     }
@@ -650,7 +657,7 @@ final class StubHouseUITests: XCTestCase {
     /// | AX5 | none | **0** |
     ///
     /// If the counts come back 10/8/0 the eight were never eight defects and
-    /// `knownPairingIssues` is a count of *sizes*, which changes what fixing
+    /// `knownPushedIssues` is a count of *sizes*, which changes what fixing
     /// them means. If they come back 8/8/8 the hypothesis is dead and the
     /// number is a cap.
     @MainActor
@@ -706,7 +713,7 @@ final class StubHouseUITests: XCTestCase {
     /// its views.
     ///
     ///  - `music` near 8 ⇒ the eight belong to the **push**, and Settings was
-    ///    never involved. `knownPairingIssues` is then a property of every
+    ///    never involved. `knownPushedIssues` is then a property of every
     ///    pushed screen in the app, which is a much larger finding than a
     ///    card that needs a `fixedSize`.
     ///  - `music` at 0 ⇒ it is Settings' own chrome after all, and what is
@@ -776,39 +783,49 @@ final class StubHouseUITests: XCTestCase {
     /// same push a tab tap makes. It has to be seeded rather than tapped
     /// because one variant removes the bar the tab is in.
     ///
-    /// ### The prediction, written before the run
+    /// ### The first run answered a question nobody had asked
     ///
-    /// | Variant | Predicts |
-    /// |---|---|
-    /// | `none` (control) | **8** |
-    /// | `topBar` | 8 |
-    /// | `phoneBar` | 8 |
-    /// | `navBar` | 8 — measured by hand once already |
-    /// | `root` | **0** |
-    /// | `content` | 8 |
+    /// The prediction was `root` at 0 and every other variant at 8, because a
+    /// pushed screen has the same two bars as Home and Home audits 0 with
+    /// both on screen. What came back was:
     ///
-    /// `root` is the guess, on the one argument left standing: a pushed screen
-    /// has the same top bar and the same phone bar as Home, and Home scores 0
-    /// with both of them on screen, so neither bar can carry eight findings by
-    /// itself. The navigation bar is measured out and the content is measured
-    /// out four times over. What is left is that **Home is still mounted
-    /// underneath a push** — covered, not unloaded — and a covered view that
-    /// no longer re-lays-out is exactly the shape of this finding: an element
-    /// whose frame does not move when the audit bumps the type size. It would
-    /// also explain `element: nil`, since a view behind a pushed screen is out
-    /// of the accessibility tree and has no element to name.
+    /// ```
+    /// STRIP SUMMARY none=0 topBar=0 phoneBar=0 navBar=0 root=0 content=0
+    /// ```
     ///
-    /// If `root` comes back 8, that argument is wrong and every piece has now
-    /// been measured — which would mean the eight are the `NavigationStack`
-    /// itself, and the next move is a stack with no shell around it at all.
+    /// **Zero everywhere, including the control.** The eight were not there to
+    /// take apart. They had been fixed by the batch before this one, which
+    /// did not know it was fixing them — and that batch's changes are all
+    /// changes to **Home**: the everything grid stopped being a `LazyVGrid`,
+    /// the timers countdown stopped being a literal 24-point font, and three
+    /// of Home's four reads started decoding at all.
     ///
-    /// **Printed, not asserted**, apart from the control. Five of these six
-    /// numbers are the unknown this test exists to find; an assertion on one
-    /// would only restate the prediction.
+    /// A pushed `music` shares not one view with Home. What it does share is
+    /// that **Home is still mounted underneath it** — covered, not unloaded —
+    /// which makes Home's views the only thing a pushed screen has that a root
+    /// does not, besides the navigation bar and its own content. Both of those
+    /// are measured out. It also explains the one detail that made the eight
+    /// unguessable: `element: nil` on all eight, because a view behind a
+    /// pushed screen is out of the accessibility tree and has no element to
+    /// name.
+    ///
+    /// ### ``AuditStrip/lazyGrid`` is what turns that into a finding
+    ///
+    /// It is the only variant that *adds* something: Home's grid, back as it
+    /// was, behind a launch argument. If `lazyGrid` comes back at 8 then the
+    /// eight were Home's `LazyVGrid` seen through a push, the same defect as
+    /// Home's six, and the covered root is the mechanism. If it comes back 0
+    /// the grid is exonerated and the timers font and the fixtures are what
+    /// is left to separate.
+    ///
+    /// **Printed, not asserted**, apart from the control. The control is the
+    /// one number that is known, and it is now 0.
     @MainActor
     func testWhichPieceOfAPushedScreenCarriesTheEight() throws {
         var counts: [(String, Int)] = []
-        for variant in ["none", "topBar", "phoneBar", "navBar", "root", "content"] {
+        for variant in [
+            "none", "topBar", "phoneBar", "navBar", "root", "content", "lazyGrid",
+        ] {
             let app = launch(strip: variant == "none" ? nil : variant, push: "Music")
             // Two markers, because no single one survives every variant: the
             // breadcrumb is gone in `topBar` and the placeholder is gone in
@@ -852,11 +869,12 @@ final class StubHouseUITests: XCTestCase {
         let control = counts.first { $0.0 == "none" }?.1
         XCTAssertEqual(
             control,
-            Self.knownPairingIssues,
+            Self.knownPushedIssues,
             "a pushed screen with the whole shell around it audited "
                 + "\(control.map(String.init) ?? "nothing"), not the known "
-                + "\(Self.knownPairingIssues) — every other count in this run is "
-                + "measured against a baseline that has changed"
+                + "\(Self.knownPushedIssues) — every other count in this run, "
+                + "`lazyGrid` above all, is a difference from a baseline that "
+                + "has moved"
         )
     }
 
