@@ -112,9 +112,21 @@ struct PhonesAndBrowsersPanel: View {
                 // builds the control around what it is handed and the frame
                 // lands on the text inside the border either way.
                 //
-                // So the padding is the height. It grows with the type size,
-                // as padding does, and the border is `.quaternary` and an
-                // 8-point radius like the app's other boxes
+                // Nor does padding reach it. The padding below moved the box
+                // and left the audit's finding exactly where it was, because
+                // what the audit measures is the **field's own accessibility
+                // element**, and for a vertical field that is the height of
+                // the text in it: 18 points, one line of `.footnote`. The
+                // single-line field reports 34 because `.roundedBorder` is
+                // part of the control.
+                //
+                // `lineLimit(2...)` is what changes that element — two lines
+                // of room, 36 points, and the right shape for this field
+                // besides, since `http://192.168.1.10:6369` does not fit one
+                // line of a Settings card at any type size worth having.
+                .lineLimit(2...)
+                // The border is drawn here, `.quaternary` on an 8-point
+                // radius like the app's other boxes
                 // (`ConnectionDialogView.swift:329`).
                 .padding(.horizontal, 8)
                 .padding(.vertical, 10)
