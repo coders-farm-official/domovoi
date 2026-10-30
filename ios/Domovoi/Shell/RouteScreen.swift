@@ -127,7 +127,15 @@ struct SettingsPlaceholder: View {
 
     var body: some View {
         ZStack {
+            // **Hidden, not merely behind.** `.isModal` on ``DialogCard``
+            // stops VoiceOver *navigating* out of the card, but the panel is
+            // still in the tree and still rendered under a 35% scrim, which
+            // is why Apple's audit kept reporting two `Contrast failed`
+            // against text behind the dialog after the trait was added. They
+            // were true: that text is unreadable while the dialog is up.
+            // Nothing behind a confirmation is content, so it says so.
             screen
+                .accessibilityHidden(askingToForget)
             if askingToForget, let ask = model.forgetActiveAsk() {
                 DialogCard {
                     ForgetServerCard(

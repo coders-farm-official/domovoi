@@ -430,6 +430,8 @@ public final class AppContainer: Sendable {
         self.vault = vault
         let observers = SinkRegistry()
         self.networkObservers = observers
+        let healthSinks = SinkRegistry()
+        self.tokenHealthObservers = healthSinks
 
         let book = ServerBook(
             activeServer: { store.serverURL },
@@ -451,7 +453,12 @@ public final class AppContainer: Sendable {
         // must add the cancellation here in the same change.
         self.network = NetworkWatch(onChange: { sink.fire() }, log: { log("NetworkWatch", $0) })
 
-        self.tokenHealth = TokenHealth(book: store, clock: clock, log: { log("TokenHealth", $0) })
+        self.tokenHealth = TokenHealth(
+                book: store,
+                clock: clock,
+                log: { log("TokenHealth", $0) },
+                changed: { healthSinks.fire() }
+            )
 
         // The circularity, resolved in one call: see
         // ``DomovoiClient/graph(book:health:lock:configuration:gate:)``.
@@ -597,6 +604,12 @@ public final class AppContainer: Sendable {
 
     private let networkObservers: SinkRegistry
 
+    /// ``onTokenHealthChange(_:)``'s sinks. Held here rather than on
+    /// ``TokenHealth`` because the health object is built before anything
+    /// that would subscribe to it, and because one registry per kind of
+    /// change is how the other two are done.
+    private let tokenHealthObservers: SinkRegistry
+
     /// The reads keyed to the saved server's address — ``onServerChange(_:)``.
     private let serverObservers = SinkRegistry()
 
@@ -633,6 +646,23 @@ public final class AppContainer: Sendable {
     /// so a teardown path can call it without knowing whether it ran before.
     public func removeNetworkChangeSink(_ token: Int) {
         networkObservers.remove(token)
+    }
+
+    /// Whoever wants to know that ``TokenHealth`` has learnt something — a
+    /// token refused, or a wait starting — because both change what the shell
+    /// should be showing and neither is a thing the shell can notice by
+    /// itself. Same shape, same ownership and same removal rule as
+    /// ``onNetworkChange(_:)``.
+    ///
+    /// ``TokenHealth``'s own `changed` note says what was broken without
+    /// this: the `.waiting` card had no way to appear.
+    @discardableResult
+    public func onTokenHealthChange(_ sink: @Sendable @escaping () -> Void) -> Int {
+        tokenHealthObservers.add(sink)
+    }
+
+    public func removeTokenHealthChangeSink(_ token: Int) {
+        tokenHealthObservers.remove(token)
     }
 
     /// Whoever has to be re-keyed when the saved server changes.

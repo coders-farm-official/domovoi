@@ -479,6 +479,11 @@ struct ForgetServerCard: View {
                 // VoiceOver announced `127.0.0.1:6601` and no more. The text
                 // on screen is unchanged: it is still the thing a person
                 // compares with the dashboard character by character.
+                // **`Text clipped` at AX5** (2026-10-30), which is what the
+                // audit reported for this element once it had a readable
+                // label: 286x131 points of an address that wraps, with no
+                // `fixedSize`, while every sibling on the card has one.
+                .fixedSize(horizontal: false, vertical: true)
                 .accessibilityLabel(forgetServerAddressLabel(ask.address))
             // The prose in prose and the keys in monospace: §6.4 wants the
             // fingerprints comparable with the dashboard, and the paragraph

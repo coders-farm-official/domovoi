@@ -626,6 +626,77 @@ final class ShellModelTests: XCTestCase {
         rig.model.stop()
     }
 
+    /// **A throttle has to raise the card by itself.** It could not.
+    ///
+    /// Every test that has ever seen the `.waiting` card wrote
+    /// `noteWait(…)` and then `rig.model.refresh()` on the next line, so the
+    /// card was always reached by a pull the app does not make. `refresh()`
+    /// is fired by a server switch, a token arriving, a reachability verdict,
+    /// a wait **already** counting down, and a foreground return. A `429` on
+    /// an ordinary read is none of those.
+    ///
+    /// So the state was unreachable in the running app: the throttle was
+    /// observed, the wait was stored, the countdown that keeps the card alive
+    /// was ready — and nothing put the card up. The sweep of 2026-10-30 found
+    /// it by trying to audit the card against a stub house that answers 429
+    /// and never finding it on screen. There is no `refresh()` in this test,
+    /// deliberately.
+    func testAThrottleRaisesTheCardWithNobodyCallingRefresh() async {
+        let rig = Rig(serverURL: server, token: "household-abc")
+        rig.container.tokenHealth.observe(
+            url: server,
+            sent: "household-abc",
+            current: "household-abc",
+            status: 429,
+            // The core's own wording (`admin_auth.py:1892`), because
+            // `isDeviceTokenThrottle` is what decides whether this is about
+            // the token at all.
+            body: #"{"detail":"too many wrong X-Device-Token values from this address — retry in 30s"}"#,
+            retryAfter: "30"
+        )
+        let up = await rig.settleVerdict {
+            if case .tokenTroubleCard(.waiting) = rig.model.screen { return true }
+            return false
+        }
+        XCTAssertTrue(
+            up,
+            "a 429 about the household token left the screen at \(rig.model.screen); "
+                + "nothing re-derived the shell, so the card had no way to appear"
+        )
+        rig.model.stop()
+    }
+
+    /// The same for a **refused** token, which arrives the same way: on a
+    /// read, from a server, with nothing else happening.
+    ///
+    /// This one was reachable before the hook existed — a 401 also sets the
+    /// client's `pairingRequired`, which does reach the shell — so it is here
+    /// to pin that the hook has not changed which card a refusal produces.
+    func testARefusalRaisesItsCardWithNobodyCallingRefresh() async {
+        let rig = Rig(serverURL: server, token: "household-abc")
+        rig.container.tokenHealth.observe(
+            url: server,
+            sent: "household-abc",
+            current: "household-abc",
+            status: 401,
+            body: #"{"detail":"X-Device-Token or admin session required"}"#,
+            retryAfter: nil
+        )
+        let up = await rig.settleVerdict {
+            if case .tokenTroubleCard(.notRecognised) = rig.model.screen { return true }
+            return false
+        }
+        XCTAssertTrue(
+            up,
+            "a refused token left the screen at \(rig.model.screen)"
+        )
+        XCTAssertTrue(
+            rig.store.isTokenRejected(server),
+            "and the refusal was written down, not just drawn"
+        )
+        rig.model.stop()
+    }
+
     /// A **refused** token with a wait is not tried again, so its card stays
     /// — but `try the old token again` has to appear when the wait ends,
     /// because that is the moment the button can do what it says. Nothing

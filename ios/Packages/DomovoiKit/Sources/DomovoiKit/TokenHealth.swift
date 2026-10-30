@@ -95,6 +95,28 @@ public final class TokenHealth: Sendable {
     private let book: RejectedBook
     private let clock: @Sendable () -> Int64
     private let log: @Sendable (String) -> Void
+
+    /// **Called whenever this object's answer changes**, so something can ask
+    /// it again.
+    ///
+    /// Everything here is a verdict about the household token, and every
+    /// screen that shows one derives it from ``AppContainer/shellInputs()``,
+    /// which is a *pull*. The only thing that pulls is
+    /// ``ShellModel/refresh()``, and its triggers are a server switch, a
+    /// token arriving, a reachability verdict, a wait **already** counting
+    /// down, and a foreground return. A `429` arriving on an ordinary read is
+    /// not one of them.
+    ///
+    /// So the `.waiting` card could not appear (measured 2026-10-30): the
+    /// throttle was observed, the wait was stored, the countdown that would
+    /// keep the card alive existed — and nothing re-derived the shell, so
+    /// nothing put the card up. A person saw `couldn't load rooms` and a
+    /// header reading `live`. The card only turned up if they happened to be
+    /// in Settings → Phones & browsers tapping something, or sent the app to
+    /// the background and brought it back.
+    ///
+    /// Fired off whatever actor the response arrived on, so a sink hops.
+    private let changed: @Sendable () -> Void
     private let waitsUntil = Mutex<[String: Int64]>([:])
 
     /// `clock` is monotonic milliseconds. Its default is Darwin's
@@ -109,11 +131,13 @@ public final class TokenHealth: Sendable {
     public init(
         book: RejectedBook = InMemoryBook(),
         clock: @Sendable @escaping () -> Int64 = TokenHealth.monotonicMs,
-        log: @Sendable @escaping (String) -> Void = { _ in }
+        log: @Sendable @escaping (String) -> Void = { _ in },
+        changed: @Sendable @escaping () -> Void = {}
     ) {
         self.book = book
         self.clock = clock
         self.log = log
+        self.changed = changed
     }
 
     public func isRejected(_ url: String) -> Bool { book.isTokenRejected(url) }
@@ -159,6 +183,7 @@ public final class TokenHealth: Sendable {
             guard !book.isTokenRejected(url) else { return }
             book.markTokenRejected(url)
             log("\(ServerCredentials.address(url)) refused this phone's household token (\(status)); it is no longer sent there")
+            changed()
         case 429:
             guard Self.isDeviceTokenThrottle(body) else { return }
             noteWait(url, waitMs: Self.retryAfterMs(retryAfter))
@@ -175,13 +200,14 @@ public final class TokenHealth: Sendable {
     public func noteWait(_ url: String, waitMs: Int64) {
         let key = ServerCredentials.normalize(url)
         let until = clock() + waitMs
-        let changed = waitsUntil.withLock { waits -> Bool in
+        let moved = waitsUntil.withLock { waits -> Bool in
             if until <= (waits[key] ?? 0) { return false }
             waits[key] = until
             return true
         }
-        guard changed else { return }
+        guard moved else { return }
         log("\(ServerCredentials.address(url)) asked this phone to wait \(waitMs / 1000) s before it sends a household token again")
+        self.changed()
     }
 
     /// Clears a wait. Not in the Kotlin, which has no call site for it: there

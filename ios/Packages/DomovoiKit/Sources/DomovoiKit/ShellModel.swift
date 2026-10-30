@@ -196,6 +196,11 @@ public final class ShellModel {
     /// building many models over one container leaks a closure per model.
     private var networkSink: Int?
 
+    /// The container's token-health sink, for the same reason as
+    /// ``networkSink``. See ``TokenHealth``'s `changed` note for what this
+    /// being absent cost.
+    private var tokenHealthSink: Int?
+
     /// - Parameters:
     ///   - probe: one question to the server, for the reachability loop.
     ///     Android's `api.answers()`.
@@ -243,6 +248,12 @@ public final class ShellModel {
         }
         self.networkSink = container.onNetworkChange { [weak self] in
             Task { @MainActor in self?.networkChanged() }
+        }
+        // A refused token or a new wait changes which screen this is, and a
+        // `429` on an ordinary read is not one of ``refresh()``'s triggers —
+        // so without this the `.waiting` card had nothing to raise it.
+        self.tokenHealthSink = container.onTokenHealthChange { [weak self] in
+            Task { @MainActor in self?.refresh() }
         }
         // A launch straight onto a waiting card has to count down too, and
         // the first `.active` is not a return, so `scenePhaseChanged` will
@@ -1020,6 +1031,10 @@ public final class ShellModel {
         if let networkSink {
             container.removeNetworkChangeSink(networkSink)
             self.networkSink = nil
+        }
+        if let tokenHealthSink {
+            container.removeTokenHealthChangeSink(tokenHealthSink)
+            self.tokenHealthSink = nil
         }
     }
 
