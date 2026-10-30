@@ -92,19 +92,38 @@ struct SettingsPlaceholder: View {
                 .font(.footnote)
                 .foregroundStyle(Color.fgMuted)
                 .fixedSize(horizontal: false, vertical: true)
+            // **Every label here wraps.** Apple's audit failed this screen on
+            // "Text of this element may be clipped at larger Dynamic Type
+            // sizes" and, once the element was legible in the log, named two
+            // of these: the `Phones & browsers` heading and the
+            // `back to Rooms & devices` button. A `Text` or a button label
+            // with no `fixedSize` can be squeezed flat by its parent, and
+            // these are section names and group names — "Rooms & devices",
+            // "Chat & AI" — that get long at an accessibility size.
+            //
+            // `minimumScaleFactor` is the other answer and is rejected
+            // throughout this app: it makes text smaller for the person who
+            // asked for bigger.
             switch place {
             case .index:
                 ForEach(SettingsGroup.allCases, id: \.self) { group in
                     Button(group.label) { place = .group(group) }
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             case .group(let group):
-                Text(group.label).font(.headline)
+                Text(group.label)
+                    .font(.headline)
+                    .fixedSize(horizontal: false, vertical: true)
                 ForEach(sections(of: group), id: \.key) { section in
                     Button(section.label) { place = .section(section) }
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 Button(ShellStrings.allSettings) { place = place.up ?? .index }
+                    .fixedSize(horizontal: false, vertical: true)
             case .section(let section):
-                Text(section.label).font(.headline)
+                Text(section.label)
+                    .font(.headline)
+                    .fixedSize(horizontal: false, vertical: true)
                 Text(section.sub)
                     .font(.footnote)
                     .foregroundStyle(Color.fgMuted)
@@ -120,6 +139,7 @@ struct SettingsPlaceholder: View {
                         .foregroundStyle(Color.fgMuted)
                 }
                 Button(ShellStrings.backTo(section.group.label)) { place = place.up ?? .index }
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Spacer()
         }

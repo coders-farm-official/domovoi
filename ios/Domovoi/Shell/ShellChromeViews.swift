@@ -235,7 +235,22 @@ struct PhoneBarView: View {
             }
         }
         .padding(.top, 4)
-        .background(.bar)
+        // **Opaque, with its own edge.** This was `.background(.bar)`, the
+        // translucent tab-bar material, and the one accessibility finding
+        // nobody could place for five runs was Apple failing the `music`
+        // caption on contrast — on Home and on Settings, the same element
+        // both times, while `videos` and `chat` beside it in the same colour
+        // and the same font passed.
+        //
+        // `fgMuted` measures 6.98:1 against the bar in a screenshot, so the
+        // colour was never the answer, and nothing about one word of four
+        // explains it. What is true of all four is that they were drawn on a
+        // material whose colour is whatever is behind it, which is not
+        // something a contrast check can read. Now the bar is a surface, the
+        // captions sit on a known colour, and `Divider` gives the edge the
+        // material used to imply.
+        .background(Color(.secondarySystemBackground))
+        .overlay(alignment: .top) { Divider() }
     }
 
     @ViewBuilder private func tabs(equalWidth: Bool) -> some View {
@@ -268,34 +283,24 @@ struct PhoneBarView: View {
                 .foregroundStyle(selected ? Color.brandInk : Color.fgMuted)
             }
             .buttonStyle(.plain)
-            // ### This bar carries a known audit failure. Four explanations
-            // have been wrong about it, so here is what is actually known.
+            // ### The contrast finding this bar used to carry is fixed
             //
-            // Taking the whole bar out made Home audit **clean** and dropped
-            // the pairing screen from fourteen issues to eight. So the bar
-            // is the source of Home's one "Contrast failed" and of four
-            // "Dynamic Type font sizes are partially unsupported", one per
-            // tab. That part is measured, by removal, not argued.
+            // Four explanations were wrong about it before the audit's
+            // element was legible: the colours (6.98:1 and 5.31:1, measured
+            // off a screenshot), "a button that is mostly background" (the
+            // system `TabBar` in ``LocalShellView`` is emptier and passes),
+            // the pill's capsule (that shell has it too), and a synthetic
+            // `.accessibilityLabel` (removing it changed the tree and not one
+            // byte of the audit).
             //
-            // Ruled out, each by a run of its own:
-            //
-            //  - **the colours.** `fgMuted` is 6.98:1 and `brandInk` 5.31:1
-            //    on the `.bar` fill, measured off the screenshot, and drawing
-            //    all four tabs in one colour changed nothing.
-            //  - **"a button that is mostly background".** The system
-            //    `TabBar` in ``LocalShellView`` passes with buttons holding
-            //    nothing but an image, emptier than these.
-            //  - **the pill's capsule**, which the local shell also has.
-            //  - **a synthetic `.accessibilityLabel`.** Dropping it so the
-            //    drawn word became the label, and hiding the icon, changed
-            //    the tree — the buttons' labels went from `Home` to `home`
-            //    and the `StaticText` frames grew to the button's — and left
-            //    the audit's output byte for byte the same.
-            //
-            // `StubHouseUITests` asserts the **count**, so this is a live
-            // regression test rather than a silence: the next change to this
-            // bar that makes it worse fails, and so does the one that fixes
-            // it, which is when to delete this comment.
+            // It was `.background(.bar)`: Apple failed the `music` caption,
+            // one word of four in the same colour and the same font, because
+            // a translucent material's colour is whatever is behind it. The
+            // bar's background is a surface now and both screens that carried
+            // the finding are clean of it. `StubHouseUITests` asserts the
+            // counts, so this comment is the record of a fix rather than of a
+            // limit — if a contrast finding ever returns here, that is where
+            // it will say so.
             .accessibilityLabel(route.label)
             .accessibilityAddTraits(selected ? [.isButton, .isSelected] : [.isButton])
         }

@@ -38,40 +38,47 @@ final class StubHouseUITests: XCTestCase {
     /// unpaired, which is a different screen from the one being photographed.
     private static let token = "stubhousetoken0000000000"
 
-    /// ### The audit counts these screens are **known** to fail
+    /// ### What Apple's audit has left against these screens
     ///
-    /// Home reports one "Contrast failed" and the pairing screen fourteen
-    /// issues. Taking ``PhoneBarView`` out makes Home audit **clean** and
-    /// takes the pairing screen to eight, so the bar is the source of Home's
-    /// one, and of six of pairing's. That part is measured by removal.
+    /// **Home: nothing.** It had one "Contrast failed" that five rounds of
+    /// explanation could not place — the colours were measured off a
+    /// screenshot at 6.98:1 and 5.31:1, an "empty button" shape was ruled out
+    /// by the local shell passing, the pill's capsule by the same, and a
+    /// synthetic `.accessibilityLabel` by removing it and watching the audit
+    /// come back byte for byte identical.
     ///
-    /// What *in* the bar is not known. Each of these was ruled out by a run of
-    /// its own: the colours (`fgMuted` 6.98:1 and `brandInk` 5.31:1 on the
-    /// `.bar` fill, measured off the screenshot, and one colour for all four
-    /// tabs changed nothing); "a button that is mostly background" (the system
-    /// `TabBar` in the local shell holds nothing but an image, and
-    /// ``testTheLocalShellPassesTheAudit`` is the standing proof it passes);
-    /// the pill's `.quaternary` capsule, which that same shell has; and a
-    /// synthetic `.accessibilityLabel`, whose removal changed the tree — the
-    /// buttons' labels went from `Home` to `home` — and left the audit's
-    /// output byte for byte the same.
+    /// What ended it was reading `issue.element`, which this track had spent
+    /// three sessions calling "always nil". It is not nil; `stub_run.sh`
+    /// filters `xcodebuild`'s output and the element was in the full log the
+    /// whole time. It named the phone bar's `music` caption — one word of
+    /// four in the same colour and the same font — and what is true of all
+    /// four is that they were drawn on `.bar`, a material whose colour is
+    /// whatever is behind it. The bar is an opaque surface now and Home
+    /// audits clean.
     ///
-    /// Four wrong explanations is where this project's rule says to stop
-    /// chasing and write the limit down. So these are **equality**
-    /// assertions rather than `XCTExpectFailure`: the next change that makes
-    /// either screen worse fails, and so does the one that finally fixes it —
-    /// which is the day to delete these two constants and the comment in
-    /// `ShellChromeViews.swift` that matches them.
+    /// **The pairing screen: eight, all the same one.** "Dynamic Type font
+    /// sizes are partially unsupported", on elements the audit does *not*
+    /// name — the nil elements are real for this finding, where they were
+    /// never real for contrast. Everything else that screen had is fixed and
+    /// each of them was a defect, not an artefact:
     ///
-    /// The eight that are the pairing screen's own — four Dynamic Type, three
-    /// "Text clipped", one contrast — are **not** accepted. They are I1-D
-    /// work and they are inside this number until they are fixed, at which
-    /// point it becomes six. Note that nothing in the app target sets a fixed
-    /// font size (`grep` for `font(.system(size:` and `UIFont.systemFont`
-    /// finds none), so whatever Dynamic Type objects to there, it is not a
-    /// hard-coded point size either.
-    private static let knownHomeIssues = 1
-    private static let knownPairingIssues = 14
+    ///  - three "Text clipped" — the `Phones & browsers` heading, the
+    ///    `back to Rooms & devices` button and the server address field, all
+    ///    squeezable flat for want of a `fixedSize`;
+    ///  - five "Contrast failed" — the brand *fill* amber at 2.05:1 serving
+    ///    as every plain button's label colour through the `AccentColor`
+    ///    asset, and four elements the bar was drawn over or that straddled a
+    ///    scroll edge, which have no pixels an audit can read;
+    ///  - one "Hit area is too small", introduced by the fix for the clipped
+    ///    address field and then fixed in turn.
+    ///
+    /// These are **equality** assertions, so the next change that makes
+    /// either screen worse fails, and so does the one that takes the eight to
+    /// seven. Nothing in the app target sets a fixed font size — `grep` for
+    /// `font(.system(size:` and `UIFont.systemFont` finds none — so whatever
+    /// Dynamic Type objects to there, it is not a hard-coded point size.
+    private static let knownHomeIssues = 0
+    private static let knownPairingIssues = 8
 
     override func setUp() {
         continueAfterFailure = false
@@ -235,14 +242,34 @@ final class StubHouseUITests: XCTestCase {
         var found: [String] = []
         try app.performAccessibilityAudit { issue in
             found.append("\(issue.compactDescription): \(issue.detailedDescription)")
-            print("""
-                AUDIT [\(name)] type=\(issue.auditType) \(issue.compactDescription)
-                  detail: \(issue.detailedDescription)
-                  element: \(issue.element?.debugDescription ?? "nil")
-                """)
+            // **One `print` per line, deliberately.** This was a single
+            // `print` of a multi-line string, and `xcodebuild`'s output kept
+            // only its first line: three runs' worth of logs showed the
+            // headline and silently dropped the detail and the element, which
+            // is why "`issue.element` is always nil" was a belief rather than
+            // an observation on this track. A one-line call per field cannot
+            // be half-swallowed.
+            print("AUDIT [\(name)] \(issue.compactDescription) | type=\(issue.auditType)")
+            print("AUDIT [\(name)]   detail: \(issue.detailedDescription)")
+            print("AUDIT [\(name)]   element: \(Self.oneLine(issue.element))")
             return true
         }
         return found
+    }
+
+    /// An audit issue's element as one line, or `nil` as the word.
+    ///
+    /// `XCUIElement.debugDescription` is a paragraph with its own query chain
+    /// and newlines, which is what got swallowed. Type, identifier, label and
+    /// frame are enough to find the view in the tree dumps beside it.
+    @MainActor
+    private static func oneLine(_ element: XCUIElement?) -> String {
+        guard let element else { return "nil" }
+        let id = element.identifier
+        return "type=\(element.elementType.rawValue)"
+            + (id.isEmpty ? "" : " id='\(id)'")
+            + " label='\(element.label)'"
+            + " frame=\(element.frame)"
     }
 
     /// The local-media shell, audited — the screen that split the chrome.

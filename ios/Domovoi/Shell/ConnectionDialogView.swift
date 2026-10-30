@@ -256,6 +256,11 @@ struct ServerPickerPanel: View {
                 }
                 .disabled(!picker.manualButtonEnabled)
                 .buttonStyle(.borderedProminent)
+                // The app's tint is `brandInk` (`DomovoiApp.swift`), so
+                // a prominent button would fill with the ink and draw
+                // near-black `brandFg` on it at 3.08:1. The fill is the
+                // other token, and 8.49:1 with this label colour.
+                .tint(Color.brand)
                 .foregroundStyle(Color.brandFg)
             }
             if let error = picker.manualError {
@@ -303,14 +308,20 @@ private struct ServerRow: View {
             Circle()
                 .fill(dot)
                 .frame(width: 8, height: 8)
+            // The same two faults as the trusted-servers row in
+            // ``PhonesAndBrowsersView``, which Apple's audit caught there and
+            // cannot catch here: nothing in a Simulator may open this sheet,
+            // because doing so starts the LAN discovery sweep across whatever
+            // network the Mac is on. So this one is fixed by reading, not by
+            // measuring, and the numbers quoted are that row's.
             VStack(alignment: .leading, spacing: 2) {
                 Text(row.displayName)
                     .font(.subheadline)
-                    .lineLimit(1)
+                    .fixedSize(horizontal: false, vertical: true)
                 Text(row.address)
                     .font(.footnote)
                     .foregroundStyle(Color.fgMuted)
-                    .lineLimit(1)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Spacer()
             Text(row.affordance(inUse: inUse).text)
@@ -320,6 +331,12 @@ private struct ServerRow: View {
                 Button(action: onForget) {
                     Image(systemName: "xmark")
                         .font(.caption2)
+                        // 8.7 points there, and worse here than there: this
+                        // row carries its own `onTapGesture` to select the
+                        // server, so a near-miss on an 8.7-point forget does
+                        // not do nothing — it connects to the server instead.
+                        .frame(minWidth: 44, minHeight: 44)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(Color.fgMuted)
@@ -399,6 +416,11 @@ struct TrustServerCard: View {
                     .tint(Color.brandInk)
                 Button(ShellStrings.trustConfirm, action: onConfirm)
                     .buttonStyle(.borderedProminent)
+                    // The app's tint is `brandInk` (`DomovoiApp.swift`), so
+                    // a prominent button would fill with the ink and draw
+                    // near-black `brandFg` on it at 3.08:1. The fill is the
+                    // other token, and 8.49:1 with this label colour.
+                    .tint(Color.brand)
                     .foregroundStyle(Color.brandFg)
             }
         }
@@ -447,6 +469,11 @@ struct ForgetServerCard: View {
                 // `colors_and_type.css` for the same reason.
                 Button(forgetServerConfirm, role: .destructive, action: onConfirm)
                     .buttonStyle(.borderedProminent)
+                    // The app's tint is `brandInk` (`DomovoiApp.swift`), so
+                    // a prominent button would fill with the ink and draw
+                    // near-black `brandFg` on it at 3.08:1. The fill is the
+                    // other token, and 8.49:1 with this label colour.
+                    .tint(Color.brand)
             }
         }
     }

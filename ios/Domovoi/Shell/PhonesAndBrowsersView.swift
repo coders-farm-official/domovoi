@@ -79,9 +79,64 @@ struct PhonesAndBrowsersPanel: View {
                     .font(.caption)
                     .foregroundStyle(model.connected ? AnyShapeStyle(Color.okInk) : AnyShapeStyle(Color.errInk))
             }
-            TextField(ShellStrings.serverURLPlaceholder, text: $typedURL)
+            // **`axis: .vertical`, so the whole address is on screen.**
+            // Apple's audit named this field for "Text of this element may be
+            // clipped at larger Dynamic Type sizes", and the tree shows why:
+            // 301 points of single-line field holding
+            // `http://127.0.0.1:6601`, which at an accessibility size shows
+            // about half of it. An address you can only see half of is the
+            // same fault as a truncated fingerprint — it looks like an
+            // answer — and a person checking why their phone will not connect
+            // is exactly who needs to read all of it.
+            //
+            // A vertical field accepts a newline from the Return key, which
+            // an address must never carry, so they are stripped as they
+            // arrive rather than at save time: `normalise(_:)` would see a
+            // broken address, and the person would see their own typing
+            // silently altered later instead of never accepting the newline.
+            TextField(ShellStrings.serverURLPlaceholder, text: $typedURL, axis: .vertical)
+                .onChange(of: typedURL) { _, new in
+                    if new.contains(where: \.isNewline) {
+                        typedURL = new.filter { !$0.isNewline }
+                    }
+                }
                 .font(.footnote.monospaced())
-                .textFieldStyle(.roundedBorder)
+                // **The border is drawn here rather than by
+                // `.textFieldStyle(.roundedBorder)`.** That style with
+                // `axis: .vertical` produces an 18-point control, which
+                // Apple's audit fails as "Hit area is too small" — a finding
+                // the single-line field never had. `.frame(minHeight: 34)`
+                // does not reach it from either side of the style modifier:
+                // measured at 18 points with the frame before it and 18
+                // points with the frame after it, because a field style
+                // builds the control around what it is handed and the frame
+                // lands on the text inside the border either way.
+                //
+                // Nor does padding reach it. The padding below moved the box
+                // and left the audit's finding exactly where it was, because
+                // what the audit measures is the **field's own accessibility
+                // element**, and for a vertical field that is the height of
+                // the text in it: 18 points, one line of `.footnote`. The
+                // single-line field reports 34 because `.roundedBorder` is
+                // part of the control.
+                //
+                // `lineLimit(2...)` is what changes that element — two lines
+                // of room, 36 points, and the right shape for this field
+                // besides, since `http://192.168.1.10:6369` does not fit one
+                // line of a Settings card at any type size worth having.
+                .lineLimit(2...)
+                // The border is drawn here, `.quaternary` on an 8-point
+                // radius like the app's other boxes
+                // (`ConnectionDialogView.swift:329`).
+                .padding(.horizontal, 8)
+                .padding(.vertical, 10)
+                .background(
+                    Color(.secondarySystemBackground),
+                    in: RoundedRectangle(cornerRadius: 8)
+                )
+                .overlay {
+                    RoundedRectangle(cornerRadius: 8).strokeBorder(.quaternary)
+                }
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .keyboardType(.URL)
@@ -90,6 +145,11 @@ struct PhonesAndBrowsersPanel: View {
                 Task { await save() }
             }
             .buttonStyle(.borderedProminent)
+            // The app's tint is `brandInk` (`DomovoiApp.swift`), so
+            // a prominent button would fill with the ink and draw
+            // near-black `brandFg` on it at 3.08:1. The fill is the
+            // other token, and 8.49:1 with this label colour.
+            .tint(Color.brand)
             .foregroundStyle(Color.brandFg)
             .disabled(ServerCredentials.isBlank(typedURL) || saving)
 
@@ -233,19 +293,32 @@ struct PhonesAndBrowsersPanel: View {
                     .foregroundStyle(Color.fgMuted)
             }
             ForEach(rows) { row in
-                HStack(spacing: 10) {
+                // **No `.lineLimit(1)` on these three.** They were the
+                // pairing screen's three "Text of this element may be clipped
+                // at larger Dynamic Type sizes": a name, an address and a
+                // fingerprint, in a row that also holds a status word and a
+                // button, so there is not much width to go round and at an
+                // accessibility size a single line of any of them is cut.
+                //
+                // A fingerprint is the one that matters. It exists to be
+                // compared against what the dashboard shows, and a truncated
+                // fingerprint is worse than no fingerprint: it looks like an
+                // answer. So it wraps, like every other long string in this
+                // app — `minimumScaleFactor` was rejected at the I0 gate for
+                // making text smaller for the person who asked for bigger.
+                HStack(alignment: .top, spacing: 10) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(row.displayName)
                             .font(.subheadline)
-                            .lineLimit(1)
+                            .fixedSize(horizontal: false, vertical: true)
                         Text(row.address)
                             .font(.footnote)
                             .foregroundStyle(Color.fgMuted)
-                            .lineLimit(1)
+                            .fixedSize(horizontal: false, vertical: true)
                         Text(store.pin(forServer: row.url)?.fingerprint ?? ShellStrings.identityNotPinnedYet)
                             .font(.caption2.monospaced())
                             .foregroundStyle(Color.fgMuted)
-                            .lineLimit(1)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                     Spacer()
                     if row.active {
@@ -271,6 +344,18 @@ struct PhonesAndBrowsersPanel: View {
                     } label: {
                         Image(systemName: "xmark")
                             .font(.caption2)
+                            // **The third time this app has got this wrong**,
+                            // after the header's live dot and the phone bar's
+                            // tabs. A Simulator measured this one at
+                            // `{{337, 1018}, {8.7, 8.7}}` — an 8.7-point
+                            // target on the control that forgets a server,
+                            // its household token and its pinned identity
+                            // together. A `caption2` glyph is 8.7 points, and
+                            // a glyph is all `.buttonStyle(.plain)` gives
+                            // SwiftUI to hit-test, so the frame is stated and
+                            // `contentShape` makes the frame the target.
+                            .frame(minWidth: 44, minHeight: 44)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(Color.fgMuted)
