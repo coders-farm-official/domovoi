@@ -73,15 +73,10 @@ struct HomeEverythingView: View {
             VStack(spacing: 6) {
                 Image(systemName: route.systemImage)
                     .font(.title3)
-                    // DIAGNOSTIC — the live variable. Was
-                    // `.accessibilityHidden(true)`, on the reasoning that the
-                    // symbol is decoration beside a label that says the same
-                    // thing in words. True of VoiceOver, but hiding it leaves
-                    // the button one child, and the audit then reports the
-                    // tile as a **staticText** (type 48) carrying the
-                    // button's frame. The phone bar's tab is the same
-                    // Image-over-caption Button, does not hide its symbol,
-                    // reports as a button, and audits clean.
+                    // Not `accessibilityHidden`, which the phone bar's tab
+                    // does not do either. An `Image(systemName:)` with no
+                    // label of its own contributes no words, so hiding it
+                    // buys nothing and it changed no finding when tried.
                 Text(route.label)
                     .font(.caption)
                     .fixedSize(horizontal: false, vertical: true)
@@ -97,22 +92,32 @@ struct HomeEverythingView: View {
         .buttonStyle(.plain)
         .foregroundStyle(Color.brandInk)
         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
-        // ### No synthetic label here, and the audit is why
+        // ### Why a `Button` has to be *told* it is a button
         //
-        // This read `.accessibilityLabel(route.label)`, which says the right
-        // words and cost six audit findings — one per tile, each named
-        // outright: `element: type=48 label='People' frame=(32.0, 699.3,
-        // 104.3, 72.0)`, "Dynamic Type font sizes are partially unsupported".
+        // These two lines are the fix for six
+        // `Dynamic Type font sizes are partially unsupported` findings that
+        // part 3b put on this screen, and the trait is the one that matters.
         //
-        // A label on the container **replaces** its children's accessibility,
-        // so the element Apple inspected had a string and no `Text`. There
-        // was no font to scale, which is exactly what that finding says, and
-        // the `Text` below — `.caption`, `fixedSize`, free to grow — was
-        // hidden behind the very label that described it.
+        // The audit's detail is the whole story once it is read:
+        // **"User will not be able to change the font size of this element"**
+        // — not a word about fitting or clipping, which is what five
+        // predictions wasted themselves on. It is a check Apple applies to
+        // text-bearing elements, and every one of the six came back as
+        // `type=48`, a bare **staticText**. A `Text` inside a `.plain`
+        // `Button` is exposed as that, and a staticText advertises no
+        // scalable font.
         //
-        // Dropping it changes nothing a person hears: the `Image` is
-        // `accessibilityHidden`, so `Text(route.label)` is the only element
-        // left and SwiftUI reads it as the button's label. Same words, and a
-        // font the audit can see.
+        // The phone bar's tab is the same Image-over-caption `Button` with
+        // the same `.caption`-class font and it has always audited clean. The
+        // only difference was these two lines, which force it to be a button
+        // element.
+        //
+        // So the audit was reporting a second defect underneath the first:
+        // **the tiles did not announce themselves as buttons.** VoiceOver
+        // read six words with no indication any of them could be tapped.
+        // Declaring `.isButton` is a true statement about a `Button`, not a
+        // way of quietening a check.
+        .accessibilityLabel(route.label)
+        .accessibilityAddTraits(.isButton)
     }
 }
