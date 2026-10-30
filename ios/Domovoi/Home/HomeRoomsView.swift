@@ -365,8 +365,10 @@ struct HomeRoomsView: View {
         let left = timerLeft[room.roomID]
         let call = inCallChip(room)
         let screenStopped = kioskDead(room)
-        let weak = weakWifi(room)
-        if left != nil || call != nil || screenStopped || weak {
+        // Not `weak`, which is a declaration modifier: an identifier the
+        // parser has another use for is not worth the four characters.
+        let weakLink = weakWifi(room)
+        if left != nil || call != nil || screenStopped || weakLink {
             // Wrapping, not scrolling: four chips and a long room name do not
             // fit one line at an accessibility size, and a horizontal scroll
             // view hides what it cannot fit without saying so.
@@ -380,7 +382,7 @@ struct HomeRoomsView: View {
                 if screenStopped {
                     chip("tv.slash", HomeRoomStrings.screenStopped, tone: .warn)
                 }
-                if weak {
+                if weakLink {
                     chip("wifi.slash", HomeRoomStrings.weakWifi, tone: .warn)
                 }
             }
