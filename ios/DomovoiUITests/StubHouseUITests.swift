@@ -114,6 +114,48 @@ final class StubHouseUITests: XCTestCase {
         app.staticTexts["stub house"]
     }
 
+    /// Get to the pairing screen from an unpaired launch, **whichever way the
+    /// app got there**.
+    ///
+    /// Three cases asserted that Home draws ``HomeHeaderStrings/pairLink``
+    /// and tapped it, and that was a race against the app's own correct
+    /// behaviour. An unpaired phone's device-tier reads come back 403 and the
+    /// shell raises the pairing screen by itself (map §11.6), so the link can
+    /// do its job before a test ever sees it.
+    ///
+    /// It took six runs to find that, because the failure said
+    /// "the unpaired header did not draw" — a sentence about the thing that
+    /// was absent, which cannot report what was present. A tree dumped at the
+    /// moment of failure **was the pairing screen**: `pair this phone`,
+    /// `household token`, `pair`, `not now`. Four eliminations happened first
+    /// and every one of them was a theory about why the link was missing.
+    ///
+    /// It began failing when the everything grid stopped being a `LazyVGrid`:
+    /// thirteen tiles drawn eagerly make Home's first frame dearer, and the
+    /// auto-raise started winning more often. Nothing about the app got
+    /// worse. **A test that passes only when it wins a race is not a test**,
+    /// so this waits for either screen and taps the link only if it is there
+    /// to tap.
+    @MainActor
+    private func reachPairing(_ app: XCUIApplication) -> Bool {
+        let link = app.buttons[ShellStringsUnderTest.pairLink]
+        let title = app.staticTexts[ShellStringsUnderTest.pairTitle]
+        let deadline = Date().addingTimeInterval(20)
+        while Date() < deadline {
+            if title.exists { return true }
+            if link.exists {
+                link.tap()
+                break
+            }
+            usleep(200_000)
+        }
+        if title.waitForExistence(timeout: 10) { return true }
+        // Same rule as everywhere else on this track: say what IS there.
+        print("PAIRING NOT REACHED — tree follows")
+        print(app.debugDescription)
+        return false
+    }
+
     /// Whether the shell gave up on the server and fell back to local media.
     ///
     /// Worth its own check, and its own message, because it is a *different
@@ -412,25 +454,13 @@ final class StubHouseUITests: XCTestCase {
     @MainActor
     func testThePairingScreenAndItsButtons() throws {
         let app = launch(paired: false)
-        let link = app.buttons[ShellStringsUnderTest.pairLink]
-        if !link.waitForExistence(timeout: 20) {
-            // **Print the screen, not a sentence about it.** This assertion
-            // failed for two runs while four other cases did the identical
-            // three lines and passed, and a message naming the thing that is
-            // missing cannot say what is there instead. `showsPairLink` is
-            // `!paired`, so the tree answers in one line whether this is an
-            // unpaired Home without its link or a paired one that should
-            // never have been.
-            evidence(app, "30-pairing-MISSING")
-            print("PAIRLINK MISSING — tree follows")
-            print(app.debugDescription)
-            XCTFail("no pairing link on Home — the unpaired header did not draw")
-            return
-        }
-        link.tap()
-        // Proof that the tap went somewhere, rather than a screenshot of the
-        // screen we started on: the link belongs to Home and Home is gone.
-        let left = link.waitForNonExistence(timeout: 10)
+        // The assertion that replaced "the link did nothing — still on Home",
+        // and a stronger one: that we are **on** the pairing screen, by its
+        // own title, however we arrived.
+        XCTAssertTrue(
+            reachPairing(app),
+            "never reached the pairing screen from an unpaired launch"
+        )
         evidence(app, "30-pairing")
         if #available(iOS 17.0, *) {
             let found = try auditIssues(app, "pairing")
@@ -442,7 +472,6 @@ final class StubHouseUITests: XCTestCase {
                     + found.joined(separator: " | ")
             )
         }
-        XCTAssertTrue(left, "the pairing link did nothing — still on Home")
     }
 
     /// **Where do the eight live?** A bisect that changes nothing in the app.
@@ -487,10 +516,7 @@ final class StubHouseUITests: XCTestCase {
     func testWhereTheEightDynamicTypeFindingsLive() throws {
         let app = launch(paired: false)
         let link = app.buttons[ShellStringsUnderTest.pairLink]
-        XCTAssertTrue(
-            link.waitForExistence(timeout: 20),
-            "no pairing link on Home — the unpaired header did not draw"
-        )
+        let homeWasAuditable = link.waitForExistence(timeout: 8)
         // No `#available` check: `IPHONEOS_DEPLOYMENT_TARGET` is 18.0
         // (`project.yml:40`), so ``auditIssues``' `@available(iOS 17.0, *)` is
         // already satisfied. The `if #available` blocks elsewhere in this file
@@ -522,10 +548,18 @@ final class StubHouseUITests: XCTestCase {
         // So this step is the control that should have been here first. Eight
         // here and the findings are the unpaired chrome's, and Settings never
         // had anything to do with them.
-        try step("0-home-unpaired")
-
-        link.tap()
-        XCTAssertTrue(link.waitForNonExistence(timeout: 10), "the pairing link did nothing")
+        // **Skipped, not failed, when the app got to pairing first.** An
+        // unpaired phone's device-tier reads 403 and the shell raises the
+        // pairing screen itself, so Home is not always auditable here — and
+        // a control step that cannot run is worth a printed line, not a red
+        // suite. ``reachPairing(_:)`` carries the whole story.
+        if homeWasAuditable {
+            try step("0-home-unpaired")
+            link.tap()
+        } else {
+            print("BISECT [0-home-unpaired] skipped — the app raised pairing before Home could be audited")
+        }
+        XCTAssertTrue(reachPairing(app), "never reached the pairing screen")
 
         try step("A-phones")
 
@@ -612,15 +646,9 @@ final class StubHouseUITests: XCTestCase {
             ("AX5", "UICTContentSizeCategoryAccessibilityXXXL"),
         ] {
             let app = launch(mode: mode, paired: false)
-            let link = app.buttons[ShellStringsUnderTest.pairLink]
             XCTAssertTrue(
-                link.waitForExistence(timeout: 20),
-                "no pairing link on Home at \(label) — the unpaired header did not draw"
-            )
-            link.tap()
-            XCTAssertTrue(
-                link.waitForNonExistence(timeout: 10),
-                "the pairing link did nothing at \(label)"
+                reachPairing(app),
+                "never reached the pairing screen at \(label)"
             )
             evidence(app, "60-sizes-\(label)")
             let found = try auditIssues(app, "sizes-\(label)")
@@ -722,6 +750,12 @@ final class StubHouseUITests: XCTestCase {
 /// followed a renamed string would stop testing what it claims to.
 private enum ShellStringsUnderTest {
     static let pairLink = "pair this phone for live updates and controls"
+    /// ``ShellStrings/pairTitle`` — the pairing screen's own heading, which is
+    /// how ``reachPairing(_:)`` knows it is there without having tapped
+    /// anything. Deliberately **not** a prefix of ``pairLink``'s matcher:
+    /// `XCUIElementQuery`'s subscript is an exact match, so the two cannot be
+    /// confused for one another.
+    static let pairTitle = "pair this phone"
 
     /// ``ShellPill/accessibilityLabel`` for a saved server, which is what the
     /// pill button answers to in the tree.
