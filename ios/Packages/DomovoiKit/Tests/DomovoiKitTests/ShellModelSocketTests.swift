@@ -308,6 +308,54 @@ final class ShellModelSocketTests: XCTestCase {
         model.stop()
     }
 
+    /// A launch is not a return, and the `.inactive` iOS slips in before
+    /// `.active` must not make it one.
+    ///
+    /// This is the sequence a real launch delivers and no test drove:
+    /// `AppShellView` observes with `.onChange(of: scenePhase, initial: true)`,
+    /// so the handler runs on first body evaluation — commonly with
+    /// `.inactive` — and again when `.active` arrives a few tens of
+    /// milliseconds later. `phase` starts at `.active` so that a launch does
+    /// not read as a return, and the `.inactive` in between defeated that:
+    /// the old guard was `was != .active`, so every launch re-dialled a socket
+    /// `AppContainer.start()` had just opened.
+    ///
+    /// The stub house measured the consequence on 2026-10-29 — two
+    /// `/ws/state` upgrades on every one of five launches, both alive until
+    /// the app quit, so every push was handled twice. 643 unit tests and
+    /// three reviews missed it because nothing drove this pair of calls and
+    /// nothing counted the dials; the sequence exists only on a real launch.
+    ///
+    /// `attemptCount` is the measurement rather than an argument, and it is
+    /// the same counter the test above uses for the case that *should*
+    /// re-dial — so the pair of them says the difference is the departure and
+    /// not the arrival.
+    func testTheInactiveStepOnTheWayInIsNotAReturn() {
+        let (model, container, _) = model(deviceSelf: nil)
+        container.startSocketUnlessARoom()
+        XCTAssertTrue(container.socket.isStarted)
+        let asked = container.socket.attemptCount
+
+        // Exactly what a launch does, in order.
+        model.scenePhaseChanged(to: .inactive)
+        model.scenePhaseChanged(to: .active)
+        XCTAssertEqual(
+            asked, container.socket.attemptCount,
+            "the launch's `.inactive` -> `.active` re-dialled the socket"
+        )
+
+        // And the real thing still does, from the same model, so the fix is
+        // a narrower guard and not a disabled one.
+        model.scenePhaseChanged(to: .background)
+        model.scenePhaseChanged(to: .active)
+        XCTAssertGreaterThan(
+            container.socket.attemptCount, asked,
+            "a return from the background stopped re-minting"
+        )
+        container.socket.stop()
+        model.stop()
+    }
+
     /// With the **real** identity gate and a server that has proved nothing,
     /// the container's socket holds: no request is built, and it parks rather
     /// than counting down to asking the same question again.
