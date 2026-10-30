@@ -413,10 +413,20 @@ final class StubHouseUITests: XCTestCase {
     func testThePairingScreenAndItsButtons() throws {
         let app = launch(paired: false)
         let link = app.buttons[ShellStringsUnderTest.pairLink]
-        XCTAssertTrue(
-            link.waitForExistence(timeout: 20),
-            "no pairing link on Home — the unpaired header did not draw"
-        )
+        if !link.waitForExistence(timeout: 20) {
+            // **Print the screen, not a sentence about it.** This assertion
+            // failed for two runs while four other cases did the identical
+            // three lines and passed, and a message naming the thing that is
+            // missing cannot say what is there instead. `showsPairLink` is
+            // `!paired`, so the tree answers in one line whether this is an
+            // unpaired Home without its link or a paired one that should
+            // never have been.
+            evidence(app, "30-pairing-MISSING")
+            print("PAIRLINK MISSING — tree follows")
+            print(app.debugDescription)
+            XCTFail("no pairing link on Home — the unpaired header did not draw")
+            return
+        }
         link.tap()
         // Proof that the tap went somewhere, rather than a screenshot of the
         // screen we started on: the link belongs to Home and Home is gone.
