@@ -16,7 +16,23 @@ struct WorkspaceView: View {
     @Bindable var model: ShellModel
     @Environment(\.horizontalSizeClass) private var width
 
+    /// Seeded once and only once: a `NavigationStack` whose path is refilled
+    /// behind the person's back cannot be navigated out of.
+    @State private var seededPush = false
+
     var body: some View {
+        layout.task { seedPushIfAsked() }
+    }
+
+    /// ``AuditStrip/seededRoute``, applied when the workspace first appears.
+    /// Nil in any build that could ship, so this returns at the `guard`.
+    private func seedPushIfAsked() {
+        guard !seededPush, let route = AuditStrip.seededRoute else { return }
+        seededPush = true
+        model.navigate(route)
+    }
+
+    @ViewBuilder private var layout: some View {
         switch shellLayout(idiom: .current, width: ShellWidth(width)) {
         case .phoneBar:
             // **Laid out with the content, not inset over it** — the same fix
@@ -40,7 +56,7 @@ struct WorkspaceView: View {
             // a bar laid out in the stack cannot produce a third.
             VStack(spacing: 0) {
                 stack
-                PhoneBarView(model: model)
+                if AuditStrip.active != .phoneBar { PhoneBarView(model: model) }
             }
         case .sidebar:
             NavigationSplitView {
@@ -72,22 +88,125 @@ struct WorkspaceView: View {
     /// collapses to nothing and Home looks as it did.
     private var stack: some View {
         VStack(spacing: 0) {
-            ShellTopBar(
-                leading: "\(ShellStrings.homeCrumb) / \(model.navigation.route.label.lowercased())",
-                pill: model.chrome.pill,
-                onPill: { model.openConnection() }
-            ) {
-                EmptyView()
+            if AuditStrip.active != .topBar {
+                ShellTopBar(
+                    leading: "\(ShellStrings.homeCrumb) / \(model.navigation.route.label.lowercased())",
+                    pill: model.chrome.pill,
+                    onPill: { model.openConnection() }
+                ) {
+                    EmptyView()
+                }
             }
             NavigationStack(path: $model.path) {
-                RouteScreen(model: model, route: startRoute)
+                stackRoot
                     .navigationDestination(for: Route.self) { route in
-                        RouteScreen(model: model, route: route)
+                        destination(route)
                     }
             }
         }
     }
+
+    /// The stack's root. ``AuditStrip/root`` is the only way to audit a pushed
+    /// screen with nothing mounted beneath it.
+    @ViewBuilder private var stackRoot: some View {
+        if AuditStrip.active == .root {
+            Color.clear
+        } else {
+            RouteScreen(model: model, route: startRoute)
+        }
+    }
+
+    @ViewBuilder private func destination(_ route: Route) -> some View {
+        let screen = Group {
+            if AuditStrip.active == .content {
+                Color.clear
+            } else {
+                RouteScreen(model: model, route: route)
+            }
+        }
+        if AuditStrip.active == .navBar {
+            screen.toolbar(.hidden, for: .navigationBar)
+        } else {
+            screen
+        }
+    }
 }
+
+/// **A diagnostic that takes one piece of the shell away.** Nothing reads it
+/// unless a launch argument names a piece, and the reads themselves are
+/// `#if DEBUG` — in a build that could ship, every one of these is nil and
+/// ``WorkspaceView`` is the shell.
+///
+/// It exists because of the eight. Every screen that is **pushed** onto the
+/// stack audits eight `Dynamic Type font sizes are partially unsupported`
+/// findings, and every screen that is a **root** audits none: the Settings
+/// index, the group list, a section with no panel, the token card and
+/// `music` all score exactly 8 — four completely different screens, plus a
+/// fifth that shares none of their views.
+///
+/// Six theories have died guessing at it, and the thing that finally
+/// explained Home's six was found by *removing* a container rather than by
+/// reasoning about it (`design-notes/ios/STUB-HOUSE-FINDINGS-01.md`). The
+/// findings carry `element: nil`, so the audit will not say which view it
+/// means and a count that moves when a piece is taken away is the only
+/// evidence there is. So this is the removal method, mechanised: one build,
+/// one launch argument, every piece of a pushed screen taken away in turn.
+enum AuditStrip: String {
+
+    /// ``ShellTopBar`` — the breadcrumb and the connection pill. Roots have
+    /// it too, so if this is the answer the eight are an *interaction* with
+    /// being pushed rather than the bar's own defect.
+    case topBar
+    /// ``PhoneBarView`` — four tabs, each an icon and a caption. Eight
+    /// leaves, which is a suspicious coincidence, and it is the one piece
+    /// that swaps its whole subtree on `isAccessibilitySize`.
+    case phoneBar
+    /// The `NavigationStack`'s own bar, hidden on the destination. Measured
+    /// once already at 8 by hand; kept as the harness's control, so a run
+    /// where *this* one moves means the harness is wired differently from
+    /// that attempt rather than that the answer changed.
+    case navBar
+    /// The stack's **root**, replaced by nothing. Home stays mounted
+    /// underneath a push, so its views are the only thing a pushed screen
+    /// has that a root does not, besides the navigation bar and its own
+    /// content. This is the piece no earlier attempt could take away.
+    case root
+    /// The pushed destination's own content. Four bisect states already say
+    /// the content is not it; this measures that rather than inheriting it.
+    case content
+
+    /// Which piece this launch is without, or nil for the whole shell.
+    static var active: AuditStrip? {
+        #if DEBUG
+        return value(after: "-domovoi-audit-strip").flatMap(AuditStrip.init(rawValue:))
+        #else
+        return nil
+        #endif
+    }
+
+    /// A route to seed ``ShellModel/path`` with once the workspace is up.
+    ///
+    /// Needed because one variant removes the phone bar, and tapping a tab is
+    /// how every earlier run reached a pushed screen. Seeding `path` is the
+    /// same push — it is the array `NavigationStack` takes — and it makes all
+    /// six variants arrive identically, which a tap could not.
+    static var seededRoute: Route? {
+        #if DEBUG
+        return value(after: "-domovoi-audit-push").flatMap(Route.init(rawValue:))
+        #else
+        return nil
+        #endif
+    }
+
+    private static func value(after flag: String) -> String? {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard let index = arguments.firstIndex(of: flag),
+              arguments.index(after: index) < arguments.endIndex
+        else { return nil }
+        return arguments[arguments.index(after: index)]
+    }
+}
+
 
 /// The sidebar's two sections (``sidebarSections(_:)``). Home is the brand
 /// row above them and never a list item, as on the web desktop and in

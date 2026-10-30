@@ -91,13 +91,19 @@ final class StubHouseUITests: XCTestCase {
         mode: String = "large",
         paired: Bool = true,
         server: Bool = true,
-        port: Int = 6601
+        port: Int = 6601,
+        strip: String? = nil,
+        push: String? = nil
     ) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = server ? ["-domovoi-server", "127.0.0.1:\(port)"] : []
         if server, paired {
             app.launchArguments += ["-domovoi-token", Self.token]
         }
+        // ``AuditStrip``. Both are DEBUG-only on the app's side and read once
+        // at launch, so a variant cannot leak into the next case.
+        if let strip { app.launchArguments += ["-domovoi-audit-strip", strip] }
+        if let push { app.launchArguments += ["-domovoi-audit-push", push] }
         // The type size, set the way the Simulator's own setting would.
         app.launchArguments += ["-UIPreferredContentSizeCategoryName", mode]
         app.launch()
@@ -747,6 +753,110 @@ final class StubHouseUITests: XCTestCase {
             Self.knownHomeIssues,
             "Home audited \(root.count), not the known \(Self.knownHomeIssues) — "
                 + "the pushed count is being read against a baseline that moved"
+        )
+    }
+
+    /// **Which piece of a pushed screen carries the eight?** The removal
+    /// method, mechanised.
+    ///
+    /// Six theories have died on this. What is known: every **pushed** screen
+    /// audits 8 `Dynamic Type font sizes are partially unsupported` and every
+    /// **root** audits 0; the count does not move when the content changes
+    /// completely (`A-phones`, `B-group`, `C-no-panel`, `D-index` and `music`
+    /// are all 8); it is not one-per-larger-type-size (8/8/7 against a
+    /// prediction of 10/8/0); and `element` is nil on all eight, so the audit
+    /// will not say which view it means.
+    ///
+    /// Guessing has had its six turns. This takes the pieces away instead,
+    /// one per launch, in one build — the way Home's six were finally
+    /// explained, by removing the `LazyVGrid` rather than reasoning about it.
+    ///
+    /// Every variant arrives the same way: ``AuditStrip/seededRoute`` puts
+    /// `Music` in ``ShellModel/path`` once the workspace appears, which is the
+    /// same push a tab tap makes. It has to be seeded rather than tapped
+    /// because one variant removes the bar the tab is in.
+    ///
+    /// ### The prediction, written before the run
+    ///
+    /// | Variant | Predicts |
+    /// |---|---|
+    /// | `none` (control) | **8** |
+    /// | `topBar` | 8 |
+    /// | `phoneBar` | 8 |
+    /// | `navBar` | 8 — measured by hand once already |
+    /// | `root` | **0** |
+    /// | `content` | 8 |
+    ///
+    /// `root` is the guess, on the one argument left standing: a pushed screen
+    /// has the same top bar and the same phone bar as Home, and Home scores 0
+    /// with both of them on screen, so neither bar can carry eight findings by
+    /// itself. The navigation bar is measured out and the content is measured
+    /// out four times over. What is left is that **Home is still mounted
+    /// underneath a push** — covered, not unloaded — and a covered view that
+    /// no longer re-lays-out is exactly the shape of this finding: an element
+    /// whose frame does not move when the audit bumps the type size. It would
+    /// also explain `element: nil`, since a view behind a pushed screen is out
+    /// of the accessibility tree and has no element to name.
+    ///
+    /// If `root` comes back 8, that argument is wrong and every piece has now
+    /// been measured — which would mean the eight are the `NavigationStack`
+    /// itself, and the next move is a stack with no shell around it at all.
+    ///
+    /// **Printed, not asserted**, apart from the control. Five of these six
+    /// numbers are the unknown this test exists to find; an assertion on one
+    /// would only restate the prediction.
+    @MainActor
+    func testWhichPieceOfAPushedScreenCarriesTheEight() throws {
+        var counts: [(String, Int)] = []
+        for variant in ["none", "topBar", "phoneBar", "navBar", "root", "content"] {
+            let app = launch(strip: variant == "none" ? nil : variant, push: "Music")
+            // Two markers, because no single one survives every variant: the
+            // breadcrumb is gone in `topBar` and the placeholder is gone in
+            // `content`. Between them every variant has one.
+            let crumb = app.staticTexts[ShellStringsUnderTest.musicCrumb]
+            let placeholder = app.descendants(matching: .staticText)
+                .matching(NSPredicate(format: "label CONTAINS %@", ShellStringsUnderTest.notBuilt))
+                .firstMatch
+            let deadline = Date().addingTimeInterval(25)
+            var arrived = false
+            while Date() < deadline {
+                if crumb.exists || placeholder.exists { arrived = true; break }
+                usleep(300_000)
+            }
+            guard arrived else {
+                print("STRIP [\(variant)] NEVER PUSHED — tree follows")
+                print(app.debugDescription)
+                app.terminate()
+                continue
+            }
+            // Worth saying out loud rather than silently auditing it: with the
+            // root stripped, Home's reads never start, and a shell that gives
+            // up on the server swaps the whole screen for local media. A count
+            // taken from that screen is a count of a different app.
+            if fellBackToLocalMedia(in: app) {
+                print("STRIP [\(variant)] WARNING — fell back to local media")
+            }
+            evidence(app, "80-strip-\(variant)")
+            let found = try auditIssues(app, "strip-\(variant)")
+            let dynamic = found.filter { $0.hasPrefix("Dynamic Type") }
+            counts.append((variant, dynamic.count))
+            print("STRIP [\(variant)] dynamic=\(dynamic.count) total=\(found.count)")
+            for line in found { print("STRIP [\(variant)]   \(line)") }
+            app.terminate()
+        }
+        print("STRIP SUMMARY " + counts.map { "\($0.0)=\($0.1)" }.joined(separator: " "))
+
+        // The control, and only the control. If the whole shell stops
+        // auditing 8 on a pushed screen then the five numbers beside it are
+        // differences from a baseline that moved, and the run says nothing.
+        let control = counts.first { $0.0 == "none" }?.1
+        XCTAssertEqual(
+            control,
+            Self.knownPairingIssues,
+            "a pushed screen with the whole shell around it audited "
+                + "\(control.map(String.init) ?? "nothing"), not the known "
+                + "\(Self.knownPairingIssues) — every other count in this run is "
+                + "measured against a baseline that has changed"
         )
     }
 
