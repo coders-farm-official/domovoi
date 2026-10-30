@@ -45,14 +45,30 @@ struct HomeEverythingView: View {
                 actionLabel: HomeEverythingStrings.editTheBar,
                 onAction: onEditTheBar
             ) {
-                // ### Rows, not a `LazyVGrid`
+                // ### Rows, not a `LazyVGrid` — and the grid was the bug
                 //
-                // DIAGNOSTIC, and also the better shape: thirteen tiles at
-                // most and no fetch behind any of them (map §7.6), so
-                // laziness was never buying anything here. The question it
-                // answers is whether a lazy container is what leaves the six
-                // tile labels advertising a font the audit says the reader
-                // cannot change.
+                // This was `LazyVGrid(columns:)`, and it cost Home **six**
+                // `Dynamic Type font sizes are partially unsupported`
+                // findings, one per tile. Thirteen tiles at most and no fetch
+                // behind any of them (map §7.6), so the laziness was never
+                // earning its place; plain rows are both the fix and the
+                // simpler shape.
+                //
+                // The audit's detail line is the part worth keeping, because
+                // it is not about layout and six predictions died ignoring
+                // it: *"User will not be able to change the font size of this
+                // element."* Not clipping, not fitting, not width. The
+                // elements came back as bare `staticText` leaves — `'Files'`
+                // at 26.3 × 14.3 — advertising a font the audit could not see
+                // scale, **inside a lazy container's cell**. Taken out of one,
+                // the same `Text` with the same `.caption` audits clean.
+                //
+                // Five things it was **not**, each measured: the tiles' height
+                // (`minHeight: 72` freed, still six, tiles 77–80 tall), the
+                // synthetic `.accessibilityLabel` (removed, still six), the
+                // column width (104 points → 329, still 100% of visible tiles
+                // — see the note below), the hidden symbol, and
+                // `.accessibilityAddTraits(.isButton)`.
                 //
                 // A short last row pads with clear tiles so that three tiles
                 // and two tiles are the same width.
