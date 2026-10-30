@@ -159,13 +159,13 @@ struct HomeAttentionView: View {
             if state.showsChecking {
                 Text(HomeAttentionStrings.checking)
                     .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.fgMuted)
                     .fixedSize(horizontal: false, vertical: true)
             }
             if state.showsStaleMark {
                 Text(HomeAttentionStrings.stale)
                     .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.fgMuted)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -224,7 +224,7 @@ struct HomeAttentionView: View {
     private func rowTime(_ at: String) -> some View {
         Text(relTime(at, nowMs: nowMs))
             .font(.footnote)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(Color.fgMuted)
             .monospacedDigit()
     }
 
@@ -246,12 +246,32 @@ struct HomeAttentionView: View {
             .accessibilityHidden(true)
     }
 
+    /// ### The three system colours here are a known, measured gap
+    ///
+    /// `.red`, `.orange` and `.green` are 3.55:1, **2.20:1** and **2.22:1**
+    /// on the light canvas, and a dot that carries meaning needs 3:1 — so two
+    /// of the three fail. Apple's audit does not say so, and cannot: the dot
+    /// is `.accessibilityHidden(true)` just above, so it is not an element the
+    /// audit looks at. Measured by hand, not reported.
+    ///
+    /// They are **not** swapped for ``Color/errInk``, ``Color/warnInk`` and
+    /// ``Color/okInk`` here, although those exist and pass, because the ink
+    /// tokens are *text* inks at 5.65-6.08:1 and a dot drawn in one reads
+    /// brown rather than amber. That is the open question already in front of
+    /// Kamron about the header's live dot — bright fill with a dark ring, or
+    /// the duller ink — and this is the same question, so it waits for the
+    /// same answer rather than being settled twice differently.
+    ///
+    /// `.idle` and `.brand` are tokens because neither had that trade-off:
+    /// `.secondary` was failing Apple's audit outright as *text* in this same
+    /// file (3.44:1, "Contrast nearly passed"), and `brandInk` was already
+    /// chosen for the live dot.
     private func colour(of tone: HealthTone) -> Color {
         switch tone {
         case .err: return .red
         case .warn: return .orange
         case .ok: return .green
-        case .idle: return .secondary
+        case .idle: return Color.fgMuted
         case .brand: return Color.brandInk
         }
     }
