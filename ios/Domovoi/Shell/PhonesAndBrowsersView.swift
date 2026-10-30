@@ -101,13 +101,19 @@ struct PhonesAndBrowsersPanel: View {
                     }
                 }
                 .font(.footnote.monospaced())
+                .textFieldStyle(.roundedBorder)
                 // A vertical field sizes to its text, and `.roundedBorder`
                 // gave it **18 points** — which Apple's audit then failed as
                 // "Hit area is too small", a finding the single-line field
                 // never had. The minimum is stated so growing with the type
                 // size is the only direction it goes.
+                //
+                // **After the style, not before.** The first attempt put this
+                // above `.textFieldStyle` and the field measured 18 points
+                // again: a field style builds the control around what it is
+                // given, so a frame set first is a frame set on the thing
+                // inside the border rather than on the control.
                 .frame(minHeight: 34)
-                .textFieldStyle(.roundedBorder)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .keyboardType(.URL)

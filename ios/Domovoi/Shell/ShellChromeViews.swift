@@ -235,7 +235,22 @@ struct PhoneBarView: View {
             }
         }
         .padding(.top, 4)
-        .background(.bar)
+        // **Opaque, with its own edge.** This was `.background(.bar)`, the
+        // translucent tab-bar material, and the one accessibility finding
+        // nobody could place for five runs was Apple failing the `music`
+        // caption on contrast — on Home and on Settings, the same element
+        // both times, while `videos` and `chat` beside it in the same colour
+        // and the same font passed.
+        //
+        // `fgMuted` measures 6.98:1 against the bar in a screenshot, so the
+        // colour was never the answer, and nothing about one word of four
+        // explains it. What is true of all four is that they were drawn on a
+        // material whose colour is whatever is behind it, which is not
+        // something a contrast check can read. Now the bar is a surface, the
+        // captions sit on a known colour, and `Divider` gives the edge the
+        // material used to imply.
+        .background(Color(.secondarySystemBackground))
+        .overlay(alignment: .top) { Divider() }
     }
 
     @ViewBuilder private func tabs(equalWidth: Bool) -> some View {
