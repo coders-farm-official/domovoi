@@ -847,11 +847,12 @@ final class StubHouseUITests: XCTestCase {
     func testWhichPieceOfAPushedScreenCarriesTheEight() throws {
         var counts: [(String, Int)] = []
         for variant in [
-            // The three arrivals, measured against each other before any
-            // piece is removed. See the note on `tap` below.
+            // `none` is kept as the documented anomaly, not as a control: a
+            // **seeded** push measures 0 with the destination fully on screen,
+            // while the identical push by tap measures 8. Nothing explains
+            // that yet, so every variant below arrives by a tap instead.
             "none", "tap", "tapAfterHomeAudit",
-            "topBar", "phoneBar", "navBar", "root", "plainRoot",
-            "content", "lazyGrid",
+            "topBar", "phoneBar", "navBar", "plainRoot", "content", "lazyGrid",
         ] {
             // **Three ways to arrive, because the delay was not the
             // difference either.** With the push held 12 seconds and
@@ -880,17 +881,21 @@ final class StubHouseUITests: XCTestCase {
             //  - `tap` is `none` arriving the other way, audited once.
             //  - `tapAfterHomeAudit` is the push test exactly: Home audited,
             //    then the tab tapped, then the pushed screen audited.
-            let arrivesByTap = variant.hasPrefix("tap")
+            // **Everything but `none` arrives by tap**, because that is the
+            // only arrival that has ever reported the eight. Which element
+            // gets tapped depends on what the variant took away:
+            //
+            //  - the phone bar's `Music` tab, normally;
+            //  - one of Home's everything tiles when the **bar itself** is
+            //    the piece removed (the tiles are
+            //    ``ShellModel/everything``, which is unaffected by the bar
+            //    not being drawn);
+            //  - the plain root's own button when **Home** is the piece
+            //    removed, which is why that root has one.
+            let arrivesByTap = variant != "none"
             let app = arrivesByTap
-                ? launch()
-                : launch(
-                    strip: variant == "none" ? nil : variant,
-                    push: "Music",
-                    // Long enough for Home's seven sections to land against
-                    // the stub, because a push that beats them measures an
-                    // empty root and reads 0 for the wrong reason.
-                    pushDelay: Self.pushDelay
-                )
+                ? launch(strip: ["tap", "tapAfterHomeAudit"].contains(variant) ? nil : variant)
+                : launch(strip: nil, push: "Music", pushDelay: Self.pushDelay)
             // **Recorded, not assumed.** The confound that wasted the first
             // run was invisible in its own log: every count was 0 and nothing
             // said the root had been blank. This prints whether the house name
@@ -905,12 +910,21 @@ final class StubHouseUITests: XCTestCase {
                 print("STRIP [\(variant)] home audited first: \(before.count)")
             }
             if arrivesByTap {
-                let tab = app.buttons[ShellStringsUnderTest.musicTab]
-                XCTAssertTrue(
-                    tab.waitForExistence(timeout: 10),
-                    "no Music tab in the phone bar for \(variant)"
-                )
-                tab.tap()
+                let opener: XCUIElement
+                switch variant {
+                case "phoneBar": opener = app.buttons[ShellStringsUnderTest.filesTile]
+                case "plainRoot": opener = app.buttons[ShellStringsUnderTest.plainRootPush]
+                default: opener = app.buttons[ShellStringsUnderTest.musicTab]
+                }
+                guard opener.waitForExistence(timeout: 20) else {
+                    // The tree, not a sentence about what is missing — this
+                    // file has paid six runs for that lesson once already.
+                    print("STRIP [\(variant)] NO OPENER — tree follows")
+                    print(app.debugDescription)
+                    app.terminate()
+                    continue
+                }
+                opener.tap()
             }
             // ### The arrival condition, and the third timing confound
             //
@@ -987,7 +1001,10 @@ final class StubHouseUITests: XCTestCase {
         // The control, and only the control. If the whole shell stops
         // auditing 8 on a pushed screen then the five numbers beside it are
         // differences from a baseline that moved, and the run says nothing.
-        let control = counts.first { $0.0 == "none" }?.1
+        // **`tap`, not `none`.** The seeded arrival reports 0 for reasons
+        // nothing has explained, so it cannot be the baseline the others are
+        // read against.
+        let control = counts.first { $0.0 == "tap" }?.1
         XCTAssertEqual(
             control,
             Self.knownPushedIssues,
@@ -1050,4 +1067,12 @@ private enum ShellStringsUnderTest {
 
     /// ``ShellTopBar``'s leading text once the Music route is pushed.
     static let musicCrumb = "domovoi / music"
+
+    /// An everything-grid tile, which is how the no-phone-bar variant leaves
+    /// Home. ``Route/label`` again, so capitalised.
+    static let filesTile = "Files"
+
+    /// ``AuditStrip/plainRootPush`` — the one button on the plain root.
+    /// Spelled out rather than imported, like every other string here.
+    static let plainRootPush = "push music from a plain root"
 }

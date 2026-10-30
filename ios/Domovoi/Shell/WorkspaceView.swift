@@ -131,11 +131,19 @@ struct WorkspaceView: View {
             Color.clear
         case .plainRoot:
             // Three text styles, no container worth the name, nothing of
-            // ours. If the eight follow this root they were never ours.
+            // ours — plus the one button needed to leave it.
+            //
+            // **The button is not decoration.** A seeded push measures 0 on
+            // every variant for reasons nothing has explained, while the same
+            // push performed by a tap measures 8; so every variant has to
+            // arrive by a tap, and a root with nothing to tap cannot be
+            // measured at all. This is the smallest root that can still be
+            // left the same way the others are.
             VStack(spacing: 8) {
                 Text("alpha").font(.body)
                 Text("bravo").font(.caption)
                 Text("charlie").font(.title3)
+                Button(AuditStrip.plainRootPush) { model.navigate(.music) }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         default:
@@ -259,6 +267,10 @@ enum AuditStrip: String {
         return nil
         #endif
     }
+
+    /// The plain root's button label, shared with the test so a rename
+    /// cannot silently stop the query matching.
+    static let plainRootPush = "push music from a plain root"
 
     private static func value(after flag: String) -> String? {
         let arguments = ProcessInfo.processInfo.arguments
