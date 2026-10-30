@@ -628,6 +628,73 @@ final class StubHouseUITests: XCTestCase {
         XCTAssertEqual(counts.count, 3, "a launch did not get far enough to audit")
     }
 
+
+    /// **Is it the screen, or is it being pushed?** The last difference left.
+    ///
+    /// What is known after two bisects: paired Home audits 0, unpaired Home
+    /// audits 0 now the pair link is 44 points, the local shell audits 0, and
+    /// **every** `SettingsPlaceholder` state audits 8 — the index, the group
+    /// list, a section with no panel, and the pairing screen alike. The eight
+    /// do not move when the content changes completely, so they are not the
+    /// content. They are not one-per-larger-type-size either: launching at S,
+    /// large and AX5 gave 8, 8 and 7 against a prediction of 10, 8 and 0.
+    ///
+    /// One difference remains. Home and the local shell are **roots** of the
+    /// `NavigationStack`; every screen that audits 8 is a screen that was
+    /// **pushed** onto it. A pushed destination gets the stack's own
+    /// navigation bar, which is where ``WorkspaceView/stack`` already found
+    /// one layout bug — the back button and our breadcrumb drawn on top of
+    /// each other, at ordinary type size.
+    ///
+    /// This pushes a route with no Settings in it at all. `music` is the
+    /// phone bar's second tab and ``ShellModel/navigate(_:)`` appends it to
+    /// `path`, so it is pushed exactly as Settings is, while sharing none of
+    /// its views.
+    ///
+    ///  - `music` near 8 ⇒ the eight belong to the **push**, and Settings was
+    ///    never involved. `knownPairingIssues` is then a property of every
+    ///    pushed screen in the app, which is a much larger finding than a
+    ///    card that needs a `fixedSize`.
+    ///  - `music` at 0 ⇒ it is Settings' own chrome after all, and what is
+    ///    left is the two lines every state draws, `settingsTitle` and
+    ///    `settingsSub`.
+    @MainActor
+    func testWhetherAPushedScreenIsWhatCarriesTheEight() throws {
+        let app = launch()
+        XCTAssertTrue(
+            houseName(in: app).waitForExistence(timeout: 20),
+            "Home did not draw against the stub house"
+        )
+        evidence(app, "70-push-root")
+        let root = try auditIssues(app, "push-root")
+        print("PUSH [root] \(root.count)")
+
+        // The phone bar's `music` tab. `Route/label` is the raw value and the
+        // tab carries it as its accessibility label, which is how a person
+        // reaches it too.
+        let tab = app.buttons["music"]
+        XCTAssertTrue(tab.waitForExistence(timeout: 10), "no music tab in the phone bar")
+        tab.tap()
+        XCTAssertTrue(
+            houseName(in: app).waitForNonExistence(timeout: 10),
+            "the music tab did not leave Home"
+        )
+        evidence(app, "70-push-music")
+        let pushed = try auditIssues(app, "push-music")
+        print("PUSH [music] \(pushed.count)")
+        for line in pushed { print("PUSH [music]   \(line)") }
+        print("PUSH SUMMARY root=\(root.count) music=\(pushed.count)")
+
+        // Home as a root is the one number already pinned, and it is the
+        // control for the comparison rather than the thing under test.
+        XCTAssertEqual(
+            root.count,
+            Self.knownHomeIssues,
+            "Home audited \(root.count), not the known \(Self.knownHomeIssues) — "
+                + "the pushed count is being read against a baseline that moved"
+        )
+    }
+
 }
 
 /// Strings this file matches on, kept together and named so that a change in
