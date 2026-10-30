@@ -481,9 +481,6 @@ final class StubHouseUITests: XCTestCase {
             link.waitForExistence(timeout: 20),
             "no pairing link on Home — the unpaired header did not draw"
         )
-        link.tap()
-        XCTAssertTrue(link.waitForNonExistence(timeout: 10), "the pairing link did nothing")
-
         // No `#available` check: `IPHONEOS_DEPLOYMENT_TARGET` is 18.0
         // (`project.yml:40`), so ``auditIssues``' `@available(iOS 17.0, *)` is
         // already satisfied. The `if #available` blocks elsewhere in this file
@@ -502,6 +499,23 @@ final class StubHouseUITests: XCTestCase {
             print("BISECT [\(name)] \(found.count) issue(s)")
             for line in found { print("BISECT [\(name)]   \(line)") }
         }
+
+        // **Home, still unpaired, before the tap.** The first run of this
+        // bisect returned 8 for all four Settings states — an index with a
+        // title, a sub and five group buttons scored the same as a section
+        // with a headline, a sub, `not built yet` and a back button. A count
+        // that does not move when the entire content of the screen changes is
+        // not a count of that content, and the uncontrolled difference was
+        // sitting in `launch(paired: false)`: every state this test visits is
+        // in the **unpaired** app, where Home's clean audit is a paired one.
+        //
+        // So this step is the control that should have been here first. Eight
+        // here and the findings are the unpaired chrome's, and Settings never
+        // had anything to do with them.
+        try step("0-home-unpaired")
+
+        link.tap()
+        XCTAssertTrue(link.waitForNonExistence(timeout: 10), "the pairing link did nothing")
 
         try step("A-phones")
 
@@ -539,14 +553,17 @@ final class StubHouseUITests: XCTestCase {
 
         print("BISECT SUMMARY " + counts.map { "\($0.0)=\($0.1)" }.joined(separator: " "))
 
-        // The one count that is already known. If this drifts, the other
-        // three are being read against a baseline that moved.
+        // The one count that is already known. **By name**, not by position:
+        // this used to read `counts.first`, and adding a step before the
+        // pairing screen would have silently re-pointed the only assertion in
+        // the test at a different screen.
+        let baseline = counts.first { $0.0 == "A-phones" }?.1
         XCTAssertEqual(
-            counts.first?.1,
+            baseline,
             Self.knownPairingIssues,
-            "the pairing screen audited \(counts.first?.1 ?? -1), not the known "
-                + "\(Self.knownPairingIssues) — the other three counts in this run "
-                + "are measured against a baseline that has changed"
+            "the pairing screen audited \(baseline.map(String.init) ?? "nothing"), not the "
+                + "known \(Self.knownPairingIssues) — every other count in this run is "
+                + "measured against a baseline that has changed"
         )
     }
 }
