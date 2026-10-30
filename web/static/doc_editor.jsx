@@ -1419,6 +1419,7 @@
     const [registry, setRegistry] = React.useState(opts.fonts || window.DomovoiFonts || null);
     const [fonts, setFonts] = React.useState(BUILTIN_FONTS);
     const [editable, setEditable] = React.useState(false);
+    const downAt = React.useRef(null); // where the last press began (pageTap)
     const markdown = opts.format === 'md';
     const coll = opts.collab || null;
     // Editable unless the caller said read-only, and, when co-editing, only
@@ -1520,7 +1521,8 @@
         )}
         {error && <div style={{ padding: 20, color: 'var(--err-ink)', fontSize: 13 }}>The editor couldn't start: {error}</div>}
         {!editor && !error && <div style={{ padding: 20, color: 'var(--fg-faint)', fontSize: 13 }}>Opening…</div>}
-        <div className="de-scroll" onClick={(e) => pageTap(editor, e)}>
+        <div className="de-scroll" onPointerDown={(e) => { downAt.current = { x: e.clientX, y: e.clientY }; }}
+             onClick={(e) => pageTap(editor, e, downAt.current)}>
           <div className="de-paper" style={{ display: editor ? undefined : 'none' }}>
             <div ref={mountRef}/>
           </div>
@@ -1534,9 +1536,15 @@
    * else at the nearest place. ProseMirror handles taps on the text itself;
    * pictures, their bar and caption, checkboxes and links keep their own
    * taps; a read-only document isn't focused at all. On a phone this is
-   * what brings up the keyboard, so it runs on the tap (click) itself. */
-  const pageTap = (editor, e) => {
+   * what brings up the keyboard, so it runs on the tap (click) itself.
+   * Only a tap: a drag that selects across lines also ends in a click, on
+   * the lines' common parent (the editor itself), and treating it as a tap
+   * threw the selection away. So a press that moved, a shift-click or a
+   * double/triple click is left alone. */
+  const pageTap = (editor, e, down) => {
     if (!editor || editor.isDestroyed || !editor.isEditable) return;
+    if (e.shiftKey || e.detail > 1) return;
+    if (down && Math.hypot(e.clientX - down.x, e.clientY - down.y) > 6) return;
     const t = e.target;
     if (!(t instanceof Element)) return;
     if (t.closest('.de-fig, a, button, input, label, select, textarea, .de-pop')) return;
