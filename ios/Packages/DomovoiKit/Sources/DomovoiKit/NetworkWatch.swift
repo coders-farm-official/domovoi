@@ -53,7 +53,7 @@ import Synchronization
 /// ## What was measured, on macOS 26.4.1 / Swift 6.3, 2026-10-29
 ///
 ///  - **`NWPath.gateways` is real and it is populated.** The default path on
-///    the build Mac reported `[192.168.0.1:0]`: an
+///    the build Mac reported `[192.168.1.1:0]`: an
 ///    `NWEndpoint.hostPort` whose port is 0. So the gateway IS in the
 ///    fingerprint, which the plan's note ("the gateway where the path reports
 ///    it") left as an open question.
@@ -117,7 +117,7 @@ public final class NetworkWatch: Sendable {
         public var iface: Set<String> = []
         /// `192.168.1.57/24`, from `getifaddrs`.
         public var addresses: Set<String> = []
-        /// What `NWPath.gateways` reports, e.g. `192.168.0.1:0`.
+        /// What `NWPath.gateways` reports, e.g. `192.168.1.1:0`.
         public var gateways: Set<String> = []
         /// **Always nil on iOS**: `NWPath` does not expose the resolvers.
         public var dns: Set<String> = []

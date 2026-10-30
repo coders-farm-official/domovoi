@@ -89,6 +89,22 @@ struct HomeEverythingView: View {
         .buttonStyle(.plain)
         .foregroundStyle(Color.brandInk)
         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
-        .accessibilityLabel(route.label)
+        // ### No synthetic label here, and the audit is why
+        //
+        // This read `.accessibilityLabel(route.label)`, which says the right
+        // words and cost six audit findings — one per tile, each named
+        // outright: `element: type=48 label='People' frame=(32.0, 699.3,
+        // 104.3, 72.0)`, "Dynamic Type font sizes are partially unsupported".
+        //
+        // A label on the container **replaces** its children's accessibility,
+        // so the element Apple inspected had a string and no `Text`. There
+        // was no font to scale, which is exactly what that finding says, and
+        // the `Text` below — `.caption`, `fixedSize`, free to grow — was
+        // hidden behind the very label that described it.
+        //
+        // Dropping it changes nothing a person hears: the `Image` is
+        // `accessibilityHidden`, so `Text(route.label)` is the only element
+        // left and SwiftUI reads it as the button's label. Same words, and a
+        // font the audit can see.
     }
 }

@@ -376,7 +376,7 @@ final class NetworkWatchTests: XCTestCase {
         try XCTSkipUnless(path.status == .satisfied, "SKIPPED, NOT PASSED — the build Mac has no satisfied path, so there are no interfaces or gateways to find")
         XCTAssertFalse(facts.iface.isEmpty)
         // `NWPath.gateways` is real and populated: measured as
-        // `[192.168.0.1:0]` on the build Mac, which is the open question the
+        // `[192.168.1.1:0]` on the build Mac, which is the open question the
         // plan left ("the gateway where the path reports it").
         XCTAssertFalse(facts.gateways.isEmpty, "the default path reported no gateway")
         XCTAssertTrue(facts.transports.contains("ipv4") || facts.transports.contains("ipv6"))
@@ -499,7 +499,7 @@ final class NetworkWatchTests: XCTestCase {
         wifi.status = "satisfied"
         wifi.transports = ["wifi"]
         wifi.iface = ["en0/wifi/14"]
-        wifi.gateways = ["192.168.0.1:0"]
+        wifi.gateways = ["192.168.1.1:0"]
 
         // The seed: one picture, whatever it is made of. The interfaces are
         // read inside it, exactly as `start()` does, because
