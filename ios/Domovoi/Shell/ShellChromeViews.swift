@@ -246,7 +246,15 @@ struct PhoneBarView: View {
                 // directions, on the app's primary navigation. Same
                 // defect as the header's live dot, found the same way.
                 .contentShape(Rectangle())
-                .foregroundStyle(selected ? Color.brandInk : Color.fgMuted)
+                // DIAGNOSTIC, to be reverted. The local shell audits clean
+                // with the same top bar and no phone bar, so the chrome's one
+                // "Contrast failed" is in here. Every colour in this bar
+                // measures well: `fgMuted` is 6.98:1 and `brandInk` 5.31:1 on
+                // the `.bar` fill, off the screenshot. The selected tab is the
+                // only element that differs from the other three, and only
+                // one issue is reported, so this run asks whether the colour
+                // is what the audit objects to or the structure is.
+                .foregroundStyle(Color.fgMuted)
             }
             .buttonStyle(.plain)
             .accessibilityLabel(route.label)
