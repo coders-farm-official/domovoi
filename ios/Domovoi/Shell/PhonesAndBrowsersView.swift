@@ -15,44 +15,38 @@ import SwiftUI
 /// no batch has built, and a theme chip that does not change the theme is the
 /// misleading control the owner has ruled out twice. `I1C3-REPORT.md` says so
 /// and sizes it as its own batch.
+/// ### This panel does not scroll, and does not own the forget dialog
+///
+/// Both changed in 3b. It was `ZStack { ScrollView { … } }` **inside a screen
+/// with no `ScrollView` at all**, so the scroll was in the wrong place: the
+/// panel's viewport sliced the `Household token` card in half and pinned the
+/// back link under it, which is visible in a screenshot. ``SettingsPlaceholder``
+/// scrolls now and this is a plain stack of three cards.
+///
+/// The dialog moved with the scroll view, because it was centred in a `ZStack`
+/// that was screen-sized only *because* that `ScrollView` filled the screen.
+/// ``SettingsPlaceholder`` carries the decision and the reasoning; what is
+/// left here is the binding, so that the control which asks and the dialog
+/// which answers share one piece of state rather than two.
 struct PhonesAndBrowsersPanel: View {
 
     let model: ShellModel
 
+    /// Set by the forget X, read and cleared by the dialog, which lives at the
+    /// screen's root — see ``SettingsPlaceholder``.
+    @Binding var askingToForget: Bool
+
     @State private var typedURL = ""
     @State private var saving = false
-    @State private var askingToForget = false
     @State private var seededFor = ""
 
     var body: some View {
-        ZStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    serverCard
-                    householdTokenCard
-                    trustedServersCard
-                }
-                .padding(16)
-            }
-            if askingToForget, let ask = model.forgetActiveAsk() {
-                DialogCard {
-                    ForgetServerCard(
-                        ask: ask,
-                        onCancel: { askingToForget = false },
-                        onConfirm: {
-                            askingToForget = false
-                            // The forget asks for the picker as it goes
-                            // (``ShellModel/forgetTheActiveServer()``), which
-                            // is the only way the dialog can outlive the
-                            // screen that opened it: this panel is in the
-                            // workspace, and the workspace is gone the
-                            // instant the server is.
-                            model.forgetTheActiveServer()
-                        }
-                    )
-                }
-            }
+        VStack(alignment: .leading, spacing: 16) {
+            serverCard
+            householdTokenCard
+            trustedServersCard
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .onAppear { seedTheField() }
     }
 
