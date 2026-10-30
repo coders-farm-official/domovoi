@@ -30,9 +30,7 @@ struct HomeEverythingView: View {
     /// clipped. `minimumScaleFactor` is the other answer and is rejected
     /// throughout this app.
     private var columns: [GridItem] {
-        // DIAGNOSTIC — one column at every size. Was
-        // `typeSize.isAccessibilitySize ? 1 : 3`.
-        let count = 1
+        let count = typeSize.isAccessibilitySize ? 1 : 3
         return Array(repeating: GridItem(.flexible(), spacing: 8), count: count)
     }
 
@@ -75,9 +73,15 @@ struct HomeEverythingView: View {
             VStack(spacing: 6) {
                 Image(systemName: route.systemImage)
                     .font(.title3)
-                    // The symbol is decoration beside the label, which says
-                    // the same thing in words.
-                    .accessibilityHidden(true)
+                    // DIAGNOSTIC — the live variable. Was
+                    // `.accessibilityHidden(true)`, on the reasoning that the
+                    // symbol is decoration beside a label that says the same
+                    // thing in words. True of VoiceOver, but hiding it leaves
+                    // the button one child, and the audit then reports the
+                    // tile as a **staticText** (type 48) carrying the
+                    // button's frame. The phone bar's tab is the same
+                    // Image-over-caption Button, does not hide its symbol,
+                    // reports as a button, and audits clean.
                 Text(route.label)
                     .font(.caption)
                     .fixedSize(horizontal: false, vertical: true)
