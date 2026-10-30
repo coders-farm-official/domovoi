@@ -78,14 +78,38 @@ final class StubHouseUITests: XCTestCase {
     /// `font(.system(size:` and `UIFont.systemFont` finds none — so whatever
     /// Dynamic Type objects to there, it is not a hard-coded point size.
     private static let knownHomeIssues = 0
-    /// **Zero, and the name was wrong for three sessions.**
+    /// **Eight false positives, measured as such.** The platform floor every
+    /// pushed screen in this app sits on.
     ///
-    /// This was `knownPairingIssues = 8`, and it was never about pairing: the
-    /// Settings index, the group list, a section with no panel, the token
-    /// card and a pushed `music` all audited 8, so it was a property of being
-    /// **pushed**. It is 0 now. What took the eight away is in
-    /// ``testWhichPieceOfAPushedScreenCarriesTheEight``.
-    private static let knownPushedIssues = 8
+    /// This was `knownPairingIssues`, and the name was wrong for three
+    /// sessions: the Settings index, the group list, a section with no panel,
+    /// the token card and a pushed `music` all audit 8, so it was never about
+    /// pairing. ``testWhichPieceOfAPushedScreenCarriesTheEight`` found where
+    /// they live — four in ``ShellTopBar`` and four in ``PhoneBarView``, one
+    /// per text leaf — and ``testTheBarsTextGrowsOnAPushedScreen`` found that
+    /// every one of them scales:
+    ///
+    /// ```
+    /// SCALE GREW Chat 13.3->48.0 | Home 13.3->48.0 | Music 13.3->48.0
+    ///            Videos 13.3->48.0 | crumb 15.7->52.7
+    /// SCALE STUCK
+    /// ```
+    ///
+    /// A 3.6x growth between `large` and AX5, on the very leaves Apple says
+    /// "User will not be able to change the font size of". The detail line is
+    /// **false** about these elements, and `element: nil` on all eight is the
+    /// audit reporting what it could not measure as what it found broken. The
+    /// same eight leaves on Home, as the stack's root, audit 0.
+    ///
+    /// ### Why this is a floor and not a suppression
+    ///
+    /// It is asserted by **signature**, not by total (``floorAndRest(_:)``):
+    /// a ninth of these fails the suite, and so does one finding of any other
+    /// kind, or one of these that arrives *with* an element — which is what a
+    /// real Dynamic Type defect would look like. Pinning the total alone would
+    /// have let a new contrast finding in unnoticed the moment one of the
+    /// eight went away, which is exactly what `knownPairingIssues` was doing.
+    private static let knownPushedBarFloor = 8
 
     /// Seconds the seeded push waits for the root to draw
     /// (``AuditStrip/pushDelay``).
@@ -126,6 +150,21 @@ final class StubHouseUITests: XCTestCase {
         return app
     }
 
+    /// Split an audit's findings into the measured floor and everything else.
+    ///
+    /// The floor is the eight of ``knownPushedBarFloor``, identified by the
+    /// signature they have and a real defect would not: this headline, and
+    /// **no element**. Anything else — a contrast finding, a hit-area
+    /// finding, or a Dynamic Type finding that names an element — lands in
+    /// `rest`, which every caller asserts is empty.
+    private static func floorAndRest(_ found: [String]) -> (floor: Int, rest: [String]) {
+        let signature = "Dynamic Type font sizes are partially unsupported"
+        func isFloor(_ line: String) -> Bool {
+            line.hasPrefix(signature) && line.hasSuffix("| element: nil")
+        }
+        return (found.filter(isFloor).count, found.filter { !isFloor($0) })
+    }
+
     /// The house's name in the header, which is the one thing on this screen
     /// only a *completed read* can produce: `HomeConfig.name(of:)` draws
     /// `bot_name` when it is non-blank and the literal `domovoi` otherwise,
@@ -143,7 +182,7 @@ final class StubHouseUITests: XCTestCase {
     /// Not the screen titled `pair this phone`. ``HomeHeaderStrings/pairLink``
     /// opens the token card in Settings — `domovoi / settings`,
     /// `Household token`, `Save & reconnect` — and that is what
-    /// ``knownPushedIssues`` has always counted, which the bisect's own step
+    /// ``knownPushedBarFloor`` has always counted, which the bisect's own step
     /// name `A-phones` says out loud. The screen titled `pair this phone`,
     /// with `not now` on it, is a **different** one: an unpaired phone's
     /// device-tier reads come back 403 and the shell raises it by itself
@@ -314,7 +353,14 @@ final class StubHouseUITests: XCTestCase {
         defer { continueAfterFailure = wasContinuing }
         var found: [String] = []
         try app.performAccessibilityAudit { issue in
-            found.append("\(issue.compactDescription): \(issue.detailedDescription)")
+            // **The element is part of the record, not just the log.** The
+            // eight are told apart from a real Dynamic Type defect by having
+            // no element (``knownPushedBarFloor``), and a classifier that
+            // reads only the two descriptions cannot see that difference.
+            found.append(
+                "\(issue.compactDescription): \(issue.detailedDescription)"
+                    + " | element: \(Self.oneLine(issue.element))"
+            )
             // **One `print` per line, deliberately.** This was a single
             // `print` of a multi-line string, and `xcodebuild`'s output kept
             // only its first line: three runs' worth of logs showed the
@@ -472,7 +518,7 @@ final class StubHouseUITests: XCTestCase {
     /// ### It also audits, and this screen is the worse of the two
     ///
     /// Fourteen issues, against Home's one. Six of them are the phone bar's,
-    /// which ``knownPushedIssues`` says what is known about; the other
+    /// which ``knownPushedBarFloor`` says what is known about; the other
     /// **eight are this screen's own** — four "Dynamic Type font sizes are
     /// partially unsupported", three "Text clipped" and one contrast — and
     /// they are I1-D work rather than an accepted limit.
@@ -495,11 +541,18 @@ final class StubHouseUITests: XCTestCase {
         evidence(app, "30-pairing")
         if #available(iOS 17.0, *) {
             let found = try auditIssues(app, "pairing")
+            let split = Self.floorAndRest(found)
+            XCTAssertTrue(
+                split.rest.isEmpty,
+                "Apple's audit has findings against the pairing screen beyond the "
+                    + "measured floor of \(Self.knownPushedBarFloor): "
+                    + split.rest.joined(separator: " / ")
+            )
             XCTAssertEqual(
-                found.count,
-                Self.knownPushedIssues,
+                split.floor,
+                Self.knownPushedBarFloor,
                 "Apple's audit has \(found.count) against the pairing screen, "
-                    + "not the \(Self.knownPushedIssues) known: "
+                    + "not the \(Self.knownPushedBarFloor) known: "
                     + found.joined(separator: " | ")
             )
         }
@@ -540,7 +593,7 @@ final class StubHouseUITests: XCTestCase {
     ///
     /// **Deliberately not an equality assertion.** Three of these four counts
     /// are unknown — that is the point of running it — so this asserts only
-    /// the baseline, which ``knownPushedIssues`` already pins, and otherwise
+    /// the baseline, which ``knownPushedBarFloor`` already pins, and otherwise
     /// prints. A diagnostic that fails on an unknown it was written to
     /// discover tells you nothing you did not put there.
     @MainActor
@@ -635,9 +688,9 @@ final class StubHouseUITests: XCTestCase {
         let baseline = counts.first { $0.0 == "A-phones" }?.1
         XCTAssertEqual(
             baseline,
-            Self.knownPushedIssues,
+            Self.knownPushedBarFloor,
             "the pairing screen audited \(baseline.map(String.init) ?? "nothing"), not the "
-                + "known \(Self.knownPushedIssues) — every other count in this run is "
+                + "known \(Self.knownPushedBarFloor) — every other count in this run is "
                 + "measured against a baseline that has changed"
         )
     }
@@ -665,7 +718,7 @@ final class StubHouseUITests: XCTestCase {
     /// | AX5 | none | **0** |
     ///
     /// If the counts come back 10/8/0 the eight were never eight defects and
-    /// `knownPushedIssues` is a count of *sizes*, which changes what fixing
+    /// `knownPushedBarFloor` is a count of *sizes*, which changes what fixing
     /// them means. If they come back 8/8/8 the hypothesis is dead and the
     /// number is a cap.
     @MainActor
@@ -721,7 +774,7 @@ final class StubHouseUITests: XCTestCase {
     /// its views.
     ///
     ///  - `music` near 8 ⇒ the eight belong to the **push**, and Settings was
-    ///    never involved. `knownPushedIssues` is then a property of every
+    ///    never involved. `knownPushedBarFloor` is then a property of every
     ///    pushed screen in the app, which is a much larger finding than a
     ///    card that needs a `fixedSize`.
     ///  - `music` at 0 ⇒ it is Settings' own chrome after all, and what is
@@ -1007,10 +1060,10 @@ final class StubHouseUITests: XCTestCase {
         let control = counts.first { $0.0 == "tap" }?.1
         XCTAssertEqual(
             control,
-            Self.knownPushedIssues,
+            Self.knownPushedBarFloor,
             "a pushed screen with the whole shell around it audited "
                 + "\(control.map(String.init) ?? "nothing"), not the known "
-                + "\(Self.knownPushedIssues) — every other count in this run, "
+                + "\(Self.knownPushedBarFloor) — every other count in this run, "
                 + "`lazyGrid` above all, is a difference from a baseline that "
                 + "has moved"
         )
@@ -1138,7 +1191,7 @@ final class StubHouseUITests: XCTestCase {
             "Apple's audit says these leaves cannot be resized, and these did not grow "
                 + "between large and AX5: \(stuck.joined(separator: ", ")) — which makes the "
                 + "eight a real defect in \(ShellStringsUnderTest.musicCrumb)'s bars rather "
-                + "than a floor, and `knownPushedIssues` is hiding it"
+                + "than a floor, and `knownPushedBarFloor` is hiding it"
         )
     }
 
