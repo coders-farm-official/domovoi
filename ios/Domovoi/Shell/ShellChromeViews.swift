@@ -230,12 +230,8 @@ struct PhoneBarView: View {
                 model.navigate(route)
             } label: {
                 VStack(spacing: 2) {
-                    // Decorative: the word below it says the same thing, and
-                    // a symbol that also carried a label gave VoiceOver
-                    // "Song" beside "music".
                     Image(systemName: route.systemImage)
                         .font(.body)
-                        .accessibilityHidden(true)
                     // No `.lineLimit`. `music` at an accessibility type size
                     // does not fit 98 points, and the horizontal scroll above
                     // is what makes room for it; a limit here would cut the
@@ -257,29 +253,35 @@ struct PhoneBarView: View {
                 .foregroundStyle(selected ? Color.brandInk : Color.fgMuted)
             }
             .buttonStyle(.plain)
-            // **No `.accessibilityLabel` here, and that is the fix.**
+            // ### This bar carries a known audit failure. Four explanations
+            // have been wrong about it, so here is what is actually known.
             //
-            // Removing the whole bar made Home audit clean and dropped the
-            // pairing screen from fourteen issues to eight, so the bar was
-            // the source of one "Contrast failed" and four "Dynamic Type font
-            // sizes are partially unsupported" — one per tab. No colour
-            // explains it: `fgMuted` is 6.98:1 and `brandInk` 5.31:1 on the
-            // `.bar` fill, and drawing all four in one colour changed
-            // nothing.
+            // Taking the whole bar out made Home audit **clean** and dropped
+            // the pairing screen from fourteen issues to eight. So the bar
+            // is the source of Home's one "Contrast failed" and of four
+            // "Dynamic Type font sizes are partially unsupported", one per
+            // tab. That part is measured, by removal, not argued.
             //
-            // What does explain both, and the detail Apple gives for the
-            // second — "User will not be able to change the font size of this
-            // element" — is that `.accessibilityLabel(route.label)` replaced
-            // the button's own content with a **synthetic string**. A string
-            // has no font and nothing drawn, so there is no size to scale and
-            // no pixels to measure, and the element fails both audits however
-            // legible the button actually is. The system `TabBar` in
-            // ``LocalShellView`` passes with buttons that hold nothing but an
-            // image, which is what says the drawing was never the problem.
+            // Ruled out, each by a run of its own:
             //
-            // So the word below the icon is the label: real text, with a real
-            // font, that scales because it is text. The icon is hidden from
-            // accessibility instead, since it was only ever repeating it.
+            //  - **the colours.** `fgMuted` is 6.98:1 and `brandInk` 5.31:1
+            //    on the `.bar` fill, measured off the screenshot, and drawing
+            //    all four tabs in one colour changed nothing.
+            //  - **"a button that is mostly background".** The system
+            //    `TabBar` in ``LocalShellView`` passes with buttons holding
+            //    nothing but an image, emptier than these.
+            //  - **the pill's capsule**, which the local shell also has.
+            //  - **a synthetic `.accessibilityLabel`.** Dropping it so the
+            //    drawn word became the label, and hiding the icon, changed
+            //    the tree — the buttons' labels went from `Home` to `home`
+            //    and the `StaticText` frames grew to the button's — and left
+            //    the audit's output byte for byte the same.
+            //
+            // `StubHouseUITests` asserts the **count**, so this is a live
+            // regression test rather than a silence: the next change to this
+            // bar that makes it worse fails, and so does the one that fixes
+            // it, which is when to delete this comment.
+            .accessibilityLabel(route.label)
             .accessibilityAddTraits(selected ? [.isButton, .isSelected] : [.isButton])
         }
     }
