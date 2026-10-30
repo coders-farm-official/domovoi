@@ -780,3 +780,25 @@ async def test_start_paused_on_an_empty_queue_starts_nothing() -> None:
     stub = MPDStubClient()
     assert await stub.start_paused() is False
     assert await stub.state() == "stop"
+
+
+async def test_the_frame_names_the_address_the_satellite_dialed(monkeypatch) -> None:
+    """2026-10-29: a Windows install pinned MPD_HTTP_BASE to the address it
+    had at setup; after a DHCP move every room was told to stream from an
+    address nobody answers. The room's own connection says where we are."""
+    from starlette.datastructures import URL
+
+    async def serving(room_id, stream_url=None, *, timeout=None):
+        return True
+
+    monkeypatch.setattr(mpd_module, "ensure_stream_serving", serving)
+    monkeypatch.setattr(settings, "mpd_http_base", "http://192.168.1.40")
+    sess, fake_app = FakeSession(), FakeApp()
+    sess.ws = type("WS", (), {"url": URL("ws://192.168.1.20:6370/v1/stream"), "scope": {}})()
+    await send_music_start(fake_app, sess, ROOM, "http://192.168.1.40:8051")
+    try:
+        assert [p for p, _ in sess.sent] == [
+            {"type": "music_start", "stream_url": "http://192.168.1.20:8051"},
+        ]
+    finally:
+        _drop_pending(fake_app)

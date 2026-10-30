@@ -314,3 +314,33 @@ def test_advertise_url_is_looked_up_at_adopt_time(monkeypatch):
     assert adoption.advertised_domovoi_url() == "ws://192.168.1.50:6370"
     _fake_network(monkeypatch, routed="192.168.1.77")
     assert adoption.advertised_domovoi_url() == "ws://192.168.1.77:6370"
+
+
+# ─── stream_url_for_peer: the address the satellite dialed wins ──────────
+
+
+@pytest.mark.parametrize("base", ["auto", "", "http://192.168.1.40"])
+def test_the_stream_follows_the_address_the_satellite_dialed(monkeypatch, base):
+    # The Windows install pins the address it had at setup (.40 here); after
+    # a DHCP move the rooms reach the server on .20 and must stream from it.
+    monkeypatch.setattr(settings, "mpd_http_base", base)
+    assert lan_address.stream_url_for_peer("http://192.168.1.40:8051", "192.168.1.20") \
+        == "http://192.168.1.20:8051"
+
+
+def test_a_host_name_someone_set_is_kept(monkeypatch):
+    monkeypatch.setattr(settings, "mpd_http_base", "http://music.home.arpa")
+    assert lan_address.stream_url_for_peer("http://music.home.arpa:8051", "192.168.1.20") \
+        == "http://music.home.arpa:8051"
+
+
+@pytest.mark.parametrize("url,dialed,want", [
+    ("http://192.168.1.40:8051", None, "http://192.168.1.40:8051"),
+    ("http://192.168.1.40:8051", "", "http://192.168.1.40:8051"),
+    ("https://192.168.1.40:8051", "192.168.1.20", "https://192.168.1.40:8051"),
+    ("http://192.168.1.40:8051", "fd00::20", "http://[fd00::20]:8051"),
+    ("http://192.168.1.40:8051", "domovoi.local", "http://domovoi.local:8051"),
+])
+def test_stream_url_for_peer_edges(monkeypatch, url, dialed, want):
+    monkeypatch.setattr(settings, "mpd_http_base", "auto")
+    assert lan_address.stream_url_for_peer(url, dialed) == want

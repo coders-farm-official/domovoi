@@ -26,6 +26,7 @@ import ipaddress
 import logging
 import socket
 import time
+from urllib.parse import urlsplit, urlunsplit
 
 from domovoi.config import settings
 
@@ -128,6 +129,36 @@ def reset_cache() -> None:
     again."""
     global _cached_ip, _cached_at
     _cached_ip, _cached_at = None, None
+
+
+def stream_url_for_peer(url: str, dialed_host: str | None) -> str:
+    """``url`` (a room stream from :func:`mpd_http_base`) with its host
+    swapped for ``dialed_host``, the address the satellite itself used to
+    reach this server. MPD runs on this host, so the address the satellite
+    already reached is the one that works, whatever the LAN lookup or a
+    saved ``MPD_HTTP_BASE`` says: a Windows install pinned the address it
+    had at setup, and after a DHCP move every room was sent a stream on an
+    address nobody answers (2026-10-29: the music started, then stopped).
+
+    Left as is: no dialed host, a URL that isn't plain http, and an
+    ``MPD_HTTP_BASE`` set to a host *name*, which someone chose on purpose
+    (an address written there is what Setup pins, so it is replaced)."""
+    host = (dialed_host or "").strip().strip("[]")
+    if not host:
+        return url
+    parts = urlsplit(url)
+    if parts.scheme != "http" or not parts.hostname:
+        return url
+    if not is_auto(settings.mpd_http_base):
+        base_host = urlsplit(settings.mpd_http_base.strip()).hostname or ""
+        try:
+            ipaddress.ip_address(base_host)
+        except ValueError:
+            return url
+    if ":" in host:
+        host = f"[{host}]"
+    netloc = f"{host}:{parts.port}" if parts.port else host
+    return urlunsplit(parts._replace(netloc=netloc))
 
 
 def mpd_http_base() -> str:

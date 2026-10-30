@@ -460,7 +460,7 @@ from uuid import UUID
 from fastapi import WebSocket, WebSocketDisconnect
 from sqlalchemy import text
 
-from domovoi import ai_features, command_captures
+from domovoi import ai_features, command_captures, lan_address
 from domovoi import fast_lane
 from domovoi import voice_activity
 from domovoi.admin_auth import TRUSTED_PROXIES, SlidingWindowLimiter, token_sha256
@@ -926,6 +926,21 @@ async def schedule_music_resume_fallback(app: Any, room_id: str, url: str) -> No
     pending[room_id] = {"url": url, "task": task}
 
 
+def _dialed_host(session: Any) -> str | None:
+    """The address the satellite dialed to reach this server: its Host
+    header, else this end of the socket. None when unknown (tests' fake
+    sessions)."""
+    ws = getattr(session, "ws", None)
+    try:
+        host = ws.url.hostname if ws is not None else None
+    except Exception:  # noqa: BLE001 — no scope, no Host: fall back
+        host = None
+    if not host:
+        server = (getattr(ws, "scope", None) or {}).get("server") if ws is not None else None
+        host = server[0] if server else None
+    return host or None
+
+
 async def send_music_start(
     app: Any,
     session: Any,
@@ -973,6 +988,7 @@ async def send_music_start(
             "no music_start", room_id,
         )
         return False
+    url = lan_address.stream_url_for_peer(url, _dialed_host(session))
     await session._safe_send_text({"type": "music_start", "stream_url": url})
     await schedule_music_resume_fallback(app, room_id, url)
     return True
