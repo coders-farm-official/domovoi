@@ -125,31 +125,25 @@ struct HomeEverythingView: View {
         .buttonStyle(.plain)
         .foregroundStyle(Color.brandInk)
         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
-        // ### Why a `Button` has to be *told* it is a button
+        // ### These two lines did **not** fix the audit, and are kept anyway
         //
-        // These two lines are the fix for six
-        // `Dynamic Type font sizes are partially unsupported` findings that
-        // part 3b put on this screen, and the trait is the one that matters.
+        // Written as a fix for the six
+        // `Dynamic Type font sizes are partially unsupported` findings part 3b
+        // put here, on the reasoning that every one came back `type=48` — a
+        // bare **staticText** — while the phone bar's otherwise identical tab
+        // carries these same two lines and audits clean. **Measured: still
+        // six.** The cause was the `LazyVGrid` above; see its note.
         //
-        // The audit's detail is the whole story once it is read:
-        // **"User will not be able to change the font size of this element"**
-        // — not a word about fitting or clipping, which is what five
-        // predictions wasted themselves on. It is a check Apple applies to
-        // text-bearing elements, and every one of the six came back as
-        // `type=48`, a bare **staticText**. A `Text` inside a `.plain`
-        // `Button` is exposed as that, and a staticText advertises no
-        // scalable font.
+        // They stay because the reasoning was wrong about the audit and right
+        // about the app. The tiles were exposed as static text, so VoiceOver
+        // read six words with nothing to say any of them could be tapped.
+        // `.isButton` is a true statement about a `Button`, and it would be
+        // worth making with no audit in the building.
         //
-        // The phone bar's tab is the same Image-over-caption `Button` with
-        // the same `.caption`-class font and it has always audited clean. The
-        // only difference was these two lines, which force it to be a button
-        // element.
-        //
-        // So the audit was reporting a second defect underneath the first:
-        // **the tiles did not announce themselves as buttons.** VoiceOver
-        // read six words with no indication any of them could be tapped.
-        // Declaring `.isButton` is a true statement about a `Button`, not a
-        // way of quietening a check.
+        // Left as a record rather than deleted: the comment that originally
+        // sat here argued these lines were the fix, which a later run
+        // falsified. A comment explaining why something works is a claim to
+        // check, not evidence.
         .accessibilityLabel(route.label)
         .accessibilityAddTraits(.isButton)
     }
