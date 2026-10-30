@@ -30,7 +30,10 @@ public let homeRoomDebounceMs: Int64 = 300
 /// the mount's reads land, and rooms and timers were both read again.
 public let homeFreshMs: Int64 = 5_000
 
-/// Attention rows a phone shows before `+N more` (`HomeModels.kt:33`).
+/// `HOME_PHONE_ROWS` (`HomeModels.kt:35`) — **attention rows and today
+/// rows** a phone shows before `+N more`. One constant for both, as the
+/// Kotlin has one: "chosen so the rooms start above the fold" (map §10.10).
+/// A wider screen shows ``homeTodayRows`` of today instead.
 public let homePhoneRows = 3
 
 // MARK: - what can ask for a re-read

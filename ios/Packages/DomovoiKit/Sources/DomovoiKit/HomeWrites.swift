@@ -59,8 +59,16 @@ extension HomeApi {
                     do {
                         try await roomAction(client, room: room, verb: "stop")
                         return (room, nil)
-                    } catch {
+                    } catch let error as DomovoiError {
                         return (room, error)
+                    } catch {
+                        // Unreachable: `roomAction` throws `DomovoiError` and
+                        // nothing else. Spelt out because Swift does not
+                        // narrow a caught type inside a task-group child
+                        // closure, and mapped to a failure rather than to nil
+                        // so that an error nobody expected still counts as a
+                        // room that did not stop.
+                        return (room, .unreachable(error.localizedDescription))
                     }
                 }
             }

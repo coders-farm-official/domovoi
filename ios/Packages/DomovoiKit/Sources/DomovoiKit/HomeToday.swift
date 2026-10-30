@@ -11,11 +11,8 @@ import Foundation
 // the house, not a countdown against the database.
 // ---------------------------------------------------------------------------
 
-/// `HOME_PHONE_ROWS` (`HomeModels.kt:35`) — attention rows **and** today rows
-/// a phone shows.
-public let homePhoneRows = 3
-
-/// `HOME_TODAY_ROWS` (`HomeModels.kt:36`) — …and a wider screen.
+/// `HOME_TODAY_ROWS` (`HomeModels.kt:36`) — today rows on a wider screen.
+/// A phone shows ``homePhoneRows``, which the attention card shares.
 public let homeTodayRows = 6
 
 // MARK: - the clock
