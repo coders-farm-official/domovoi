@@ -62,36 +62,40 @@ struct HomeView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 HomeHeaderView(state: headerState, onPair: openPairing)
-                // **The `shown` test is here and not only inside the card.**
-                // It was only inside, and a Simulator tree measured what that
-                // costs: with nothing to say the card renders empty but is
-                // still a child of this `VStack`, so it is still given one of
-                // the 16-point gaps. Home's content box was 111 points tall
-                // for 63 points of header — 16 top, 63, **16 for a child that
-                // drew nothing**, 16 bottom.
+                // ### The `shown` test stays inside the card, and the
+                // Simulator is why
                 //
-                // SwiftUI omits a nil child and its spacing; it does not omit
-                // a child whose `body` evaluates to nothing. Android's rule is
-                // explicit about the same thing — "a section with nothing to
-                // say gets no slot at all, so it leaves no gap either"
-                // (`HomeScreen.kt:490`) — so the test moves up to where the
-                // slot is decided. The card keeps its own `if state.shown`:
-                // it is the one that makes the card correct wherever it is
-                // used, and this one is the one that makes the layout right.
+                // I1D2-REVIEW §2 asked whether an attention card with nothing
+                // to say leaves a 16-point hole here, since `if state.shown`
+                // is inside ``HomeAttentionView``'s own `body` and this
+                // `VStack` therefore holds the child either way. Android's
+                // rule is explicit — "a section with nothing to say gets no
+                // slot at all, so it leaves no gap either"
+                // (`HomeScreen.kt:490`) — so it was a fair question.
+                //
+                // **Measured: there is no hole.** Home's content box is
+                // `{{0, 93.3}, {393, 111}}` on an iPhone 16 with nothing to
+                // attend to, and it is the same 111 points with the test
+                // hoisted up here and the child omitted outright. SwiftUI
+                // omits the spacing around a child whose `body` evaluates to
+                // nothing, exactly as it does for a nil one; the 111 is 16 of
+                // padding, a 79-point header and 16 of padding, with nothing
+                // spent on the card.
+                //
+                // So the hoist was tried, changed not one point, and was
+                // taken back out: this reads better and there is nothing for
+                // the other version to fix.
                 if let home {
-                    let attention = home.attention(
-                        shared: model.visibility.sharedScreen,
-                        compact: sizeClass != .regular,
-                        expanded: attentionExpanded
+                    HomeAttentionView(
+                        state: home.attention(
+                            shared: model.visibility.sharedScreen,
+                            compact: sizeClass != .regular,
+                            expanded: attentionExpanded
+                        ),
+                        nowMs: home.nowMs,
+                        onRow: open,
+                        onMore: { attentionExpanded = true }
                     )
-                    if attention.shown {
-                        HomeAttentionView(
-                            state: attention,
-                            nowMs: home.nowMs,
-                            onRow: open,
-                            onMore: { attentionExpanded = true }
-                        )
-                    }
                 }
                 Spacer(minLength: 0)
             }
