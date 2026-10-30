@@ -30,7 +30,9 @@ struct HomeEverythingView: View {
     /// clipped. `minimumScaleFactor` is the other answer and is rejected
     /// throughout this app.
     private var columns: [GridItem] {
-        let count = typeSize.isAccessibilitySize ? 1 : 3
+        // DIAGNOSTIC — one column at every size. Was
+        // `typeSize.isAccessibilitySize ? 1 : 3`.
+        let count = 1
         return Array(repeating: GridItem(.flexible(), spacing: 8), count: count)
     }
 
@@ -81,16 +83,11 @@ struct HomeEverythingView: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .multilineTextAlignment(.center)
             }
-            .padding(.vertical, 18)
-            .padding(.horizontal, 8)
-            // DIAGNOSTIC — to be reverted or converted. Was
-            // `.frame(maxWidth: .infinity, minHeight: 72)`, Android's
-            // `≥72 dp`. Each tile's `staticText` carries the tile's own
-            // 104.3 x 72.0 frame in the audit, and 72.0 is exactly that
-            // minimum, so the question is whether Apple reads a floor on the
-            // container as a constraint on the text inside it. Padding
-            // reaches a similar height with nothing declared about it.
-            .frame(maxWidth: .infinity)
+            .padding(8)
+            // Android's `≥72 dp`, which is also over Apple's 44. **Measured
+            // not to be the audit's objection**: dropping it for padding left
+            // the finding count at six with the tiles 77 to 80 points tall.
+            .frame(maxWidth: .infinity, minHeight: 72)
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
