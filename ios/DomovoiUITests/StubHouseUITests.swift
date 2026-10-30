@@ -42,14 +42,18 @@ final class StubHouseUITests: XCTestCase {
         continueAfterFailure = false
     }
 
+    /// `server: false` saves nothing, which is the local-media shell — no
+    /// workspace, no phone bar, and the same ``ShellTopBar``. It is the only
+    /// way from here to audit the chrome without Home's content under it.
     private func launch(
         mode: String = "large",
         paired: Bool = true,
+        server: Bool = true,
         port: Int = 6601
     ) -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchArguments = ["-domovoi-server", "127.0.0.1:\(port)"]
-        if paired {
+        app.launchArguments = server ? ["-domovoi-server", "127.0.0.1:\(port)"] : []
+        if server, paired {
             app.launchArguments += ["-domovoi-token", Self.token]
         }
         // The type size, set the way the Simulator's own setting would.
@@ -175,6 +179,38 @@ final class StubHouseUITests: XCTestCase {
             return true
         }
         return found
+    }
+
+    /// The local-media shell, audited — which splits the chrome in half.
+    ///
+    /// Home has one "Contrast failed" that nothing names, and the pairing
+    /// screen has three. What Home and pairing share is the top bar **and**
+    /// the phone bar, so the comparison between those two could only say
+    /// "chrome", not which half.
+    ///
+    /// With nothing saved there is no workspace: the same ``ShellTopBar``
+    /// over the local-media placeholder, and **no phone bar**. So this one
+    /// passing puts the issue in the phone bar, and this one failing puts it
+    /// in the top bar — where the only thing not already measured is the
+    /// pill's `.quaternary` capsule, which is `#DDDDDE` on white and so
+    /// **1.36:1** against the page.
+    ///
+    /// It is also the I1-C result turned into a standing test. That the local
+    /// shell passed this audit was a thing remembered from a run, and the
+    /// chrome has been rebuilt twice since.
+    @MainActor
+    func testTheLocalShellPassesTheAudit() throws {
+        let app = launch(server: false)
+        _ = app.staticTexts.firstMatch.waitForExistence(timeout: 20)
+        evidence(app, "40-local-shell")
+        if #available(iOS 17.0, *) {
+            let found = try auditIssues(app, "local-shell")
+            XCTAssertTrue(
+                found.isEmpty,
+                "Apple's audit has \(found.count) against the local shell: "
+                    + found.joined(separator: " | ")
+            )
+        }
     }
 
     /// Apple's own audit, on Home rather than on the launch screen.
