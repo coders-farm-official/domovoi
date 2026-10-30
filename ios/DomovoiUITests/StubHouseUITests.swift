@@ -912,18 +912,54 @@ final class StubHouseUITests: XCTestCase {
                 )
                 tab.tap()
             }
-            // Two markers, because no single one survives every variant: the
-            // breadcrumb is gone in `topBar` and the placeholder is gone in
-            // `content`. Between them every variant has one.
-            let crumb = app.staticTexts[ShellStringsUnderTest.musicCrumb]
+            // ### The arrival condition, and the third timing confound
+            //
+            // This waited on the **breadcrumb**, and the breadcrumb is a lie
+            // about arrival: ``ShellTopBar`` is mounted *outside* the
+            // `NavigationStack` (``WorkspaceView/stack``), so it is rebuilt
+            // from `model.navigation.route` the instant `path` changes —
+            // before the destination has been laid out, let alone finished
+            // animating in. The audit then ran on a screen mid-push and
+            // reported 0, and every removal variant inherited that 0.
+            //
+            // A tap did not have the problem because `XCUIElement.tap()`
+            // waits for the app to go quiescent, so the push had settled
+            // before the next query ran. That is the whole of the difference
+            // between `none=0` and `tap=8` — same destination, same Home
+            // behind it, same single audit.
+            //
+            // So the condition is now something only the **destination**
+            // can satisfy:
+            //
+            //  - the `not built yet` placeholder, which every variant draws
+            //    except ``AuditStrip/content``;
+            //  - or the navigation bar's `Back` button, which exists in every
+            //    variant except ``AuditStrip/navBar``.
+            //
+            // No variant removes both, so one of the two is always a true
+            // statement that the pushed screen is on screen. The settle after
+            // it is for the transition itself, which neither marker waits
+            // out.
             let placeholder = app.descendants(matching: .staticText)
                 .matching(NSPredicate(format: "label CONTAINS %@", ShellStringsUnderTest.notBuilt))
                 .firstMatch
-            let deadline = Date().addingTimeInterval(25)
+            let back = app.navigationBars.buttons.firstMatch
+            let deadline = Date().addingTimeInterval(Self.pushDelay + 25)
             var arrived = false
             while Date() < deadline {
-                if crumb.exists || placeholder.exists { arrived = true; break }
+                if placeholder.exists || back.exists { arrived = true; break }
                 usleep(300_000)
+            }
+            if arrived {
+                // Crude on purpose, and printed so it can be argued with. A
+                // push animates for a third of a second; three is a margin
+                // over a Simulator under load, and the cost of being wrong
+                // the other way is another run of meaningless zeroes.
+                usleep(3_000_000)
+                print(
+                    "STRIP [\(variant)] settled — placeholder: \(placeholder.exists) "
+                        + "back: \(back.exists)"
+                )
             }
             guard arrived else {
                 print("STRIP [\(variant)] NEVER PUSHED — tree follows")
