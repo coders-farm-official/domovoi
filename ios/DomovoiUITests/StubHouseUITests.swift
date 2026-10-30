@@ -235,14 +235,34 @@ final class StubHouseUITests: XCTestCase {
         var found: [String] = []
         try app.performAccessibilityAudit { issue in
             found.append("\(issue.compactDescription): \(issue.detailedDescription)")
-            print("""
-                AUDIT [\(name)] type=\(issue.auditType) \(issue.compactDescription)
-                  detail: \(issue.detailedDescription)
-                  element: \(issue.element?.debugDescription ?? "nil")
-                """)
+            // **One `print` per line, deliberately.** This was a single
+            // `print` of a multi-line string, and `xcodebuild`'s output kept
+            // only its first line: three runs' worth of logs showed the
+            // headline and silently dropped the detail and the element, which
+            // is why "`issue.element` is always nil" was a belief rather than
+            // an observation on this track. A one-line call per field cannot
+            // be half-swallowed.
+            print("AUDIT [\(name)] \(issue.compactDescription) | type=\(issue.auditType)")
+            print("AUDIT [\(name)]   detail: \(issue.detailedDescription)")
+            print("AUDIT [\(name)]   element: \(Self.oneLine(issue.element))")
             return true
         }
         return found
+    }
+
+    /// An audit issue's element as one line, or `nil` as the word.
+    ///
+    /// `XCUIElement.debugDescription` is a paragraph with its own query chain
+    /// and newlines, which is what got swallowed. Type, identifier, label and
+    /// frame are enough to find the view in the tree dumps beside it.
+    @MainActor
+    private static func oneLine(_ element: XCUIElement?) -> String {
+        guard let element else { return "nil" }
+        let id = element.identifier
+        return "type=\(element.elementType.rawValue)"
+            + (id.isEmpty ? "" : " id='\(id)'")
+            + " label='\(element.label)'"
+            + " frame=\(element.frame)"
     }
 
     /// The local-media shell, audited — the screen that split the chrome.
