@@ -566,6 +566,68 @@ final class StubHouseUITests: XCTestCase {
                 + "measured against a baseline that has changed"
         )
     }
+    /// **Are the eight elements, or are they sizes?** One per larger category.
+    ///
+    /// Everything about the eight says they are not a count of broken views.
+    /// They do not move when the screen's whole content changes — an index of
+    /// seven elements and a panel of forty both score 8 — every one carries
+    /// the identical sentence, and `element` is nil for all of them where it
+    /// is populated for every contrast and hit-area finding this track has
+    /// seen.
+    ///
+    /// There are twelve content size categories. From `large`, the ones
+    /// **above** it are XL, XXL, XXXL and AX1-AX5 — exactly **eight**. So the
+    /// hypothesis is that Apple reports this finding once per larger size the
+    /// screen fails at, and the screen is one thing failing eight times
+    /// rather than eight things failing once.
+    ///
+    /// That is falsifiable, which is the point of it:
+    ///
+    /// | Launch size | Larger categories | Predicts |
+    /// |---|---|---|
+    /// | `S` | M, L, XL, XXL, XXXL, AX1-AX5 | **10** |
+    /// | `large` | XL, XXL, XXXL, AX1-AX5 | **8** |
+    /// | AX5 | none | **0** |
+    ///
+    /// If the counts come back 10/8/0 the eight were never eight defects and
+    /// `knownPairingIssues` is a count of *sizes*, which changes what fixing
+    /// them means. If they come back 8/8/8 the hypothesis is dead and the
+    /// number is a cap.
+    @MainActor
+    func testWhetherTheEightAreSizesRatherThanElements() throws {
+        var counts: [(String, Int)] = []
+        for (label, mode) in [
+            ("S", "UICTContentSizeCategoryS"),
+            ("large", "large"),
+            ("AX5", "UICTContentSizeCategoryAccessibilityXXXL"),
+        ] {
+            let app = launch(mode: mode, paired: false)
+            let link = app.buttons[ShellStringsUnderTest.pairLink]
+            XCTAssertTrue(
+                link.waitForExistence(timeout: 20),
+                "no pairing link on Home at \(label) — the unpaired header did not draw"
+            )
+            link.tap()
+            XCTAssertTrue(
+                link.waitForNonExistence(timeout: 10),
+                "the pairing link did nothing at \(label)"
+            )
+            evidence(app, "60-sizes-\(label)")
+            let found = try auditIssues(app, "sizes-\(label)")
+            let dynamic = found.filter { $0.hasPrefix("Dynamic Type") }
+            counts.append((label, dynamic.count))
+            print("SIZES [\(label)] dynamic=\(dynamic.count) total=\(found.count)")
+            for line in found { print("SIZES [\(label)]   \(line)") }
+            app.terminate()
+        }
+        print("SIZES SUMMARY " + counts.map { "\($0.0)=\($0.1)" }.joined(separator: " "))
+
+        // Printed, not asserted. All three numbers are the unknown here, and
+        // the prediction is the thing under test — an assertion would only
+        // restate it.
+        XCTAssertEqual(counts.count, 3, "a launch did not get far enough to audit")
+    }
+
 }
 
 /// Strings this file matches on, kept together and named so that a change in
