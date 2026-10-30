@@ -77,7 +77,7 @@ struct PhonesAndBrowsersPanel: View {
                     .frame(width: 8, height: 8)
                 Text(model.connected ? ShellStrings.connected : ShellStrings.notConnected)
                     .font(.caption)
-                    .foregroundStyle(model.connected ? AnyShapeStyle(.green) : AnyShapeStyle(.red))
+                    .foregroundStyle(model.connected ? AnyShapeStyle(Color.okInk) : AnyShapeStyle(Color.errInk))
             }
             TextField(ShellStrings.serverURLPlaceholder, text: $typedURL)
                 .font(.footnote.monospaced())
@@ -90,6 +90,7 @@ struct PhonesAndBrowsersPanel: View {
                 Task { await save() }
             }
             .buttonStyle(.borderedProminent)
+            .foregroundStyle(Color.brandFg)
             .disabled(ServerCredentials.isBlank(typedURL) || saving)
 
             if !ServerCredentials.isBlank(model.inputs.serverURL) {
@@ -161,11 +162,12 @@ struct PhonesAndBrowsersPanel: View {
             }
             Text(display.detail)
                 .font(.footnote)
-                .foregroundStyle(display == .noIdentityOffered ? AnyShapeStyle(.orange) : AnyShapeStyle(Color.fgMuted))
+                .foregroundStyle(display == .noIdentityOffered ? AnyShapeStyle(Color.warnInk) : AnyShapeStyle(Color.fgMuted))
                 .fixedSize(horizontal: false, vertical: true)
             if display.offersPinning {
                 Button(ShellStrings.pinThisIdentity) { model.pinTheOfferedIdentity() }
                     .buttonStyle(.bordered)
+                    .tint(Color.brandInk)
             }
         }
     }
@@ -181,7 +183,7 @@ struct PhonesAndBrowsersPanel: View {
                     .frame(width: 8, height: 8)
                 Text(paired ? ShellStrings.paired : ShellStrings.notPaired)
                     .font(.caption)
-                    .foregroundStyle(paired ? AnyShapeStyle(.green) : AnyShapeStyle(Color.fgMuted))
+                    .foregroundStyle(paired ? AnyShapeStyle(Color.okInk) : AnyShapeStyle(Color.fgMuted))
             }
             if paired {
                 Text(ShellStrings.pairedExplanation)
@@ -210,6 +212,7 @@ struct PhonesAndBrowsersPanel: View {
                     model.refresh()
                 }
                 .buttonStyle(.bordered)
+                .tint(Color.brandInk)
             }
         }
     }
@@ -248,11 +251,11 @@ struct PhonesAndBrowsersPanel: View {
                     if row.active {
                         Text(ShellStrings.connected)
                             .font(.caption)
-                            .foregroundStyle(.tint)
+                            .foregroundStyle(Color.brandInk)
                     } else if !ServerCredentials.isBlank(store.token(for: row.url) ?? "") {
                         Text(ShellStrings.paired)
                             .font(.caption)
-                            .foregroundStyle(.green)
+                            .foregroundStyle(Color.okInk)
                     }
                     Button {
                         switch row.forgetAffordance {

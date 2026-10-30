@@ -30,20 +30,39 @@ struct WorkspaceView: View {
         }
     }
 
+    /// The chrome **above** the stack, not inset over it.
+    ///
+    /// This was `.safeAreaInset(edge: .top)` on the `NavigationStack`, and a
+    /// Simulator showed what that does: the stack draws its own navigation
+    /// bar in the same band, so on any pushed screen the back button and the
+    /// breadcrumb are drawn on top of each other — at **ordinary** type size,
+    /// not only large ones (`design-notes/ios/STUB-HOUSE-FINDINGS-01.md`).
+    /// The inset also failed to move the content down: Home's scroll view
+    /// measured `{{0, 59}, {393, 852}}`, the full height, with `stub house`
+    /// at y=75 underneath a bar spanning roughly 59–92.
+    ///
+    /// ``LocalShellView`` had it right all along — a plain `VStack(spacing: 0)`
+    /// with the bar above the content — which is also why Apple's audit passed
+    /// on that shell in I1-C and failed here. Two shells, one way of mounting
+    /// the same bar.
+    ///
+    /// The navigation bar keeps its back button, below our bar rather than
+    /// inside it. On the root there is no title and no toolbar, so it
+    /// collapses to nothing and Home looks as it did.
     private var stack: some View {
-        NavigationStack(path: $model.path) {
-            RouteScreen(model: model, route: startRoute)
-                .navigationDestination(for: Route.self) { route in
-                    RouteScreen(model: model, route: route)
-                }
-        }
-        .safeAreaInset(edge: .top, spacing: 0) {
+        VStack(spacing: 0) {
             ShellTopBar(
                 leading: "\(ShellStrings.homeCrumb) / \(model.navigation.route.label.lowercased())",
                 pill: model.chrome.pill,
                 onPill: { model.openConnection() }
             ) {
                 EmptyView()
+            }
+            NavigationStack(path: $model.path) {
+                RouteScreen(model: model, route: startRoute)
+                    .navigationDestination(for: Route.self) { route in
+                        RouteScreen(model: model, route: route)
+                    }
             }
         }
     }

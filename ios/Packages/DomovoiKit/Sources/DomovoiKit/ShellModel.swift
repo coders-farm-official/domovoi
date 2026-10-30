@@ -67,6 +67,30 @@ public final class ShellModel {
     /// The scene phase, as last reported.
     public private(set) var phase: ShellPhase = .active
 
+    /// Whether the app has actually left the screen since it last arrived on
+    /// it — Android's `onStop` having run, not `.inactive` having been seen.
+    ///
+    /// This exists because ``phase`` cannot answer it. A real return is
+    /// `.background` → `.inactive` → `.active`, and a launch is
+    /// `.inactive` → `.active`; the phase *before* the arrival is `.inactive`
+    /// in both, so only a flag set at the departure tells them apart.
+    /// ``scenePhaseChanged(to:sendRegister:)`` says what went wrong while
+    /// this was inferred instead of recorded.
+    ///
+    /// **False at launch**, which is the whole point: nothing has departed
+    /// yet, and ``AppContainer/start()`` has already done the arrival's work.
+    ///
+    /// Readable by tests rather than private, because the consequence is not
+    /// visible from outside in a unit rig:
+    /// ``StateSocket/attemptCount`` counts a *parked* socket re-asking its
+    /// rule as well as a dial, and `refresh()`'s `wake()` does that on any
+    /// arrival at `.active` by design — `testComingBackReAsksTheSocketsRule`
+    /// depends on exactly that. So the counter moves either way and cannot
+    /// separate a launch from a return. The behaviour is proved against the
+    /// stub house instead, where a dial is a `/ws/state` upgrade in the
+    /// server's log; this flag is what that proof turns on.
+    private(set) var departed = false
+
     /// Whether this install is a shared screen (the kitchen tablet). A paired
     /// install counts as shared until the server says otherwise
     /// (``DeviceRegistry/isSharedScreen(answer:paired:)``); the answer
@@ -666,8 +690,42 @@ public final class ShellModel {
         self.phase = phase
         switch phase {
         case .active:
-            if was != .active {
-                container.appForegrounded()
+            // **A return is an arrival that a departure came before**, which
+            // is `departed` and not the previous phase. This was
+            // `was != .active`, which counted `.inactive` too — Control
+            // Centre, the app switcher, a system alert, and the launch
+            // itself.
+            //
+            // `was == .background` is the wrong fix and the obvious one: iOS
+            // delivers `.background` → `.inactive` → `.active` on a real
+            // return, so `was` is `.inactive` for that too, and
+            // `testOnlyARealDepartureBumpsTheIdentityEpoch` drives exactly
+            // that sequence. A flag is needed because the phase before the
+            // arrival does not carry the answer.
+            //
+            // The launch is the one that bit. `AppShellView` observes with
+            // `.onChange(of: scenePhase, initial: true)`, iOS delivers
+            // `.inactive` before `.active` during launch, and `phase` starts
+            // at `.active` precisely so that a launch does not read as a
+            // return — which the `.inactive` in between defeated. So every
+            // launch ran this branch: `AppContainer.start()` had already
+            // opened the socket, and `sceneReturned()` immediately re-dialled
+            // it. The stub house measured it on 2026-10-29 — **two
+            // `/ws/state` upgrades on every one of five launches**, 30 to
+            // 580 ms apart, both alive until the app quit, so every push was
+            // handled twice (`design-notes/ios/STUB-HOUSE-FINDINGS-01.md`).
+            //
+            // The rule was already written down, for the other direction, a
+            // dozen lines below: "`.inactive` is a step on the way out and
+            // also a transient state on the way in; the epoch is Android's
+            // `onStop`, which is the real departure." The outbound branch
+            // honoured it and this one did not.
+            //
+            // Why `.inactive` needs none of this: it does not suspend the
+            // app, so no callback is missed and `connected` *is* believable.
+            // The re-mint earns its cost only against a frozen app.
+            if departed {
+                departed = false
                 // Before `refresh()`, because `connected` is **not to be
                 // believed** across a return: a cached, frozen app misses
                 // every callback, so the flag it comes back holding is
@@ -676,7 +734,16 @@ public final class ShellModel {
                 // waking a socket that reports itself up. `refresh()`'s
                 // `wake()` afterwards is then a no-op, because the socket is
                 // connecting rather than parked.
+                container.appForegrounded()
                 container.socket.sceneReturned()
+            }
+            // `refresh()` stays on **any** arrival at `.active`, including
+            // from `.inactive`, because it is also what picks up a pending
+            // route (`takePendingRoute()`): a notification tapped while the
+            // app sat inactive would otherwise be dropped. It is cheap by
+            // construction — `serverChanged()` is a no-op at an unchanged
+            // address and `wake()` is a no-op on a socket that is not parked.
+            if was != .active {
                 refresh()
             }
         case .inactive, .background:
@@ -684,6 +751,7 @@ public final class ShellModel {
             // on the way in; the epoch is Android's `onStop`, which is the
             // real departure.
             if phase == .background, was != .background {
+                departed = true
                 container.appBackgrounded()
             }
         }

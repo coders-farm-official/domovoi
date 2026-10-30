@@ -38,7 +38,7 @@ struct TokenTroubleCard: View {
                 if let wait = tokenTroubleWaitLine(trouble) {
                     Text(wait)
                         .font(.footnote)
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(Color.warnInk)
                 }
                 CheckedPairingFieldView(field: PairingFieldModel(
                     container: model.container,

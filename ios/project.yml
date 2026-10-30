@@ -97,6 +97,27 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(DOMOVOI_BUNDLE_ID)
         PRODUCT_NAME: Domovoi
+        # The app's accent, from `Assets.xcassets/AccentColor.colorset`.
+        #
+        # Domovoi's accent is amber and there is exactly one of it —
+        # `android/.../ui/theme/Color.kt` says so in as many words: "Single
+        # amber accent — never introduce a second accent color." Without this
+        # setting (and the catalogue it names) SwiftUI's `.accentColor` and
+        # `.tint` resolve to `systemBlue`, which is a second accent, and the
+        # one a Simulator photographed on the phone bar and the live dot.
+        #
+        # The values are `--brand` from `web/static/colors_and_type.css`
+        # light and dark, and they round-trip to the two hexes Android ships
+        # (`#F2A618`, `#F9AD26`), which is how they were checked.
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        # **Empty on purpose.** The moment a target has an asset catalogue,
+        # this defaults to "AppIcon" and the build *fails* if no such set is
+        # there: "None of the input catalogs contained a matching stickers
+        # icon set, app icon set, or icon stack named AppIcon". This app has
+        # no icon yet — that is a real gap with a real owner decision behind
+        # it, not something to paper over with a placeholder square so the
+        # build goes quiet.
+        ASSETCATALOG_COMPILER_APPICON_NAME: ""
         # INFOPLIST_FILE is set by XcodeGen from the `info:` block below.
         #
         # No entitlements file at all in this batch. Background audio needs

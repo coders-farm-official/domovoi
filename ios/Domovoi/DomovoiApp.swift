@@ -34,8 +34,72 @@ struct DomovoiApp: App {
 
     private let model: ShellModel
 
+    /// A server and token handed in on the command line, for a UI test.
+    ///
+    /// **Why this exists.** With no server saved the shell is `.local`, so
+    /// Home, the pairing screens and the token-trouble card are unreachable
+    /// and a Simulator can only photograph the music placeholder. The
+    /// obvious way in — drive the connection sheet and type an address —
+    /// **starts the LAN discovery sweep**, and a Simulator shares the Mac's
+    /// network, so that is 254 probes across whatever real network the Mac
+    /// is on. Measured, not feared: the first run of `StubHouseUITests`
+    /// reached `scanning 80/254…` before it was stopped.
+    ///
+    /// So the test seeds the store instead — **through the picker's own
+    /// normaliser**, ``ServerAddress/fromTyped(_:defaultPort:)``, the one
+    /// that turns what a person types into what gets saved.
+    ///
+    /// That used to be a claim rather than a mechanism: this method wrote the
+    /// launch argument into the store verbatim and a comment asserted it was
+    /// "the same thing the picker would have written". It was not. A saved
+    /// address carries its scheme (`http://10.0.0.42:6369`, as every test in
+    /// the package spells it) because ``ServerURL/parse(_:)`` requires
+    /// `"://"` and returns nil without it, while the *displayed* address has
+    /// the scheme stripped (``ServerCredentials/address(_:)``) — and the
+    /// launch argument was written in the displayed form.
+    ///
+    /// What that cost: `ServerCredentials.isBlank` is false for
+    /// `127.0.0.1:6601`, so the shell believed a server was saved; nothing
+    /// could parse it, so ``DomovoiClient/answers()`` returned false without
+    /// sending a byte; and after ``unreachableGraceMs`` the app dropped to
+    /// local media saying "Can't reach 127.0.0.1:6601" about a server it had
+    /// never contacted. Two Simulator runs went into that. The stub house's
+    /// own request log is what settled it — the only two requests it ever saw
+    /// came from `stub_run.sh`'s readiness `curl`.
+    ///
+    /// Going through `fromTyped` executes the claim instead of making it: the
+    /// scheme, the default port and ``CleartextPolicy`` are the picker's
+    /// rules, applied by the picker's code. An address it refuses trips an
+    /// assertion rather than booting into a plausible-looking lie.
+    ///
+    /// `#if DEBUG` keeps it out of any build that could ship. It is also
+    /// why this reads `ProcessInfo` rather than `UserDefaults`: a launch
+    /// argument lives for one process, where a default would persist and
+    /// could outlive the test that set it.
+    private static func seededStore() -> InMemoryShellStore {
+        #if DEBUG
+        let arguments = ProcessInfo.processInfo.arguments
+        func value(after flag: String) -> String? {
+            guard let index = arguments.firstIndex(of: flag),
+                  arguments.index(after: index) < arguments.endIndex
+            else { return nil }
+            return arguments[arguments.index(after: index)]
+        }
+        if let server = value(after: "-domovoi-server"), !server.isEmpty {
+            guard case .ok(let url)? = ServerAddress.fromTyped(server) else {
+                assertionFailure(
+                    "-domovoi-server \(server) is not an address the picker would accept"
+                )
+                return InMemoryShellStore()
+            }
+            return InMemoryShellStore(serverURL: url, token: value(after: "-domovoi-token"))
+        }
+        #endif
+        return InMemoryShellStore()
+    }
+
     init() {
-        let container = AppContainer(store: InMemoryShellStore())
+        let container = AppContainer(store: Self.seededStore())
         // The device id, and the two things only UIKit can answer. Read HERE,
         // on the main actor, once: ``DeviceSelf`` exists so that a `Sendable`
         // closure running anywhere never reads `UIDevice`, which
@@ -157,6 +221,98 @@ extension Color {
         traits.userInterfaceStyle == .dark
             ? UIColor(red: 0.6555, green: 0.6434, blue: 0.6238, alpha: 1)   // oklch(0.72 0.008 80)
             : UIColor(red: 0.3458, green: 0.3323, blue: 0.3104, alpha: 1)   // oklch(0.45 0.01 80)
+    })
+
+    /// `--brand`: Domovoi's one accent, amber.
+    ///
+    /// Also the app's `AccentColor` asset, so `.tint` and `.accentColor`
+    /// resolve to it without a call site asking. This constant exists for the
+    /// few places that name the brand explicitly rather than inheriting it.
+    ///
+    /// `#F2A618` light and `#F9AD26` dark — the two values Android ships,
+    /// which is how the conversion from the stylesheet's `oklch` was checked.
+    ///
+    /// **A fill, never text.** It is **2.05:1** on white, which is under the
+    /// 3:1 that even a meaningful *graphic* needs, let alone text. Use
+    /// ``Color/brandInk`` for anything a person has to read or interpret on a
+    /// light surface, and ``Color/brandFg`` for text drawn **on** this.
+    static let brand = Color(UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? UIColor(red: 0.9758, green: 0.6765, blue: 0.1471, alpha: 1)   // oklch(0.80 0.16 75)
+            : UIColor(red: 0.9491, green: 0.6513, blue: 0.0950, alpha: 1)   // oklch(0.78 0.16 75)
+    })
+
+    /// `--brand-fg`: text drawn **on** the amber, which the stylesheet calls
+    /// "text on amber buttons". Near-black, not white: white on amber is
+    /// 2.05:1, this is **8.49:1** light and **9.87:1** dark.
+    ///
+    /// `#281600` light, matching Android's `brandFg`.
+    static let brandFg = Color(UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? UIColor(red: 0.1084, green: 0.0566, blue: 0.0000, alpha: 1)   // oklch(0.18 0.04 75)
+            : UIColor(red: 0.1561, green: 0.0879, blue: 0.0000, alpha: 1)   // oklch(0.22 0.05 75)
+    })
+
+    /// `--brand-ink`: the brand **as text or a meaningful graphic** on a light
+    /// surface — links, the selected tab, the live dot.
+    ///
+    /// **5.65:1** on white and **9.84:1** on the dark canvas. Dark mode is
+    /// `--brand` itself, because that stylesheet's dark block says
+    /// `--brand-ink: var(--brand)`.
+    ///
+    /// The dots take this and not ``Color/brand``: a dot that is the only
+    /// thing saying whether the house is live is a graphic that has to be
+    /// seen, and 2.05:1 is under the 3:1 such a graphic needs. That is the
+    /// one place this port departs from a literal reading of the token
+    /// names, and the reason is a measurement.
+    static let brandInk = Color(UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? UIColor(red: 0.9758, green: 0.6765, blue: 0.1471, alpha: 1)   // oklch(0.80 0.16 75)
+            : UIColor(red: 0.5923, green: 0.3456, blue: 0.0000, alpha: 1)   // oklch(0.52 0.13 70)
+    })
+
+    /// `--warn-ink`: the amber hue **as text or an icon**, which is not the
+    /// amber used for dots and fills.
+    ///
+    /// `web/static/colors_and_type.css:166-170` already draws this
+    /// distinction and says why: the status fills are "for buttons, dots and
+    /// washes; at their lightness amber and green read about 2:1 as text on
+    /// white", so there is a second, deeper token for text. The iOS port used
+    /// SwiftUI's `.orange` — `systemOrange`, `#FF9500` — for the text role at
+    /// every site, and Apple's accessibility audit failed Home with "Contrast
+    /// failed" because of it.
+    ///
+    /// Measured, not assumed: `systemOrange` on white is **2.20:1**, which is
+    /// the stylesheet's "about 2:1" exactly. This token is **5.73:1** on
+    /// white and **9.84:1** on the dark canvas. Body text needs 4.5:1.
+    ///
+    /// Dark mode takes `--warn` itself, because the dark block of that
+    /// stylesheet says `--warn-ink: var(--warn)` — on a dark canvas the fill
+    /// already reads.
+    static let warnInk = Color(UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? UIColor(red: 1.0000, green: 0.6604, blue: 0.2897, alpha: 1)   // oklch(0.82 0.16 60)
+            : UIColor(red: 0.6167, green: 0.3244, blue: 0.0000, alpha: 1)   // oklch(0.52 0.13 60)
+    })
+
+    /// `--ok-ink`: the same rule for green, which is the worst of the three.
+    /// `systemGreen` (`#34C759`) is **2.22:1** on white. This is **5.65:1**,
+    /// and **10.01:1** on the dark canvas.
+    static let okInk = Color(UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? UIColor(red: 0.3807, green: 0.8332, blue: 0.4147, alpha: 1)   // oklch(0.78 0.18 145)
+            : UIColor(red: 0.1169, green: 0.4659, blue: 0.1627, alpha: 1)   // oklch(0.50 0.14 145)
+    })
+
+    /// `--err-ink`: the same rule for red. SwiftUI's `.red` is `systemRed`,
+    /// **3.55:1** on white — the near miss rather than the gross one, and
+    /// still under the 4.5:1 body text needs.
+    ///
+    /// **6.08:1** on white, **6.30:1** on the dark canvas.
+    static let errInk = Color(UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? UIColor(red: 1.0000, green: 0.3718, blue: 0.3577, alpha: 1)   // oklch(0.70 0.20 25)
+            : UIColor(red: 0.7451, green: 0.1339, blue: 0.1637, alpha: 1)   // oklch(0.52 0.19 25)
     })
 }
 

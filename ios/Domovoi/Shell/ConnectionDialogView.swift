@@ -256,11 +256,12 @@ struct ServerPickerPanel: View {
                 }
                 .disabled(!picker.manualButtonEnabled)
                 .buttonStyle(.borderedProminent)
+                .foregroundStyle(Color.brandFg)
             }
             if let error = picker.manualError {
                 Text(error)
                     .font(.footnote)
-                    .foregroundStyle(.red)
+                    .foregroundStyle(Color.errInk)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -279,11 +280,11 @@ private struct NoticeLine: View {
             if warning {
                 Image(systemName: "wifi.slash")
                     .font(.caption)
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(Color.warnInk)
             }
             Text(text)
                 .font(.footnote)
-                .foregroundStyle(warning ? AnyShapeStyle(.orange) : AnyShapeStyle(Color.fgMuted))
+                .foregroundStyle(warning ? AnyShapeStyle(Color.warnInk) : AnyShapeStyle(Color.fgMuted))
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -314,7 +315,7 @@ private struct ServerRow: View {
             Spacer()
             Text(row.affordance(inUse: inUse).text)
                 .font(.caption)
-                .foregroundStyle(.tint)
+                .foregroundStyle(Color.brandInk)
             if row.forgetAffordance != .none {
                 Button(action: onForget) {
                     Image(systemName: "xmark")
@@ -333,7 +334,7 @@ private struct ServerRow: View {
     }
 
     private var dot: Color {
-        if row.active { return .accentColor }
+        if row.active { return Color.brandInk }
         return row.online ? .green : .gray
     }
 }
@@ -378,7 +379,7 @@ struct TrustServerCard: View {
         VStack(alignment: .leading, spacing: 10) {
             Label(ShellStrings.trustTitle, systemImage: "externaldrive.connected.to.line.below")
                 .font(.headline)
-                .foregroundStyle(.orange)
+                .foregroundStyle(Color.warnInk)
             Text(server.address)
                 .font(.title3)
             if let fingerprint = server.fingerprint {
@@ -395,8 +396,10 @@ struct TrustServerCard: View {
                 Spacer()
                 Button(ShellStrings.trustCancel, action: onCancel)
                     .buttonStyle(.bordered)
+                    .tint(Color.brandInk)
                 Button(ShellStrings.trustConfirm, action: onConfirm)
                     .buttonStyle(.borderedProminent)
+                    .foregroundStyle(Color.brandFg)
             }
         }
     }
@@ -414,7 +417,7 @@ struct ForgetServerCard: View {
         VStack(alignment: .leading, spacing: 10) {
             Label(forgetServerTitle, systemImage: "externaldrive.badge.xmark")
                 .font(.headline)
-                .foregroundStyle(.red)
+                .foregroundStyle(Color.errInk)
             Text(ask.address)
                 .font(.title3)
             // The prose in prose and the keys in monospace: §6.4 wants the
@@ -436,6 +439,12 @@ struct ForgetServerCard: View {
                 Spacer()
                 Button(forgetServerCancel, action: onCancel)
                     .buttonStyle(.bordered)
+                    .tint(Color.brandInk)
+                // **No brand colour here.** A destructive role draws itself
+                // red whatever the tint is, and forgetting a server is the
+                // one button on this sheet that should not look like the
+                // friendly one. `--danger` is its own token in
+                // `colors_and_type.css` for the same reason.
                 Button(forgetServerConfirm, role: .destructive, action: onConfirm)
                     .buttonStyle(.borderedProminent)
             }
