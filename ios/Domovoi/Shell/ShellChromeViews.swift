@@ -230,11 +230,19 @@ struct PhoneBarView: View {
                 model.navigate(route)
             } label: {
                 VStack(spacing: 2) {
+                    // Decorative: the word below it says the same thing, and
+                    // a symbol that also carried a label gave VoiceOver
+                    // "Song" beside "music".
                     Image(systemName: route.systemImage)
                         .font(.body)
+                        .accessibilityHidden(true)
+                    // No `.lineLimit`. `music` at an accessibility type size
+                    // does not fit 98 points, and the horizontal scroll above
+                    // is what makes room for it; a limit here would cut the
+                    // word instead, which is the "Text clipped" the bar's own
+                    // labels were just fixed for.
                     Text(route.label.lowercased())
                         .font(.caption2)
-                        .lineLimit(equalWidth ? 1 : nil)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 .padding(.horizontal, equalWidth ? 0 : 14)
@@ -249,7 +257,29 @@ struct PhoneBarView: View {
                 .foregroundStyle(selected ? Color.brandInk : Color.fgMuted)
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(route.label)
+            // **No `.accessibilityLabel` here, and that is the fix.**
+            //
+            // Removing the whole bar made Home audit clean and dropped the
+            // pairing screen from fourteen issues to eight, so the bar was
+            // the source of one "Contrast failed" and four "Dynamic Type font
+            // sizes are partially unsupported" — one per tab. No colour
+            // explains it: `fgMuted` is 6.98:1 and `brandInk` 5.31:1 on the
+            // `.bar` fill, and drawing all four in one colour changed
+            // nothing.
+            //
+            // What does explain both, and the detail Apple gives for the
+            // second — "User will not be able to change the font size of this
+            // element" — is that `.accessibilityLabel(route.label)` replaced
+            // the button's own content with a **synthetic string**. A string
+            // has no font and nothing drawn, so there is no size to scale and
+            // no pixels to measure, and the element fails both audits however
+            // legible the button actually is. The system `TabBar` in
+            // ``LocalShellView`` passes with buttons that hold nothing but an
+            // image, which is what says the drawing was never the problem.
+            //
+            // So the word below the icon is the label: real text, with a real
+            // font, that scales because it is text. The icon is hidden from
+            // accessibility instead, since it was only ever repeating it.
             .accessibilityAddTraits(selected ? [.isButton, .isSelected] : [.isButton])
         }
     }
