@@ -39,13 +39,25 @@ struct ShellTopBar<Trailing: View>: View {
 
     var body: some View {
         if typeSize.isAccessibilitySize {
+            // **One line each, measured.** This had the pill, `unverified`
+            // and the status word sharing a row, which answered the clipping
+            // audit and produced something worse: a Simulator tree at
+            // `AccessibilityXXXL` measured the pill's address at **62.7 points
+            // wide and 306 tall** — wrapped to roughly a character a line —
+            // and the whole bar took **444 of 852 points** before Home's
+            // content began. Three labels dividing 361 points cannot each
+            // have a readable width, so they stop dividing it.
+            //
+            // The trailing control stays beside the brand, top right, where
+            // it is on every other screen; it is an icon and a word, not a
+            // paragraph, so it is the one thing here that does fit a row.
             VStack(alignment: .leading, spacing: 6) {
-                brand
-                HStack(spacing: 0) {
-                    pillAndStatus
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    brand
                     Spacer(minLength: 8)
                     trailing()
                 }
+                pillAndStatus
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 6)
@@ -136,7 +148,10 @@ struct ShellTopBar<Trailing: View>: View {
                 Text(ShellStrings.unverified)
                     .font(.caption2)
                     .foregroundStyle(Color.warnInk)
-                    .padding(.leading, 6)
+                    // The gap that separates it from the capsule on one line.
+                    // Stacked there is nothing to its left, so the indent
+                    // would read as an indent.
+                    .padding(.leading, typeSize.isAccessibilitySize ? 0 : 6)
                     .fixedSize(horizontal: false, vertical: true)
             }
             if let status = pill.status {

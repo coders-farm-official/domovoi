@@ -178,6 +178,35 @@ final class StubHouseUITests: XCTestCase {
         let named = houseName(in: app).waitForExistence(timeout: 20)
         evidence(app, "11-home-ax5")
         XCTAssertTrue(named, "the header never drew the house's name")
+
+        // ### The bar must not eat the screen
+        //
+        // The first version of this screen passed the clipping audit and was
+        // worse than the thing it fixed. The tree measured the server pill at
+        // **62.7 points wide and 314.3 tall** — its address wrapped to about a
+        // character a line — because the pill, `unverified` and the status
+        // word were dividing 361 points between them. Home's content began at
+        // **y=444 of 852**: more than half the screen was chrome.
+        //
+        // These are the two numbers that say so, and they are deliberately
+        // generous. A pill under 160 points is one that still wraps its
+        // address over two or three lines at this type size, which is fine; a
+        // pill over it is one that has gone back to wrapping per character.
+        let pill = app.buttons[ShellStringsUnderTest.pillLabel]
+        XCTAssertTrue(pill.exists, "no server pill in the bar")
+        XCTAssertLessThan(
+            pill.frame.height,
+            160,
+            "the server pill is \(Int(pill.frame.height)) points tall — its "
+                + "address is wrapping a character at a time, which is what "
+                + "sharing a row with `unverified` and the status word does"
+        )
+        XCTAssertLessThan(
+            houseName(in: app).frame.minY,
+            360,
+            "Home's content starts at y=\(Int(houseName(in: app).frame.minY)) "
+                + "of 852 — the bar is taking most of the screen"
+        )
     }
 
     /// Apple's audit on a screen, with every issue it has — not the first.
@@ -388,4 +417,8 @@ final class StubHouseUITests: XCTestCase {
 /// followed a renamed string would stop testing what it claims to.
 private enum ShellStringsUnderTest {
     static let pairLink = "pair this phone for live updates and controls"
+
+    /// ``ShellPill/accessibilityLabel`` for a saved server, which is what the
+    /// pill button answers to in the tree.
+    static let pillLabel = "switch server"
 }
