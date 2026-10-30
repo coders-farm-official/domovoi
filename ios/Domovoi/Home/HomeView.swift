@@ -437,7 +437,21 @@ struct HomeView: View {
                     // throw away what somebody typed.
                     announceDraft = ""
                 } catch {
-                    model.showToast(failureText("broadcast", error))
+                    // ``HomeApi/announceAll`` is `throws(DomovoiError)`, but
+                    // Swift does not narrow a caught typed throw inside this
+                    // closure, so `error` arrives as `any Error` and
+                    // ``failureText`` will not take it. ``HomeApi/stopRooms``
+                    // carries the same note for the same reason, from inside
+                    // a task group.
+                    //
+                    // Mapped rather than ignored: a send that failed for a
+                    // reason nobody anticipated still has to say something,
+                    // because the alternative is a button that silently does
+                    // nothing — which is what the announce field's own
+                    // no-op toasts exist to avoid.
+                    let failure = (error as? DomovoiError)
+                        ?? .unreachable(error.localizedDescription)
+                    model.showToast(failureText("broadcast", failure))
                 }
                 announcing = false
             }
