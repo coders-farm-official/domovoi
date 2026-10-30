@@ -1237,8 +1237,8 @@ final class ShellStringsTests: XCTestCase {
         // The two with a value interpolated beside them — `"done · ${room ?:
         // "no room"}"` (`HomeSections.kt:430`) and `"reminder · ${…}"`
         // (`HomeModels.kt:264`) — so only the head is a literal.
-        assertKotlinSaysAround("done \u{b7}\u{1}")
-        assertKotlinSaysAround("reminder \u{b7}\u{1}")
+        assertKotlinSays(HomeTimerStrings.done + HomeTimerStrings.middot, "U+00B7, space each side")
+        assertKotlinSays(HomeTimerStrings.reminder + HomeTimerStrings.middot)
         XCTAssertEqual(" \u{b7} ", HomeTimerStrings.middot, "U+00B7, one space each side")
         XCTAssertEqual("done · kitchen", doneLineTitle("kitchen"))
     }
@@ -1269,7 +1269,7 @@ final class ShellStringsTests: XCTestCase {
         assertKotlinSays(HomeRoomStrings.inCallWithPrefix, "before r.in_call_with")
         assertKotlinSays(HomeRoomStrings.middot, "between a song's title and its artist")
         // `stop $count rooms?`, whose plural is hard-coded (map §11.5).
-        assertKotlinSaysAround("stop \u{1} rooms?")
+        assertKotlinSays(HomeRoomStrings.roomsQuestionSuffix, "after $count, and plural whatever it is")
         XCTAssertEqual(
             "stop 1 rooms?",
             StopAllArm(armedAtMs: 0).label(count: 1, busy: false, nowMs: 0),
@@ -1339,7 +1339,12 @@ final class ShellStringsTests: XCTestCase {
         assertKotlinSaysWhole(HomeToastStrings.noRoomsConnected, "U+2014 em dash, one space each side")
         assertKotlinSaysWhole(HomeToastStrings.alreadyFinished)
         assertKotlinSaysWhole(HomeToastStrings.noRoomsAccepted, "the parentheses and the ? inside them")
-        assertKotlinSaysWhole(HomeToastStrings.room, "the word plural() is given")
+        assertKotlinSays(
+            HomeToastStrings.room,
+            "containment only: it is an argument inside a string template, which the literal reader cannot see into"
+        )
+        XCTAssertEqual("stopped 3 rooms", stopAllToast(total: 3, outcome: StopOutcome(stopped: ["a", "b", "c"])))
+        XCTAssertEqual("broadcasted to 1 room", announceToast(delivered: ["kitchen"], onlineCount: 1))
         // The interpolated heads and middles.
         assertKotlinSays(HomeToastStrings.cancelledPrefix, "before timerNoun(t, shared)")
         assertKotlinSays(HomeToastStrings.stoppedPrefix, "before plural(total, room)")
