@@ -114,44 +114,54 @@ final class StubHouseUITests: XCTestCase {
         app.staticTexts["stub house"]
     }
 
-    /// Get to the pairing screen from an unpaired launch, **whichever way the
-    /// app got there**.
+    /// Get to **Settings → Phones & browsers**, where an unpaired phone pastes
+    /// its household token, from an unpaired launch.
     ///
-    /// Three cases asserted that Home draws ``HomeHeaderStrings/pairLink``
-    /// and tapped it, and that was a race against the app's own correct
-    /// behaviour. An unpaired phone's device-tier reads come back 403 and the
-    /// shell raises the pairing screen by itself (map §11.6), so the link can
-    /// do its job before a test ever sees it.
+    /// ### What this file has been calling "the pairing screen"
     ///
-    /// It took six runs to find that, because the failure said
-    /// "the unpaired header did not draw" — a sentence about the thing that
-    /// was absent, which cannot report what was present. A tree dumped at the
-    /// moment of failure **was the pairing screen**: `pair this phone`,
-    /// `household token`, `pair`, `not now`. Four eliminations happened first
-    /// and every one of them was a theory about why the link was missing.
+    /// Not the screen titled `pair this phone`. ``HomeHeaderStrings/pairLink``
+    /// opens the token card in Settings — `domovoi / settings`,
+    /// `Household token`, `Save & reconnect` — and that is what
+    /// ``knownPairingIssues`` has always counted, which the bisect's own step
+    /// name `A-phones` says out loud. The screen titled `pair this phone`,
+    /// with `not now` on it, is a **different** one: an unpaired phone's
+    /// device-tier reads come back 403 and the shell raises it by itself
+    /// (`ShellModel.swift:503`, map §11.6).
     ///
-    /// It began failing when the everything grid stopped being a `LazyVGrid`:
-    /// thirteen tiles drawn eagerly make Home's first frame dearer, and the
-    /// auto-raise started winning more often. Nothing about the app got
-    /// worse. **A test that passes only when it wins a race is not a test**,
-    /// so this waits for either screen and taps the link only if it is there
-    /// to tap.
+    /// ### Why a loop and not three lines
+    ///
+    /// Three cases asserted the link exists, tapped it and carried on. That
+    /// only ever passed when the link was reached **before** the auto-raise,
+    /// which is a race — and one the everything grid tipped by ceasing to be
+    /// a `LazyVGrid`: thirteen tiles drawn eagerly make Home's first frame
+    /// dearer. Nothing about the app got worse.
+    ///
+    /// So when the auto-raise wins, take its own way out and tap `not now`,
+    /// which puts the phone back on Home with the link still there. Both
+    /// paths end on one screen, so the audit count means the same thing on
+    /// every run.
+    ///
+    /// Six runs were spent before the screen was simply printed, because the
+    /// failure said "the unpaired header did not draw" — a claim about
+    /// something absent, which cannot report what is present. Four of the
+    /// five eliminations were theories about why the link was missing, and it
+    /// was never missing.
     @MainActor
-    private func reachPairing(_ app: XCUIApplication) -> Bool {
+    private func reachPhonesAndBrowsers(_ app: XCUIApplication) -> Bool {
         let link = app.buttons[ShellStringsUnderTest.pairLink]
-        let title = app.staticTexts[ShellStringsUnderTest.pairTitle]
-        let deadline = Date().addingTimeInterval(20)
+        let notNow = app.buttons[ShellStringsUnderTest.notNow]
+        let marker = app.staticTexts[ShellStringsUnderTest.householdToken]
+        let deadline = Date().addingTimeInterval(30)
         while Date() < deadline {
-            if title.exists { return true }
+            if marker.exists { return true }
             if link.exists {
                 link.tap()
-                break
+            } else if notNow.exists {
+                notNow.tap()
             }
-            usleep(200_000)
+            usleep(300_000)
         }
-        if title.waitForExistence(timeout: 10) { return true }
-        // Same rule as everywhere else on this track: say what IS there.
-        print("PAIRING NOT REACHED — tree follows")
+        print("PHONES & BROWSERS NOT REACHED — tree follows")
         print(app.debugDescription)
         return false
     }
@@ -455,11 +465,11 @@ final class StubHouseUITests: XCTestCase {
     func testThePairingScreenAndItsButtons() throws {
         let app = launch(paired: false)
         // The assertion that replaced "the link did nothing — still on Home",
-        // and a stronger one: that we are **on** the pairing screen, by its
-        // own title, however we arrived.
+        // and a stronger one: that we are **on** the screen, by the card
+        // that only it draws, however we arrived.
         XCTAssertTrue(
-            reachPairing(app),
-            "never reached the pairing screen from an unpaired launch"
+            reachPhonesAndBrowsers(app),
+            "never reached Settings → Phones & browsers from an unpaired launch"
         )
         evidence(app, "30-pairing")
         if #available(iOS 17.0, *) {
@@ -552,14 +562,14 @@ final class StubHouseUITests: XCTestCase {
         // unpaired phone's device-tier reads 403 and the shell raises the
         // pairing screen itself, so Home is not always auditable here — and
         // a control step that cannot run is worth a printed line, not a red
-        // suite. ``reachPairing(_:)`` carries the whole story.
+        // suite. ``reachPhonesAndBrowsers(_:)`` carries the whole story.
         if homeWasAuditable {
             try step("0-home-unpaired")
             link.tap()
         } else {
             print("BISECT [0-home-unpaired] skipped — the app raised pairing before Home could be audited")
         }
-        XCTAssertTrue(reachPairing(app), "never reached the pairing screen")
+        XCTAssertTrue(reachPhonesAndBrowsers(app), "never reached Phones & browsers")
 
         try step("A-phones")
 
@@ -647,8 +657,8 @@ final class StubHouseUITests: XCTestCase {
         ] {
             let app = launch(mode: mode, paired: false)
             XCTAssertTrue(
-                reachPairing(app),
-                "never reached the pairing screen at \(label)"
+                reachPhonesAndBrowsers(app),
+                "never reached Phones & browsers at \(label)"
             )
             evidence(app, "60-sizes-\(label)")
             let found = try auditIssues(app, "sizes-\(label)")
@@ -751,11 +761,20 @@ final class StubHouseUITests: XCTestCase {
 private enum ShellStringsUnderTest {
     static let pairLink = "pair this phone for live updates and controls"
     /// ``ShellStrings/pairTitle`` — the pairing screen's own heading, which is
-    /// how ``reachPairing(_:)`` knows it is there without having tapped
+    /// how ``reachPhonesAndBrowsers(_:)`` knows it is there without tapping
     /// anything. Deliberately **not** a prefix of ``pairLink``'s matcher:
     /// `XCUIElementQuery`'s subscript is an exact match, so the two cannot be
     /// confused for one another.
+    /// ``ShellStrings/pairTitle`` — the **auto-raised** pairing screen's
+    /// heading, which is a different screen from where ``pairLink`` goes.
     static let pairTitle = "pair this phone"
+    /// ``ShellStrings/notNow`` — the one way off the auto-raised pairing
+    /// screen (`ShellModel.swift:503`).
+    static let notNow = "not now"
+    /// ``ShellStrings/householdTokenCard`` — the card that marks
+    /// Settings → Phones & browsers, which is where ``pairLink`` actually
+    /// goes and what this file has been calling "the pairing screen".
+    static let householdToken = "Household token"
 
     /// ``ShellPill/accessibilityLabel`` for a saved server, which is what the
     /// pill button answers to in the tree.
