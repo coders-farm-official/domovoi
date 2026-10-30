@@ -122,6 +122,7 @@ final class StubHouseUITests: XCTestCase {
     /// `server: false` saves nothing, which is the local-media shell — no
     /// workspace, no phone bar, and the same ``ShellTopBar``. It is the only
     /// way from here to audit the chrome without Home's content under it.
+    @MainActor
     private func launch(
         mode: String = "large",
         paired: Bool = true,
@@ -170,6 +171,7 @@ final class StubHouseUITests: XCTestCase {
     /// `bot_name` when it is non-blank and the literal `domovoi` otherwise,
     /// so `domovoi` on a server called `stub house` means the config read
     /// did not land — whatever the network did.
+    @MainActor
     private func houseName(in app: XCUIApplication) -> XCUIElement {
         app.staticTexts["stub house"]
     }
@@ -238,6 +240,7 @@ final class StubHouseUITests: XCTestCase {
     ///
     /// `localBanner(for:canTrustAgain:)`'s `.unreachable` wording, which
     /// appears only in that fallback.
+    @MainActor
     private func fellBackToLocalMedia(in app: XCUIApplication) -> Bool {
         app.descendants(matching: .staticText)
             .matching(NSPredicate(format: "label CONTAINS %@", "Can't reach"))
@@ -251,6 +254,7 @@ final class StubHouseUITests: XCTestCase {
     /// would have shown a header reading `domovoi`, and only the tree said
     /// the header had also drawn `offline` and `not live` beside a server
     /// address that was plainly reachable.
+    @MainActor
     private func evidence(_ app: XCUIApplication, _ name: String) {
         let shot = XCTAttachment(screenshot: app.screenshot())
         shot.name = name
@@ -267,6 +271,7 @@ final class StubHouseUITests: XCTestCase {
     }
 
     /// Home, drawn against a server, at the ordinary type size.
+    @MainActor
     func testHomeDrawsAgainstAServer() throws {
         let app = launch()
         // Give the reads a chance to land before the picture is taken, but
@@ -292,6 +297,7 @@ final class StubHouseUITests: XCTestCase {
     /// This is the size that failed the audit on the first screen in I1-C,
     /// and the one the attention card's wrapped rows were argued about in
     /// I1-D part 2's divergence list.
+    @MainActor
     func testHomeAtTheLargestTypeSize() throws {
         let app = launch(mode: "UICTContentSizeCategoryAccessibilityXXXL")
         let named = houseName(in: app).waitForExistence(timeout: 20)
@@ -347,6 +353,7 @@ final class StubHouseUITests: XCTestCase {
     /// two screens that share chrome but not content say which half it is in.
     @MainActor
     @available(iOS 17.0, *)
+    @MainActor
     private func auditIssues(_ app: XCUIApplication, _ name: String) throws -> [String] {
         let wasContinuing = continueAfterFailure
         continueAfterFailure = true
@@ -480,6 +487,7 @@ final class StubHouseUITests: XCTestCase {
     /// It asserted nothing until it was looked at: `waitForExistence` on
     /// `staticTexts.firstMatch` is true of every screen the app can draw,
     /// the local-media placeholder included, so this case could not fail.
+    @MainActor
     func testAnUnpairedPhoneIsToldToPair() throws {
         let app = launch(paired: false)
         // Whatever it shows, photograph it: the point of this one is the
