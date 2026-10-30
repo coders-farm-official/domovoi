@@ -164,10 +164,8 @@ final class HomeWritesTests: XCTestCase {
     func testTheCancelToastOfAReminderIsJustTheWordReminder() async {
         StubURLProtocol.dispatch { _ in .json("{}") }
         let reminder = HomeTimer(id: 7, message: "take the tablets", roomID: "office", isReminder: true)
-        XCTAssertEqual(
-            .cancelled("cancelled reminder"),
-            await HomeApi.cancelTimer(client(), timer: reminder, shared: true)
-        )
+        let outcome = await HomeApi.cancelTimer(client(), timer: reminder, shared: true)
+        XCTAssertEqual(.cancelled("cancelled reminder"), outcome)
     }
 
     /// **The double tap sends one request.**

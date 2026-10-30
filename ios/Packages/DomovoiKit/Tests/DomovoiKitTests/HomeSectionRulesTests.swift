@@ -214,7 +214,7 @@ final class HomeSectionRulesTests: XCTestCase {
         // An empty string is not a message.
         XCTAssertEqual(
             "reminder",
-            timerTitle(timer(1, expires: noon, message: "", label: "", reminder: true), shared: false)
+            timerTitle(timer(1, expires: noon, label: "", message: "", reminder: true), shared: false)
         )
         // The label is the fallback before the bare word.
         XCTAssertEqual(
@@ -266,20 +266,20 @@ final class HomeSectionRulesTests: XCTestCase {
     /// going**: somebody heard it, which is what the timer was for.
     func testAFireHeardSomewhereIsOkEvenWhileStillAnnouncing() {
         XCTAssertEqual(
-            .ok,
+            HealthTone.ok,
             fireTone(fire(1, firedAt: noon, heardIn: ["kitchen"], deliveries: [
                 HomeFireDelivery(roomID: "garage", outcome: "pending"),
             ]))
         )
         XCTAssertEqual(
-            .warn,
+            HealthTone.warn,
             fireTone(fire(1, firedAt: noon, deliveries: [HomeFireDelivery(roomID: "garage", outcome: "sending")]))
         )
         XCTAssertEqual(
-            .err,
+            HealthTone.err,
             fireTone(fire(1, firedAt: noon, deliveries: [HomeFireDelivery(roomID: "garage", outcome: "failed")]))
         )
-        XCTAssertEqual(.err, fireTone(fire(1, firedAt: noon)))
+        XCTAssertEqual(HealthTone.err, fireTone(fire(1, firedAt: noon)))
     }
 
     /// A fire's `kind` is read as well as its flag, so a server that records
@@ -292,17 +292,17 @@ final class HomeSectionRulesTests: XCTestCase {
 
     func testTheDoneLinesComeOffTheLedgerNewestFirstAndOnlyForAMinute() {
         let fires = [
-            fire(1, firedAt: noon - 10_000, summary: "heard in kitchen", heardIn: ["kitchen"]),
+            fire(1, firedAt: noon - 10_000, heardIn: ["kitchen"], summary: "heard in kitchen"),
             fire(2, firedAt: noon - 1_000, summary: ""),
             fire(3, firedAt: noon - 61_000, summary: "too old"),
             fire(4, firedAt: nil, summary: "never recorded a time"),
         ]
         let lines = fireDoneLines(fires, nowMs: noon)
-        XCTAssertEqual([2, 1], lines.map(\.timer.id), "newest first, and the stale and undated ones dropped")
+        XCTAssertEqual([Int64(2), 1], lines.map(\.timer.id), "newest first, and the stale and undated ones dropped")
         XCTAssertEqual("heard in kitchen", lines[1].summary)
         XCTAssertNil(lines[0].summary, "an empty summary is no summary")
-        XCTAssertEqual(.ok, lines[1].tone)
-        XCTAssertEqual(.err, lines[0].tone)
+        XCTAssertEqual(HealthTone.ok, lines[1].tone)
+        XCTAssertEqual(HealthTone.err, lines[0].tone)
         // Exactly on the boundary is out: `nowMs - at < HOME_DONE_MS`.
         XCTAssertTrue(fireDoneLines([fire(5, firedAt: noon - homeDoneMs)], nowMs: noon).isEmpty)
     }
