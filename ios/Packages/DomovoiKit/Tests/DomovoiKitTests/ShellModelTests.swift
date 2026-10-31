@@ -626,6 +626,63 @@ final class ShellModelTests: XCTestCase {
         rig.model.stop()
     }
 
+    /// **Picking a server in the connection dialog has to move the app.** It
+    /// did not, and Kamron found it on the first install, on a real phone, on
+    /// his own network — the one path no stub house can test.
+    ///
+    /// What he saw: the sweep found the house, he tapped it, the row said
+    /// `selected` — and nothing else changed. The dialog still said
+    /// `no server yet · pick one below`, `this phone` still said `in use`,
+    /// the tabs were still the local-media ones, and the top bar still
+    /// offered `connect`. Tapping `your Domovoi` did nothing either, because
+    /// ``ServerChoice/isEnabled`` is false for `.noServer` and the card
+    /// disables itself.
+    ///
+    /// The store was right the whole time. ``ServerTrustGate/overStore(_:didConnect:)``
+    /// writes trust, the known row, the address and `preferLocal = false`,
+    /// and ``ServerPickerModel/rows`` reads `store.serverURL` live — which is
+    /// exactly why the row said `selected` while everything else disagreed.
+    /// What nothing did was tell ``ShellModel``, whose ``ShellModel/inputs``
+    /// is a snapshot taken by ``AppContainer/shellInputs()`` and refreshed
+    /// only by ``ShellModel/refresh()``. The picker never calls it, and
+    /// ``ShellModel/dismissSheet()`` only clears the sheet.
+    ///
+    /// So the app sat pointed at nothing until something unrelated refreshed
+    /// it — backgrounding and coming back, or a reachability verdict landing.
+    ///
+    /// **Third time on this track for the same shape**: a write that lands in
+    /// the store with nothing pulling it back out
+    /// (``testAThrottleRaisesTheCardWithNobodyCallingRefresh``, and the
+    /// satellite onboarding bug before it). There is no `refresh()` in this
+    /// test, deliberately.
+    func testPickingAServerMovesTheAppWithNobodyCallingRefresh() async {
+        let rig = Rig(serverURL: "")
+        XCTAssertEqual("", rig.model.inputs.serverURL, "the rig starts with nothing saved")
+
+        // Exactly what the dialog does: the gate the picker builds, over the
+        // same store, for a server this phone already trusts.
+        let gate = ServerTrustGate.overStore(rig.store)
+        rig.store.trustServer(server, identity: nil)
+        XCTAssertTrue(
+            gate.select(url: server, name: "Domovoi"),
+            "an already-trusted server connects without a trust dialog"
+        )
+
+        let moved = await rig.settleVerdict {
+            rig.model.inputs.serverURL == server && !rig.model.inputs.preferLocal
+        }
+        XCTAssertTrue(
+            moved,
+            "picking a server left the shell at serverURL='\(rig.model.inputs.serverURL)' "
+                + "preferLocal=\(rig.model.inputs.preferLocal); the store had it all along"
+        )
+        XCTAssertTrue(
+            rig.model.serverChoice.isEnabled,
+            "and `your Domovoi` has to be tappable, or there is no way back by hand"
+        )
+        rig.model.stop()
+    }
+
     /// **A throttle has to raise the card by itself.** It could not.
     ///
     /// Every test that has ever seen the `.waiting` card wrote

@@ -201,6 +201,8 @@ public final class ShellModel {
     /// being absent cost.
     private var tokenHealthSink: Int?
 
+    private var selectionSink: Int?
+
     /// - Parameters:
     ///   - probe: one question to the server, for the reachability loop.
     ///     Android's `api.answers()`.
@@ -253,6 +255,13 @@ public final class ShellModel {
         // `429` on an ordinary read is not one of ``refresh()``'s triggers —
         // so without this the `.waiting` card had nothing to raise it.
         self.tokenHealthSink = container.onTokenHealthChange { [weak self] in
+            Task { @MainActor in self?.refresh() }
+        }
+        // And the one the connection dialog needs: its picker writes the
+        // store directly, through ``ServerTrustGate``, so without this a
+        // person who picked their house watched nothing happen —
+        // `ShellModelTest.testPickingAServerMovesTheAppWithNobodyCallingRefresh`.
+        self.selectionSink = container.onServerSelectionChange { [weak self] in
             Task { @MainActor in self?.refresh() }
         }
         // A launch straight onto a waiting card has to count down too, and
@@ -1035,6 +1044,10 @@ public final class ShellModel {
         if let tokenHealthSink {
             container.removeTokenHealthChangeSink(tokenHealthSink)
             self.tokenHealthSink = nil
+        }
+        if let selectionSink {
+            container.removeServerSelectionSink(selectionSink)
+            self.selectionSink = nil
         }
     }
 
