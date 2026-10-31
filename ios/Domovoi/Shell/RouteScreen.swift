@@ -5,9 +5,10 @@ import SwiftUI
 ///
 /// The counterpart of `android/.../ui/screens/ScreenRouter.kt`: a `switch`
 /// over the route, with the capability check in front of it. **The screens
-/// themselves are later batches'** — Home's grid, Music, Videos, Files, Chat,
-/// Settings and the rest — so each is a marked placeholder that names what
-/// belongs there, and nothing here pretends to be one.
+/// themselves are later batches'** — Videos, Files, Chat and most of
+/// Settings — so each of those is a marked placeholder that names what
+/// belongs there, and nothing here pretends to be one. Home and the library
+/// half of Music are built.
 ///
 /// The one piece of real behaviour is the check at the top, and it is
 /// ported rather than invented: a route a link reached that the server does
@@ -36,6 +37,11 @@ struct RouteScreen: View {
             // I1-D part 1 replaces exactly one branch, which is Android's
             // shape too: `ScreenRouter.kt:57` → `Route.Home -> HomeScreen(…)`.
             HomeView(model: model)
+        } else if route == .music {
+            // The second branch to become a screen. Only the library half of
+            // it is built; ``MusicView`` says what is left out and why there
+            // is no control for any of it.
+            MusicView(model: model)
         } else if route == .settings {
             SettingsPlaceholder(model: model)
         } else {
