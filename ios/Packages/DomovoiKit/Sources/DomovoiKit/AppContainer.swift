@@ -111,6 +111,34 @@ public protocol ShellStore: IdentityGate.PinStore, TokenHealth.RejectedBook {
     @discardableResult
     func forgetActiveServer() -> String?
 
+    // MARK: - what the local network has ever done
+
+    /// Whether anything on the local network has **ever** answered this
+    /// install.
+    ///
+    /// Not a verdict about the network and not about now: one bit of install
+    /// history, set the first time a sweep or a typed address reaches a
+    /// dashboard and never cleared.
+    ///
+    /// It is here because of what the picker is entitled to say about an
+    /// empty sweep. iOS asks about Local Network access on the first local
+    /// connection and gives **no API that reports the answer** (TN3179), so
+    /// the sweep that runs while that alert is on screen has every probe
+    /// fail, finishes `.swept` with nothing found, and the picker said
+    /// *"nothing answered on port 6369 — is the web backend running?"* — an
+    /// accusation against the person's own server, for Apple's prompt.
+    /// Kamron hit it within a minute of the first install.
+    ///
+    /// Once something has answered, the permission is settled and an empty
+    /// sweep really is about the house. Until then it is not, and the line
+    /// has to say so: ``ServerPickerNotice/nothingAnsweredYet(port:)``.
+    var localNetworkHasAnswered: Bool { get }
+
+    /// Something answered. Called by the picker for a sweep that found a
+    /// dashboard and for a typed address that reached one — the two things in
+    /// this app that prove a local connection was allowed.
+    func noteLocalNetworkAnswered()
+
     /// Call `sink` after a write that changes **which server this phone is
     /// pointed at** — the address, the "this phone" choice, or the active
     /// server being forgotten.
@@ -157,6 +185,7 @@ public final class InMemoryShellStore: ShellStore {
         var book = TrustBook()
         var preferLocal = false
         var phoneBar: String?
+        var localNetworkHasAnswered = false
         var onSelectionChange: (@Sendable () -> Void)?
     }
 
@@ -197,6 +226,12 @@ public final class InMemoryShellStore: ShellStore {
     public var preferLocal: Bool { state.withLock { $0.preferLocal } }
 
     public var phoneBar: String? { state.withLock { $0.phoneBar } }
+
+    public var localNetworkHasAnswered: Bool { state.withLock { $0.localNetworkHasAnswered } }
+
+    public func noteLocalNetworkAnswered() {
+        state.withLock { $0.localNetworkHasAnswered = true }
+    }
 
     public func notifySelectionChanges(to sink: @escaping @Sendable () -> Void) {
         state.withLock { $0.onSelectionChange = sink }
