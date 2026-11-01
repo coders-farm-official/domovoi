@@ -495,4 +495,173 @@ public enum MusicStrings {
     public static func queuedInRoom(_ title: String, room: String) -> String {
         "playing \"\(title)\" in \(room)…"
     }
+
+    // ---- the tabs ---------------------------------------------------------
+
+    public static let tabLibrary = "library"
+
+    /// `"room queue"`, not `"queue"` — `MusicScreen.kt:358`, whose own
+    /// comment says why: the room's queue sits next to the phone's own in
+    /// Android's bar "so the difference is visible rather than explained".
+    /// This app has no phone queue yet, and the word stays anyway, because
+    /// the difference will exist again the day it does and because "room
+    /// queue" is the more accurate of the two names today.
+    public static let tabQueue = "room queue"
+    public static let tabStats = "stats"
+
+    // ---- the room transport ----------------------------------------------
+
+    /// `"pause failed: the house did not answer"` — Android names the
+    /// failure after the action it sent (`roomCtl(action, room, action)`).
+    public static func actionFailed(_ action: String, _ reason: String) -> String {
+        "\(action) failed: \(reason)"
+    }
+
+    /// The "play something" button on an idle room's card, and what the
+    /// server is actually asked for.
+    ///
+    /// The query is the **server's** search term, not a client-side pick
+    /// (`MusicScreen.kt:193`): the house decides what random means, so a
+    /// plugin can change that answer without this app shipping again.
+    public static let playSomething = "play something"
+    public static let somethingRandom = "something random"
+
+    public static func shuffleRequested(room: String) -> String {
+        "shuffle requested in \(room)…"
+    }
+
+    public static func nothingPlayingIn(room: String) -> String {
+        "nothing playing in \(room)"
+    }
+
+    /// The now-playing favourite control, whose label says what it will do to
+    /// **the song in the room** rather than to a row in a list.
+    public static let favoriteThis = "favorite what's playing"
+    public static let unfavoriteThis = "unfavorite what's playing"
+
+    // ---- the room queue ---------------------------------------------------
+
+    public static let roomLabel = "room"
+    public static let noRooms = "no rooms provisioned yet"
+    public static let noRoomsNote = "set up a room to bring it online"
+
+    /// `"added by Kamron's iPhone"`. Absent entirely when the server has no
+    /// record — never "added by someone".
+    public static func addedBy(_ device: String) -> String { "added by \(device)" }
+
+    public static let nowPlayingHere = "now playing"
+
+    public static func queueCount(_ count: Int) -> String {
+        count == 1 ? "1 in the queue" : "\(count) in the queue"
+    }
+
+    public static func queueEmpty(room: String) -> String {
+        "nothing queued in \(room) — ask it to play something, "
+            + "or play a track from the library"
+    }
+
+    public static let moveUp = "move up"
+    public static let moveDown = "move down"
+    public static let removeFromQueue = "remove from queue"
+    public static let clearQueue = "clear queue"
+
+    public static func clearQueueTitle(room: String) -> String {
+        "clear \(room)'s queue?"
+    }
+
+    public static let clearQueueBody = "Empties the queue and stops playback in that room."
+
+    public static func removedFromQueue(_ title: String) -> String {
+        "removed \"\(title)\""
+    }
+
+    public static func removeFailed(_ reason: String) -> String { "remove failed: \(reason)" }
+    public static func moveFailed(_ reason: String) -> String { "move failed: \(reason)" }
+
+    public static func clearedQueue(room: String) -> String { "cleared \(room)'s queue" }
+    public static func clearFailed(_ reason: String) -> String { "clear failed: \(reason)" }
+
+    /// `QueueTab.kt:316`: the server's own sentence, then what it means for
+    /// whoever is looking at the screen.
+    public static func watchOnly(_ reason: String) -> String {
+        "\(reason). You can watch the queue but not change it."
+    }
+
+    // ---- the stats tab ----------------------------------------------------
+
+    public static let statTotalTracks = "total tracks"
+    public static let statAcrossSources = "across all sources"
+    public static let statTotalDuration = "total duration"
+    public static func statMinutes(_ minutes: Int) -> String { "\(minutes) minutes" }
+    public static let statNoDurations = "no durations indexed"
+
+    /// `"added via spotify"`, or `"added via —"` before any bucket is known.
+    public static func statAddedVia(_ bucket: String?) -> String {
+        "added via \(bucket ?? "—")"
+    }
+
+    public static let statEnriched = "enriched"
+    public static func statPending(_ count: Int) -> String { "\(count) pending" }
+    public static let statsUnavailable = "stats unavailable"
+    public static let statsUnavailableNote = "the library/stats read did not answer"
+
+    // ---- the track sheet --------------------------------------------------
+
+    public static func trackEyebrow(_ id: Int64) -> String { "track · #\(id)" }
+    public static let metaDuration = "duration"
+    public static let metaSource = "source"
+    public static let metaSourceID = "source id"
+    public static let metaAdded = "added"
+    public static let metaAddedVia = "added via"
+    public static let metaEnriched = "enriched"
+    public static let metaPath = "path"
+    public static let unknownTitle = "unknown title"
+    public static let noRoomsOnline = "no rooms online"
+    public static let close = "close"
+
+    public static let alsoDeleteFile = "also delete the file on disk"
+    public static let deleteTrack = "delete track"
+    public static let delete = "delete"
+    public static let cancel = "cancel"
+
+    public static func deleteFromLibraryBody(_ title: String) -> String {
+        "Remove \"\(title)\" from the library? "
+            + "The file stays on disk; a rescan will re-add it."
+    }
+
+    public static func deleteFileBody(_ title: String, path: String?) -> String {
+        let shown = (path?.isEmpty == false ? path : nil).map { "\n\n\($0)" } ?? ""
+        return "Permanently delete the file for \"\(title)\" from disk? "
+            + "This can't be undone.\(shown)"
+    }
+
+    public static func removedFromLibrary(_ title: String) -> String {
+        "removed \"\(title)\" from the library (file kept; a rescan will re-add it)"
+    }
+
+    public static func deletedWithFile(_ title: String) -> String {
+        "deleted \"\(title)\" · file removed from disk"
+    }
+
+    public static func deleteFailed(_ reason: String) -> String { "delete failed: \(reason)" }
+
+    // ---- rescan and enrich -----------------------------------------------
+
+    public static let rescan = "rescan the library"
+    public static let rescanStarted = "rescan started"
+    public static func rescanFailed(_ reason: String) -> String { "rescan failed: \(reason)" }
+
+    public static let enrich = "identify untagged tracks"
+    public static let enrichStarted = "enrich started"
+    public static let enrichDisabled = "song recognition is turned off on the server"
+    public static let enrichOffline = "no internet right now — try again when it's back"
+    public static let enrichNoProvider =
+        "song recognition needs a free AcoustID key or the Shazam add-on"
+    public static let enrichRunning = "already identifying songs"
+
+    public static func enrichRefused(_ reason: String?) -> String {
+        "enrich didn't start (\(reason ?? "unknown reason"))"
+    }
+
+    public static func enrichFailed(_ reason: String) -> String { "enrich failed: \(reason)" }
 }

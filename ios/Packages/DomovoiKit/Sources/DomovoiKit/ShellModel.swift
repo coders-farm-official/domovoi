@@ -920,6 +920,17 @@ public final class ShellModel {
     /// can say — which is the state an app built without one is in.
     private let deviceSelf: (@Sendable () -> DeviceSelf)?
 
+    /// What this install calls itself on the wire, or nil when nothing can
+    /// say.
+    ///
+    /// Read by the room queue, whose every request carries `device_id`: the
+    /// server decides from it whether this phone may edit the queue, and a
+    /// request without one would be refused the household's view of who
+    /// queued what. One id per install, so it comes from the one place that
+    /// already holds it rather than being minted a second time beside the
+    /// screen that needs it.
+    public var deviceID: String? { deviceSelf?().deviceID }
+
     /// The device register's sender, or nil when there is nothing to send.
     ///
     /// **This is the thing I1-C part 2's F9 left a hole for.** It wrote the

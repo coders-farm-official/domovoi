@@ -65,7 +65,9 @@ public final class MusicModel {
 
     // MARK: - what it was built from
 
-    private let container: AppContainer
+    /// Internal rather than private: ``MusicRoomActions`` is an extension in
+    /// this module and every one of its actions needs the client.
+    let container: AppContainer
     private let clock: @Sendable () -> Int64
 
     /// How the debounce waits.
@@ -153,6 +155,17 @@ public final class MusicModel {
     public var castRooms: [String] { MusicPage.castRooms(rooms) }
 
     public var playingCount: Int { MusicPage.playingCount(rooms) }
+
+    /// The room that actually has sound coming out of it, or nil.
+    ///
+    /// What the room queue opens on: "the queue you opened this tab to look
+    /// at" (`QueueTab.kt:114`). Deliberately **not**
+    /// ``MusicPage/defaultRoom(_:)``, which falls back to the first room
+    /// there is: that fallback belongs to the queue model, which has to
+    /// decide between a room it was already showing and a new one, and a
+    /// value that has already fallen back cannot be told apart from a real
+    /// answer.
+    public var playingRoom: String? { rooms.first(where: \.isPlaying)?.roomID }
 
     /// `stats.total_tracks`, or nil while that read has not answered — and
     /// nil is **not** zero anywhere it is used.
@@ -253,6 +266,13 @@ public final class MusicModel {
         defer { toast = nil }
         return toast
     }
+
+    /// The one writer of ``toast``.
+    ///
+    /// Internal, for the extension in ``MusicRoomActions`` — and a method
+    /// rather than loosening `private(set)`, so that "what can set a toast"
+    /// stays a list `grep` can produce.
+    func setToast(_ said: String) { toast = said }
 
     // MARK: - the query, and the one place a new list is built
 

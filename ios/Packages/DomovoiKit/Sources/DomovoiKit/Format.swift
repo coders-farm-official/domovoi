@@ -75,6 +75,24 @@ public func fmtDur(_ seconds: Double?) -> String {
     return String(format: "%d:%02d", m, s)
 }
 
+/// `2h 14m`, `47m` — a span long enough that seconds are noise.
+/// `fmtBigDur` (`Format.kt:62`), which the stats tiles use for a whole
+/// library's playing time.
+///
+/// **A bare em dash for nil**, as `fmtDur` gives, and the hour is left off
+/// entirely when there is none: `47m`, not `0h 47m`. Anything negative or
+/// non-finite is an em dash too — `fmtBigDur` is handed arithmetic over an
+/// optional from the wire, exactly as `fmtDur` is, and Android's version does
+/// not guard that: `fmtBigDur(Double.NaN)` over there is `"-2147483648h"`,
+/// because `roundToInt()` on a NaN is `Int.MIN_VALUE`.
+public func fmtBigDur(_ seconds: Double?) -> String {
+    guard let seconds, seconds.isFinite, seconds >= 0 else { return "—" }
+    let total = Int(seconds.rounded())
+    let h = total / 3600
+    let m = (total % 3600) / 60
+    return h > 0 ? "\(h)h \(m)m" : "\(m)m"
+}
+
 /// `just now`, `4m ago`, `2h ago`, `3d ago`, then a date — `relTime`
 /// (`Format.kt:21`).
 ///
@@ -121,7 +139,11 @@ private func relFuture(_ seconds: Int64) -> String {
 
 /// Kotlin's `roundToInt()`: half away from zero, which `Foundation.rounded()`
 /// also is by default. Every argument here is non-negative.
-private func rounded(_ value: Double) -> Int {
+///
+/// Internal rather than private since ``LibraryStats/tiles`` needs the same
+/// rounding for its "N minutes" line: two roundings of one number in one
+/// module is how two screens come to disagree about a duration by a minute.
+func rounded(_ value: Double) -> Int {
     Int(value.rounded())
 }
 

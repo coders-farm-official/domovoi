@@ -1,41 +1,43 @@
 import DomovoiKit
 import SwiftUI
 
-/// Music: the library, as a list you scroll.
+/// Music: the library, the room's queue, and the numbers.
 ///
-/// `android/.../ui/screens/music/MusicScreen.kt` and its `LibraryTab`, with
-/// everything this batch does not build **left out rather than stubbed**.
+/// `android/.../ui/screens/music/MusicScreen.kt`, with everything this app
+/// does not build **left out rather than stubbed**.
 ///
 /// ### What is here
 ///
-/// The now-playing strip as information, the search, the source filter, the
-/// sort, the favourites switch, the count line, the library a page at a time,
-/// favouriting a row, and playing a row in a room.
+/// A card per room — what it is playing, how far in, and its transport. Three
+/// tabs: the library a page at a time with its search, filters and sort; the
+/// **room's** queue, reorderable and clearable; and the library's whole-house
+/// numbers. A track opens a sheet with everything the server knows about it,
+/// where to play it, and how to delete it. In the header, the two
+/// library-wide jobs: rescan, and identify untagged tracks.
 ///
 /// ### What is not, and why there is no control for it
 ///
-/// The player tab, the room queue, playlists, the stats tab, uploads, rescan,
-/// enrich, the track drawer, lyrics and cast are later batches'. Android puts
-/// five tabs across the top of this screen; four of them would be empty here,
-/// so **there is no tab bar yet**. That is the owner's standing rule — a
-/// control that cannot do what it says is not drawn — and it is the reason
-/// this screen looks smaller than Android's rather than looking the same and
-/// doing less.
+/// **This phone's own player**, which is Android's `player` tab: queueing to
+/// the handset, playing through its speaker, the seek bar, the sleep timer,
+/// the playback speed, chapters, and casting a local queue to a room. That is
+/// an audio engine, not a screen, and it is its own milestone.
 ///
-/// The one place it is visible: a row has no `…` menu. Android's row menu is
-/// `play in room`, `play next`, `favorite`, `add to playlist` and `play on
-/// this device` (`LibraryTab.kt:356`); two of those five work here, so they
-/// are the two controls the row has.
+/// **Playlists** (the tab, the drawer and "add to playlist"), **lyrics**,
+/// **uploading** a file from the phone, **saving** a track to the phone, and
+/// the **cover art** everywhere it would appear. Each is a later batch's.
+///
+/// So the tab bar has three tabs rather than five (``MusicTab``), a room card
+/// has no cast menu, a library row has no `…` menu, and the track sheet has
+/// no `play here`. The rule they are left out under is the owner's standing
+/// one — a control that cannot do what it says is not drawn
+/// ([[no-misleading-controls]]).
 ///
 /// ### The list is lazy, and nothing that matters is held in a row
 ///
 /// `LazyVStack`, because this is a files-like page and the owner's standing
 /// decision of 2026-10-11 is that those load as you scroll. A lazy row is
-/// recycled, so **a row never holds a `Task`**: favouriting and playing are
-/// `MusicModel`'s, which outlives the row and the screen's own scroll
-/// position. That is the same hoist ``HomeView`` makes for the announce
-/// field, for the same reason, and here it comes for free because the model
-/// owns the writes.
+/// recycled, so **a row never holds a `Task`**: every write is a model's,
+/// which outlives the row, the tab and the screen.
 ///
 /// The page trigger is ``MusicModel/shouldLoadMore(lastVisible:)`` on each
 /// row's `onAppear` — the function, not the bare `onAppear`, because a
@@ -46,6 +48,22 @@ struct MusicView: View {
     let model: ShellModel
 
     @State private var music: MusicModel?
+
+    /// The room queue's own model, built **the first time that tab is
+    /// opened**.
+    ///
+    /// Not in `.task` beside ``music``: the queue is one request per room per
+    /// visit, and a person who only ever looks at the library should not be
+    /// sending them. Android reaches the opposite place from the other end —
+    /// its `rememberRoomQueue` is called from the screen whatever tab is
+    /// open, so an Android phone sitting on the library tab is reading a
+    /// queue nobody asked for.
+    @State private var queue: MusicQueueModel?
+
+    @State private var tab: MusicTab = .library
+
+    /// The track whose sheet is open.
+    @State private var sheetTrack: LibraryTrack?
 
     /// Whether this view is on screen, as `onAppear`/`onDisappear` report it.
     ///
@@ -59,9 +77,23 @@ struct MusicView: View {
             LazyVStack(alignment: .leading, spacing: 16) {
                 header
                 if let music {
-                    MusicNowPlayingStrip(rooms: music.rooms, tick: music.tick)
-                    MusicFilters(music: music)
-                    MusicLibraryList(music: music)
+                    MusicNowPlayingStrip(music: music)
+                    MusicTabBar(
+                        tab: $tab,
+                        libraryTotal: music.libraryTotal,
+                        queueCount: queue?.items.count
+                    )
+                    switch tab {
+                    case .library:
+                        MusicFilters(music: music)
+                        MusicLibraryList(music: music, onOpen: { sheetTrack = $0 })
+                    case .queue:
+                        if let queue {
+                            MusicQueueView(music: music, queue: queue)
+                        }
+                    case .stats:
+                        MusicStatsView(music: music)
+                    }
                 }
             }
             .padding(16)
@@ -80,113 +112,148 @@ struct MusicView: View {
         .onDisappear {
             visible = false
             music?.stop()
+            queue?.stop()
+        }
+        // The queue's model is built on first use and started with whatever
+        // rooms are known by then. Its own read is subscribed to the
+        // now-playing push, so this runs once per visit to the tab rather
+        // than once per answer.
+        .onChange(of: tab) { _, now in
+            guard now == .queue, let music else { return }
+            startQueue(with: music)
+        }
+        // A satellite came online, or went away: the open queue is re-offered
+        // the list, so a room that has gone does not leave the tab asking for
+        // a queue that cannot answer. **Not a refresh** — the read has its
+        // own subscription, and a second request per push is one too many.
+        .onChange(of: music?.castRooms ?? []) { _, rooms in
+            queue?.offer(rooms: rooms, playing: music?.playingRoom)
         }
         // **The toast is the shell's**, drawn over the whole app
         // (`AppShellView.swift:36`), because a toast about a play that failed
-        // must outlive a scroll and does outlive this screen. The model holds
-        // it until something takes it, so this is a hand-off and not a second
-        // copy.
+        // must outlive a scroll and does outlive this screen. Each model
+        // holds its own until something takes it, so this is a hand-off and
+        // not a second copy.
         .onChange(of: music?.toast) { _, text in
             guard text != nil, let said = music?.takeToast() else { return }
+            model.showToast(said)
+        }
+        .onChange(of: queue?.toast) { _, text in
+            guard text != nil, let said = queue?.takeToast() else { return }
             model.showToast(said)
         }
         .onChange(of: model.inputs.serverURL) { _, _ in
             guard visible else { return }
             music?.serverChanged()
+            queue?.serverChanged()
+        }
+        .sheet(item: $sheetTrack) { track in
+            if let music {
+                MusicTrackSheet(music: music, track: track)
+            }
         }
     }
 
+    /// Build the queue's model if there is not one, and start it.
+    ///
+    /// The device id comes from ``ShellModel/deviceID`` — the one the install
+    /// already registered with — because the server decides from it whether
+    /// this phone may edit the queue. With no id there is no queue model at
+    /// all: a request without `device_id` reads as a stranger's, which would
+    /// show a household phone a queue it is told it cannot change.
+    private func startQueue(with music: MusicModel) {
+        guard let deviceID = model.deviceID else { return }
+        if queue == nil {
+            queue = MusicQueueModel(container: model.container, deviceID: deviceID)
+        }
+        queue?.start(rooms: music.castRooms, playing: music.playingRoom)
+    }
+
     private var header: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(MusicStrings.title)
-                .font(.title2)
-                .accessibilityAddTraits(.isHeader)
-                .fixedSize(horizontal: false, vertical: true)
-            Text(music?.header ?? MusicStrings.header(tracks: nil, roomsPlaying: 0))
-                .font(.footnote)
-                .foregroundStyle(Color.fgMuted)
-                .fixedSize(horizontal: false, vertical: true)
+        HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(MusicStrings.title)
+                    .font(.title2)
+                    .accessibilityAddTraits(.isHeader)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(music?.header ?? MusicStrings.header(tracks: nil, roomsPlaying: 0))
+                    .font(.footnote)
+                    .foregroundStyle(Color.fgMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+            jobs
+        }
+    }
+
+    /// Rescan and enrich.
+    ///
+    /// A menu rather than Android's two bare icon buttons in the header: the
+    /// two icons there are a circular arrow and a sparkle, and neither says
+    /// which of them rewrites tags. Here they are words.
+    @ViewBuilder
+    private var jobs: some View {
+        if let music {
+            Menu {
+                Button(MusicStrings.rescan) { music.rescanLibrary() }
+                Button(MusicStrings.enrich) { music.enrichLibrary() }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+                    .frame(minWidth: 44, minHeight: 44)
+                    .contentShape(.rect)
+            }
+            .accessibilityLabel(MusicStrings.title)
         }
     }
 }
 
 // ---------------------------------------------------------------------------
-// The now-playing strip
+// The tabs
 // ---------------------------------------------------------------------------
 
-/// What the house is playing, **as information**.
+/// Three tabs, as a scrolling row of words.
 ///
-/// `NowPlayingCards.kt`'s cards with their transports taken off: play, pause,
-/// skip, seek, the favourite-this-song button and the cast menu are the
-/// player batch's, and a row of buttons that did nothing would be worse than
-/// no row. So this says which room is playing what and how far in, and the
-/// rooms it lists are **the ones the server reported** — never a made-up
-/// `"kitchen"`.
-struct MusicNowPlayingStrip: View {
+/// **Not a segmented `Picker`.** A segmented control divides the width it is
+/// given between its segments and shrinks the text to fit, which is
+/// `minimumScaleFactor` by another name and is rejected throughout this app;
+/// `library · 5232` and `room queue · 3` at an accessibility text size do not
+/// fit a phone between them. Android reaches the same answer with
+/// `ScrollableTabRow`, and for the same reason.
+struct MusicTabBar: View {
 
-    let rooms: [NowPlayingRoom]
-    let tick: Int
+    @Binding var tab: MusicTab
+    let libraryTotal: Int?
+    let queueCount: Int?
 
     var body: some View {
-        // Nothing at all while no room has answered: a card saying "nothing
-        // playing" over a house whose satellites simply have not been read
-        // yet is a claim the app cannot make.
-        if !rooms.isEmpty {
-            HomeCard(title: MusicStrings.title) {
-                VStack(alignment: .leading, spacing: 10) {
-                    ForEach(rooms, id: \.roomID) { room in
-                        row(room)
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 4) {
+                ForEach(MusicTab.allCases) { one in
+                    Button {
+                        tab = one
+                    } label: {
+                        Text(one.label(libraryTotal: libraryTotal, queueCount: queueCount))
+                            .font(.subheadline)
+                            .fontWeight(one == tab ? .semibold : .regular)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.horizontal, 12)
+                            .frame(minHeight: 44)
+                            .contentShape(.rect)
                     }
+                    .buttonStyle(.plain)
+                    // The selected tab is **told**, not just drawn darker:
+                    // weight and colour are both invisible to VoiceOver, and
+                    // the word alone cannot say which one is open.
+                    .accessibilityAddTraits(one == tab ? [.isButton, .isSelected] : .isButton)
+                    .foregroundStyle(one == tab ? Color.brandInk : Color.fgMuted)
+                    .background(
+                        one == tab ? Color(.secondarySystemBackground) : .clear,
+                        in: Capsule()
+                    )
                 }
             }
         }
-    }
-
-    private func row(_ room: NowPlayingRoom) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                ToneDot(tone: room.isPlaying ? .brand : .idle)
-                Text(roomLine(room))
-                    .font(.subheadline)
-                    .fixedSize(horizontal: false, vertical: true)
-                Spacer(minLength: 8)
-                if let song = room.song, room.state != nil {
-                    Text(elapsedLine(room, song))
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(Color.fgMuted)
-                }
-            }
-            Text(songLine(room))
-                .font(.footnote)
-                .foregroundStyle(Color.fgMuted)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        // One row, one sentence: VoiceOver reads "playing in garage, Hey Jude
-        // — The Beatles" rather than stopping at a dot and a time.
-        .accessibilityElement(children: .combine)
-    }
-
-    private func roomLine(_ room: NowPlayingRoom) -> String {
-        if room.isPlaying { return MusicStrings.playingIn(room: room.roomID) }
-        if room.isPaused { return MusicStrings.pausedIn(room: room.roomID) }
-        return room.roomID
-    }
-
-    private func songLine(_ room: NowPlayingRoom) -> String {
-        guard let song = room.song else { return MusicStrings.nothingPlaying }
-        let artist = song.artist?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let who = (artist?.isEmpty == false ? artist : nil) ?? MusicStrings.unknownArtist
-        return "\(song.displayTitle) — \(who)"
-    }
-
-    /// `0:31 / 7:11`, or just the position for a stream with no duration.
-    ///
-    /// The position is ``NowPlayingRoom/elapsed(tick:)``, so it counts up
-    /// between pushes and never runs past the end of the song.
-    private func elapsedLine(_ room: NowPlayingRoom, _ song: NowPlayingSong) -> String {
-        let at = fmtDur(room.elapsed(tick: tick))
-        guard let total = song.durationSec else { return at }
-        return "\(at) / \(fmtDur(total))"
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -271,6 +338,10 @@ struct MusicLibraryList: View {
 
     let music: MusicModel
 
+    /// Open a track's sheet. A closure rather than a binding, so that a row
+    /// can open a sheet and cannot write anything else of the screen's state.
+    let onOpen: (LibraryTrack) -> Void
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             if let count = music.countText {
@@ -288,7 +359,7 @@ struct MusicLibraryList: View {
                     .accessibilityLabel(MusicStrings.title)
             }
             ForEach(Array(music.library.state.items.enumerated()), id: \.element.id) { index, track in
-                MusicTrackRow(music: music, track: track)
+                MusicTrackRow(music: music, track: track, onOpen: onOpen)
                     .onAppear {
                         // The guarded question, never a bare "the last row
                         // appeared".
@@ -334,30 +405,39 @@ struct MusicLibraryList: View {
     }
 }
 
-/// One library row: what it is, and the two things that can be done to it.
+/// One library row: what it is, and what can be done to it.
 struct MusicTrackRow: View {
 
     let music: MusicModel
     let track: LibraryTrack
+    let onOpen: (LibraryTrack) -> Void
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(track.displayTitle)
-                    .font(.subheadline)
-                    .fixedSize(horizontal: false, vertical: true)
-                Text(subtitle)
-                    .font(.caption)
-                    .foregroundStyle(Color.fgMuted)
-                    .fixedSize(horizontal: false, vertical: true)
-                if let pill = track.sourcePill {
-                    // Only when there is one. A row the library found on disk
-                    // has no source, and the pill it used to get said
-                    // "manual" beside an `added via` that also said "manual".
-                    HomeTonePill(label: pill, tone: .idle)
+            // The row's text is the button that opens the sheet; the two
+            // controls beside it are **not** inside it, so a tap on the star
+            // cannot also open the sheet.
+            Button { onOpen(track) } label: {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(track.displayTitle)
+                        .font(.subheadline)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(Color.fgMuted)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if let pill = track.sourcePill {
+                        // Only when there is one. A row the library found on
+                        // disk has no source, and the pill it used to get
+                        // said "manual" beside an `added via` that also said
+                        // "manual".
+                        HomeTonePill(label: pill, tone: .idle)
+                    }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(.rect)
             }
-            Spacer(minLength: 8)
+            .buttonStyle(.plain)
             favouriteButton
             playMenu
         }
