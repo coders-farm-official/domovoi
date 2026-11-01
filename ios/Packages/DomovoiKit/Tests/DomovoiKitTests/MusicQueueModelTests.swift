@@ -157,8 +157,20 @@ final class MusicQueueModelTests: XCTestCase {
         StubURLProtocol.recorded.filter { $0.url?.path.hasSuffix(suffix) == true }
     }
 
-    private func body(of request: URLRequest) -> String {
-        guard let data = request.httpBody else { return "" }
+    /// The body of the FIRST of `sent`, or a clean failure when nothing was
+    /// sent.
+    ///
+    /// `sent[0]` traps on an empty list, and a trap takes the rest of the
+    /// xctest process with it — which is how this batch's negative control
+    /// lost eighteen sabotages behind one broken guard. Asserting the count
+    /// first would do as well; this makes it impossible to forget.
+    private func firstBody(
+        of sent: [URLRequest],
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) throws -> String {
+        let one = try XCTUnwrap(sent.first, "nothing was sent", file: file, line: line)
+        guard let data = one.httpBody else { return "" }
         return String(decoding: data, as: UTF8.self)
     }
 
@@ -389,7 +401,7 @@ final class MusicQueueModelTests: XCTestCase {
         let sent = requests(to: "/api/music/queue/den/remove")
         XCTAssertEqual(1, sent.count)
         XCTAssertEqual("POST", sent.first?.httpMethod)
-        XCTAssertEqual(#"{"song_ids":[9],"device_id":"\#(phone)"}"#, body(of: sent[0]))
+        XCTAssertEqual(#"{"song_ids":[9],"device_id":"\#(phone)"}"#, try firstBody(of: sent))
         // And the list is re-read rather than patched: the server is the
         // truth about an edit four other clients also see.
         await settleUntil({ (house.reads.current["den"] ?? 0) >= 2 }, "the re-read")
@@ -397,7 +409,7 @@ final class MusicQueueModelTests: XCTestCase {
 
     /// A successful move says **nothing**: the list redraws in the new order,
     /// which says it better than a sentence over the top of it.
-    func testAMoveSendsThePositionAndSaysNothing() async {
+    func testAMoveSendsThePositionAndSaysNothing() async throws {
         let (queue, _, house) = rig()
         house.queues.set(["den": twoEntries])
         await started(queue, rooms: ["den"])
@@ -408,10 +420,13 @@ final class MusicQueueModelTests: XCTestCase {
 
         XCTAssertNil(queue.toast)
         let sent = requests(to: "/api/music/queue/den/move")
-        XCTAssertEqual(#"{"song_id":7,"to_position":1,"device_id":"\#(phone)"}"#, body(of: sent[0]))
+        XCTAssertEqual(
+            #"{"song_id":7,"to_position":1,"device_id":"\#(phone)"}"#,
+            try firstBody(of: sent)
+        )
     }
 
-    func testMovingUpSendsThePositionAbove() async {
+    func testMovingUpSendsThePositionAbove() async throws {
         let (queue, _, house) = rig()
         house.queues.set(["den": twoEntries])
         await started(queue, rooms: ["den"])
@@ -421,7 +436,10 @@ final class MusicQueueModelTests: XCTestCase {
         await settleUntil({ (house.reads.current["den"] ?? 0) >= 2 }, "the move")
 
         let sent = requests(to: "/api/music/queue/den/move")
-        XCTAssertEqual(#"{"song_id":9,"to_position":0,"device_id":"\#(phone)"}"#, body(of: sent[0]))
+        XCTAssertEqual(
+            #"{"song_id":9,"to_position":0,"device_id":"\#(phone)"}"#,
+            try firstBody(of: sent)
+        )
     }
 
     /// The ends of the list send nothing. The server takes `to_position: int
@@ -446,7 +464,7 @@ final class MusicQueueModelTests: XCTestCase {
         XCTAssertEqual(1, house.reads.current["den"])
     }
 
-    func testAClearSendsTheDeviceAndSaysWhichRoom() async {
+    func testAClearSendsTheDeviceAndSaysWhichRoom() async throws {
         let (queue, _, house) = rig()
         house.queues.set(["den": twoEntries])
         await started(queue, rooms: ["den"])
@@ -459,7 +477,7 @@ final class MusicQueueModelTests: XCTestCase {
         XCTAssertFalse(queue.confirmingClear, "the confirmation is closed by the act")
         XCTAssertEqual("cleared den's queue", queue.takeToast())
         let sent = requests(to: "/api/music/queue/den/clear")
-        XCTAssertEqual(#"{"device_id":"\#(phone)"}"#, body(of: sent[0]))
+        XCTAssertEqual(#"{"device_id":"\#(phone)"}"#, try firstBody(of: sent))
         await settleUntil({ (house.reads.current["den"] ?? 0) >= 2 }, "the re-read")
     }
 

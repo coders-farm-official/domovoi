@@ -137,8 +137,20 @@ final class MusicRoomActionsTests: XCTestCase {
             .filter { $0.contains(text) }
     }
 
-    private func body(of request: URLRequest) -> String {
-        guard let data = request.httpBody else { return "" }
+    /// The body of the FIRST of `sent`, or a clean failure when nothing was
+    /// sent.
+    ///
+    /// `sent[0]` traps on an empty list, and a trap takes the rest of the
+    /// xctest process with it — which is how this batch's negative control
+    /// lost eighteen sabotages behind one broken guard. Asserting the count
+    /// first would do as well; this makes it impossible to forget.
+    private func firstBody(
+        of sent: [URLRequest],
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) throws -> String {
+        let one = try XCTUnwrap(sent.first, "nothing was sent", file: file, line: line)
+        guard let data = one.httpBody else { return "" }
         return String(decoding: data, as: UTF8.self)
     }
 
@@ -241,7 +253,7 @@ final class MusicRoomActionsTests: XCTestCase {
     /// The body carries the room and the **server's** search term: the house
     /// decides what random means, so a plugin can change that answer without
     /// this app shipping again.
-    func testPlaySomethingAsksTheServerWhatRandomMeans() async {
+    func testPlaySomethingAsksTheServerWhatRandomMeans() async throws {
         let (model, _) = rig()
         await started(model)
         defer { model.stop() }
@@ -254,13 +266,13 @@ final class MusicRoomActionsTests: XCTestCase {
 
         XCTAssertEqual(
             #"{"room_id":"garage","query":"something random"}"#,
-            body(of: posts(to: "/api/music/play")[0])
+            try firstBody(of: posts(to: "/api/music/play"))
         )
     }
 
     /// A room name with a quote in it is escaped in the **body**, not just in
     /// a path: `"Kids' room"` is one of the two names a real house produces.
-    func testARoomNameWithAQuoteDoesNotBreakTheBody() async {
+    func testARoomNameWithAQuoteDoesNotBreakTheBody() async throws {
         let (model, house) = rig()
         house.nowPlaying.set(#"[{"room_id":"Kids\" room","state":"stop"}]"#)
         await started(model)
@@ -270,7 +282,7 @@ final class MusicRoomActionsTests: XCTestCase {
         XCTAssertTrue(model.playSomething(in: #"Kids" room"#))
         await settleUntil({ self.posts(to: "/api/music/play").count == 1 }, "the play")
 
-        let sent = body(of: posts(to: "/api/music/play")[0])
+        let sent = try firstBody(of: posts(to: "/api/music/play"))
         XCTAssertEqual(#"{"room_id":"Kids\" room","query":"something random"}"#, sent)
         // And it is still JSON, which is the thing the escaping is for.
         XCTAssertNoThrow(
