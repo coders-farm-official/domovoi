@@ -541,7 +541,8 @@ final class MusicQueueModelTests: XCTestCase {
         )
 
         queue.remove(queue.items[1])
-        XCTAssertTrue(await settle(for: park.arrived, what: "the first remove"))
+        let arrived = await settle(for: park.arrived, what: "the first remove")
+        XCTAssertTrue(arrived)
         XCTAssertTrue(queue.busy)
 
         queue.remove(queue.items[0])
