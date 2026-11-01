@@ -132,6 +132,27 @@ final class MusicQueueModelTests: XCTestCase {
         frame: #"{"type":"music.now_playing.changed"}"#
     )
 
+    /// The entry at `index`, or a clean failure.
+    ///
+    /// **Never `queue.items[index]`.** A regression that empties the queue
+    /// would trap there, and a trap takes the rest of the xctest process with
+    /// it: the negative control for this batch died at exactly that line and
+    /// so reported nothing about the eighteen sabotages behind it. This fails
+    /// the one test and lets the suite finish.
+    private func entry(
+        _ queue: MusicQueueModel,
+        _ index: Int,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) throws -> QueueItem {
+        try XCTUnwrap(
+            queue.items.indices.contains(index) ? queue.items[index] : nil,
+            "no entry \(index) in a queue of \(queue.items.count)",
+            file: file,
+            line: line
+        )
+    }
+
     private func requests(to suffix: String) -> [URLRequest] {
         StubURLProtocol.recorded.filter { $0.url?.path.hasSuffix(suffix) == true }
     }
@@ -355,13 +376,13 @@ final class MusicQueueModelTests: XCTestCase {
 
     // MARK: - the three edits
 
-    func testARemoveSendsTheEntryAndSaysWhatItDid() async {
+    func testARemoveSendsTheEntryAndSaysWhatItDid() async throws {
         let (queue, _, house) = rig()
         house.queues.set(["den": twoEntries])
         await started(queue, rooms: ["den"])
         defer { queue.stop() }
 
-        queue.remove(queue.items[1])
+        queue.remove(try entry(queue, 1))
         await settleUntil({ queue.toast != nil }, "the remove")
 
         XCTAssertEqual(#"removed "Come Together""#, queue.takeToast())
@@ -406,7 +427,7 @@ final class MusicQueueModelTests: XCTestCase {
     /// The ends of the list send nothing. The server takes `to_position: int
     /// = Field(..., ge=0)`, so a `-1` from an up-arrow on the first row is a
     /// 422 with nothing for the person to do about it.
-    func testTheEndsOfTheListCannotBeMovedPastThem() async {
+    func testTheEndsOfTheListCannotBeMovedPastThem() async throws {
         let (queue, _, house) = rig()
         house.queues.set(["den": twoEntries])
         await started(queue, rooms: ["den"])
@@ -417,8 +438,8 @@ final class MusicQueueModelTests: XCTestCase {
         queue.moveUp(0)
         queue.moveDown(1)
         // And a position outside the list, asked for directly.
-        queue.move(queue.items[0], to: 5)
-        queue.move(queue.items[0], to: -1)
+        queue.move(try entry(queue, 0), to: 5)
+        queue.move(try entry(queue, 0), to: -1)
         await settleUntil({ queue.read.answered })
 
         XCTAssertTrue(edits().isEmpty, "nothing should have gone out")
@@ -462,26 +483,26 @@ final class MusicQueueModelTests: XCTestCase {
 
     /// And may not take out the entry playing now, which the core refuses
     /// because the core is what knows which entry that is.
-    func testAGuestMayNotRemoveWhatIsPlayingButMayRemoveTheRest() async {
+    func testAGuestMayNotRemoveWhatIsPlayingButMayRemoveTheRest() async throws {
         let (queue, _, house) = rig()
         house.queues.set(["den": guestQueue])
         await started(queue, rooms: ["den"])
         defer { queue.stop() }
 
-        XCTAssertFalse(queue.mayRemove(queue.items[0]))
-        XCTAssertTrue(queue.mayRemove(queue.items[1]))
+        XCTAssertFalse(queue.mayRemove(try entry(queue, 0)))
+        XCTAssertTrue(queue.mayRemove(try entry(queue, 1)))
 
-        queue.remove(queue.items[0])
+        queue.remove(try entry(queue, 0))
         await settleUntil({ queue.read.answered })
         XCTAssertTrue(edits().isEmpty, "the playing entry is the core's to refuse")
 
-        queue.remove(queue.items[1])
+        queue.remove(try entry(queue, 1))
         await settleUntil({ queue.toast != nil }, "the guest's remove")
         XCTAssertEqual(1, requests(to: "/api/music/queue/den/remove").count)
     }
 
     /// `editable: false` is the end of all three.
-    func testABlockedDeviceSendsNothingAtAll() async {
+    func testABlockedDeviceSendsNothingAtAll() async throws {
         let (queue, _, house) = rig()
         house.queues.set([
             "den": """
@@ -496,14 +517,14 @@ final class MusicQueueModelTests: XCTestCase {
 
         XCTAssertFalse(queue.mayClear)
         XCTAssertFalse(queue.mayMove)
-        XCTAssertFalse(queue.mayRemove(queue.items[1]))
+        XCTAssertFalse(queue.mayRemove(try entry(queue, 1)))
         XCTAssertEqual(
             "Kamron's iPad isn't allowed to edit the queue in den. "
                 + "You can watch the queue but not change it.",
             queue.watchOnlyNote
         )
 
-        queue.remove(queue.items[1])
+        queue.remove(try entry(queue, 1))
         queue.moveDown(0)
         queue.clear()
         await settleUntil({ queue.read.answered })
@@ -515,7 +536,7 @@ final class MusicQueueModelTests: XCTestCase {
 
     /// A second edit while one is in flight sends nothing. Two moves racing
     /// each other on one list produce an order neither tap asked for.
-    func testASecondEditWhileOneIsInFlightSendsNothing() async {
+    func testASecondEditWhileOneIsInFlightSendsNothing() async throws {
         let (queue, _, house) = rig()
         house.queues.set(["den": twoEntries])
         await started(queue, rooms: ["den"])
@@ -540,12 +561,12 @@ final class MusicQueueModelTests: XCTestCase {
             }
         )
 
-        queue.remove(queue.items[1])
+        queue.remove(try entry(queue, 1))
         let arrived = await settle(for: park.arrived, what: "the first remove")
         XCTAssertTrue(arrived)
         XCTAssertTrue(queue.busy)
 
-        queue.remove(queue.items[0])
+        queue.remove(try entry(queue, 0))
         queue.clear()
         queue.moveDown(0)
         XCTAssertEqual(1, edits().count, "only the first edit went")
@@ -567,7 +588,7 @@ final class MusicQueueModelTests: XCTestCase {
         await started(queue, rooms: ["den"])
         defer { queue.stop() }
 
-        queue.remove(queue.items[1])
+        queue.remove(try entry(queue, 1))
         await settleUntil({ queue.toast != nil }, "the failed remove")
 
         // `DomovoiError.message` is "{status}: {body}" (``ApiFailure/message``
