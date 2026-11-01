@@ -121,8 +121,20 @@ final class MusicRoomActionsTests: XCTestCase {
         XCTAssertNil(model.nowPlaying.error, "the rooms read failed", file: file, line: line)
     }
 
+    /// The POSTs to one path, **as `URL.path` spells it** — which is
+    /// percent-DECODED. A recorded request for
+    /// `/api/music/pause/living%20room` has the path
+    /// `/api/music/pause/living room`, so matching the escaped spelling here
+    /// found nothing and left five tests waiting for posts that had already
+    /// gone out. ``urls(to:)`` is the one that sees the wire.
     private func posts(to path: String) -> [URLRequest] {
         StubURLProtocol.recorded.filter { $0.url?.path == path && $0.httpMethod == "POST" }
+    }
+
+    /// The addresses, exactly as they went out, escaping and all.
+    private func urls(containing text: String) -> [String] {
+        StubURLProtocol.recorded.compactMap { $0.url?.absoluteString }
+            .filter { $0.contains(text) }
     }
 
     private func body(of request: URLRequest) -> String {
@@ -150,13 +162,19 @@ final class MusicRoomActionsTests: XCTestCase {
         // requests the model deliberately dropped — and would hang rather
         // than fail.
         for action in MusicTransportAction.allCases {
-            let path = "/api/music/\(action.rawValue)/living%20room"
+            let path = "/api/music/\(action.rawValue)/living room"
             let rooms = nowPlayingReads()
             XCTAssertTrue(model.control(action, in: "living room"), "\(action) was refused")
             await settleUntil({ self.posts(to: path).count == 1 }, "the \(action) post")
             await settleUntil({ self.nowPlayingReads() > rooms }, "the \(action) refresh")
         }
 
+        // And the space in the room's name went out escaped, which is the
+        // thing the paths are built by ``MusicQueuePath`` for.
+        XCTAssertEqual(
+            MusicTransportAction.allCases.map { "\(server)/api/music/\($0.rawValue)/living%20room" },
+            MusicTransportAction.allCases.compactMap { urls(containing: "/\($0.rawValue)/").first }
+        )
         XCTAssertNil(model.toast, "nothing to say when every one of them worked")
     }
 
@@ -196,7 +214,7 @@ final class MusicRoomActionsTests: XCTestCase {
         XCTAssertTrue(model.togglePlayback(playing))
         XCTAssertTrue(model.togglePlayback(idle))
         await settleUntil(
-            { self.posts(to: "/api/music/pause/living%20room").count == 1
+            { self.posts(to: "/api/music/pause/living room").count == 1
                 && self.posts(to: "/api/music/resume/garage").count == 1 },
             "the two posts"
         )
@@ -277,7 +295,11 @@ final class MusicRoomActionsTests: XCTestCase {
         await settleUntil({ model.toast != nil }, "the favourite")
 
         XCTAssertEqual("saved Ep 12 to your podcasts", model.takeToast())
-        XCTAssertEqual(1, posts(to: "/api/music/now-playing/living%20room/favorite").count)
+        XCTAssertEqual(1, posts(to: "/api/music/now-playing/living room/favorite").count)
+        XCTAssertEqual(
+            ["\(server)/api/music/now-playing/living%20room/favorite"],
+            urls(containing: "/favorite")
+        )
     }
 
     /// With no sentence from the server, the generic one — and `radio` and an

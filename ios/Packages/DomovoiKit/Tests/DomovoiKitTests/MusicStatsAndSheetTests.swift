@@ -15,8 +15,13 @@ final class MusicStatsAndSheetTests: XCTestCase {
 
     func testABigDurationDropsTheSeconds() {
         XCTAssertEqual("0m", fmtBigDur(0))
-        XCTAssertEqual("0m", fmtBigDur(29))
-        XCTAssertEqual("1m", fmtBigDur(30))
+        // Whole seconds first, then the division: 30 s is 0m, not a rounded
+        // 1m. Android's `fmtBigDur` does the same, and this expectation was
+        // mine rather than the function's.
+        XCTAssertEqual("0m", fmtBigDur(30))
+        XCTAssertEqual("0m", fmtBigDur(59))
+        XCTAssertEqual("1m", fmtBigDur(60))
+        XCTAssertEqual("1m", fmtBigDur(119))
         XCTAssertEqual("47m", fmtBigDur(47 * 60))
         XCTAssertEqual("1h 0m", fmtBigDur(3_600))
         XCTAssertEqual("2h 14m", fmtBigDur(2 * 3_600 + 14 * 60))
