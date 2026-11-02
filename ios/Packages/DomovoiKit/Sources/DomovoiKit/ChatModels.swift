@@ -164,14 +164,19 @@ public struct ChatImageRef: Equatable, Sendable, Decodable {
 /// A reply's figures, as the server keeps them in `chat_messages.stats`
 /// (`ChatMessageActions.kt:41`).
 ///
-/// **Three fields of twenty-three.** Android's `ChatStats` decodes the lot
+/// **Two fields of twenty-three.** Android's `ChatStats` decodes the lot
 /// because its details dialog draws them; this port has no details sheet, so
-/// the rest would be twenty dead properties with a doc comment apiece.
-/// ``errorCode`` words a failed reply (``chatErrorView(error:code:model:)``),
-/// ``windowFromId`` places the window divider, and ``modelRole`` is what the
-/// error wording keys on when the model name is absent. Unknown keys are
-/// ignored rather than refused, so the batch that draws the figures adds
-/// properties here and changes nothing else.
+/// the rest would be twenty-one dead properties with a doc comment apiece.
+/// ``errorCode`` words a failed reply (``chatErrorView(error:code:model:)``)
+/// and ``windowFromId`` places the window divider. Unknown keys are ignored
+/// rather than refused, so the batch that draws the figures adds properties
+/// here and changes nothing else.
+///
+/// `model_role` was the third, with a doc comment saying it "is what the error
+/// wording keys on when the model name is absent" — and nothing passed it to
+/// ``chatErrorView(error:code:model:)``, here or in the Kotlin. It decoded for
+/// one assertion in `ChatModelsTests` and no reader, so it is gone; the key
+/// still arrives and is still ignored, like the other twenty-one.
 public struct ChatStats: Equatable, Sendable, Decodable {
 
     /// Why a reply has an error, for this app's own wording
@@ -182,26 +187,20 @@ public struct ChatStats: Equatable, Sendable, Decodable {
     /// before it is still shown, under ``ChatStrings/windowNote``.
     public let windowFromId: Int64?
 
-    /// `"chat"`, `"vision"`, or the name of whatever else wrote the reply.
-    public let modelRole: String?
-
-    public init(errorCode: String? = nil, windowFromId: Int64? = nil, modelRole: String? = nil) {
+    public init(errorCode: String? = nil, windowFromId: Int64? = nil) {
         self.errorCode = errorCode
         self.windowFromId = windowFromId
-        self.modelRole = modelRole
     }
 
     enum CodingKeys: String, CodingKey {
         case errorCode = "error_code"
         case windowFromId = "window_from_id"
-        case modelRole = "model_role"
     }
 
     public init(from decoder: any Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         errorCode = try values.decodeIfPresent(String.self, forKey: .errorCode)
         windowFromId = try values.decodeIfPresent(Int64.self, forKey: .windowFromId)
-        modelRole = try values.decodeIfPresent(String.self, forKey: .modelRole)
     }
 }
 

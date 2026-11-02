@@ -378,7 +378,7 @@ public struct ChatTranscript: Equatable, Sendable {
 
         case "done":
             guard let row: ChatMessage = event.payload() else { return .unreadable(event.name) }
-            if row.kept {
+            if row.kept, stashed != nil {
                 // A retry that failed: the server kept the reply that was
                 // already there, and this row IS that reply. Put it back rather
                 // than dressing the live one up as it — restoring the stash
@@ -390,12 +390,22 @@ public struct ChatTranscript: Equatable, Sendable {
                 replaced = true
                 return .finished(kept: true, replaces: nil)
             }
+            // `kept: true` with **nothing stashed** falls through to here, and
+            // the row is treated as the reply. There is no earlier reply to put
+            // back, so the alternative was what this used to do: `restoreStash`
+            // bailed on its own `guard`, `replaced` was set anyway and
+            // `liveIndex` was left standing, so the reply stayed pending until
+            // `finishStream` cleared it and **the server's own row was thrown
+            // away**. This server does not send it (`kept` comes only from
+            // `_finish_retry`, which always has a stash), so the shape is a
+            // guard against a server this build does not know rather than a
+            // sequence anybody has seen.
             messages[index].finish(with: row)
             messages[index].pending = false
             liveIndex = nil
             stashed = nil
             replaced = true
-            return .finished(kept: false, replaces: row.replaces)
+            return .finished(kept: row.kept, replaces: row.replaces)
 
         // Ignored by name, each with the feature it belongs to:
         //  `replace`   — a lookup answer that became the honest line; the

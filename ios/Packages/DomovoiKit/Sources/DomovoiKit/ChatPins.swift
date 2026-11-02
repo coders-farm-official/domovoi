@@ -60,7 +60,13 @@ public final class ChatPinBook: @unchecked Sendable {
     /// Every key pinned, across every house this phone knows.
     public var all: Set<String> { state.withLock { $0 } }
 
-    public func isPinned(_ key: String) -> Bool { state.withLock { $0.contains(key) } }
+    // There is no `isPinned(_ key:)` here. It was the natural API and it had
+    // no non-test caller: ``ChatModel/isPinned(_:)`` asks the set it already
+    // holds (``all``, taken at init and returned by ``set(_:pinned:)``), which
+    // is what lets `rows` be a computed property the view can read without
+    // touching a lock. A seam with tests and no reader is a bug on this
+    // project, so the honest resolution was to delete one of the two — and the
+    // one with a reader stayed.
 
     /// Pin or unpin `key`, and write the whole set out.
     ///

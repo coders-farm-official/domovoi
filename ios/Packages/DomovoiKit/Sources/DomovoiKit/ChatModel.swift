@@ -93,9 +93,9 @@ public final class ChatModel {
     /// leaves nothing in the household's list.
     public private(set) var newChat = false
 
-    /// The title to show for ``newChat`` and for a thread the list does not
-    /// know yet.
-    public private(set) var openTitle = ChatStrings.newChat
+    /// The title the row was opened under, kept only as the third thing
+    /// ``openTitle`` asks. Nil for a new chat.
+    private var storedTitle: String?
 
     public private(set) var transcript = ChatTranscript()
 
@@ -114,6 +114,41 @@ public final class ChatModel {
     private var debounce: Task<Void, Never>?
     private var stream: Task<Void, Never>?
     private var pinKeys: Set<String>
+
+    /// How many times this app has moved house since it launched.
+    ///
+    /// **The mechanism for [[read-after-await-wrong-key]], said once.** This
+    /// track's top defect class is a value read after an `await` and written
+    /// back under a key that has since changed. In this type the key that
+    /// changes is the house: a thread id is the *house's* id, and two houses
+    /// can both have a thread 7 — ``serverChanged()`` says exactly that in its
+    /// own words — so `openThread == id` cannot tell house A's answer from
+    /// house B's, and house A's conversation lands under house B's title.
+    ///
+    /// So **every `Task` this type starts takes this number before its first
+    /// await and asks ``stillHome(_:)`` after it**: ``loadMessages(_:)``,
+    /// ``share(_:)``, ``write(verb:method:path:body:said:)``,
+    /// ``ensureThread(_:)`` and the stream consumer ``run(path:body:verb:on:)``.
+    /// A task that no longer holds the house it was started for writes
+    /// nothing, says nothing and refreshes nothing. One `guard` at each call
+    /// site, and this is the only place the rule is written down.
+    ///
+    /// A counter rather than the address itself, because leaving a house and
+    /// coming back to it is also a change: the first visit's in-flight read is
+    /// as wrong on the second visit as it was on the first, and
+    /// `normalize(serverURL)` cannot tell the two visits apart.
+    ///
+    /// A counter rather than a tracked handle per task, because cancelling is
+    /// best effort and the guard is what makes this correct:
+    /// ``ApiRead/run()`` cancels *and* guards for the reason its own comment
+    /// gives — "a `fetch` that ignores cancellation can still return". Two
+    /// half-mechanisms would be worse than one that holds everywhere, and the
+    /// stream (the one task with a real handle) is cancelled as well.
+    private var houseEpoch = 0
+
+    /// Whether a task that took ``houseEpoch`` before its await still owns
+    /// what it is about to write.
+    private func stillHome(_ epoch: Int) -> Bool { epoch == houseEpoch }
 
     public init(
         in container: AppContainer,
@@ -191,13 +226,41 @@ public final class ChatModel {
         return .empty(ChatStrings.noChatsYet, hint: ChatStrings.emptyHint)
     }
 
-    /// The line above a partial result: some place could not be searched.
+    /// The title shown over the conversation, which is **the list's title
+    /// first** (`ChatScreen.kt:941`'s `titleOf`, built at
+    /// `ServerChatPlace.kt:149`).
     ///
-    /// Android says "everywhere" because it searches two places
-    /// (`ChatHome.kt:416`). There is one here, so a failed search with hits in
-    /// it cannot happen — the read either answered or it did not — and this is
-    /// nil for that reason rather than by omission.
-    public var searchWarning: String? { nil }
+    /// Android's chain of four, link for link, and the first link is the one
+    /// that matters: the Kotlin writes down both of its reasons — *"the model's
+    /// title arrives after the first reply; a rename on another device shows
+    /// too"*. A stored value cannot do either. A new chat's header said "new
+    /// chat" for ever after the server's title job had named the thread, and a
+    /// rename made on the dashboard never showed while the chat was open here.
+    ///
+    /// It also means a **refused** rename cannot leave the rejected name in the
+    /// header: nothing writes this, so the header follows the list back.
+    public var openTitle: String {
+        if let openThread, let named = listTitle(of: openThread) { return named }
+        // Not ``ChatStrings/newChat``: that is ``ChatRules/row(_:)``'s
+        // substitution for a thread the server has **not** named, so a row
+        // handing it over is the list saying it has no name and the chain has
+        // to go on. Android's second link is the `ThreadRow`'s own nullable
+        // title, which is null in exactly that case.
+        if let storedTitle, storedTitle != ChatStrings.newChat { return storedTitle }
+        if let asked = transcript.messages.first(where: { $0.role == "user" })?.content,
+           let words = ChatTitles.firstWords(asked) { return words }
+        return ChatStrings.newChat
+    }
+
+    /// The title either list has for `id` right now, or nil — including for a
+    /// thread the server has not named yet, because Android's `titleOf` reads
+    /// `ThreadRow.title`, which is nullable, and falls through on a null.
+    /// ``ChatRules/row(_:)``'s "new chat" substitution is the *list's* wording
+    /// and must not short-circuit the chain's third link.
+    private func listTitle(of id: Int64) -> String? {
+        let known = (threads.data?.threads ?? []) + (archivedThreads.data?.threads ?? [])
+        return known.first { $0.id == id }?.title
+    }
 
     public func showArchived(_ show: Bool) {
         showArchived = show
@@ -276,9 +339,13 @@ public final class ChatModel {
         let name = String(title.trimmingCharacters(in: .whitespacesAndNewlines)
             .prefix(ChatStrings.renameMaxChars))
         guard !name.isEmpty, let id = row.threadID else { return }
+        // **The header is not set here.** ``openTitle`` reads the list, so the
+        // new name appears when the `PATCH` has landed and the list has been
+        // read again — and a *refused* rename leaves the old name where it was
+        // instead of the rejected one in the header for as long as the chat is
+        // open. Android gets the same for free from `titleOf`.
         write(verb: ChatStrings.verbRename, method: "PATCH", path: ChatPath.thread(id),
               body: ChatPath.patchBody(title: name))
-        if openThread == id { openTitle = name }
     }
 
     /// `PATCH /threads/{id}` with `archived`. The server's, so it shows on
@@ -327,16 +394,22 @@ public final class ChatModel {
         said: String? = nil
     ) {
         let client = container.client
+        let epoch = houseEpoch
         Task { @MainActor [weak self] in
+            var said: String? = said
             do {
                 try await client.send(method: method, path: path, body: body)
-                self?.toast = said
             } catch let trouble as DomovoiError {
-                self?.toast = isAiOffRefusal(trouble) ? aiChatOffText : failureText(verb, trouble)
+                said = isAiOffRefusal(trouble) ? aiChatOffText : failureText(verb, trouble)
             } catch {
-                self?.toast = failureText(verb, .unreachable("\(error)"))
+                said = failureText(verb, .unreachable("\(error)"))
             }
-            self?.refreshLists()
+            // ``houseEpoch``: an "archived" toast for a thread in a house the
+            // person has left names a chat that is no longer on screen, and
+            // the new house's lists are its own start()'s business.
+            guard let self, self.stillHome(epoch) else { return }
+            self.toast = said
+            self.refreshLists()
         }
     }
 
@@ -354,10 +427,17 @@ public final class ChatModel {
         guard let id = row.threadID else { return }
         let client = container.client
         let title = row.title
+        let epoch = houseEpoch
         Task { @MainActor [weak self] in
             guard let list = try? await client.get(ChatPath.messages(id), as: ChatMessageList.self)
             else { return }
-            self?.sharing = ChatShare(
+            // ``houseEpoch``: this one hands a whole conversation to the share
+            // sheet, so a read from the house the person has left would put
+            // the *other house's* words into whatever they share next.
+            // ``serverChanged()`` nils `sharing`; without this guard this task
+            // set it back.
+            guard let self, self.stillHome(epoch) else { return }
+            self.sharing = ChatShare(
                 title: title,
                 text: ChatRules.shareText(title: title, messages: list.messages)
             )
@@ -380,7 +460,7 @@ public final class ChatModel {
         cancelStream()
         openThread = id
         newChat = false
-        openTitle = title
+        storedTitle = title
         transcript.clear()
         loadMessages(id)
     }
@@ -392,7 +472,7 @@ public final class ChatModel {
         cancelStream()
         openThread = nil
         newChat = true
-        openTitle = ChatStrings.newChat
+        storedTitle = nil
         transcript.clear()
     }
 
@@ -440,21 +520,28 @@ public final class ChatModel {
     private func loadMessages(_ id: Int64) {
         let client = container.client
         let who = deviceID
+        let epoch = houseEpoch
         Task { @MainActor [weak self] in
             do {
                 let list = try await client.get(ChatPath.messages(id), as: ChatMessageList.self)
-                // **The thread that is open now**, not the one this read was
-                // for: a slow read landing after the person opened another chat
-                // would otherwise draw somebody else's conversation under this
-                // title. That is [[read-after-await-wrong-key]] in its
-                // navigation form, and the check is one `==`.
-                guard let self, self.openThread == id else { return }
+                // **The thread that is open now, in the house that is open
+                // now.** The id alone is not the key: a thread id belongs to a
+                // house, two houses can both have a thread 7, and house A's
+                // slow read then passed `openThread == 7` and drew house A's
+                // conversation under house B's title. ``houseEpoch`` is the
+                // other half, and it is also what drops a read from a house the
+                // person has left when nothing at all is open.
+                guard let self, self.stillHome(epoch), self.openThread == id else { return }
                 self.transcript.load(list.messages, thisDeviceID: who)
             } catch let trouble as DomovoiError {
-                guard let self, self.openThread == id else { return }
+                guard let self, self.stillHome(epoch), self.openThread == id else { return }
+                // ``ChatStrings/verbOpenChat``, not `verbSend`: **nothing was
+                // sent**. This is the read that draws a conversation, and a
+                // toast reading "send failed (offline?)" for a chat that would
+                // not open names something the person did not do.
                 self.toast = isAiOffRefusal(trouble)
                     ? aiChatOffText
-                    : failureText(ChatStrings.verbSend, trouble)
+                    : failureText(ChatStrings.verbOpenChat, trouble)
             } catch {
                 return
             }
@@ -474,25 +561,33 @@ public final class ChatModel {
         guard !content.isEmpty, canSend, conversationOpen else { return false }
         sending = true
         transcript.beginSend(content: content, atISO: nowISO())
-        let client = container.client
         let who = deviceID
+        let epoch = houseEpoch
         stream = Task { @MainActor [weak self] in
             guard let self else { return }
-            do {
-                let id = try await self.ensureThread()
+            // `throws(DomovoiError)` on the `do` itself, which is what lets
+            // the one `catch` below be the only one: a bare `do` is typed
+            // `any Error` even when everything in it throws the same thing,
+            // and the second `catch` that used to sit under this one could
+            // not be reached.
+            do throws(DomovoiError) {
+                // Nil when the chat that asked moved on while the thread was
+                // being made — ``ensureThread(_:)`` says what that means.
+                // Nothing to say and nothing to settle: every caller that can
+                // overtake a send goes through `cancelStream()`, which has
+                // already put `sending` back.
+                guard let id = try await self.ensureThread(epoch) else { return }
                 await self.run(
                     path: ChatPath.messages(id),
                     body: ChatPath.sendBody(content: content, deviceID: who),
-                    verb: ChatStrings.verbSend
+                    verb: ChatStrings.verbSend,
+                    on: epoch
                 )
-            } catch let trouble as DomovoiError {
+            } catch {
                 // The thread could not even be made: the refusal goes where the
                 // reply would have been, as Android's `onFailure` puts it
                 // (`ChatScreen.kt:773`).
-                self.transcript.failLive(sendFailureLine(trouble, verb: ChatStrings.verbNewChat))
-                self.endStream()
-            } catch {
-                self.transcript.failLive(failureText(ChatStrings.verbNewChat, .unreachable("\(error)")))
+                self.transcript.failLive(sendFailureLine(error, verb: ChatStrings.verbNewChat))
                 self.endStream()
             }
         }
@@ -509,33 +604,41 @@ public final class ChatModel {
     public func retry() -> Bool {
         guard let id = openThread, canSend, transcript.beginRetry() else { return false }
         sending = true
+        let epoch = houseEpoch
         stream = Task { @MainActor [weak self] in
             await self?.run(
                 path: ChatPath.retry(id),
                 // No body. The route takes none (`chat.py:1069`), and Android
                 // sends `{}` only because its builder always sends one.
                 body: nil,
-                verb: ChatStrings.verbTryAgain
+                verb: ChatStrings.verbTryAgain,
+                on: epoch
             )
         }
         return true
     }
 
     /// One streamed round trip: open it, apply every event, then settle.
-    private func run(path: String, body: Data?, verb: String) async {
+    private func run(path: String, body: Data?, verb: String, on epoch: Int) async {
         let client = container.client
         do {
             let events = try await client.events(method: "POST", path: path, body: body)
             for try await event in events {
-                guard !Task.isCancelled else { break }
+                // ``houseEpoch`` beside the cancellation check: a stream opened
+                // against the old house must not write its words into the
+                // transcript of the new one.
+                guard !Task.isCancelled, stillHome(epoch) else { break }
                 react(to: transcript.apply(event))
             }
         } catch let trouble as DomovoiError {
+            guard stillHome(epoch) else { return }
             transcript.failLive(sendFailureLine(trouble, verb: verb))
         } catch {
+            guard stillHome(epoch) else { return }
             transcript.failLive(failureText(verb, .unreachable("\(error)")))
         }
-        endStream(verb: verb)
+        guard stillHome(epoch) else { return }
+        endStream()
     }
 
     private func react(to step: ChatStreamStep) {
@@ -547,24 +650,40 @@ public final class ChatModel {
         }
     }
 
-    private func endStream(verb: String = ChatStrings.verbSend) {
+    private func endStream() {
         switch transcript.finishStream(atISO: nowISO()) {
         case .keptOldReply(let why):
             // A retry that failed. The old reply is back — the thread on the
             // server never changed — and the failure is said once, as a toast,
             // rather than left attached to a reply that is not the one that
             // failed.
-            toast = ChatStrings.couldNotTryAgain(why ?? ChatStrings.searchFailed)
-        case .unfinished(let why):
-            if verb == ChatStrings.verbTryAgain, let why {
-                toast = ChatStrings.couldNotTryAgain(why)
-            }
-        case .finished, .nothingRunning:
+            //
+            // **Nothing at all when the stream gave no reason**, as Android
+            // does (`ChatScreen.kt:879` is `live.error?.let { toast(...) }`).
+            // The fallback this used to have was `ChatStrings.searchFailed`,
+            // which is "couldn't search": a retry whose stream opened, said
+            // something and closed without an `error` or a `done` — a generator
+            // ending early, a worker restart, a proxy closing after the headers
+            // — told the person **the search** could not run. The old reply is
+            // back on screen, which is the truth and is itself the answer.
+            if let why { toast = ChatStrings.couldNotTryAgain(why) }
+        // `.unfinished` had a `verb == verbTryAgain` branch, which could not be
+        // reached: during a retry `stashed` stays non-nil until a `done`
+        // settles it, so `finishStream` takes `.keptOldReply` every time and a
+        // retry that got its `done` leaves nothing running at all.
+        case .unfinished, .finished, .nothingRunning:
             break
         }
         sending = false
         // The list's own row for this thread is now stale: its snippet, its
         // count and its `updated_at` all moved.
+        //
+        // **Not for a stream that was cancelled.** `stop()` → `cancelStream()`
+        // → `threads.stop()`, and then the cancelled task's continuation got
+        // here and re-issued the two reads `stop()` had just stopped
+        // (``ApiRead/refresh()`` re-joins the server-change registry), so a
+        // screen going away asked the house for both lists on its way out.
+        guard !Task.isCancelled else { return }
         refreshLists()
     }
 
@@ -576,9 +695,30 @@ public final class ChatModel {
 
     /// The thread to write to: the one open, or the one this message makes
     /// (`ensureThread`, `ChatScreen.kt:438`).
-    private func ensureThread() async throws(DomovoiError) -> Int64 {
+    /// Nil when the chat that asked for the thread is no longer the one open:
+    /// the thread was made on the server, and **this is not the send that may
+    /// claim it**.
+    ///
+    /// Writing `openThread` here regardless was the same defect class as B1 in
+    /// its worst form. Send from a new chat; while `POST /threads` is in
+    /// flight, tap a row. `open(_:)` sets `openThread = 2` and reads thread
+    /// 2's messages; the POST's continuation then clobbered `openThread` to
+    /// the brand-new thread 77, so thread 2's own read failed *its* guard and
+    /// was discarded, the header showed thread 2's title over an empty
+    /// transcript, and the next message went into thread 77. Narrow —
+    /// `session.data(for:delegate:)` is cancellation-aware, so the cancelled
+    /// POST normally throws — but the guard is one line and
+    /// ``ApiRead/run()``'s comment is this project's rule: *"a `fetch` that
+    /// ignores cancellation can still return."*
+    ///
+    /// The thread it made is left behind on the house's list, as Android's is
+    /// (`ChatScreen.kt:438` has no guard either). An empty thread in the list
+    /// is a smaller wrong thing than a composer pointed at a chat that is not
+    /// on screen.
+    private func ensureThread(_ epoch: Int) async throws(DomovoiError) -> Int64? {
         if let openThread { return openThread }
         let made = try await container.client.post(ChatPath.newThread, as: ChatThread.self)
+        guard stillHome(epoch), newChat, openThread == nil, !Task.isCancelled else { return nil }
         openThread = made.id
         newChat = false
         return made.id
@@ -603,17 +743,32 @@ public final class ChatModel {
     public func start() {
         threads.refresh()
         models.refresh()
-        if showArchived { archivedThreads.refresh() }
+        // **Both lists, always**, as Android does: `ServerChatPlace.chats` is
+        // `threads + archivedThreads` and both are read on mount
+        // (`ServerChatPlace.kt:65-70`, `:87`).
+        //
+        // Reading the archived list only `if showArchived` was a closed loop.
+        // The only control that calls ``showArchived(_:)`` is the row the list
+        // draws **when the archived count is non-zero** (`ChatHome.kt:443`'s
+        // `archived.isNotEmpty()`), the count comes from this read, and the
+        // read was waiting to be asked for — so the archived chats were simply
+        // missing when Chat was opened, and turned up later, after the first
+        // push or the first write, for no reason the person could see.
+        archivedThreads.refresh()
     }
 
     /// The app moved house. Everything here is the old house's — the thread
     /// ids, which two houses can both have, most of all.
     public func serverChanged() {
+        // **First**, so that every task already in flight for the old house
+        // fails ``stillHome(_:)`` from here on, whatever order its continuation
+        // runs in.
+        houseEpoch += 1
         debounce?.cancel()
         cancelStream()
         openThread = nil
         newChat = false
-        openTitle = ChatStrings.newChat
+        storedTitle = nil
         transcript.clear()
         filter = ""
         hits = nil

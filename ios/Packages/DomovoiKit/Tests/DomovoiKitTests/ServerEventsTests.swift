@@ -367,6 +367,25 @@ final class ServerEventsTests: XCTestCase {
         }
     }
 
+    /// **Smell 12.** How much of a refused stream's body is read.
+    ///
+    /// ``DomovoiClient/text(_:)`` cuts what it returns to 4,096 characters, so
+    /// no byte past four times that can reach a caller. The bound used to be
+    /// 64 KiB, and because `AsyncBytes` has no chunk API that was 49,152
+    /// `await`s per refused stream that could not change the answer.
+    func testARefusalIsReadOnlyAsFarAsItsWordsCanReachACaller() {
+        XCTAssertEqual(
+            4 * 4096,
+            DomovoiClient.refusalBodyLimit,
+            "four bytes to a character is the UTF-8 maximum, and text(_:) keeps 4096 characters"
+        )
+        XCTAssertLessThan(
+            DomovoiClient.refusalBodyLimit,
+            64 * 1024,
+            "a refusal is one sentence; 64 KiB was asking for bytes nothing could read"
+        )
+    }
+
     /// **A stream a gate refuses never leaves the phone.**
     ///
     /// The one assertion that proves `events(…)` goes through `prepare` rather
