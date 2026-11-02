@@ -242,6 +242,24 @@ final class ServerEventsTests: XCTestCase {
         StubURLProtocol.Answer.json(body, headers: ["Content-Type": "text/event-stream"])
     }
 
+    /// Answer `/api/health` as the pinned server, and everything else with
+    /// `answer`.
+    ///
+    /// **Not `enqueue`**: the identity gate probes `/api/health` before the
+    /// first request of a session, so a single queued answer is eaten by the
+    /// probe and the stream then gets `{}` — the gate rejects it, the test
+    /// fails on an identity error, and the thing it meant to assert is never
+    /// reached. Measured here on the first run of this file.
+    private static func serveHealth(then answer: @Sendable @escaping () -> StubURLProtocol.Answer) {
+        StubURLProtocol.dispatch { request in
+            guard let url = request.url, let parts = URLComponents(url: url, resolvingAgainstBaseURL: false)
+            else { return .json("{}", status: 404) }
+            guard parts.path == "/api/health" else { return answer() }
+            let challenge = (parts.queryItems ?? []).first { $0.name == "challenge" }?.value
+            return .json((try? TestIdentity.real.healthBody(challenge: challenge)) ?? "{}")
+        }
+    }
+
     /// The whole round trip: the request says it wants an event stream, carries
     /// the household token, and the events come out in order.
     ///
@@ -252,17 +270,19 @@ final class ServerEventsTests: XCTestCase {
     /// identical to a read one. A stream reaching for `URLSession.shared`
     /// would pass every other assertion in this file and fail this one.
     func testAStreamCarriesTheTokenAndDeliversItsEventsInOrder() async throws {
-        StubURLProtocol.enqueue(Self.sse("""
-        event: delta
-        data: {"text":"hel"}
+        Self.serveHealth(then: {
+            Self.sse("""
+            event: delta
+            data: {"text":"hel"}
 
-        event: delta
-        data: {"text":"lo"}
+            event: delta
+            data: {"text":"lo"}
 
-        event: done
-        data: {"id":3,"role":"assistant","content":"hello"}
+            event: done
+            data: {"id":3,"role":"assistant","content":"hello"}
 
-        """))
+            """)
+        })
         let events = try await client().events(
             method: "POST",
             path: ChatPath.messages(5),
@@ -271,21 +291,26 @@ final class ServerEventsTests: XCTestCase {
         var seen: [ServerEvent] = []
         for try await event in events { seen.append(event) }
         XCTAssertEqual(["delta", "delta", "done"], seen.map(\.name))
-        XCTAssertEqual("household-abc", StubURLProtocol.header("X-Device-Token", at: 0))
-        XCTAssertEqual("text/event-stream", StubURLProtocol.header("Accept", at: 0))
-        XCTAssertEqual("DomovoiApp", StubURLProtocol.header("X-Requested-With", at: 0))
-        XCTAssertEqual("POST", StubURLProtocol.recorded.first?.httpMethod)
+        // The stream's own request, found by its path: the identity gate's
+        // `/api/health` probe is recorded ahead of it.
+        let sent = try XCTUnwrap(StubURLProtocol.recorded.first { $0.url?.path == ChatPath.messages(5) })
+        XCTAssertEqual("household-abc", sent.value(forHTTPHeaderField: "X-Device-Token"))
+        XCTAssertEqual("text/event-stream", sent.value(forHTTPHeaderField: "Accept"))
+        XCTAssertEqual("DomovoiApp", sent.value(forHTTPHeaderField: "X-Requested-With"))
+        XCTAssertEqual("POST", sent.httpMethod)
     }
 
     /// A refusal is thrown by `events(…)` itself — **before** the stream — so
     /// the caller can word it. And the body it carries is what
     /// ``isAiOffRefusal(_:)`` reads.
     func testARefusalIsThrownBeforeTheStreamAndKeepsItsWords() async {
-        StubURLProtocol.enqueue(.json(
-            #"{"detail":"AI features are turned off for this home"}"#,
-            status: 409,
-            headers: ["X-Domovoi-Refusal": "ai-off"]
-        ))
+        Self.serveHealth(then: {
+            .json(
+                #"{"detail":"AI features are turned off for this home"}"#,
+                status: 409,
+                headers: ["X-Domovoi-Refusal": "ai-off"]
+            )
+        })
         do {
             _ = try await client().events(method: "POST", path: ChatPath.messages(5))
             XCTFail("a 409 is not a stream")
