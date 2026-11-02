@@ -5,10 +5,10 @@ import SwiftUI
 ///
 /// The counterpart of `android/.../ui/screens/ScreenRouter.kt`: a `switch`
 /// over the route, with the capability check in front of it. **The screens
-/// themselves are later batches'** — Chat and most of Settings — so each of
-/// those is a marked placeholder that names what belongs there, and nothing
-/// here pretends to be one. Home, Videos, Files and the library half of Music
-/// are built.
+/// themselves are later batches'** — most of Settings — so each of those is a
+/// marked placeholder that names what belongs there, and nothing here pretends
+/// to be one. Home, Videos, Files, Chat and the library half of Music are
+/// built.
 ///
 /// The one piece of real behaviour is the check at the top, and it is
 /// ported rather than invented: a route a link reached that the server does
@@ -51,6 +51,22 @@ struct RouteScreen: View {
             // there is no control for any of it — including the delete
             // Android draws and cannot do from a phone.
             FilesView(model: model)
+        } else if route == .chat {
+            // The fifth screen. ``ChatView`` says what is left out and why
+            // there is no control for any of it — the place chip and picker
+            // that would say the same thing on every row for ever, the
+            // per-thread internet switch this app cannot honestly offer
+            // (nothing here can answer a mid-answer `lookup_permission`
+            // card), and the pictures, voice, documents, drafts, letters,
+            // long-document jobs, lookups, report-a-message and heads-up
+            // picks that are each a milestone away.
+            //
+            // **The capability check above is Chat's AI check.** A house with
+            // `features.ai == false` never reaches this branch; it gets
+            // ``Route/unavailableNote(_:)``'s "chat is turned off". What
+            // ``ChatModel/aiEnabled`` covers is the other case — the switch
+            // thrown while this screen is already open.
+            ChatView(model: model)
         } else if route == .settings {
             SettingsPlaceholder(model: model)
         } else {

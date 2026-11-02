@@ -221,7 +221,10 @@ final class ChatModelTests: XCTestCase {
         house: House = House(),
         server: String? = nil,
         pins: ChatPinBook = ChatPinBook(place: SavedStateBox()),
-        waits: Waits = Waits()
+        waits: Waits = Waits(),
+        /// The model's own clock, which only ``timeText(_:)`` reads. Defaulted
+        /// so that every case written before it is untouched.
+        nowMs: @Sendable @escaping () -> Int64 = { 1_762_110_000_000 }
     ) -> (ChatModel, House, Waits) {
         house.install()
         let address = server ?? self.server
@@ -239,7 +242,7 @@ final class ChatModelTests: XCTestCase {
             deviceID: "ios-1",
             pins: pins,
             wait: waits.sleeper,
-            nowMs: { 1_762_110_000_000 },
+            nowMs: nowMs,
             nowISO: { "2026-11-02T19:00:00+00:00" }
         )
         return (model, house, waits)
@@ -293,6 +296,38 @@ final class ChatModelTests: XCTestCase {
         model.showArchived(true)
         XCTAssertEqual(["3"], model.archivedRows.map(\.id))
         XCTAssertEqual(1, model.archivedCount)
+    }
+
+    /// A row's age is worded against the **model's** clock, which is the one
+    /// `init` takes.
+    ///
+    /// The view used to be the obvious home for this, and it is the wrong one:
+    /// a view that reads the wall clock itself cannot be driven to a boundary
+    /// by a test, and the row times would drift from the rest of the screen's
+    /// (``HomeAttentionView`` says the same thing about Home's). It is also
+    /// what gave ``ChatModel/timeText(_:)``'s clock a reader — part 1 stored
+    /// it and nothing read it.
+    func testARowsAgeIsWordedAgainstTheModelsOwnClock() async {
+        // An hour after the newest thread was last used — read off that
+        // thread's own timestamp rather than written out as a number, which is
+        // how the rig's default clock came to be a year behind its own house.
+        let hourAfter = isoMs("2026-11-02T18:00:00+00:00")! + 3_600_000
+        let (model, _, _) = rig(nowMs: { hourAfter })
+        model.start()
+        await settleUntil({ !model.rows.isEmpty }, "the thread list")
+        XCTAssertEqual("1h ago", model.timeText(model.rows[0]))
+        // Thread 2 was last used at 09:00 the day before: 34 hours, which
+        // rounds to a day.
+        XCTAssertEqual("1d ago", model.timeText(model.rows[1]))
+    }
+
+    /// A thread whose `updated_at` the server did not give, or gave in a
+    /// spelling this app could not read, is `updatedMs == 0` — which is
+    /// *1970* and not "just now". It reads as the em dash ``relTimeMs(_:nowMs:)``
+    /// words an unknown time with.
+    func testARowWithNoLastUseReadsAsAnUnknownTimeRatherThan1970() {
+        let (model, _, _) = rig()
+        XCTAssertEqual("—", model.timeText(ChatRow(id: "9", title: "no date")))
     }
 
     /// `GET /threads` carries **no** `limit`, `offset` or cursor: the route has
