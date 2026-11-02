@@ -475,6 +475,11 @@ tts_prebuffer_sec = 0.5
 # set to 0 to disable the handshake (the server's fallback timer still
 # resumes MPD eventually).
 prime_sec = 1.0
+# Seconds of music held before a song starts playing (0-10). The room's
+# stream arrives exactly as fast as it plays, so this is the whole cushion
+# for Wi-Fi dropouts: raise it if music is choppy in this room. Songs
+# start, pause and skip that much later; stop is immediate either way.
+buffer_sec = 3.0
 
 [leds]
 # State indicators. The LED backend is chosen by the [device] profile, and the

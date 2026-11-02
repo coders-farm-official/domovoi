@@ -57,7 +57,7 @@ SETTABLE: frozenset[str] = frozenset({
     "mic.enabled", "display.idle_mode", "display.power_method",
     "sounds.sync_enabled", "log.level",
     "audio.input_device", "audio.output_device", "audio.output_mixer_card",
-    "audio.output_mixer_control", "music.alsa_device",
+    "audio.output_mixer_control", "music.alsa_device", "music.buffer_sec",
     "leds.enabled", "leds.num_leds", "leds.brightness",
     "mic_gain.enabled", "mic_gain.target_dbfs",
     "wifi.enabled", "wifi.min_healthy_mbits",

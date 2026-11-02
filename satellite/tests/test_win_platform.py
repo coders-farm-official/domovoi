@@ -109,13 +109,51 @@ def test_every_other_profile_keeps_alsa_and_its_own_restart(profile):
 def test_the_windows_player_argv():
     out = ep.WindowsAudioOut(python=r"C:\sat\python\python.exe")
     head = [r"C:\sat\python\python.exe", "-m", "satellite.win_player"]
-    assert out.stream_argv("default", "http://h:8051") == head + ["stream", "http://h:8051", "--device", "default"]
+    assert out.stream_argv("default", "http://h:8051") == head + [
+        "stream", "http://h:8051", "--device", "default", "--buffer-sec", "3"]
+    assert out.stream_argv("default", "http://h:8051", 4.5)[-2:] == ["--buffer-sec", "4.5"]
     assert out.mp3_argv("default", r"C:\x\g.mp3", 1.0) == head + ["mp3", r"C:\x\g.mp3", "--device", "default"]
     assert out.mp3_argv("3", "g.mp3", 1.5)[-2:] == ["--gain", "1.5"]
     assert out.wav_argv("Speakers (Realtek)", "c.wav") == head + ["wav", "c.wav", "--device", "Speakers (Realtek)"]
 
 
-@pytest.mark.parametrize("bad", ["x & calc.exe", "-f", "--gain=99", "a|b", "a\nb", "\"quoted\"", "x" * 81, "%TEMP%"])
+class _TrickleBody:
+    """An HTTP body that hands out one chunk each time the test allows."""
+
+    def __init__(self, chunks):
+        self._chunks = list(chunks)
+        self.allow = threading.Semaphore(0)
+
+    def read(self, n):
+        self.allow.acquire()
+        return self._chunks.pop(0) if self._chunks else b""
+
+
+def test_the_windows_player_holds_the_first_read_until_the_buffer_is_in():
+    body = _TrickleBody([b"a" * 1000, b"b" * 1000, b"c" * 1000])
+    feed = win_player._Prefetch(body, start_bytes=2500)
+    got = []
+    reader = threading.Thread(target=lambda: got.append(feed.read(10_000)))
+    reader.start()
+    body.allow.release()
+    body.allow.release()
+    reader.join(timeout=1.0)
+    assert reader.is_alive()                 # 2000 of 2500 bytes: still holding
+    body.allow.release()
+    reader.join(timeout=2.0)
+    assert not reader.is_alive()
+    assert got == [b"a" * 1000 + b"b" * 1000 + b"c" * 1000]
+
+
+def test_the_windows_player_plays_a_stream_shorter_than_its_buffer():
+    body = _TrickleBody([b"x" * 100])
+    feed = win_player._Prefetch(body, start_bytes=10_000)
+    body.allow.release()
+    body.allow.release()                     # the end of the body
+    assert feed.read(10_000) == b"x" * 100
+
+
+@pytest.mark.parametrize("bad",["x & calc.exe", "-f", "--gain=99", "a|b", "a\nb", "\"quoted\"", "x" * 81, "%TEMP%"])
 def test_a_bad_device_name_never_reaches_the_player(bad):
     argv = ep.WindowsAudioOut(python="py").wav_argv(bad, "c.wav")
     assert argv[-2:] == ["--device", "default"]

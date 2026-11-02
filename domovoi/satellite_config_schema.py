@@ -236,6 +236,13 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "startup latency; 0 = immediate.",
         "float", min=0.0, max=2.0, unit="sec",
     ),
+    FieldSpec(
+        "music.buffer_sec", "Music buffer", "Playback",
+        "Seconds of music held before a song starts. This is the cushion "
+        "for Wi-Fi dropouts: raise it if music is choppy in this room. "
+        "Songs start, pause and skip that much later.",
+        "float", min=0.0, max=10.0, unit="sec",
+    ),
 
     # ─── Voice input / Display (video satellites) ──────────────────────
     FieldSpec(

@@ -48,10 +48,27 @@ def pi_cfg(profile="xvf3800_usb", **kw):
 # ─── audio out: the Pi's argv, byte for byte ──────────────────────────────
 
 def test_the_music_player_argv_is_the_pi_s():
+    # 3 s of 44.1 kHz stereo is 529200 bytes: half of the 1034 KiB buffer.
     assert ep.AlsaAudioOut().stream_argv("plughw:CARD=Array,DEV=0", "http://h:8051") == [
-        "mpg123", "-q", "-b", "1024", "--devbuffer", "1.0",
+        "mpg123", "-q", "-b", "1034", "--preload", "0.500", "--devbuffer", "1.0",
         "-o", "alsa", "-a", "plughw:CARD=Array,DEV=0", "http://h:8051",
     ]
+
+
+@pytest.mark.parametrize("sec", [0.0, 0.5, 1.0, 3.0, 7.5, 10.0])
+def test_the_music_buffer_holds_buffer_sec_before_the_first_note(sec):
+    args = ep.mpg123_buffer_args(sec)
+    kib, preload = int(args[1]), float(args[3])
+    assert args[0] == "-b" and args[2] == "--preload"
+    assert kib >= 1024                      # never less than the old 1 MiB
+    held = kib * 1024 * preload / (44100 * 2 * 2)
+    assert held == pytest.approx(sec, abs=0.01)
+    assert 0.0 <= preload <= 0.5 + 1e-3     # room to keep filling past the start
+
+
+def test_the_music_buffer_is_passed_through():
+    argv = ep.AlsaAudioOut().stream_argv("default", "http://h:8051", 6.0)
+    assert argv[2:6] == ep.mpg123_buffer_args(6.0)
 
 
 def test_the_clip_players_argv_are_the_pi_s():

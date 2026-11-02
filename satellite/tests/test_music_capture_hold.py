@@ -277,7 +277,7 @@ class Room:
             followup_pre_speech_timeout=8.0,
             wake_ack_mode=wake_ack_mode, greeting_funny_chance=0.0,
             tts_playback_gain=1.0, tts_prebuffer_sec=prebuffer,
-            music_alsa_device=DEVICE, music_prime_sec=1.0 / SPEED,
+            music_alsa_device=DEVICE, music_prime_sec=1.0 / SPEED, music_buffer_sec=3.0,
             barge_in=False, barge_in_require_wake_word=False,
             vad_aggressiveness_during_tts=3, barge_in_min_speech_ms=300,
             output_device=None,
@@ -927,7 +927,7 @@ def test_what_holds_the_music():
 
 def _music_sat(monkeypatch):
     sat = _bare_sat()
-    sat.cfg = types.SimpleNamespace(music_prime_sec=0.0, music_alsa_device=DEVICE)
+    sat.cfg = types.SimpleNamespace(music_prime_sec=0.0, music_alsa_device=DEVICE, music_buffer_sec=3.0)
     sat._playback_idle = threading.Event()
     sat._playback_idle.set()
     sat._music_lock = threading.Lock()

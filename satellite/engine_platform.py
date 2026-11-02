@@ -32,6 +32,7 @@ behaviour as one implementation, byte for byte what it was:
 from __future__ import annotations
 
 import logging
+import math
 import shutil
 import subprocess
 import threading
@@ -63,12 +64,39 @@ Runner = Callable[..., Any]
 
 # ─── audio out ────────────────────────────────────────────────────────────
 
+#: ``[music] buffer_sec``: seconds of a room's stream the player holds
+#: before it plays a note. The room's MPD serves its stream at exactly the
+#: playback rate (domovoi/mpd.conf: 192 kbit/s MP3, 44.1 kHz stereo), so a
+#: player never gets ahead of it: what it holds when it starts is all the
+#: Wi-Fi cushion it ever has. mpg123's own start point is 20 % of its
+#: buffer (about 1.2 s of ``-b 1024``), and the satellites' 2.4 GHz Wi-Fi
+#: drops out for longer than that, which played as choppy music
+#: (2026-11-01: the server's stream measured even to the half second).
+MUSIC_BUFFER_SEC_DEFAULT = 3.0
+MUSIC_BUFFER_SEC_MAX = 10.0
+#: Decoded PCM per second of the room stream, what mpg123's ``-b`` holds.
+_STREAM_PCM_BYTES_PER_SEC = 44100 * 2 * 2
+#: The smallest ``-b`` (KiB): the 1 MiB the player always had.
+_MPG123_BUFFER_KIB_MIN = 1024
+
+
+def mpg123_buffer_args(buffer_sec: float) -> list[str]:
+    """``-b`` and ``--preload`` holding ``buffer_sec`` of the stream before
+    playback starts: the buffer is at least twice that (and never under
+    1 MiB), and preload is the fraction of it to fill first."""
+    kib = max(_MPG123_BUFFER_KIB_MIN,
+              math.ceil(2 * buffer_sec * _STREAM_PCM_BYTES_PER_SEC / 1024))
+    preload = min(1.0, buffer_sec * _STREAM_PCM_BYTES_PER_SEC / (kib * 1024))
+    return ["-b", str(kib), "--preload", f"{preload:.3f}"]
+
+
 class AudioOut(Protocol):
     """The argv of the player child process for each kind of sound.
     ``device`` is the config's output device (``[music] alsa_device`` on
     Linux), passed per call so a config change needs no new object."""
 
-    def stream_argv(self, device: str, url: str) -> list[str]: ...
+    def stream_argv(self, device: str, url: str,
+                    buffer_sec: float = MUSIC_BUFFER_SEC_DEFAULT) -> list[str]: ...
     def mp3_argv(self, device: str, path: str, gain: float) -> list[str]: ...
     def wav_argv(self, device: str, path: str) -> list[str]: ...
 
@@ -88,10 +116,11 @@ class AlsaAudioOut:
     device is the sound server's, which is where a laptop's speakers are.
     Every device name passes :func:`_pcm` first."""
 
-    def stream_argv(self, device: str, url: str) -> list[str]:
+    def stream_argv(self, device: str, url: str,
+                    buffer_sec: float = MUSIC_BUFFER_SEC_DEFAULT) -> list[str]:
         device = _pcm(device)
-        # -b 1024 / --devbuffer 1.0: see Satellite._spawn_music.
-        return ["mpg123", "-q", "-b", "1024", "--devbuffer", "1.0",
+        # -b / --preload / --devbuffer 1.0: see Satellite._spawn_music.
+        return ["mpg123", "-q", *mpg123_buffer_args(buffer_sec), "--devbuffer", "1.0",
                 "-o", "alsa", "-a", device, url]
 
     def mp3_argv(self, device: str, path: str, gain: float) -> list[str]:
@@ -130,8 +159,10 @@ class WindowsAudioOut:
         log.warning("not a Windows audio device name: %r; using the default", str(device)[:40])
         return "default"
 
-    def stream_argv(self, device: str, url: str) -> list[str]:
-        return self._argv("stream", url, "--device", self._device(device))
+    def stream_argv(self, device: str, url: str,
+                    buffer_sec: float = MUSIC_BUFFER_SEC_DEFAULT) -> list[str]:
+        return self._argv("stream", url, "--device", self._device(device),
+                          "--buffer-sec", f"{float(buffer_sec):g}")
 
     def mp3_argv(self, device: str, path: str, gain: float) -> list[str]:
         args = self._argv("mp3", path, "--device", self._device(device))

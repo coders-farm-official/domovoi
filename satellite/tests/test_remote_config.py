@@ -313,3 +313,21 @@ def test_the_screen_takes_plain_scalars_only(value):
     for pc in (True, False):
         assert remote_config.screen({"audio.input_device": value}, pc=pc) == ({}, ["'audio.input_device'"])
     assert remote_config.screen({"audio.input_device": "x" * 120}, pc=False)[0] == {"audio.input_device": "x" * 120}
+
+
+@pytest.mark.parametrize("value, held", [(None, 3.0), (0, 0.0), (4.5, 4.5), (10, 10.0)])
+def test_the_music_buffer_setting(value, held):
+    music = {} if value is None else {"buffer_sec": value}
+    cfg = client.Config.from_toml({"device": {"profile": "xvf3800_usb"}, "music": music})
+    assert cfg.music_buffer_sec == held
+
+
+@pytest.mark.parametrize("value", [-1, 10.5, "3", True])
+def test_a_music_buffer_outside_its_range_fails_loud(value):
+    with pytest.raises(ValueError, match=r"\[music\] buffer_sec"):
+        client.Config.from_toml({"device": {"profile": "xvf3800_usb"}, "music": {"buffer_sec": value}})
+
+
+def test_the_dashboard_may_set_the_music_buffer_on_any_board():
+    for pc in (True, False):
+        assert remote_config.screen({"music.buffer_sec": 5.0}, pc=pc) == ({"music.buffer_sec": 5.0}, [])

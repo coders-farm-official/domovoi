@@ -160,7 +160,7 @@ def make_sat(monkeypatch, plans, *, features=("speech_pause", "end_capture", "mu
     Popen that hands out one scripted mpg123 per spawn (the last plan
     repeats)."""
     sat = object.__new__(client.Satellite)
-    sat.cfg = types.SimpleNamespace(music_prime_sec=prime, music_alsa_device=DEVICE)
+    sat.cfg = types.SimpleNamespace(music_prime_sec=prime, music_alsa_device=DEVICE, music_buffer_sec=3.0)
     sat.shutdown_event = threading.Event()
     sat._playback_idle = threading.Event()
     sat._playback_idle.set()

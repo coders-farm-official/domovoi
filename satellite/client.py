@@ -629,6 +629,7 @@ class Config:
     tts_prebuffer_sec: float
     tts_playback_gain: float
     music_prime_sec: float
+    music_buffer_sec: float
     leds_enabled: bool
     leds_num: int
     leds_brightness: int
@@ -942,6 +943,10 @@ class Config:
             # music_ready frame is sent — server's fallback timer will
             # eventually resume MPD).
             music_prime_sec=float(music.get("prime_sec", 1.0)),
+            # Seconds of the room's stream held before the first note:
+            # the only Wi-Fi cushion music gets (engine_platform.
+            # MUSIC_BUFFER_SEC_DEFAULT says why).
+            music_buffer_sec=_music_buffer_sec(music.get("buffer_sec")),
             leds_enabled=bool(leds.get("enabled", profile.leds_enabled_default)),
             leds_num=int(leds.get("num_leds", profile.leds_num)),
             leds_brightness=int(leds.get("brightness", profile.leds_brightness)),
@@ -1037,6 +1042,23 @@ def _speech_pause_ms(value: Any) -> int:
             f"{SPEECH_PAUSE_FRAMES_MIN * FRAME_MS}-{SPEECH_PAUSE_FRAMES_MAX * FRAME_MS} ms"
         )
     return frames * FRAME_MS
+
+
+def _music_buffer_sec(value: Any) -> float:
+    """`[music] buffer_sec`: 0 to MUSIC_BUFFER_SEC_MAX seconds; absent
+    means the default (3). Anything else fails loud, like speech_pause_ms
+    — the dashboard's own range keeps an edit from getting here."""
+    from satellite.engine_platform import MUSIC_BUFFER_SEC_DEFAULT, MUSIC_BUFFER_SEC_MAX
+
+    if value is None:
+        return MUSIC_BUFFER_SEC_DEFAULT
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"[music] buffer_sec must be a number of seconds, not {value!r}")
+    if not 0.0 <= float(value) <= MUSIC_BUFFER_SEC_MAX:
+        raise ValueError(
+            f"[music] buffer_sec {value!r} is outside 0-{MUSIC_BUFFER_SEC_MAX:g} s"
+        )
+    return float(value)
 
 
 # ─── Wake model reset ─────────────────────────────────────────────────────
@@ -2406,11 +2428,17 @@ class Satellite(pc_engine.SpareDeviceEngine):
         try:
             # Two separate buffers, each guarding against a different
             # source of stutter:
-            #   `-b 1024`         — mpg123's output buffer, 1 MiB of
-            #                       decoded audio (about 6 s). Absorbs
-            #                       WiFi blips on the Pi Zero 2 W's
-            #                       2.4 GHz radio that would otherwise
-            #                       starve the output. mpg123 runs it in
+            #   `-b` + `--preload` — mpg123's output buffer of decoded
+            #                       audio (at least 1 MiB, about 6 s),
+            #                       filled to `[music] buffer_sec` before
+            #                       the first note. Absorbs WiFi blips on
+            #                       the Pi Zero 2 W's 2.4 GHz radio that
+            #                       would otherwise starve the output.
+            #                       The stream arrives no faster than it
+            #                       plays, so what is held at the start
+            #                       is the whole cushion; mpg123's own
+            #                       start point (20 %, ~1.2 s) was too
+            #                       little. mpg123 runs it in
             #                       a forked child process, which is why
             #                       the player gets a process group of
             #                       its own (`start_new_session`) and is
@@ -2429,7 +2457,8 @@ class Satellite(pc_engine.SpareDeviceEngine):
             #                       and adds imperceptible pause/stop
             #                       latency for music.
             proc = subprocess.Popen(
-                self._platform.audio_out.stream_argv(self.cfg.music_alsa_device, url),
+                self._platform.audio_out.stream_argv(
+                    self.cfg.music_alsa_device, url, self.cfg.music_buffer_sec),
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
@@ -4588,6 +4617,7 @@ class Satellite(pc_engine.SpareDeviceEngine):
             "display.idle_mode": c.display_idle_mode,
             "display.power_method": c.display_power_method,
             "music.alsa_device": c.music_alsa_device,
+            "music.buffer_sec": c.music_buffer_sec,
             "mic_gain.enabled": c.mic_gain_enabled,
             "mic_gain.target_dbfs": c.mic_gain_target_dbfs,
             "wifi.enabled": c.wifi_enabled,

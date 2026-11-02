@@ -43,6 +43,10 @@ PREFETCH_BYTES = 1 << 20
 #: The output device's buffer, in seconds (mpg123's ``--devbuffer 1.0``).
 DEVICE_LATENCY_SEC = 1.0
 CHUNK = 16384
+#: The room stream's MP3 bytes per second (domovoi/mpd.conf: 192 kbit/s),
+#: for ``--buffer-sec``: how much is held before the first note, the same
+#: cushion mpg123's ``--preload`` holds on a Pi (engine_platform).
+STREAM_BYTES_PER_SEC = 192_000 // 8
 STREAM_RATE = 44100
 STREAM_CHANNELS = 2
 CONNECT_TIMEOUT_SEC = 10.0
@@ -210,14 +214,17 @@ class InProcessPlay:
 class _Prefetch:
     """Reads the HTTP body on its own thread into a bounded buffer, so a
     network stall drains the buffer instead of the speakers. ``read`` blocks
-    until there is data, or returns b"" at the end."""
+    until there is data, or returns b"" at the end. The first read waits
+    for ``start_bytes`` (or the end): a stream that arrives no faster than
+    it plays keeps only the cushion it started with."""
 
-    def __init__(self, response: Any) -> None:
+    def __init__(self, response: Any, start_bytes: int = 0) -> None:
         self._response = response
         self._chunks: collections.deque[bytes] = collections.deque()
         self._size = 0
         self._cond = threading.Condition()
         self._eof = False
+        self._start_bytes = min(max(0, start_bytes), PREFETCH_BYTES)
         self.error: BaseException | None = None
         self.received = 0
         threading.Thread(target=self._run, name="music-prefetch", daemon=True).start()
@@ -244,6 +251,9 @@ class _Prefetch:
 
     def read(self, n: int) -> bytes:
         with self._cond:
+            while self._size < self._start_bytes and not self._eof:
+                self._cond.wait(0.5)
+            self._start_bytes = 0
             while not self._chunks and not self._eof:
                 self._cond.wait(0.5)
             if not self._chunks:
@@ -280,11 +290,11 @@ def _open_stream(url: str) -> Any:
         raise PlayerError(f"unable to establish connection to {url}: {e}") from e
 
 
-def play_stream(url: str, *, device: Any = None) -> None:
+def play_stream(url: str, *, device: Any = None, buffer_sec: float = 0.0) -> None:
     import miniaudio
 
     response = _open_stream(url)
-    feed = _Prefetch(response)
+    feed = _Prefetch(response, start_bytes=int(buffer_sec * STREAM_BYTES_PER_SEC))
 
     class Source(miniaudio.StreamableSource):
         def read(self, num_bytes: int) -> bytes:
@@ -319,6 +329,7 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="kind", required=True)
     s = sub.add_parser("stream")
     s.add_argument("url")
+    s.add_argument("--buffer-sec", type=float, default=0.0)
     m = sub.add_parser("mp3")
     m.add_argument("path")
     m.add_argument("--gain", type=float, default=1.0)
@@ -330,7 +341,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         device = _device(args.device)
         if args.kind == "stream":
-            play_stream(args.url, device=device)
+            play_stream(args.url, device=device, buffer_sec=args.buffer_sec)
         elif args.kind == "mp3":
             play_mp3(args.path, gain=args.gain, device=device)
         else:

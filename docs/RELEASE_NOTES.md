@@ -4,6 +4,20 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-11-02 — music holds 3 s before it plays
+
+Music on a satellite was choppy, library songs included. The room's MPD
+serves its stream exactly as fast as it plays (measured: an even
+23 KB/s, no gap over 47 ms), so a satellite never gets ahead of it, and
+the player started after only about 1.2 s (mpg123's own 20 % of its
+buffer). A Wi-Fi dropout longer than that was heard as a chop. A
+satellite now holds **3 s** before the first note: `--preload` on the Pi,
+the same wait in the Windows player. The new satellite setting
+**Music buffer** (`[music] buffer_sec`, 0-10 s) changes it per room in
+the dashboard. A song starts about 2 s later than before, and pause and
+skip are heard that much later; stop is still immediate. A satellite
+takes this with its next code update from the server.
+
 ## 2026-10-30 — the vision model's new build
 
 Ollama's registry now serves another build under the vision model's tag,
