@@ -148,6 +148,22 @@ struct VideoFeedView: View {
             guard open.from == .grid, let feed else { return }
             feed.grew(to: videos.gridOrder.map { FeedVideo($0) })
         }
+        // **The player could not play what it was given.**
+        //
+        // `VideoFeedModel.failed(_:)` had no caller. The model was right,
+        // `hasFailed(_:)` was drawn by the page, the rules had tests — and
+        // nothing ever told the model, so "can't play this video" was
+        // unreachable for every video in the house. A Simulator found it the
+        // only way it could be found: by asking a stub for a video with no
+        // file behind it and photographing a page that said nothing.
+        //
+        // `loaded`, not `showing`: the failure belongs to the video the
+        // player was given, which is still the right one even if a fling has
+        // since moved the page.
+        .onChange(of: engine.failed) { _, broken in
+            guard broken, let feed, let video = feed.loaded else { return }
+            feed.failed(video.key)
+        }
         // The screen awake only while a video means to play.
         .onChange(of: [engine.state == .ready, engine.state == .buffering, engine.failed, engine.wantsToPlay]) { _, _ in
             engine.holdScreen(
