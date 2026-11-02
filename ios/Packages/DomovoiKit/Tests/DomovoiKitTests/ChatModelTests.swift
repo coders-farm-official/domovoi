@@ -503,11 +503,19 @@ final class ChatModelTests: XCTestCase {
             ["archived": true],
             (try? JSONSerialization.jsonObject(with: body)) as? [String: Bool] ?? [:]
         )
+        // **Both, in one wait.** `refreshLists()` calls `refresh()` on two
+        // separate `ApiRead`s, and each starts a `Task` of its own, so the two
+        // requests reach the stub in whichever order the scheduler runs them.
+        // Waiting for the archived read and then asserting the plain one had
+        // already arrived failed about half the time (measured 2026-11-02,
+        // 4 of 8 runs) while the app was doing exactly the right thing.
         await settleUntil(
-            { house.seen.current.contains("GET /api/chat/threads?archived=true") },
-            "the archived list read again"
+            {
+                house.seen.current.contains("GET /api/chat/threads?archived=true")
+                    && house.seen.current.contains("GET /api/chat/threads")
+            },
+            "both lists read again"
         )
-        XCTAssertTrue(house.seen.current.contains("GET /api/chat/threads"))
 
         model.setToast(nil)
         model.setArchived(row, false)
