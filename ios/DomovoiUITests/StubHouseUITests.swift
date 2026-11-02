@@ -2119,6 +2119,24 @@ final class StubHouseUITests: XCTestCase {
         return true
     }
 
+    /// A button **inside a presented sheet**, when the screen behind it has
+    /// one by the same name.
+    ///
+    /// The destination picker lists `Albums`; so does the folder behind it.
+    /// `firstMatch` takes the one behind every time, because it comes first
+    /// in the tree, and the tap then lands on the sheet's backdrop and does
+    /// nothing at all — which reads exactly like a picker that will not
+    /// walk into a folder. The screen behind a sheet stays in the query tree
+    /// and stops being hittable, so hittability is what tells them apart.
+    @MainActor
+    private func inSheet(_ app: XCUIApplication, _ label: String) -> XCUIElement? {
+        let all = app.buttons.matching(NSPredicate(format: "label == %@", label))
+        for index in 0..<all.count where all.element(boundBy: index).isHittable {
+            return all.element(boundBy: index)
+        }
+        return nil
+    }
+
     /// Whether this row offers a menu at all. A row with nothing this app can
     /// do to it has **no `•••`**, which is a thing to assert rather than a
     /// thing to work around.
@@ -2343,9 +2361,23 @@ final class StubHouseUITests: XCTestCase {
         let here = app.buttons["move here"]
         XCTAssertFalse(here.exists, "the starting folder offered to move the file where it is")
 
+        // The claim `inSheet` rests on, checked once rather than believed:
+        // the list behind a presented sheet is still in the tree and is no
+        // longer hittable. If this ever fails, a sheet is not modal and a
+        // person can tap the screen underneath it.
+        XCTAssertFalse(
+            app.buttons["track 00.mp3"].isHittable,
+            "the list behind the sheet can still be tapped"
+        )
+
         // Into a subfolder of the library the file is already in, which is
-        // where the picker starts.
-        app.buttons["Albums"].firstMatch.tap()
+        // where the picker starts — the sheet's `Albums`, not the row of the
+        // same name on the folder behind it.
+        guard let albums = inSheet(app, "Albums") else {
+            evidence(app, "59b-files-move-no-albums")
+            return XCTFail("the sheet has no Albums to walk into")
+        }
+        albums.tap()
         XCTAssertTrue(here.waitForExistence(timeout: 10), "the picker did not walk into Albums")
         here.tap()
 
@@ -2367,9 +2399,14 @@ final class StubHouseUITests: XCTestCase {
 
         XCTAssertTrue(openRowMenu(app, "clip.mp4"), "the drive's row has no menu")
         app.buttons["import into a library"].firstMatch.tap()
-        let music = app.buttons["Music"].firstMatch
-        XCTAssertTrue(music.waitForExistence(timeout: 20), "the import sheet never opened")
+        // `"Music, core"` — the sheet names the library and where it lives,
+        // and the distinction earns its keep here: a bare `"Music"` matched
+        // **the phone bar's music tab**, which is behind the sheet and does
+        // nothing when tapped. The test then blamed the import.
+        let music = app.buttons["Music, core"].firstMatch
+        let opened = music.waitForExistence(timeout: 20)
         evidence(app, "61-files-import-sheet")
+        XCTAssertTrue(opened, "the import sheet never opened")
         music.tap()
 
         // `"imported 1 item"` — the server's own count, and **not** the word

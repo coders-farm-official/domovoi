@@ -14,6 +14,16 @@ struct FileRowView: View {
     let entry: FileEntry
     let files: FilesModel
 
+    /// The icon column's width, which **grows with the type size**.
+    ///
+    /// It was a flat 26, and `Image.font(.body)` scales: at AX5 the glyph is
+    /// about twice that wide, a `frame(width:)` does not clip, and the folder
+    /// was drawn straight across the row's own words. The picture from the
+    /// Simulator is the only reason this was found — Apple's audit reported
+    /// the row as a Dynamic Type finding and said nothing about an overlap,
+    /// and every automated check passed.
+    @ScaledMetric(relativeTo: .body) private var glyphWidth: CGFloat = 26
+
     var body: some View {
         HStack(spacing: 8) {
             if let action = tappable {
@@ -52,7 +62,7 @@ struct FileRowView: View {
             Image(systemName: FilesView.entryGlyph(entry))
                 .font(.body)
                 .foregroundStyle(entry.isDir ? Color.brandInk : Color.fgMuted)
-                .frame(width: 26, alignment: .center)
+                .frame(width: glyphWidth, alignment: .center)
             VStack(alignment: .leading, spacing: 2) {
                 Text(entry.displayTitle)
                     .font(.subheadline)
