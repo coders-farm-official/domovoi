@@ -167,7 +167,7 @@ extension DomovoiClient {
             // difference between "AI chat is turned off on your home server"
             // and "409 Conflict". Bounded, because the body of a refusal is
             // a sentence and anything claiming to be larger is not one.
-            let text = await Self.firstBytes(of: bytes, limit: 64 * 1024)
+            let text = await Self.firstBytes(of: bytes, limit: Self.refusalBodyLimit)
             noteTokenHealth(ready, http: http, body: text)
             let pairing = isPairingRefusalFromOurServer(status: http.statusCode, body: text)
             // Through the public door rather than the flag, because only a
@@ -235,6 +235,16 @@ extension DomovoiClient {
             continuation.onTermination = { _ in task.cancel() }
         }
     }
+
+    /// How much of a refused stream's body is read, in bytes.
+    ///
+    /// ``DomovoiClient/text(_:)`` cuts what it returns to 4,096 **characters**,
+    /// so no byte past the 16,384th can reach a caller even if every character
+    /// in the body takes the UTF-8 maximum of four. The bound used to be
+    /// 64 KiB, which asked for 49,152 bytes — and, because there is no chunk
+    /// API on `AsyncBytes`, 49,152 `await`s — that could not change the
+    /// answer. A refusal is one sentence; this is the cap where it bites.
+    static let refusalBodyLimit = 4 * 4096
 
     /// At most `limit` bytes of `bytes`, as text.
     ///

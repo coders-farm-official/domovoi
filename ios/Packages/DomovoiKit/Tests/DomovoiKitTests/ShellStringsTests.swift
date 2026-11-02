@@ -1406,11 +1406,11 @@ final class ShellStringsTests: XCTestCase {
         // literal — and `searchFailed` itself is asserted whole above, which
         // is what makes the pair complete.
         assertKotlinSaysAround(sentinel + " everywhere: some chats may be missing")
-        XCTAssertEqual(
-            ChatStrings.searchFailed + " everywhere: some chats may be missing",
-            ChatStrings.searchFailedPartly,
-            "the partial line is the failed line plus its tail, as the Kotlin builds it"
-        )
+        // The Kotlin's tail is still asserted present, so the divergence
+        // cannot go stale — but `ChatStrings.searchFailedPartly` is gone.
+        // There is one place to search here, so a search that failed cannot
+        // also have hits, and the sentence had no reader: it was ported, given
+        // this assertion, and never drawn.
         // `"archived · $count"` (`ChatHome.kt:523`).
         assertKotlinSaysAround("archived \u{b7} " + sentinel)
         XCTAssertEqual("archived · 4", ChatStrings.archivedLabel(4))
@@ -1491,7 +1491,15 @@ final class ShellStringsTests: XCTestCase {
     /// divergence was deliberate rather than mistyped.
     ///
     /// Both are in `design-notes/ios/IOS-ONLY-STRINGS.md` with the reason.
-    func testChatsTwoOwnStringsAreNotInTheKotlinAtAll() {
+    func testChatsThreeOwnStringsAreNotInTheKotlinAtAll() {
+        // `verbOpenChat`: Android's `loadMessages` has no failure branch at
+        // all (`ChatScreen.kt:508`), so there is no verb over there for a
+        // thread whose messages could not be read — and the one this port
+        // used, `verbSend`, said a send had failed when nothing was sent.
+        XCTAssertFalse(
+            Self.haystack.contains(ChatStrings.verbOpenChat),
+            "the read's verb is this port's own: Android words no read failure"
+        )
         XCTAssertFalse(
             Self.haystack.contains(ChatStrings.emptyHint),
             "the empty hint is this port's own: Android's offers an image attachment"

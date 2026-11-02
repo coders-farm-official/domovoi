@@ -79,7 +79,6 @@ final class ChatModelsTests: XCTestCase {
         XCTAssertEqual("typed", message.source)
         XCTAssertTrue(message.retryable)
         XCTAssertEqual(40, message.stats?.windowFromId)
-        XCTAssertEqual("chat", message.stats?.modelRole)
         XCTAssertNil(message.stats?.errorCode)
         // The figures this port does not draw are simply not read, and reading
         // the row does not fail because they are there.

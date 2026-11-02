@@ -100,20 +100,9 @@ final class ChatErrorsTests: XCTestCase {
         XCTAssertEqual("", modelKey("   "))
     }
 
-    /// `serverHasChatModel` (`ChatPlace.kt:218`): nil while it is not known,
-    /// false for a house with no model set.
-    func testWhetherTheHouseCanAnswerAChatAtAll() {
-        XCTAssertNil(serverHasChatModel(nil))
-        XCTAssertEqual(false, serverHasChatModel(ChatModelsInfo(installed: ["llama3.2:latest"])))
-        XCTAssertEqual(
-            true,
-            serverHasChatModel(ChatModelsInfo(installed: ["llama3.2:latest"], defaultModel: "llama3.2"))
-        )
-        XCTAssertEqual(
-            false,
-            serverHasChatModel(ChatModelsInfo(installed: ["mistral:latest"], defaultModel: "llama3.2"))
-        )
-    }
+    // `testWhetherTheHouseCanAnswerAChatAtAll` went with `serverHasChatModel`
+    // itself: it was the function's only reader, which is what made the
+    // function dead surface rather than a seam (`ChatErrors.swift`).
 
     // MARK: - the household's AI switch
 

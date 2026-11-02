@@ -372,6 +372,34 @@ final class ChatTranscriptTests: XCTestCase {
         XCTAssertEqual(ordinals, ordinals.sorted(), "and they are in list order")
     }
 
+    /// **Smell 10.** `kept: true` with **nothing stashed** — a send, not a
+    /// retry — used to leave the reply pending and throw the server's own row
+    /// away: `restoreStash` bailed on its own `guard`, `replaced` was set
+    /// anyway and `liveIndex` was left standing, so only `finishStream`
+    /// cleared it and the row's id, model and `retryable` were lost with it.
+    ///
+    /// This server does not send that shape (`kept` comes only from
+    /// `_finish_retry`, which always has a stash), so this is what the app
+    /// does with a server this build does not know.
+    func testADoneThatSaysItKeptAReplyWithNothingStashedIsTheReply() {
+        var transcript = ChatTranscript()
+        transcript.beginSend(content: "how long?", atISO: now)
+        transcript.apply(event("delta", #"{"text":"ten minutes maybe"}"#))
+        let step = transcript.apply(event("done", """
+        {"id":7,"role":"assistant","content":"ten minutes","model":"llama3.2:latest",
+         "retryable":true,"kept":true}
+        """))
+        XCTAssertEqual(.finished(kept: true, replaces: nil), step)
+        XCTAssertFalse(transcript.streaming, "the reply is settled, not left pending")
+        let reply = transcript.messages.last
+        XCTAssertEqual(7, reply?.id, "the server's row, not the stream's guess")
+        XCTAssertEqual("ten minutes", reply?.content)
+        XCTAssertEqual("llama3.2:latest", reply?.model)
+        XCTAssertEqual(true, reply?.retryable)
+        XCTAssertFalse(reply?.pending ?? true)
+        XCTAssertEqual(.finished, transcript.finishStream(atISO: later), "and nothing is left to settle")
+    }
+
     func testClearingForgetsEverythingIncludingAStashedReply() {
         var transcript = answered()
         transcript.beginRetry()

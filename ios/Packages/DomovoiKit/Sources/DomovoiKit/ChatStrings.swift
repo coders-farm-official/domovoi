@@ -63,10 +63,16 @@ public enum ChatStrings {
     /// is the subtitle's own, so nothing new is claimed.
     public static let emptyHint = "start one — it runs on your own hardware"
 
-    /// `ChatPlace.kt:146`, and the line above a partial result
-    /// (`ChatHome.kt:416`).
+    /// `ChatPlace.kt:146`.
+    ///
+    /// Android's companion line, `"couldn't search everywhere: some chats may
+    /// be missing"` (`ChatHome.kt:416`), is **not** here: it is the line above
+    /// a *partial* result, and Android has one because it searches two places.
+    /// There is one place here — the read either answered or it did not — so a
+    /// failed search with hits in it cannot happen and the sentence had no
+    /// reader. It was ported, given a line in the strings test, and never
+    /// drawn.
     public static let searchFailed = "couldn't search"
-    public static let searchFailedPartly = "couldn't search everywhere: some chats may be missing"
 
     // MARK: - a row's own words
 
@@ -154,6 +160,17 @@ public enum ChatStrings {
     public static let verbSend = "send"
     public static let verbNewChat = "new chat"
     public static let verbTryAgain = "try again"
+
+    /// A thread whose messages could not be **read**. **iOS-only**, and
+    /// recorded in `design-notes/ios/IOS-ONLY-STRINGS.md` §6.
+    ///
+    /// Android's `loadMessages` is `runCatching{…}.onSuccess{…}` with no
+    /// `onFailure` at all (`ChatScreen.kt:508`), so a chat that will not open
+    /// says nothing there. Saying nothing is worse than saying why, but the
+    /// verb has to be this one: this port said `verbSend`, so opening a chat
+    /// the house could not answer for read **"send failed (offline?)"** —
+    /// naming something the person had not done.
+    public static let verbOpenChat = "open chat"
 
     /// `ChatScreen.kt:879`.
     public static func couldNotTryAgain(_ why: String) -> String { "couldn't try again: \(why)" }

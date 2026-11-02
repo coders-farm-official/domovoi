@@ -92,23 +92,13 @@ func modelKey(_ name: String) -> String {
     return "\(trimmed):latest"
 }
 
-/// Whether the house's chat model is one Ollama has installed
-/// (`serverHasChatModel`, `ChatPlace.kt:218`). Nil while it is not known.
-///
-/// Android reads it to pick the first default place, which this app has no
-/// need of — there is one place. It is ported because the same fact answers a
-/// question this app does ask: whether a send can be expected to work at all.
-public func serverHasChatModel(_ info: ChatModelsInfo?) -> Bool? {
-    guard let info else { return nil }
-    let model = info.defaultModel?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-    if model.isEmpty { return false }
-    func bare(_ name: String) -> String {
-        var trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.hasSuffix(":latest") { trimmed.removeLast(":latest".count) }
-        return trimmed
-    }
-    return info.installed.contains { bare($0) == bare(model) }
-}
+// `serverHasChatModel` (`ChatPlace.kt:218`) is **not** ported. Android reads
+// it to pick the first default place, and this app has one place. It was
+// ported once, with a doc comment arguing that "the same fact answers a
+// question this app does ask" — and nothing asked it: the definition and
+// `ChatErrorsTests` were its only readers. The standing rule on this project
+// is that a seam with tests and no reader is a bug rather than a seam, so it
+// is gone. What the house has installed is still read, for ``visionRefusal``.
 
 // MARK: - the household's AI switch
 

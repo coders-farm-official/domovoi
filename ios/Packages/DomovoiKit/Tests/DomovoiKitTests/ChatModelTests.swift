@@ -264,6 +264,13 @@ final class ChatModelTests: XCTestCase {
         for _ in 0..<3000 { await Task.yield() }
     }
 
+    /// The same, with the whole ``settleYieldLimit`` behind it: for a
+    /// **released round trip** whose answer has to have landed before a
+    /// negative assertion means anything.
+    private func everythingLands() async {
+        for _ in 0..<settleYieldLimit { await Task.yield() }
+    }
+
     private func rows(_ content: ChatListContent) -> [ChatRow] {
         if case .rows(let rows) = content { return rows }
         return []
@@ -278,11 +285,12 @@ final class ChatModelTests: XCTestCase {
         XCTAssertEqual(["1", "2", "4"], model.rows.map(\.id), "newest first")
         XCTAssertEqual("and then simmer", model.rows.first?.subtitle)
         XCTAssertEqual(ChatStrings.noMessagesYet, model.rows.last?.subtitle, "a thread with no messages")
-        // The archived view is a second read, and not made until it is asked
-        // for: the list on screen is one route's answer.
-        XCTAssertTrue(model.archivedRows.isEmpty)
-        model.showArchived(true)
+        // The archived view is a second read — and it is made on `start()`,
+        // not when it is asked for. `testTheArchivedCountIsKnownWhenTheListFirstLands`
+        // is why; this assertion used to be `XCTAssertTrue(archivedRows.isEmpty)`
+        // with a comment arguing the laziness was fine.
         await settleUntil({ !model.archivedRows.isEmpty }, "the archived list")
+        model.showArchived(true)
         XCTAssertEqual(["3"], model.archivedRows.map(\.id))
         XCTAssertEqual(1, model.archivedCount)
     }
@@ -884,6 +892,485 @@ final class ChatModelTests: XCTestCase {
             [ChatRules.pinKey(row, server: model.server)],
             Array(ChatPinBook(place: place).all),
             "the pin is still written down, under the house it belongs to"
+        )
+    }
+
+    // MARK: - [[read-after-await-wrong-key]]: the house is half of every key
+    //
+    // Five of the eight tests below were throwaway probes written by the
+    // reviewer of I1-H part 1 (`ZZReviewProbeTests.swift`, on
+    // `wf/ios-h1-review`): each asserted the correct behaviour, all five
+    // failed, and that is how these findings were established rather than
+    // relayed. They are permanent here, with the assertion messages they were
+    // written with — those name the symptom in the words a person would use.
+    //
+    // The rig is each test's own rather than ``House``: these need **two
+    // houses** and a slow first one, so the dispatcher has to answer one path
+    // differently on its second call, or hold one open while the app moves.
+
+    nonisolated private static func health(_ parts: URLComponents) -> StubURLProtocol.Answer {
+        let challenge = (parts.queryItems ?? []).first { $0.name == "challenge" }?.value
+        return .json((try? TestIdentity.real.healthBody(challenge: challenge)) ?? "{}")
+    }
+
+    /// A dispatcher's usual answers: health signed, everything else empty.
+    nonisolated private static func plain(_ request: URLRequest) -> StubURLProtocol.Answer {
+        guard let parts = request.url.flatMap({ URLComponents(url: $0, resolvingAgainstBaseURL: false) })
+        else { return .json("{}") }
+        if parts.path == "/api/health" { return health(parts) }
+        return .json("{}")
+    }
+
+    /// A model on `address` with no ``House`` behind it, and the store, so a
+    /// test can move house inside a round trip.
+    private func twoHouseRig(_ address: String) -> (ChatModel, InMemoryShellStore) {
+        let store = InMemoryShellStore(serverURL: address, token: "household-abc")
+        store.trustServer(address, identity: TestIdentity.real.pin)
+        let container = AppContainer(
+            store: store,
+            vault: TokenVault(items: InMemoryKeychain()),
+            lock: HouseholdLock(),
+            clock: { 0 },
+            configuration: StubURLProtocol.session(timeout: 1)
+        )
+        let model = ChatModel(
+            in: container,
+            deviceID: "ios-1",
+            pins: ChatPinBook(place: SavedStateBox()),
+            nowISO: { "2026-11-02T19:00:00+00:00" }
+        )
+        return (model, store)
+    }
+
+    /// Move the app from the house it is in to `address`.
+    private func move(_ model: ChatModel, _ store: InMemoryShellStore, to address: String) {
+        store.trustServer(address, identity: TestIdentity.real.pin)
+        XCTAssertTrue(store.setServerURL(address))
+        model.serverChanged()
+    }
+
+    /// **B2.** `share(_:)` hands a whole conversation to the share sheet, so a
+    /// read from the house the person has left is the one finding here that
+    /// puts another house's words into whatever they share next.
+    ///
+    /// Android does not have this: its `shareText` is a `suspend fun` launched
+    /// from `rememberCoroutineScope()` (`ChatHome.kt:364`), which dies with the
+    /// composition.
+    func testAShareReadFromTheOldHouseDoesNotOpenAfterMovingHouse() async {
+        let park = parkRequest(
+            to: "/api/chat/threads/7/messages",
+            answering: {
+                .json(#"{"messages":[{"id":1,"role":"user","content":"the old house's words"}]}"#)
+            },
+            otherwise: { Self.plain($0) }
+        )
+        let (model, store) = twoHouseRig(server)
+        model.share(ChatRow(id: "7", title: "old plan"))
+        await settle(for: park.arrived, what: "the share read")
+
+        move(model, store, to: otherServer)
+        XCTAssertNil(model.sharing, "serverChanged cleared it")
+
+        park.release.set(true)
+        await everythingLands()
+        XCTAssertFalse(park.ranOut.current, "the park timed out, so this asserts nothing")
+        XCTAssertNil(
+            model.sharing,
+            "the old house's chat text opened the share sheet after the app moved house"
+        )
+    }
+
+    /// **B1.** `openThread == id` is not the key: a thread id belongs to a
+    /// house, and `serverChanged()` says in its own words that two houses can
+    /// both have one.
+    ///
+    /// The person opens thread 7 on house A; the read is slow; they move
+    /// house and open **thread 7** there. House A's answer then lands, passes
+    /// `openThread == 7`, and writes house A's conversation into the
+    /// transcript the screen is drawing under house B's title.
+    func testAnOldHousesTranscriptDoesNotLandUnderTheSameIdOnTheNewHouse() async {
+        let calls = Shared<Int>(0)
+        let arrived = Shared<Bool>(false)
+        let release = Shared<Bool>(false)
+        let ranOut = Shared<Bool>(false)
+        StubURLProtocol.dispatch { request in
+            guard let parts = request.url.flatMap({ URLComponents(url: $0, resolvingAgainstBaseURL: false) })
+            else { return .json("{}") }
+            if parts.path == "/api/health" { return Self.health(parts) }
+            guard parts.path == "/api/chat/threads/7/messages" else { return .json("{}") }
+            let mine = calls.mutate { $0 += 1; return $0 }
+            // House B's own read of **its** thread 7 answers with nothing at
+            // all. That is what makes this test honest: the only thing that
+            // can put words in the transcript afterwards is the read that was
+            // started for the house the app has left, so an empty transcript
+            // is the finding and a full one is the bug. House B's read is also
+            // the proof of order — a custom `URLProtocol` is served on one
+            // worker, so its failure cannot be recorded until house A's answer
+            // has been handed back.
+            guard mine == 1 else { return .json(#"{"detail":"not this one"}"#, status: 503) }
+            arrived.set(true)
+            for step in 0..<400 {
+                if release.current { break }
+                if step == 399 { ranOut.set(true) }
+                Thread.sleep(forTimeInterval: 0.002)
+            }
+            return .json(#"{"messages":[{"id":10,"role":"user","content":"house A's words"}]}"#)
+        }
+        let (model, store) = twoHouseRig(server)
+        model.open(thread: 7, title: "house A's plan")
+        await settle(for: arrived, what: "house A's transcript read")
+
+        move(model, store, to: otherServer)
+        model.open(thread: 7, title: "house B's plan")
+
+        release.set(true)
+        await settleUntil({ model.toast != nil }, "house B's own read of its thread 7")
+        await everythingLands()
+        XCTAssertFalse(ranOut.current, "the park timed out, so this asserts nothing")
+        XCTAssertEqual(7, model.openThread, "house B's thread 7 is what is on screen")
+        XCTAssertEqual(
+            [],
+            model.transcript.messages.map(\.content),
+            "house A's conversation landed under house B's thread 7"
+        )
+    }
+
+    /// **Smell 1.** `write(…)`'s task was as untracked as `share`'s, so an
+    /// "archived" toast landed on the new house, naming a thread the person is
+    /// no longer looking at.
+    func testAnArchiveToastFromTheOldHouseDoesNotLandOnTheNewOne() async {
+        let park = parkRequest(
+            to: "/api/chat/threads/7",
+            answering: { .json(#"{"ok":true}"#) },
+            otherwise: { Self.plain($0) }
+        )
+        let (model, store) = twoHouseRig(server)
+        model.setArchived(ChatRow(id: "7", title: "old plan"), true)
+        await settle(for: park.arrived, what: "the archive write")
+
+        move(model, store, to: otherServer)
+        park.release.set(true)
+        await everythingLands()
+        XCTAssertFalse(park.ranOut.current, "the park timed out, so this asserts nothing")
+        XCTAssertNil(
+            model.toast,
+            "the old house's archive said \"archived\" over the new house's list"
+        )
+    }
+
+    /// **B7.** `ensureThread()` wrote `openThread` after an await with no
+    /// guard at all, so a thread made for a house the app has left claimed the
+    /// composer.
+    ///
+    /// **This test pins the guard's presence, not a sequence anybody has
+    /// seen fire, and it did not go red with the guard taken out.** Say so
+    /// here rather than let it read as a proven catcher.
+    ///
+    /// Every route into this window goes through `cancelStream()` —
+    /// `open(_:)`, `startNewChat()`, `closeChat()`, `serverChanged()`, all of
+    /// them — and `session.data(for:delegate:)` is cancellation-aware, so the
+    /// cancelled POST throws and `ensureThread` never reaches its write. The
+    /// window the guard closes is "the response arrived and its main-actor hop
+    /// was enqueued before the `cancel()` landed", and nothing in this suite
+    /// can place a test inside it. The reviewer said the same and reported it
+    /// as a bug to fix rather than one they had shown firing.
+    ///
+    /// What this does do is hold the end state that matters, so a change that
+    /// stops cancellation from being enough on its own is caught here.
+    func testAThreadMadeForTheOldHouseDoesNotClaimTheNewOnesComposer() async {
+        let park = parkRequest(
+            to: "/api/chat/threads",
+            answering: { .json(#"{"id":77,"title":null}"#) },
+            otherwise: { Self.plain($0) }
+        )
+        let (model, store) = twoHouseRig(server)
+        model.startNewChat()
+        XCTAssertTrue(model.send("how long do lentils take?"))
+        await settle(for: park.arrived, what: "the new thread")
+
+        move(model, store, to: otherServer)
+        park.release.set(true)
+        await everythingLands()
+        XCTAssertFalse(park.ranOut.current, "the park timed out, so this asserts nothing")
+        XCTAssertNil(
+            model.openThread,
+            "a thread made on the house the app left became the open chat on the new one"
+        )
+        XCTAssertFalse(model.newChat)
+        XCTAssertFalse(model.sending)
+    }
+
+    /// **B5.** A retry whose stream opened, said something, and closed with
+    /// neither an `error` nor a `done` — a `StreamingResponse` generator
+    /// ending early, a worker restart, a proxy closing after the headers —
+    /// gave `finishStream` no reason, and the fallback was
+    /// `ChatStrings.searchFailed`.
+    ///
+    /// Android has no fallback at all (`ChatScreen.kt:879` is
+    /// `live.error?.let { toast(…) }`), and the old reply being back on screen
+    /// is itself the answer.
+    func testAFailedRetryWithNoReasonSaysNothingRatherThanBlamingTheSearch() async {
+        let transcript = #"""
+        {"messages":[
+          {"id":10,"role":"user","content":"how long?"},
+          {"id":11,"role":"assistant","content":"twenty minutes","retryable":true}
+        ]}
+        """#
+        let stream = "event: delta\ndata: {\"text\":\"half an \"}\n\n"
+        StubURLProtocol.dispatch { request in
+            guard let parts = request.url.flatMap({ URLComponents(url: $0, resolvingAgainstBaseURL: false) })
+            else { return .json("{}") }
+            if parts.path == "/api/health" { return Self.health(parts) }
+            if parts.path == "/api/chat/threads/7/retry" {
+                return .json(stream, headers: ["Content-Type": "text/event-stream"])
+            }
+            if parts.path == "/api/chat/threads/7/messages" { return .json(transcript) }
+            return .json("{}")
+        }
+        let (model, _) = twoHouseRig(server)
+        model.open(thread: 7, title: "lentils")
+        await settleUntil({ model.transcript.messages.count == 2 }, "the transcript")
+        XCTAssertTrue(model.transcript.canRetry)
+        XCTAssertTrue(model.retry())
+        await settleUntil({ !model.sending }, "the retry")
+        XCTAssertNotEqual(
+            ChatStrings.couldNotTryAgain(ChatStrings.searchFailed),
+            model.toast,
+            "a retry that failed told the person the SEARCH could not run"
+        )
+        XCTAssertNil(model.toast, "and with no reason to give it says nothing, as Android does")
+        XCTAssertEqual(
+            ["how long?", "twenty minutes"],
+            model.transcript.messages.map(\.content),
+            "the reply that is still on the server is what is on screen"
+        )
+    }
+
+    /// **B4.** `openTitle` was a stored value, so a new chat's header said
+    /// "new chat" for ever after the server's title job had named the thread,
+    /// and a rename made on the dashboard never showed while the chat was
+    /// open here. Android's title begins with *the title as the list has it
+    /// now* (`ChatScreen.kt:941`), and `ServerChatPlace.kt:149` writes down
+    /// both reasons.
+    func testTheOpenTitleFollowsTheListWhenTheServerNamesTheThread() async {
+        let threads = Shared<String>(#"{"threads":[]}"#)
+        StubURLProtocol.dispatch { request in
+            guard let parts = request.url.flatMap({ URLComponents(url: $0, resolvingAgainstBaseURL: false) })
+            else { return .json("{}") }
+            if parts.path == "/api/health" { return Self.health(parts) }
+            if parts.path == "/api/chat/models" { return .json(#"{"installed":[]}"#) }
+            if parts.path == "/api/chat/threads" { return .json(threads.current) }
+            if parts.path == "/api/chat/threads/7/messages" {
+                return .json(#"{"messages":[{"id":1,"role":"user","content":"how long do lentils take?"}]}"#)
+            }
+            return .json("{}")
+        }
+        let (model, _) = twoHouseRig(server)
+        model.start()
+        model.open(thread: 7, title: ChatStrings.newChat)
+        await settleUntil({ !model.transcript.isEmpty }, "the transcript")
+        // The title job has now written one, and a push says the list moved.
+        threads.set(#"""
+        {"threads":[{"id":7,"title":"lentil soup","updated_at":"2026-11-02T18:00:00+00:00",
+                     "message_count":2,"last_snippet":"and then simmer","archived":false}]}
+        """#)
+        model.received(StateEvent(type: "chat.changed", frame: "{}"))
+        await settleUntil({ model.rows.first?.title == "lentil soup" }, "the list")
+        XCTAssertEqual("lentil soup", model.rows.first?.title, "the list has the server's title")
+        XCTAssertEqual(
+            "lentil soup",
+            model.openTitle,
+            "the conversation's header still says \"new chat\" (ChatScreen.kt:941's titleOf)"
+        )
+    }
+
+    /// The chain's other three links: the stored title for a thread the list
+    /// does not know, the first words of the question for a thread the server
+    /// has not named, and `newChat` for nothing at all.
+    func testWhatTheHeaderSaysBeforeTheServerHasNamedTheThread() async {
+        StubURLProtocol.dispatch { request in
+            guard let parts = request.url.flatMap({ URLComponents(url: $0, resolvingAgainstBaseURL: false) })
+            else { return .json("{}") }
+            if parts.path == "/api/health" { return Self.health(parts) }
+            if parts.path == "/api/chat/models" { return .json(#"{"installed":[]}"#) }
+            if parts.path == "/api/chat/threads" {
+                // The list has thread 7 and the server has **not** named it:
+                // Android's `titleOf` reads a nullable title and falls
+                // through on a null, which is why `ChatRules.row`'s own "new
+                // chat" substitution must not be what this asks.
+                return .json(#"""
+                {"threads":[{"id":7,"title":null,"updated_at":"2026-11-02T18:00:00+00:00",
+                             "message_count":2,"archived":false}]}
+                """#)
+            }
+            if parts.path == "/api/chat/threads/7/messages" {
+                return .json(#"{"messages":[{"id":1,"role":"user","content":"how long do lentils take to cook?"}]}"#)
+            }
+            return .json("{}")
+        }
+        let (model, _) = twoHouseRig(server)
+        model.startNewChat()
+        XCTAssertEqual(ChatStrings.newChat, model.openTitle, "nothing to go on")
+
+        // Opened from somewhere that knew a name the list does not have yet —
+        // a help notification's tap (``PendingChatThread``).
+        model.open(thread: 7, title: "bike chain")
+        XCTAssertEqual("bike chain", model.openTitle)
+
+        // Opened from a list row for a thread the server has not named:
+        // ``ChatRules/row(_:)`` hands over its own "new chat" placeholder,
+        // which is the list saying it has no name — so the chain goes on,
+        // exactly as Android's does on a null `ThreadRow.title`.
+        model.open(thread: 7, title: ChatStrings.newChat)
+        model.start()
+        await settleUntil({ model.transcript.messages.count == 1 }, "the transcript")
+        await settleUntil({ model.threads.data != nil }, "the list")
+        XCTAssertEqual(
+            "how long do lentils take…",
+            model.openTitle,
+            "the list has the thread and no name for it, so the question's first five words"
+        )
+    }
+
+    /// **B3.** The archived view was invisible when Chat was first opened, and
+    /// it was a closed loop: `start()` read the archived list only `if
+    /// showArchived`, and the only control that sets `showArchived` is the row
+    /// the list draws **when the archived count is non-zero**
+    /// (`ChatHome.kt:443`). Android reads both lists on mount.
+    func testTheArchivedCountIsKnownWhenTheListFirstLands() async {
+        StubURLProtocol.dispatch { request in
+            guard let parts = request.url.flatMap({ URLComponents(url: $0, resolvingAgainstBaseURL: false) })
+            else { return .json("{}") }
+            if parts.path == "/api/health" { return Self.health(parts) }
+            if parts.path == "/api/chat/models" { return .json(#"{"installed":[]}"#) }
+            guard parts.path == "/api/chat/threads" else { return .json("{}") }
+            let archived = (parts.queryItems ?? []).first { $0.name == "archived" }?.value == "true"
+            if archived {
+                return .json(#"""
+                {"threads":[{"id":3,"title":"old plan","updated_at":"2026-09-01T09:00:00+00:00",
+                             "message_count":9,"archived":true}]}
+                """#)
+            }
+            return .json(#"""
+            {"threads":[{"id":1,"title":"lentil soup","updated_at":"2026-11-02T18:00:00+00:00",
+                         "message_count":6,"archived":false}]}
+            """#)
+        }
+        let (model, _) = twoHouseRig(server)
+        model.start()
+        await settleUntil({ !model.rows.isEmpty }, "the main list")
+        XCTAssertEqual(["1"], model.rows.map(\.id), "the main list landed")
+        await settleUntil({ model.archivedCount > 0 }, "the archived list")
+        XCTAssertEqual(
+            1,
+            model.archivedCount,
+            "the archived entry's count is 0 on first load, so the row that opens the archived view is never drawn (ChatHome.kt:443)"
+        )
+        XCTAssertFalse(model.showArchived, "and the main list is still what is on screen")
+    }
+
+    /// **B6.** A failed **read** of a thread was worded as a failed **send**:
+    /// opening a chat the house could not answer for said "send failed
+    /// (offline?)" when nothing had been sent.
+    func testAChatThatCouldNotBeReadSaysSoAsAReadAndNotAsASend() async {
+        StubURLProtocol.dispatch { request in
+            guard let parts = request.url.flatMap({ URLComponents(url: $0, resolvingAgainstBaseURL: false) })
+            else { return .json("{}") }
+            if parts.path == "/api/health" { return Self.health(parts) }
+            if parts.path == "/api/chat/threads/7/messages" {
+                return .json(#"{"detail":"the thread is being rebuilt"}"#, status: 503)
+            }
+            return .json("{}")
+        }
+        let (model, _) = twoHouseRig(server)
+        model.open(thread: 7, title: "lentil soup")
+        await settleUntil({ model.toast != nil }, "the failed read")
+        XCTAssertTrue(
+            model.toast?.hasPrefix("open chat failed") == true,
+            "the verb is the read's: \(model.toast ?? "nil")"
+        )
+        XCTAssertFalse(
+            model.toast?.hasPrefix("send failed") == true,
+            "a read that failed said a send had failed, and nothing was sent"
+        )
+    }
+
+    /// **Smells 9 and 11.** A stream cancelled on the way out writes nothing
+    /// into the transcript and **re-issues nothing**: `stop()` →
+    /// `cancelStream()` → `threads.stop()`, and the cancelled task's
+    /// continuation then ran `endStream` → `refreshLists()`, which
+    /// ``ApiRead/refresh()`` re-joins to the server-change registry and
+    /// re-issues — so a screen going away asked the house for both lists.
+    ///
+    /// This is the only test of stream cancellation there is. What it does
+    /// **not** pin is ``ServerEvents``' own `onTermination` hook: the pump's
+    /// cancellation has no observable effect through `StubURLProtocol`, whose
+    /// `stopLoading` is a no-op.
+    func testAStreamCancelledOnTheWayOutAppliesNothingAndRefreshesNothing() async {
+        let listReads = Shared<Int>(0)
+        let arrived = Shared<Bool>(false)
+        let release = Shared<Bool>(false)
+        let ranOut = Shared<Bool>(false)
+        StubURLProtocol.dispatch { request in
+            guard let parts = request.url.flatMap({ URLComponents(url: $0, resolvingAgainstBaseURL: false) })
+            else { return .json("{}") }
+            if parts.path == "/api/health" { return Self.health(parts) }
+            if parts.path == "/api/chat/threads" { listReads.mutate { $0 += 1 } }
+            guard parts.path == "/api/chat/threads/7/messages" else { return .json("{}") }
+            // The GET answers at once; **the stream's POST is held open**, so
+            // `stop()` happens inside the round trip.
+            guard request.httpMethod == "POST" else {
+                return .json(#"{"messages":[{"id":10,"role":"user","content":"how long?"}]}"#)
+            }
+            arrived.set(true)
+            for step in 0..<400 {
+                if release.current { break }
+                if step == 399 { ranOut.set(true) }
+                Thread.sleep(forTimeInterval: 0.002)
+            }
+            return .json(
+                "event: delta\ndata: {\"text\":\"about twenty\"}\n\n",
+                headers: ["Content-Type": "text/event-stream"]
+            )
+        }
+        let (model, _) = twoHouseRig(server)
+        model.open(thread: 7, title: "lentil soup")
+        await settleUntil({ model.transcript.messages.count == 1 }, "the transcript")
+        XCTAssertTrue(model.send("how long do lentils take?"))
+        await settle(for: arrived, what: "the stream")
+
+        let before = listReads.current
+        model.stop()
+        release.set(true)
+        await everythingLands()
+        XCTAssertFalse(ranOut.current, "the park timed out, so this asserts nothing")
+        XCTAssertFalse(model.sending)
+        XCTAssertEqual(before, listReads.current, "a screen on its way out read both lists again")
+        XCTAssertFalse(
+            model.transcript.live?.content.contains("about twenty") == true,
+            "and a cancelled stream wrote no words"
+        )
+    }
+
+    /// **Smell 8.** A rename is a `PATCH` and was optimistic with no revert, so
+    /// a refused rename left the rejected name in the header for as long as
+    /// the chat was open. ``ChatModel/openTitle`` reading the list is the
+    /// revert, which is where Android gets it from too.
+    func testARenameTheServerRefusedLeavesTheHeaderAlone() async {
+        let (model, house, _) = rig()
+        model.start()
+        await settleUntil({ !model.rows.isEmpty })
+        guard let row = model.rows.first else { return XCTFail("no rows") }
+        model.open(row)
+        await settleUntil({ model.transcript.messages.count == 2 })
+        XCTAssertEqual("lentil soup", model.openTitle)
+        house.writeStatus.set(400)
+        model.rename(row, to: "LENTILS")
+        await settleUntil({ model.toast != nil }, "the refusal")
+        XCTAssertEqual(
+            "lentil soup",
+            model.openTitle,
+            "the name the server refused stayed in the header"
         )
     }
 }
