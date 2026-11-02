@@ -261,13 +261,19 @@ struct ChatBubbleView: View {
 
     @ViewBuilder
     private var words: some View {
-        if message.content.isEmpty, message.pending {
-            // A reply with no words yet. A spinner and not an empty bubble:
-            // ``ChatTranscript/finishStream(atISO:)`` stops it whatever
-            // happens, including a stream that ends with no `done`, so this
-            // cannot be the spinner that never goes away.
-            ProgressView()
-                .accessibilityLabel(ChatStrings.title)
+        if message.content.isEmpty {
+            // A reply with no words. A spinner while one is still being
+            // written — ``ChatTranscript/finishStream(atISO:)`` stops it
+            // whatever happens, including a stream that ends with no `done`,
+            // so this cannot be the spinner that never goes away — and
+            // **nothing at all** once it has stopped, which is the reply that
+            // failed before it said anything: its error line is the whole
+            // bubble, and an empty `Text` above it is a leaf the audit has to
+            // measure and a person cannot see.
+            if message.pending {
+                ProgressView()
+                    .accessibilityLabel(ChatStrings.title)
+            }
         } else {
             Text(message.content)
                 .font(.body)
