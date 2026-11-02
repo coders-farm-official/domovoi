@@ -117,7 +117,7 @@ public final class VideoPosterStore {
 
     /// Ask for `path` if it has not been asked for.
     ///
-    /// Nothing re-fetches: a ``VideoPoster/none`` is a settled answer and a
+    /// Nothing re-fetches: a ``VideoPoster/absent`` is a settled answer and a
     /// ``VideoPoster/loading`` is already on its way. A
     /// ``VideoPoster/failed`` **is** retried, because that one may have been
     /// the network.
