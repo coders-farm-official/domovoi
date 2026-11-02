@@ -2052,16 +2052,38 @@ final class StubHouseUITests: XCTestCase {
     /// The count line again, for ``openVideos``' reason: `showing 50 of 56
     /// items` cannot exist until the folder has answered, where the word
     /// `Files` is on screen from the first frame as a phone-bar tab.
+    ///
+    /// ### Two things this sets before it launches, and why
+    ///
+    /// **The files block.** It is one flag in a stub process that outlives
+    /// every case in the run, and `testABlockedDevice…` sorts first: when
+    /// that case failed mid-way, its `defer` never ran (this class sets
+    /// `continueAfterFailure = false`, so a failed assertion leaves by an
+    /// exception) and **every Files case after it saw a blocked phone**. Three
+    /// of them reported "the row has no menu", which was the app behaving
+    /// perfectly. A state this important is set per case, not cleaned up
+    /// afterwards.
+    ///
+    /// **What it waits for.** The count line at `large`, because it cannot
+    /// exist until the folder has answered. At AX5 the header, the picker,
+    /// the crumbs and the filter fill the window and the count line is not
+    /// merely off screen but unbuilt, so the wait is for the picker instead —
+    /// which also only exists once the libraries have landed.
     @MainActor
     private func openFiles(
         _ mode: String = "large",
+        blocked: Bool = false,
         delay: Double? = nil
     ) -> (app: XCUIApplication, landed: Bool) {
+        setFilesBlocked(blocked)
         let app = launch(mode: mode, push: "Files", pushDelay: delay ?? Self.pushDelay)
-        let count = app.descendants(matching: .staticText)
-            .matching(NSPredicate(format: "label BEGINSWITH %@", "showing "))
-            .firstMatch
-        return (app, count.waitForExistence(timeout: 40))
+        let big = mode.hasPrefix("UICTContentSizeCategoryAccessibility")
+        let marker = big
+            ? app.buttons["choose library"].firstMatch
+            : app.descendants(matching: .staticText)
+                .matching(NSPredicate(format: "label BEGINSWITH %@", "showing "))
+                .firstMatch
+        return (app, marker.waitForExistence(timeout: 40))
     }
 
     /// Pick a library from the header's menu.
@@ -2085,9 +2107,24 @@ final class StubHouseUITests: XCTestCase {
     @MainActor
     private func openRowMenu(_ app: XCUIApplication, _ name: String) -> Bool {
         let menu = app.buttons["more for \"\(name)\""].firstMatch
-        guard menu.waitForExistence(timeout: 10) else { return false }
+        guard menu.waitForExistence(timeout: 10) else {
+            // The tree, not a sentence about the element: "the row has no
+            // menu" is a claim about something that is not there, and the
+            // only useful answer is what *is*.
+            print("=== NO MENU for \(name) — tree follows ===")
+            print(app.debugDescription)
+            return false
+        }
         menu.tap()
         return true
+    }
+
+    /// Whether this row offers a menu at all. A row with nothing this app can
+    /// do to it has **no `•••`**, which is a thing to assert rather than a
+    /// thing to work around.
+    @MainActor
+    private func rowHasMenu(_ app: XCUIApplication, _ name: String) -> Bool {
+        app.buttons["more for \"\(name)\""].firstMatch.exists
     }
 
     /// The first page of the first library, with the server's own count.
@@ -2228,25 +2265,53 @@ final class StubHouseUITests: XCTestCase {
         )
     }
 
-    /// A read-only library offers no move, and a drive offers an import.
+    /// What each library offers on a row — including the rows that offer
+    /// **nothing**, which is the case this screen is built around.
+    ///
+    /// On a read-only plugin library a tap already saves the file, so there is
+    /// no second save to offer, no move (the library takes no changes) and no
+    /// import (that is a drive's word). Three empty answers, so the `•••` is
+    /// not drawn at all: an empty menu is a control that does nothing.
     @MainActor
     func testWhatEachLibraryOffersOnARow() throws {
         let (app, landed) = openFiles()
         XCTAssertTrue(landed, "the folder never answered")
 
+        // The first library, which takes changes: a move and nothing else,
+        // because tapping the row is already the save.
+        XCTAssertTrue(openRowMenu(app, "track 00.mp3"), "an editable library's row has no menu")
+        evidence(app, "57-files-editable-menu")
+        XCTAssertTrue(app.buttons["move"].exists, "an editable library did not offer a move")
+        XCTAssertFalse(
+            app.buttons["save to device"].exists,
+            "a row whose tap is already a save offered a second one"
+        )
+        XCTAssertFalse(app.buttons["import into a library"].exists, "a core library offered an import")
+        app.buttons["move"].firstMatch.tap()
+        app.buttons["close"].firstMatch.tap()
+
         XCTAssertTrue(pickLibrary(app, "Comics"), "the library picker never opened")
         XCTAssertTrue(app.buttons["issue 1.cbz"].waitForExistence(timeout: 20), "Comics never listed")
-        XCTAssertTrue(openRowMenu(app, "issue 1.cbz"), "the row has no menu")
-        evidence(app, "57-files-readonly-menu")
-        XCTAssertFalse(app.buttons["move"].exists, "a read-only library offered a move")
-        XCTAssertFalse(app.buttons["import into a library"].exists, "a plugin library offered an import")
-        app.buttons["save to device"].firstMatch.tap()
+        evidence(app, "58-files-readonly-row")
+        XCTAssertFalse(
+            rowHasMenu(app, "issue 1.cbz"),
+            "a read-only library's row drew a menu with nothing in it"
+        )
 
+        // The drive, on the one row that cannot be tapped: `holiday.mp4` is
+        // 300 MB, over the save cap, so there is no save to offer — and an
+        // import is still offered, because the copy happens on the server
+        // where there is no cap. A row with no tap and a menu all the same.
         XCTAssertTrue(pickLibrary(app, "USB stick"), "the picker never opened for the drive")
-        XCTAssertTrue(app.buttons["holiday.mp4"].waitForExistence(timeout: 20), "the drive never listed")
+        XCTAssertTrue(app.buttons["clip.mp4"].waitForExistence(timeout: 20), "the drive never listed")
         XCTAssertTrue(openRowMenu(app, "holiday.mp4"), "the drive's row has no menu")
-        evidence(app, "58-files-drive-menu")
+        evidence(app, "68-files-drive-menu")
         XCTAssertTrue(app.buttons["import into a library"].exists, "a drive did not offer an import")
+        XCTAssertFalse(
+            app.buttons["save to device"].exists,
+            "a file over the save cap was offered a save in its menu"
+        )
+        XCTAssertFalse(app.buttons["move"].exists, "a read-only drive offered a move")
     }
 
     /// Moving a file: the destination picker, and what the toast says.
@@ -2280,9 +2345,9 @@ final class StubHouseUITests: XCTestCase {
         let (app, landed) = openFiles()
         XCTAssertTrue(landed, "the folder never answered")
         XCTAssertTrue(pickLibrary(app, "USB stick"), "the library picker never opened")
-        XCTAssertTrue(app.buttons["holiday.mp4"].waitForExistence(timeout: 20), "the drive never listed")
+        XCTAssertTrue(app.buttons["clip.mp4"].waitForExistence(timeout: 20), "the drive never listed")
 
-        XCTAssertTrue(openRowMenu(app, "holiday.mp4"), "the drive's row has no menu")
+        XCTAssertTrue(openRowMenu(app, "clip.mp4"), "the drive's row has no menu")
         app.buttons["import into a library"].firstMatch.tap()
         let music = app.buttons["Music"].firstMatch
         XCTAssertTrue(music.waitForExistence(timeout: 20), "the import sheet never opened")
@@ -2296,17 +2361,14 @@ final class StubHouseUITests: XCTestCase {
         evidence(app, "62-files-imported")
         // The drive's own folder is still the one on screen: an import writes
         // into another library and nothing here changed.
-        XCTAssertTrue(app.buttons["holiday.mp4"].exists, "the screen left the drive after an import")
+        XCTAssertTrue(app.buttons["clip.mp4"].exists, "the screen left the drive after an import")
     }
 
     /// A device an admin has blocked: the card above the list, and **no write
     /// controls at all**.
     @MainActor
     func testABlockedDeviceCanLookButIsOfferedNothingToTouch() throws {
-        setFilesBlocked(true)
-        defer { setFilesBlocked(false) }
-
-        let (app, landed) = openFiles()
+        let (app, landed) = openFiles(blocked: true)
         XCTAssertTrue(landed, "the folder never answered")
         evidence(app, "63-files-blocked")
         XCTAssertTrue(
@@ -2315,8 +2377,14 @@ final class StubHouseUITests: XCTestCase {
                 .firstMatch.exists,
             "the blocked card is not on screen"
         )
-        XCTAssertTrue(openRowMenu(app, "track 00.mp3"), "the row has no menu")
-        evidence(app, "64-files-blocked-menu")
+        // It can still look: the rows are there and a folder still opens.
+        XCTAssertTrue(app.buttons["track 00.mp3"].exists, "a blocked device cannot see its files")
+        // And it is offered nothing to touch — not a disabled move, no menu
+        // at all, because the three things a menu could hold are all refused.
+        XCTAssertFalse(
+            rowHasMenu(app, "track 00.mp3"),
+            "a blocked device was offered a menu"
+        )
         XCTAssertFalse(app.buttons["move"].exists, "a blocked device was offered a move")
     }
 
@@ -2331,11 +2399,91 @@ final class StubHouseUITests: XCTestCase {
         let (floor, rest) = Self.floorAndRest(found)
         print("FILES AUDIT floor=\(floor) rest=\(rest.count)")
         for line in rest { print("FILES AUDIT REST :: \(line)") }
-        // The same pin the grid has: a finding Apple can attribute is a
-        // defect, and an anonymous one of an unrecognised kind is an unknown
-        // rather than a floor.
-        XCTAssertEqual([], rest, "the Files list has an audit finding of its own")
+
+        // **A named Dynamic Type finding is not a defect by virtue of being
+        // named**, which is the correction the Videos grid forced on this
+        // file. The eight here name the row titles, the row meta lines and a
+        // crumb — `.subheadline` and `.caption`, nothing fixed — and
+        // `testTheFilesListTextGrowsAtAX5` measures those very leaves. The
+        // measurement is the test; this is the classification that makes room
+        // for it.
+        let unexplained = rest.filter { !$0.hasPrefix("Dynamic Type font sizes") }
+        XCTAssertEqual([], unexplained, "the Files list has an audit finding of its own")
         XCTAssertEqual(0, floor, "an anonymous finding appeared on the Files list")
+    }
+
+    /// The leaves Apple's audit names on this screen, measured at `large` and
+    /// at AX5.
+    ///
+    /// Eight findings of "Dynamic Type font sizes are partially unsupported"
+    /// against the row titles, the row meta lines and a breadcrumb — all
+    /// `.subheadline` and `.caption`, none of them a fixed size. The Videos
+    /// grid taught this file that such a finding is not a defect for being
+    /// named, and that the only honest answer is to measure. Anything that
+    /// really is stuck fails here.
+    ///
+    /// Matched by shape rather than by exact label, because a row's meta line
+    /// carries a relative time (`folder · 2h ago`) that the stub's own mtimes
+    /// move, and by `.any` rather than `.staticTexts`, because a row's text
+    /// may be merged into the row's button.
+    @MainActor
+    func testTheFilesListTextGrowsAtAX5() throws {
+        func heights(_ app: XCUIApplication) -> [String: CGFloat] {
+            var out: [String: CGFloat] = [:]
+            for (leaf, predicate) in [
+                ("subtitle", "label BEGINSWITH 'browse every library'"),
+                ("count", "label BEGINSWITH 'showing 50 of 56'"),
+                ("row-meta", "label BEGINSWITH 'folder · '"),
+                ("row-title", "label == 'Albums'"),
+            ] {
+                let found = app.descendants(matching: .any)
+                    .matching(NSPredicate(format: predicate))
+                    .firstMatch
+                if found.exists { out[leaf] = found.frame.height }
+            }
+            return out
+        }
+
+        var measured: [String: [String: CGFloat]] = [:]
+        for (label, mode) in [
+            ("large", "large"),
+            ("AX5", "UICTContentSizeCategoryAccessibilityXXXL"),
+        ] {
+            let (app, landed) = openFiles(mode)
+            XCTAssertTrue(landed, "the folder never answered at \(label)")
+            // At AX5 the header, the picker, the crumbs and the filter fill
+            // the window, so the rows are not merely off screen but unbuilt.
+            // Scroll until the first one exists; a leaf still missing is
+            // skipped, not failed.
+            for _ in 0..<6 where !app.descendants(matching: .any)
+                .matching(NSPredicate(format: "label == 'Albums'"))
+                .firstMatch.exists {
+                app.swipeUp()
+            }
+            usleep(1_000_000)
+            evidence(app, "67-files-scale-\(label)")
+            measured[label] = heights(app)
+            for (leaf, height) in heights(app).sorted(by: { $0.key < $1.key }) {
+                print("FILES SCALE [\(label)] \(leaf) height=\(height)")
+            }
+            app.terminate()
+        }
+
+        let small = measured["large"] ?? [:]
+        let big = measured["AX5"] ?? [:]
+        var compared = 0
+        var stuck: [String] = []
+        for (leaf, height) in small.sorted(by: { $0.key < $1.key }) {
+            guard let grown = big[leaf] else { continue }
+            compared += 1
+            if grown < height * 1.8 { stuck.append("\(leaf) \(height)->\(grown)") }
+        }
+        XCTAssertEqual([], stuck, "a leaf Apple flagged really does not scale")
+        XCTAssertGreaterThanOrEqual(
+            compared,
+            2,
+            "nothing could be compared, so this proved nothing: \(small) / \(big)"
+        )
     }
 
     /// Flip the stub house's files block, from the test process.
