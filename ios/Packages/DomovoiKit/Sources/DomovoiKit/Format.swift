@@ -129,7 +129,19 @@ public func fmtBytes(_ bytes: Int64?) -> String {
 ///   is all about (45 seconds, an hour, a day, thirty days) without waiting
 ///   for it.
 public func relTime(_ iso: String?, nowMs: Int64) -> String {
-    guard let then = isoMs(iso) else { return "—" }
+    relTimeMs(isoMs(iso), nowMs: nowMs)
+}
+
+/// The same wording for a time already in epoch **milliseconds**.
+///
+/// ``relTime(_:nowMs:)`` was the whole function until Files, whose
+/// timestamps are `st_mtime` floats rather than ISO strings
+/// (``FileEntry/mtime``). The split is a rename, not a second
+/// implementation: one wording, one set of boundaries, two ways in — the
+/// alternative being a Files copy that disagreed with Home about what
+/// "3d ago" means.
+public func relTimeMs(_ thenMs: Int64?, nowMs: Int64) -> String {
+    guard let then = thenMs else { return "—" }
     let seconds = (nowMs - then) / 1000
     if seconds < 0 { return relFuture(-seconds) }
     switch seconds {
