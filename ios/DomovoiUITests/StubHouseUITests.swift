@@ -2604,6 +2604,10 @@ final class StubHouseUITests: XCTestCase {
         fail: String? = nil,
         delay: Double? = nil
     ) -> (app: XCUIApplication, landed: Bool) {
+        // Reset first, then the two switches: the reset puts both back on
+        // their defaults, so the other order would undo whatever this case
+        // asked for.
+        resetChatHouse()
         setChatAI(on: !aiOff)
         setChatFail(fail)
         let app = launch(mode: mode, push: "Chat", pushDelay: delay ?? Self.pushDelay)
@@ -2631,20 +2635,30 @@ final class StubHouseUITests: XCTestCase {
     /// `swipeActions`, so this scrolls **the list** rather than the
     /// application: a swipe on the app can land on the shell's header, which
     /// does not scroll, and then nothing moves and nothing says so.
+    ///
+    /// **A drag, not `swipeUp()`.** `swipeUp` is a flick with momentum: it
+    /// moves about a viewport at a time, and at AX5 the archived entry's cell
+    /// is 95pt in a 402pt viewport, so eight of them scrolled *past* it
+    /// without one of the checks in between ever seeing it built — the tree
+    /// printed after the eighth was at the foot of the list. A press-and-drag
+    /// of a quarter of the list, held long enough not to fling, moves about
+    /// 100pt and cannot step over a cell.
     @MainActor
-    private func scrollUntilBuilt(_ app: XCUIApplication, _ element: XCUIElement, swipes: Int = 8) -> Bool {
+    private func scrollUntilBuilt(_ app: XCUIApplication, _ element: XCUIElement, drags: Int = 24) -> Bool {
         let list = app.collectionViews.firstMatch
         guard list.waitForExistence(timeout: 20) else {
             print("=== NO LIST TO SCROLL — tree follows ===")
             print(app.debugDescription)
             return false
         }
-        for _ in 0..<swipes {
+        for _ in 0..<drags {
             if element.exists { return true }
-            list.swipeUp()
+            let from = list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.7))
+            let to = list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.45))
+            from.press(forDuration: 0.3, thenDragTo: to)
         }
         if !element.exists {
-            print("=== \(swipes) SWIPES AND STILL UNBUILT — tree follows ===")
+            print("=== \(drags) DRAGS AND STILL UNBUILT — tree follows ===")
             print(app.debugDescription)
         }
         return element.exists
@@ -3037,9 +3051,23 @@ final class StubHouseUITests: XCTestCase {
 
         let row = app.buttons[StubChat.archiveMe].firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 25), "the new thread never reached the list")
-        row.swipeLeft()
+        // **The cell, not the row's own button.** `swipeActions` belongs to
+        // the `List`'s cell; a swipe across the title button inside it moved
+        // nothing and revealed nothing, and the case reported "the swipe
+        // offered nothing" about a swipe the list never received (measured
+        // 2026-11-02 — this line is the first one that ever ran, because the
+        // composer bug above it stopped five cases before they got here).
+        let cell = app.collectionViews.cells
+            .containing(NSPredicate(format: "label == %@", StubChat.archiveMe))
+            .firstMatch
+        XCTAssertTrue(cell.waitForExistence(timeout: 15), "the new thread's row has no cell")
+        cell.swipeLeft()
         let archive = app.buttons[ChatStringsUnderTest.actionArchive].firstMatch
-        XCTAssertTrue(archive.waitForExistence(timeout: 10), "the swipe offered nothing")
+        if !archive.waitForExistence(timeout: 10) {
+            print("=== SWIPE REVEALED NOTHING — tree follows ===")
+            print(app.debugDescription)
+        }
+        XCTAssertTrue(archive.exists, "the swipe offered nothing")
         evidence(app, "76-chat-swipe")
         archive.tap()
 
@@ -3468,7 +3496,14 @@ final class StubHouseUITests: XCTestCase {
                 ("row-title", "label == 'Who left the garage light on'"),
                 ("row-snippet", "label BEGINSWITH 'Nobody has opened it'"),
             ] {
-                let found = app.descendants(matching: .any)
+                // **staticTexts, not .any.** A row's words sit inside a button
+                // carrying the same label, and .any measured the button:
+                // `archived · 2` came back as 66.0 at the ordinary size, which
+                // is a 44pt-minimum control with padding, not a line of text.
+                // The audit's one named finding is about the *text* —
+                // `type=48 label='archived · 2' …, 18.0` — so a measurement
+                // meant to answer it has to be of the same thing.
+                let found = app.staticTexts
                     .matching(NSPredicate(format: predicate))
                     .firstMatch
                 if found.exists { out[leaf] = found.frame.height }
@@ -3487,11 +3522,17 @@ final class StubHouseUITests: XCTestCase {
             // new-chat row fill the window, so the rows are not merely off
             // screen but unbuilt. Scroll until one exists; a leaf still
             // missing is skipped, not failed.
-            for _ in 0..<6 where !app.descendants(matching: .any)
-                .matching(NSPredicate(format: "label == 'Who left the garage light on'"))
-                .firstMatch.exists {
-                app.swipeUp()
-            }
+            //
+            // ``scrollUntilBuilt(_:_:drags:)`` rather than a loop of
+            // `app.swipeUp()`: a swipe on the *application* can land on the
+            // shell's header, which does not scroll, and a flick steps over a
+            // short cell without ever building it.
+            _ = scrollUntilBuilt(
+                app,
+                app.staticTexts
+                    .matching(NSPredicate(format: "label == 'Who left the garage light on'"))
+                    .firstMatch
+            )
             usleep(1_000_000)
             evidence(app, "93-chat-scale-\(label)")
             measured[label] = heights(app)
@@ -3516,6 +3557,21 @@ final class StubHouseUITests: XCTestCase {
             2,
             "nothing could be compared, so this proved nothing: \(small) / \(big)"
         )
+    }
+
+    /// The seven threads, back the way the cases were written against.
+    ///
+    /// **The chat half of the stub house is the only part a case can change**,
+    /// and two cases make a thread of their own on purpose. Once the composer
+    /// worked, those threads started arriving — and the cases that come after
+    /// them alphabetically were reading a list of seven unarchived threads
+    /// where they expected five, which put the help thread below the fold of a
+    /// lazy list and made `no row for the help thread` perfectly true about a
+    /// row that was there. This is called before every launch, so what ran
+    /// before a case cannot decide what it sees.
+    @MainActor
+    private func resetChatHouse(port: Int = 6601) {
+        control("chat-reset", "{}", port: port, what: "the chat house's seven threads")
     }
 
     /// The household's AI switch, from the test process.
