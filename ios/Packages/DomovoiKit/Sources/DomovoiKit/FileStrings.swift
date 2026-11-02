@@ -62,7 +62,9 @@ public enum FileStrings {
     }
 
     /// Why there is no Delete in this screen's menus. **iOS-only**, and said
-    /// once per menu rather than per row: see ``FilePath/deleteNeedsAnAdmin``.
+    /// once at the foot of the list rather than per row — `whereDeletingLives`
+    /// says why it is not in the menus themselves. See
+    /// ``FilePath/deleteNeedsAnAdmin``.
     public static let deleteIsAnAdminJob = "deleting is on the dashboard — a phone can't sign in as an admin"
 
     // MARK: - what the list says instead of rows

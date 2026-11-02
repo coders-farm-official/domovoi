@@ -5,10 +5,10 @@ import SwiftUI
 ///
 /// The counterpart of `android/.../ui/screens/ScreenRouter.kt`: a `switch`
 /// over the route, with the capability check in front of it. **The screens
-/// themselves are later batches'** — Videos, Files, Chat and most of
-/// Settings — so each of those is a marked placeholder that names what
-/// belongs there, and nothing here pretends to be one. Home and the library
-/// half of Music are built.
+/// themselves are later batches'** — Chat and most of Settings — so each of
+/// those is a marked placeholder that names what belongs there, and nothing
+/// here pretends to be one. Home, Videos, Files and the library half of Music
+/// are built.
 ///
 /// The one piece of real behaviour is the check at the top, and it is
 /// ported rather than invented: a route a link reached that the server does
@@ -46,6 +46,11 @@ struct RouteScreen: View {
             // The third screen. ``VideosView`` says what is left out and why
             // there is no control for any of it.
             VideosView(model: model)
+        } else if route == .files {
+            // The fourth screen. ``FilesView`` says what is left out and why
+            // there is no control for any of it — including the delete
+            // Android draws and cannot do from a phone.
+            FilesView(model: model)
         } else if route == .settings {
             SettingsPlaceholder(model: model)
         } else {
