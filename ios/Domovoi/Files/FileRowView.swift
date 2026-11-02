@@ -117,7 +117,7 @@ struct FileRowView: View {
                     .frame(width: 44, height: 44)
                     .contentShape(.rect)
             }
-            .accessibilityLabel(entry.displayTitle)
+            .accessibilityLabel(FileStrings.moreFor(entry.displayTitle))
         }
     }
 

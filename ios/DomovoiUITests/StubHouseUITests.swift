@@ -2077,13 +2077,16 @@ final class StubHouseUITests: XCTestCase {
     }
 
     /// Tap a row's `•••` and return whether its menu opened.
+    ///
+    /// By its own label and **not** by taking the second button called
+    /// `Albums`: the first tree from this screen had two buttons with that
+    /// one label on a single row, which is ambiguous to a reader and to a
+    /// query. The menu says whose it is now.
     @MainActor
     private func openRowMenu(_ app: XCUIApplication, _ name: String) -> Bool {
-        // The menu button carries the row's own name, so the two controls on
-        // a row are told apart by kind rather than by position.
-        let menus = app.buttons.matching(identifier: name).allElementsBoundByIndex
-        guard menus.count >= 2 else { return false }
-        menus[1].tap()
+        let menu = app.buttons["more for \"\(name)\""].firstMatch
+        guard menu.waitForExistence(timeout: 10) else { return false }
+        menu.tap()
         return true
     }
 
@@ -2105,14 +2108,33 @@ final class StubHouseUITests: XCTestCase {
         )
         XCTAssertTrue(app.buttons["Albums"].exists, "no row for the first folder")
         XCTAssertTrue(app.buttons["track 00.mp3"].exists, "no row for the first file")
-        // Where deleting is done, said once at the foot of the list — and
-        // **no Delete control anywhere**, which is the whole point of saying
-        // it in words.
-        XCTAssertTrue(
-            app.staticTexts["deleting is on the dashboard — a phone can't sign in as an admin"].exists,
-            "the list does not say where deleting is done"
-        )
+        // **No Delete control anywhere**, which is the point:
+        // `/api/files/delete` needs an admin session and this app has none.
         XCTAssertFalse(app.buttons["delete"].exists, "a phone cannot delete and must not offer to")
+        XCTAssertFalse(app.buttons["Delete…"].exists, "Android's own label for it is not here either")
+    }
+
+    /// Where deleting is done, said at the foot of the list.
+    ///
+    /// Asserted here rather than in the test above, and with a scroll: at the
+    /// foot of a fifty-row lazy list the line is not merely off screen, it is
+    /// not built, so a query for it fails whatever the code says. That is the
+    /// honest cost of this placement — a line above every folder would be
+    /// clutter for everyone to answer a question few people ask, and the row
+    /// menus cannot hold prose (`whereDeletingLives` says why).
+    @MainActor
+    func testTheListSaysWhereDeletingIsDone() throws {
+        let (app, landed) = openFiles()
+        XCTAssertTrue(landed, "the folder never answered")
+        XCTAssertTrue(pickLibrary(app, "Documents"), "the library picker never opened")
+        XCTAssertTrue(app.buttons["notes.md"].waitForExistence(timeout: 20), "Documents never listed")
+
+        let line = app.staticTexts["deleting is on the dashboard — a phone can't sign in as an admin"]
+        for _ in 0..<6 where !line.exists {
+            app.swipeUp()
+        }
+        evidence(app, "66-files-delete-line")
+        XCTAssertTrue(line.exists, "the list never says where deleting is done")
     }
 
     /// The same screen at the largest accessibility type size.

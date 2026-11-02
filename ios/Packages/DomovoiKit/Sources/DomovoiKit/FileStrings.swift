@@ -52,6 +52,15 @@ public enum FileStrings {
 
     public static let move = "move"
 
+    /// The row's `...` button, for VoiceOver.
+    ///
+    /// Not the row's own name, which is what it said first: the tree from the
+    /// Simulator had two buttons labelled `Albums` on one row, and a reader
+    /// cannot tell the one that opens the folder from the one that offers to
+    /// move it. (Not visible text, so not an IOS-ONLY string: Android's row
+    /// has its own content description.)
+    public static func moreFor(_ name: String) -> String { "more for \"\(name)\"" }
+
     /// `FilesScreen.kt:1162`.
     public static let importInto = "import into a library"
 
