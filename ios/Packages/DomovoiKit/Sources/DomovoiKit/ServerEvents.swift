@@ -185,14 +185,47 @@ extension DomovoiClient {
         return AsyncThrowingStream { continuation in
             let task = Task {
                 var reader = ServerEventReader()
+                // **The lines are split here, byte by byte, and NOT by
+                // `bytes.lines`.**
+                //
+                // `AsyncLineSequence` does not deliver empty lines, and a
+                // blank line is the only thing in SSE that ends an event. Fed
+                // from `.lines`, this reader gathered every `data:` of a whole
+                // reply into one event and delivered it once, at the end: a
+                // three-event stream came out as `["done"]` with the deltas
+                // glued into its payload, so a reply never appeared a word at
+                // a time and `kept`/`replaces` arrived after the screen had
+                // given up. Measured 2026-11-02 by
+                // `testAStreamCarriesTheTokenAndDeliversItsEventsInOrder`,
+                // which is why that test opens a real stream through
+                // `StubURLProtocol` instead of only feeding the reader.
+                //
+                // A byte at a time is one `await` per byte, which for a reply
+                // of a few kilobytes costs nothing measurable and is what
+                // `AsyncBytes` offers — there is no chunk-level API on it.
+                var line = Data()
+                func finishLine() -> String {
+                    if line.last == 0x0d { line.removeLast() }  // a CRLF's CR
+                    let text = String(decoding: line, as: UTF8.self)
+                    line.removeAll(keepingCapacity: true)
+                    return text
+                }
                 do {
-                    for try await line in bytes.lines {
-                        if let event = reader.take(line) { continuation.yield(event) }
+                    for try await byte in bytes {
+                        guard byte == 0x0a else {
+                            line.append(byte)
+                            continue
+                        }
+                        if let event = reader.take(finishLine()) { continuation.yield(event) }
                     }
                     // A stream that ends without its blank line still ends an
                     // event — the server closing after `data: {...}` with no
                     // trailing newline would otherwise lose the `done` row,
-                    // and with it the reply's id and model.
+                    // and with it the reply's id and model. Both halves: the
+                    // unterminated line itself, and then the end of the event.
+                    if !line.isEmpty, let event = reader.take(finishLine()) {
+                        continuation.yield(event)
+                    }
                     if let last = reader.take("") { continuation.yield(last) }
                     continuation.finish()
                 } catch {

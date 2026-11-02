@@ -300,6 +300,52 @@ final class ServerEventsTests: XCTestCase {
         XCTAssertEqual("POST", sent.httpMethod)
     }
 
+    /// **The blank line is what ends an event, and it has to survive the
+    /// wire.**
+    ///
+    /// This is the wire-level twin of the reader's own blank-line tests, and
+    /// it is here because the reader passing them proved nothing about what
+    /// reached it: `AsyncLineSequence` drops empty lines, so the first
+    /// version of `events(…)` delivered a whole reply as one `done` event
+    /// with every delta glued into its payload. Every assertion below was
+    /// green against the pure reader while the stream was broken.
+    func testEveryEventArrivesSeparatelyOverTheWire() async throws {
+        Self.serveHealth(then: {
+            // CRLF, a comment line and an `id:` in the middle — a proxy's
+            // keep-alive and a server's reconnection id, both of which have
+            // to pass through without ending anything.
+            Self.sse(
+                ": keep-alive\r\n"
+                + "event: delta\r\ndata: {\"text\":\"one\"}\r\n\r\n"
+                + "id: 7\r\nevent: delta\r\ndata: {\"text\":\" two\"}\r\n\r\n"
+                + "event: delta\r\ndata: {\"text\":\"\"}\r\n\r\n"
+            )
+        })
+        let events = try await client().events(method: "POST", path: ChatPath.messages(5))
+        var seen: [ServerEvent] = []
+        for try await event in events { seen.append(event) }
+        XCTAssertEqual(3, seen.count, "three blank lines, three events")
+        XCTAssertEqual(
+            [#"{"text":"one"}"#, #"{"text":" two"}"#, #"{"text":""}"#],
+            seen.map(\.data),
+            "and no CR left on any of them"
+        )
+    }
+
+    /// A stream the server closed after its last `data:` line, with no blank
+    /// line and no newline at all: the `done` row still arrives, because it
+    /// carries the reply's id and the model that wrote it.
+    func testAStreamThatEndsMidLineStillDeliversItsLastEvent() async throws {
+        Self.serveHealth(then: {
+            Self.sse("event: done\ndata: {\"id\":3,\"role\":\"assistant\",\"content\":\"hello\"}")
+        })
+        let events = try await client().events(method: "POST", path: ChatPath.messages(5))
+        var seen: [ServerEvent] = []
+        for try await event in events { seen.append(event) }
+        XCTAssertEqual(["done"], seen.map(\.name))
+        XCTAssertEqual(3, seen.first?.payload(as: ChatMessage.self)?.id)
+    }
+
     /// A refusal is thrown by `events(…)` itself — **before** the stream — so
     /// the caller can word it. And the body it carries is what
     /// ``isAiOffRefusal(_:)`` reads.
