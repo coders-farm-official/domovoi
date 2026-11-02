@@ -42,6 +42,10 @@ struct RouteScreen: View {
             // it is built; ``MusicView`` says what is left out and why there
             // is no control for any of it.
             MusicView(model: model)
+        } else if route == .videos {
+            // The third screen. ``VideosView`` says what is left out and why
+            // there is no control for any of it.
+            VideosView(model: model)
         } else if route == .settings {
             SettingsPlaceholder(model: model)
         } else {

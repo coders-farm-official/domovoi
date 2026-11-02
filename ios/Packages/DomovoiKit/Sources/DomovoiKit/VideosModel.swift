@@ -245,6 +245,31 @@ public final class VideosModel {
     /// The viewing order for a tap in the grid.
     public var gridOrder: [VideoRow] { VideoGrid.feedOrder(entries) }
 
+    /// The entries as sections, which is the shape the grid draws.
+    public var sections: [VideoSection] { VideoGrid.sections(entries) }
+
+    /// `"showing 60 of 1,904 videos"`, or nil before the list has answered.
+    public var countText: String? {
+        guard list.state.loaded else { return nil }
+        return Paging.countText(
+            shown: list.state.items.count,
+            total: list.state.total,
+            noun: "videos"
+        )
+    }
+
+    /// Whether the row at `lastVisible` is close enough to the end to ask for
+    /// another page. The guarded question, never a bare "the last tile
+    /// appeared".
+    public func shouldLoadMore(lastVisible: Int) -> Bool {
+        guard list.state.canLoadMore else { return false }
+        return Paging.nearEnd(
+            totalItems: list.state.items.count,
+            lastVisible: lastVisible,
+            threshold: Paging.gridThreshold
+        )
+    }
+
     /// Nothing at all, and nothing is wrong: the list answered and it is
     /// empty. Never shown while a read is in flight or has failed, for
     /// ``MusicQueueModel/emptyNote``'s reason — "no videos found" beside a
@@ -394,6 +419,22 @@ public final class VideosModel {
     }
 
     // MARK: - coming and going
+
+    /// The screen appeared: be keyed to the server again, read page one if
+    /// nothing has been read, and re-read the strip.
+    ///
+    /// ``Pager/resume()`` rather than `reset()` for an already-loaded list:
+    /// the point of keeping the rows is not re-reading them, and a grid that
+    /// jumped to the top on every return to the tab would lose the person's
+    /// place. The strip **is** re-read, because a position saved on another
+    /// device is the one thing that changes while this screen is away and
+    /// nothing else would show it.
+    public func start() {
+        list.resume()
+        if !list.state.loaded { list.reset() }
+        recent.refresh()
+    }
+
 
     /// The app moved house. Everything this screen holds is the old house's.
     public func serverChanged() {

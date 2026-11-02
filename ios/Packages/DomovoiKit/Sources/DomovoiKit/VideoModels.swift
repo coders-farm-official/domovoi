@@ -271,6 +271,58 @@ public enum VideoGrid {
         return out
     }
 
+    /// The same entries as **sections**, which is what a SwiftUI grid needs.
+    ///
+    /// ### Why both shapes exist
+    ///
+    /// Android draws one `LazyVerticalGrid` and makes a header span the whole
+    /// width with `GridItemSpan(maxLineSpan)`. SwiftUI's `LazyVGrid` cannot:
+    /// `gridCellColumns(_:)` needs a **fixed** column count, and these
+    /// columns are `.adaptive(minimum: 160)` precisely so a wide phone shows
+    /// more of them. So the page is a stack of (header, grid-of-that-
+    /// library's-tiles) instead, which renders the same and is the ordinary
+    /// SwiftUI shape for it.
+    ///
+    /// It is **derived from ``entries(showRecent:grouped:totals:)``** rather
+    /// than built from the rows again, so the two cannot drift: the flat list
+    /// stays the thing that defines the order (and the thing
+    /// ``index(of:in:)`` searches when a feed closes), and this is a reading
+    /// of it.
+    public static func sections(_ entries: [VideoGridEntry]) -> [VideoSection] {
+        var out: [VideoSection] = []
+        var tileIndex = 0
+        for entry in entries {
+            switch entry {
+            case .recent:
+                continue
+            case .header(let libraryID, let label, let count):
+                out.append(VideoSection(libraryID: libraryID, label: label, count: count, tiles: []))
+            case .tile(let video):
+                let tile = VideoTile(gridIndex: tileIndex, video: video)
+                tileIndex += 1
+                guard var last = out.popLast() else {
+                    // A tile with no header above it cannot come out of
+                    // `entries`, which always writes the header first. It is
+                    // handled rather than trapped because a `popLast` on
+                    // empty would, and a crash in a grid is the worst
+                    // possible answer to an impossible input.
+                    out.append(
+                        VideoSection(
+                            libraryID: video.libraryID,
+                            label: video.libraryLabel ?? video.libraryID,
+                            count: 1,
+                            tiles: [tile]
+                        )
+                    )
+                    continue
+                }
+                last.tiles.append(tile)
+                out.append(last)
+            }
+        }
+        return out
+    }
+
     /// The viewing order for a tap in the grid: every tile, in the order the
     /// grid shows them. `FeedModels.kt:135`.
     public static func feedOrder(_ entries: [VideoGridEntry]) -> [VideoRow] {
@@ -505,4 +557,52 @@ public enum VideoStrings {
 
     /// The phone is not paired, so the device tier is closed to it.
     public static let pairToPlay = "pair this phone with your Domovoi to play videos"
+
+    // ---- the words this screen shares with Music ---------------------------
+    //
+    // Said again here rather than reached for across screens: the same two
+    // words, and ``MusicStrings`` is Music's vocabulary, not a common one.
+    // If a third screen wants them they become a shared type, which is a
+    // decision to make with three call sites rather than two.
+
+    public static let retry = "try again"
+    public static let loadMore = "load more"
+}
+
+/// One tile in the grid, with **its index among the tiles**.
+///
+/// The index is what ``VideosModel/shouldLoadMore(lastVisible:)`` compares
+/// against the loaded row count, so it counts tiles and not headers: an
+/// index that counted the section headings too would ask for the next page
+/// one heading early per library, which on a house with six libraries is six
+/// tiles early.
+public struct VideoTile: Identifiable, Sendable, Equatable {
+    public let gridIndex: Int
+    public let video: VideoRow
+
+    public var id: String { video.id }
+
+    public init(gridIndex: Int, video: VideoRow) {
+        self.gridIndex = gridIndex
+        self.video = video
+    }
+}
+
+/// One library's heading and its loaded tiles.
+public struct VideoSection: Identifiable, Sendable, Equatable {
+    public let libraryID: String
+    public let label: String
+    /// The server's total for this library, or the loaded count — whichever
+    /// ``VideoGrid/entries(showRecent:grouped:totals:)`` put in the header.
+    public let count: Int
+    public var tiles: [VideoTile]
+
+    public var id: String { libraryID }
+
+    public init(libraryID: String, label: String, count: Int, tiles: [VideoTile]) {
+        self.libraryID = libraryID
+        self.label = label
+        self.count = count
+        self.tiles = tiles
+    }
 }
