@@ -1598,6 +1598,251 @@ final class StubHouseUITests: XCTestCase {
         )
     }
 
+    // MARK: - Videos
+
+    /// Open Videos and wait for its grid.
+    ///
+    /// The grid is a paged read and the strip is another, so the count line
+    /// is the thing to wait on: it appears only once the list has answered
+    /// (``VideosModel/countText`` is nil before that), which makes it the one
+    /// signal that means "the page landed" rather than "the screen exists".
+    @MainActor
+    private func openVideos(
+        _ mode: String = "large",
+        delay: Double? = nil
+    ) -> (app: XCUIApplication, landed: Bool) {
+        let app = launch(mode: mode, push: "Videos", pushDelay: delay ?? Self.pushDelay)
+        let count = app.descendants(matching: .staticText)
+            .matching(NSPredicate(format: "label CONTAINS %@", "videos"))
+            .firstMatch
+        return (app, count.waitForExistence(timeout: 40))
+    }
+
+    /// The grid: a heading per library with the **server's** count, poster
+    /// tiles, and the count line.
+    ///
+    /// The stub serves fifty-four videos in `Movies` and six on a `USB
+    /// stick`, so page one holds fifty of the sixty and the two headings must
+    /// read 54 and 6 — not 44 and 6, which is what the rows that loaded would
+    /// say. That difference is the whole reason the answer is decoded twice
+    /// (``VideosModel`` and ``VideoLibraryTotals``), and it is invisible to
+    /// anything but a real paged read.
+    @MainActor
+    func testVideosDrawsItsGridWithTheServersCounts() throws {
+        let (app, landed) = openVideos()
+        evidence(app, "40-videos-grid")
+        XCTAssertFalse(fellBackToLocalMedia(in: app), "the shell gave up on the server")
+        XCTAssertTrue(landed, "the videos list never answered — no count line drew")
+
+        XCTAssertTrue(
+            app.staticTexts["showing 50 of 60 videos"].exists,
+            "the count line is not the server's numbers"
+        )
+        XCTAssertTrue(app.staticTexts["Movies · 54"].exists, "the Movies heading is not the server's total")
+        XCTAssertTrue(app.staticTexts["USB stick · 6"].exists, "the USB heading is not the server's total")
+        // A tile is a button labelled with what the video is called, which is
+        // also how everything below taps one.
+        XCTAssertTrue(
+            app.buttons["a long one.mp4"].exists,
+            "no tile for the one video the stub can actually play"
+        )
+    }
+
+    /// The same grid at the largest accessibility type size.
+    ///
+    /// The size that found the clipped text on the first screen of this
+    /// track. Videos has three places text can be squeezed flat: the
+    /// heading's `label · count`, the resume line under a strip row, and a
+    /// tile's caption, all of which have `fixedSize` for that reason.
+    @MainActor
+    func testVideosAtTheLargestTypeSize() throws {
+        let (app, landed) = openVideos("UICTContentSizeCategoryAccessibilityXXXL")
+        evidence(app, "41-videos-ax5")
+        XCTAssertTrue(landed, "the videos list never answered at AX5")
+    }
+
+    /// Apple's audit over the grid.
+    @MainActor
+    @available(iOS 17.0, *)
+    func testTheVideosGridAudits() throws {
+        let (app, landed) = openVideos()
+        XCTAssertTrue(landed, "the videos list never answered")
+        let found = try auditIssues(app, "videos-grid")
+        evidence(app, "42-videos-grid-audited")
+        let (floor, rest) = Self.floorAndRest(found)
+        XCTAssertEqual([], rest, "the grid has findings Apple can attribute to an element")
+        XCTAssertEqual(Self.knownPushedBarFloor, floor, "the anonymous floor moved")
+    }
+
+    /// **A real video, decoded by a real player.**
+    ///
+    /// This is the part no package test can reach: `FeedEngine` talks to
+    /// AVFoundation and nothing else in this batch does. The stream URL is
+    /// built here for the first time against something that checks it — the
+    /// household token rides in the **query** (``VideoStream``), and the stub
+    /// refuses the videos routes without a token in either place, so a
+    /// picture of a playing video is also proof the token arrived.
+    ///
+    /// Two screenshots three seconds apart. The generated video draws a white
+    /// column at "how far through this is", so the pair of pictures shows
+    /// whether it is actually playing rather than parked on frame one — which
+    /// a single screenshot of a video cannot tell you.
+    @MainActor
+    func testAVideoPlaysInTheFeed() throws {
+        let (app, landed) = openVideos()
+        XCTAssertTrue(landed, "the videos list never answered")
+
+        app.buttons["a long one.mp4"].firstMatch.tap()
+        let counter = app.staticTexts["1 / 50"]
+        let opened = counter.waitForExistence(timeout: 20)
+        evidence(app, "43-feed-opened")
+        XCTAssertTrue(opened, "the feed did not open on the video that was tapped")
+        XCTAssertTrue(app.buttons["close"].exists, "the feed has no way out")
+
+        Thread.sleep(forTimeInterval: 3)
+        evidence(app, "44-feed-three-seconds-later")
+        // Still the same page: three seconds of playing must not advance the
+        // pager, which would mean the scroll view had decided to settle
+        // somewhere else on its own.
+        XCTAssertTrue(counter.exists, "the feed moved off the page by itself")
+    }
+
+    /// The details sheet, filled in by the player rather than the library.
+    ///
+    /// `480 × 270` is not in any JSON the stub serves: the resolution, the
+    /// bitrate, the frame rate and the codec are read off the decoded track
+    /// (`FeedEngine.takeFacts`), which is `await`ed since iOS 16. So this
+    /// case is the only thing on either side of the project that can tell
+    /// whether that load lands — and whether it lands on the **right video**,
+    /// which is why `takeFacts` compares the item after the await.
+    @MainActor
+    func testTheDetailsSheetSaysWhatThePlayerMeasured() throws {
+        let (app, landed) = openVideos()
+        XCTAssertTrue(landed, "the videos list never answered")
+        app.buttons["a long one.mp4"].firstMatch.tap()
+        XCTAssertTrue(app.staticTexts["1 / 50"].waitForExistence(timeout: 20), "the feed did not open")
+
+        // A long press anywhere on the page opens the options sheet.
+        app.staticTexts["1 / 50"].press(forDuration: 1.0)
+        let details = app.buttons["details"]
+        XCTAssertTrue(details.waitForExistence(timeout: 10), "the long press opened no options sheet")
+        details.tap()
+
+        let resolution = app.staticTexts["480 × 270"]
+        let measured = resolution.waitForExistence(timeout: 20)
+        evidence(app, "45-feed-details")
+        XCTAssertTrue(
+            measured,
+            "the details sheet never showed the stream's real resolution — "
+                + "the awaited track load did not land, or landed on another video"
+        )
+        XCTAssertTrue(app.staticTexts["duration"].exists, "no duration row")
+        XCTAssertTrue(app.staticTexts["size"].exists, "no size row")
+    }
+
+    /// The session queue, which is a playlist and **not** a list of files to
+    /// delete.
+    @MainActor
+    func testThePlaylistSheetListsTheQueue() throws {
+        let (app, landed) = openVideos()
+        XCTAssertTrue(landed, "the videos list never answered")
+        app.buttons["a long one.mp4"].firstMatch.tap()
+        XCTAssertTrue(app.staticTexts["1 / 50"].waitForExistence(timeout: 20), "the feed did not open")
+
+        app.staticTexts["1 / 50"].press(forDuration: 1.0)
+        let playlist = app.buttons["playlist"]
+        XCTAssertTrue(playlist.waitForExistence(timeout: 10), "no options sheet")
+        playlist.tap()
+
+        let heading = app.staticTexts["playlist · 50 videos"]
+        let listed = heading.waitForExistence(timeout: 10)
+        evidence(app, "46-feed-playlist")
+        XCTAssertTrue(listed, "the playlist sheet does not say how many are queued")
+        XCTAssertTrue(
+            app.buttons["remove from playlist"].firstMatch.exists,
+            "no way to drop a video from the queue"
+        )
+    }
+
+    /// A video the server will not stream says so, and says to swipe on.
+    ///
+    /// Most of the stub's library has no file behind it, on purpose: a 404
+    /// from `/stream` is a state a real house will not produce on demand, and
+    /// it is the difference between the feed's two failure messages — this
+    /// one, and the refusal a phone with no proof gets (``VideoStream``),
+    /// which must **not** say "swipe for the next one" because the next one
+    /// will not play either.
+    @MainActor
+    func testAVideoWithNoFileSaysItCannotPlay() throws {
+        let (app, landed) = openVideos()
+        XCTAssertTrue(landed, "the videos list never answered")
+
+        app.buttons["01 she said \"no\".mp4"].firstMatch.tap()
+        let message = app.staticTexts["can't play this video"]
+        let said = message.waitForExistence(timeout: 30)
+        evidence(app, "47-feed-cannot-play")
+        XCTAssertTrue(said, "a stream that 404s drew no message")
+        XCTAssertTrue(
+            app.staticTexts["swipe for the next one"].exists,
+            "it did not say what to do about it"
+        )
+    }
+
+    /// **The resume round trip, end to end.**
+    ///
+    /// Watch a few seconds, close the feed, and the video is in "recently
+    /// played" with where it got to. That path crosses everything this batch
+    /// built: the five-second tick and the save on close
+    /// (``VideoFeedModel/tick(positionSec:durationSec:)``), the POST body
+    /// (``VideoPath/saveBody``), the strip's own read, and
+    /// ``VideosModel/feedClosed(on:)`` re-reading it. The stub remembers what
+    /// it was sent, so this is the real thing and not a canned answer.
+    @MainActor
+    func testWatchingSomethingPutsItInTheRecentlyPlayedStrip() throws {
+        let (app, landed) = openVideos()
+        XCTAssertTrue(landed, "the videos list never answered")
+        XCTAssertFalse(
+            app.staticTexts["recently played"].exists,
+            "the strip is there before anything has been watched"
+        )
+
+        app.buttons["a long one.mp4"].firstMatch.tap()
+        XCTAssertTrue(app.staticTexts["1 / 50"].waitForExistence(timeout: 20), "the feed did not open")
+        // Past the five-second floor, so the saved position is one the app
+        // will actually resume from (``FeedRules/resumeFloorSec``).
+        Thread.sleep(forTimeInterval: 8)
+        app.buttons["close"].tap()
+
+        let strip = app.staticTexts["recently played"]
+        let appeared = strip.waitForExistence(timeout: 20)
+        evidence(app, "48-videos-recently-played")
+        XCTAssertTrue(
+            appeared,
+            "watching a video and closing the feed did not put it in the strip"
+        )
+    }
+
+    /// Filtering, and the strip that is not part of a search result.
+    @MainActor
+    func testFilteringNarrowsTheGrid() throws {
+        let (app, landed) = openVideos()
+        XCTAssertTrue(landed, "the videos list never answered")
+
+        let field = app.textFields["filter…"]
+        XCTAssertTrue(field.waitForExistence(timeout: 10), "no filter field")
+        field.tap()
+        field.typeText("portrait")
+
+        let narrowed = app.staticTexts["showing 1 of 1 videos"]
+        let answered = narrowed.waitForExistence(timeout: 20)
+        evidence(app, "49-videos-filtered")
+        XCTAssertTrue(answered, "the filter did not narrow the grid to the one match")
+        XCTAssertTrue(app.staticTexts["USB stick · 1"].exists, "the heading kept a stale count")
+        XCTAssertFalse(
+            app.staticTexts["recently played"].exists,
+            "the strip is drawn over a search result"
+        )
+    }
 }
 
 /// Strings this file matches on, kept together and named so that a change in
@@ -1676,4 +1921,5 @@ private enum ShellStringsUnderTest {
     /// irreversible: a query for this is unambiguous only while the dialog is
     /// shut, which is why the sweep taps it once and never again.
     static let forget = "forget"
+
 }
