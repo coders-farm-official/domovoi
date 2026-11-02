@@ -2613,7 +2613,41 @@ final class StubHouseUITests: XCTestCase {
                 .matching(NSPredicate(format: "label BEGINSWITH %@", ChatStringsUnderTest.archivedPrefix))
                 .firstMatch
             : app.buttons[StubChat.fridge].firstMatch
-        return (app, marker.waitForExistence(timeout: 40))
+        if marker.waitForExistence(timeout: 40) { return (app, true) }
+        // **A lazy list's foot is unbuilt, not off screen** — the trap this
+        // file keeps paying for. At AX5 the shell's own header takes 300pt of
+        // an 852pt window and the phone bar another 146, leaving the list 402;
+        // the list's first cell, the screen's subtitle, is 302 of those. So
+        // the archived entry does not exist until the list is scrolled, and a
+        // case that waited forty seconds for it waited for a thing that was
+        // never going to be built. Measured on a Simulator, 2026-11-02.
+        guard big else { return (app, false) }
+        return (app, scrollUntilBuilt(app, marker))
+    }
+
+    /// Scroll a lazy list until an element is built, and say whether it was.
+    ///
+    /// The list is a `UICollectionView` because Chat's rows need
+    /// `swipeActions`, so this scrolls **the list** rather than the
+    /// application: a swipe on the app can land on the shell's header, which
+    /// does not scroll, and then nothing moves and nothing says so.
+    @MainActor
+    private func scrollUntilBuilt(_ app: XCUIApplication, _ element: XCUIElement, swipes: Int = 8) -> Bool {
+        let list = app.collectionViews.firstMatch
+        guard list.waitForExistence(timeout: 20) else {
+            print("=== NO LIST TO SCROLL — tree follows ===")
+            print(app.debugDescription)
+            return false
+        }
+        for _ in 0..<swipes {
+            if element.exists { return true }
+            list.swipeUp()
+        }
+        if !element.exists {
+            print("=== \(swipes) SWIPES AND STILL UNBUILT — tree follows ===")
+            print(app.debugDescription)
+        }
+        return element.exists
     }
 
     /// A chat row's `•••`, which every row answers to by the same label.
@@ -2759,6 +2793,42 @@ final class StubHouseUITests: XCTestCase {
         return landed
     }
 
+    /// The composer's own send button, told apart from **the keyboard's key**.
+    ///
+    /// `app.buttons["send"].firstMatch` matched two elements once the field
+    /// had focus: this screen's button, and the keyboard's Return key, which
+    /// the composer's `submitLabel(.send)` had relabelled `send`. `firstMatch`
+    /// took the keyboard's. The key put a newline into a multi-line field and
+    /// submitted nothing — `onSubmit` does not fire on a vertical-axis
+    /// `TextField` — so five cases reported "the composer would not send"
+    /// about a composer nothing had asked to send. The app no longer labels
+    /// that key, which removes the collision; this picks by position anyway,
+    /// because what the next keyboard calls its keys is not this file's to
+    /// promise.
+    ///
+    /// Above the keyboard, not merely hittable: a key *is* hittable, and
+    /// `isHittable` would have chosen the wrong one just as happily.
+    @MainActor
+    private func composerSend(_ app: XCUIApplication) -> XCUIElement? {
+        let keyboard = app.keyboards.firstMatch
+        let keyboardTop = keyboard.exists ? keyboard.frame.minY : .greatestFiniteMagnitude
+        let all = app.buttons
+            .matching(NSPredicate(format: "label == %@", ChatStringsUnderTest.send))
+        guard all.firstMatch.waitForExistence(timeout: 10) else {
+            print("=== NO SEND BUTTON — tree follows ===")
+            print(app.debugDescription)
+            return nil
+        }
+        for index in 0..<all.count {
+            let candidate = all.element(boundBy: index)
+            guard candidate.exists else { continue }
+            if candidate.frame.maxY <= keyboardTop { return candidate }
+        }
+        print("=== EVERY 'send' IS INSIDE THE KEYBOARD (top \(keyboardTop)) — tree follows ===")
+        print(app.debugDescription)
+        return nil
+    }
+
     /// Say something in the open conversation and wait for the send to be
     /// taken. Answers whether the composer accepted it.
     @MainActor
@@ -2771,12 +2841,7 @@ final class StubHouseUITests: XCTestCase {
         }
         field.tap()
         app.typeText(words)
-        let send = app.buttons[ChatStringsUnderTest.send].firstMatch
-        guard send.waitForExistence(timeout: 10) else {
-            print("=== NO SEND BUTTON — tree follows ===")
-            print(app.debugDescription)
-            return false
-        }
+        guard let send = composerSend(app) else { return false }
         send.tap()
         // The person's own words land in the transcript before the stream
         // opens (``ChatTranscript/beginSend``), so this is the signal that the

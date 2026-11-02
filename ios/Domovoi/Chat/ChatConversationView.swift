@@ -202,11 +202,19 @@ struct ChatConversationView: View {
         if chat.composerOffered {
             Divider()
             HStack(spacing: 8) {
+                // **No `submitLabel(.send)` and no `onSubmit`.** A
+                // vertical-axis field is a multi-line one, and its Return key
+                // puts in a newline rather than submitting, so `onSubmit`
+                // never fires. Labelling that key `send` made a control that
+                // said one thing and did another: a Simulator run on
+                // 2026-11-02 watched it swallow a whole message, and the only
+                // reason it was caught is that a case reached for the key by
+                // its word and got the keyboard's instead of this view's
+                // button. The key now says `return` and puts in a newline,
+                // which is what it does; the button beside it is what sends.
                 TextField(ChatStrings.composerHint, text: $typed, axis: .vertical)
                     .textFieldStyle(.roundedBorder)
                     .lineLimit(1...5)
-                    .submitLabel(.send)
-                    .onSubmit { send() }
                     .accessibilityLabel(ChatStrings.composerHint)
                 Button(ChatStrings.send) { send() }
                     .buttonStyle(.borderedProminent)
