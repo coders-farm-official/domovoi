@@ -2565,6 +2565,1029 @@ final class StubHouseUITests: XCTestCase {
         wait(for: [answered], timeout: 15)
         XCTAssertEqual(200, code, "the stub did not set its files block")
     }
+
+    // MARK: - Chat
+
+    /// Open Chat and wait for the house's threads.
+    ///
+    /// ### The two pieces of house state this sets BEFORE it launches
+    ///
+    /// The Files pass lost a whole run to the other way round. This class sets
+    /// `continueAfterFailure = false`, so a failed assertion leaves a case by
+    /// an ObjC exception and a `defer` never runs — and the stub process
+    /// outlives every case in the run, so one case's leftover state becomes
+    /// every later case's house. Both of Chat's control routes are therefore
+    /// set here, on every launch, to the state the case wants, and nothing is
+    /// cleaned up afterwards.
+    ///
+    /// **The AI switch has to be set before `launch`** for a second reason as
+    /// well: `features.ai` reaches the app in the capabilities manifest, which
+    /// is read once on start, so flipping it afterwards changes the house and
+    /// not the screen.
+    ///
+    /// ### What it waits for
+    ///
+    /// At `large`, the first thread's own row — it cannot exist until
+    /// `GET /threads` has answered, where the title, the subtitle and the
+    /// search field are all on screen from the first frame. At AX5 the header,
+    /// the subtitle, the search field and `new chat` fill the window and a
+    /// row is not merely off screen but **unbuilt**, so the wait is for the
+    /// `archived · N` entry instead, which is higher up and still needs a read
+    /// (the archived list's) to exist at all.
+    ///
+    /// `aiOff: true` hides Chat altogether — the route's own capability check
+    /// — so `landed` is false by design and that case asserts the note.
+    @MainActor
+    private func openChat(
+        _ mode: String = "large",
+        aiOff: Bool = false,
+        fail: String? = nil,
+        delay: Double? = nil
+    ) -> (app: XCUIApplication, landed: Bool) {
+        setChatAI(on: !aiOff)
+        setChatFail(fail)
+        let app = launch(mode: mode, push: "Chat", pushDelay: delay ?? Self.pushDelay)
+        let big = mode.hasPrefix("UICTContentSizeCategoryAccessibility")
+        let marker = big
+            ? app.descendants(matching: .any)
+                .matching(NSPredicate(format: "label BEGINSWITH %@", ChatStringsUnderTest.archivedPrefix))
+                .firstMatch
+            : app.buttons[StubChat.fridge].firstMatch
+        return (app, marker.waitForExistence(timeout: 40))
+    }
+
+    /// A chat row's `•••`, which every row answers to by the same label.
+    ///
+    /// `chat actions` is Android's own word for the control (`ChatHome.kt:582`)
+    /// and ``ChatStrings`` has no `moreFor`-style string to spell the row into
+    /// it, so the row is the control's **value** and this picks by both. Not
+    /// `firstMatch` on the label: that is whichever row the tree happens to
+    /// hold first, which is the trap `openRowMenu` was written for one screen
+    /// earlier.
+    @MainActor
+    private func openChatRowMenu(_ app: XCUIApplication, _ title: String) -> Bool {
+        let menu = app.buttons
+            .matching(
+                NSPredicate(
+                    format: "label == %@ AND value == %@",
+                    ChatStringsUnderTest.rowActions, title
+                )
+            )
+            .firstMatch
+        guard menu.waitForExistence(timeout: 15) else {
+            // The tree, not a sentence about the element: "the row has no
+            // menu" is a claim about something that is not there, and the
+            // only useful answer is what *is*.
+            print("=== NO CHAT MENU for \(title) — tree follows ===")
+            print(app.debugDescription)
+            return false
+        }
+        menu.tap()
+        return true
+    }
+
+    /// Anything on screen whose label starts with `text`, of any element type.
+    ///
+    /// `.any` rather than `.staticTexts` throughout the Chat cases, because a
+    /// row's words may be merged into the row's button and a bubble's may not
+    /// be — and a query that guessed wrong would report a screen as empty.
+    @MainActor
+    private func startingWith(_ app: XCUIApplication, _ text: String) -> XCUIElement {
+        app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label BEGINSWITH %@", text))
+            .firstMatch
+    }
+
+    @MainActor
+    private func containing(_ app: XCUIApplication, _ text: String) -> XCUIElement {
+        app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label CONTAINS %@", text))
+            .firstMatch
+    }
+
+    /// The composer's field.
+    ///
+    /// Matched by label across every element type on purpose: it is a
+    /// `TextField` with a vertical axis, so that the box grows with the type
+    /// size instead of clipping one line of it — and a vertically-growing
+    /// SwiftUI field does not always report as `.textField` in the query tree.
+    /// A case that asked for `app.textFields[…]` would pass or fail on that
+    /// detail rather than on the composer.
+    @MainActor
+    private func composerField(_ app: XCUIApplication) -> XCUIElement {
+        app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label == %@", ChatStringsUnderTest.composerHint))
+            .firstMatch
+    }
+
+    /// The header's `new chat` control, picked by **position**.
+    ///
+    /// `new chat` is two things at once and Android has the same collision:
+    /// `ChatHome.kt:377` is the header's button and `ChatPlace.kt:56` is what
+    /// the list calls a thread the server has not named — and the stub house
+    /// has one of those on purpose. ``ChatStrings`` has no second word to tell
+    /// them apart, so `firstMatch` would be whichever the tree held first and
+    /// a case that got the row would send its message **into thread 13**,
+    /// renaming one of the house's seven for every later case.
+    ///
+    /// The control is above every row, which is the one thing that is always
+    /// true of it. (The row also carries its age as an accessibility value and
+    /// the control carries none; `value == ""` is not a predicate an
+    /// `XCUIElement` answers reliably, so the frame is what this uses.)
+    @MainActor
+    private func newChatControl(_ app: XCUIApplication) -> XCUIElement? {
+        let all = app.buttons
+            .matching(NSPredicate(format: "label == %@", ChatStringsUnderTest.newChat))
+        guard all.firstMatch.waitForExistence(timeout: 20) else {
+            print("=== NO NEW CHAT CONTROL — tree follows ===")
+            print(app.debugDescription)
+            return nil
+        }
+        var best: XCUIElement?
+        var top = CGFloat.greatestFiniteMagnitude
+        for index in 0..<all.count {
+            let candidate = all.element(boundBy: index)
+            guard candidate.exists else { continue }
+            let minY = candidate.frame.minY
+            if minY < top {
+                top = minY
+                best = candidate
+            }
+        }
+        return best
+    }
+
+    /// Wait for an element to stop existing, which is a thing to assert in its
+    /// own right: a row that was archived has to **leave** the list, and
+    /// `XCUIElement` has no `waitForNonExistence` before iOS 18's.
+    @MainActor
+    private func waitUntilGone(_ element: XCUIElement, timeout: Double = 20) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if !element.exists { return true }
+            usleep(300_000)
+        }
+        return false
+    }
+
+    /// Clear a text field this test has focus in, whatever is in it.
+    ///
+    /// Deletes rather than `Select All`: the edit menu is a long-press away
+    /// and does not always come up on a Simulator under load, and a case that
+    /// silently appended to a seeded name would assert a name nobody could
+    /// explain.
+    @MainActor
+    private func clearField(_ app: XCUIApplication) {
+        app.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 60))
+    }
+
+    /// Open a thread from the list and wait for its transcript.
+    @MainActor
+    private func openThread(_ app: XCUIApplication, _ title: String, waitingFor words: String) -> Bool {
+        let row = app.buttons[title].firstMatch
+        guard row.waitForExistence(timeout: 20) else {
+            print("=== NO CHAT ROW for \(title) — tree follows ===")
+            print(app.debugDescription)
+            return false
+        }
+        row.tap()
+        let landed = startingWith(app, words).waitForExistence(timeout: 25)
+        if !landed {
+            print("=== THREAD \(title) DREW NO TRANSCRIPT — tree follows ===")
+            print(app.debugDescription)
+        }
+        return landed
+    }
+
+    /// Say something in the open conversation and wait for the send to be
+    /// taken. Answers whether the composer accepted it.
+    @MainActor
+    private func say(_ app: XCUIApplication, _ words: String) -> Bool {
+        let field = composerField(app)
+        guard field.waitForExistence(timeout: 20) else {
+            print("=== NO COMPOSER — tree follows ===")
+            print(app.debugDescription)
+            return false
+        }
+        field.tap()
+        app.typeText(words)
+        let send = app.buttons[ChatStringsUnderTest.send].firstMatch
+        guard send.waitForExistence(timeout: 10) else {
+            print("=== NO SEND BUTTON — tree follows ===")
+            print(app.debugDescription)
+            return false
+        }
+        send.tap()
+        // The person's own words land in the transcript before the stream
+        // opens (``ChatTranscript/beginSend``), so this is the signal that the
+        // send was taken rather than refused.
+        return startingWith(app, words).waitForExistence(timeout: 20)
+    }
+
+    /// The list, drawn against the house's seven threads.
+    ///
+    /// Pinned first then newest first, which with no pins on a fresh install
+    /// is the server's order: the fridge thread (seven minutes), the garage
+    /// (an hour and a half), the untitled one, `Help: App`, and the reply that
+    /// failed. The two archived ones are **not** here — they have their own
+    /// view, behind the `archived · 2` row.
+    @MainActor
+    func testChatDrawsTheHousesThreads() throws {
+        let (app, landed) = openChat()
+        evidence(app, "70-chat-list")
+        XCTAssertFalse(fellBackToLocalMedia(in: app), "the shell gave up on the server")
+        XCTAssertTrue(landed, "the thread list never answered")
+
+        XCTAssertTrue(app.buttons[StubChat.garage].exists, "no row for a thread a person named")
+        XCTAssertTrue(app.buttons[StubChat.help].exists, "no row for the help thread")
+        // A thread the server has not named is called `new chat` in the list,
+        // which is also the header button's word — the row is the one with an
+        // age as its accessibility value.
+        XCTAssertTrue(
+            app.buttons
+                .matching(NSPredicate(format: "label == %@", ChatStringsUnderTest.newChat))
+                .count >= 2,
+            "the untitled thread has no row, or the new-chat button is missing"
+        )
+        // The last words under the title.
+        XCTAssertTrue(
+            startingWith(app, StubChat.fridgeSnippet).exists,
+            "a row does not show the thread's last words"
+        )
+        // The archived chats are behind their own row and not in this list.
+        XCTAssertTrue(
+            startingWith(app, ChatStringsUnderTest.archivedPrefix).exists,
+            "the archived entry is missing on the first paint"
+        )
+        XCTAssertFalse(app.buttons[StubChat.kitten].exists, "an archived chat is in the main list")
+
+        // **Nothing about where a chat runs.** One place means a chip saying
+        // so on every row would be furniture; the household fact is said in
+        // the delete confirmation instead.
+        XCTAssertFalse(
+            containing(app, "shared with the household").exists,
+            "a place chip was drawn on a screen with one place"
+        )
+    }
+
+    /// The same screen at the largest accessibility type size.
+    @MainActor
+    func testChatAtTheLargestTypeSize() throws {
+        let (app, landed) = openChat("UICTContentSizeCategoryAccessibilityXXXL")
+        evidence(app, "71-chat-ax5")
+        XCTAssertTrue(landed, "the thread list never answered at AX5")
+    }
+
+    /// A row's menu is **exactly** `actions(for:)`, in that order.
+    ///
+    /// Five items: rename, pin (because nothing is pinned on a fresh install),
+    /// archive (because this row is not archived), share, delete. The two
+    /// complements are asserted absent, which is the half that catches a menu
+    /// built by a view instead of read off the model — and the order is
+    /// asserted by where each item is on screen, because a list of five
+    /// buttons that exist says nothing about the order they were offered in.
+    @MainActor
+    func testARowsMenuIsExactlyWhatTheModelOffers() throws {
+        let (app, landed) = openChat()
+        XCTAssertTrue(landed, "the thread list never answered")
+        XCTAssertTrue(openChatRowMenu(app, StubChat.garage), "the row has no menu")
+        evidence(app, "72-chat-row-menu")
+
+        let wanted = [
+            ChatStringsUnderTest.actionRename,
+            ChatStringsUnderTest.actionPin,
+            ChatStringsUnderTest.actionArchive,
+            ChatStringsUnderTest.actionShare,
+            ChatStringsUnderTest.actionDelete,
+        ]
+        var tops: [CGFloat] = []
+        for label in wanted {
+            let item = app.buttons[label].firstMatch
+            guard item.exists else {
+                return XCTFail("the row's menu does not offer \(label)")
+            }
+            tops.append(item.frame.minY)
+        }
+        XCTAssertEqual(tops, tops.sorted(), "the menu is not in the model's order: \(tops)")
+
+        XCTAssertFalse(
+            app.buttons[ChatStringsUnderTest.actionUnpin].exists,
+            "an unpinned row was offered unpin"
+        )
+        XCTAssertFalse(
+            app.buttons[ChatStringsUnderTest.actionUnarchive].exists,
+            "a row that is not archived was offered move back to chats"
+        )
+        // Nothing Android has that this app cannot do.
+        XCTAssertFalse(app.buttons["report"].exists, "the menu offers a report this app cannot send")
+    }
+
+    /// Renaming a chat, and the list following the server back.
+    ///
+    /// On a thread this case makes for itself rather than one of the house's
+    /// seven: the stub outlives the run, a `PATCH` is permanent, and a case
+    /// that renamed `Who left the garage light on` would leave every later
+    /// case looking for a row that is not there. The one it makes is also the
+    /// proof of two other rules — **nothing is created on the server until the
+    /// first message needs a thread**, and the server names a new thread after
+    /// its first five words.
+    @MainActor
+    func testANewChatIsNamedByItsFirstMessageAndCanBeRenamed() throws {
+        let (app, landed) = openChat()
+        XCTAssertTrue(landed, "the thread list never answered")
+
+        guard let start = newChatControl(app) else {
+            return XCTFail("the header has no new chat control")
+        }
+        start.tap()
+        XCTAssertTrue(say(app, StubChat.firstWordsAsked), "the composer would not send")
+        // The reply settles the thread and the list is read again on the way
+        // out of the conversation.
+        XCTAssertTrue(
+            startingWith(app, StubChat.replyOpening).waitForExistence(timeout: 30),
+            "no reply arrived"
+        )
+        evidence(app, "73-chat-new-thread")
+        app.buttons[ChatStringsUnderTest.backToChats].firstMatch.tap()
+
+        let named = app.buttons[StubChat.firstWords].firstMatch
+        XCTAssertTrue(
+            named.waitForExistence(timeout: 25),
+            "the server named the thread after its first five words and the list did not follow"
+        )
+
+        XCTAssertTrue(openChatRowMenu(app, StubChat.firstWords), "the new thread's row has no menu")
+        app.buttons[ChatStringsUnderTest.actionRename].firstMatch.tap()
+        let field = app.textFields[ChatStringsUnderTest.renameField].firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 15), "the rename sheet never opened")
+        evidence(app, "74-chat-rename-sheet")
+        XCTAssertTrue(
+            app.staticTexts[ChatStringsUnderTest.renameTitle].exists,
+            "the rename sheet has no title"
+        )
+        // The list behind a presented sheet is still in the tree and is no
+        // longer hittable, which is the claim `inSheet` rests on.
+        XCTAssertFalse(
+            app.buttons[StubChat.firstWords].isHittable,
+            "the list behind the rename sheet can still be tapped"
+        )
+        field.tap()
+        // The field is seeded with the row's own title, so it is cleared
+        // before the new name is typed.
+        clearField(app)
+        app.typeText(StubChat.renamed)
+        app.buttons[ChatStringsUnderTest.renameSave].firstMatch.tap()
+
+        XCTAssertTrue(
+            app.buttons[StubChat.renamed].waitForExistence(timeout: 25),
+            "the list does not show the new name"
+        )
+        evidence(app, "75-chat-renamed")
+    }
+
+    /// Archiving from a swipe, the archived view, and the way back.
+    ///
+    /// The swipe's word is deliberately shorter than the menu's — `archive`
+    /// and `move back`, where the menu says `move back to chats` — because a
+    /// swipe has a row's width to fit in.
+    ///
+    /// On a thread this case makes, for ``testANewChatIsNamedByItsFirstMessageAndCanBeRenamed``'s
+    /// reason: archiving one of the house's seven would move it for every
+    /// later case.
+    @MainActor
+    func testArchivingAChatAndTheArchivedViewBehindItsOwnRow() throws {
+        let (app, landed) = openChat()
+        XCTAssertTrue(landed, "the thread list never answered")
+
+        guard let start = newChatControl(app) else {
+            return XCTFail("the header has no new chat control")
+        }
+        start.tap()
+        XCTAssertTrue(say(app, StubChat.archiveMeAsked), "the composer would not send")
+        XCTAssertTrue(
+            startingWith(app, StubChat.replyOpening).waitForExistence(timeout: 30),
+            "no reply arrived"
+        )
+        app.buttons[ChatStringsUnderTest.backToChats].firstMatch.tap()
+
+        let row = app.buttons[StubChat.archiveMe].firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 25), "the new thread never reached the list")
+        row.swipeLeft()
+        let archive = app.buttons[ChatStringsUnderTest.actionArchive].firstMatch
+        XCTAssertTrue(archive.waitForExistence(timeout: 10), "the swipe offered nothing")
+        evidence(app, "76-chat-swipe")
+        archive.tap()
+
+        // **The row leaving the main list** is what this asserts, not the
+        // toast: the toast's whole word is `archived`, which is also the mark
+        // an archived row carries and the archived view's own heading, so a
+        // query for it proves nothing about which of the three is on screen.
+        XCTAssertTrue(
+            waitUntilGone(app.buttons[StubChat.archiveMe].firstMatch),
+            "the archived chat is still in the main list"
+        )
+        let entry = startingWith(app, ChatStringsUnderTest.archivedPrefix)
+        XCTAssertTrue(entry.waitForExistence(timeout: 20), "the archived entry is gone")
+        entry.tap()
+
+        // The way out of the archived view, which only this view draws.
+        let out = app.buttons[ChatStringsUnderTest.backToChats].firstMatch
+        XCTAssertTrue(out.waitForExistence(timeout: 20), "the archived view never opened")
+        evidence(app, "77-chat-archived-view")
+        XCTAssertTrue(
+            app.buttons[StubChat.kitten].waitForExistence(timeout: 20),
+            "the archived view does not list the house's archived chats"
+        )
+        XCTAssertFalse(app.buttons[StubChat.fridge].exists, "a live chat is in the archived view")
+
+        // The swipe's own word in this view, which is the shorter one.
+        app.buttons[StubChat.kitten].firstMatch.swipeLeft()
+        let back = app.buttons[ChatStringsUnderTest.swipeMoveBack].firstMatch
+        XCTAssertTrue(back.waitForExistence(timeout: 10), "the archived view's swipe offered nothing")
+        evidence(app, "78-chat-archived-swipe")
+        // Not tapped: it would move one of the house's own threads for every
+        // later case. The word is what this asserts.
+        app.buttons[StubChat.kitten].firstMatch.swipeRight()
+
+        app.buttons[ChatStringsUnderTest.backToChats].firstMatch.tap()
+        XCTAssertTrue(
+            app.buttons[StubChat.fridge].waitForExistence(timeout: 20),
+            "back to chats did not come back"
+        )
+    }
+
+    /// The delete confirmation says the household sentence.
+    ///
+    /// **Cancelled, never confirmed**: a delete is for the whole house and
+    /// would take a thread out of the stub for every later case. The sentence
+    /// is the thing under test — it is the one place this port says the
+    /// household fact at all, because with one place a chip on every row would
+    /// say it for ever.
+    @MainActor
+    func testDeletesConfirmationSaysItIsTheHouseholdsChat() throws {
+        let (app, landed) = openChat()
+        XCTAssertTrue(landed, "the thread list never answered")
+        XCTAssertTrue(openChatRowMenu(app, StubChat.garage), "the row has no menu")
+        app.buttons[ChatStringsUnderTest.actionDelete].firstMatch.tap()
+
+        let asked = containing(app, ChatStringsUnderTest.serverDeleteNote)
+        let shown = asked.waitForExistence(timeout: 15)
+        evidence(app, "79-chat-delete-ask")
+        XCTAssertTrue(shown, "the confirmation does not say the chat is the household's")
+        XCTAssertTrue(
+            containing(app, "Delete \"\(StubChat.garage)\"?").exists,
+            "the confirmation does not name the chat"
+        )
+        XCTAssertTrue(
+            containing(app, "This can't be undone.").exists,
+            "the confirmation does not say it cannot be undone"
+        )
+        app.buttons[ChatStringsUnderTest.renameCancel].firstMatch.tap()
+        XCTAssertTrue(
+            app.buttons[StubChat.garage].waitForExistence(timeout: 15),
+            "cancelling the confirmation lost the row"
+        )
+    }
+
+    /// The search, which looks in **both halves** of the house.
+    ///
+    /// `?q=` with no `archived` searches the archived threads too
+    /// (`chat.py:235`), so an archived chat can be a hit in the main list —
+    /// and the hits are sorted by date alone rather than run through
+    /// `orderChats`, which would have dropped every archived one. Searching
+    /// for the kitten is that case: the only thread that matches is archived.
+    ///
+    /// The second search is the other half of a row: a match in a thread's
+    /// **words** rather than its title shows the words under the title.
+    @MainActor
+    func testSearchingLooksInTheArchivedChatsTooAndShowsWhatMatched() throws {
+        let (app, landed) = openChat()
+        XCTAssertTrue(landed, "the thread list never answered")
+
+        let field = app.textFields[ChatStringsUnderTest.searchHint].firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 20), "there is no search field")
+        field.tap()
+        app.typeText("kitten")
+        let kitten = app.buttons[StubChat.kitten].firstMatch
+        let found = kitten.waitForExistence(timeout: 25)
+        evidence(app, "80-chat-search-archived")
+        XCTAssertTrue(found, "a search did not find the archived chat that matched")
+        XCTAssertFalse(app.buttons[StubChat.fridge].exists, "a search left the whole list on screen")
+
+        // Something nothing matches, which is the list's own emptiness and not
+        // a blank screen.
+        clearField(app)
+        app.typeText("zzzznothing")
+        XCTAssertTrue(
+            app.staticTexts[ChatStringsUnderTest.noChatsMatch].waitForExistence(timeout: 25),
+            "a search that found nothing does not say so"
+        )
+        evidence(app, "81-chat-search-empty")
+
+        // A match in the words rather than the title: the server sends the
+        // words around it and the row shows them under the title.
+        clearField(app)
+        app.typeText("frittata")
+        let fridge = app.buttons[StubChat.fridge].firstMatch
+        XCTAssertTrue(fridge.waitForExistence(timeout: 25), "a search did not match a thread's words")
+        evidence(app, "82-chat-search-words")
+        XCTAssertTrue(
+            containing(app, "frittata").exists,
+            "the row does not show the words that matched"
+        )
+    }
+
+    /// The conversation: the transcript, and the window divider **where the
+    /// server says**.
+    ///
+    /// Thread 11 has six messages and its last reply's `stats.window_from_id`
+    /// is message 103, so the model was given the last four and the divider
+    /// goes above the third message — not at a fixed row, and not at all for a
+    /// thread where nothing fell out. This asserts the position by frames: the
+    /// divider is below the second message and above the third.
+    @MainActor
+    func testTheConversationDrawsTheWindowDividerWhereTheServerSaysItIs() throws {
+        let (app, landed) = openChat()
+        XCTAssertTrue(landed, "the thread list never answered")
+        XCTAssertTrue(
+            openThread(app, StubChat.fridge, waitingFor: StubChat.secondMessage),
+            "the fridge thread drew no transcript"
+        )
+        evidence(app, "83-chat-conversation")
+
+        // The title row: the list's own title, and the share control.
+        XCTAssertTrue(
+            app.staticTexts[StubChat.fridge].exists,
+            "the conversation's header is not the thread's title"
+        )
+        XCTAssertTrue(
+            app.buttons[ChatStringsUnderTest.actionShare].exists,
+            "a thread that exists on the server is offered no share"
+        )
+        // What a message sent from another device is attributed to. Thread
+        // 11's fifth message carries `device_name: "Kamron's iPhone"`, and
+        // this phone's own id is not that one — so the name is the device's
+        // and not ``ChatStrings/thisPhone``, which is the pair of branches
+        // ``ChatMessage/live(ordinal:thisDeviceID:)`` decides between.
+        XCTAssertTrue(
+            containing(app, StubChat.otherDevice).exists,
+            "a message from another device is not attributed to it"
+        )
+
+        let divider = app.staticTexts[ChatStringsUnderTest.windowNote].firstMatch
+        XCTAssertTrue(divider.exists, "the window divider is not drawn")
+        let second = startingWith(app, StubChat.secondMessage)
+        let third = startingWith(app, StubChat.thirdMessage)
+        guard second.exists, third.exists else {
+            print(app.debugDescription)
+            return XCTFail("the second or third message is not on screen: the divider cannot be placed")
+        }
+        XCTAssertGreaterThan(
+            divider.frame.minY,
+            second.frame.minY,
+            "the divider is above the message the model could still see"
+        )
+        XCTAssertLessThan(
+            divider.frame.maxY,
+            third.frame.maxY,
+            "the divider is below the oldest message the model was given"
+        )
+
+        // "try again" is offered: the last message is a finished, retryable
+        // reply to a question.
+        XCTAssertTrue(
+            app.buttons[ChatStringsUnderTest.actionTryAgain].exists,
+            "a retryable reply is offered no try again"
+        )
+    }
+
+    /// A new chat has nothing to share, and says so by offering nothing.
+    @MainActor
+    func testANewChatWithNoThreadYetIsOfferedNoShare() throws {
+        let (app, landed) = openChat()
+        XCTAssertTrue(landed, "the thread list never answered")
+        app.buttons[ChatStringsUnderTest.newChat].firstMatch.tap()
+        XCTAssertTrue(
+            composerField(app).waitForExistence(timeout: 20),
+            "a new chat has no composer"
+        )
+        evidence(app, "84-chat-new-empty")
+        XCTAssertFalse(
+            app.buttons[ChatStringsUnderTest.actionShare].exists,
+            "a chat with no thread on the server offered a share that would do nothing"
+        )
+        XCTAssertFalse(
+            app.buttons[ChatStringsUnderTest.actionTryAgain].exists,
+            "an empty chat offered try again"
+        )
+    }
+
+    /// **A reply arrives a word at a time.**
+    ///
+    /// The one thing about this screen that cannot be checked by reading it,
+    /// and part 1's own bug was that it could not happen at all. The stub's
+    /// `slow` mode is 1.5 seconds a delta and 7.5 for the whole reply, which
+    /// exists because at 0.6 there was no window: an XCUITest query is not
+    /// instant, and this has to read the reply **twice** and compare.
+    ///
+    /// It asserts growth and never a total: how much has arrived by the second
+    /// read is a race, and the thing under test is that it is more.
+    @MainActor
+    func testAReplyArrivesAWordAtATime() throws {
+        let (app, landed) = openChat(fail: "slow")
+        XCTAssertTrue(landed, "the thread list never answered")
+        XCTAssertTrue(
+            openThread(app, StubChat.garage, waitingFor: StubChat.garageSnippet),
+            "the garage thread drew no transcript"
+        )
+        XCTAssertTrue(say(app, "slowly now"), "the composer would not send")
+
+        let live = startingWith(app, StubChat.replyOpening)
+        XCTAssertTrue(live.waitForExistence(timeout: 25), "the first words of the reply never arrived")
+        let first = live.label
+        evidence(app, "85-chat-reply-growing")
+        usleep(3_500_000)
+        let second = live.label
+        print("CHAT STREAM first=\(first.count) second=\(second.count)")
+        evidence(app, "86-chat-reply-grown")
+        XCTAssertGreaterThan(
+            second.count,
+            first.count,
+            "the reply did not grow: \(first.count) then \(second.count) characters"
+        )
+        XCTAssertTrue(second.hasPrefix(first), "the reply was rewritten rather than added to")
+
+        // And it settles: the `done` row replaces the stream's guess, so the
+        // whole reply is there and the composer is live again.
+        XCTAssertTrue(
+            containing(app, StubChat.replyEnding).waitForExistence(timeout: 30),
+            "the reply never finished"
+        )
+        evidence(app, "87-chat-reply-done")
+    }
+
+    /// A model that died with the reply half written: **what arrived stays**,
+    /// and what went wrong is said under it.
+    ///
+    /// `mid-stream` clears itself after one use in the stub, because the state
+    /// a test wants is one broken reply and not a broken house.
+    @MainActor
+    func testAMidStreamFailureKeepsWhatArrivedAndSaysWhatWentWrong() throws {
+        let (app, landed) = openChat(fail: "mid-stream")
+        XCTAssertTrue(landed, "the thread list never answered")
+        XCTAssertTrue(
+            openThread(app, StubChat.garage, waitingFor: StubChat.garageSnippet),
+            "the garage thread drew no transcript"
+        )
+        XCTAssertTrue(say(app, "break halfway"), "the composer would not send")
+
+        let why = containing(app, StubChat.midStreamError)
+        let said = why.waitForExistence(timeout: 30)
+        evidence(app, "88-chat-mid-stream")
+        XCTAssertTrue(said, "a reply that failed halfway says nothing about why")
+        let kept = startingWith(app, StubChat.replyOpening)
+        XCTAssertTrue(kept.exists, "the words that did arrive were thrown away")
+        XCTAssertGreaterThan(
+            why.frame.minY,
+            kept.frame.minY,
+            "the reason is not under the words it belongs to"
+        )
+    }
+
+    /// A reply that failed for want of the vision model says why, in the
+    /// server's terms rather than a code.
+    ///
+    /// Thread 15 is that reply, already in the house: `error` with
+    /// `stats.error_code = vision_model_missing`. There is no paperclip in
+    /// this app, which is why the sentence still matters — the picture came
+    /// from the dashboard or from Android, and the refusal is the honest half
+    /// of a feature this phone does not have.
+    @MainActor
+    func testTheFailedReplyShowsTheVisionSentenceAndNotACode() throws {
+        let (app, landed) = openChat()
+        XCTAssertTrue(landed, "the thread list never answered")
+        XCTAssertTrue(
+            openThread(app, StubChat.failedThread, waitingFor: StubChat.visionAsked),
+            "the failed thread drew no transcript"
+        )
+        evidence(app, "89-chat-vision-refusal")
+        XCTAssertTrue(
+            containing(app, StubChat.visionSentence).exists,
+            "the failed reply does not say why pictures could not be read"
+        )
+        XCTAssertFalse(
+            containing(app, "vision_model_missing").exists,
+            "the screen shows the server's code instead of its sentence"
+        )
+        // Settings → Models is named **in the sentence** and nothing links
+        // there: this app has no Models panel to send anybody to, and a
+        // control that cannot do what it says is not drawn.
+        XCTAssertFalse(
+            app.buttons["Models"].exists,
+            "the error offers a hand-off to a panel this app has not built"
+        )
+    }
+
+    /// The household's AI switch off: the server's own sentence, and **no
+    /// composer anywhere**.
+    ///
+    /// The switch is set before `launch` because `features.ai` arrives in the
+    /// capabilities manifest, which is read once on start. With it off the
+    /// route's own check is what answers — Chat is not a screen this house
+    /// offers — so the note is the shell's and the sentence is the one
+    /// `ShellStrings.unavailableNote` words for a chat that is turned off.
+    ///
+    /// ### What this case rests on, said out loud
+    ///
+    /// The seeded push appends the route whatever the capabilities say
+    /// (`ShellNavigation.go`), and `capabilitiesChanged` empties the path when
+    /// the route on screen has become invisible. So a **second** capabilities
+    /// read landing after the push would take this screen away and the case
+    /// would fail with an empty stack rather than a wrong sentence. If that is
+    /// what the screenshot shows, the app is right and this case needs the
+    /// push removed and the phone bar's missing Chat tab asserted instead.
+    ///
+    /// ``ChatModel/aiOffNote`` — the switch thrown while the screen is
+    /// *already open* — has no route into it from here at all, because the
+    /// manifest is read once on start. It is on the Simulator list in the
+    /// report instead.
+    @MainActor
+    func testAHouseWithItsAiSwitchOffSaysSoAndOffersNoComposer() throws {
+        let (app, _) = openChat(aiOff: true)
+        let note = app.staticTexts[ChatStringsUnderTest.aiOffTitle].firstMatch
+        let shown = note.waitForExistence(timeout: 30)
+        evidence(app, "90-chat-ai-off")
+        XCTAssertTrue(shown, "a house with AI off does not say so where Chat would be")
+        XCTAssertTrue(
+            app.staticTexts[ChatStringsUnderTest.aiOffDetail].exists,
+            "the note does not say why"
+        )
+        XCTAssertFalse(composerField(app).exists, "a house with AI off drew a composer")
+        XCTAssertFalse(
+            app.buttons[ChatStringsUnderTest.send].exists,
+            "a house with AI off drew a send button"
+        )
+        XCTAssertFalse(app.buttons[StubChat.fridge].exists, "a house with AI off listed its chats")
+    }
+
+    /// A send the server refuses because the household's AI switch went off:
+    /// the refusal goes where the reply would have been, worded as the server
+    /// words it and never as `409 Conflict`.
+    ///
+    /// This is the other side of the case above, and the only one of the two a
+    /// Simulator can reach with the screen already open: `chat-fail` refuses
+    /// the **send** while the capabilities manifest the app read still says
+    /// AI is on.
+    @MainActor
+    func testASendRefusedForTheAiSwitchSaysTheServersSentence() throws {
+        let (app, landed) = openChat(fail: "ai-off")
+        XCTAssertTrue(landed, "the thread list never answered")
+        XCTAssertTrue(
+            openThread(app, StubChat.garage, waitingFor: StubChat.garageSnippet),
+            "the garage thread drew no transcript"
+        )
+        XCTAssertTrue(say(app, "is anyone there"), "the composer would not send")
+
+        let refusal = containing(app, ChatStringsUnderTest.aiChatOffText)
+        let said = refusal.waitForExistence(timeout: 30)
+        evidence(app, "91-chat-send-refused")
+        XCTAssertTrue(said, "a send refused for the AI switch does not say what the server said")
+        XCTAssertFalse(containing(app, "409").exists, "the screen shows a status code")
+    }
+
+    /// Apple's audit over the Chat list.
+    @MainActor
+    @available(iOS 17.0, *)
+    func testTheChatListAudits() throws {
+        let (app, landed) = openChat()
+        XCTAssertTrue(landed, "the thread list never answered")
+        let found = try auditIssues(app, "chat-list")
+        evidence(app, "92-chat-audited")
+        let (floor, rest) = Self.floorAndRest(found)
+        print("CHAT AUDIT floor=\(floor) rest=\(rest.count)")
+        for line in rest { print("CHAT AUDIT REST :: \(line)") }
+
+        // **A named Dynamic Type finding is not a defect by virtue of being
+        // named**, which the Videos grid forced on this file and the Files
+        // list repeated: the leaves here are `.title2`, `.subheadline`,
+        // `.caption` and `.footnote`, nothing fixed, and
+        // ``testTheChatListTextGrowsAtAX5`` measures them. Anything else is
+        // this screen's own finding to fix.
+        let unexplained = rest.filter { !$0.hasPrefix("Dynamic Type font sizes") }
+        XCTAssertEqual([], unexplained, "the Chat list has an audit finding of its own")
+        XCTAssertEqual(0, floor, "an anonymous finding appeared on the Chat list")
+    }
+
+    /// The leaves this screen draws, measured at `large` and at AX5.
+    ///
+    /// **Growth, never a total**: the floor is pinned by signature elsewhere
+    /// in this file and a total is what let a new finding in unnoticed. A leaf
+    /// that is not on screen at one size is skipped rather than failed, and
+    /// the case fails if too few could be compared to mean anything.
+    ///
+    /// The glyph columns are the reason this exists at all. A fixed
+    /// `frame(width:)` on a scaling glyph draws the icon across the words
+    /// beside it at AX5 — it shipped in ``FileRowView``, the audit named a
+    /// different element and the element tree carries no image, so the only
+    /// evidence was a photograph. Every glyph width in `ios/Domovoi/Chat/` is
+    /// a ``ScaledMetric``, and the screenshots this case keeps are how that is
+    /// checked.
+    @MainActor
+    func testTheChatListTextGrowsAtAX5() throws {
+        func heights(_ app: XCUIApplication) -> [String: CGFloat] {
+            var out: [String: CGFloat] = [:]
+            for (leaf, predicate) in [
+                ("subtitle", "label BEGINSWITH 'text chat with Domovoi'"),
+                ("new-chat", "label == 'new chat'"),
+                ("archived-entry", "label BEGINSWITH 'archived · '"),
+                ("row-title", "label == 'Who left the garage light on'"),
+                ("row-snippet", "label BEGINSWITH 'Nobody has opened it'"),
+            ] {
+                let found = app.descendants(matching: .any)
+                    .matching(NSPredicate(format: predicate))
+                    .firstMatch
+                if found.exists { out[leaf] = found.frame.height }
+            }
+            return out
+        }
+
+        var measured: [String: [String: CGFloat]] = [:]
+        for (label, mode) in [
+            ("large", "large"),
+            ("AX5", "UICTContentSizeCategoryAccessibilityXXXL"),
+        ] {
+            let (app, landed) = openChat(mode)
+            XCTAssertTrue(landed, "the thread list never answered at \(label)")
+            // At AX5 the header, the subtitle, the search field and the
+            // new-chat row fill the window, so the rows are not merely off
+            // screen but unbuilt. Scroll until one exists; a leaf still
+            // missing is skipped, not failed.
+            for _ in 0..<6 where !app.descendants(matching: .any)
+                .matching(NSPredicate(format: "label == 'Who left the garage light on'"))
+                .firstMatch.exists {
+                app.swipeUp()
+            }
+            usleep(1_000_000)
+            evidence(app, "93-chat-scale-\(label)")
+            measured[label] = heights(app)
+            for (leaf, height) in heights(app).sorted(by: { $0.key < $1.key }) {
+                print("CHAT SCALE [\(label)] \(leaf) height=\(height)")
+            }
+            app.terminate()
+        }
+
+        let small = measured["large"] ?? [:]
+        let big = measured["AX5"] ?? [:]
+        var compared = 0
+        var stuck: [String] = []
+        for (leaf, height) in small.sorted(by: { $0.key < $1.key }) {
+            guard let grown = big[leaf] else { continue }
+            compared += 1
+            if grown < height * 1.8 { stuck.append("\(leaf) \(height)->\(grown)") }
+        }
+        XCTAssertEqual([], stuck, "a leaf on the Chat list does not scale")
+        XCTAssertGreaterThanOrEqual(
+            compared,
+            2,
+            "nothing could be compared, so this proved nothing: \(small) / \(big)"
+        )
+    }
+
+    /// The household's AI switch, from the test process.
+    ///
+    /// ``clearWatched`` says why the test process can reach the stub at all.
+    @MainActor
+    private func setChatAI(on: Bool, port: Int = 6601) {
+        control("chat-ai", "{\"on\":\(on)}", port: port, what: "the household AI switch")
+    }
+
+    /// What the next send does instead of answering: nil, `"ai-off"`,
+    /// `"mid-stream"` or `"slow"`.
+    @MainActor
+    private func setChatFail(_ how: String?, port: Int = 6601) {
+        let body = how.map { "{\"how\":\"\($0)\"}" } ?? "{\"how\":null}"
+        control("chat-fail", body, port: port, what: "how the next send fails")
+    }
+
+    @MainActor
+    private func control(_ route: String, _ body: String, port: Int, what: String) {
+        var request = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/api/_test/\(route)")!)
+        request.httpMethod = "POST"
+        request.setValue(Self.token, forHTTPHeaderField: "X-Device-Token")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = Data(body.utf8)
+        let answered = expectation(description: "the stub set \(what)")
+        var code = -1
+        URLSession.shared.dataTask(with: request) { _, response, _ in
+            code = (response as? HTTPURLResponse)?.statusCode ?? -1
+            answered.fulfill()
+        }.resume()
+        wait(for: [answered], timeout: 15)
+        XCTAssertEqual(200, code, "the stub did not set \(what)")
+    }
+}
+
+/// What the stub house's chat half holds, by the words that appear on screen.
+///
+/// Spelt out here rather than imported, like every other string this file
+/// matches on: a query that silently followed a renamed constant would stop
+/// testing what it claims to. These are the stub's own
+/// (`design-notes/ios/stubhouse/stubhouse.py`, `CHAT_THREADS` and
+/// `CHAT_MESSAGES`), not the app's.
+private enum StubChat {
+    /// Thread 11: six messages, and the one whose `stats.window_from_id`
+    /// puts the divider in a true place.
+    static let fridge = "What can I cook with what's in the fridge?"
+    static let fridgeSnippet = "...so that is a frittata"
+    static let secondMessage = "Tell me what you have and I will work with it."
+    static let thirdMessage = "Six eggs, half an onion"
+
+    /// Thread 12, named by a person, and the shortest transcript that still
+    /// has a reply to retry.
+    static let garage = "Who left the garage light on"
+    static let garageSnippet = "Nobody has opened it since Tuesday."
+
+    /// Thread 14, the help desk.
+    static let help = "Help: App"
+
+    /// Thread 15: a reply that failed for want of the vision model.
+    static let failedThread = "A reply that went wrong"
+    static let visionAsked = "Describe this photograph for me."
+    /// The **app's** wording for that code, which is what must be on screen
+    /// instead of the code itself.
+    static let visionSentence = "Pictures need the vision model llava:7b"
+
+    /// Thread 11's fifth message came from another phone, which the house has
+    /// a name for.
+    static let otherDevice = "Kamron's iPhone"
+
+    /// The two archived threads.
+    static let kitten = "Names for the kitten"
+
+    /// The stub's streamed reply, first words and last.
+    static let replyOpening = "Let me think about that."
+    static let replyEnding = "once the oven is free."
+
+    /// `chat-fail mid-stream`'s own sentence.
+    static let midStreamError = "the model ran out of memory"
+
+    /// What a new chat is asked, and the five words the server then names the
+    /// thread after. Different per case, because the stub outlives the run and
+    /// two cases must not make rows with one name.
+    static let firstWordsAsked = "Name this thread for me please, server"
+    static let firstWords = "Name this thread for me"
+    static let renamed = "A name a person chose"
+
+    static let archiveMeAsked = "Archive this one for the test, please"
+    static let archiveMe = "Archive this one for the"
+}
+
+/// The Chat screen's own words, from ``ChatStrings`` and ``ShellStrings``.
+private enum ChatStringsUnderTest {
+    static let newChat = "new chat"
+    static let searchHint = "search chats"
+    static let composerHint = "Message Domovoi…"
+    static let send = "send"
+    static let rowActions = "chat actions"
+    static let noChatsMatch = "no chats match"
+
+    static let archived = "archived"
+    static let archivedToast = "archived"
+    /// ``ChatStrings/archivedLabel(_:)`` — U+00B7 with a space each side. The
+    /// count moves as cases archive things, so it is matched as a prefix.
+    static let archivedPrefix = "archived · "
+    static let backToChats = "back to chats"
+
+    static let actionRename = "rename"
+    static let actionPin = "pin"
+    static let actionUnpin = "unpin"
+    static let actionArchive = "archive"
+    static let actionUnarchive = "move back to chats"
+    static let actionShare = "share"
+    static let actionDelete = "delete"
+    static let actionTryAgain = "try again"
+    /// Deliberately shorter than ``actionUnarchive``: a swipe has a row's
+    /// width to fit in.
+    static let swipeMoveBack = "move back"
+
+    static let renameTitle = "rename chat"
+    static let renameField = "name"
+    static let renameSave = "save"
+    /// Also the delete confirmation's cancel: one word, one constant.
+    static let renameCancel = "cancel"
+
+    static let serverDeleteNote = "Deletes it for everyone in the house."
+    static let windowNote = "earlier messages are beyond what Domovoi can keep in mind"
+    static let thisPhone = "this phone"
+
+    /// ``ShellStrings/unavailableNote(label:isChat:aiEnabled:)`` for a house
+    /// whose AI features are off, which is what the **route** answers with
+    /// before Chat is a screen at all.
+    static let aiOffTitle = "chat is turned off"
+    static let aiOffDetail = "this server has its AI features turned off"
+
+    /// ``aiChatOffText`` — what a person reads instead of "409 Conflict".
+    static let aiChatOffText = "AI chat is turned off on your home server"
 }
 
 /// Strings this file matches on, kept together and named so that a change in

@@ -212,6 +212,26 @@ public final class ChatModel {
         ChatRules.withPins(rows, pins: pinKeys, server: server)
     }
 
+    /// How old a row is, in words (`ChatHome.kt:613`'s `relTime`).
+    ///
+    /// Here rather than in the row's view, for ``HomeAttentionView``'s reason:
+    /// **a view that reads the wall clock itself cannot be driven to a
+    /// boundary by a test**, and the row times would drift from the rest of
+    /// the screen's. ``ChatRules/row(_:)`` deliberately does not take a clock
+    /// — the row keeps `updatedMs` and the *wording* of an age is
+    /// ``relTimeMs(_:nowMs:)``'s — and this is the one place that passes it
+    /// one, which is the clock `init` already takes.
+    ///
+    /// It is also the reader that clock did not have. It was stored by part 1
+    /// and read by nothing, which on this project is a bug rather than a seam
+    /// ([[reasoning-that-hides-a-bug]]: grep the call site before saying a
+    /// value is used).
+    ///
+    /// No ``houseEpoch`` here, and none needed: there is no `await` in it.
+    public func timeText(_ row: ChatRow) -> String {
+        relTimeMs(row.updatedMs == 0 ? nil : row.updatedMs, nowMs: nowMs())
+    }
+
     /// Whether a search is what is on screen (`ChatHome.kt:355`).
     public var searching: Bool { !filter.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
