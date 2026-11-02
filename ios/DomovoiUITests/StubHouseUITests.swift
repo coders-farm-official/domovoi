@@ -2315,6 +2315,13 @@ final class StubHouseUITests: XCTestCase {
     }
 
     /// Moving a file: the destination picker, and what the toast says.
+    ///
+    /// The picker opens **in the folder the file is already in**, where the
+    /// button does not say "move here" at all — it carries the refusal in the
+    /// button's place (`FileMoveModel.actionLabel`), so that a disabled button
+    /// is never unexplained. Waiting for "move here" to decide the sheet had
+    /// opened was a round wasted on a screen doing the right thing; the wait
+    /// is for the sheet's own title now, and the refusal is a thing to assert.
     @MainActor
     func testMovingAFileSaysWhatHappened() throws {
         let (app, landed) = openFiles()
@@ -2322,9 +2329,20 @@ final class StubHouseUITests: XCTestCase {
 
         XCTAssertTrue(openRowMenu(app, "track 00.mp3"), "the row has no menu")
         app.buttons["move"].firstMatch.tap()
-        let here = app.buttons["move here"]
-        XCTAssertTrue(here.waitForExistence(timeout: 20), "the move sheet never opened")
+        // The refusal is the marker: it is the sheet's own button, it exists
+        // from the first frame, and the picture is taken before anything is
+        // asserted about it.
+        let refusal = app.buttons["already in this folder"]
+        let opened = refusal.waitForExistence(timeout: 20)
         evidence(app, "59-files-move-sheet")
+        XCTAssertTrue(opened, "the move sheet never opened")
+        XCTAssertTrue(
+            app.staticTexts["move \"track 00.mp3\" to…"].exists,
+            "the sheet does not say which file it is moving"
+        )
+        let here = app.buttons["move here"]
+        XCTAssertFalse(here.exists, "the starting folder offered to move the file where it is")
+
         // Into a subfolder of the library the file is already in, which is
         // where the picker starts.
         app.buttons["Albums"].firstMatch.tap()
@@ -2354,8 +2372,11 @@ final class StubHouseUITests: XCTestCase {
         evidence(app, "61-files-import-sheet")
         music.tap()
 
+        // `"imported 1 item"` — the server's own count, and **not** the word
+        // "copied", which is what this test waited for at first. The screen
+        // said what it does and the test was looking for a synonym.
         let toast = app.descendants(matching: .staticText)
-            .matching(NSPredicate(format: "label CONTAINS %@", "copied"))
+            .matching(NSPredicate(format: "label BEGINSWITH %@", "imported "))
             .firstMatch
         XCTAssertTrue(toast.waitForExistence(timeout: 20), "nothing was said about the import")
         evidence(app, "62-files-imported")
