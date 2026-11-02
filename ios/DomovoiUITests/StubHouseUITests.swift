@@ -1606,6 +1606,21 @@ final class StubHouseUITests: XCTestCase {
     /// is the thing to wait on: it appears only once the list has answered
     /// (``VideosModel/countText`` is nil before that), which makes it the one
     /// signal that means "the page landed" rather than "the screen exists".
+    ///
+    /// ### Why the predicate is `BEGINSWITH "showing "` and not `videos`
+    ///
+    /// The first version of this waited on any text **containing** "videos",
+    /// and it came back satisfied in five seconds — seven seconds before the
+    /// push was due. What it had found was the phone bar's own `videos` tab
+    /// label, which is on screen from the first frame of Home. So `landed`
+    /// said yes about a screen the test had never reached, the screenshot was
+    /// of Home, and the only thing that failed was the count assertion
+    /// underneath, which read as "the numbers are wrong" rather than "this is
+    /// the wrong screen". A landing check has to match something that cannot
+    /// exist until the thing has landed; "showing " is that, because
+    /// ``Pager/countText(shown:total:noun:)`` is the only place in the app
+    /// that writes it and ``VideosModel/countText`` is nil until the list has
+    /// answered.
     @MainActor
     private func openVideos(
         _ mode: String = "large",
@@ -1613,7 +1628,7 @@ final class StubHouseUITests: XCTestCase {
     ) -> (app: XCUIApplication, landed: Bool) {
         let app = launch(mode: mode, push: "Videos", pushDelay: delay ?? Self.pushDelay)
         let count = app.descendants(matching: .staticText)
-            .matching(NSPredicate(format: "label CONTAINS %@", "videos"))
+            .matching(NSPredicate(format: "label BEGINSWITH %@", "showing "))
             .firstMatch
         return (app, count.waitForExistence(timeout: 40))
     }
