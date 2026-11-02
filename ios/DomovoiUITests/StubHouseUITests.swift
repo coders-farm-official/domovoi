@@ -3010,7 +3010,16 @@ final class StubHouseUITests: XCTestCase {
             app.buttons[StubChat.firstWords].isHittable,
             "the list behind the rename sheet can still be tapped"
         )
-        field.tap()
+        // **Tapped past the end of the words, not in the middle of them.**
+        // `field.tap()` taps the centre, and a tap on a text field puts the
+        // caret where it landed — in the middle of `Name this thread for me`,
+        // which is what the field is seeded with. Sixty backspaces then
+        // deleted what was to the *left* of the caret and the typing went in
+        // at the same place, so the house was asked for
+        // `A name a person choseme` and said so in its log (2026-11-02).
+        // Nothing on screen showed the leftover: the field is one line wide
+        // and the tail sat past the caret.
+        field.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
         // The field is seeded with the row's own title, so it is cleared
         // before the new name is typed.
         clearField(app)
@@ -3061,11 +3070,21 @@ final class StubHouseUITests: XCTestCase {
             .containing(NSPredicate(format: "label == %@", StubChat.archiveMe))
             .firstMatch
         XCTAssertTrue(cell.waitForExistence(timeout: 15), "the new thread's row has no cell")
-        cell.swipeLeft()
+        // **A held drag, not `swipeLeft()`.** `swipeLeft` on the cell revealed
+        // nothing on 2026-11-02 and the `print(app.debugDescription)` under it
+        // came back as a bare `Query chain:` with no subtree, so the run said
+        // only that the button was absent. A press-and-drag across the row,
+        // held long enough to read as a pan rather than a flick, is the
+        // gesture a `List`'s swipe actions actually answer to.
+        let grab = cell.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5))
+        let pull = cell.coordinate(withNormalizedOffset: CGVector(dx: 0.1, dy: 0.5))
+        grab.press(forDuration: 0.2, thenDragTo: pull)
         let archive = app.buttons[ChatStringsUnderTest.actionArchive].firstMatch
         if !archive.waitForExistence(timeout: 10) {
-            print("=== SWIPE REVEALED NOTHING — tree follows ===")
-            print(app.debugDescription)
+            // `evidence` and not a `print`: it attaches the tree as a file and
+            // takes a picture, and a picture is the only thing that will say
+            // whether the row moved at all.
+            evidence(app, "76-chat-swipe-revealed-nothing")
         }
         XCTAssertTrue(archive.exists, "the swipe offered nothing")
         evidence(app, "76-chat-swipe")
@@ -3487,15 +3506,26 @@ final class StubHouseUITests: XCTestCase {
     /// checked.
     @MainActor
     func testTheChatListTextGrowsAtAX5() throws {
+        // The five leaves **in the order the list draws them**, which is what
+        // lets this scroll to each in turn: a lazy list only builds what is
+        // near the viewport, and at AX5 the subtitle alone is 302pt of a 402pt
+        // one, so a single scroll position can never hold all five.
+        //
+        // The first attempt scrolled once, to the garage row, and measured
+        // whatever happened to be built there. At AX5 that was two leaves out
+        // of five, and the three it missed included `archived · 2` — the one
+        // leaf the audit names and the only one a measurement was needed for.
+        let leaves = [
+            ("subtitle", "label BEGINSWITH 'text chat with Domovoi'"),
+            ("new-chat", "label == 'new chat'"),
+            ("archived-entry", "label BEGINSWITH 'archived · '"),
+            ("row-title", "label == 'Who left the garage light on'"),
+            ("row-snippet", "label BEGINSWITH 'Nobody has opened it'"),
+        ]
+
         func heights(_ app: XCUIApplication) -> [String: CGFloat] {
             var out: [String: CGFloat] = [:]
-            for (leaf, predicate) in [
-                ("subtitle", "label BEGINSWITH 'text chat with Domovoi'"),
-                ("new-chat", "label == 'new chat'"),
-                ("archived-entry", "label BEGINSWITH 'archived · '"),
-                ("row-title", "label == 'Who left the garage light on'"),
-                ("row-snippet", "label BEGINSWITH 'Nobody has opened it'"),
-            ] {
+            for (leaf, predicate) in leaves {
                 // **staticTexts, not .any.** A row's words sit inside a button
                 // carrying the same label, and .any measured the button:
                 // `archived · 2` came back as 66.0 at the ordinary size, which
@@ -3506,6 +3536,10 @@ final class StubHouseUITests: XCTestCase {
                 let found = app.staticTexts
                     .matching(NSPredicate(format: predicate))
                     .firstMatch
+                // Scrolling down the list in its own order, so each leaf is
+                // reached without having to come back up for an earlier one.
+                // A leaf that cannot be built at all is skipped, not failed.
+                if !found.exists { _ = scrollUntilBuilt(app, found, drags: 10) }
                 if found.exists { out[leaf] = found.frame.height }
             }
             return out
@@ -3518,25 +3552,18 @@ final class StubHouseUITests: XCTestCase {
         ] {
             let (app, landed) = openChat(mode)
             XCTAssertTrue(landed, "the thread list never answered at \(label)")
-            // At AX5 the header, the subtitle, the search field and the
-            // new-chat row fill the window, so the rows are not merely off
-            // screen but unbuilt. Scroll until one exists; a leaf still
-            // missing is skipped, not failed.
-            //
-            // ``scrollUntilBuilt(_:_:drags:)`` rather than a loop of
-            // `app.swipeUp()`: a swipe on the *application* can land on the
-            // shell's header, which does not scroll, and a flick steps over a
-            // short cell without ever building it.
-            _ = scrollUntilBuilt(
-                app,
-                app.staticTexts
-                    .matching(NSPredicate(format: "label == 'Who left the garage light on'"))
-                    .firstMatch
-            )
+            // Photograph the **first paint**, before any scrolling: the
+            // picture is the only thing that catches a glyph drawn across the
+            // words beside it, and the top of the list is where that shows.
             usleep(1_000_000)
             evidence(app, "93-chat-scale-\(label)")
-            measured[label] = heights(app)
-            for (leaf, height) in heights(app).sorted(by: { $0.key < $1.key }) {
+            // `heights` scrolls as it goes, so it is called **once** and the
+            // answer is kept. Calling it twice — once to store and once to
+            // print — would have had the second call start from wherever the
+            // first one finished.
+            let seen = heights(app)
+            measured[label] = seen
+            for (leaf, height) in seen.sorted(by: { $0.key < $1.key }) {
                 print("CHAT SCALE [\(label)] \(leaf) height=\(height)")
             }
             app.terminate()
