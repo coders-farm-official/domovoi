@@ -437,7 +437,7 @@ final class FileSaveAndViewTests: XCTestCase {
         await settleUntil({ !model.loading }, "the root")
 
         model.into(try XCTUnwrap(model.folders.first))
-        await settleUntil({ model.targetPath == "Albums" }, "Albums")
+        await settleUntil({ model.targetPath == "Albums" && !model.loading }, "Albums")
         XCTAssertEqual(["Albums"], model.trail)
         XCTAssertTrue(model.isEmptyHere)
 

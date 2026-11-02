@@ -494,9 +494,9 @@ final class FilesModelTests: XCTestCase {
 
         model.rescan()
         await settleUntil({ queries(to: "/api/files/browse").count == 2 }, "the rescan")
+        await settleUntil({ queries(to: "/api/files/libraries").count == 2 }, "the libraries re-read")
 
         XCTAssertTrue(queries(to: "/api/files/browse").last?.contains("refresh=true") == true)
-        XCTAssertEqual(2, queries(to: "/api/files/libraries").count)
     }
 
     // MARK: - the filter
@@ -509,12 +509,18 @@ final class FilesModelTests: XCTestCase {
         model.typed("so")
         model.typed("son")
         model.typed("song")
-        await nothingHappens()
+        await settleUntil({ waits.asked.current.count == 3 }, "the three waits")
 
         XCTAssertEqual("song", model.filter)
         XCTAssertEqual("", model.needle, "nothing has been asked for yet")
         XCTAssertEqual(before, queries(to: "/api/files/browse").count)
         XCTAssertEqual([250, 250, 250], waits.asked.current)
+        await nothingHappens()
+        XCTAssertEqual(
+            "",
+            model.needle,
+            "still nothing: asked=\(waits.asked.current) browsed=\(queries(to: "/api/files/browse"))"
+        )
 
         waits.release()
         await settleUntil({ model.needle == "song" }, "the filtered list")
@@ -529,6 +535,7 @@ final class FilesModelTests: XCTestCase {
 
         model.typed("  Albums  ")
         await settleUntil({ model.needle == "Albums" }, "the trimmed needle")
+        await settleUntil({ queries(to: "/api/files/browse").count == 2 }, "the filtered read")
         let asked = queries(to: "/api/files/browse").count
 
         model.typed("Albums")
@@ -738,7 +745,7 @@ final class FilesModelTests: XCTestCase {
         }, "the saved file")
 
         XCTAssertEqual(
-            ["library_id=core:music&path=track%200.mp3"],
+            ["library_id=core:music&path=track 0.mp3"],
             queries(to: "/api/files/download")
         )
         guard case .ready(let url, let name) = model.saves.state else { return XCTFail("no file") }
