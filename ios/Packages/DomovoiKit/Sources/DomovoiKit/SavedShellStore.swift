@@ -23,18 +23,32 @@ public protocol SavedState: Sendable {
 /// ``DeviceIdentity/UserDefaultsStore`` is and for the same reason.
 public struct UserDefaultsSavedState: SavedState, @unchecked Sendable {
 
-    /// The key. Named after the app so a shared suite could never collide,
-    /// as ``DeviceIdentity/UserDefaultsStore/key`` is.
+    /// The shell's key. Named after the app so a shared suite could never
+    /// collide, as ``DeviceIdentity/UserDefaultsStore/key`` is.
     public static let key = "domovoi.shell"
 
-    private let defaults: UserDefaults
+    /// Chat's pins, which are **this phone's** and not the household's
+    /// (``ChatPinBook``).
+    ///
+    /// A second key under the same prefix rather than a field in the shell's
+    /// blob: the shell's blob is one write of the server, the trust and the
+    /// pins, and a chat pin has nothing to do with any of them — a tap on a
+    /// pin rewriting the trust book is how a half-applied write comes to trust
+    /// a server there is no row for.
+    public static let chatPinsKey = "domovoi.chat.pins"
 
-    public init(defaults: UserDefaults = .standard) {
+    private let defaults: UserDefaults
+    private let key: String
+
+    /// - Parameter key: which saved blob this is. Defaults to the shell's, so
+    ///   every existing call site reads and writes exactly what it did before.
+    public init(defaults: UserDefaults = .standard, key: String = UserDefaultsSavedState.key) {
         self.defaults = defaults
+        self.key = key
     }
 
-    public func read() -> Data? { defaults.data(forKey: Self.key) }
-    public func write(_ blob: Data) { defaults.set(blob, forKey: Self.key) }
+    public func read() -> Data? { defaults.data(forKey: key) }
+    public func write(_ blob: Data) { defaults.set(blob, forKey: key) }
 }
 
 /// A box. For the tests, and for nothing else — the twin of

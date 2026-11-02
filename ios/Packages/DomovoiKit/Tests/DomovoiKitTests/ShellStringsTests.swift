@@ -89,6 +89,17 @@ final class ShellStringsTests: XCTestCase {
         "ui/components/Format.kt",
         // Part 3a: the toasts of the four writes, which live with the calls.
         "ui/screens/home/HomeIo.kt",
+        // I1-H part 1: Chat. All six files, because Chat's words are spread
+        // across all six — the list's in `ChatHome.kt`, the constants in
+        // `ChatPlace.kt`, the conversation's in `ChatScreen.kt`, the server
+        // place's own in `ServerChatPlace.kt`, and the two refusals in
+        // `ChatErrors.kt` and `AiOffRefusal.kt`.
+        "ui/screens/chat/ChatPlace.kt",
+        "ui/screens/chat/ChatHome.kt",
+        "ui/screens/chat/ChatScreen.kt",
+        "ui/screens/chat/ChatErrors.kt",
+        "ui/screens/chat/AiOffRefusal.kt",
+        "ui/screens/chat/ServerChatPlace.kt",
     ]
 
     /// Every literal in every file above, decoded, concatenated per file.
@@ -1367,5 +1378,139 @@ final class ShellStringsTests: XCTestCase {
         )
         XCTAssertFalse(Self.haystack.contains("broadcast partial - "), "a hyphen is not an em dash")
         XCTAssertFalse(Self.haystack.contains("broadcast to "), "the Kotlin says broadcasted")
+    }
+
+    // MARK: - I1-H part 1: Chat
+
+    /// The page, the list, and what the list says when it has no rows.
+    func testTheChatListSaysWhatTheKotlinSays() {
+        assertKotlinSaysWhole(ChatStrings.title)
+        assertKotlinSaysWhole(ChatStrings.subtitle, "U+2014 em dash, one space each side")
+        assertKotlinSaysWhole(ChatStrings.newChat)
+        assertKotlinSaysWhole(ChatStrings.searchHint)
+        assertKotlinSaysWhole(ChatStrings.composerHint, "U+2026 ellipsis, not three dots")
+        assertKotlinSaysWhole(ChatStrings.send)
+        assertKotlinSaysWhole(ChatStrings.openRow)
+        assertKotlinSaysWhole(ChatStrings.rowActions)
+        assertKotlinSaysWhole(ChatStrings.pinnedMark)
+        assertKotlinSaysWhole(ChatStrings.usedInternetMark)
+        assertKotlinSaysWhole(ChatStrings.noChatsYet)
+        assertKotlinSaysWhole(ChatStrings.noChatsMatch)
+        assertKotlinSaysWhole(ChatStrings.noArchivedChats)
+        assertKotlinSaysWhole(ChatStrings.searchFailed, "couldn't, ASCII apostrophe")
+        assertKotlinSaysWhole(ChatStrings.noMessagesYet)
+        assertKotlinSaysWhole(ChatStrings.archived)
+        assertKotlinSaysWhole(ChatStrings.backToChats)
+        // `"$SEARCH_FAILED everywhere: …"` (`ChatHome.kt:416`): the first
+        // clause is `searchFailed` interpolated, so only the tail is a
+        // literal — and `searchFailed` itself is asserted whole above, which
+        // is what makes the pair complete.
+        assertKotlinSaysAround(sentinel + " everywhere: some chats may be missing")
+        XCTAssertEqual(
+            ChatStrings.searchFailed + " everywhere: some chats may be missing",
+            ChatStrings.searchFailedPartly,
+            "the partial line is the failed line plus its tail, as the Kotlin builds it"
+        )
+        // `"archived · $count"` (`ChatHome.kt:523`).
+        assertKotlinSaysAround("archived \u{b7} " + sentinel)
+        XCTAssertEqual("archived · 4", ChatStrings.archivedLabel(4))
+    }
+
+    /// The row menu, the swipe, and the two dialogs.
+    func testTheChatActionsAndDialogsSayWhatTheKotlinSays() {
+        assertKotlinSaysWhole(ChatStrings.actionRename)
+        assertKotlinSaysWhole(ChatStrings.actionPin)
+        assertKotlinSaysWhole(ChatStrings.actionUnpin)
+        assertKotlinSaysWhole(ChatStrings.actionArchive)
+        assertKotlinSaysWhole(ChatStrings.actionUnarchive)
+        assertKotlinSaysWhole(ChatStrings.actionShare)
+        assertKotlinSaysWhole(ChatStrings.actionDelete)
+        assertKotlinSaysWhole(ChatStrings.actionTryAgain)
+        assertKotlinSaysWhole(ChatStrings.swipeMoveBack)
+        assertKotlinSaysWhole(ChatStrings.deleteTitle)
+        assertKotlinSaysWhole(ChatStrings.deleteConfirm)
+        assertKotlinSaysWhole(ChatStrings.serverDeleteNote, "a sentence, with its full stop")
+        assertKotlinSaysWhole(ChatStrings.renameTitle)
+        assertKotlinSaysWhole(ChatStrings.renameField)
+        assertKotlinSaysWhole(ChatStrings.renameSave)
+        assertKotlinSaysWhole(ChatStrings.renameCancel)
+        assertKotlinSaysWhole(ChatStrings.archivedToast)
+        assertKotlinSaysWhole(ChatStrings.movedBackToast)
+        // `"Delete \"${row.title}\"? $SERVER_DELETE_NOTE This can't be
+        // undone."` (`ServerChatPlace.kt:102`) — two values in one literal, so
+        // the only piece long enough to check is the tail. The note itself is
+        // asserted whole above, and the rendering is pinned here, which
+        // together cover the sentence the fragment check cannot.
+        assertKotlinSaysAround("Delete \"" + sentinel + "\"? " + sentinel + " This can't be undone.")
+        XCTAssertEqual(
+            "Delete \"soup\"? Deletes it for everyone in the house. This can't be undone.",
+            ChatStrings.deleteText("soup")
+        )
+        XCTAssertEqual(200, ChatStrings.renameMaxChars, "`take(200)`, ChatHome.kt:562")
+        // The swipe's word is SHORTER than the menu's, and deliberately: a row
+        // has less width than a menu. Equal would mean one of the two was
+        // transcribed from the wrong line.
+        XCTAssertNotEqual(ChatStrings.swipeMoveBack, ChatStrings.actionUnarchive)
+    }
+
+    /// The conversation, the share text, and the words a failed write says.
+    func testTheChatConversationSaysWhatTheKotlinSays() {
+        assertKotlinSaysWhole(ChatStrings.windowNote)
+        assertKotlinSaysWhole(ChatStrings.thisPhone)
+        assertKotlinSaysWhole(ChatStrings.shareYou)
+        assertKotlinSaysWhole(ChatStrings.shareDomovoi)
+        // The share header carries its own newline in the Kotlin
+        // (`ServerChatPlace.kt:41`), and `shareText` adds it back, so the
+        // whole-string lookup is of the header **with** the newline.
+        assertKotlinSaysWhole(ChatStrings.shareHeader + "\n", "the literal includes its \\n")
+        for verb in [
+            ChatStrings.verbDelete, ChatStrings.verbRename, ChatStrings.verbArchive,
+            ChatStrings.verbMoveBack, ChatStrings.verbSend, ChatStrings.verbNewChat,
+            ChatStrings.verbTryAgain,
+        ] {
+            assertKotlinSaysWhole(verb, "the verb `failureText` is given")
+        }
+        // `"couldn't try again: $why"` (`ChatScreen.kt:879`).
+        assertKotlinSaysAround("couldn't try again: " + sentinel)
+        XCTAssertEqual("couldn't try again: offline", ChatStrings.couldNotTryAgain("offline"))
+        // The two refusals.
+        assertKotlinSaysWhole(aiChatOffText)
+        assertKotlinSaysWhole(aiOffDetail, "the server's own sentence, matched on a 409")
+        assertKotlinSaysWhole(aiOffRefusal, "the header value")
+        assertKotlinSaysWhole(visionMissingText(nil), "U+2192 arrow in Settings → Models")
+        assertKotlinSaysAround("Pictures need the vision model " + sentinel
+            + ", which isn't installed on this Domovoi. "
+            + "An admin can install it in Settings \u{2192} Models, or pick another vision model there.")
+        for code in ChatErrors.modelCodes.sorted() {
+            assertKotlinSaysWhole(code, "a code the server sends, matched by value")
+        }
+    }
+
+    /// **The two strings this port had to write itself** — asserted to be
+    /// absent from the Kotlin, which is the only way a test can show that a
+    /// divergence was deliberate rather than mistyped.
+    ///
+    /// Both are in `design-notes/ios/IOS-ONLY-STRINGS.md` with the reason.
+    func testChatsTwoOwnStringsAreNotInTheKotlinAtAll() {
+        XCTAssertFalse(
+            Self.haystack.contains(ChatStrings.emptyHint),
+            "the empty hint is this port's own: Android's offers an image attachment"
+        )
+        XCTAssertFalse(
+            Self.haystack.contains("the server wouldn't answer this"),
+            "the refusal fallback is this port's own: Android says a status and a reason phrase"
+        )
+        // And the Android sentence it replaces must NOT have been ported: a
+        // hint that sends somebody looking for a paperclip this app does not
+        // have is [[no-misleading-controls]].
+        XCTAssertTrue(
+            Self.haystack.contains("attach an image"),
+            "the Kotlin really does say it, so the divergence is real and not a stale note"
+        )
+        XCTAssertFalse(
+            ChatStrings.emptyHint.contains("image"),
+            "nothing in this app's words offers an image"
+        )
+        XCTAssertFalse(ChatStrings.composerHint.contains("..."), "U+2026, not three dots")
     }
 }
