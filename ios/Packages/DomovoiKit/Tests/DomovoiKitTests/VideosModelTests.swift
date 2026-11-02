@@ -58,6 +58,10 @@ final class VideosModelTests: XCTestCase {
     /// totals have something to be wrong about.
     private final class House: Sendable {
         let total = Shared<Int>(60)
+        /// An older server that answers with rows and **no** `libraries`
+        /// array. The headings then count what loaded, and a model that kept
+        /// the previous needle's counts would draw those instead.
+        let omitLibraries = Shared<Bool>(false)
         let recent = Shared<String>(#"{"recent":[]}"#)
         let position = Shared<String>(#"{"position_sec":90}"#)
         let positionStatus = Shared<Int>(200)
@@ -107,6 +111,9 @@ final class VideosModelTests: XCTestCase {
                     let body = self.rows(offset: offset, limit: limit, narrowed: narrowed)
                     let count = narrowed ? min(1, self.total.current) : self.total.current
                     // The `libraries` array the headers' counts come from.
+                    if self.omitLibraries.current {
+                        return .json(#"{"videos":[\#(body)],"total":\#(count)}"#)
+                    }
                     let libraries = narrowed
                         ? #"[{"library_id":"core:videos","total":\#(count)}]"#
                         : #"[{"library_id":"core:videos","total":40},{"library_id":"usb","total":20}]"#
@@ -161,6 +168,18 @@ final class VideosModelTests: XCTestCase {
             await Task.yield()
         }
         XCTFail("\(what) never settled in \(settleYieldLimit) yields", file: file, line: line)
+    }
+
+    /// Give every task that could have been started its chance to run.
+    ///
+    /// For asserting a **negative** — that no request went out, that no wait
+    /// was asked for. A bare `await Task.yield()` is not enough and the
+    /// mistake is invisible: the assertion passes because nothing has run
+    /// yet, not because nothing happens, so it would pass with the guard it
+    /// is testing deleted. Two of the assertions in this file were exactly
+    /// that until a sabotage run found them.
+    private func nothingHappens() async {
+        for _ in 0..<3000 { await Task.yield() }
     }
 
     private func requests(to path: String) -> [URLRequest] {
@@ -303,7 +322,21 @@ final class VideosModelTests: XCTestCase {
         XCTAssertEqual("sort=library&q=sea&limit=50", queries(to: "/api/videos/list").last)
     }
 
-    /// Four keystrokes, one request: each cancels the wait before it.
+    /// Four keystrokes, one query.
+    ///
+    /// ### What this does and does not pin
+    ///
+    /// It passes with `typed`'s `debounce?.cancel()` deleted, and that is
+    /// worth writing down rather than leaving as a surprise for whoever
+    /// deletes it. `applyFilter` also calls `list.stop()` on the pager it
+    /// replaces, so three un-cancelled debounces produce three applyFilters
+    /// whose first two pagers are stopped before their request reaches the
+    /// wire — one query either way. The cancel's value is the work it avoids
+    /// (three pagers built and torn down, three needles applied), not a
+    /// different answer, and nothing observable from outside this class
+    /// tells the two apart. So this pins the user-visible property, which is
+    /// the one that matters, and the cancel stays because doing that work
+    /// for nothing on every keystroke is not free on a phone.
     func testTypingFastAsksOnce() async throws {
         let (model, _, waits) = rig()
         await started(model)
@@ -329,9 +362,13 @@ final class VideosModelTests: XCTestCase {
         let before = requests(to: "/api/videos/list").count
 
         model.typed("  ")
+        await nothingHappens()
 
         XCTAssertEqual("  ", model.filter)
-        XCTAssertTrue(waits.asked.current.isEmpty)
+        // No wait was even **asked for**, which is the assertion with teeth:
+        // a model that started a debounce and only then found the needle
+        // unchanged would record one here.
+        XCTAssertTrue(waits.asked.current.isEmpty, "\(waits.asked.current)")
         XCTAssertEqual(before, requests(to: "/api/videos/list").count)
     }
 
@@ -370,6 +407,32 @@ final class VideosModelTests: XCTestCase {
         XCTAssertEqual(["core:videos": 1], model.totals)
         let section = try XCTUnwrap(model.sections.first)
         XCTAssertEqual(1, section.count)
+    }
+
+    /// The old counts go with the old needle **even when the new answer
+    /// carries none of its own**.
+    ///
+    /// The test above passes whether or not `applyFilter` clears the totals,
+    /// because the filtered answer happens to bring a `libraries` array that
+    /// overwrites them. This one takes that away: an older server sends rows
+    /// and no totals, and then a model that had not cleared would sit one
+    /// video under a heading saying forty.
+    func testANeedleAgainstAServerThatSendsNoTotalsFallsBackToWhatLoaded() async throws {
+        let house = House()
+        let (model, _, waits) = rig(house: house)
+        await started(model)
+        XCTAssertEqual(["core:videos": 40, "usb": 20], model.totals)
+
+        house.omitLibraries.set(true)
+        model.typed("sea")
+        waits.release()
+        await settleUntil({ model.needle == "sea" }, "the filter")
+        await settleUntil({ model.list.state.items.count == 1 }, "the filtered grid")
+
+        XCTAssertEqual([:], model.totals)
+        let section = try XCTUnwrap(model.sections.first)
+        XCTAssertEqual(1, section.count)
+        XCTAssertEqual(1, section.tiles.count)
     }
 
     func testAFilterThatMatchesNothingSaysSoAndNamesTheFilter() async throws {
@@ -704,9 +767,12 @@ final class VideosModelTests: XCTestCase {
         let video = try XCTUnwrap(model.gridOrder.first)
 
         model.savePosition(video, positionSec: 42, durationSec: 2910, ended: false)
-        await Task.yield()
+        await nothingHappens()
 
-        XCTAssertTrue(requests(to: "/api/videos/position").isEmpty)
+        XCTAssertTrue(
+            requests(to: "/api/videos/position").isEmpty,
+            "\(requests(to: "/api/videos/position").compactMap { $0.url?.absoluteString })"
+        )
     }
 
     /// A failed save is **silent**: it fires every five seconds while a video

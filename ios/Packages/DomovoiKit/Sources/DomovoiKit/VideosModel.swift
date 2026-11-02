@@ -210,6 +210,21 @@ public final class VideosModel {
     /// and ``Pager``'s is fixed at construction — the same shape Music's
     /// library query has. The old one is stopped so it leaves the server-key
     /// registry; a pager that could only join is a leak with a callback.
+    ///
+    /// ### The two lines that clear the totals are not observable
+    ///
+    /// Said plainly because a sabotage run established it: delete
+    /// `totalsBox.clear()` and `totals = [:]` and no test fails, and none
+    /// can. The new pager starts with no rows, so there is no heading for a
+    /// stale count to appear under; and when the new page lands it sets the
+    /// totals from its own body — to the empty dictionary when the server
+    /// sent no `libraries` at all. Every path ends with the right number.
+    ///
+    /// They stay because the state in between is still wrong while it lasts:
+    /// `totals` is public and a reader during that frame would be told this
+    /// needle's grid holds the last needle's counts. Clearing is one
+    /// assignment; being right only after the network answers is the kind of
+    /// almost-right that this file is otherwise careful not to be.
     private func applyFilter(_ settled: String) {
         needle = settled
         list.stop()

@@ -251,6 +251,15 @@ public enum VideoGrid {
     ///
     /// A library whose list is empty gets **no header**: a heading over
     /// nothing reads as a failed section.
+    ///
+    /// The label is read with `first?` and not `videos[0]`, even though the
+    /// `where` clause above has just established that there is one. This is
+    /// the principle ``sections(_:)`` states at its own impossible case, and
+    /// it was arrived at the same way: with `videos[0]` there, deleting the
+    /// `where` clause did not make a test fail — it made the whole test
+    /// process die on `Index out of range`, taking every later result with
+    /// it. A grid that traps is the worst possible answer to a shape that
+    /// should not exist, and it is also the one that tells you least.
     public static func entries(
         showRecent: Bool,
         grouped: [(libraryID: String, videos: [VideoRow])],
@@ -262,7 +271,7 @@ public enum VideoGrid {
             out.append(
                 .header(
                     libraryID: group.libraryID,
-                    label: group.videos[0].libraryLabel ?? group.libraryID,
+                    label: group.videos.first?.libraryLabel ?? group.libraryID,
                     count: totals[group.libraryID] ?? group.videos.count
                 )
             )

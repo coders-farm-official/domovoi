@@ -63,6 +63,17 @@ final class VideoPosterStoreTests: XCTestCase {
         }
     }
 
+    /// Give every task that could have been started its chance to run.
+    ///
+    /// For asserting a **negative** — that nothing was fetched again. The
+    /// fetch records what it was asked for from inside its own task, so an
+    /// assertion made straight after `want` passes because nothing has run
+    /// yet rather than because nothing happens: it would pass with the guard
+    /// it is testing deleted, which is what a sabotage run found it doing.
+    private func nothingHappens() async {
+        for _ in 0..<3000 { await Task.yield() }
+    }
+
     private func settleUntil(
         _ done: @MainActor () -> Bool,
         _ what: String = "the store",
@@ -148,11 +159,16 @@ final class VideoPosterStoreTests: XCTestCase {
         posters.release()
         await settleUntil({ store.poster("/p/1") != .loading }, "the image")
         store.want("/p/1")
+        await nothingHappens()
         XCTAssertEqual(["/p/1"], posters.asked.current)
 
         store.want("/p/2")
         await settleUntil({ store.poster("/p/2") != .loading }, "the absence")
+        // A 204 is a **settled** answer: the server has said there is no
+        // frame for this video, and asking again on every recycled tile
+        // would be a request per scroll for ever.
         store.want("/p/2")
+        await nothingHappens()
         XCTAssertEqual(["/p/1", "/p/2"], posters.asked.current)
     }
 

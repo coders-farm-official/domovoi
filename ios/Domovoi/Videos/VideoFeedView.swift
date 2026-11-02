@@ -93,10 +93,22 @@ struct VideoFeedView: View {
             guard empty == true else { return }
             videos.feedClosed(on: nil)
         }
-                // The list behind the feed loaded another page.
-        .onChange(of: videos.gridOrder.map(\.id)) { _, _ in
+        // The list behind the feed loaded another page.
+        //
+        // Watched by **how many rows there are**, not by the rows. The
+        // obvious version is `of: videos.gridOrder.map(\.id)`, and it is a
+        // trap: `gridOrder` regroups the whole library every time it is read,
+        // SwiftUI reads a watched value on every update, and this view
+        // updates four times a second from the player's clock — so a feed
+        // over a thousand videos would regroup a thousand rows and compare a
+        // thousand strings, four times a second, to learn nothing. A page
+        // landing changes the count, which is the thing worth watching, and
+        // ``VideoFeedModel/grew(to:)`` is keyed anyway: a reload that
+        // replaced rows without changing their number adds nothing it
+        // already has.
+        .onChange(of: videos.list.state.items.count) { _, _ in
             guard open.from == .grid, let feed else { return }
-            feed.grew(to: videos.gridOrder.map(FeedVideo.init))
+            feed.grew(to: videos.gridOrder.map { FeedVideo($0) })
         }
         // The screen awake only while a video means to play.
         .onChange(of: [engine.state == .ready, engine.state == .buffering, engine.failed, engine.wantsToPlay]) { _, _ in
