@@ -191,6 +191,20 @@ final class StubHouseUITests: XCTestCase {
     /// element is a defect to fix — that is how the modal bug was found, by
     /// two `Contrast failed` that named the views behind a dialog — and an
     /// anonymous finding of an unrecognised kind is an unknown, not a floor.
+    /// An `XCUIApplication.State` in words. A raw value in a log is a number
+    /// somebody has to look up, and the one question being asked of it here is
+    /// whether the app is still there.
+    private static func stateName(_ state: XCUIApplication.State) -> String {
+        switch state {
+        case .unknown: return "unknown"
+        case .notRunning: return "notRunning"
+        case .runningBackgroundSuspended: return "runningBackgroundSuspended"
+        case .runningBackground: return "runningBackground"
+        case .runningForeground: return "runningForeground"
+        @unknown default: return "state \(state.rawValue)"
+        }
+    }
+
     private static func floorAndRest(_ found: [String]) -> (floor: Int, rest: [String]) {
         func isFloor(_ line: String) -> Bool {
             guard line.hasSuffix("| element: nil") else { return false }
@@ -2636,29 +2650,35 @@ final class StubHouseUITests: XCTestCase {
     /// application: a swipe on the app can land on the shell's header, which
     /// does not scroll, and then nothing moves and nothing says so.
     ///
-    /// **A drag, not `swipeUp()`.** `swipeUp` is a flick with momentum: it
-    /// moves about a viewport at a time, and at AX5 the archived entry's cell
-    /// is 95pt in a 402pt viewport, so eight of them scrolled *past* it
-    /// without one of the checks in between ever seeing it built — the tree
-    /// printed after the eighth was at the foot of the list. A press-and-drag
-    /// of a quarter of the list, held long enough not to fling, moves about
-    /// 100pt and cannot step over a cell.
+    /// **A slow flick.** Both of the obvious gestures were measured and both
+    /// are wrong:
+    ///
+    /// * `swipeUp()` is a flick at the default velocity, worth about a
+    ///   viewport. At AX5 the archived entry's cell is 95pt in a 402pt
+    ///   viewport, so eight of them scrolled *past* it and the tree printed
+    ///   after the eighth was at the foot of the list.
+    /// * A press-and-drag held 0.3s moved the list **90pt in twenty-four
+    ///   tries**. The start point, at 0.7 of the list's height, lands on the
+    ///   search field at AX5 — and a touch that is *held* on a text field is
+    ///   taken by the field, not by the scroll view. A flick is claimed by the
+    ///   scroll view's pan; a hold is not.
+    ///
+    /// `.slow` is the same flick with a fraction of the momentum, so it moves
+    /// far enough to build the next cells and not far enough to skip one.
     @MainActor
-    private func scrollUntilBuilt(_ app: XCUIApplication, _ element: XCUIElement, drags: Int = 24) -> Bool {
+    private func scrollUntilBuilt(_ app: XCUIApplication, _ element: XCUIElement, flicks: Int = 30) -> Bool {
         let list = app.collectionViews.firstMatch
         guard list.waitForExistence(timeout: 20) else {
             print("=== NO LIST TO SCROLL — tree follows ===")
             print(app.debugDescription)
             return false
         }
-        for _ in 0..<drags {
+        for _ in 0..<flicks {
             if element.exists { return true }
-            let from = list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.7))
-            let to = list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.45))
-            from.press(forDuration: 0.3, thenDragTo: to)
+            list.swipeUp(velocity: .slow)
         }
         if !element.exists {
-            print("=== \(drags) DRAGS AND STILL UNBUILT — tree follows ===")
+            print("=== \(flicks) FLICKS AND STILL UNBUILT — tree follows ===")
             print(app.debugDescription)
         }
         return element.exists
@@ -3070,21 +3090,29 @@ final class StubHouseUITests: XCTestCase {
             .containing(NSPredicate(format: "label == %@", StubChat.archiveMe))
             .firstMatch
         XCTAssertTrue(cell.waitForExistence(timeout: 15), "the new thread's row has no cell")
-        // **A held drag, not `swipeLeft()`.** `swipeLeft` on the cell revealed
-        // nothing on 2026-11-02 and the `print(app.debugDescription)` under it
-        // came back as a bare `Query chain:` with no subtree, so the run said
-        // only that the button was absent. A press-and-drag across the row,
-        // held long enough to read as a pan rather than a flick, is the
-        // gesture a `List`'s swipe actions actually answer to.
-        let grab = cell.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5))
-        let pull = cell.coordinate(withNormalizedOffset: CGVector(dx: 0.1, dy: 0.5))
-        grab.press(forDuration: 0.2, thenDragTo: pull)
+        // `swipeLeft()`, which is the gesture a `List`'s swipe actions answer
+        // to. A press-and-drag was tried instead and did no better, so the
+        // gesture is **not** what this is about — see below.
+        print("CHAT SWIPE state before: \(Self.stateName(app.state))")
+        cell.swipeLeft()
+        print("CHAT SWIPE state after: \(Self.stateName(app.state))")
         let archive = app.buttons[ChatStringsUnderTest.actionArchive].firstMatch
         if !archive.waitForExistence(timeout: 10) {
-            // `evidence` and not a `print`: it attaches the tree as a file and
-            // takes a picture, and a picture is the only thing that will say
-            // whether the row moved at all.
-            evidence(app, "76-chat-swipe-revealed-nothing")
+            // **Measured, not inferred.** Twice now this case has failed with
+            // no usable evidence: once the `print(app.debugDescription)` came
+            // back as a bare `Query chain:` with no subtree, and once
+            // `evidence` itself failed with "cannot request screenshot data
+            // because it does not exist" — which ends the case before the
+            // assertion below and says nothing about the swipe. Both readings
+            // point at the app not being there, but no crash report was
+            // written anywhere on the Mac and `XCTest` reported no crash, so
+            // the app's own state is the thing to print rather than guess at.
+            print("CHAT SWIPE state at the check: \(Self.stateName(app.state))")
+            if app.state == .runningForeground {
+                evidence(app, "76-chat-swipe-revealed-nothing")
+            } else {
+                print("=== THE APP IS NOT IN THE FOREGROUND — there is nothing to photograph ===")
+            }
         }
         XCTAssertTrue(archive.exists, "the swipe offered nothing")
         evidence(app, "76-chat-swipe")
@@ -3479,15 +3507,55 @@ final class StubHouseUITests: XCTestCase {
         print("CHAT AUDIT floor=\(floor) rest=\(rest.count)")
         for line in rest { print("CHAT AUDIT REST :: \(line)") }
 
-        // **A named Dynamic Type finding is not a defect by virtue of being
-        // named**, which the Videos grid forced on this file and the Files
-        // list repeated: the leaves here are `.title2`, `.subheadline`,
-        // `.caption` and `.footnote`, nothing fixed, and
-        // ``testTheChatListTextGrowsAtAX5`` measures them. Anything else is
-        // this screen's own finding to fix.
-        let unexplained = rest.filter { !$0.hasPrefix("Dynamic Type font sizes") }
+        // Two signatures this screen produces that
+        // ``testTheChatListTextGrowsAtAX5`` measured to be false, and nothing
+        // else. Each is pinned by **what the finding says**, never by how many
+        // of it there are: the floor came back 6, 5 and 5 across three runs of
+        // the same commit while `rest` was 11 every time, so a total would be
+        // a flake and a signature is not.
+        //
+        // **`Text clipped`, with no element.** Chat is the first screen on this
+        // track to use a `List`, which puts a `UICollectionView` in the tree,
+        // and it is the first to produce this headline — ten of them, every
+        // one anonymous and every one saying only that text *may* be clipped
+        // at larger sizes. Every leaf that could be measured grows instead:
+        // the subtitle 15.7 → 208.7, `archived · 2` 18.0 → 116.7, the row's
+        // title 18.0 → 406.7, its snippet 30.3 → 102.3 and the new-chat row
+        // 20.3 → 63.3, all at AX5.
+        let clipped = rest.filter {
+            $0.hasPrefix("Text clipped") && $0.hasSuffix("| element: nil")
+        }
+        // **The one finding Apple *can* attribute**, which is normally this
+        // file's definition of a defect — a named element is how the modal bug
+        // was found. This one names the archived entry's text and carries its
+        // measurement with it, `frame=(…, 18.0)`, and that same static text is
+        // 116.7pt at AX5: six and a half times, measured by label. The text is
+        // `.subheadline` and the glyphs beside it are `ScaledMetric`, so there
+        // is nothing fixed for the finding to be about. It is pinned by its
+        // element's label, so the finding moving to any other leaf fails here.
+        let archivedEntry = rest.filter {
+            $0.hasPrefix("Dynamic Type font sizes are partially unsupported")
+                && $0.contains("label='archived · ")
+        }
+        let unexplained = rest.filter { !clipped.contains($0) && !archivedEntry.contains($0) }
         XCTAssertEqual([], unexplained, "the Chat list has an audit finding of its own")
-        XCTAssertEqual(0, floor, "an anonymous finding appeared on the Chat list")
+        XCTAssertFalse(clipped.isEmpty, "the ten `Text clipped` findings went away — re-read this case")
+        XCTAssertEqual(
+            1,
+            archivedEntry.count,
+            "the archived entry's Dynamic Type finding is not the one that was measured"
+        )
+        // **The floor is not pinned to a number here, and that is deliberate.**
+        // The Videos grid and the Files list both assert `0`, and the pairing
+        // screen asserts ``knownPushedBarFloor`` exactly, because on those
+        // screens the count is stable. On this one it is not: three runs of
+        // the same commit gave 6, 5 and 5. What `floorAndRest` already
+        // guarantees about every one of them is the part worth asserting —
+        // each is anonymous *and* carries one of the two measured headlines —
+        // and a finding of any other kind, or one of these *with* an element,
+        // is in `rest` above and fails the case. Pinning 5 would have turned
+        // one run in three red for nothing.
+        print("CHAT AUDIT the floor is \(floor), unpinned by design — see this case's comment")
     }
 
     /// The leaves this screen draws, measured at `large` and at AX5.
@@ -3539,7 +3607,7 @@ final class StubHouseUITests: XCTestCase {
                 // Scrolling down the list in its own order, so each leaf is
                 // reached without having to come back up for an earlier one.
                 // A leaf that cannot be built at all is skipped, not failed.
-                if !found.exists { _ = scrollUntilBuilt(app, found, drags: 10) }
+                if !found.exists { _ = scrollUntilBuilt(app, found, flicks: 12) }
                 if found.exists { out[leaf] = found.frame.height }
             }
             return out
