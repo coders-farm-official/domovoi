@@ -93,6 +93,30 @@ public func fmtBigDur(_ seconds: Double?) -> String {
     return h > 0 ? "\(h)h \(m)m" : "\(m)m"
 }
 
+/// `0 B`, `512 B`, `1 KB`, `12.4 MB`, `1.08 GB` — `fmtBytes`
+/// (`Format.kt:51`), and an em dash for nothing.
+///
+/// Binary units with decimal names, as Android has it: 1 KB is 1024 bytes.
+/// That is what the dashboard shows for the same file, so the two agree, and
+/// changing it here would make the phone disagree with the browser about the
+/// size of one video.
+///
+/// A **negative** size reads as the em dash rather than `-3 B`. Android would
+/// print the negative (its `b < 1024` branch takes any negative straight to
+/// `"$b B"`); a size is a count of bytes, and the server sending one below
+/// zero means it does not know, which is what the dash says. The same
+/// judgement as ``fmtBigDur``'s guard one batch ago, and recorded for the
+/// same reason: it is a deliberate divergence, not an accident.
+public func fmtBytes(_ bytes: Int64?) -> String {
+    guard let bytes, bytes >= 0 else { return "—" }
+    if bytes < 1024 { return "\(bytes) B" }
+    let kb = Double(bytes) / 1024
+    if kb < 1024 { return String(format: "%.0f KB", kb) }
+    let mb = kb / 1024
+    if mb < 1024 { return String(format: "%.1f MB", mb) }
+    return String(format: "%.2f GB", mb / 1024)
+}
+
 /// `just now`, `4m ago`, `2h ago`, `3d ago`, then a date — `relTime`
 /// (`Format.kt:21`).
 ///
