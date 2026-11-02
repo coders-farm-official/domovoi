@@ -282,6 +282,10 @@ struct FileImportSheet: View {
     let entry: FileEntry
     let files: FilesModel
 
+    /// The icon column, for the reason in ``FileRowView``: a `frame(width:)`
+    /// does not clip, and these glyphs scale with the type size.
+    @ScaledMetric(relativeTo: .body) private var glyphWidth: CGFloat = 26
+
     var body: some View {
         NavigationStack {
             Group {
@@ -306,7 +310,7 @@ struct FileImportSheet: View {
                                     HStack(spacing: 12) {
                                         Image(systemName: FilesView.libraryGlyph(target.icon))
                                             .foregroundStyle(Color.brandInk)
-                                            .frame(width: 26)
+                                            .frame(width: glyphWidth)
                                         VStack(alignment: .leading, spacing: 2) {
                                             Text(target.label)
                                                 .font(.subheadline)
