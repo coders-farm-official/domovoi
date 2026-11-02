@@ -82,6 +82,16 @@ final class FilesModelTests: XCTestCase {
         /// An admin's files block on this device.
         let writable = Shared<Bool>(true)
 
+        /// When set, every browse answers with **this** path instead of the
+        /// one it was asked for — and with the breadcrumb that goes with it.
+        ///
+        /// It is how an answer that does not belong to the folder on screen
+        /// is put on the wire: in the app that happens when a browse lands
+        /// after the person has walked on, which no amount of yielding in a
+        /// test can arrange, and the shape the model has to survive is the
+        /// same either way ([[read-after-await-wrong-key]]).
+        let answerPathAs = Shared<String?>(nil)
+
         let librariesStatus = Shared<Int>(200)
         let moveStatus = Shared<Int>(200)
         let moveAnswer = Shared<String>(#"{"moved":["a"],"skipped":[],"failed":[],"reindex_triggered":false}"#)
@@ -175,10 +185,11 @@ final class FilesModelTests: XCTestCase {
                  "mtime":1762000000,"kind":"\(FileKinds.kind(of: row.0, isDir: row.1))"}
                 """
             }.joined(separator: ",")
-            let crumbs = path.split(separator: "/").map { #""\#($0)""# }.joined(separator: ",")
+            let said = answerPathAs.current ?? path
+            let crumbs = said.split(separator: "/").map { #""\#($0)""# }.joined(separator: ",")
             let editable = libraryID == "core:music" || libraryID == "core:documents"
             return """
-            {"library_id":"\(libraryID)","path":"\(path)","editable":\(editable),
+            {"library_id":"\(libraryID)","path":"\(said)","editable":\(editable),
              "importable":\(editable),"doc_editing":\(libraryID == "core:documents"),
              "breadcrumb":[\(crumbs)],"entries":[\(page)],
              "writable":\(writable.current),
@@ -426,6 +437,37 @@ final class FilesModelTests: XCTestCase {
         XCTAssertEqual("USB stick", model.currentLibrary?.label, "the libraries are still the ones that landed")
     }
 
+    /// A libraries read that lands with the **same** libraries must leave
+    /// the screen exactly where it is.
+    ///
+    /// This is the half of the re-selection that the ejected-drive test
+    /// cannot see: that one ends on `core:music` either way, because
+    /// `core:music` is both the re-selection's answer and the first library.
+    /// Here the screen is two levels into the fourth library, and a
+    /// re-selection that fired anyway would hand it back to the first one at
+    /// its root — which is what a `files.changed` event does every time
+    /// somebody else writes a file.
+    func testARefreshKeepsWhereYouAre() async throws {
+        let (model, _, _) = rig()
+        await started(model)
+        model.select("usb-1")
+        await settleUntil({ model.folder?.libraryID == "usb-1" }, "the drive")
+        model.tapped(FileEntry(name: "DCIM", rel: "DCIM", isDir: true))
+        await settleUntil({ model.folder?.path == "DCIM" }, "the drive's DCIM folder")
+        let reads = queries(to: "/api/files/libraries").count
+
+        model.libraries.refresh()
+        await settleUntil(
+            { queries(to: "/api/files/libraries").count > reads },
+            "the second libraries read"
+        )
+        await nothingHappens()
+
+        XCTAssertEqual("usb-1", model.selectedID, "a library that is still there stays picked")
+        XCTAssertEqual("DCIM", model.path, "and the folder inside it is still the one on screen")
+        XCTAssertEqual(["VID_0001.mp4"], model.entries.state.items.map(\.name))
+    }
+
     // MARK: - walking about
 
     func testWalkingIntoAFolderListsItAndBuildsTheTrail() async throws {
@@ -476,6 +518,38 @@ final class FilesModelTests: XCTestCase {
 
         XCTAssertEqual("", model.path)
         XCTAssertEqual(before, queries(to: "/api/files/browse").count)
+    }
+
+    /// An answer that names a folder other than the one on screen is **not
+    /// this folder's**, and the screen shows none of it.
+    ///
+    /// ``FilesModel/folder`` checks the path as well as the library, where
+    /// Android checks the library alone. Without the path half, the rows
+    /// below would be the new folder's and the breadcrumb above them the old
+    /// folder's — and tapping a crumb would navigate by a trail that is not
+    /// on screen.
+    func testAnAnswerForAnotherFolderIsNotThisFolders() async throws {
+        let (model, house, _) = rig()
+        await started(model)
+        let albums = try XCTUnwrap(model.entries.state.items.first { $0.name == "Albums" })
+
+        house.answerPathAs.set("Singles")
+        model.tapped(albums)
+        await settleUntil(
+            { model.entries.state.items.map(\.name) == ["2026", "a song.mp3"] },
+            "the rows of the folder that was asked for"
+        )
+
+        XCTAssertEqual("Albums", model.path, "the screen is where the tap sent it")
+        XCTAssertNil(model.folder, "an answer for another folder is not this folder's")
+        XCTAssertEqual([], model.breadcrumb, "and its breadcrumb is not drawn over these rows")
+        XCTAssertFalse(model.blocked)
+
+        // The crumb that answer would have put on screen leads nowhere,
+        // because it is not on screen.
+        model.goToCrumb(0)
+        await nothingHappens()
+        XCTAssertEqual("Albums", model.path)
     }
 
     func testGoingUpFromASubfolderAndNotFromTheRoot() async throws {
