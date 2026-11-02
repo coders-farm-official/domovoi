@@ -46,6 +46,38 @@ struct VideoFeedView: View {
 
     @Environment(\.scenePhase) private var scenePhase
 
+    /// Seeds ``pageKey`` with the video the feed was opened on.
+    ///
+    /// ### The bug this exists to fix
+    ///
+    /// `pageKey` was set in `.task`, which runs **after** the first layout,
+    /// and `.scrollPosition(id:)` did nothing with it: a Simulator run opened
+    /// the feed on the second video in the grid and the scroll view stayed
+    /// parked on the first. The chrome was right — `2 / 50`, the right title,
+    /// the right video held by the player — and the page the viewer could see
+    /// was the *other* video's poster, one screen above the one playing. The
+    /// accessibility tree is where it showed: the held page at
+    /// `{{0, 852}, {393, 852}}`, exactly one viewport below the window.
+    ///
+    /// A `LazyVStack` has not laid out the page at index 1 when `.task` runs,
+    /// and `scrollPosition(id:)` ignores an id it cannot find rather than
+    /// remembering it. So the position must be a non-nil `@State` **before**
+    /// the pager is built, which is what an initial value is for.
+    ///
+    /// Opening on the first video hid this completely, which is every feed
+    /// opened from the recently-played strip and the first tile in the grid —
+    /// the two things a person tries first.
+    init(open: OpenVideoFeed, videos: VideosModel, posters: VideoPosterStore, model: ShellModel) {
+        self.open = open
+        self.videos = videos
+        self.posters = posters
+        self.model = model
+        let start = open.videos.indices.contains(open.start)
+            ? open.videos[open.start].id
+            : nil
+        _pageKey = State(initialValue: start)
+    }
+
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
@@ -63,7 +95,10 @@ struct VideoFeedView: View {
         .task {
             if feed == nil { feed = build() }
             engine.begin()
-            pageKey = feed?.showing?.key
+            // Normally already the right key, from `init`. Still written for
+            // a queue the model trimmed on the way in, where `showing` is not
+            // the row `open.start` pointed at.
+            if pageKey == nil { pageKey = feed?.showing?.key }
             await activate(page: open.start)
         }
         .onDisappear {

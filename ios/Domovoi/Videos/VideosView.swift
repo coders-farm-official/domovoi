@@ -321,9 +321,16 @@ struct VideoRecentStrip: View {
                                     resumeOverride: Int64(max(0, video.positionSec ?? 0))
                                 )
                             }
+                            // Two lines and `fixedSize`, as the grid's
+                            // caption has: with `lineLimit(1)` Apple's audit
+                            // reported "Text clipped" against this very leaf,
+                            // and it was right — a title longer than a
+                            // 200-point row was truncated at **every** type
+                            // size, not only large ones.
                             Text(video.displayTitle)
                                 .font(.caption)
-                                .lineLimit(1)
+                                .lineLimit(2)
+                                .fixedSize(horizontal: false, vertical: true)
                             Text(video.resumeLine)
                                 .font(.caption2)
                                 .monospaced()

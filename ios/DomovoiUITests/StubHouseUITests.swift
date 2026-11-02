@@ -425,6 +425,53 @@ final class StubHouseUITests: XCTestCase {
         return found
     }
 
+    /// The element frame a finding carries, as ``oneLine(_:)`` wrote it.
+    ///
+    /// `CGRect.description` is `(x, y, w, h)`, so this is a parse of this
+    /// file's own output rather than of Apple's. It exists for one
+    /// classification, in ``testTheVideosGridAudits``: a `Contrast failed`
+    /// against an element the **scroll view's own bottom edge** is cutting in
+    /// half is not a colour defect, and the only way to tell that from a real
+    /// one is where the element is.
+    private static func frame(in line: String) -> CGRect? {
+        guard let opened = line.range(of: "frame=(") else { return nil }
+        let rest = line[opened.upperBound...]
+        guard let closed = rest.firstIndex(of: ")") else { return nil }
+        let numbers = rest[..<closed]
+            .split(separator: ",")
+            .compactMap { Double($0.trimmingCharacters(in: .whitespaces)) }
+        guard numbers.count == 4 else { return nil }
+        return CGRect(x: numbers[0], y: numbers[1], width: numbers[2], height: numbers[3])
+    }
+
+    /// Clear the stub house's recently-played list, from the test process.
+    ///
+    /// The stub is one process for a whole run and the app is relaunched per
+    /// case, so **watched state crosses tests**: whichever case plays a video
+    /// leaves a strip on the screen of every case that runs after it, in
+    /// alphabetical order. That is how `testWatchingSomethingPutsItInThe…`
+    /// came to fail on its first assertion — the strip was already there,
+    /// put there by `testAVideoPlaysInTheFeed` a minute earlier.
+    ///
+    /// The Simulator shares the Mac's loopback, which is how the app reaches
+    /// the stub, so the test process can reach it too.
+    @MainActor
+    private func clearWatched(port: Int = 6601) {
+        var request = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/api/_test/reset-watched")!)
+        request.httpMethod = "POST"
+        request.setValue(Self.token, forHTTPHeaderField: "X-Device-Token")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = Data("{}".utf8)
+        let answered = expectation(description: "the stub cleared its watched list")
+        var code = -1
+        URLSession.shared.dataTask(with: request) { _, response, _ in
+            code = (response as? HTTPURLResponse)?.statusCode ?? -1
+            answered.fulfill()
+        }.resume()
+        wait(for: [answered], timeout: 15)
+        XCTAssertEqual(200, code, "the stub did not clear its watched list")
+    }
+
     /// An audit issue's element as one line, or `nil` as the word.
     ///
     /// `XCUIElement.debugDescription` is a paragraph with its own query chain
@@ -1654,7 +1701,17 @@ final class StubHouseUITests: XCTestCase {
             "the count line is not the server's numbers"
         )
         XCTAssertTrue(app.staticTexts["Movies · 54"].exists, "the Movies heading is not the server's total")
-        XCTAssertTrue(app.staticTexts["USB stick · 6"].exists, "the USB heading is not the server's total")
+        // **No USB heading yet**, and that is the other half of the same
+        // property: page one is fifty rows and all fifty are in `Movies`, so
+        // the second library has nothing loaded — and a library with no rows
+        // gets no heading (``VideoGrid/entries(_:)``). A heading reading
+        // `USB stick · 6` over an empty grid is what the totals decode would
+        // produce if it were applied to libraries rather than to rows, which
+        // is the mistake worth pinning here.
+        XCTAssertFalse(
+            app.staticTexts["USB stick · 6"].exists,
+            "a library with nothing loaded was given a heading"
+        )
         // A tile is a button labelled with what the video is called, which is
         // also how everything below taps one.
         XCTAssertTrue(
@@ -1685,8 +1742,105 @@ final class StubHouseUITests: XCTestCase {
         let found = try auditIssues(app, "videos-grid")
         evidence(app, "42-videos-grid-audited")
         let (floor, rest) = Self.floorAndRest(found)
-        XCTAssertEqual([], rest, "the grid has findings Apple can attribute to an element")
+        // The outer scroll view, which is the tallest one on screen — the
+        // other is the strip's, lying on its side.
+        let page = app.scrollViews.allElementsBoundByIndex
+            .max(by: { $0.frame.height < $1.frame.height })
+        let bottom = page?.frame.maxY ?? 0
+        XCTAssertGreaterThan(bottom, 0, "no scroll view to take a bottom edge from")
+        let unexplained = rest.filter { line in
+            // A Dynamic Type headline **with** an element, which this file
+            // believed for three sessions was the signature of a real
+            // defect. It is not: ``testTheVideosGridTextGrowsAtAX5`` measures
+            // these very leaves and they grow 3.6x and more. The belief came
+            // from never having seen one — the eight on a pushed screen all
+            // arrive anonymous — and the measurement is what settles it, in
+            // both directions. The grown-by check is the test; this is the
+            // classification that makes room for it.
+            if Self.knownAnonymousHeadlines.contains(where: { line.hasPrefix($0) }) {
+                return false
+            }
+            // A contrast finding against an element the scroll view's own
+            // bottom edge cuts in half. Half an element has no pixels to
+            // read, which is what the audit is reporting, and every list on
+            // this phone has a row straddling that edge — including the one
+            // in the picture beside this run, where `02 holiday 2026.mp4`
+            // spans 768.5 to 782.8 against a content area ending at 770.
+            // Scrolling one row makes it a different row's turn.
+            if line.hasPrefix("Contrast failed"), let box = Self.frame(in: line),
+               box.minY < bottom, box.maxY > bottom {
+                return false
+            }
+            return true
+        }
+        XCTAssertEqual(
+            [],
+            unexplained,
+            "the grid has findings neither measurement nor the viewport edge explains"
+        )
         XCTAssertEqual(Self.knownPushedBarFloor, floor, "the anonymous floor moved")
+    }
+
+    /// **The measurement the audit's Dynamic Type finding claims to be
+    /// about.**
+    ///
+    /// Apple reported five of the grid's own leaves as "User will not be able
+    /// to change the font size of this element", each with the element
+    /// attached. This launches the same screen at `large` and at AX5 and
+    /// measures them. Anything that really is stuck fails here, and nothing
+    /// is excluded from the audit on the strength of a belief.
+    ///
+    /// A leaf that is not on screen at AX5 is skipped rather than failed: at
+    /// that size the count line alone is 105 points tall and the grid's first
+    /// tile is most of the way down the window.
+    @MainActor
+    func testTheVideosGridTextGrowsAtAX5() throws {
+        func heights(_ app: XCUIApplication) -> [String: CGFloat] {
+            var out: [String: CGFloat] = [:]
+            for (leaf, label) in [
+                ("count", "showing 50 of 60 videos"),
+                ("heading", "Movies · 54"),
+                ("strip-heading", "recently played"),
+                ("caption", "a long one.mp4"),
+                ("resume", "0:10 / 0:40"),
+            ] {
+                let text = app.staticTexts[label].firstMatch
+                if text.exists { out[leaf] = text.frame.height }
+            }
+            return out
+        }
+
+        var measured: [String: [String: CGFloat]] = [:]
+        for (label, mode) in [
+            ("large", "large"),
+            ("AX5", "UICTContentSizeCategoryAccessibilityXXXL"),
+        ] {
+            let (app, landed) = openVideos(mode)
+            XCTAssertTrue(landed, "the videos list never answered at \(label)")
+            usleep(2_000_000)
+            evidence(app, "4A-videos-scale-\(label)")
+            measured[label] = heights(app)
+            for (leaf, height) in heights(app).sorted(by: { $0.key < $1.key }) {
+                print("SCALE [\(label)] \(leaf) height=\(height)")
+            }
+            app.terminate()
+        }
+
+        let small = measured["large"] ?? [:]
+        let big = measured["AX5"] ?? [:]
+        var compared = 0
+        var stuck: [String] = []
+        for (leaf, height) in small.sorted(by: { $0.key < $1.key }) {
+            guard let grown = big[leaf] else { continue }
+            compared += 1
+            if grown < height * 2 { stuck.append("\(leaf) \(height)->\(grown)") }
+        }
+        XCTAssertEqual([], stuck, "a leaf Apple flagged really does not scale")
+        XCTAssertGreaterThanOrEqual(
+            compared,
+            2,
+            "nothing could be compared, so this proved nothing: \(small) / \(big)"
+        )
     }
 
     /// **A real video, decoded by a real player.**
@@ -1737,10 +1891,19 @@ final class StubHouseUITests: XCTestCase {
         app.buttons["a long one.mp4"].firstMatch.tap()
         XCTAssertTrue(app.staticTexts["1 / 50"].waitForExistence(timeout: 20), "the feed did not open")
 
-        // A long press anywhere on the page opens the options sheet.
-        app.staticTexts["1 / 50"].press(forDuration: 1.0)
+        // A long press on the **page**, by coordinate.
+        //
+        // `app.staticTexts["1 / 50"].press(...)` was the first attempt and it
+        // opened nothing: the counter is in the chrome drawn over the pager,
+        // so the press never reached the view carrying
+        // `onLongPressGesture`. A normalized coordinate presses the pixels,
+        // which is what a finger does.
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4))
+            .press(forDuration: 1.0)
         let details = app.buttons["details"]
-        XCTAssertTrue(details.waitForExistence(timeout: 10), "the long press opened no options sheet")
+        let opened = details.waitForExistence(timeout: 10)
+        evidence(app, "45-feed-options")
+        XCTAssertTrue(opened, "the long press opened no options sheet")
         details.tap()
 
         let resolution = app.staticTexts["480 × 270"]
@@ -1764,9 +1927,12 @@ final class StubHouseUITests: XCTestCase {
         app.buttons["a long one.mp4"].firstMatch.tap()
         XCTAssertTrue(app.staticTexts["1 / 50"].waitForExistence(timeout: 20), "the feed did not open")
 
-        app.staticTexts["1 / 50"].press(forDuration: 1.0)
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4))
+            .press(forDuration: 1.0)
         let playlist = app.buttons["playlist"]
-        XCTAssertTrue(playlist.waitForExistence(timeout: 10), "no options sheet")
+        let opened = playlist.waitForExistence(timeout: 10)
+        evidence(app, "46-feed-options")
+        XCTAssertTrue(opened, "no options sheet")
         playlist.tap()
 
         let heading = app.staticTexts["playlist · 50 videos"]
@@ -1793,9 +1959,19 @@ final class StubHouseUITests: XCTestCase {
         XCTAssertTrue(landed, "the videos list never answered")
 
         app.buttons["01 she said \"no\".mp4"].firstMatch.tap()
+        // **Which page the feed is on, before anything about the message.**
+        // This is the second tile, so the feed must open on page two — and
+        // the first run of this case is how the pager's seeded position bug
+        // was found (``VideoFeedView/init``): the chrome said `2 / 50`, the
+        // player held this video, and the page on screen was the first
+        // video's poster, one viewport above. Everything below asked about a
+        // message on a page nobody could see.
+        let counter = app.staticTexts["2 / 50"]
+        let onThePage = counter.waitForExistence(timeout: 20)
         let message = app.staticTexts["can't play this video"]
         let said = message.waitForExistence(timeout: 30)
         evidence(app, "47-feed-cannot-play")
+        XCTAssertTrue(onThePage, "the feed did not open on the video that was tapped")
         XCTAssertTrue(said, "a stream that 404s drew no message")
         XCTAssertTrue(
             app.staticTexts["swipe for the next one"].exists,
@@ -1814,6 +1990,10 @@ final class StubHouseUITests: XCTestCase {
     /// it was sent, so this is the real thing and not a canned answer.
     @MainActor
     func testWatchingSomethingPutsItInTheRecentlyPlayedStrip() throws {
+        // The stub outlives this case and `testAVideoPlaysInTheFeed` runs
+        // before it (alphabetically), so without this the strip is already
+        // there and the assertion below fails about the wrong thing.
+        clearWatched()
         let (app, landed) = openVideos()
         XCTAssertTrue(landed, "the videos list never answered")
         XCTAssertFalse(
