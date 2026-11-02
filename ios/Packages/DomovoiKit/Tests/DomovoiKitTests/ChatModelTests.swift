@@ -384,16 +384,24 @@ final class ChatModelTests: XCTestCase {
         let (model, house, waits) = rig()
         model.start()
         await settleUntil({ model.threads.data != nil })
-        let before = house.seen.current.count
         model.typed("p")
         model.typed("pl")
         model.typed("pla")
         model.typed("plan")
-        await nothingHappens()
-        XCTAssertEqual(before, house.seen.current.count, "nothing while the gate is shut")
-        XCTAssertFalse(waits.gaveUp.current, "the rig ran out, so this proves nothing")
+        // **Settled on the waits, not on a yield count.** The gate's spin runs
+        // off the main actor, so a long `nothingHappens()` lets it reach its
+        // own bound, give up, and fire the search it was holding — the trap
+        // `FilesModelTests.Waits.gaveUp` was added for, which cost this test a
+        // round. Four keystrokes have asked for four waits; the only way a
+        // search could have gone out is through one of them returning.
+        await settleUntil({ waits.asked.current.count == 4 }, "the four debounces")
+        XCTAssertTrue(
+            house.seen.current.filter { $0.contains("q=") }.isEmpty,
+            "nothing while the gate is shut: \(house.seen.current)"
+        )
         waits.release()
         await settleUntil({ model.hits != nil })
+        XCTAssertFalse(waits.gaveUp.current, "a wait ran out, so the count below proves nothing")
         let searches = house.seen.current.filter { $0.contains("q=") }
         XCTAssertEqual(1, searches.count, "one search for four keystrokes: \(searches)")
         XCTAssertEqual("GET /api/chat/threads?q=plan", searches.first)
@@ -557,7 +565,10 @@ final class ChatModelTests: XCTestCase {
         XCTAssertTrue(model.conversationOpen)
         XCTAssertEqual(ChatStrings.thisPhone, model.transcript.messages.first?.device,
                        "a message from this install is not called by the device's own name")
-        XCTAssertEqual(0, model.transcript.windowDividerIndex, "window_from_id = 10, the first message")
+        XCTAssertNil(
+            model.transcript.windowDividerIndex,
+            "window_from_id is the FIRST message: nothing fell out of the window, so no divider"
+        )
         XCTAssertTrue(model.transcript.canRetry, "the last message is a finished retryable reply")
     }
 

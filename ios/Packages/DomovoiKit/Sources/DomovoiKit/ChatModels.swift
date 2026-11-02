@@ -345,7 +345,7 @@ public struct ChatMessage: Equatable, Sendable, Decodable {
         // that an explicit `null` — which is what the server sends for a row
         // without one — reads as absent rather than as a shape that would not
         // decode.
-        hasDocuments = try Self.carries([ChatImageRef].self, values, .documents)
+        hasDocuments = try Self.carries(ChatImageRef.self, values, .documents)
         hasDocReply = try Self.present(values, .doc)
         hasDraft = try Self.present(values, .draft)
         kept = try values.decodeIfPresent(Bool.self, forKey: .kept) ?? false
