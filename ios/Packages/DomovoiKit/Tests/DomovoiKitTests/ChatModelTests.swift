@@ -65,23 +65,23 @@ final class ChatModelTests: XCTestCase {
         /// What `GET /threads` answers with, as rows of
         /// (id, title, updatedAt, messages, snippet, archived).
         let threads = Shared<[String]>([
-            Self.thread(id: 1, title: "lentil soup", at: "2026-11-02T18:00:00+00:00", messages: 6,
+            House.thread(id: 1, title: "lentil soup", at: "2026-11-02T18:00:00+00:00", messages: 6,
                         snippet: "and then simmer"),
-            Self.thread(id: 2, title: "bike chain", at: "2026-11-01T09:00:00+00:00", messages: 2,
+            House.thread(id: 2, title: "bike chain", at: "2026-11-01T09:00:00+00:00", messages: 2,
                         snippet: "a quick link"),
-            Self.thread(id: 4, title: "nothing said", at: "2026-10-30T09:00:00+00:00", messages: 0),
+            House.thread(id: 4, title: "nothing said", at: "2026-10-30T09:00:00+00:00", messages: 0),
         ])
         let archived = Shared<[String]>([
-            Self.thread(id: 3, title: "old plan", at: "2026-09-01T09:00:00+00:00", messages: 9,
+            House.thread(id: 3, title: "old plan", at: "2026-09-01T09:00:00+00:00", messages: 9,
                         snippet: "never mind", archived: true),
         ])
 
         /// A `?q=` answer: hits come back in whatever order the server likes,
         /// **with an archived one among them** (`chat.py:235`).
         let hits = Shared<[String]>([
-            Self.thread(id: 3, title: "old plan", at: "2026-09-01T09:00:00+00:00", messages: 9,
+            House.thread(id: 3, title: "old plan", at: "2026-09-01T09:00:00+00:00", messages: 9,
                         snippet: "never mind", archived: true, match: "…the old plan…"),
-            Self.thread(id: 1, title: "lentil soup", at: "2026-11-02T18:00:00+00:00", messages: 6,
+            House.thread(id: 1, title: "lentil soup", at: "2026-11-02T18:00:00+00:00", messages: 6,
                         snippet: "and then simmer"),
         ])
         let searchStatus = Shared<Int>(200)
