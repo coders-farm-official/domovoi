@@ -598,12 +598,12 @@ public final class FilesModel {
     /// Android shows two toasts in a row (`FilesScreen.kt:468`); the shell
     /// here draws one at a time and a second would replace the first before
     /// it was read, so they are one sentence.
-    static func line(_ counts: String, _ failure: String?) -> String {
+    nonisolated static func line(_ counts: String, _ failure: String?) -> String {
         guard let failure, !failure.isEmpty else { return counts }
         return "\(counts) — \(failure)"
     }
 
-    static func why(_ error: any Error) -> String {
+    nonisolated static func why(_ error: any Error) -> String {
         (error as? DomovoiError)?.message ?? error.localizedDescription
     }
 
