@@ -2045,6 +2045,298 @@ final class StubHouseUITests: XCTestCase {
             "the strip is drawn over a search result"
         )
     }
+    // MARK: - Files
+
+    /// Open Files and wait for its first page.
+    ///
+    /// The count line again, for ``openVideos``' reason: `showing 50 of 56
+    /// items` cannot exist until the folder has answered, where the word
+    /// `Files` is on screen from the first frame as a phone-bar tab.
+    @MainActor
+    private func openFiles(
+        _ mode: String = "large",
+        delay: Double? = nil
+    ) -> (app: XCUIApplication, landed: Bool) {
+        let app = launch(mode: mode, push: "Files", pushDelay: delay ?? Self.pushDelay)
+        let count = app.descendants(matching: .staticText)
+            .matching(NSPredicate(format: "label BEGINSWITH %@", "showing "))
+            .firstMatch
+        return (app, count.waitForExistence(timeout: 40))
+    }
+
+    /// Pick a library from the header's menu.
+    @MainActor
+    private func pickLibrary(_ app: XCUIApplication, _ label: String) -> Bool {
+        let picker = app.buttons["choose library"]
+        guard picker.waitForExistence(timeout: 20) else { return false }
+        picker.tap()
+        let item = app.buttons[label].firstMatch
+        guard item.waitForExistence(timeout: 10) else { return false }
+        item.tap()
+        return true
+    }
+
+    /// Tap a row's `•••` and return whether its menu opened.
+    @MainActor
+    private func openRowMenu(_ app: XCUIApplication, _ name: String) -> Bool {
+        // The menu button carries the row's own name, so the two controls on
+        // a row are told apart by kind rather than by position.
+        let menus = app.buttons.matching(identifier: name).allElementsBoundByIndex
+        guard menus.count >= 2 else { return false }
+        menus[1].tap()
+        return true
+    }
+
+    /// The first page of the first library, with the server's own count.
+    ///
+    /// The stub's `Music` root holds fifty-six things — two folders and
+    /// fifty-four tracks — so page one is fifty of fifty-six and the folders
+    /// come first because the server put them there.
+    @MainActor
+    func testFilesDrawsTheFirstLibraryAndItsFirstPage() throws {
+        let (app, landed) = openFiles()
+        evidence(app, "50-files-list")
+        XCTAssertFalse(fellBackToLocalMedia(in: app), "the shell gave up on the server")
+        XCTAssertTrue(landed, "the folder never answered — no count line drew")
+
+        XCTAssertTrue(
+            app.staticTexts["showing 50 of 56 items"].exists,
+            "the count line is not the server's numbers"
+        )
+        XCTAssertTrue(app.buttons["Albums"].exists, "no row for the first folder")
+        XCTAssertTrue(app.buttons["track 00.mp3"].exists, "no row for the first file")
+        // Where deleting is done, said once at the foot of the list — and
+        // **no Delete control anywhere**, which is the whole point of saying
+        // it in words.
+        XCTAssertTrue(
+            app.staticTexts["deleting is on the dashboard — a phone can't sign in as an admin"].exists,
+            "the list does not say where deleting is done"
+        )
+        XCTAssertFalse(app.buttons["delete"].exists, "a phone cannot delete and must not offer to")
+    }
+
+    /// The same screen at the largest accessibility type size.
+    @MainActor
+    func testFilesAtTheLargestTypeSize() throws {
+        let (app, landed) = openFiles("UICTContentSizeCategoryAccessibilityXXXL")
+        evidence(app, "51-files-ax5")
+        XCTAssertTrue(landed, "the folder never answered at AX5")
+    }
+
+    /// Walking into a folder and back up by its crumb.
+    @MainActor
+    func testWalkingIntoAFolderAndBackUpByItsCrumb() throws {
+        let (app, landed) = openFiles()
+        XCTAssertTrue(landed, "the folder never answered")
+
+        app.buttons["Albums"].tap()
+        let song = app.buttons["a song.mp3"]
+        XCTAssertTrue(song.waitForExistence(timeout: 20), "Albums never listed")
+        evidence(app, "52-files-in-albums")
+        XCTAssertTrue(app.buttons["Albums"].exists, "no crumb for the folder we are in")
+
+        // The library's own name is the root crumb.
+        app.buttons["library root"].tap()
+        XCTAssertTrue(
+            app.buttons["track 00.mp3"].waitForExistence(timeout: 20),
+            "the root crumb did not go back to the root"
+        )
+    }
+
+    /// A document opens in the reader, which says on its face that it cannot
+    /// write.
+    @MainActor
+    func testADocumentReadsAndTheReaderSaysItIsReadOnly() throws {
+        let (app, landed) = openFiles()
+        XCTAssertTrue(landed, "the folder never answered")
+        XCTAssertTrue(pickLibrary(app, "Documents"), "the library picker never opened")
+
+        let notes = app.buttons["notes.md"]
+        XCTAssertTrue(notes.waitForExistence(timeout: 20), "Documents never listed")
+        notes.tap()
+        let readOnly = app.staticTexts["read-only — editing is on the dashboard"]
+        XCTAssertTrue(readOnly.waitForExistence(timeout: 20), "the reader never opened")
+        evidence(app, "53-files-document")
+        XCTAssertTrue(
+            app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "the shopping list"))
+                .firstMatch.exists,
+            "the document's own text is not on screen"
+        )
+    }
+
+    /// A picture opens in the viewer; an SVG says what it is instead of
+    /// drawing nothing.
+    @MainActor
+    func testAPictureIsShownAndAnSvgSaysItCannotBe() throws {
+        let (app, landed) = openFiles()
+        XCTAssertTrue(landed, "the folder never answered")
+        XCTAssertTrue(pickLibrary(app, "Documents"), "the library picker never opened")
+
+        let photo = app.buttons["photo.jpg"]
+        XCTAssertTrue(photo.waitForExistence(timeout: 20), "Documents never listed")
+        photo.tap()
+        let picture = app.images["photo.jpg"]
+        XCTAssertTrue(picture.waitForExistence(timeout: 20), "the picture never drew")
+        evidence(app, "54-files-picture")
+        app.buttons["close"].firstMatch.tap()
+
+        let svg = app.buttons["logo.svg"]
+        XCTAssertTrue(svg.waitForExistence(timeout: 20), "back to the list")
+        svg.tap()
+        let refusal = app.staticTexts["not a picture this phone can show"]
+        XCTAssertTrue(refusal.waitForExistence(timeout: 20), "an undecodable image drew nothing at all")
+        evidence(app, "55-files-not-a-picture")
+        // The way out that does work is offered right there.
+        XCTAssertTrue(app.buttons["save to device"].exists, "no save offered for a file that cannot be shown")
+    }
+
+    /// A file over the save cap gets a line saying how big it is and where to
+    /// get it — and no control that would refuse.
+    @MainActor
+    func testAFileTooBigToSaveSaysSoRatherThanOfferingOne() throws {
+        let (app, landed) = openFiles()
+        XCTAssertTrue(landed, "the folder never answered")
+        XCTAssertTrue(pickLibrary(app, "Documents"), "the library picker never opened")
+        XCTAssertTrue(app.buttons["notes.md"].waitForExistence(timeout: 20), "Documents never listed")
+        evidence(app, "56-files-too-big")
+
+        XCTAssertTrue(
+            app.staticTexts["too big to save from a phone (4.00 GB) — on the dashboard"].exists,
+            "the four-gigabyte row does not say why it cannot be saved here"
+        )
+    }
+
+    /// A read-only library offers no move, and a drive offers an import.
+    @MainActor
+    func testWhatEachLibraryOffersOnARow() throws {
+        let (app, landed) = openFiles()
+        XCTAssertTrue(landed, "the folder never answered")
+
+        XCTAssertTrue(pickLibrary(app, "Comics"), "the library picker never opened")
+        XCTAssertTrue(app.buttons["issue 1.cbz"].waitForExistence(timeout: 20), "Comics never listed")
+        XCTAssertTrue(openRowMenu(app, "issue 1.cbz"), "the row has no menu")
+        evidence(app, "57-files-readonly-menu")
+        XCTAssertFalse(app.buttons["move"].exists, "a read-only library offered a move")
+        XCTAssertFalse(app.buttons["import into a library"].exists, "a plugin library offered an import")
+        app.buttons["save to device"].firstMatch.tap()
+
+        XCTAssertTrue(pickLibrary(app, "USB stick"), "the picker never opened for the drive")
+        XCTAssertTrue(app.buttons["holiday.mp4"].waitForExistence(timeout: 20), "the drive never listed")
+        XCTAssertTrue(openRowMenu(app, "holiday.mp4"), "the drive's row has no menu")
+        evidence(app, "58-files-drive-menu")
+        XCTAssertTrue(app.buttons["import into a library"].exists, "a drive did not offer an import")
+    }
+
+    /// Moving a file: the destination picker, and what the toast says.
+    @MainActor
+    func testMovingAFileSaysWhatHappened() throws {
+        let (app, landed) = openFiles()
+        XCTAssertTrue(landed, "the folder never answered")
+
+        XCTAssertTrue(openRowMenu(app, "track 00.mp3"), "the row has no menu")
+        app.buttons["move"].firstMatch.tap()
+        let here = app.buttons["move here"]
+        XCTAssertTrue(here.waitForExistence(timeout: 20), "the move sheet never opened")
+        evidence(app, "59-files-move-sheet")
+        // Into a subfolder of the library the file is already in, which is
+        // where the picker starts.
+        app.buttons["Albums"].firstMatch.tap()
+        XCTAssertTrue(here.waitForExistence(timeout: 10), "the picker did not walk into Albums")
+        here.tap()
+
+        let toast = app.descendants(matching: .staticText)
+            .matching(NSPredicate(format: "label CONTAINS %@", "moved"))
+            .firstMatch
+        XCTAssertTrue(toast.waitForExistence(timeout: 20), "nothing was said about the move")
+        evidence(app, "60-files-moved")
+    }
+
+    /// Importing off the drive, which copies on the server and leaves the
+    /// drive's folder on screen.
+    @MainActor
+    func testImportingOffTheDriveSaysWhereItWent() throws {
+        let (app, landed) = openFiles()
+        XCTAssertTrue(landed, "the folder never answered")
+        XCTAssertTrue(pickLibrary(app, "USB stick"), "the library picker never opened")
+        XCTAssertTrue(app.buttons["holiday.mp4"].waitForExistence(timeout: 20), "the drive never listed")
+
+        XCTAssertTrue(openRowMenu(app, "holiday.mp4"), "the drive's row has no menu")
+        app.buttons["import into a library"].firstMatch.tap()
+        let music = app.buttons["Music"].firstMatch
+        XCTAssertTrue(music.waitForExistence(timeout: 20), "the import sheet never opened")
+        evidence(app, "61-files-import-sheet")
+        music.tap()
+
+        let toast = app.descendants(matching: .staticText)
+            .matching(NSPredicate(format: "label CONTAINS %@", "copied"))
+            .firstMatch
+        XCTAssertTrue(toast.waitForExistence(timeout: 20), "nothing was said about the import")
+        evidence(app, "62-files-imported")
+        // The drive's own folder is still the one on screen: an import writes
+        // into another library and nothing here changed.
+        XCTAssertTrue(app.buttons["holiday.mp4"].exists, "the screen left the drive after an import")
+    }
+
+    /// A device an admin has blocked: the card above the list, and **no write
+    /// controls at all**.
+    @MainActor
+    func testABlockedDeviceCanLookButIsOfferedNothingToTouch() throws {
+        setFilesBlocked(true)
+        defer { setFilesBlocked(false) }
+
+        let (app, landed) = openFiles()
+        XCTAssertTrue(landed, "the folder never answered")
+        evidence(app, "63-files-blocked")
+        XCTAssertTrue(
+            app.descendants(matching: .staticText)
+                .matching(NSPredicate(format: "label CONTAINS %@", "is blocked from changing files"))
+                .firstMatch.exists,
+            "the blocked card is not on screen"
+        )
+        XCTAssertTrue(openRowMenu(app, "track 00.mp3"), "the row has no menu")
+        evidence(app, "64-files-blocked-menu")
+        XCTAssertFalse(app.buttons["move"].exists, "a blocked device was offered a move")
+    }
+
+    /// Apple's audit over the Files list.
+    @MainActor
+    @available(iOS 17.0, *)
+    func testTheFilesListAudits() throws {
+        let (app, landed) = openFiles()
+        XCTAssertTrue(landed, "the folder never answered")
+        let found = try auditIssues(app, "files-list")
+        evidence(app, "65-files-audited")
+        let (floor, rest) = Self.floorAndRest(found)
+        print("FILES AUDIT floor=\(floor) rest=\(rest.count)")
+        for line in rest { print("FILES AUDIT REST :: \(line)") }
+        // The same pin the grid has: a finding Apple can attribute is a
+        // defect, and an anonymous one of an unrecognised kind is an unknown
+        // rather than a floor.
+        XCTAssertEqual([], rest, "the Files list has an audit finding of its own")
+        XCTAssertEqual(0, floor, "an anonymous finding appeared on the Files list")
+    }
+
+    /// Flip the stub house's files block, from the test process.
+    ///
+    /// A control route rather than a sixth stub house on a sixth port: it is
+    /// one field of one answer (``clearWatched`` says why the test process
+    /// can reach the stub at all).
+    @MainActor
+    private func setFilesBlocked(_ blocked: Bool, port: Int = 6601) {
+        var request = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/api/_test/files-blocked")!)
+        request.httpMethod = "POST"
+        request.setValue(Self.token, forHTTPHeaderField: "X-Device-Token")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = Data("{\"blocked\":\(blocked)}".utf8)
+        let answered = expectation(description: "the stub set its files block")
+        var code = -1
+        URLSession.shared.dataTask(with: request) { _, response, _ in
+            code = (response as? HTTPURLResponse)?.statusCode ?? -1
+            answered.fulfill()
+        }.resume()
+        wait(for: [answered], timeout: 15)
+        XCTAssertEqual(200, code, "the stub did not set its files block")
+    }
 }
 
 /// Strings this file matches on, kept together and named so that a change in
