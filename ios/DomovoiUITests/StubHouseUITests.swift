@@ -1778,7 +1778,14 @@ final class StubHouseUITests: XCTestCase {
             unexplained,
             "the grid has findings neither measurement nor the viewport edge explains"
         )
-        XCTAssertEqual(Self.knownPushedBarFloor, floor, "the anonymous floor moved")
+        // **Zero, not eight.** ``knownPushedBarFloor`` is the Settings and
+        // Music figure and this screen does not produce it: every finding
+        // here arrives with an element attached. Asserting 8 would be
+        // asserting another screen's shape, and asserting nothing would let
+        // an anonymous finding of an unrecognised kind through — the thing
+        // the floor exists to catch. So this pins what this screen does:
+        // nothing the audit cannot attribute.
+        XCTAssertEqual(0, floor, "an anonymous finding appeared on the grid")
     }
 
     /// **The measurement the audit's Dynamic Type finding claims to be

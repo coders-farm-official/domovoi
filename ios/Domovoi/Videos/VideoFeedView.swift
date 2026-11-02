@@ -44,6 +44,9 @@ struct VideoFeedView: View {
 
     @State private var away = BackgroundPause()
 
+    /// Whether the pager has been put on the page the feed opened on.
+    @State private var jumped = false
+
     @Environment(\.scenePhase) private var scenePhase
 
     /// Seeds ``pageKey`` with the video the feed was opened on.
@@ -262,20 +265,48 @@ struct VideoFeedView: View {
     // MARK: - the pager
 
     private func pager(_ feed: VideoFeedModel) -> some View {
-        ScrollView(.vertical) {
-            LazyVStack(spacing: 0) {
-                ForEach(feed.queue) { video in
-                    page(video, feed)
-                        .containerRelativeFrame([.horizontal, .vertical])
-                        .id(video.key)
+        // `.scrollPosition(id:)` **reports** here; it does not drive.
+        //
+        // Seeding `pageKey` before the first layout was not enough, and a
+        // Simulator measured it twice: the page the player held sat at
+        // `{{0, 852}, {393, 852}}`, one whole viewport below the window,
+        // with the scroll view at offset zero. The page existed — the tree
+        // listed it, so this is not a lazy stack that had not built the item
+        // — and `.scrollPosition` still did not move to it. With
+        // `.paging` and `containerRelativeFrame`, the initial value is taken
+        // as a report of where the scroll already is.
+        //
+        // So the opening jump is a `ScrollViewReader`, which has one job and
+        // does it, and `.scrollPosition` keeps the job it is good at: saying
+        // which page a fling settled on. The two coexist because `scrollTo`
+        // changes the offset and the binding is then written with the page
+        // that settled, which is the same path a finger takes.
+        ScrollViewReader { proxy in
+            ScrollView(.vertical) {
+                LazyVStack(spacing: 0) {
+                    ForEach(feed.queue) { video in
+                        page(video, feed)
+                            .containerRelativeFrame([.horizontal, .vertical])
+                            .id(video.key)
+                    }
                 }
+                .scrollTargetLayout()
             }
-            .scrollTargetLayout()
+            .scrollTargetBehavior(.paging)
+            .scrollPosition(id: $pageKey)
+            .scrollIndicators(.hidden)
+            .ignoresSafeArea()
+            .task {
+                // Once, and after a turn of the run loop: the stack has to
+                // have laid out its pages for `scrollTo` to have somewhere
+                // to go, and `.task` on the scroll view itself runs early
+                // enough that it sometimes has not.
+                guard !jumped, let key = pageKey else { return }
+                jumped = true
+                try? await Task.sleep(nanoseconds: 50_000_000)
+                proxy.scrollTo(key, anchor: .top)
+            }
         }
-        .scrollTargetBehavior(.paging)
-        .scrollPosition(id: $pageKey)
-        .scrollIndicators(.hidden)
-        .ignoresSafeArea()
     }
 
     private func page(_ video: FeedVideo, _ feed: VideoFeedModel) -> some View {
