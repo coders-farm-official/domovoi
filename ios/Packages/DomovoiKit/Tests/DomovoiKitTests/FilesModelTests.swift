@@ -28,8 +28,27 @@ final class FilesModelTests: XCTestCase {
     // MARK: - the rig
 
     /// The filter's debounce, as a gate a test opens.
+    ///
+    /// ### Why it reports running out, and what that cost
+    ///
+    /// The gate spins until a test opens it, and gives up after
+    /// ``settleYieldLimit`` yields so that a test which never opens it fails
+    /// instead of hanging. It gives up by **throwing**, which is also how
+    /// cancellation arrives — and ``FilesModel/typed(_:)`` writes
+    /// `try? await wait(…)` and then asks `Task.isCancelled`, because in the
+    /// app the wait is `Task.sleep` and the only thing it throws is
+    /// cancellation.
+    ///
+    /// So a gate that ran out looked **exactly like a wait that finished**:
+    /// a test asserting "nothing has been asked for" sat in
+    /// ``nothingHappens()`` long enough to exhaust the budget, the debounce
+    /// fired, and the failure said the filter had been applied with the gate
+    /// still shut. That cost a round, and `gaveUp` is here so it cannot cost
+    /// another one: a test that sees it set knows its own rig ran out rather
+    /// than the model jumping the gun.
     private final class Waits: Sendable {
         let asked = Shared<[Int64]>([])
+        let gaveUp = Shared<Bool>(false)
         private let opened = Shared<Bool>(false)
 
         func release() { opened.set(true) }
@@ -37,6 +56,7 @@ final class FilesModelTests: XCTestCase {
         var sleeper: @Sendable (Int64) async throws -> Void {
             let asked = self.asked
             let opened = self.opened
+            let gaveUp = self.gaveUp
             return { ms in
                 asked.mutate { $0.append(ms) }
                 for _ in 0..<settleYieldLimit {
@@ -44,6 +64,7 @@ final class FilesModelTests: XCTestCase {
                     try Task.checkCancellation()
                     await Task.yield()
                 }
+                gaveUp.set(true)
                 throw CancellationError()
             }
         }
@@ -515,17 +536,12 @@ final class FilesModelTests: XCTestCase {
         XCTAssertEqual("", model.needle, "nothing has been asked for yet")
         XCTAssertEqual(before, queries(to: "/api/files/browse").count)
         XCTAssertEqual([250, 250, 250], waits.asked.current)
-        await nothingHappens()
-        XCTAssertEqual(
-            "",
-            model.needle,
-            "still nothing: asked=\(waits.asked.current) browsed=\(queries(to: "/api/files/browse"))"
-        )
 
         waits.release()
         await settleUntil({ model.needle == "song" }, "the filtered list")
         await settleUntil({ model.folder != nil }, "the filtered folder")
         XCTAssertTrue(queries(to: "/api/files/browse").last?.contains("q=song") == true)
+        XCTAssertFalse(waits.gaveUp.current, "the gate ran out — this test proved nothing")
     }
 
     func testTheNeedleIsTrimmedAndABlankFilterAsksForNothingNew() async throws {
