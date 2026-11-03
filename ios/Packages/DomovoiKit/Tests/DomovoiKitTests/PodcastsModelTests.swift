@@ -234,7 +234,10 @@ final class PodcastsModelTests: XCTestCase {
     /// The identity gate's probe, answered properly: a server that did not
     /// prove itself would refuse every read, and every assertion over them
     /// would be an assertion about nothing.
-    private static func healthAnswer(_ parts: URLComponents) -> StubURLProtocol.Answer {
+    /// `nonisolated` because a `URLProtocol`'s dispatcher is called on a
+    /// `URLSession` worker thread, and every member of this `@MainActor`
+    /// class — statics included — is isolated unless it says otherwise.
+    nonisolated private static func healthAnswer(_ parts: URLComponents) -> StubURLProtocol.Answer {
         let challenge = parts.queryItems?.first { $0.name == "challenge" }?.value
         return .json((try? TestIdentity.real.healthBody(challenge: challenge)) ?? "{}")
     }
