@@ -91,21 +91,35 @@ struct AudiobooksView: View {
 
     var body: some View {
         ZStack {
-            if let books {
-                if let page, openBook != nil {
-                    AudiobookDetailView(detail: page, library: books) {
-                        openBook = nil
-                        self.page = nil
+            Group {
+                if let books {
+                    if let page, openBook != nil {
+                        AudiobookDetailView(detail: page, library: books) {
+                            openBook = nil
+                            self.page = nil
+                        }
+                    } else {
+                        library(books)
                     }
                 } else {
-                    library(books)
+                    // Before the model exists there is nothing to read and
+                    // nothing to say about the house; an empty canvas rather
+                    // than a spinner, which would claim a request is in
+                    // flight.
+                    Color.clear
                 }
-            } else {
-                // Before the model exists there is nothing to read and
-                // nothing to say about the house; an empty canvas rather than
-                // a spinner, which would claim a request is in flight.
-                Color.clear
             }
+            // **Hidden, not merely behind**, which is
+            // ``SettingsPlaceholder``'s finding word for word
+            // (`RouteScreen.swift:200`): `.isModal` on ``DialogCard`` stops
+            // VoiceOver *navigating* out of the card, but the page is still
+            // in the tree and still rendered under a 35% scrim, and Apple's
+            // audit went on reporting `Contrast failed` against it —
+            // `Frank Herbert`, the meta line and the page's own `play`, all
+            // three measured through the dim on 2026-11-02. They were true:
+            // that text is unreadable while the question is up. Nothing
+            // behind a question is content, so it says so.
+            .accessibilityHidden(books?.ask != nil)
             if let books, let ask = books.ask {
                 AudiobookResumeDialog(
                     title: ask.plan.title,

@@ -61,7 +61,7 @@ struct AudiobookResumeDialog: View {
                     Spacer(minLength: 0)
                     Button(AudiobooksStrings.notNow, action: onDismiss)
                         .buttonStyle(.bordered)
-                        .tint(Color.brandInk)
+                        .tint(Self.secondaryInk)
                 }
             }
         }
@@ -105,15 +105,35 @@ struct AudiobookResumeDialog: View {
                         onPlay(plan.positionSec)
                     }
                     .buttonStyle(.bordered)
-                    .tint(Color.brandInk)
+                    .tint(Self.secondaryInk)
                 }
             }
             Button(AudiobooksStrings.startOver) {
                 onPlay(0)
             }
             .buttonStyle(.bordered)
-            .tint(Color.brandInk)
+            .tint(Self.secondaryInk)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
+
+    /// The ink on the answers that are **not** the likely one.
+    ///
+    /// Android gives these the ordinary ink rather than the brand —
+    /// `color = if (plan.offer == null) brand else fg` on `resume at …` and
+    /// `fgMuted` on `start over` (`BookUi.kt:186-189`) — and this port had
+    /// them all in ``Color/brandInk``. That is 5.65:1 on white, but a
+    /// `.bordered` button does not draw its label on white: it fills with its
+    /// own tint at about 15%, so the ink sits on a pale wash of itself.
+    /// Apple's audit measured all three — `resume at 1:01:12`, `start over`
+    /// and `not now` — as "Contrast is not high enough for element unless
+    /// font size is larger" on 2026-11-02. The label colour is the fix, and
+    /// the Android-faithful one: only the likely answer is the brand, and it
+    /// is a filled button whose ``Color/brandFg`` on ``Color/brand`` is
+    /// 8.49:1.
+    ///
+    /// One constant for all three rather than Android's two tones, because
+    /// `fgMuted` on a wash of itself is the same measurement again.
+    /// DECISIONS §18.
+    private static let secondaryInk = Color.primary
 }

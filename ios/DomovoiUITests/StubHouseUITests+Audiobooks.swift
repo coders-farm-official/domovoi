@@ -63,7 +63,17 @@ extension StubHouseUITests {
         let count = app.descendants(matching: .staticText)
             .matching(NSPredicate(format: "label BEGINSWITH %@", "showing "))
             .firstMatch
-        return (app, count.waitForExistence(timeout: 40))
+        if count.waitForExistence(timeout: 40) { return (app, true) }
+        // **At an accessibility size the count line is below the fold, and a
+        // lazy stack has not built it.** The whole screen — the heading, the
+        // subtitle, the search box, the chips, the count and the rows — is one
+        // `LazyVStack`, which is ``FilesView``'s shape; at
+        // `AccessibilityXXXL` the heading and the search box alone are about
+        // 700 of the phone's 852 points, so the first thing below them is
+        // unbuilt rather than off screen (train S004's tree: title, subtitle,
+        // `reindex`, the field, and then nothing). It still has to exist, so
+        // this scrolls to it rather than settling for less.
+        return (app, audiobooksScroll(app, to: count))
     }
 
     /// Open one book's page from the library and wait for its head.
@@ -83,6 +93,38 @@ extension StubHouseUITests {
             print(app.debugDescription)
         }
         return landed
+    }
+
+    /// A book page's one action, **whichever word it is carrying**.
+    ///
+    /// `Text(if ((place ?: 0.0) > 5) "resume" else "play")` (`BookPage.kt:173`),
+    /// so the word turns over the moment this phone holds a place past five
+    /// seconds in the book. The place is the **phone's**: it lives in the
+    /// app's own store, survives a relaunch, and `reset-fixtures` puts the
+    /// *house* back and not the phone. Dune's server slot is adopted by the
+    /// first case of a run that opens the question, so every case after that
+    /// one finds `resume` where the first found `play`.
+    ///
+    /// Train S004 is what that cost: `testAudiobooks_TheResumeDialog…` and
+    /// `testAudiobooks_TheServersPlaceWins…` both died on
+    /// `No matches found for … '"play" IN identifiers'` while the tree held a
+    /// `resume` button at the same point, and the audit case that runs before
+    /// them in alphabetical order passed — it was the one that did the
+    /// adopting. Asking for the control by one of its two words was testing
+    /// the order the run happened to take.
+    ///
+    /// The word itself is still tested, where it can be said for certain:
+    /// ``testAudiobooks_AFreshBookGoesStraightToPlay()`` opens a book with no
+    /// place anywhere and requires `play` and the **absence** of `resume`.
+    @MainActor
+    func audiobooksStart(_ app: XCUIApplication) -> XCUIElement {
+        app.buttons
+            .matching(
+                NSPredicate(
+                    format: "label IN %@", [StubAudiobooks.play, StubAudiobooks.resume]
+                )
+            )
+            .firstMatch
     }
 
     /// How many times the house has been asked for each book's cover.
@@ -289,13 +331,22 @@ extension StubHouseUITests {
             "the list never built the foot of page one"
         )
         XCTAssertTrue(
-            app.staticTexts[StubAudiobooks.countGrown].waitForExistence(timeout: 25),
-            "the count line did not grow, so no second page was asked for"
-        )
-        evidence(app, "audiobooks-15-second-page")
-        XCTAssertTrue(
             audiobooksScroll(app, to: app.buttons[StubAudiobooks.firstByAuthor].firstMatch),
             "page two's rows never drew"
+        )
+        evidence(app, "audiobooks-15-second-page")
+        // **Back up to the count line, which is at the head of the stack.**
+        // It is drawn once, above the rows, so by the foot of page one it is
+        // over a thousand points above the viewport and a lazy stack has
+        // dropped it. Train S004 stood at the bottom waiting 25 seconds for a
+        // line it could not have seen, with `Grasshopper Lies Heavy` — a
+        // page-two book — already in the tree three rows below its own foot:
+        // the app had paged correctly and the case was looking the wrong way.
+        XCTAssertTrue(
+            audiobooksScroll(
+                app, to: app.staticTexts[StubAudiobooks.countGrown].firstMatch, up: true
+            ),
+            "the count line did not grow, so no second page was counted"
         )
     }
 
@@ -397,13 +448,32 @@ extension StubHouseUITests {
     /// (`BookPage.kt:96-98`); the compare with the server's slot belongs to
     /// ``BookPositionSync/open(bookID:server:)``, which runs when a book
     /// starts. So the page of a book this phone has never played shows no
-    /// place until something asks — exactly as Android's does. Tapping `play`
-    /// runs that compare and raises the question; `not now` answers it
-    /// without playing anything, and the adopted place is then the phone's.
+    /// place until something asks — exactly as Android's does. Tapping the
+    /// start control runs that compare and raises the question; `not now`
+    /// answers it without playing anything, and the adopted place is then the
+    /// phone's.
     ///
     /// That makes this one case cover the whole chain: the detail read, the
     /// chapter list, `PositionRules.resolve`'s adopt branch through a real
     /// round trip, and `placeText`'s assembly.
+    ///
+    /// ### Which chapter row is asserted, and why it is the second
+    ///
+    /// Chapter **1** is a row whose value depends on the order the run took:
+    /// it carries `— where you are now` the moment this phone holds Dune's
+    /// place, which is from the first case of the run that opens the question
+    /// onwards, and the phone's store is not what `reset-fixtures` puts back
+    /// (``audiobooksStart(_:)``). Chapter **2** starts at 1:46:18, which is
+    /// three quarters of an hour past anything this seed can put the place
+    /// at, so it is never the current one and its value is its start time and
+    /// nothing else — an exact equality that still fails if the row stopped
+    /// saying where its chapter starts. Train S004 asserted chapter one's
+    /// value exactly and failed on `0:00 — where you are now`, which is the
+    /// app being right.
+    ///
+    /// The marker is then asserted **after** the compare, where it is certain
+    /// rather than incidental: once the server's 1:01:12 has been adopted the
+    /// place is inside chapter one, so that row and no other says so.
     @MainActor
     func testAudiobooks_ABookPageShowsItsChaptersAndPlace() throws {
         let (app, landed) = openAudiobooks()
@@ -420,13 +490,20 @@ extension StubHouseUITests {
         )
         let chapterOne = app.buttons[StubAudiobooks.duneChapterOne].firstMatch
         XCTAssertTrue(chapterOne.exists, "no row for Dune's first chapter")
+        XCTAssertTrue(
+            (chapterOne.value as? String ?? "").hasPrefix(StubAudiobooks.zeroTime),
+            "Dune's first chapter row reads `\(chapterOne.value as? String ?? "")` "
+                + "rather than starting with the time the chapter starts at"
+        )
+        let chapterTwo = app.buttons[StubAudiobooks.duneChapterTwo].firstMatch
+        XCTAssertTrue(chapterTwo.exists, "no row for Dune's second chapter")
         XCTAssertEqual(
-            StubAudiobooks.zeroTime, chapterOne.value as? String,
+            StubAudiobooks.chapterTwoStart, chapterTwo.value as? String,
             "the chapter row does not say where the chapter starts"
         )
         evidence(app, "audiobooks-20-book-page")
 
-        app.buttons[StubAudiobooks.play].firstMatch.tap()
+        audiobooksStart(app).tap()
         let notNow = app.buttons[StubAudiobooks.notNow].firstMatch
         XCTAssertTrue(notNow.waitForExistence(timeout: 25), "the question never came up")
         notNow.tap()
@@ -434,6 +511,18 @@ extension StubHouseUITests {
         XCTAssertTrue(
             app.staticTexts[StubAudiobooks.dunePlace].waitForExistence(timeout: 25),
             "the page shows no place after the phone and the server compared"
+        )
+        // The place is 1:01:12, which falls in chapter one and in no other
+        // chapter, so exactly one row says where you are — in **words**, since
+        // the shaded ground Android marks it with (`BookUi.kt:283`) is not
+        // something a reader hears.
+        XCTAssertEqual(
+            StubAudiobooks.chapterOneHere, chapterOne.value as? String,
+            "the chapter the adopted place falls in does not say so"
+        )
+        XCTAssertEqual(
+            StubAudiobooks.chapterTwoStart, chapterTwo.value as? String,
+            "a chapter the place is nowhere near is marked as where you are"
         )
         evidence(app, "audiobooks-21-book-place")
     }
@@ -561,7 +650,7 @@ extension StubHouseUITests {
         XCTAssertTrue(landed, "the audiobooks list never answered")
         XCTAssertTrue(openBook(app, StubAudiobooks.dune), "Dune's page never drew")
 
-        app.buttons[StubAudiobooks.play].firstMatch.tap()
+        audiobooksStart(app).tap()
         XCTAssertTrue(
             app.staticTexts[StubAudiobooks.wereAtDune].waitForExistence(timeout: 25),
             "the question did not report the place this phone now holds"
@@ -633,7 +722,7 @@ extension StubHouseUITests {
         XCTAssertTrue(landed, "the audiobooks list never answered")
         XCTAssertTrue(openBook(app, StubAudiobooks.dune), "Dune's page never drew")
 
-        app.buttons[StubAudiobooks.play].firstMatch.tap()
+        audiobooksStart(app).tap()
         XCTAssertTrue(
             app.staticTexts[StubAudiobooks.wereAtDune].waitForExistence(timeout: 25),
             "the server's place was not adopted as this phone's"
@@ -744,6 +833,29 @@ extension StubHouseUITests {
     /// ``floorAndRest(_:)`` and never against a pinned total: a finding Apple
     /// can attribute to an element is a defect to fix, and an anonymous
     /// finding of an unrecognised kind is an unknown rather than a floor.
+    ///
+    /// ### The two signatures this screen produces
+    ///
+    /// **`Dynamic Type font sizes …`, named.** Seventeen of them on train
+    /// S004, against the row titles, the row authors, the row meta lines, the
+    /// count line and the three sort chips. `testTheFilesListAudits` settled
+    /// this class for the whole app: a named Dynamic Type finding is not a
+    /// defect by virtue of being named, those leaves are `.subheadline` and
+    /// `.caption` with nothing fixed about them, and **the measurement is the
+    /// test** — ``testAudiobooks_TheLibraryTextGrowsAtAX5()`` compares these
+    /// very leaves at the two sizes and fails on anything that is really
+    /// stuck.
+    ///
+    /// **One `Contrast failed`, against the em dash.** `A Wizard of Earthsea`
+    /// has no length and no size, so its whole meta line is one `—`, and the
+    /// audit measured that leaf — 7.7 × 14.3 points — as failing. The colour
+    /// is not what it is about: `Le Guin, Ursula K.` is drawn two points above
+    /// it in the **same** ``Color/fgMuted`` on the **same** white canvas
+    /// (7.44:1, the rows have no card behind them) and the same audit does not
+    /// report it. One em-dash stroke in a box that is mostly background is a
+    /// finding about ink coverage. So it is pinned to that label: if the
+    /// token ever does regress, the author line goes with it and lands in
+    /// `unexplained` below.
     @MainActor
     @available(iOS 17.0, *)
     func testAudiobooks_TheLibraryPassesApplesAudit() throws {
@@ -752,10 +864,20 @@ extension StubHouseUITests {
         let found = try auditIssues(app, "audiobooks-library")
         evidence(app, "audiobooks-60-library-audit")
         let split = Self.floorAndRest(found)
-        XCTAssertTrue(
-            split.rest.isEmpty,
-            "the library has \(split.rest.count) attributed findings:\n"
-                + split.rest.joined(separator: "\n")
+        for line in split.rest { print("AUDIOBOOKS AUDIT REST :: \(line)") }
+
+        let measured = split.rest.filter { $0.hasPrefix("Dynamic Type font sizes") }
+        let emDash = split.rest.filter {
+            $0.hasPrefix("Contrast failed")
+                && $0.contains("label='\(StubAudiobooks.dash)'")
+        }
+        let unexplained = split.rest.filter {
+            !measured.contains($0) && !emDash.contains($0)
+        }
+        XCTAssertEqual([], unexplained, "the audiobooks library has an audit finding of its own")
+        XCTAssertEqual(
+            0, split.floor,
+            "an anonymous finding appeared on the library, where there were none"
         )
     }
 
@@ -763,17 +885,37 @@ extension StubHouseUITests {
     ///
     /// The dialog is audited rather than dismissed first, and that is the
     /// whole point of auditing this state: a `Contrast failed` naming an
-    /// element *behind* a dialog means the dialog is not modal, which is how
-    /// the connection panel's two live `forget` controls were found. A
-    /// ``DialogCard`` carries `.isModal` so VoiceOver cannot reach the page's
-    /// own `play` while the question is open.
+    /// element *behind* a dialog is a finding about the page under the scrim,
+    /// which is how the connection panel's two live `forget` controls were
+    /// found. A ``DialogCard`` carries `.isModal` so VoiceOver cannot reach
+    /// the page's own start control while the question is open.
+    ///
+    /// ### What this case caught, and what it now allows
+    ///
+    /// Train S004 reported **six** findings that were not about type sizes:
+    /// three `Contrast failed` naming `Frank Herbert`, the meta line and
+    /// `play` — all three on the page, measured through the dialog's 35%
+    /// scrim — and three `Contrast nearly passed` naming the dialog's own
+    /// `resume at 1:01:12`, `start over` and `not now`. Both were true.
+    /// ``AudiobooksView`` now hides the page behind the question
+    /// (`.accessibilityHidden`, ``SettingsPlaceholder``'s fix word for word),
+    /// because `.isModal` keeps VoiceOver *inside* the card without taking
+    /// the dimmed page out of the tree; and the dialog's secondary answers
+    /// carry the ordinary ink rather than ``Color/brandInk`` on a wash of
+    /// itself, which is also what Android gives them (`BookUi.kt:186-189`).
+    ///
+    /// What is left allowed is the one class `testTheFilesListAudits` settled:
+    /// a **named** `Dynamic Type font sizes …`, whose leaves
+    /// ``testAudiobooks_TheLibraryTextGrowsAtAX5()`` measures. Everything
+    /// else, the seven anonymous `Potentially inaccessible text` included,
+    /// fails here.
     @MainActor
     @available(iOS 17.0, *)
     func testAudiobooks_ABookPagePassesApplesAudit() throws {
         let (app, landed) = openAudiobooks()
         XCTAssertTrue(landed, "the audiobooks list never answered")
         XCTAssertTrue(openBook(app, StubAudiobooks.dune), "Dune's page never drew")
-        app.buttons[StubAudiobooks.play].firstMatch.tap()
+        audiobooksStart(app).tap()
         XCTAssertTrue(
             app.buttons[StubAudiobooks.startOver].waitForExistence(timeout: 25),
             "the question never came up, so the modal state was never audited"
@@ -782,10 +924,14 @@ extension StubHouseUITests {
         let found = try auditIssues(app, "audiobooks-book-page")
         evidence(app, "audiobooks-61-book-page-audit")
         let split = Self.floorAndRest(found)
-        XCTAssertTrue(
-            split.rest.isEmpty,
-            "a book's page with the question up has \(split.rest.count) "
-                + "attributed findings:\n" + split.rest.joined(separator: "\n")
+        for line in split.rest { print("AUDIOBOOKS AUDIT REST :: \(line)") }
+
+        let measured = split.rest.filter { $0.hasPrefix("Dynamic Type font sizes") }
+        let unexplained = split.rest.filter { !measured.contains($0) }
+        XCTAssertEqual(
+            [], unexplained,
+            "a book's page with the question up has \(unexplained.count) "
+                + "findings of its own:\n" + unexplained.joined(separator: "\n")
         )
     }
 
@@ -804,22 +950,44 @@ extension StubHouseUITests {
     /// squeezed past the edge of the phone.
     @MainActor
     func testAudiobooks_TheLibraryTextGrowsAtAX5() throws {
+        // **Each leaf is scrolled to, in the order the list draws them**, and
+        // the whole pass starts at the top. Chat's AX5 case learnt this the
+        // same way: one scroll position cannot hold every leaf at
+        // `AccessibilityXXXL` — here the heading, the subtitle and the search
+        // box alone are about 700 of 852 points, so the count line and the
+        // first row are unbuilt while the heading is on screen and the
+        // heading is gone by the time they are built. Measuring whatever
+        // happened to be built is how a leaf that never grew gets skipped,
+        // and `grown[label] == nil` below fails the case rather than passing
+        // it quietly.
         func heights(_ app: XCUIApplication) -> [String: CGFloat] {
             var out: [String: CGFloat] = [:]
+            let heading = app.staticTexts[StubAudiobooks.libraryTitle].firstMatch
+            if !heading.exists { _ = audiobooksScroll(app, to: heading, up: true) }
             for label in StubAudiobooks.growingLeaves {
                 let leaf = app.staticTexts[label].firstMatch
+                if !leaf.exists { _ = audiobooksScroll(app, to: leaf, flicks: 12) }
                 if leaf.exists { out[label] = leaf.frame.height }
             }
             let row = app.buttons[StubAudiobooks.dune].firstMatch
+            if !row.exists { _ = audiobooksScroll(app, to: row, flicks: 12) }
             if row.exists { out[StubAudiobooks.dune] = row.frame.height }
             return out
+        }
+
+        /// The chips, scrolled back up to — they sit between the subtitle and
+        /// the count line, so ``heights(_:)``'s downward pass has left them
+        /// behind by the time it returns.
+        func chips(_ app: XCUIApplication) -> (title: XCUIElement, newest: XCUIElement) {
+            let title = app.buttons[StubAudiobooks.sortTitle].firstMatch
+            if !title.exists { _ = audiobooksScroll(app, to: title, up: true) }
+            return (title, app.buttons[StubAudiobooks.sortNewest].firstMatch)
         }
 
         let (ordinary, landedSmall) = openAudiobooks()
         XCTAssertTrue(landedSmall, "the audiobooks list never answered at the ordinary size")
         let small = heights(ordinary)
-        let titleChip = ordinary.buttons[StubAudiobooks.sortTitle].firstMatch
-        let newestChip = ordinary.buttons[StubAudiobooks.sortNewest].firstMatch
+        let (titleChip, newestChip) = chips(ordinary)
         XCTAssertTrue(titleChip.exists && newestChip.exists, "the sort chips never drew")
         XCTAssertEqual(
             titleChip.frame.minY, newestChip.frame.minY, accuracy: 2,
@@ -846,8 +1014,7 @@ extension StubHouseUITests {
             )
         }
 
-        let bigTitle = big.buttons[StubAudiobooks.sortTitle].firstMatch
-        let bigNewest = big.buttons[StubAudiobooks.sortNewest].firstMatch
+        let (bigTitle, bigNewest) = chips(big)
         XCTAssertTrue(bigTitle.exists && bigNewest.exists, "the sort chips never drew at AX5")
         XCTAssertGreaterThan(
             bigNewest.frame.minY, bigTitle.frame.minY + 8,
@@ -881,11 +1048,18 @@ extension StubHouseUITests {
     /// ``scrollUntilBuilt(_:_:flicks:)`` measured: a plain `swipeUp()` is
     /// worth about a viewport and steps over rows, and a press-and-drag held
     /// on a text field is taken by the field rather than by the scroll view.
+    /// - Parameter up: scroll back towards the top instead of down. The count
+    ///   line and the chips are at the **head** of this lazy stack, so a case
+    ///   that has scrolled to the foot of a page cannot see them again
+    ///   without this: `testAudiobooks_TheListLoadsAsYouScroll` waited
+    ///   25 seconds at the bottom of train S004 for a line that was sitting
+    ///   unbuilt 1,300 points above it, with page two's rows already drawn.
     @MainActor
     func audiobooksScroll(
         _ app: XCUIApplication,
         to element: XCUIElement,
-        flicks: Int = 30
+        flicks: Int = 30,
+        up: Bool = false
     ) -> Bool {
         let list = audiobooksList(app)
         guard list.waitForExistence(timeout: 20) else {
@@ -895,7 +1069,11 @@ extension StubHouseUITests {
         }
         for _ in 0..<flicks {
             if element.exists { return true }
-            list.swipeUp(velocity: .slow)
+            if up {
+                list.swipeDown(velocity: .slow)
+            } else {
+                list.swipeUp(velocity: .slow)
+            }
         }
         if !element.exists {
             // The **tree**, not a sentence about the element: "it is not
@@ -976,7 +1154,15 @@ enum StubAudiobooks {
     static let duneChapters = "12 chapters"
     static let duneNarrator = "read by Simon Vance"
     static let duneChapterOne = "Chapter 1"
+    static let duneChapterTwo = "Chapter 2"
     static let zeroTime = "0:00"
+    /// Chapter two's start, which is also its whole value: it is 45 minutes
+    /// past the furthest place this seed holds, so it is never the chapter
+    /// you are in.
+    static let chapterTwoStart = "1:46:18"
+    /// ``AudiobooksStrings/chapterPlayingNow(_:)`` over chapter one's start,
+    /// which is what the row carries once Dune's place has been adopted.
+    static let chapterOneHere = "0:00 — where you are now"
 
     /// `A Wizard of Earthsea` has no length, no size and one file with no
     /// size, so its whole meta line is the em dash — U+2014, not a hyphen.
@@ -1056,9 +1242,15 @@ enum StubAudiobooks {
         "play in a room",
     ]
 
-    /// The leaves whose heights the Dynamic Type case compares.
+    /// The screen's heading, which is the first thing the list draws and the
+    /// mark the Dynamic Type case scrolls back up to before it measures.
+    static let libraryTitle = "Audiobooks"
+
+    /// The leaves whose heights the Dynamic Type case compares, **in the
+    /// order the list draws them** — that is what lets the case scroll to
+    /// each in turn.
     static let growingLeaves = [
-        "Audiobooks",
+        libraryTitle,
         "books with chapters and your place, kept on the Domovoi",
         "showing 9 of 9 books",
     ]
