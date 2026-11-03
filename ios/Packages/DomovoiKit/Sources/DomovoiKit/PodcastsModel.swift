@@ -570,6 +570,23 @@ public final class PodcastsModel {
         shows.reload()
     }
 
+    /// A pull, awaited until the read it started has settled.
+    ///
+    /// Two things in one method **because of where it is called from**: a
+    /// `.refreshable` action is a `@Sendable` closure, so the view hands it
+    /// this model — a `@MainActor` class, and therefore `Sendable` — rather
+    /// than reaching through its own `@State` from inside one. One
+    /// cross-actor call, nothing non-sendable captured, and the spinner stays
+    /// up until the page has landed instead of vanishing the instant the
+    /// request is sent.
+    ///
+    /// It is ``reload()``, not ``poll()``: a pull must not send the house to
+    /// the internet behind the person's back (`PodcastsScreen.kt:104-105`).
+    public func pulled() async {
+        shows.reload()
+        await shows.idle()
+    }
+
     public func setToast(_ said: String?) { toast = said }
 
     // MARK: - coming and going

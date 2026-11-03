@@ -85,9 +85,12 @@ struct PodcastsView: View {
         // (`PodcastsScreen.kt:104-105`): a pull must not send the house to
         // the internet behind the person's back. `poll now` is the only thing
         // that does.
-        .refreshable {
-            podcasts?.reload()
-            await podcasts?.shows.idle()
+        //
+        // The model is captured rather than reached for through `@State`:
+        // this action is a `@Sendable` closure, and a `@MainActor` class is
+        // `Sendable` where a `View` struct is not.
+        .refreshable { [podcasts] in
+            await podcasts?.pulled()
         }
         .task {
             // Built here and not in `init`, for ``HomeView``'s reason: the
