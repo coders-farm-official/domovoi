@@ -208,7 +208,18 @@ public func phoneUploadTarget(_ kind: PhoneUploadKind, _ status: PhoneServerWrit
         }
         return .direct(.library(id: id, label: library.label, path: ""))
     case .file:
-        if let libs, !libs.contains(where: \.editable) {
+        // **Refused, not `.pick`, when the library list could not be read**
+        // — the `.video` branch's answer, for the same reason. Android's
+        // `.Pick` opens a sheet, which this port has no equivalent of: here
+        // `.pick` means "the default home library for the file's kind", and
+        // ``PhoneUploadModel/destination(for:)`` over an empty list answers
+        // nil, so the Files door drew a fully enabled Upload button whose tap
+        // did nothing at all. A control that cannot do what it says is not
+        // drawn (the owner's rule); a faint one that names the reason is.
+        guard let libs else {
+            return .refused(reason: PhoneMediaStrings.couldNotReadLibraries(status.error), blocked: false)
+        }
+        if !libs.contains(where: \.editable) {
             return .refused(reason: PhoneMediaStrings.everyLibraryIsReadOnly, blocked: false)
         }
         return .pick
