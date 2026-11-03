@@ -63,7 +63,22 @@ extension StubHouseUITests {
         let crumb = app.staticTexts[ShellStringsUnderTest.musicCrumb]
         guard crumb.waitForExistence(timeout: 40) else { return (app, false) }
         let tab = startingWith(app, MusicMoreUnderTest.tabPlaylists)
-        return (app, tab.waitForExistence(timeout: 30))
+        guard !tab.waitForExistence(timeout: 30) else { return (app, true) }
+        // **The strip is below the room cards, and at an accessibility size
+        // that is below the fold.** Train S007 failed here and the message
+        // said "the playlists tab never drew a row", which reads as a screen
+        // that did not answer; the tree beside it said otherwise. At
+        // AX5 the three room cards above the strip are 1520 points tall
+        // against a 400-point content area, so the strip is not off screen —
+        // it is *unbuilt*, the lazy foot of a `LazyVStack` nobody has
+        // scrolled to. Scrolling to it is what a person does, so the case
+        // does it too, rather than the screen being called broken.
+        //
+        // Not an app defect: Android stacks `NowPlayingCards` above
+        // `ScrollableTabRow` in the same order, and at the ordinary size the
+        // strip is 726 points down a 770-point window, which is where it has
+        // always been.
+        return (app, musicMoreScroll(app, to: tab))
     }
 
     /// Open Music and move to the playlists tab.
@@ -74,7 +89,10 @@ extension StubHouseUITests {
         guard landed else { return (app, false) }
         startingWith(app, MusicMoreUnderTest.tabPlaylists).tap()
         let row = containing(app, MusicMoreUnderTest.longwater)
-        return (app, row.waitForExistence(timeout: 30))
+        if row.waitForExistence(timeout: 30) { return (app, true) }
+        // The rows are under the strip, so at an accessibility size they are
+        // unbuilt for the same reason the strip was — see `openMusicMore`.
+        return (app, musicMoreScroll(app, to: row))
     }
 
     /// Open one playlist's sheet from the tab.
@@ -929,6 +947,84 @@ extension StubHouseUITests {
         )
     }
 
+    /// **The measurement the audit's Dynamic Type finding claims to be
+    /// about** — the tab strip's own four words.
+    ///
+    /// Train S007's audit named all four tab buttons: "User will not be able
+    /// to change the font size of this element", with the element attached.
+    /// They are the first named Dynamic Type findings this item has seen, and
+    /// this track has now had three: `favorites only`
+    /// (``knownScalingFalsePositive``) and the five leaves
+    /// ``testTheVideosGridTextGrowsAtAX5`` measures were both false. The
+    /// shape is the same here — a `Text` with `.fixedSize(horizontal: false,
+    /// vertical: true)` inside a `Button` that merges it, so the audit has no
+    /// font to read on the element it can see — but a belief is not a
+    /// measurement, so this is the measurement.
+    ///
+    /// **Why the assertion is "bigger", and not "half again bigger" like the
+    /// playlist row's.** All four buttons measure exactly 44.0 at the
+    /// ordinary size, and 44 is ``MusicTabBar``'s `minHeight` floor, not the
+    /// text's height — a `.subheadline` leaf there is about 18 points. So a
+    /// ratio would be a ratio against the floor: `.subheadline` at AX5 is
+    /// around 49 points, which is the control growing by every point it has
+    /// and still only 1.1x of 44. What discriminates is the floor itself —
+    /// a strip whose font could not change would measure 44.0 at **both**
+    /// sizes, because the floor is the only thing holding it up.
+    @MainActor
+    func testMusicMore_TheTabStripTextGrowsAtAX5() throws {
+        func heights(_ mode: String) -> [String: CGFloat] {
+            let (app, landed) = openMusicMore(mode)
+            XCTAssertTrue(landed, "the tab strip never drew at \(mode)")
+            var out: [String: CGFloat] = [:]
+            for word in MusicMoreUnderTest.tabWords {
+                let button = app.buttons
+                    .matching(NSPredicate(format: "label BEGINSWITH %@", word))
+                    .firstMatch
+                if button.exists { out[word] = button.frame.height }
+            }
+            evidence(app, "musicmore-16A-tabstrip-\(mode == Self.ordinaryTypeSize ? "large" : "ax5")")
+            app.terminate()
+            return out
+        }
+
+        musicMoreReset()
+        let ordinary = heights(Self.ordinaryTypeSize)
+        let huge = heights("UICTContentSizeCategoryAccessibilityXXXL")
+        for word in MusicMoreUnderTest.tabWords {
+            // Printed whatever the verdict: a run where the numbers are
+            // wanted is a run where the case already failed, and a log that
+            // only prints on failure prints nothing the day the case is
+            // right for the wrong reason.
+            let large = ordinary[word].map { "\($0)" } ?? "not on screen"
+            let ax5 = huge[word].map { "\($0)" } ?? "not on screen"
+            print("SCALE [musicmore-tab] \(word) large=\(large) ax5=\(ax5)")
+        }
+
+        // Every one of the four, measured on both sides: a strip where one
+        // word is pinned and three grow is still a defect, and an average
+        // would hide it.
+        for word in MusicMoreUnderTest.tabWords {
+            guard let small = ordinary[word] else {
+                XCTFail("the '\(word)' tab was not on screen at the ordinary size")
+                continue
+            }
+            guard let big = huge[word] else {
+                XCTFail("the '\(word)' tab was not on screen at AX5")
+                continue
+            }
+            // Two points of margin, not none: the measurement comes back in
+            // thirds of a point and a strict `>` on two equal 44.0s is a
+            // comparison of floats.
+            XCTAssertGreaterThan(
+                big, small + 2,
+                "the '\(word)' tab did not grow with the type size "
+                    + "(\(small) -> \(big) points) — it is still on its 44-point "
+                    + "floor at AX5, so the audit's Dynamic Type finding "
+                    + "against it is real after all"
+            )
+        }
+    }
+
     // MARK: - 10. the audit
 
     /// Apple's own accessibility audit over the playlists tab and the sheet
@@ -953,21 +1049,82 @@ extension StubHouseUITests {
         let tab = try auditIssues(app, "musicmore-playlists-tab")
         let onTab = Self.floorAndRest(tab)
         evidence(app, "musicmore-170-audit-tab")
+        let tabLeft = musicMoreUnexplained(onTab.rest, in: app)
         XCTAssertEqual(
-            [], onTab.rest,
-            "the playlists tab has \(onTab.rest.count) findings beyond the known floor "
-                + "of \(onTab.floor): \(onTab.rest)"
+            [], tabLeft,
+            "the playlists tab has findings beyond the known floor of \(onTab.floor) "
+                + "that neither a measurement nor the viewport edge explains: \(tabLeft)"
         )
 
         XCTAssertTrue(openPlaylistSheet(app, MusicMoreUnderTest.longwater), "the sheet never opened")
         let sheet = try auditIssues(app, "musicmore-playlist-sheet")
         let onSheet = Self.floorAndRest(sheet)
         evidence(app, "musicmore-171-audit-sheet")
+        let sheetLeft = musicMoreUnexplained(onSheet.rest, in: app)
         XCTAssertEqual(
-            [], onSheet.rest,
-            "the playlist sheet has \(onSheet.rest.count) findings beyond the known floor "
-                + "of \(onSheet.floor): \(onSheet.rest)"
+            [], sheetLeft,
+            "the playlist sheet has findings beyond the known floor of \(onSheet.floor) "
+                + "that neither a measurement nor the viewport edge explains: \(sheetLeft)"
         )
+    }
+
+    /// The named findings this item has an **answer** for, taken out — and
+    /// everything else left in.
+    ///
+    /// Three exclusions, each with its reason, and none of them "the audit is
+    /// usually wrong". The shape is `testTheVideosGridAudits`'s, which is
+    /// where both of the first two were settled first.
+    ///
+    /// Anything else — a contrast failure on a card that is fully on screen,
+    /// an icon-only control with no label, a finding naming an element
+    /// *behind* the sheet (which is how a non-modal sheet reports) — is
+    /// returned and fails the case.
+    @MainActor
+    func musicMoreUnexplained(_ rest: [String], in app: XCUIApplication) -> [String] {
+        // The outer scroll view: the tallest on screen. The others are the
+        // tab strip, lying on its side, and the phone bar.
+        let page = app.scrollViews.allElementsBoundByIndex
+            .max(by: { $0.frame.height < $1.frame.height })?.frame ?? .null
+
+        return rest.filter { line in
+            // 1. A Dynamic Type headline **with** an element. The four tab
+            //    buttons arrive this way and
+            //    ``testMusicMore_TheTabStripTextGrowsAtAX5`` measures those
+            //    very four at both sizes, which is the test; this is only
+            //    the classification that makes room for it. Nothing is
+            //    excluded here on a belief — if the strip ever does stop
+            //    scaling, the measurement fails and this line is why the
+            //    audit stayed quiet, not what kept it quiet.
+            if Self.knownAnonymousHeadlines.contains(where: { line.hasPrefix($0) }) {
+                return false
+            }
+            // 2. A contrast finding against an element one of the scroll
+            //    view's own edges is cutting. Half an element has no pixels
+            //    to read, which is what the audit reports. S007's single
+            //    contrast finding was `playing in parlour` at y
+            //    184.3–198.7 against a content area starting at 197.3 — 1.3
+            //    points of it visible — while `playing in cellar`, the same
+            //    string in the same colour on the same card two rooms down
+            //    and fully on screen, passed. One row further down the
+            //    scroll and it is a different row's turn.
+            if line.hasPrefix("Contrast failed"), let box = Self.frame(in: line),
+               box.intersects(page), !page.contains(box) {
+                return false
+            }
+            // 3. The phone-source segmented control, which is the PhoneMedia
+            //    item's (`PhoneSourceSwitchView.swift:171`) and not this
+            //    one's to edit — Apple reads its label `127.0.0.1:6601` as
+            //    not human-readable, and it is right. Recorded in
+            //    `overnight/musicmore/DECISIONS.md` under "Needs a shared
+            //    change" rather than silently fixed in another item's file.
+            //    Pinned to that one control by its identifier: a second
+            //    unreadable label anywhere on Music still fails this case.
+            if line.hasPrefix("Label not human-readable"),
+               line.contains("id='\(MusicMoreUnderTest.phoneSourceServer)'") {
+                return false
+            }
+            return true
+        }
     }
 }
 
@@ -984,6 +1141,19 @@ enum MusicMoreUnderTest {
     // the tabs
     static let tabPlaylists = "playlists"
     static let tabPlayer = "player"
+
+    /// The four words the strip offers with no engine registered, each one
+    /// the **start** of a button's label: two of them carry a count
+    /// (`library · 6`, `playlists · 3`) and the count moves with the
+    /// fixtures, so a whole label would be a second thing to keep true.
+    static let tabWords = ["library", "room queue", "playlists", "stats"]
+
+    /// The phone-source switch's server segment, by identifier
+    /// (`PhoneSourceSwitchView.swift:171`). Not this item's control; it is
+    /// here because it is on Music's screen and so in Music's audit, and an
+    /// identifier is the only stable handle on it — its label is the house's
+    /// address.
+    static let phoneSourceServer = "phone-source-server"
 
     // the playlists
     static let favorites = "Favorites"
