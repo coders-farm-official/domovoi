@@ -33,43 +33,78 @@ struct RouteScreen: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             .padding(24)
-        } else if route == .home {
+        } else {
+            screen
+        }
+    }
+
+    /// One slot per route.
+    ///
+    /// **Each unbuilt route is three lines — `case`, a `// slot:` comment and
+    /// its placeholder — and a branch that builds a screen replaces only the
+    /// placeholder line.** That keeps an unchanged line between any two
+    /// branches' edits, so the overnight branches of 2026-11-02, each building
+    /// a different screen in parallel, merge here without a conflict. Keep
+    /// the shape when filling a slot: add lines under the `// slot:` comment,
+    /// never move or delete the comment.
+    @ViewBuilder private var screen: some View {
+        switch route {
+        case .home:
             // I1-D part 1 replaces exactly one branch, which is Android's
             // shape too: `ScreenRouter.kt:57` → `Route.Home -> HomeScreen(…)`.
             HomeView(model: model)
-        } else if route == .music {
-            // The second branch to become a screen. Only the library half of
-            // it is built; ``MusicView`` says what is left out and why there
-            // is no control for any of it.
+        case .music:
+            // Only the library half is built; ``MusicView`` says what is left
+            // out and why there is no control for any of it.
             MusicView(model: model)
-        } else if route == .videos {
-            // The third screen. ``VideosView`` says what is left out and why
-            // there is no control for any of it.
+        case .videos:
+            // ``VideosView`` says what is left out and why there is no
+            // control for any of it.
             VideosView(model: model)
-        } else if route == .files {
-            // The fourth screen. ``FilesView`` says what is left out and why
-            // there is no control for any of it — including the delete
-            // Android draws and cannot do from a phone.
+        case .files:
+            // ``FilesView`` says what is left out and why there is no control
+            // for any of it — including the delete Android draws and cannot
+            // do from a phone.
             FilesView(model: model)
-        } else if route == .chat {
-            // The fifth screen. ``ChatView`` says what is left out and why
-            // there is no control for any of it — the place chip and picker
-            // that would say the same thing on every row for ever, the
-            // per-thread internet switch this app cannot honestly offer
-            // (nothing here can answer a mid-answer `lookup_permission`
-            // card), and the pictures, voice, documents, drafts, letters,
-            // long-document jobs, lookups, report-a-message and heads-up
-            // picks that are each a milestone away.
-            //
-            // **The capability check above is Chat's AI check.** A house with
-            // `features.ai == false` never reaches this branch; it gets
+        case .chat:
+            // ``ChatView`` says what is left out and why. **The capability
+            // check above is Chat's AI check**: a house with
+            // `features.ai == false` never reaches this branch and gets
             // ``Route/unavailableNote(_:)``'s "chat is turned off". What
-            // ``ChatModel/aiEnabled`` covers is the other case — the switch
-            // thrown while this screen is already open.
+            // ``ChatModel/aiEnabled`` covers is the switch thrown while this
+            // screen is already open.
             ChatView(model: model)
-        } else if route == .settings {
+        case .settings:
             SettingsPlaceholder(model: model)
-        } else {
+        case .podcasts:
+            // slot: podcasts
+            ScreenPlaceholder(route: route, onThisPhone: false)
+        case .audiobooks:
+            // slot: audiobooks
+            ScreenPlaceholder(route: route, onThisPhone: false)
+        case .images:
+            // slot: images
+            ScreenPlaceholder(route: route, onThisPhone: false)
+        case .news:
+            // slot: news
+            ScreenPlaceholder(route: route, onThisPhone: false)
+        case .people:
+            // slot: people
+            ScreenPlaceholder(route: route, onThisPhone: false)
+        case .satellites:
+            // slot: satellites
+            ScreenPlaceholder(route: route, onThisPhone: false)
+        case .calendar:
+            // slot: calendar
+            ScreenPlaceholder(route: route, onThisPhone: false)
+        case .stations:
+            // slot: stations
+            ScreenPlaceholder(route: route, onThisPhone: false)
+        case .manual:
+            // slot: manual
+            ScreenPlaceholder(route: route, onThisPhone: false)
+        case .containers:
+            // slot: containers
             ScreenPlaceholder(route: route, onThisPhone: false)
         }
     }
@@ -248,16 +283,11 @@ struct SettingsPlaceholder: View {
                     .font(.footnote)
                     .foregroundStyle(Color.fgMuted)
                     .fixedSize(horizontal: false, vertical: true)
-                if section.key == "phones-and-browsers" {
-                    // The one section with a screen. Its first three cards
-                    // are part 3's; §6.5's four are a batch of their own, as
-                    // ``PhonesAndBrowsersPanel`` says and the report sizes.
-                    PhonesAndBrowsersPanel(model: model, askingToForget: $askingToForget)
-                } else {
-                    Text("not built yet")
-                        .font(.footnote)
-                        .foregroundStyle(Color.fgMuted)
-                }
+                SettingsSectionScreen(
+                    model: model,
+                    section: section,
+                    askingToForget: $askingToForget
+                )
                 Button(ShellStrings.backTo(section.group.label)) { place = place.up ?? .index }
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -266,5 +296,78 @@ struct SettingsPlaceholder: View {
             // `Spacer` has no space to take and the `frame(maxHeight:)` on the
             // scroll view is what fills the screen now.
         }
+    }
+}
+
+/// One slot per Settings section — the same three-line shape as
+/// ``RouteScreen``'s, for the same reason: parallel branches each fill a
+/// different section and must merge here without a conflict. Fill a slot by
+/// replacing its ``SettingsSectionNotBuilt()`` line; never move a
+/// `// slot:` comment.
+struct SettingsSectionScreen: View {
+
+    let model: ShellModel
+    let section: SettingsSection
+    @Binding var askingToForget: Bool
+
+    var body: some View {
+        switch section.key {
+        case "phones-and-browsers":
+            // The one section built before 2026-11-02. Its first three cards
+            // are part 3's; §6.5's four are a batch of their own, as
+            // ``PhonesAndBrowsersPanel`` says and the report sizes.
+            PhonesAndBrowsersPanel(model: model, askingToForget: $askingToForget)
+        case "rooms":
+            // slot: rooms
+            SettingsSectionNotBuilt()
+        case "printers":
+            // slot: printers
+            SettingsSectionNotBuilt()
+        case "app-layout":
+            // slot: app-layout
+            SettingsSectionNotBuilt()
+        case "wake-words":
+            // slot: wake-words
+            SettingsSectionNotBuilt()
+        case "voices":
+            // slot: voices
+            SettingsSectionNotBuilt()
+        case "greetings":
+            // slot: greetings
+            SettingsSectionNotBuilt()
+        case "models":
+            // slot: models
+            SettingsSectionNotBuilt()
+        case "chat":
+            // slot: chat
+            SettingsSectionNotBuilt()
+        case "internet":
+            // slot: internet
+            SettingsSectionNotBuilt()
+        case "voice-history":
+            // slot: voice-history
+            SettingsSectionNotBuilt()
+        case "about":
+            // slot: about
+            SettingsSectionNotBuilt()
+        case "health":
+            // slot: health
+            SettingsSectionNotBuilt()
+        case "advanced":
+            // slot: advanced
+            SettingsSectionNotBuilt()
+        default:
+            SettingsSectionNotBuilt()
+        }
+    }
+}
+
+/// What an unbuilt section says — the words this file drew inline before the
+/// sections had slots.
+struct SettingsSectionNotBuilt: View {
+    var body: some View {
+        Text("not built yet")
+            .font(.footnote)
+            .foregroundStyle(Color.fgMuted)
     }
 }

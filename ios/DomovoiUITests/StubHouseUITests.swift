@@ -36,7 +36,7 @@ final class StubHouseUITests: XCTestCase {
     /// Long enough to be storable: `TokenPasteField` refuses anything under
     /// twelve characters, and a refused token would leave the phone
     /// unpaired, which is a different screen from the one being photographed.
-    private static let token = "stubhousetoken0000000000"
+    static let token = "stubhousetoken0000000000"
 
     /// ### What Apple's audit has left against these screens
     ///
@@ -77,7 +77,7 @@ final class StubHouseUITests: XCTestCase {
     /// seven. Nothing in the app target sets a fixed font size — `grep` for
     /// `font(.system(size:` and `UIFont.systemFont` finds none — so whatever
     /// Dynamic Type objects to there, it is not a hard-coded point size.
-    private static let knownHomeIssues = 0
+    static let knownHomeIssues = 0
     /// **Eight false positives, measured as such.** The platform floor every
     /// pushed screen in this app sits on.
     ///
@@ -131,23 +131,23 @@ final class StubHouseUITests: XCTestCase {
     /// This is the second time on this track that a named Dynamic Type
     /// finding turned out to be one: measure the element before believing
     /// the headline.
-    private static let knownScalingFalsePositive = "label='favorites only'"
+    static let knownScalingFalsePositive = "label='favorites only'"
 
-    private static let knownPushedBarFloor = 8
+    static let knownPushedBarFloor = 8
 
     /// Seconds the seeded push waits for the root to draw
     /// (``AuditStrip/pushDelay``).
-    private static let pushDelay: Double = 12
+    static let pushDelay: Double = 12
 
     /// **The companion houses, one per failure mode.** `stub_run.sh` starts
     /// these beside the primary house on 6601; a test picks the state it
     /// wants by port rather than by a mode it cannot set from here. All
     /// inside 6600-6699, which is the range the stub itself enforces and the
     /// only range this track may bind.
-    private static let throttledPort = 6602
-    private static let roomsDownPort = 6603
-    private static let silentSocketPort = 6604
-    private static let unpairedPort = 6605
+    static let throttledPort = 6602
+    static let roomsDownPort = 6603
+    static let silentSocketPort = 6604
+    static let unpairedPort = 6605
 
     override func setUp() {
         continueAfterFailure = false
@@ -186,13 +186,13 @@ final class StubHouseUITests: XCTestCase {
     /// always spelled properly (`UICTContentSizeCategoryAccessibilityXXXL`),
     /// which is the other half of why this hid for so long: the AX5 cases were
     /// the ones being watched.
-    private static let ordinaryTypeSize = "UICTContentSizeCategoryL"
+    static let ordinaryTypeSize = "UICTContentSizeCategoryL"
 
     /// `server: false` saves nothing, which is the local-media shell — no
     /// workspace, no phone bar, and the same ``ShellTopBar``. It is the only
     /// way from here to audit the chrome without Home's content under it.
     @MainActor
-    private func launch(
+    func launch(
         mode: String = StubHouseUITests.ordinaryTypeSize,
         paired: Bool = true,
         server: Bool = true,
@@ -237,7 +237,7 @@ final class StubHouseUITests: XCTestCase {
     /// `Contrast failed` this file has seen outside a modal is unattributed
     /// and unexplained, and a classifier that swallowed "anything the audit
     /// could not attribute" would have hidden it.
-    private static let knownAnonymousHeadlines: Set<String> = [
+    static let knownAnonymousHeadlines: Set<String> = [
         "Dynamic Type font sizes are partially unsupported",
         "Dynamic Type font sizes are unsupported",
     ]
@@ -253,7 +253,7 @@ final class StubHouseUITests: XCTestCase {
     /// An `XCUIApplication.State` in words. A raw value in a log is a number
     /// somebody has to look up, and the one question being asked of it here is
     /// whether the app is still there.
-    private static func stateName(_ state: XCUIApplication.State) -> String {
+    static func stateName(_ state: XCUIApplication.State) -> String {
         switch state {
         case .unknown: return "unknown"
         case .notRunning: return "notRunning"
@@ -264,7 +264,7 @@ final class StubHouseUITests: XCTestCase {
         }
     }
 
-    private static func floorAndRest(_ found: [String]) -> (floor: Int, rest: [String]) {
+    static func floorAndRest(_ found: [String]) -> (floor: Int, rest: [String]) {
         func isFloor(_ line: String) -> Bool {
             guard line.hasSuffix("| element: nil") else { return false }
             return Self.knownAnonymousHeadlines.contains { line.hasPrefix($0) }
@@ -278,7 +278,7 @@ final class StubHouseUITests: XCTestCase {
     /// so `domovoi` on a server called `stub house` means the config read
     /// did not land — whatever the network did.
     @MainActor
-    private func houseName(in app: XCUIApplication) -> XCUIElement {
+    func houseName(in app: XCUIApplication) -> XCUIElement {
         app.staticTexts["stub house"]
     }
 
@@ -315,7 +315,7 @@ final class StubHouseUITests: XCTestCase {
     /// five eliminations were theories about why the link was missing, and it
     /// was never missing.
     @MainActor
-    private func reachPhonesAndBrowsers(_ app: XCUIApplication) -> Bool {
+    func reachPhonesAndBrowsers(_ app: XCUIApplication) -> Bool {
         let link = app.buttons[ShellStringsUnderTest.pairLink]
         let notNow = app.buttons[ShellStringsUnderTest.notNow]
         let marker = app.staticTexts[ShellStringsUnderTest.householdToken]
@@ -347,7 +347,7 @@ final class StubHouseUITests: XCTestCase {
     /// `localBanner(for:canTrustAgain:)`'s `.unreachable` wording, which
     /// appears only in that fallback.
     @MainActor
-    private func fellBackToLocalMedia(in app: XCUIApplication) -> Bool {
+    func fellBackToLocalMedia(in app: XCUIApplication) -> Bool {
         app.descendants(matching: .staticText)
             .matching(NSPredicate(format: "label CONTAINS %@", "Can't reach"))
             .firstMatch
@@ -361,7 +361,7 @@ final class StubHouseUITests: XCTestCase {
     /// the header had also drawn `offline` and `not live` beside a server
     /// address that was plainly reachable.
     @MainActor
-    private func evidence(_ app: XCUIApplication, _ name: String) {
+    func evidence(_ app: XCUIApplication, _ name: String) {
         let shot = XCTAttachment(screenshot: app.screenshot())
         shot.name = name
         shot.lifetime = .keepAlways
@@ -469,7 +469,7 @@ final class StubHouseUITests: XCTestCase {
     /// only in the log.
     @MainActor
     @available(iOS 17.0, *)
-    private func auditIssues(_ app: XCUIApplication, _ name: String) throws -> [String] {
+    func auditIssues(_ app: XCUIApplication, _ name: String) throws -> [String] {
         let wasContinuing = continueAfterFailure
         continueAfterFailure = true
         defer { continueAfterFailure = wasContinuing }
@@ -506,7 +506,7 @@ final class StubHouseUITests: XCTestCase {
     /// against an element the **scroll view's own bottom edge** is cutting in
     /// half is not a colour defect, and the only way to tell that from a real
     /// one is where the element is.
-    private static func frame(in line: String) -> CGRect? {
+    static func frame(in line: String) -> CGRect? {
         guard let opened = line.range(of: "frame=(") else { return nil }
         let rest = line[opened.upperBound...]
         guard let closed = rest.firstIndex(of: ")") else { return nil }
@@ -529,7 +529,7 @@ final class StubHouseUITests: XCTestCase {
     /// The Simulator shares the Mac's loopback, which is how the app reaches
     /// the stub, so the test process can reach it too.
     @MainActor
-    private func clearWatched(port: Int = 6601) {
+    func clearWatched(port: Int = 6601) {
         var request = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/api/_test/reset-watched")!)
         request.httpMethod = "POST"
         request.setValue(Self.token, forHTTPHeaderField: "X-Device-Token")
@@ -551,7 +551,7 @@ final class StubHouseUITests: XCTestCase {
     /// and newlines, which is what got swallowed. Type, identifier, label and
     /// frame are enough to find the view in the tree dumps beside it.
     @MainActor
-    private static func oneLine(_ element: XCUIElement?) -> String {
+    static func oneLine(_ element: XCUIElement?) -> String {
         guard let element else { return "nil" }
         let id = element.identifier
         return "type=\(element.elementType.rawValue)"
@@ -1268,7 +1268,7 @@ final class StubHouseUITests: XCTestCase {
     /// `descendants(matching: .any)` means a marker that moves from a `Text`
     /// to a `Label` does not read as a screen that never drew.
     @MainActor
-    private func anything(_ app: XCUIApplication, labelled label: String) -> XCUIElement {
+    func anything(_ app: XCUIApplication, labelled label: String) -> XCUIElement {
         app.descendants(matching: .any)
             .matching(NSPredicate(format: "label == %@", label))
             .firstMatch
@@ -1762,7 +1762,7 @@ final class StubHouseUITests: XCTestCase {
     /// that writes it and ``VideosModel/countText`` is nil until the list has
     /// answered.
     @MainActor
-    private func openVideos(
+    func openVideos(
         _ mode: String = StubHouseUITests.ordinaryTypeSize,
         delay: Double? = nil
     ) -> (app: XCUIApplication, landed: Bool) {
@@ -2163,7 +2163,7 @@ final class StubHouseUITests: XCTestCase {
     /// merely off screen but unbuilt, so the wait is for the picker instead —
     /// which also only exists once the libraries have landed.
     @MainActor
-    private func openFiles(
+    func openFiles(
         _ mode: String = StubHouseUITests.ordinaryTypeSize,
         blocked: Bool = false,
         delay: Double? = nil
@@ -2181,7 +2181,7 @@ final class StubHouseUITests: XCTestCase {
 
     /// Pick a library from the header's menu.
     @MainActor
-    private func pickLibrary(_ app: XCUIApplication, _ label: String) -> Bool {
+    func pickLibrary(_ app: XCUIApplication, _ label: String) -> Bool {
         let picker = app.buttons["choose library"]
         guard picker.waitForExistence(timeout: 20) else { return false }
         picker.tap()
@@ -2198,7 +2198,7 @@ final class StubHouseUITests: XCTestCase {
     /// one label on a single row, which is ambiguous to a reader and to a
     /// query. The menu says whose it is now.
     @MainActor
-    private func openRowMenu(_ app: XCUIApplication, _ name: String) -> Bool {
+    func openRowMenu(_ app: XCUIApplication, _ name: String) -> Bool {
         let menu = app.buttons["more for \"\(name)\""].firstMatch
         guard menu.waitForExistence(timeout: 10) else {
             // The tree, not a sentence about the element: "the row has no
@@ -2222,7 +2222,7 @@ final class StubHouseUITests: XCTestCase {
     /// walk into a folder. The screen behind a sheet stays in the query tree
     /// and stops being hittable, so hittability is what tells them apart.
     @MainActor
-    private func inSheet(_ app: XCUIApplication, _ label: String) -> XCUIElement? {
+    func inSheet(_ app: XCUIApplication, _ label: String) -> XCUIElement? {
         let all = app.buttons.matching(NSPredicate(format: "label == %@", label))
         for index in 0..<all.count where all.element(boundBy: index).isHittable {
             return all.element(boundBy: index)
@@ -2234,7 +2234,7 @@ final class StubHouseUITests: XCTestCase {
     /// do to it has **no `•••`**, which is a thing to assert rather than a
     /// thing to work around.
     @MainActor
-    private func rowHasMenu(_ app: XCUIApplication, _ name: String) -> Bool {
+    func rowHasMenu(_ app: XCUIApplication, _ name: String) -> Bool {
         app.buttons["more for \"\(name)\""].firstMatch.exists
     }
 
@@ -2643,7 +2643,7 @@ final class StubHouseUITests: XCTestCase {
     /// one field of one answer (``clearWatched`` says why the test process
     /// can reach the stub at all).
     @MainActor
-    private func setFilesBlocked(_ blocked: Bool, port: Int = 6601) {
+    func setFilesBlocked(_ blocked: Bool, port: Int = 6601) {
         var request = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/api/_test/files-blocked")!)
         request.httpMethod = "POST"
         request.setValue(Self.token, forHTTPHeaderField: "X-Device-Token")
@@ -2691,7 +2691,7 @@ final class StubHouseUITests: XCTestCase {
     /// `aiOff: true` hides Chat altogether — the route's own capability check
     /// — so `landed` is false by design and that case asserts the note.
     @MainActor
-    private func openChat(
+    func openChat(
         _ mode: String = StubHouseUITests.ordinaryTypeSize,
         aiOff: Bool = false,
         fail: String? = nil,
@@ -2745,7 +2745,7 @@ final class StubHouseUITests: XCTestCase {
     /// `.slow` is the same flick with a fraction of the momentum, so it moves
     /// far enough to build the next cells and not far enough to skip one.
     @MainActor
-    private func scrollUntilBuilt(_ app: XCUIApplication, _ element: XCUIElement, flicks: Int = 30) -> Bool {
+    func scrollUntilBuilt(_ app: XCUIApplication, _ element: XCUIElement, flicks: Int = 30) -> Bool {
         let list = app.collectionViews.firstMatch
         guard list.waitForExistence(timeout: 20) else {
             print("=== NO LIST TO SCROLL — tree follows ===")
@@ -2772,7 +2772,7 @@ final class StubHouseUITests: XCTestCase {
     /// hold first, which is the trap `openRowMenu` was written for one screen
     /// earlier.
     @MainActor
-    private func openChatRowMenu(_ app: XCUIApplication, _ title: String) -> Bool {
+    func openChatRowMenu(_ app: XCUIApplication, _ title: String) -> Bool {
         let menu = app.buttons
             .matching(
                 NSPredicate(
@@ -2799,14 +2799,14 @@ final class StubHouseUITests: XCTestCase {
     /// row's words may be merged into the row's button and a bubble's may not
     /// be — and a query that guessed wrong would report a screen as empty.
     @MainActor
-    private func startingWith(_ app: XCUIApplication, _ text: String) -> XCUIElement {
+    func startingWith(_ app: XCUIApplication, _ text: String) -> XCUIElement {
         app.descendants(matching: .any)
             .matching(NSPredicate(format: "label BEGINSWITH %@", text))
             .firstMatch
     }
 
     @MainActor
-    private func containing(_ app: XCUIApplication, _ text: String) -> XCUIElement {
+    func containing(_ app: XCUIApplication, _ text: String) -> XCUIElement {
         app.descendants(matching: .any)
             .matching(NSPredicate(format: "label CONTAINS %@", text))
             .firstMatch
@@ -2821,7 +2821,7 @@ final class StubHouseUITests: XCTestCase {
     /// A case that asked for `app.textFields[…]` would pass or fail on that
     /// detail rather than on the composer.
     @MainActor
-    private func composerField(_ app: XCUIApplication) -> XCUIElement {
+    func composerField(_ app: XCUIApplication) -> XCUIElement {
         app.descendants(matching: .any)
             .matching(NSPredicate(format: "label == %@", ChatStringsUnderTest.composerHint))
             .firstMatch
@@ -2842,7 +2842,7 @@ final class StubHouseUITests: XCTestCase {
     /// the control carries none; `value == ""` is not a predicate an
     /// `XCUIElement` answers reliably, so the frame is what this uses.)
     @MainActor
-    private func newChatControl(_ app: XCUIApplication) -> XCUIElement? {
+    func newChatControl(_ app: XCUIApplication) -> XCUIElement? {
         let all = app.buttons
             .matching(NSPredicate(format: "label == %@", ChatStringsUnderTest.newChat))
         guard all.firstMatch.waitForExistence(timeout: 20) else {
@@ -2868,7 +2868,7 @@ final class StubHouseUITests: XCTestCase {
     /// own right: a row that was archived has to **leave** the list, and
     /// `XCUIElement` has no `waitForNonExistence` before iOS 18's.
     @MainActor
-    private func waitUntilGone(_ element: XCUIElement, timeout: Double = 20) -> Bool {
+    func waitUntilGone(_ element: XCUIElement, timeout: Double = 20) -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             if !element.exists { return true }
@@ -2884,13 +2884,13 @@ final class StubHouseUITests: XCTestCase {
     /// silently appended to a seeded name would assert a name nobody could
     /// explain.
     @MainActor
-    private func clearField(_ app: XCUIApplication) {
+    func clearField(_ app: XCUIApplication) {
         app.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 60))
     }
 
     /// Open a thread from the list and wait for its transcript.
     @MainActor
-    private func openThread(_ app: XCUIApplication, _ title: String, waitingFor words: String) -> Bool {
+    func openThread(_ app: XCUIApplication, _ title: String, waitingFor words: String) -> Bool {
         let row = app.buttons[title].firstMatch
         guard row.waitForExistence(timeout: 20) else {
             print("=== NO CHAT ROW for \(title) — tree follows ===")
@@ -2922,7 +2922,7 @@ final class StubHouseUITests: XCTestCase {
     /// Above the keyboard, not merely hittable: a key *is* hittable, and
     /// `isHittable` would have chosen the wrong one just as happily.
     @MainActor
-    private func composerSend(_ app: XCUIApplication) -> XCUIElement? {
+    func composerSend(_ app: XCUIApplication) -> XCUIElement? {
         let keyboard = app.keyboards.firstMatch
         let keyboardTop = keyboard.exists ? keyboard.frame.minY : .greatestFiniteMagnitude
         let all = app.buttons
@@ -2945,7 +2945,7 @@ final class StubHouseUITests: XCTestCase {
     /// Say something in the open conversation and wait for the send to be
     /// taken. Answers whether the composer accepted it.
     @MainActor
-    private func say(_ app: XCUIApplication, _ words: String) -> Bool {
+    func say(_ app: XCUIApplication, _ words: String) -> Bool {
         let field = composerField(app)
         guard field.waitForExistence(timeout: 20) else {
             print("=== NO COMPOSER — tree follows ===")
@@ -3813,7 +3813,7 @@ final class StubHouseUITests: XCTestCase {
     /// row that was there. This is called before every launch, so what ran
     /// before a case cannot decide what it sees.
     @MainActor
-    private func resetChatHouse(port: Int = 6601) {
+    func resetChatHouse(port: Int = 6601) {
         control("chat-reset", "{}", port: port, what: "the chat house's seven threads")
     }
 
@@ -3821,20 +3821,20 @@ final class StubHouseUITests: XCTestCase {
     ///
     /// ``clearWatched`` says why the test process can reach the stub at all.
     @MainActor
-    private func setChatAI(on: Bool, port: Int = 6601) {
+    func setChatAI(on: Bool, port: Int = 6601) {
         control("chat-ai", "{\"on\":\(on)}", port: port, what: "the household AI switch")
     }
 
     /// What the next send does instead of answering: nil, `"ai-off"`,
     /// `"mid-stream"` or `"slow"`.
     @MainActor
-    private func setChatFail(_ how: String?, port: Int = 6601) {
+    func setChatFail(_ how: String?, port: Int = 6601) {
         let body = how.map { "{\"how\":\"\($0)\"}" } ?? "{\"how\":null}"
         control("chat-fail", body, port: port, what: "how the next send fails")
     }
 
     @MainActor
-    private func control(_ route: String, _ body: String, port: Int, what: String) {
+    func control(_ route: String, _ body: String, port: Int, what: String) {
         var request = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/api/_test/\(route)")!)
         request.httpMethod = "POST"
         request.setValue(Self.token, forHTTPHeaderField: "X-Device-Token")
@@ -3858,7 +3858,7 @@ final class StubHouseUITests: XCTestCase {
 /// testing what it claims to. These are the stub's own
 /// (`design-notes/ios/stubhouse/stubhouse.py`, `CHAT_THREADS` and
 /// `CHAT_MESSAGES`), not the app's.
-private enum StubChat {
+enum StubChat {
     /// Thread 11: six messages, and the one whose `stats.window_from_id`
     /// puts the divider in a true place.
     static let fridge = "What can I cook with what's in the fridge?"
@@ -3910,7 +3910,7 @@ private enum StubChat {
 }
 
 /// The Chat screen's own words, from ``ChatStrings`` and ``ShellStrings``.
-private enum ChatStringsUnderTest {
+enum ChatStringsUnderTest {
     static let newChat = "new chat"
     static let searchHint = "search chats"
     static let composerHint = "Message Domovoi…"
@@ -3963,7 +3963,7 @@ private enum ChatStringsUnderTest {
 /// Deliberately **not** `@testable import DomovoiKit`: a UI test drives the
 /// app through the same surface a person does, and a query that silently
 /// followed a renamed string would stop testing what it claims to.
-private enum ShellStringsUnderTest {
+enum ShellStringsUnderTest {
     static let pairLink = "pair this phone for live updates and controls"
     /// ``ShellStrings/pairTitle`` — the pairing screen's own heading, which is
     /// how ``reachPhonesAndBrowsers(_:)`` knows it is there without tapping
