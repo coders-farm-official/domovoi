@@ -58,23 +58,49 @@ struct NewsTopicsCardView: View {
 
     /// `FlowRow` of the nine keys (`NewsDetail.kt:243-250`).
     ///
-    /// SwiftUI has no flow layout, and the substitute is a `LazyVGrid` with
-    /// **adaptive** columns whose minimum is a ``ScaledMetric``: at the
-    /// ordinary size that is three or four chips to a row, and at an
-    /// accessibility size it becomes one, which is what a flow row would do
-    /// with chips whose text is 48 points tall. A fixed column count would
-    /// clip the long words (`entertainment`) at the larger sizes.
+    /// ### Rows, not a `LazyVGrid` — and the grid was the finding
+    ///
+    /// This was `LazyVGrid(columns: [.adaptive(minimum:)])`, and train S002
+    /// reported **nine** `Dynamic Type font sizes are partially unsupported`,
+    /// one per chip, each naming the chip and its 104 × 44 cell.
+    /// ``HomeEverythingView`` has already paid for that lesson and measured
+    /// it to the end (its note, and the six findings it cost Home): the same
+    /// `Text` with the same `.caption` audits clean once it is out of a lazy
+    /// container's cell, and none of height, label, column width or traits
+    /// changes it. Nine chips with no fetch behind any of them never earned
+    /// the laziness.
+    ///
+    /// Three to a row, and **one at the accessibility sizes**: 104 points of
+    /// chip at 48-point text is one syllable, and `minimumScaleFactor` is
+    /// rejected throughout this app. A short last row is padded with clear
+    /// chips so that two chips and three chips are the same width.
     private var chips: some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: chipMinimum), spacing: 8)], spacing: 8) {
-            ForEach(categories, id: \.self) { word in
-                NewsCategoryChip(word: word, on: detail.isCategoryOn(word)) {
-                    detail.toggleCategory(word)
+        VStack(spacing: 8) {
+            ForEach(chipRows, id: \.self) { row in
+                HStack(spacing: 8) {
+                    ForEach(row, id: \.self) { word in
+                        NewsCategoryChip(word: word, on: detail.isCategoryOn(word)) {
+                            detail.toggleCategory(word)
+                        }
+                    }
+                    ForEach(Array(0 ..< max(0, chipsPerRow - row.count)), id: \.self) { _ in
+                        Color.clear.frame(maxWidth: .infinity, minHeight: 44)
+                    }
                 }
             }
         }
     }
 
-    @ScaledMetric(relativeTo: .body) private var chipMinimum: CGFloat = 104
+    private var chipsPerRow: Int { typeSize.isAccessibilitySize ? 1 : 3 }
+
+    /// ``categories`` in rows of ``chipsPerRow``.
+    private var chipRows: [[String]] {
+        stride(from: 0, to: categories.count, by: chipsPerRow).map { start in
+            Array(categories[start ..< min(start + chipsPerRow, categories.count)])
+        }
+    }
+
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     // MARK: - the free-form field
 
@@ -86,6 +112,17 @@ struct NewsTopicsCardView: View {
     /// Return key makes a newline and whose `onSubmit` never fires. This
     /// field is single-line, which is Android's `ImeAction.Done`
     /// (`:264`), and the key does what it says.
+    ///
+    /// ### `add topic` is drawn when there is something to add
+    ///
+    /// Android keeps the button in place and disables it (`:268`). Drawn
+    /// disabled it is a dimmed label on a dimmed fill, which is what train
+    /// S002's `Contrast failed: news-add-topic` is — and a control that
+    /// cannot do what it says is not drawn here (Kamron's rule). Appearing
+    /// with the first character is also what gives the field its full width
+    /// back: the same run reported the placeholder clipped at 225 points
+    /// beside the button, and it is not clipped at 329 without it.
+    /// DECISIONS.md.
     private var freeform: some View {
         HStack(spacing: 8) {
             TextField(
@@ -103,13 +140,18 @@ struct NewsTopicsCardView: View {
             .accessibilityLabel(NewsStrings.freeformPlaceholder)
             .accessibilityIdentifier("news-freeform")
 
-            Button(NewsStrings.addTopic) { detail.addFreeform() }
-                .buttonStyle(.bordered)
-                .tint(Color.brandInk)
-                .disabled(!detail.canAddTopic)
-                .frame(minHeight: 44)
-                .fixedSize(horizontal: false, vertical: true)
-                .accessibilityIdentifier("news-add-topic")
+            if detail.canAddTopic {
+                // The poll button's pair: `.borderedProminent` draws a white
+                // label, which is 2.05:1 on the amber, and `brandFg` is the
+                // measured 8.49:1 one.
+                Button(NewsStrings.addTopic) { detail.addFreeform() }
+                    .buttonStyle(.borderedProminent)
+                    .tint(Color.brand)
+                    .foregroundStyle(Color.brandFg)
+                    .frame(minHeight: 44)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("news-add-topic")
+            }
         }
     }
 
@@ -166,9 +208,14 @@ struct NewsCategoryChip: View {
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
                 .frame(maxWidth: .infinity, minHeight: 44)
-                // The measured pair on the fill, `fgMuted` on the card — and
-                // never ``Color/brand`` as text, which is 2.05:1.
-                .foregroundStyle(on ? Color.brandFg : Color.fgMuted)
+                // The measured pair on the fill, and `brandInk` — not
+                // `fgMuted` — on the unselected chip: `fgMuted` was measured
+                // against the **white canvas**, and this chip's fill is
+                // `secondarySystemBackground`, where it is what Apple's audit
+                // fails. ``HomeEverythingView``'s tile draws `brandInk` on
+                // that same fill and audits clean. Never ``Color/brand`` as
+                // text, which is 2.05:1.
+                .foregroundStyle(on ? Color.brandFg : Color.brandInk)
                 .background(
                     on ? Color.brand : Color(.secondarySystemBackground),
                     in: Capsule()
@@ -380,13 +427,17 @@ struct NewsFeedsListView: View {
             .accessibilityLabel(NewsStrings.feedURLPlaceholder)
             .accessibilityIdentifier("news-feed-url-\(feeds.topicID)")
 
-            Button(NewsStrings.addFeed) { feeds.addFeed() }
-                .buttonStyle(.bordered)
-                .tint(Color.brandInk)
-                .disabled(!feeds.canAddFeed)
-                .frame(minHeight: 44)
-                .fixedSize(horizontal: false, vertical: true)
-                .accessibilityIdentifier("news-add-feed-\(feeds.topicID)")
+            // Drawn when it can act, and in the page's one action pair —
+            // ``freeform``'s note says why for both.
+            if feeds.canAddFeed {
+                Button(NewsStrings.addFeed) { feeds.addFeed() }
+                    .buttonStyle(.borderedProminent)
+                    .tint(Color.brand)
+                    .foregroundStyle(Color.brandFg)
+                    .frame(minHeight: 44)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("news-add-feed-\(feeds.topicID)")
+            }
         }
     }
 }

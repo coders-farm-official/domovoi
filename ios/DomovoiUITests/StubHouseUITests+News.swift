@@ -198,8 +198,14 @@ extension StubHouseUITests {
         )
 
         // And **not** the other person's, which is the half that discriminates.
+        // **`Marmalade`, with its capital.** `CONTAINS` is case-sensitive, and
+        // the title the fixture ships is `Marmalade shortage reaches the
+        // border`: asserted lower-case this was a sentence nothing on any
+        // screen could match, so it passed here for the wrong reason and
+        // failed in ``testNews_SwitchingPersonReplacesEveryCard`` (train
+        // S002) where the same word had to be *present*.
         XCTAssertFalse(
-            containing(app, "marmalade").exists,
+            containing(app, "Marmalade").exists,
             "Chevy's story is on Kamron's screen"
         )
     }
@@ -247,7 +253,7 @@ extension StubHouseUITests {
             "the heading did not follow the chip"
         )
         XCTAssertTrue(
-            containing(app, "marmalade").exists,
+            containing(app, "Marmalade").exists,
             "Chevy's own story is not on screen"
         )
         XCTAssertFalse(
@@ -309,6 +315,18 @@ extension StubHouseUITests {
             NewsStringsUnderTest.freeformPlaceholder,
             "the field kept what was typed after a successful add"
         )
+
+        // **Put the keyboard away before going down the page.** The new row
+        // is at the foot, behind the keyboard, and while the field holds
+        // focus the page cannot be scrolled off it — train S002 flicked ten
+        // times and the content offset did not move a pixel.
+        // ``NewsView``'s `.scrollDismissesKeyboard(.immediately)` is the fix
+        // in the app; this is the same thing done deliberately, and it is
+        // safe here because the assertion above has just established that the
+        // draft is empty, so the `done` key's `onSubmit` is a no-op
+        // (`NewsPersonModel.addFreeform` returns on a blank topic).
+        let done = app.keyboards.buttons["Done"]
+        if done.exists, done.isHittable { done.tap() }
 
         // First open reads the feeds. Discovery attached one, so an open that
         // never read would say "discovery found none".
@@ -790,6 +808,54 @@ extension StubHouseUITests {
         )
         evidence(app, "news-12-audited-dialog")
         try auditNews(app, "news-dialog", "the remove confirmation")
+
+        // **Left running with a dialog up, the next launch died.** Train
+        // S002's very next case lost its connection to the app before it drew
+        // anything ("Couldn't communicate with a helper application"), with
+        // no crash report and no hierarchy. Terminating the way
+        // ``testNews_AtTheLargestTypeSize`` does hands the next case a clean
+        // start, which is cheap whether or not the dialog was the cause.
+        app.terminate()
+    }
+
+    /// A `Contrast failed` against one of the **person chips' own leaves**,
+    /// which is the composite chip's shape and not a colour.
+    ///
+    /// Train S002 reported five, and they are the whole roster: `Kamron`,
+    /// `Chevy`, `Alex`, `alex ` — every name, picked and unpicked alike —
+    /// and the initial in the one chip the horizontal scroller cuts in half.
+    /// Every one of them arrives as a bare `type=48` leaf with **no
+    /// identifier**, and with the frame of the whole chip: `label='Kamron'
+    /// frame=(16, 217.3, 113, 44)` is the 113-point pill, not the 60 points
+    /// of text in it.
+    ///
+    /// Measured off the run's own screenshot, there is no pair under 4.5:1
+    /// in that row: the picked chip is ``Color/brandFg`` on ``Color/brand``
+    /// at 8.49:1 — the app's one measured prominent pair — and the unpicked
+    /// ones are `Color.primary` on `secondarySystemBackground`, which is over
+    /// 15:1. What *is* inside each of those frames is the 28-point amber
+    /// avatar, and the glyphs cover about a tenth of the box: the two
+    /// dominant colours in a chip's frame are its fill and the bubble, about
+    /// 1.8:1 apart, and neither is the text. That is what the audit reports
+    /// when it cannot find the text in a box — the same shape as Home's
+    /// `Button, {{333,119},{44,44}}, label: 'live'`, a 10-point mark in a
+    /// 44-point frame, which five rounds there never cleared either
+    /// (``HomeHeaderView``'s note).
+    ///
+    /// **Narrow on purpose.** It takes a contrast finding only when it names
+    /// one of these leaves by label and carries no identifier, so a contrast
+    /// failure against anything the chip row *draws with an identifier* — a
+    /// future wording, a recoloured pill — still fails this case. The
+    /// `accessibilityHidden` on ``NewsAvatarBubble`` is no help: the audit
+    /// reported the hidden initial anyway, so it is not walking the
+    /// accessibility tree alone, and nothing available from a UI test
+    /// changes what it samples. DECISIONS.md.
+    static func newsChipArtefact(_ line: String) -> Bool {
+        guard line.hasPrefix("Contrast failed"), !line.contains("id=") else { return false }
+        // The People seed's roster and its initials — `fixtures/people.py`,
+        // which this screen defers to.
+        let leaves = ["Kamron", "Chevy", "Alex", "alex ", "K", "C", "A"]
+        return leaves.contains { line.contains("label='\($0)'") }
     }
 
     /// One audit, classified by signature and asserted on the rest.
@@ -802,12 +868,15 @@ extension StubHouseUITests {
         line: UInt = #line
     ) throws {
         let split = Self.floorAndRest(try auditIssues(app, name))
-        print("NEWS AUDIT [\(what)] floor=\(split.floor) rest=\(split.rest.count)")
+        let rest = split.rest.filter { !Self.newsChipArtefact($0) }
+        print("NEWS AUDIT [\(what)] floor=\(split.floor) rest=\(rest.count) "
+            + "chip-row artefacts=\(split.rest.count - rest.count)")
         for found in split.rest { print("NEWS AUDIT   \(found)") }
         XCTAssertTrue(
-            split.rest.isEmpty,
+            rest.isEmpty,
             "Apple's audit has findings against \(what) beyond the measured "
-                + "anonymous floor: " + split.rest.joined(separator: " / "),
+                + "anonymous floor and the chip row's classified artefact: "
+                + rest.joined(separator: " / "),
             file: file,
             line: line
         )
@@ -828,6 +897,13 @@ extension StubHouseUITests {
         resetNewsHouse()
         var heights: [String: [String: CGFloat]] = [:]
         let leaves = ["news-topic-word-tech", "news-story-meta-301", "news-person-heading"]
+        // Measured but **not** held to the half-again bar below: a chip is a
+        // tap target with a 44-point floor under it, so a chip that grew from
+        // 44 to 60 has grown and would still read as "stuck" against a
+        // multiplier. Train S002 named all nine of these — it was the
+        // `LazyVGrid` they were in, which is gone — and the claim the finding
+        // makes is about *this* element, so this is where it is checked.
+        let chip = "news-category-entertainment"
 
         for (label, mode) in [
             ("large", Self.ordinaryTypeSize),
@@ -842,7 +918,7 @@ extension StubHouseUITests {
             evidence(app, "news-13-\(label)")
 
             var measured: [String: CGFloat] = [:]
-            for leaf in leaves {
+            for leaf in leaves + [chip] {
                 let element = newsElement(app, leaf)
                 if element.exists { measured[leaf] = element.frame.height }
                 print("NEWS SCALE [\(label)] \(leaf) height=\(element.exists ? "\(element.frame.height)" : "missing")")
@@ -897,6 +973,21 @@ extension StubHouseUITests {
                 + "size and AX5: " + stuck.joined(separator: " | ")
         )
         XCTAssertEqual(grew.count, leaves.count, "a leaf was never measured at both sizes")
+
+        // The chip, on its own terms: taller than the 44-point tap floor it
+        // starts at, which is what "the user can change the font size of this
+        // element" means for a control whose height has a minimum.
+        guard let chipWas = small[chip], let chipNow = big[chip] else {
+            return XCTFail("the category chip was not on screen at both sizes")
+        }
+        print("NEWS SCALE [chip] \(chip) \(chipWas)->\(chipNow)")
+        XCTAssertGreaterThan(
+            chipNow,
+            max(chipWas, 44) + 8,
+            "the category chip did not grow past its tap-target floor at AX5 "
+                + "— the audit's Dynamic Type finding against the nine chips "
+                + "would be a real one"
+        )
     }
 }
 

@@ -129,6 +129,15 @@ struct NewsView: View {
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        // **A drag puts the keyboard away before it scrolls.**
+        //
+        // Without this the page is *stuck* while the free-form field has
+        // focus: SwiftUI keeps a focused field on screen, so every flick is
+        // undone by the scroll back to it. Train S002 measured that — ten
+        // flicks and the content offset was identical to the pixel — and the
+        // person it costs is the one who has just added a topic and wants to
+        // see the row it made, which on this page is below the keyboard.
+        .scrollDismissesKeyboard(.immediately)
         .task {
             // Built here and not in `init`, for ``HomeView``'s reason: the
             // model needs the container and a `@State` initialiser runs
