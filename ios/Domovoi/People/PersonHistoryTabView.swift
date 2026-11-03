@@ -68,34 +68,44 @@ struct PersonSessionRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Button(action: onToggle) {
-                if typeSize.isAccessibilitySize {
-                    VStack(alignment: .leading, spacing: 4) {
-                        when
-                        PersonRoomChip(roomID: session.roomID)
-                        counts
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                } else {
-                    HStack(spacing: 10) {
-                        Image(systemName: open ? "chevron.down" : "chevron.right")
-                            .font(.caption)
-                            .foregroundStyle(Color.fgMuted)
-                            .frame(width: chevronWidth, alignment: .center)
-                        when
-                        Spacer(minLength: 4)
-                        PersonRoomChip(roomID: session.roomID)
-                        counts
-                    }
-                }
+                head
+                    // Inside the label, for ``PersonRosterRow``'s measured
+                    // reason: the `Spacer` between the time and the chip is
+                    // not content, so with these two modifiers outside the
+                    // `Button` the middle of the row — where a tap lands —
+                    // was not a tap target at all.
+                    .frame(maxWidth: .infinity, minHeight: 56, alignment: .leading)
+                    .contentShape(.rect)
             }
             .buttonStyle(.plain)
-            .frame(minHeight: 56)
-            .contentShape(.rect)
             .accessibilityLabel(detail.sessionTime(session))
             .accessibilityValue(detail.sessionSubtitle(session))
             .accessibilityAddTraits(open ? [.isButton, .isSelected] : [.isButton])
             if open {
                 turns
+            }
+        }
+    }
+
+    /// The row itself: a column at an accessibility size, where a chevron, a
+    /// time, a room chip and two counts have no business sharing a line.
+    @ViewBuilder private var head: some View {
+        if typeSize.isAccessibilitySize {
+            VStack(alignment: .leading, spacing: 4) {
+                when
+                PersonRoomChip(roomID: session.roomID)
+                counts
+            }
+        } else {
+            HStack(spacing: 10) {
+                Image(systemName: open ? "chevron.down" : "chevron.right")
+                    .font(.caption)
+                    .foregroundStyle(Color.fgMuted)
+                    .frame(width: chevronWidth, alignment: .center)
+                when
+                Spacer(minLength: 4)
+                PersonRoomChip(roomID: session.roomID)
+                counts
             }
         }
     }

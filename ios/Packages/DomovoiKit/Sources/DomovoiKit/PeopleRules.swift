@@ -195,17 +195,97 @@ public func personPlural(_ n: Int, _ word: String) -> String {
 
 // MARK: - the avatar's colour
 
-/// One of five gradients, as 24-bit RGB pairs (`Kit.kt:140`'s `hues`).
+/// Android's five gradients, as 24-bit RGB pairs (`Kit.kt:140`'s `hues`).
 ///
 /// Hex rather than a `Color`: `DomovoiKit` imports no SwiftUI, and the view
-/// turns these into one. The five pairs are Android's, in Android's order.
-public let personAvatarGradients: [(from: UInt32, to: UInt32)] = [
+/// turns these into one. **Not what is drawn** — see
+/// ``personAvatarGradients``, which darkens these until the initial on top of
+/// them is readable. Kept as its own value so the port's starting point is in
+/// the source rather than in a commit message, and so the test that proves
+/// the darkening changed something has a before to compare against.
+public let personAvatarSourceGradients: [(from: UInt32, to: UInt32)] = [
     (0xF2_A6_18, 0xE4_73_18),
     (0x54_BF_5C, 0x2E_8B_57),
     (0x5B_8D_EF, 0x3A_5F_C0),
     (0xB8_6B_D9, 0x8A_4B_AF),
     (0xE4_65_7C, 0xB4_3A_55),
 ]
+
+/// The five gradients **as drawn**: Android's hues, each end darkened until
+/// white text over it clears 4.5:1.
+///
+/// ### Why this is not Android's palette
+///
+/// Android draws a white initial on all five, and **not one** of the five
+/// light ends carries it: measured, white over them is 2.05, 2.34, 3.23,
+/// 3.42 and 3.26 to one, all under the 4.5:1 a 13-point semibold glyph
+/// needs. Apple's audit on the Simulator saw it — `Contrast failed` once and
+/// `Contrast nearly passed` twice against People on train S002 — and
+/// reported all three *anonymously*, with `element: nil`, because the bubble
+/// is `accessibilityHidden`. That is exactly how an unreadable glyph hides
+/// from an audit, and why this was answered by measuring every end rather
+/// than by widening the suite's classifier.
+///
+/// The first attempt was Android's palette with a **dark** initial on the two
+/// lightest gradients. It passes on the amber and the green and fails on the
+/// blue: black at 85% over `#3A5FC0` is 3.27:1, so that one has no ink that
+/// works at both ends, and a palette with two rules in it is a palette whose
+/// next colour will get the wrong one. Darkening the fill leaves all five
+/// with one rule — white, everywhere, as Android has it — and a hue a
+/// household would still recognise: `#F2A618` becomes `#9E6D10`, `#E4657C`
+/// becomes `#BE5468`, and the two darkest ends do not move at all.
+///
+/// Nothing depends on these agreeing with Android's; the bucket already does
+/// not (``personAvatarBucket(_:)``). Recorded in
+/// `overnight/people/DECISIONS.md`.
+public let personAvatarGradients: [(from: UInt32, to: UInt32)] =
+    personAvatarSourceGradients.map {
+        (from: personDarkenedForWhiteInk($0.from), to: personDarkenedForWhiteInk($0.to))
+    }
+
+/// A colour's relative luminance, WCAG 2.1's formula over sRGB.
+public func personLuminance(_ rgb: UInt32) -> Double {
+    func channel(_ shift: UInt32) -> Double {
+        let raw = Double((rgb >> shift) & 0xFF) / 255
+        return raw <= 0.040_45 ? raw / 12.92 : pow((raw + 0.055) / 1.055, 2.4)
+    }
+    return 0.2126 * channel(16) + 0.7152 * channel(8) + 0.0722 * channel(0)
+}
+
+/// How much contrast white text has over `rgb`.
+///
+/// White's luminance is 1, so the ratio is `1.05 / (L + 0.05)` — the general
+/// form with the lighter side known.
+public func personWhiteInkContrast(_ rgb: UInt32) -> Double {
+    1.05 / (personLuminance(rgb) + 0.05)
+}
+
+/// The same hue, darkened until white over it clears `target`.
+///
+/// Every channel is scaled by one factor, so the hue and the saturation are
+/// the colour's own and only the brightness moves. The search walks the 256
+/// factors downwards and returns the **first** that clears the target
+/// *after* rounding to whole channels — a binary search over a continuous
+/// factor can land a rounded colour a hundredth under the line, which is a
+/// contrast finding that would then be very hard to read a reason into.
+///
+/// A colour that already clears it is returned untouched.
+public func personDarkenedForWhiteInk(_ rgb: UInt32, target: Double = 4.5) -> UInt32 {
+    for step in stride(from: 255, through: 0, by: -1) {
+        let candidate = personScaled(rgb, by: Double(step) / 255)
+        if personWhiteInkContrast(candidate) >= target { return candidate }
+    }
+    return 0x00_00_00
+}
+
+/// Every channel of `rgb` multiplied by `factor`, rounded to whole channels.
+func personScaled(_ rgb: UInt32, by factor: Double) -> UInt32 {
+    func channel(_ shift: UInt32) -> UInt32 {
+        let scaled = (Double((rgb >> shift) & 0xFF) * factor).rounded()
+        return UInt32(min(255, max(0, scaled)))
+    }
+    return (channel(16) << 16) | (channel(8) << 8) | channel(0)
+}
 
 /// Which of the five a name gets: `0..<5`, stable for ever.
 ///

@@ -208,6 +208,68 @@ final class PeopleRulesTests: XCTestCase {
         XCTAssertEqual(personAvatarInitial(" alex "), "A")
     }
 
+    /// **Every end of every gradient carries a readable white initial.**
+    ///
+    /// The bubble is `accessibilityHidden`, so Apple's audit reports a bad
+    /// one with `element: nil` and no name — three of those stood against
+    /// People on train S002 and could be attributed only by measuring. This
+    /// is that measurement, kept where it fails in a second rather than in a
+    /// Simulator run.
+    func testEveryAvatarFillCarriesAReadableWhiteInitial() {
+        for (bucket, pair) in personAvatarGradients.enumerated() {
+            for (end, rgb) in [("from", pair.from), ("to", pair.to)] {
+                let ratio = personWhiteInkContrast(rgb)
+                XCTAssertGreaterThanOrEqual(
+                    ratio, 4.5,
+                    "gradient \(bucket)'s \(end) end is "
+                        + String(format: "%06X", rgb)
+                        + ", which gives a white initial "
+                        + String(format: "%.2f", ratio) + ":1"
+                )
+            }
+        }
+    }
+
+    /// The darkening moved the three Android fills that needed it, and the
+    /// hue went with them.
+    ///
+    /// Without the second half a function that returned black for everything
+    /// would pass the case above — and a household of five identical black
+    /// circles is not the feature.
+    func testDarkeningKeepsTheHueAndOnlyMovesWhatItMust() {
+        // `#E4657C` gives white 3.26:1 and must move; `#3A5FC0` gives
+        // 5.87:1 and must not. `#2E8B57` is the near one the eye would have
+        // waved through — 4.25:1 — and it moves by two channel steps, which
+        // is the whole argument for measuring rather than judging.
+        XCTAssertNotEqual(personDarkenedForWhiteInk(0xE4_65_7C), 0xE4_65_7C)
+        XCTAssertEqual(personDarkenedForWhiteInk(0x3A_5F_C0), 0x3A_5F_C0)
+        XCTAssertNotEqual(personDarkenedForWhiteInk(0x2E_8B_57), 0x2E_8B_57)
+
+        for (source, drawn) in zip(personAvatarSourceGradients, personAvatarGradients) {
+            for (before, after) in [(source.from, drawn.from), (source.to, drawn.to)] {
+                // Darker, never lighter, and never black.
+                XCTAssertLessThanOrEqual(personLuminance(after), personLuminance(before) + 1e-9)
+                XCTAssertGreaterThan(personLuminance(after), 0.0)
+                // The channels keep their order, which is what "same hue"
+                // means for a single multiplier: the reddest stays the
+                // reddest.
+                let rank = { (rgb: UInt32) in
+                    [(rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF]
+                }
+                let a = rank(before), b = rank(after)
+                for i in 0..<3 where a[i] > 0 {
+                    for j in 0..<3 where a[j] > 0 {
+                        XCTAssertEqual(
+                            a[i] >= a[j], b[i] >= b[j],
+                            "channels \(i) and \(j) swapped places darkening "
+                                + String(format: "%06X", before)
+                        )
+                    }
+                }
+            }
+        }
+    }
+
     // MARK: - the long answer
 
     /// Long at **141** characters, cut at **130** — two different numbers

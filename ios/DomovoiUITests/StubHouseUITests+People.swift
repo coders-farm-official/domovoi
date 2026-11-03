@@ -373,12 +373,26 @@ extension StubHouseUITests {
             "the profile of a person who shares a name says nothing about it"
         )
         // Android's note ends "If they are different people, rename one of
-        // them" — advice about a control this screen does not have. The
-        // replacement is one of this screen's two iOS-only sentences.
+        // them." — advice about a control that is not on this screen and
+        // cannot be (`PATCH /api/people/{id}` is admin-only). The iOS-only
+        // replacement keeps the advice and says **where**:
+        // ``PeopleStrings/namesakeFixIsOnTheDashboard``.
+        //
+        // This assertion read `!contains("rename one of them")` on train
+        // S002, which both sentences contain — it could not tell the ported
+        // Android wording from the replacement, so it failed against a screen
+        // that was right. It is the clause that differs that is asserted
+        // here: Android's bare full stop after `them`, and the dashboard the
+        // replacement names. Reverting the string to Android's still fails
+        // both halves.
         XCTAssertFalse(
-            note.label.contains("rename one of them"),
-            "the note still tells the reader to rename somebody, which a phone cannot do: "
-                + note.label
+            note.label.contains("rename one of them."),
+            "the note tells the reader to rename somebody and does not say where, which is "
+                + "advice a phone cannot act on: " + note.label
+        )
+        XCTAssertTrue(
+            note.label.contains("on the dashboard"),
+            "the note raises the clash and never says where it can be settled: " + note.label
         )
     }
 
