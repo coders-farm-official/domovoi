@@ -380,9 +380,25 @@ struct ManualTopBar: View {
     }
 
     /// The result list (`:424`): the matches, or `search_empty`.
+    ///
+    /// **The matches are read once into `hits`, and the list is built off
+    /// that array.** ``ManualModel/results`` is a computed property that
+    /// re-runs `searchManual` on every access (deliberately — see its doc
+    /// comment), so it is a *different value* each time it is read. The first
+    /// version of this view wrote `ForEach(manual.results.indices)` and then
+    /// `manual.results[at]` inside the closure: `ForEach` holds the range
+    /// from one read and evaluates its content against a later one, and
+    /// picking a result sets `query = ""` — which makes the next read empty
+    /// while that range still says `0..<1`. `hits[at]` then trapped on an
+    /// index out of range and took the app down, with no crash report and no
+    /// ObjC exception: train S003 lost all seven cases that open a piece from
+    /// the search field to it, and two of them could only say the app no
+    /// longer existed. A captured array cannot shrink under the range taken
+    /// from it.
     private func results(_ doc: ManualDoc) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            if manual.results.isEmpty {
+        let hits = manual.results
+        return VStack(alignment: .leading, spacing: 0) {
+            if hits.isEmpty {
                 Text(doc.label("search_empty", fallback: ManualStrings.Fallback.searchEmpty))
                     .font(.footnote)
                     .foregroundStyle(Color.fgMuted)
@@ -391,8 +407,8 @@ struct ManualTopBar: View {
             }
             // Indices, not `enumerated()`: Swift has no key path to a tuple
             // element, so `id: \.element.id` does not compile.
-            ForEach(manual.results.indices, id: \.self) { at in
-                let piece = manual.results[at]
+            ForEach(hits.indices, id: \.self) { at in
+                let piece = hits[at]
                 if at > 0 { Divider() }
                 Button {
                     manual.open(result: piece)

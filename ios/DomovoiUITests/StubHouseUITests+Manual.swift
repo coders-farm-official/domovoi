@@ -625,6 +625,32 @@ extension StubHouseUITests {
             "a piece's heading did not grow with the type size: "
                 + "\(ordinary.heading) -> \(huge.heading)"
         )
+
+        // ---- and the two leaves the audit names.
+        //
+        // These are not here for the screen's sake; they are the measurement
+        // ``manualAudit(_:_:)`` leans on. Apple's audit says of both "User
+        // will not be able to change the font size of this element", and if
+        // that were true of either one the classifier that drops that finding
+        // would be hiding a real defect. So the claim is checked directly: a
+        // bullet drawn at `.body` and a list item drawn through
+        // ``ManualRichText`` — whose `AttributedString` runs carry fonts of
+        // their own, which is the one thing on this screen that could
+        // genuinely pin a size — both have to grow.
+        print("MANUAL SIZES bullet \(ordinary.bullet) -> \(huge.bullet)")
+        print("MANUAL SIZES item \(ordinary.item) -> \(huge.item)")
+        XCTAssertGreaterThan(
+            huge.bullet, ordinary.bullet * 1.2,
+            "the list's bullet did not grow with the type size: "
+                + "\(ordinary.bullet) -> \(huge.bullet) — Apple's audit names "
+                + "this leaf, and the audit case drops that finding"
+        )
+        XCTAssertGreaterThan(
+            huge.item, ordinary.item * 1.2,
+            "a list item's text did not grow with the type size: "
+                + "\(ordinary.item) -> \(huge.item) — Apple's audit names this "
+                + "leaf, and the audit case drops that finding"
+        )
     }
 
     // MARK: - helpers this item owns
@@ -634,9 +660,32 @@ extension StubHouseUITests {
     private func manualSizes(
         _ mode: String,
         _ name: String
-    ) throws -> (node: CGFloat, heading: CGFloat) {
+    ) throws -> (node: CGFloat, heading: CGFloat, bullet: CGFloat, item: CGFloat) {
         control("reset-fixtures", "{}", port: 6601, what: "the manual fixture's seed")
         let app = launch(mode: mode, push: "Manual", pushDelay: Self.pushDelay)
+
+        // ---- the two leaves Apple's audit names on Start here, measured
+        // before anything else so that ``manualAudit(_:_:)``'s classification
+        // rests on a number rather than on the headline it drops.
+        XCTAssertTrue(manualStart(app), "the manual never drew Start here at \(mode)")
+        // Static texts only, and not ``StubHouseUITests/containing(_:_:)``: a
+        // measurement must come off the leaf that draws the words, and a
+        // `.any` first match can be a container whose merged label holds them.
+        let item = app.staticTexts
+            .matching(NSPredicate(format: "label BEGINSWITH %@", StubManual.appOnlyItem))
+            .firstMatch
+        XCTAssertTrue(
+            manualScroll(app, to: item),
+            "the `only: app` list item never built at \(mode)"
+        )
+        let itemHeight = item.frame.height
+        // Any of the list's bullets: they are one `Text` drawn once per item,
+        // so whichever is built first measures the same glyph. At AX5 the
+        // scroll above may have left a later one at the top of the tree.
+        let bullet = app.staticTexts["\u{2022}"].firstMatch
+        XCTAssertTrue(bullet.exists, "the list's bullet never drew at \(mode)")
+        let bulletHeight = bullet.frame.height
+
         XCTAssertTrue(manualMap(app), "the map pill did not open the map at \(mode)")
         let centre = manualNode(app, StubManual.centreNode)
         XCTAssertTrue(
@@ -655,20 +704,97 @@ extension StubHouseUITests {
         )
         let heading = title.frame.height
         evidence(app, name)
-        return (node, heading)
+        return (node, heading, bulletHeight, itemHeight)
     }
 
     /// One audit, classified by signature.
+    ///
+    /// ### Why the Dynamic Type finding is floor here even when it names a leaf
+    ///
+    /// ``StubHouseUITests/floorAndRest(_:)`` takes the two Dynamic Type
+    /// headlines as floor only while they carry `element: nil`, which is the
+    /// shape every other screen on this track has seen. Start here reports
+    /// them **attributed**: train S003 named fourteen leaves — `•`,
+    /// `how to start`, `what will not work`, `admin`, `ask whoever set it up`
+    /// and the checklist's and list's sentences — each with the same detail,
+    /// "User will not be able to change the font size of this element".
+    ///
+    /// That set is the reason this is not read as a defect. It is *almost
+    /// every text leaf on the page*, and it does not sort by how the text is
+    /// drawn: `Text("\u{2022}").font(.body)` and
+    /// `Text(block.text).font(.subheadline.weight(.semibold))` are plain
+    /// text-style fonts with nothing fixed about them, and they are flagged
+    /// beside the ``ManualRichText`` sentences. What those leaves have in
+    /// common is that they are standalone elements — Start here merges almost
+    /// nothing — so this is the same finding the rest of the file sees with no
+    /// element, on a screen where the audit had an element to name.
+    ///
+    /// The detail's claim is **measured false** rather than assumed false:
+    /// ``testManual_GrowsAtAnAccessibilitySize()`` takes the height of two of
+    /// these very leaves — the bullet and the `only: app` list item — at
+    /// `large` and at AX5 and requires both to grow. So the signature below
+    /// is narrow on purpose: this headline, this detail, and an element that
+    /// is a static text (`type=48`) or none. A hit area, a contrast failure or
+    /// an unlabelled control still lands in `rest` and still fails the case,
+    /// and so does a Dynamic Type finding against anything that is not text.
     @MainActor
     private func manualAudit(_ app: XCUIApplication, _ name: String) throws {
         let found = try auditIssues(app, name)
         let split = Self.floorAndRest(found)
+        let scaling = split.rest.filter { Self.isManualDynamicTypeOnText($0) }
+        let rest = split.rest.filter { !Self.isManualDynamicTypeOnText($0) }
         evidence(app, name)
+        print("AUDIT [\(name)] floor=\(split.floor) text-scaling=\(scaling.count)")
         XCTAssertTrue(
-            split.rest.isEmpty,
-            "\(name): Apple's audit named \(split.rest.count) element(s): "
-                + split.rest.joined(separator: " || ")
+            rest.isEmpty,
+            "\(name): Apple's audit named \(rest.count) element(s): "
+                + rest.joined(separator: " || ")
         )
+    }
+
+    /// The one signature above, as a test of a line ``auditIssues`` wrote:
+    /// `"<compact>: <detail> | element: <oneLine>"`.
+    private static func isManualDynamicTypeOnText(_ line: String) -> Bool {
+        let detail = "User will not be able to change the font size of this element"
+        let headlines = [
+            "Dynamic Type font sizes are partially unsupported",
+            "Dynamic Type font sizes are unsupported",
+        ]
+        guard headlines.contains(where: { line.hasPrefix("\($0): \(detail)") }) else {
+            return false
+        }
+        // `type=48` is `XCUIElement.ElementType.staticText`, as
+        // ``StubHouseUITests/oneLine(_:)`` writes it.
+        return line.hasSuffix("| element: nil") || line.contains("| element: type=48 ")
+    }
+
+    /// Scroll a `LazyVStack`'s unbuilt foot into existence.
+    ///
+    /// Not ``StubHouseUITests/scrollUntilBuilt(_:_:flicks:)``: that one drives
+    /// `app.collectionViews`, and the manual's pages are a `ScrollView` over a
+    /// `LazyVStack` with no collection view anywhere in them. The foot is
+    /// unbuilt in exactly the same way, so the loop is the same one.
+    @MainActor
+    private func manualScroll(
+        _ app: XCUIApplication,
+        to element: XCUIElement,
+        flicks: Int = 25
+    ) -> Bool {
+        let scroller = app.scrollViews.firstMatch
+        guard scroller.waitForExistence(timeout: 20) else {
+            print("=== NO MANUAL SCROLL VIEW — tree follows ===")
+            print(app.debugDescription)
+            return false
+        }
+        for _ in 0..<flicks {
+            if element.exists { return true }
+            scroller.swipeUp(velocity: .slow)
+        }
+        if !element.exists {
+            print("=== \(flicks) FLICKS AND STILL UNBUILT — tree follows ===")
+            print(app.debugDescription)
+        }
+        return element.exists
     }
 
     /// Put the screen on Start here, whatever level the last launch left in
