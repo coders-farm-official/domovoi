@@ -129,12 +129,47 @@ final class StubHouseUITests: XCTestCase {
         continueAfterFailure = false
     }
 
+    /// The ordinary type size, spelled the way `UIKit` spells it.
+    ///
+    /// **This used to be the string `"large"`, and that is not a
+    /// `UIContentSizeCategory`.** Every case in this file has launched the app
+    /// with `-UIPreferredContentSizeCategoryName large` since the file was
+    /// written, and nothing noticed, because nothing in the app compared the
+    /// category against another one — the type still rendered at its default
+    /// size, which is why every measurement taken at this size looks right.
+    ///
+    /// Chat's swipe-to-archive is the first code path that does compare, and
+    /// it does not survive it:
+    ///
+    /// ```
+    /// *** Terminating app due to uncaught exception 'NSInternalInconsistencyException',
+    /// reason: 'UIContentSizeCategoryCompareToCategory cannot be used to order arbitrary
+    /// strings, only UIContentSizeCategory objects (comparing large to UICTContentSizeCategoryL).'
+    ///   3  UIKitCore  UIContentSizeCategoryCompareToCategory
+    ///   4  UIKitCore  -[UISwipeActionButton titleFont]
+    /// ```
+    ///
+    /// So `app.state` going `runningForeground` → `notRunning` across the
+    /// swipe was real, and the cause was this rig rather than the app: a
+    /// person's device always has a valid category, and `UISwipeActionButton`
+    /// asks for its `titleFont` the moment a swipe reveals it. Read from the
+    /// Simulator's own log on 2026-11-02 — the app was terminated by an
+    /// uncaught ObjC exception and **no crash report was written anywhere**,
+    /// which is why four runs could only say the app had gone.
+    ///
+    /// A constant rather than a literal, so the invalid spelling cannot come
+    /// back one call site at a time. The accessibility sizes in this file were
+    /// always spelled properly (`UICTContentSizeCategoryAccessibilityXXXL`),
+    /// which is the other half of why this hid for so long: the AX5 cases were
+    /// the ones being watched.
+    private static let ordinaryTypeSize = "UICTContentSizeCategoryL"
+
     /// `server: false` saves nothing, which is the local-media shell — no
     /// workspace, no phone bar, and the same ``ShellTopBar``. It is the only
     /// way from here to audit the chrome without Home's content under it.
     @MainActor
     private func launch(
-        mode: String = "large",
+        mode: String = Self.ordinaryTypeSize,
         paired: Bool = true,
         server: Bool = true,
         port: Int = 6601,
@@ -838,7 +873,7 @@ final class StubHouseUITests: XCTestCase {
         var counts: [(String, Int)] = []
         for (label, mode) in [
             ("S", "UICTContentSizeCategoryS"),
-            ("large", "large"),
+            ("large", Self.ordinaryTypeSize),
             ("AX5", "UICTContentSizeCategoryAccessibilityXXXL"),
         ] {
             let app = launch(mode: mode, paired: false)
@@ -1606,7 +1641,7 @@ final class StubHouseUITests: XCTestCase {
 
         var measured: [String: [String: CGFloat]] = [:]
         for (label, mode) in [
-            ("large", "large"),
+            ("large", Self.ordinaryTypeSize),
             ("AX5", "UICTContentSizeCategoryAccessibilityXXXL"),
         ] {
             let app = launch(mode: mode)
@@ -1684,7 +1719,7 @@ final class StubHouseUITests: XCTestCase {
     /// answered.
     @MainActor
     private func openVideos(
-        _ mode: String = "large",
+        _ mode: String = Self.ordinaryTypeSize,
         delay: Double? = nil
     ) -> (app: XCUIApplication, landed: Bool) {
         let app = launch(mode: mode, push: "Videos", pushDelay: delay ?? Self.pushDelay)
@@ -1833,7 +1868,7 @@ final class StubHouseUITests: XCTestCase {
 
         var measured: [String: [String: CGFloat]] = [:]
         for (label, mode) in [
-            ("large", "large"),
+            ("large", Self.ordinaryTypeSize),
             ("AX5", "UICTContentSizeCategoryAccessibilityXXXL"),
         ] {
             let (app, landed) = openVideos(mode)
@@ -2085,7 +2120,7 @@ final class StubHouseUITests: XCTestCase {
     /// which also only exists once the libraries have landed.
     @MainActor
     private func openFiles(
-        _ mode: String = "large",
+        _ mode: String = Self.ordinaryTypeSize,
         blocked: Bool = false,
         delay: Double? = nil
     ) -> (app: XCUIApplication, landed: Bool) {
@@ -2518,7 +2553,7 @@ final class StubHouseUITests: XCTestCase {
 
         var measured: [String: [String: CGFloat]] = [:]
         for (label, mode) in [
-            ("large", "large"),
+            ("large", Self.ordinaryTypeSize),
             ("AX5", "UICTContentSizeCategoryAccessibilityXXXL"),
         ] {
             let (app, landed) = openFiles(mode)
@@ -2613,7 +2648,7 @@ final class StubHouseUITests: XCTestCase {
     /// — so `landed` is false by design and that case asserts the note.
     @MainActor
     private func openChat(
-        _ mode: String = "large",
+        _ mode: String = Self.ordinaryTypeSize,
         aiOff: Bool = false,
         fail: String? = nil,
         delay: Double? = nil
@@ -3627,7 +3662,7 @@ final class StubHouseUITests: XCTestCase {
 
         var measured: [String: [String: CGFloat]] = [:]
         for (label, mode) in [
-            ("large", "large"),
+            ("large", Self.ordinaryTypeSize),
             ("AX5", "UICTContentSizeCategoryAccessibilityXXXL"),
         ] {
             let (app, landed) = openChat(mode)
