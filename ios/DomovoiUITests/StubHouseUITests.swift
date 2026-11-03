@@ -3465,10 +3465,20 @@ final class StubHouseUITests: XCTestCase {
         // staring at the words it started with, and this case still passed
         // because it only ever read the element's label, which is there
         // whether or not it is on screen.
+        // **Bounded by the keyboard, not by the window.** The composer is
+        // focused here, so the bottom third of the screen is keyboard and a
+        // reply can be well inside the window and completely out of sight.
+        // Measured on 2026-11-02 with the window as the bound: the clean app
+        // put the reply's bottom at 389.7 and the sabotaged one at 477.7, and
+        // both passed against a window of 852. It is the same mistake
+        // ``composerSend(_:)`` was written for — "a key *is* hittable".
         let window = app.windows.firstMatch.frame
+        let keyboard = app.keyboards.firstMatch
+        let bound = keyboard.exists ? keyboard.frame.minY : window.maxY
         let opening = containing(app, StubChat.secondMessage)
         print(
-            "CHAT FOLLOW reply maxY=\(live.frame.maxY) window maxY=\(window.maxY) "
+            "CHAT FOLLOW reply maxY=\(live.frame.maxY) bound=\(bound) "
+                + "keyboard=\(keyboard.exists) window maxY=\(window.maxY) "
                 + "opening minY=\(opening.exists ? "\(opening.frame.minY)" : "gone")"
         )
         // Non-vacuous only if the transcript is taller than the screen, which
@@ -3478,8 +3488,9 @@ final class StubHouseUITests: XCTestCase {
         }
         XCTAssertLessThanOrEqual(
             live.frame.maxY,
-            window.maxY,
-            "the transcript did not follow the reply down the screen"
+            bound,
+            "the transcript did not follow the reply down the screen: its bottom "
+                + "is at \(live.frame.maxY) and the screen ends at \(bound)"
         )
 
         // And it settles: the `done` row replaces the stream's guess, so the
