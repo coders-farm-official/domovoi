@@ -86,7 +86,10 @@ public protocol AlertsMirrorStore: Sendable {
 /// default, rather than by a cast that would trap: a corrupt or absent blob is
 /// an **empty book**, never a failure, which is `runCatching { … }
 /// .getOrDefault(…)` on every one of Android's decoders.
-public final class AlertsDefaultsBookStore: AlertsBookStore {
+/// `@unchecked Sendable` with the reason spelt out, as the house rule asks:
+/// `UserDefaults` is documented as thread-safe, this holds one and a prefix,
+/// and both are set once in `init`.
+public final class AlertsDefaultsBookStore: AlertsBookStore, @unchecked Sendable {
 
     private let defaults: UserDefaults
     private let prefix: String

@@ -37,22 +37,25 @@ extension KeyedDecodingContainer {
 
     /// A string, or nil when the key is absent, null, not a string, or blank
     /// — `JsonObject.str` (`ContainerIncidents.kt:116`).
+    /// `try?` flattens the optional a `decodeIfPresent` returns, so one
+    /// binding is the whole test: an absent key, a null and a value of the
+    /// wrong type all arrive here as nil.
     func alertsString(_ key: Key) -> String? {
-        guard let raw = try? decodeIfPresent(String.self, forKey: key), let raw else { return nil }
+        guard let raw = try? decodeIfPresent(String.self, forKey: key) else { return nil }
         return raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : raw
     }
 
     /// A boolean, however the server spelt it — `JsonObject.bool` (`:118`).
     func alertsBool(_ key: Key) -> Bool? {
-        if let direct = try? decodeIfPresent(Bool.self, forKey: key), let direct { return direct }
-        if let text = try? decodeIfPresent(String.self, forKey: key), let text {
+        if let direct = try? decodeIfPresent(Bool.self, forKey: key) { return direct }
+        if let text = try? decodeIfPresent(String.self, forKey: key) {
             switch text.lowercased() {
             case "true", "1": return true
             case "false", "0": return false
             default: return nil
             }
         }
-        if let number = try? decodeIfPresent(Int.self, forKey: key), let number {
+        if let number = try? decodeIfPresent(Int.self, forKey: key) {
             return number != 0
         }
         return nil
@@ -61,8 +64,8 @@ extension KeyedDecodingContainer {
     /// An integer, or one written as digits in a string — `JsonObject.long`
     /// (`:126`).
     func alertsInt64(_ key: Key) -> Int64? {
-        if let direct = try? decodeIfPresent(Int64.self, forKey: key), let direct { return direct }
-        if let text = try? decodeIfPresent(String.self, forKey: key), let text { return Int64(text) }
+        if let direct = try? decodeIfPresent(Int64.self, forKey: key) { return direct }
+        if let text = try? decodeIfPresent(String.self, forKey: key) { return Int64(text) }
         return nil
     }
 }
@@ -251,7 +254,7 @@ struct AlertsMaybeHelpDelivery: Decodable {
             id: id,
             personID: person,
             threadID: thread,
-            title: (try? c.decodeIfPresent(String.self, forKey: .title)).flatMap { $0 } ?? "",
+            title: c.alertsString(.title) ?? "",
             createdAt: c.alertsString(.createdAt)
         )
     }
