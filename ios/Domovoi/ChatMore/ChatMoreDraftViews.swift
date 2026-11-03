@@ -43,7 +43,15 @@ struct ChatMoreDraftCardView: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .multilineTextAlignment(.leading)
             }
+            // The label is the verb and the **value is which draft**, which
+            // is ``ChatMoreRowBottom``'s idiom for the row menu and the only
+            // thing that tells four "open" buttons in one transcript apart,
+            // for VoiceOver and for a UI case alike.
             Button(ChatMoreStrings.open, action: open)
+                .accessibilityLabel(ChatMoreStrings.open)
+                .accessibilityValue(
+                    ChatMoreStrings.draftCard(title: draft.title, version: draft.version)
+                )
                 .buttonStyle(.plain)
                 .font(.subheadline)
                 .foregroundStyle(Color.brandInk)
@@ -54,8 +62,11 @@ struct ChatMoreDraftCardView: View {
         .background(RoundedRectangle(cornerRadius: 12).fill(Color.fgMuted.opacity(0.10)))
         // One element, so the card reads as a card: "draft: Boiler service at
         // Fernbrook, version 2" (`DraftUi.kt:241`).
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(ChatMoreStrings.draftCard(title: draft.title, version: draft.version))
+        // **Not** `.accessibilityElement(children: .combine)`: combining
+        // would fold the "open" button into the card and leave no button to
+        // press. The sentence the card reads as a whole lives on that button's
+        // value instead.
+        .accessibilityElement(children: .contain)
     }
 
     /// kind · vN, in a column at an accessibility size (NIGHT-RULES §3).
@@ -105,8 +116,12 @@ struct ChatMoreDraftCardView: View {
 ///  3. **A 409 is said out loud.** `POST .../versions` refuses an edit based
 ///     on anything but the newest version, and
 ///     ``ChatMoreStrings/newerVersionCameIn`` promises the typed words are
-///     still there — which they are, because ``ChatMoreDraftModel/saveEdit()``
-///     leaves `editing` alone on that one status.
+///     still there — and they are, though not for the reason the comment
+///     here used to give. The reload a 409 triggers picks a version, picking a
+///     version is what clears the editor, so the words had to be held across
+///     the round trip and put back (``ChatMoreDraftModel/saveEdit()``'s
+///     `keepEdit`). The sentence was true of the wording and false of the
+///     code.
 ///
 /// The editor is a multi-line `TextField(axis: .vertical)` and so carries
 /// **no `submitLabel` and no `onSubmit`** (NIGHT-RULES §3): its Return key
@@ -199,7 +214,18 @@ struct ChatMoreDraftCanvasView: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(Color.brandInk)
-                .accessibilityAddTraits(version.version == model.selected ? [.isSelected] : [])
+                // The label is the version alone and "latest" is its value, so
+                // the newest chip is still reachable as "v3" -- a label that
+                // joined the two words would make one chip in every draft
+                // spell itself differently.
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(ChatMoreStrings.version(version.version))
+                .accessibilityValue(
+                    version.version == model.latest?.version ? ChatMoreStrings.latest : ""
+                )
+                .accessibilityAddTraits(
+                    version.version == model.selected ? [.isButton, .isSelected] : [.isButton]
+                )
             }
         }
     }

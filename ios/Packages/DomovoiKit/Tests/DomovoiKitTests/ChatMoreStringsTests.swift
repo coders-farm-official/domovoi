@@ -307,7 +307,7 @@ final class ChatMoreStringsTests: XCTestCase {
         XCTAssertEqual(ChatMoreStrings.chatAccepts, prefix + documents + ".")
     }
 
-    /// The five wordings this app says that Android does not, each with the
+    /// The seven wordings this app says that Android does not, each with the
     /// reason there is nothing to port.
     ///
     /// They are asserted **not** to be the Kotlin's, so that one quietly
@@ -340,6 +340,18 @@ final class ChatMoreStringsTests: XCTestCase {
                 "Android hands a draft to its own share sheet and has no word for the sheet failing; a "
                 + "UIActivityViewController that cannot be presented needs one."
             ),
+            (
+                "theSentenceTheReplyUsed", ChatMoreStrings.theSentenceTheReplyUsed,
+                "Android washes the matched sentence inside the passage and names it nowhere "
+                + "(ChatDocsUi.kt). A wash is not a thing VoiceOver can read, so the caption says what "
+                + "the colour means."
+            ),
+            (
+                "pictureDidntLoad", ChatMoreStrings.pictureDidntLoad,
+                "Coil draws Android's thumbnails and its error state is a glyph, not a sentence "
+                + "(ChatScreen.kt). A thumbnail that failed has to say so in words here, because the "
+                + "three states of one 84-point square are otherwise indistinguishable."
+            ),
         ]
         for (name, ours, why) in iOSOnly {
             XCTAssertFalse(
@@ -348,6 +360,6 @@ final class ChatMoreStringsTests: XCTestCase {
             )
             XCTAssertFalse(ours.isEmpty, name)
         }
-        XCTAssertEqual(iOSOnly.count, 5, "IOS-ONLY-STRINGS.md lists these five and no others")
+        XCTAssertEqual(iOSOnly.count, 7, "IOS-ONLY-STRINGS.md lists these seven and no others")
     }
 }

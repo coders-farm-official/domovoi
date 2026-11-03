@@ -128,10 +128,19 @@ struct ChatMorePictureThumbView: View {
         content
             .frame(width: side, height: side)
             .clipShape(RoundedRectangle(cornerRadius: 8))
-            .accessibilityLabel(ChatMoreStrings.pictureNamed(image.name))
             .onAppear { store.want(image.token) }
     }
 
+    /// Each of the three states carries the name, and the name **alone** is
+    /// only on the picture itself.
+    ///
+    /// The label used to sit on the frame, above this `switch`. It read the
+    /// same whether the bytes had arrived, were still coming or had been
+    /// refused -- so nothing on screen, and nothing a test could ask, told a
+    /// drawn picture from a spinner that was never going to stop. The three
+    /// states are three element kinds with three labels now: a picture, a
+    /// spinner that says which picture it is waiting for, and a line that
+    /// says that one did not load.
     @ViewBuilder
     private var content: some View {
         switch store.picture(image.token) {
@@ -140,6 +149,7 @@ struct ChatMorePictureThumbView: View {
                 Image(uiImage: picture)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
+                    .accessibilityLabel(ChatMoreStrings.pictureNamed(image.name))
             } else {
                 // Bytes that are not a picture this phone can open. The store
                 // only checks the size, so this is the other half of the same
@@ -150,6 +160,7 @@ struct ChatMorePictureThumbView: View {
             ProgressView()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(Color.fgMuted.opacity(0.08))
+                .accessibilityLabel(ChatMoreStrings.pictureNamed(image.name))
         case .absent, .failed:
             missing
         }
@@ -157,6 +168,10 @@ struct ChatMorePictureThumbView: View {
 
     private var missing: some View {
         Text(ChatMoreStrings.pictureDidntLoad)
+            .accessibilityLabel(
+                ChatMoreStrings.pictureNamed(image.name)
+                    + " \u{2014} " + ChatMoreStrings.pictureDidntLoad
+            )
             .font(.caption2)
             .foregroundStyle(Color.fgMuted)
             .multilineTextAlignment(.center)

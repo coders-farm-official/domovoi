@@ -114,7 +114,14 @@ public final class ChatMoreDraftModel {
         close()
     }
 
-    private func load(jumpTo: Int?) {
+    /// Re-read the draft.
+    ///
+    /// `keepEdit` exists for one caller. ``select(_:)`` clears ``editing``,
+    /// because picking a version throws an edit of a different one away — so a
+    /// plain reload after a refused save would also throw the typed words
+    /// away, and the 409's sentence promises the opposite. The words are held
+    /// across the round trip and put back.
+    private func load(jumpTo: Int?, keepEdit: Bool = false) {
         guard let id = draftID else { return }
         let client = container.client
         let asked = epoch
@@ -128,7 +135,9 @@ public final class ChatMoreDraftModel {
                 self.error = nil
                 self.busy = false
                 let pick = ChatMoreDraftRules.opensAt(answer, asked: jumpTo)
+                let held = keepEdit ? self.editing : nil
                 self.select(pick)
+                if let held { self.editing = held }
             } catch {
                 guard self.stillHere(asked) else { return }
                 self.busy = false
@@ -238,9 +247,12 @@ public final class ChatMoreDraftModel {
                 self.busy = false
                 if error.failure?.status == 409 {
                     // The text stays in the editor, which is what the
-                    // sentence promises.
+                    // sentence promises -- and `keepEdit` is what makes that
+                    // true: the reload picks a version, and picking a version
+                    // is exactly what clears ``editing``. The comment used to
+                    // claim the words survived; they did not.
                     self.toast = ChatMoreStrings.newerVersionCameIn
-                    self.load(jumpTo: nil)
+                    self.load(jumpTo: nil, keepEdit: true)
                     return
                 }
                 self.toast = failureText(ChatMoreStrings.verbSave, error)

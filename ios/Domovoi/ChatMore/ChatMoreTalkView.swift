@@ -190,7 +190,11 @@ struct ChatMoreTalkView: View {
             )
         }
         .frame(width: button, height: button)
-        .accessibilityLabel(ChatMoreStrings.talk)
+        // ``ChatMoreStrings/holdToTalk`` and not ``ChatMoreStrings/talk``: the
+        // composer's mic -- which is still there, behind this sheet -- is
+        // "talk", and two elements with one label is the trap NIGHT-RULES
+        // section 6 names (`firstMatch` would take whichever it liked).
+        .accessibilityLabel(ChatMoreStrings.holdToTalk)
         .accessibilityHint(more.talkHint)
         .accessibilityAddTraits(.isButton)
     }
