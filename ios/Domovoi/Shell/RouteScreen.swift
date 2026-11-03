@@ -359,7 +359,7 @@ struct SettingsSectionScreen: View {
             SettingsSectionNotBuilt()
         case "printers":
             // slot: printers
-            SettingsSectionNotBuilt()
+            PrintersPanelView(model: model)
         case "app-layout":
             // slot: app-layout
             SettingsSectionNotBuilt()

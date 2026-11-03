@@ -8,24 +8,36 @@ import SwiftUI
 /// 420dp panel in from the edge, which is a tablet shape; iOS has one for
 /// this and it is a sheet.
 ///
+/// The cover is read from the file itself — the picture built into it, else
+/// the first image in its folder, else nothing, which is entirely the
+/// server's doing ([[cover-art-decision]]) and is fetched through
+/// ``MusicCoverStore`` rather than `AsyncImage` for the reason that store's
+/// own doc gives. It is the one cover in this app that VoiceOver reads,
+/// because there is exactly one of it and whether a song has art is worth
+/// being told.
+///
 /// ### What is not here
 ///
-/// `play here` and `queue` (this phone's own player), `save` (a download to
-/// the device) and the cover image are later batches'. The buttons for them
-/// are **absent, not disabled**: the owner's standing rule is that a control
-/// which cannot do what it says is not drawn, and a greyed-out `play here`
-/// would be a promise with a date on it.
-///
-/// The cover is worth naming separately, because its absence is the most
-/// visible: `CoverArt.libraryPath(track.id)` is `GET
-/// /api/music/library/{id}/cover`, which needs an image loader this app does
-/// not have yet (no `AsyncImage` call site exists in `ios/`, checked by grep
-/// on 2026-10-31). A sheet with a grey rectangle where the art goes is worse
-/// than one without the rectangle.
+/// `play here` and `queue` (this phone's own player) and `save` (a download
+/// to the device) are other batches'. The buttons for them are **absent, not
+/// disabled**: the owner's standing rule is that a control which cannot do
+/// what it says is not drawn, and a greyed-out `play here` would be a
+/// promise with a date on it.
 struct MusicTrackSheet: View {
 
     let music: MusicModel
     let track: LibraryTrack
+
+    let covers: MusicCoverStore
+
+    /// This track's words. The model is handed the room playing this very
+    /// track when there is one, so the line moves with the song; with none it
+    /// reads the track's own document and shows it still.
+    let lyrics: MusicRoomLyricsModel
+
+    /// Open the add-to-playlist sheet. A closure, because a sheet over a
+    /// sheet is the screen's business and not this view's.
+    let onAddToPlaylist: () -> Void
 
     /// Dismisses the sheet. Held rather than passed so that the two places
     /// that close it — the `close` button and a confirmed delete — close it
@@ -49,6 +61,9 @@ struct MusicTrackSheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     identity
+                    MusicLyricsPanelView(lyrics: lyrics, open: true)
+                    Divider()
+                    playlists
                     Divider()
                     metadata
                     Divider()
@@ -85,20 +100,41 @@ struct MusicTrackSheet: View {
     // MARK: - what it is
 
     private var identity: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(track.title ?? MusicStrings.unknownTitle)
-                .font(.title3)
-                .fixedSize(horizontal: false, vertical: true)
-            Text(track.artist ?? MusicStrings.unknownArtist)
-                .font(.subheadline)
-                .foregroundStyle(Color.fgMuted)
-                .fixedSize(horizontal: false, vertical: true)
-            Text(track.album ?? "—")
-                .font(.footnote)
-                .foregroundStyle(Color.fgMuted)
-                .fixedSize(horizontal: false, vertical: true)
+        HStack(alignment: .top, spacing: 12) {
+            MusicCoverView(
+                trackID: track.id,
+                size: 96,
+                corner: 10,
+                spoken: true,
+                covers: covers
+            )
+            VStack(alignment: .leading, spacing: 2) {
+                Text(track.title ?? MusicStrings.unknownTitle)
+                    .font(.title3)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(track.artist ?? MusicStrings.unknownArtist)
+                    .font(.subheadline)
+                    .foregroundStyle(Color.fgMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(track.album ?? "—")
+                    .font(.footnote)
+                    .foregroundStyle(Color.fgMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            // Combined around the text only, so the cover stays its own
+            // element and keeps saying which of the two pictures it drew.
+            .accessibilityElement(children: .combine)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .accessibilityElement(children: .combine)
+    }
+
+    /// Which playlists this track is in, in one tap.
+    ///
+    /// The sheet behind it (``MusicAddToPlaylistSheet``) is where the
+    /// memberships are read and toggled; this is only the way in, because a
+    /// membership list drawn here would be a third read of the same thing.
+    private var playlists: some View {
+        HomeLink(MusicMoreStrings.addToPlaylist, action: onAddToPlaylist)
     }
 
     private var metadata: some View {

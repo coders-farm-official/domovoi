@@ -29,6 +29,18 @@ struct FileRowView: View {
     /// pins: a row whose tap is already a save does not offer a second one.
     var onEdit: ((FileEntry) -> Void)? = nil
 
+    /// What this row offers about printing: a `Print` item, the server's
+    /// "save it as PDF first" sentence **instead of** a control, or nothing.
+    ///
+    /// The hook the Printing item adds, and the one question it asks
+    /// (``printingOffer(name:isDir:printers:)``). `.none` — this screen has
+    /// no printers read, or the house has no printer, or the kind never
+    /// prints — leaves the row exactly as it was.
+    var printOffer: PrintingOffer = .none
+
+    /// Open the Print sheet for this row.
+    var onPrint: (() -> Void)? = nil
+
     /// The icon column's width, which **grows with the type size**.
     ///
     /// It was a flat 26, and `Image.font(.body)` scales: at AX5 the glyph is
@@ -112,6 +124,21 @@ struct FileRowView: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .multilineTextAlignment(.leading)
                 }
+                // **The server's "save it as PDF first" sentence goes HERE,
+                // not in the `Menu`.** A `Text` inside SwiftUI's `Menu` is
+                // silently dropped — the trap this screen already learned
+                // once over its missing Delete (`FilesView.swift:436-445`) —
+                // so a sentence in there would have shipped as a line nobody
+                // ever saw. This is the one place on the row that already
+                // says "this file can't do the thing" in prose, beside
+                // `tooBigToSave`.
+                if case .pdfFirst(let said) = printOffer {
+                    Text(said)
+                        .font(.caption)
+                        .foregroundStyle(Color.fgMuted)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .multilineTextAlignment(.leading)
+                }
             }
             Spacer(minLength: 0)
             if entry.isDir {
@@ -130,8 +157,19 @@ struct FileRowView: View {
     /// does nothing.
     @ViewBuilder
     private var menu: some View {
-        if files.offersSave(entry) || files.canWrite || canImport {
+        if files.offersSave(entry) || files.canWrite || canImport || offersPrint {
             Menu {
+                // **Absent for a kind that never prints, never greyed.** The
+                // route answers 415 for an extension outside the server's own
+                // `printable.exts` table (`jobs.py:41-51`), so a `Print` on a
+                // `.svg` would be a control that cannot do what it says.
+                if offersPrint {
+                    Button {
+                        onPrint?()
+                    } label: {
+                        Label(PrintingStrings.printMenuItem, systemImage: "printer")
+                    }
+                }
                 if files.offersSave(entry) {
                     Button {
                         files.saveToDevice(entry)
@@ -161,6 +199,14 @@ struct FileRowView: View {
             }
             .accessibilityLabel(FileStrings.moreFor(entry.displayTitle))
         }
+    }
+
+    /// Whether the menu has a `Print`. One question, asked once, so the
+    /// menu's presence and its contents cannot disagree — a `•••` that opened
+    /// on nothing is a control that does nothing.
+    private var offersPrint: Bool {
+        guard onPrint != nil else { return false }
+        return printOffer == .print
     }
 
     /// Import is off a drive and into a library, so it is offered on a

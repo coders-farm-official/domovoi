@@ -13,6 +13,12 @@ enum FileSheet: Identifiable {
     /// Importing off a drive. `bring`, because `import` is a keyword.
     case bring(FileEntry)
     case share(URL, String)
+    /// Printing a server file on one of the household's printers. Appended
+    /// **after** the five that were here, so nothing already on screen is
+    /// displaced by the new cases' place in ``FilesView``'s `current` chain.
+    case printFile(FileEntry)
+    /// Scanning into Documents. No file of its own — it makes one.
+    case scanIn
 
     /// The case **and** the file, so that opening a second file of the same
     /// kind replaces the sheet's content rather than keeping the first one's:
@@ -24,6 +30,8 @@ enum FileSheet: Identifiable {
         case .move(let entry): return "move:\(entry.rel)"
         case .bring(let entry): return "bring:\(entry.rel)"
         case .share(_, let name): return "share:\(name)"
+        case .printFile(let entry): return "print:\(entry.rel)"
+        case .scanIn: return "scan"
         }
     }
 }
@@ -33,6 +41,16 @@ struct FileSheetView: View {
     let which: FileSheet
     let files: FilesModel
     let model: ShellModel
+
+    /// The printers read, when the screen has one. The hook the Printing item
+    /// adds: nil here leaves every other case exactly as it was, and the two
+    /// printing cases cannot be reached without it because the controls that
+    /// open them are only drawn from the same read.
+    var printing: PrintingFilesOffer? = nil
+
+    /// Close whichever printing sheet is up. The other five close through
+    /// ``FilesModel``, which owns their state; these two are the screen's.
+    var closePrinting: () -> Void = {}
 
     var body: some View {
         switch which {
@@ -46,6 +64,32 @@ struct FileSheetView: View {
             FileImportSheet(entry: entry, files: files)
         case .share(let url, _):
             FileShareSheet(url: url)
+        case .printFile(let entry):
+            // Both are nil-guarded rather than force-unwrapped: a sheet case
+            // that could be reached with no read behind it would crash, and
+            // this screen's rule is that a control nothing can answer is not
+            // drawn in the first place.
+            if let printers = printing?.data, let library = files.selectedID {
+                PrintSheetView(
+                    entry: entry,
+                    libraryID: library,
+                    printers: printers,
+                    model: model,
+                    onClose: closePrinting
+                )
+            }
+        case .scanIn:
+            if let printers = printing?.data {
+                ScanSheetView(
+                    printers: printers,
+                    model: model,
+                    // The saved scan's row is in the folder because the
+                    // folder is re-read, not because the sheet guessed what
+                    // the server wrote.
+                    onSaved: { files.entries.reload(fresh: true) },
+                    onClose: closePrinting
+                )
+            }
         }
     }
 }

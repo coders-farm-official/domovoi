@@ -17,13 +17,21 @@ import Observation
 /// strip as *information*, favouriting a library row, and playing a library
 /// row in a room.
 ///
-/// **Not built, and no control claims otherwise**: the player tab (this
-/// phone's own playback), the room queue, playlists, the stats tab, uploads,
-/// rescan, enrich, the track drawer, lyrics, cast. Those are the batches
-/// after this one. The rule they are left out under is Kamron's own: a
-/// control that cannot do what it says is not drawn
-/// ([[no-misleading-controls]]) — so Music has no tab bar yet, because four
-/// of its five tabs would be empty.
+/// **Not built here, but built since** (2026-11-02, corrected because this
+/// list had gone stale and a doc comment that is wrong about what exists is
+/// worse than none): the room queue is ``MusicQueueModel``, the stats tab is
+/// ``MusicStatTile``, rescan and enrich are ``MusicRoomActions``, the track
+/// drawer is `MusicTrackSheet`, playlists are ``MusicPlaylistsModel`` and
+/// ``MusicPlaylistDetailModel``, lyrics are ``MusicLyricsStore`` and
+/// ``MusicRoomLyricsModel``, cover art is ``MusicCoverStore``, and the cast
+/// planner is ``MusicCastPlanner``.
+///
+/// **Still not built, and no control claims otherwise**: the player tab —
+/// this phone's own playback — because that is an audio engine and
+/// ``MusicMorePlayerEngine`` has no conformer yet; and uploading a file from
+/// the phone or saving a track to it, which are a different batch's. The rule
+/// they are left out under is Kamron's own: a control that cannot do what it
+/// says is not drawn ([[no-misleading-controls]]).
 @MainActor
 @Observable
 public final class MusicModel {

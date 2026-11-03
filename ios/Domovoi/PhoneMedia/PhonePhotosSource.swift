@@ -94,12 +94,12 @@ struct PhonePhotosSource: PhoneMediaReading {
             .first(where: \.isKeyWindow)?
             .rootViewController
         guard let host else { return }
-        // Under Swift concurrency this arrives as the async form: its
-        // completion handler hands back the local identifiers the person just
-        // added, so the call suspends until the sheet is dismissed. Nothing
-        // here needs the identifiers — ``libraries()`` re-reads the library
-        // from `PHAuthorizationStatus` when the screen reloads — so they are
-        // discarded rather than threaded through.
+        // Under Swift concurrency this arrives as the async form (iOS 16+):
+        // its completion handler hands back the local identifiers the person
+        // just added, so the call suspends until the sheet is dismissed.
+        // Nothing here needs the identifiers — ``libraries()`` re-reads the
+        // library from `PHAuthorizationStatus` when the screen reloads — so
+        // they are discarded rather than threaded through.
         _ = await PHPhotoLibrary.shared().presentLimitedLibraryPicker(from: host)
     }
 

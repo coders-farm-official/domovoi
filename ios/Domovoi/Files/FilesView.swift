@@ -46,10 +46,15 @@ import SwiftUI
 /// whose "read-only — editing is on the dashboard" line stays true of exactly
 /// the files that reach it. See `overnight/documents/DECISIONS.md`.
 ///
-/// **Printing, scanning, and "Ask in chat"** — each needs a screen this app
-/// has not built, and the last needs Chat.
+/// **Printing and scanning are here now.** A printable row offers `Print`
+/// (``PrintSheetView``) and Documents' header offers `scan`
+/// (``ScanSheetView``) where this phone may write — both device tier, so a
+/// phone really can do them, and the row for a Word-like file gets the
+/// server's "save it as PDF first" sentence instead of a Print that would
+/// answer 415. What is still **not** built: **"Ask in chat"**, which needs
+/// Chat to take a file.
 ///
-/// So a row's menu has at most four items rather than Android's nine, and
+/// So a row's menu has at most five items rather than Android's nine, and
 /// each one is something that happens.
 struct FilesView: View {
 
@@ -66,6 +71,19 @@ struct FilesView: View {
     /// keeps the card open. Built in the same `.task` as ``files``, because
     /// it needs the container too.
     @State private var newDoc: DocumentsNewModel?
+
+    /// What this screen knows about the household's printers: one read, and
+    /// two predicates over it (``PrintingFilesOffer``). Built in the same
+    /// `.task` as ``files``, because it needs the container too.
+    @State private var printing: PrintingFilesOffer?
+
+    /// The file whose Print sheet is open, and whether the Scan sheet is.
+    ///
+    /// Held here rather than in ``FilesModel``: they are this screen's own
+    /// two sheet cases, and ``FilesModel`` is shared with the editors and
+    /// knows nothing about printers.
+    @State private var printingFile: FileEntry?
+    @State private var scanning = false
 
     /// `onAppear`/`onDisappear`, for ``HomeView``'s reason: this screen is
     /// inside the workspace's `NavigationStack`, so a pushed destination
@@ -103,12 +121,17 @@ struct FilesView: View {
             if newDoc == nil {
                 newDoc = DocumentsNewModel(deviceID: model.deviceID, in: model.container)
             }
+            if printing == nil {
+                printing = PrintingFilesOffer(in: model.container)
+            }
             files?.start()
+            printing?.refresh()
         }
         .onAppear { visible = true }
         .onDisappear {
             visible = false
             files?.stop()
+            printing?.stop()
         }
         // **The toast is the shell's**, drawn over the whole app, because a
         // toast about a move that failed must outlive a scroll and does
@@ -137,7 +160,16 @@ struct FilesView: View {
         // controls.
         .sheet(item: openSheet) { which in
             if let files {
-                FileSheetView(which: which, files: files, model: model)
+                FileSheetView(
+                    which: which,
+                    files: files,
+                    model: model,
+                    printing: printing,
+                    closePrinting: {
+                        printingFile = nil
+                        scanning = false
+                    }
+                )
             }
         }
         // A **cover**, not a sixth `.sheet` case: a different modifier, so
@@ -197,6 +229,12 @@ struct FilesView: View {
         if let entry = files.viewing { return .look(entry) }
         if let entry = files.moving { return .move(entry) }
         if let entry = files.importing { return .bring(entry) }
+        // **Appended after the existing five**, so nothing that was already
+        // on screen is displaced: a save, a read, a look, a move and an
+        // import all keep the places they had, and these two can only win a
+        // race against each other.
+        if let entry = printingFile { return .printFile(entry) }
+        if scanning { return .scanIn }
         return nil
     }
 
@@ -224,6 +262,8 @@ struct FilesView: View {
         // idle, and without it a second save would be ignored for ever (one
         // at a time).
         case .share: files?.saves.taken()
+        case .printFile: printingFile = nil
+        case .scanIn: scanning = false
         }
     }
 
@@ -249,6 +289,20 @@ struct FilesView: View {
             if let files, let newDoc,
                files.selectedID == FileLibrary.documents, files.canWrite {
                 DocumentsNewMenu(new: newDoc)
+            }
+            // `scan`, in Documents only, only where a scanner exists and only
+            // where this phone may change files
+            // (``printingOffersScan(printers:libraryID:canWrite:)``). The
+            // `canWrite` half is not decoration: the scan routes enforce the
+            // per-device Documents block twice and answer 403 with the
+            // server's own sentence, so a button drawn without it would fail
+            // every time from a blocked phone ([[no-misleading-controls]]).
+            if let files, let printing,
+               printing.offersScan(libraryID: files.selectedID, canWrite: files.canWrite) {
+                Button(PrintingStrings.scanHeaderButton) { scanning = true }
+                    .buttonStyle(.bordered)
+                    .tint(Color.brandInk)
+                    .frame(minHeight: 44)
             }
             if let files {
                 // A word, not Android's circular-arrow icon: an arrow in a
@@ -426,9 +480,18 @@ struct FilesView: View {
             }
         }
         ForEach(Array(files.entries.state.items.enumerated()), id: \.element.rel) { index, entry in
-            FileRowView(entry: entry, files: files, onEdit: { opened in
-                editing = DocumentsEditorCover(for: opened, in: files.selectedID)
-            })
+            FileRowView(
+                entry: entry,
+                files: files,
+                onEdit: { opened in
+                    editing = DocumentsEditorCover(for: opened, in: files.selectedID)
+                },
+                // One question per row, asked of the one read this screen
+                // holds: ``PrintingOffer/print``, the server's "save it as
+                // PDF first" sentence, or nothing at all.
+                printOffer: printing?.offer(for: entry) ?? .none,
+                onPrint: { printingFile = entry }
+            )
                 .onAppear {
                     // The guarded question, never a bare "the last row
                     // appeared" (``Paging/nearEnd(totalItems:lastVisible:threshold:)``).

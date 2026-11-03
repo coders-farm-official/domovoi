@@ -8,28 +8,49 @@ import SwiftUI
 ///
 /// ### What is here
 ///
-/// A card per room — what it is playing, how far in, and its transport. Three
-/// tabs: the library a page at a time with its search, filters and sort; the
-/// **room's** queue, reorderable and clearable; and the library's whole-house
-/// numbers. A track opens a sheet with everything the server knows about it,
-/// where to play it, and how to delete it. In the header, the two
-/// library-wide jobs: rescan, and identify untagged tracks.
+/// A card per room — what it is playing, how far in, its transport, its
+/// cover and the line of lyric it is on. Four tabs: the library a page at a
+/// time with its search, filters and sort; the house's **playlists**, each
+/// opening a sheet that plays, reorders, renames and deletes it; the
+/// **room's** queue, reorderable and clearable; and the library's
+/// whole-house numbers. A track opens a sheet with its cover, everything the
+/// server knows about it, its words, which playlists it is in, where to play
+/// it and how to delete it. In the header, the two library-wide jobs:
+/// rescan, and identify untagged tracks.
+///
+/// Cover art is read **from the file** — the picture built into it, else the
+/// first image in its folder, else nothing — which is the owner's 2026-10-02
+/// decision and is entirely the server's doing ([[cover-art-decision]]).
+/// This app does nothing but ask (``MusicCoverStore``).
 ///
 /// ### What is not, and why there is no control for it
 ///
 /// **This phone's own player**, which is Android's `player` tab: queueing to
 /// the handset, playing through its speaker, the seek bar, the sleep timer,
-/// the playback speed, chapters, and casting a local queue to a room. That is
-/// an audio engine, not a screen, and it is its own milestone.
+/// the playback speed, chapters, and casting a local queue to a room. The
+/// screen for it is built (``MusicPlayerTabView``) and so is everything
+/// behind it, but **nothing conforms to ``MusicMorePlayerEngine`` yet** —
+/// the audio engine is its own item. So ``MusicTab/shown(hasPlayer:)``
+/// leaves `player` out of the tab bar entirely rather than offering a
+/// transport row with nothing behind it.
 ///
-/// **Playlists** (the tab, the drawer and "add to playlist"), **lyrics**,
-/// **uploading** a file from the phone, **saving** a track to the phone, and
-/// the **cover art** everywhere it would appear. Each is a later batch's.
+/// **Uploading** a file from the phone and **saving** a track to the phone.
+/// Each is a different batch's, and neither has a control here.
 ///
-/// So the tab bar has three tabs rather than five (``MusicTab``), a room card
-/// has no cast menu, a library row has no `…` menu, and the track sheet has
-/// no `play here`. The rule they are left out under is the owner's standing
-/// one — a control that cannot do what it says is not drawn
+/// **Bulk selection** — a checkbox per library row and a bar that adds them
+/// all to one playlist (`LibraryTab.kt:229`). Left out deliberately: this
+/// app's library row is a tap-to-open-sheet row that already carries two
+/// controls, the add-to-playlist sheet reaches every track one at a time,
+/// and the default staying simple is the standing call
+/// ([[feedback-mass-appeal-not-power-user]], DECISIONS).
+///
+/// **A cover on a room-queue row.** That list's entries carry MPD's
+/// `song_id` (`schemas.py:265`), which is not a library track id, so there
+/// is nothing to ask the cover route for — a picture drawn from it would be
+/// another song's.
+///
+/// The rule all of these are left out under is the owner's standing one — a
+/// control that cannot do what it says is not drawn
 /// ([[no-misleading-controls]]).
 ///
 /// ### The list is lazy, and nothing that matters is held in a row
@@ -62,8 +83,67 @@ struct MusicView: View {
 
     @State private var tab: MusicTab = .library
 
-    /// The track whose sheet is open.
-    @State private var sheetTrack: LibraryTrack?
+    /// The playlists tab's model, built **the first time that tab is
+    /// opened**, for ``queue``'s reason: a person who only ever looks at the
+    /// library should not be sending its read.
+    @State private var playlists: MusicPlaylistsModel?
+
+    /// The covers every list on this screen draws from. One store for the
+    /// whole screen, because it is a cache with a cap — two of them would
+    /// fetch the same picture twice and hold it twice.
+    @State private var covers: MusicCoverStore?
+
+    /// The lyrics docs, shared by the room cards and the track sheet so that
+    /// two surfaces asking for one track share one request.
+    @State private var lyricsStore: MusicLyricsStore?
+
+    /// Where a room's lyric timing offset is kept, for this viewer.
+    @State private var nudges: MusicLyricsNudgeStore?
+
+    /// This phone's own queue, over whatever engine is registered.
+    ///
+    /// **Nothing registers one**, so ``MusicLocalQueueModel/hasEngine`` is
+    /// false, the `player` tab is not in the bar, and
+    /// ``MusicPlayerTabView`` is never on screen. The model is built anyway
+    /// — rather than the tab being commented out — so that the engine's item
+    /// lands as one `use(_:)` call and nothing here is written from scratch
+    /// against a thing that by then exists.
+    @State private var player: MusicLocalQueueModel?
+
+    /// One room-lyrics model per room card, kept across redraws so that the
+    /// anchor and the follow flag are not rebuilt every tick.
+    @State private var roomLyrics: [String: MusicRoomLyricsModel] = [:]
+
+    /// Which of this screen's three sheets is up, and the model behind it.
+    ///
+    /// **One sheet presentation, over one value.** This screen has three
+    /// sheets and `AppShellView.swift:54` already wrote down what three
+    /// `.sheet` modifiers on one view does: "the later modifier commonly
+    /// wins and the earlier silently never presents". It compiles, and
+    /// nothing in `pkgtest.sh` can see it. So which sheet is up is one value
+    /// with one answer.
+    ///
+    /// The models live **in the case** rather than being built in the sheet's
+    /// content closure, because that closure runs again on every re-render —
+    /// and a lyrics model rebuilt per render is one whose anchor and follow
+    /// flag reset ten times a second.
+    @State private var sheet: MusicMoreSheet?
+
+    /// One of the three, with what it needs.
+    ///
+    /// Presented through `.sheet(isPresented:)` rather than
+    /// ``ShellSheet``'s `.sheet(item:)`, and the difference is the one
+    /// interaction this item adds: `add to playlist` **replaces** the track
+    /// sheet. Changing `item` while a sheet is up asks SwiftUI to dismiss
+    /// and present inside one state change; `isPresented` stays true and the
+    /// content closure re-reads this value, which is a content swap and
+    /// nothing more. Each case also carries a main-actor model, so an
+    /// `Identifiable` `id` would be a nonisolated witness reaching them.
+    private enum MusicMoreSheet {
+        case track(LibraryTrack, MusicRoomLyricsModel)
+        case playlist(MusicPlaylistDetailModel)
+        case addTo(LibraryTrack, MusicAddToPlaylistModel)
+    }
 
     /// Whether this view is on screen, as `onAppear`/`onDisappear` report it.
     ///
@@ -76,23 +156,67 @@ struct MusicView: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 16) {
                 header
-                if let music {
-                    MusicNowPlayingStrip(music: music)
+                if let music, let covers {
+                    MusicNowPlayingStrip(
+                        music: music,
+                        covers: covers,
+                        // Looked **up**, never built: a view's body may not
+                        // write `@State`, and a model made in here would be
+                        // a fresh one every redraw — which resets the
+                        // anchor, the follow flag and the position, and is
+                        // the shape a lyrics line that never moves takes.
+                        // ``syncRoomLyrics(_:)`` below owns the dictionary.
+                        lyrics: { roomLyrics[$0.roomID] }
+                    )
                     MusicTabBar(
                         tab: $tab,
                         libraryTotal: music.libraryTotal,
-                        queueCount: queue?.items.count
+                        queueCount: queue?.items.count,
+                        playlistCount: playlists?.count,
+                        hasPlayer: player?.hasEngine ?? false
                     )
                     switch tab {
                     case .library:
                         MusicFilters(music: music)
-                        MusicLibraryList(music: music, onOpen: { sheetTrack = $0 })
+                        MusicLibraryList(
+                            music: music,
+                            covers: covers,
+                            onOpen: { openTrack($0) }
+                        )
+                    case .playlists:
+                        if let playlists {
+                            MusicPlaylistsView(
+                                playlists: playlists,
+                                rooms: music.castRooms,
+                                onOpen: { openPlaylist($0) }
+                            )
+                        }
                     case .queue:
                         if let queue {
                             MusicQueueView(music: music, queue: queue)
                         }
                     case .stats:
                         MusicStatsView(music: music)
+                    case .player:
+                        // Not reachable today: ``MusicTab/shown(hasPlayer:)``
+                        // leaves this tab out of the bar while nothing
+                        // conforms to ``MusicMorePlayerEngine``, and `tab`
+                        // can only hold what the bar offered. Wired anyway,
+                        // so that the engine's item is one conformance and
+                        // not a screen written later against a seam nobody
+                        // kept honest.
+                        if let player {
+                            MusicPlayerTabView(
+                                player: player,
+                                covers: covers,
+                                // While casting, the words follow the room
+                                // being cast to — which is a room the
+                                // now-playing read already named, so its
+                                // model is the one already synced.
+                                lyrics: player.lyricsRoom.flatMap { roomLyrics[$0] },
+                                rooms: music.castRooms
+                            )
+                        }
                     }
                 }
             }
@@ -106,21 +230,34 @@ struct MusicView: View {
             if music == nil {
                 music = MusicModel(container: model.container)
             }
+            if covers == nil { covers = MusicCoverStore(in: model.container) }
+            if lyricsStore == nil { lyricsStore = MusicLyricsStore(container: model.container) }
+            if nudges == nil { nudges = MusicLyricsNudgeStore() }
+            if player == nil, let deviceID = model.deviceID {
+                player = MusicLocalQueueModel(deviceID: deviceID)
+            }
             music?.start()
+            playlists?.start()
         }
         .onAppear { visible = true }
         .onDisappear {
             visible = false
             music?.stop()
             queue?.stop()
+            playlists?.stop()
+            // Each room card's model is stopped too: a panel left running
+            // off screen republishes a position ten times a second for
+            // nothing.
+            for one in roomLyrics.values { one.stop() }
         }
         // The queue's model is built on first use and started with whatever
         // rooms are known by then. Its own read is subscribed to the
         // now-playing push, so this runs once per visit to the tab rather
         // than once per answer.
         .onChange(of: tab) { _, now in
-            guard now == .queue, let music else { return }
-            startQueue(with: music)
+            guard let music else { return }
+            if now == .queue { startQueue(with: music) }
+            if now == .playlists { startPlaylists() }
         }
         // A satellite came online, or went away: the open queue is re-offered
         // the list, so a room that has gone does not leave the tab asking for
@@ -128,6 +265,12 @@ struct MusicView: View {
         // own subscription, and a second request per push is one too many.
         .onChange(of: music?.castRooms ?? []) { _, rooms in
             queue?.offer(rooms: rooms, playing: music?.playingRoom)
+        }
+        // The rooms themselves, not just their names: a room that keeps its
+        // name and changes its track needs its model told, which is the
+        // `offer` inside.
+        .onChange(of: music?.rooms ?? []) { _, rooms in
+            syncRoomLyrics(rooms)
         }
         // **The toast is the shell's**, drawn over the whole app
         // (`AppShellView.swift:36`), because a toast about a play that failed
@@ -142,16 +285,209 @@ struct MusicView: View {
             guard text != nil, let said = queue?.takeToast() else { return }
             model.showToast(said)
         }
+        .onChange(of: player?.toast) { _, text in
+            guard text != nil, let said = player?.takeToast() else { return }
+            model.showToast(said)
+        }
+        .onChange(of: playlists?.toast) { _, text in
+            guard text != nil, let said = playlists?.takeToast() else { return }
+            model.showToast(said)
+        }
+        // **A sheet's outcome is not handed to the shell's toast.** That
+        // toast is an overlay on the shell's content
+        // (`AppShellView.swift:35`), a sibling of this view rather than of
+        // the sheet presented from it, so a page sheet covers it: every
+        // message these sheets produce was drawn behind the sheet that was
+        // still up. They report inline now
+        // (``MusicMoreSheetStatus``).
+        //
+        // The one exception is the delete, which dismisses the sheet first —
+        // so there is no sheet left to say it in, and the sentence is taken
+        // here, on `deleted`, while the model is still in `sheet`.
+        .onChange(of: playlistDeleted) { _, gone in
+            guard gone, let said = takeDeletedPlaylistToast() else { return }
+            model.showToast(said)
+        }
+        // A write from the add-to-playlist sheet changed something the
+        // screen behind it is showing: the star on a library row, and the
+        // playlists tab's counts.
+        .onChange(of: addMutated) { _, changed in
+            guard changed else { return }
+            guard case .addTo(_, let add) = sheet, add.takeMutated() else { return }
+            music?.library.reload()
+            playlists?.read.refresh()
+        }
         .onChange(of: model.inputs.serverURL) { _, _ in
             guard visible else { return }
             music?.serverChanged()
             queue?.serverChanged()
+            playlists?.serverChanged()
+            covers?.serverChanged()
+            lyricsStore?.serverChanged()
+            // Every room model held is the old house's — a room name is one
+            // house's word, and a track id they happen to share is the
+            // wrong-key defect in its most visible shape.
+            for one in roomLyrics.values { one.stop() }
+            roomLyrics = [:]
+            // Whatever sheet is up is about a playlist id or a track id of
+            // the house that has gone; the models close themselves, and this
+            // is the screen's half of that.
+            sheet = nil
         }
-        .sheet(item: $sheetTrack) { track in
-            if let music {
-                MusicTrackSheet(music: music, track: track)
+        // `isPresented`, not `item`: see ``MusicMoreSheet``.
+        .sheet(isPresented: sheetUp) {
+            switch sheet {
+            case .track(let track, let lyrics):
+                if let music, let covers {
+                    MusicTrackSheet(
+                        music: music,
+                        track: track,
+                        covers: covers,
+                        lyrics: lyrics,
+                        onAddToPlaylist: { openAddToPlaylist(track) }
+                    )
+                }
+            case .playlist(let detail):
+                if let covers, let music {
+                    MusicPlaylistSheet(
+                        detail: detail,
+                        covers: covers,
+                        rooms: music.castRooms
+                    )
+                }
+            case .addTo(_, let add):
+                MusicAddToPlaylistSheet(add: add)
+            case .none:
+                // The slot emptied while the sheet was coming down. Nothing
+                // rather than a half-built sheet.
+                EmptyView()
             }
         }
+    }
+
+    /// Whether a sheet is up. The setter only ever **closes** one: a sheet is
+    /// opened by putting a case in ``sheet``, never by a bare `true`.
+    private var sheetUp: Binding<Bool> {
+        Binding(
+            get: { sheet != nil },
+            set: { up in if !up { sheet = nil } }
+        )
+    }
+
+    /// Whether the open playlist sheet's playlist is gone.
+    ///
+    /// Here rather than on ``MusicMoreSheet`` because reading a model is
+    /// main-actor work and this view is where that isolation already is.
+    private var playlistDeleted: Bool {
+        if case .playlist(let detail) = sheet { return detail.deleted }
+        return false
+    }
+
+    /// The delete's own sentence, taken before the sheet's dismissal empties
+    /// ``sheet``. Every other outcome a sheet produces is said in the sheet.
+    private func takeDeletedPlaylistToast() -> String? {
+        guard case .playlist(let detail) = sheet else { return nil }
+        return detail.takeToast()
+    }
+
+    /// Whether the add-to-playlist sheet has written something.
+    ///
+    /// A computed property rather than the expression inline in `onChange`,
+    /// because an `onChange(of:)` over a `switch` is not an expression the
+    /// compiler will take.
+    private var addMutated: Bool {
+        if case .addTo(_, let add) = sheet { return add.mutated }
+        return false
+    }
+
+    // MARK: - the models the new tabs and sheets hang off
+
+    private func startPlaylists() {
+        if playlists == nil {
+            guard let deviceID = model.deviceID else { return }
+            playlists = MusicPlaylistsModel(container: model.container, deviceID: deviceID)
+        }
+        playlists?.start()
+    }
+
+    /// Open a track's sheet, and build the one lyrics model it will use.
+    ///
+    /// A track sheet follows no room's clock — it is a song, not a speaker —
+    /// so the model is given the room playing **this very track** when there
+    /// is one, and the words move with it. With none the room read 404s and
+    /// the model falls back to the track's own document, which it shows
+    /// still: that fallback is
+    /// ``MusicRoomLyricsModel``'s own, not something invented here.
+    private func openTrack(_ track: LibraryTrack) {
+        guard let lyricsStore, let nudges, let music else { return }
+        let lyrics = MusicRoomLyricsModel(
+            // Nil, **not** `?? ""`: an empty room made the model ask
+            // `GET /api/music/now-playing//lyrics`, a path the server's
+            // `{room_id}` cannot match, so every sheet for a song nobody is
+            // playing cost a guaranteed 404 before the fallback ran — and it
+            // drew three timing chips whose writes the nudge store dropped.
+            room: music.rooms.first { $0.trackID == track.id }?.roomID,
+            store: lyricsStore,
+            nudges: nudges
+        )
+        lyrics.offer(trackID: track.id)
+        sheet = .track(track, lyrics)
+    }
+
+    private func openPlaylist(_ playlist: Playlist) {
+        guard let deviceID = model.deviceID else { return }
+        sheet = .playlist(MusicPlaylistDetailModel(
+            playlist: playlist,
+            container: model.container,
+            deviceID: deviceID
+        ))
+    }
+
+    /// Open the add-to-playlist sheet, **in place of** the track sheet it was
+    /// reached from.
+    ///
+    /// Not over it. A sheet presented from inside a sheet is the second half
+    /// of the hazard ``MusicMoreSheet`` exists for, and Android reaches this
+    /// sheet from the library row's own `+` rather than from the track
+    /// drawer (`LibraryTab.kt:229`) — so one at a time is also the faithful
+    /// shape. Closing it comes back to Music, which is where the row is.
+    private func openAddToPlaylist(_ track: LibraryTrack) {
+        sheet = .addTo(track, MusicAddToPlaylistModel(track: track, container: model.container))
+    }
+
+    /// Keep one lyrics model per room the server reported, and tell each one
+    /// which track its room is on.
+    ///
+    /// Called from `onChange`, never from `body`: a model built in a body is
+    /// rebuilt on every redraw, and this one holds the anchor, the follow
+    /// flag and the position.
+    ///
+    /// A room that has gone is **stopped** before it is dropped — the model
+    /// owns a 100 ms republish loop, and a dropped reference does not cancel
+    /// a `Task`.
+    private func syncRoomLyrics(_ rooms: [NowPlayingRoom]) {
+        guard let lyricsStore, let nudges else { return }
+        var next = roomLyrics
+        let named = Set(rooms.map(\.roomID))
+        // Over a snapshot of the keys, so the removal below is not a mutation
+        // of the thing being walked.
+        for room in Array(next.keys) where !named.contains(room) {
+            next[room]?.stop()
+            next.removeValue(forKey: room)
+        }
+        for room in rooms {
+            let held = next[room.roomID] ?? MusicRoomLyricsModel(
+                room: room.roomID,
+                store: lyricsStore,
+                nudges: nudges
+            )
+            // The track the now-playing read says this room is on. Without
+            // it a house that refuses the room-lyrics route leaves the model
+            // never knowing which track to fall back to.
+            held.offer(trackID: room.trackID)
+            next[room.roomID] = held
+        }
+        roomLyrics = next
     }
 
     /// Build the queue's model if there is not one, and start it.
@@ -211,7 +547,7 @@ struct MusicView: View {
 // The tabs
 // ---------------------------------------------------------------------------
 
-/// Three tabs, as a scrolling row of words.
+/// The tabs that have something behind them, as a scrolling row of words.
 ///
 /// **Not a segmented `Picker`.** A segmented control divides the width it is
 /// given between its segments and shrinks the text to fit, which is
@@ -224,15 +560,27 @@ struct MusicTabBar: View {
     @Binding var tab: MusicTab
     let libraryTotal: Int?
     let queueCount: Int?
+    let playlistCount: Int?
+
+    /// Whether an audio engine is registered. **Nothing registers one yet**,
+    /// so `player` is not offered — `MusicTab.shown(hasPlayer:)` is the one
+    /// line that changes when the engine's item lands, and
+    /// ``MusicTab/allCases`` is never iterated here, because that is how the
+    /// unbacked tab would come back.
+    var hasPlayer = false
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 4) {
-                ForEach(MusicTab.allCases) { one in
+                ForEach(MusicTab.shown(hasPlayer: hasPlayer)) { one in
                     Button {
                         tab = one
                     } label: {
-                        Text(one.label(libraryTotal: libraryTotal, queueCount: queueCount))
+                        Text(one.label(
+                            libraryTotal: libraryTotal,
+                            queueCount: queueCount,
+                            playlistCount: playlistCount
+                        ))
                             .font(.subheadline)
                             .fontWeight(one == tab ? .semibold : .regular)
                             .fixedSize(horizontal: false, vertical: true)
@@ -393,6 +741,10 @@ struct MusicLibraryList: View {
 
     let music: MusicModel
 
+    /// The screen's one cover store. Passed down rather than built here for
+    /// the reason it is capped: two stores would fetch each picture twice.
+    let covers: MusicCoverStore
+
     /// Open a track's sheet. A closure rather than a binding, so that a row
     /// can open a sheet and cannot write anything else of the screen's state.
     let onOpen: (LibraryTrack) -> Void
@@ -414,7 +766,7 @@ struct MusicLibraryList: View {
                     .accessibilityLabel(MusicStrings.title)
             }
             ForEach(Array(music.library.state.items.enumerated()), id: \.element.id) { index, track in
-                MusicTrackRow(music: music, track: track, onOpen: onOpen)
+                MusicTrackRow(music: music, covers: covers, track: track, onOpen: onOpen)
                     .onAppear {
                         // The guarded question, never a bare "the last row
                         // appeared".
@@ -464,6 +816,7 @@ struct MusicLibraryList: View {
 struct MusicTrackRow: View {
 
     let music: MusicModel
+    let covers: MusicCoverStore
     let track: LibraryTrack
     let onOpen: (LibraryTrack) -> Void
 
@@ -471,8 +824,12 @@ struct MusicTrackRow: View {
         HStack(alignment: .top, spacing: 12) {
             // The row's text is the button that opens the sheet; the two
             // controls beside it are **not** inside it, so a tap on the star
-            // cannot also open the sheet.
+            // cannot also open the sheet. The cover is **inside** it: it is
+            // not a control, and a 40-point square with nothing behind it
+            // between two real targets is a dead zone on the row.
             Button { onOpen(track) } label: {
+                HStack(alignment: .top, spacing: 10) {
+                MusicCoverView(trackID: track.id, size: 40, covers: covers)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(track.displayTitle)
                         .font(.subheadline)
@@ -490,6 +847,7 @@ struct MusicTrackRow: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+                }
                 .contentShape(.rect)
             }
             .buttonStyle(.plain)
