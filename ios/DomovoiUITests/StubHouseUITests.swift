@@ -109,6 +109,30 @@ final class StubHouseUITests: XCTestCase {
     /// real Dynamic Type defect would look like. Pinning the total alone would
     /// have let a new contrast finding in unnoticed the moment one of the
     /// eight went away, which is exactly what `knownPairingIssues` was doing.
+    /// The **only** Dynamic Type finding on a pushed screen that names an
+    /// element, and a false positive.
+    ///
+    /// Apple reports "User will not be able to change the font size of this
+    /// element" against the `favorites only` switch in Music's filter row
+    /// (`MusicView.swift:303`), which carries `.fixedSize()`. It reads as a
+    /// real defect, and the view even has a modifier that would plausibly
+    /// cause one — but the element was measured on both sides and it scales:
+    ///
+    ///     ordinary   101.67 x 20.33
+    ///     AX5        296.00 x 63.33
+    ///
+    /// Three times the height is not a font that cannot change. The finding
+    /// is pinned by its wording here rather than removed from the count,
+    /// because a *second* named finding — a real one — must still fail this
+    /// case, and because deleting `.fixedSize()` to quiet an audit that is
+    /// wrong would have squeezed the toggle at AX3, which is what the
+    /// modifier is there to prevent.
+    ///
+    /// This is the second time on this track that a named Dynamic Type
+    /// finding turned out to be one: measure the element before believing
+    /// the headline.
+    private static let knownScalingFalsePositive = "label='favorites only'"
+
     private static let knownPushedBarFloor = 8
 
     /// Seconds the seeded push waits for the root to draw
@@ -1046,6 +1070,7 @@ final class StubHouseUITests: XCTestCase {
     @MainActor
     func testWhichPieceOfAPushedScreenCarriesTheEight() throws {
         var counts: [(String, Int)] = []
+        var namedDynamic: [String] = []
         for variant in [
             // `none` is kept as the documented anomaly, not as a control: a
             // **seeded** push measures 0 with the destination fully on screen,
@@ -1191,8 +1216,18 @@ final class StubHouseUITests: XCTestCase {
             evidence(app, "80-strip-\(variant)")
             let found = try auditIssues(app, "strip-\(variant)")
             let dynamic = found.filter { $0.hasPrefix("Dynamic Type") }
-            counts.append((variant, dynamic.count))
-            print("STRIP [\(variant)] dynamic=\(dynamic.count) total=\(found.count)")
+            // **The anonymous ones are the floor; a named one is a claim
+            // about a particular view.** Counting them together is what made
+            // this case fail for a fortnight over `favorites only`, which
+            // grows perfectly well — see ``knownScalingFalsePositive``.
+            let anonymous = dynamic.filter { $0.hasSuffix("| element: nil") }
+            let named = dynamic.filter { !$0.hasSuffix("| element: nil") }
+            counts.append((variant, anonymous.count))
+            namedDynamic.append(contentsOf: named)
+            print(
+                "STRIP [\(variant)] anonymous=\(anonymous.count) "
+                    + "named=\(named.count) total=\(found.count)"
+            )
             for line in found { print("STRIP [\(variant)]   \(line)") }
             app.terminate()
         }
@@ -1204,6 +1239,15 @@ final class StubHouseUITests: XCTestCase {
         // **`tap`, not `none`.** The seeded arrival reports 0 for reasons
         // nothing has explained, so it cannot be the baseline the others are
         // read against.
+        let unexpectedNamed = namedDynamic.filter {
+            !$0.contains(Self.knownScalingFalsePositive)
+        }
+        XCTAssertEqual(
+            [], unexpectedNamed,
+            "a Dynamic Type finding named an element that is not the known "
+                + "false positive — measure it at both sizes before believing it"
+        )
+
         let control = counts.first { $0.0 == "tap" }?.1
         XCTAssertEqual(
             control,
