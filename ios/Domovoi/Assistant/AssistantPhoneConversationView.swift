@@ -237,20 +237,37 @@ struct AssistantPhoneConversationView: View {
                     Button(AssistantStrings.stop) { phone.stop() }
                         .buttonStyle(.bordered)
                         .frame(minHeight: 44)
-                } else {
+                } else if !typed.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     // Disabled, not absent and not lying, while a reply is
                     // being written in **another** of this place's chats: the
                     // model allows one reply at a time (``send`` guards on
                     // `sending`), so a `send` that looked live here would do
                     // nothing when tapped.
-                    Button(ChatStrings.send) { send() }
-                        .buttonStyle(.borderedProminent)
-                        .frame(minHeight: 44)
-                        .disabled(
-                            typed.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                                || phone.sending
-                        )
+                    //
+                    // The label's colour is named rather than inherited.
+                    // `.borderedProminent` draws a WHITE label on the accent,
+                    // and white on `Color.brand` is **2.05:1** — the arithmetic
+                    // is in the token's own doc comment, which says to use
+                    // ``Color/brandFg`` for text drawn on the amber.
+                    Button {
+                        send()
+                    } label: {
+                        Text(ChatStrings.send).foregroundStyle(Color.brandFg)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(Color.brand)
+                    .frame(minHeight: 44)
+                    .disabled(phone.sending)
                 }
+                // **Nothing at all with a blank composer.** Android does not
+                // draw a greyed send there either — with a blank draft the
+                // spot holds the mic (`AssistantChat.kt:379-390`), and this
+                // milestone has no voice, so it holds nothing. A send that
+                // cannot send is not drawn (no-misleading-controls), and the
+                // dimmed `.borderedProminent` that stood here is what Apple's
+                // audit failed on contrast in train S005: grey glyphs on a
+                // grey fill, the one finding that run attributed to a control
+                // of this screen.
             }
             .padding(12)
         }

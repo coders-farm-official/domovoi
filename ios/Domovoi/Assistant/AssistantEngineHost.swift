@@ -85,12 +85,52 @@ enum AssistantStoreSeam {
 
     static let flag = "-domovoi-phone-chats"
 
-    /// Empties the store when the launch said `wipe`. Called once, before the
-    /// place's model reads the directory.
+    /// Empties the store when the launch said `wipe`, and empties it and
+    /// writes one finished exchange when it said `seed`. Called once, before
+    /// the place's model reads the directory.
     static func wipeIfAsked(_ arguments: [String] = ProcessInfo.processInfo.arguments) {
-        guard let at = arguments.firstIndex(of: flag), at + 1 < arguments.count,
-              arguments[at + 1] == "wipe" else { return }
-        _ = AssistantConversationStore().clearAll()
+        guard let at = arguments.firstIndex(of: flag), at + 1 < arguments.count else { return }
+        switch arguments[at + 1] {
+        case "wipe":
+            _ = AssistantConversationStore().clearAll()
+        case "seed":
+            _ = AssistantConversationStore().clearAll()
+            seedOneExchange()
+        default:
+            return
+        }
+    }
+
+    /// One chat with a question and its answer already in it, written through
+    /// the same ``AssistantConversationStore/save(_:)`` the place writes with.
+    ///
+    /// **Why a seed and not a case that types.** The only case that needs it
+    /// is `testAssistant_DynamicTypeHoldsAtAccessibilityXXXL`, which measures
+    /// the frames of the labels train S005's audit named — a row title, the
+    /// row's place caption and age, the list's footer, `clear all` and the two
+    /// bubbles — at the ordinary size and at AX5. Reaching those labels by
+    /// typing a question at AX5 means a keyboard over a 178-point list on a
+    /// screen where a flick steps over a whole cell, which is how that case
+    /// lost `new chat` in the first place. A seeded chat is a tap away from
+    /// every one of them.
+    ///
+    /// It is **only** geometry that is measured against this, never behaviour:
+    /// nothing asserts that a reply arrived, or what it says, from seeded
+    /// data. The words are ``AssistantFakeScripts``' own, so the labels the
+    /// audit named and the labels this writes cannot drift apart.
+    private static func seedOneExchange() {
+        let store = AssistantConversationStore()
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        let chat = AssistantConversation(
+            id: AssistantConversationStore.newId(now),
+            created: now,
+            updated: now,
+            messages: [
+                AssistantMessage(from: .user, text: AssistantFakeScripts.risotto, at: now),
+                AssistantMessage(from: .domovoi, text: AssistantFakeScripts.paperBag, at: now),
+            ]
+        )
+        _ = store.save(chat)
     }
 }
 #endif
@@ -142,6 +182,12 @@ enum AssistantFakeScripts {
     /// nothing else in the app or the stub house says, so a case finding it
     /// found this reply.
     static let paperBag = "Mushrooms keep best in a paper bag in the fridge door."
+
+    /// The question the cases ask. Five words, so ``ChatTitles/firstWords(_:)``
+    /// makes them the chat's title whole; it is here as well as in the cases
+    /// because ``AssistantStoreSeam`` writes it, and a seed whose words were
+    /// not the ones a case matches on would measure nothing.
+    static let risotto = "Mushroom risotto needs arborio rice"
 
     /// The shorter answer after a context overflow — a different phrase, so a
     /// case can tell the retry's reply from the first one.

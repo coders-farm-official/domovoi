@@ -33,6 +33,15 @@ struct AssistantPhoneRowView: View {
     /// (``ChatView`` paid for that one). Every glyph width here is scaled.
     @ScaledMetric(relativeTo: .body) private var glyphWidth: CGFloat = 26
 
+    /// At an accessibility size this row's two side-by-side pairs become
+    /// columns — the title beside its place chip, and the words beside the
+    /// age. Train S005's picture is the argument: at the **ordinary** size the
+    /// title was already down to 94 points of width with the chip and the age
+    /// holding the rest, so a five-word title wrapped to three lines; at AX5
+    /// the same `HStack` would have left it a column of single letters.
+    /// NIGHT-RULES §3 asks for the swap on every row that has one.
+    @Environment(\.dynamicTypeSize) private var typeSize
+
     var body: some View {
         HStack(spacing: 8) {
             Button {
@@ -72,20 +81,38 @@ struct AssistantPhoneRowView: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .multilineTextAlignment(.leading)
                 }
+                // At an accessibility size the age joins the column instead of
+                // competing with the title for the row's width.
+                if typeSize.isAccessibilitySize { ageText }
             }
             Spacer(minLength: 0)
-            Text(age)
-                .font(.caption)
-                .foregroundStyle(Color.fgMuted)
-                .monospacedDigit()
+            if !typeSize.isAccessibilitySize { ageText }
         }
         .frame(minHeight: 56)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(.rect)
     }
 
+    private var ageText: some View {
+        Text(age)
+            .font(.caption)
+            .foregroundStyle(Color.fgMuted)
+            .monospacedDigit()
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    @ViewBuilder
     private var title: some View {
-        HStack(spacing: 6) {
+        if typeSize.isAccessibilitySize {
+            VStack(alignment: .leading, spacing: 2) { titleWords }
+        } else {
+            HStack(spacing: 6) { titleWords }
+        }
+    }
+
+    @ViewBuilder
+    private var titleWords: some View {
+        Group {
             Text(row.title)
                 .font(.subheadline)
                 .fixedSize(horizontal: false, vertical: true)

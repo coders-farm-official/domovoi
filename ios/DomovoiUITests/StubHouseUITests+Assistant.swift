@@ -27,7 +27,9 @@ import XCTest
 /// need a house that is not the primary one — the audit's and the
 /// no-house one — and both use houses `stub_run.sh` already stands up on
 /// their own ports. Every case resets the fixtures as NIGHT-RULES §5 says to,
-/// and wipes the **phone's own** chats with `-domovoi-phone-chats wipe`,
+/// and wipes the **phone's own** chats with `-domovoi-phone-chats wipe` (or,
+/// where a case needs a chat to measure rather than to drive, replaces them
+/// with one seeded exchange — `seed`),
 /// because those are files in the app's container and would otherwise be the
 /// previous case's data (`AssistantStoreSeam` says so where it is written).
 extension StubHouseUITests {
@@ -75,12 +77,41 @@ extension StubHouseUITests {
     /// Nothing else is forgiven. The contrast finding S003 raised against the
     /// selected `on this phone` chip was **real** and was fixed in
     /// `AssistantPlacePickerView.swift`, which has the arithmetic.
+    ///
+    /// ### S005 named seven more, on two screens the audit had not reached
+    ///
+    /// S003 only ever swept the empty list. S005 swept a conversation and a
+    /// list with a row in it as well, and the same headline came back against
+    /// the row's title, its `on this phone` caption, its age, the privacy
+    /// footer, `clear all`, and the two bubbles. Every one of them is a plain
+    /// `Text` with a semantic font — `.subheadline`, `.caption`, `.caption2`,
+    /// `.footnote`, `.body` — and there is **no fixed point size, no
+    /// `minimumScaleFactor` and no fixed `frame(width:)` anywhere in
+    /// `ios/Domovoi/Assistant/`; a grep of the four view files is the check.
+    /// So they are forgiven on the same terms as the first three, and all ten
+    /// labels are now measured at both type sizes by
+    /// `testAssistant_DynamicTypeHoldsAtAccessibilityXXXL`.
+    ///
+    /// What S005 found that was **not** forgiven: the contrast finding against
+    /// the composer's `send`. That one was real — a dimmed
+    /// `.borderedProminent` on a blank composer — and the control is gone,
+    /// which is also what Android draws there (`AssistantChat.kt:379-390`).
     static let assistantScalingFalsePositives: [AssistantAuditExemption] = {
         let headline = "Dynamic Type font sizes are partially unsupported"
         return [
+            // the empty list (S003)
             AssistantUnderTest.noChatsYet,
             AssistantUnderTest.emptyHintPhone,
             ChatStringsUnderTest.newChat,
+            // a list with a row in it (S005)
+            AssistantUnderTest.arborio,
+            AssistantUnderTest.chipPhone,
+            AssistantUnderTest.justNow,
+            AssistantUnderTest.privacyLineOne,
+            AssistantUnderTest.clearAll,
+            // a conversation (S005). `arborio` is the question's bubble as
+            // well as the row's title and is already above.
+            AssistantUnderTest.paperBag,
         ].map { AssistantAuditExemption(headline: headline, label: $0) }
     }()
 
@@ -98,6 +129,7 @@ extension StubHouseUITests {
         model: String,
         script: String? = nil,
         wipe: Bool = true,
+        chats: String? = nil,
         mode: String = StubHouseUITests.ordinaryTypeSize,
         port: Int = 6601
     ) -> XCUIApplication {
@@ -114,7 +146,14 @@ extension StubHouseUITests {
             "-domovoi-phone-model", model,
         ]
         if let script { app.launchArguments += ["-domovoi-phone-script", script] }
-        if wipe { app.launchArguments += ["-domovoi-phone-chats", "wipe"] }
+        // `chats` wins over `wipe` where a case asked for a seeded store:
+        // `seed` empties it and writes one finished exchange, which is the
+        // same `clearAll` plus one `save` (``AssistantStoreSeam``).
+        if let chats {
+            app.launchArguments += ["-domovoi-phone-chats", chats]
+        } else if wipe {
+            app.launchArguments += ["-domovoi-phone-chats", "wipe"]
+        }
         app.launch()
         XCTAssertTrue(app.wait(for: .runningForeground, timeout: 30))
         return app
@@ -474,6 +513,18 @@ extension StubHouseUITests {
         start.tap()
         let field = composerField(app)
         XCTAssertTrue(field.waitForExistence(timeout: 20), "no composer")
+        // **Nothing in the send's place with a blank composer**, which is what
+        // Android draws there (`AssistantChat.kt:379-390`: a blank draft gets
+        // the mic, never a greyed send) and what train S005's audit asked for
+        // — the dimmed `.borderedProminent` that used to stand here was the
+        // one contrast finding that run attributed to a control of this item.
+        // Before the field is tapped, so there is no keyboard whose own key
+        // could be the match.
+        XCTAssertEqual(
+            app.buttons.matching(NSPredicate(format: "label ==[c] %@", ChatStringsUnderTest.send)).count,
+            0,
+            "a send button on a composer with nothing in it — it cannot send, so it is not drawn"
+        )
         field.tap()
         app.typeText("Mushrooms")
         let keyboard = app.keyboards.firstMatch
@@ -736,13 +787,80 @@ extension StubHouseUITests {
 
     // MARK: - Dynamic Type, and the audit
 
+    /// Scroll the phone's list back to its head, so that the next element is
+    /// looked for from the top rather than from wherever the last one left it.
+    ///
+    /// **Train S005 paid for this.** At AX5 the place picker wraps to two
+    /// rows and the list is left a 178-point window; one `swipeUp` in a window
+    /// that small steps over a whole cell. ``StubHouseUITests/scrollUntilBuilt(_:_:flicks:)``
+    /// only ever scrolls **down**, so once a measurement had run to the foot
+    /// of the list the `new chat` cell above it was unbuilt and unreachable,
+    /// and the case reported "new-chat was not on screen at AX5" about a
+    /// button that was drawing perfectly well.
+    ///
+    /// The head is the two-place subtitle, which is in the list's own header
+    /// cell — the one thing that is at the top of this list and nowhere else.
+    @MainActor
+    func assistantScrollListToTop(_ app: XCUIApplication, flicks: Int = 20) {
+        let list = app.collectionViews.firstMatch
+        guard list.exists else { return }
+        let head = startingWith(app, AssistantUnderTest.subtitleBoth)
+        for _ in 0..<flicks {
+            if head.exists { return }
+            list.swipeDown(velocity: .slow)
+        }
+    }
+
+    /// The height of the **shortest** static text carrying exactly this label.
+    ///
+    /// Shortest, and every match rather than `firstMatch`, because two of the
+    /// labels the audit named are drawn twice on the screen they were named
+    /// on: `on this phone` is the picker's chip and the row's caption, and the
+    /// chat's title is the row and the conversation's own heading. A
+    /// measurement of whichever one the tree happened to hold first would
+    /// forgive a finding against the other; the shortest growing means both
+    /// grew.
+    ///
+    /// - Parameter inList: scroll the phone's list for it. False for the
+    ///   conversation, whose transcript is a `ScrollView` and not the
+    ///   `collectionViews.firstMatch` those helpers drive.
+    @MainActor
+    func assistantTextHeight(
+        _ app: XCUIApplication,
+        _ label: String,
+        inList: Bool = true
+    ) -> CGFloat? {
+        let all = app.staticTexts.matching(NSPredicate(format: "label == %@", label))
+        if inList {
+            assistantScrollListToTop(app)
+            guard scrollUntilBuilt(app, all.firstMatch) else { return nil }
+        } else {
+            guard all.firstMatch.waitForExistence(timeout: 20) else {
+                print("=== NO TEXT '\(label)' — tree follows ===")
+                print(app.debugDescription)
+                return nil
+            }
+        }
+        var shortest: CGFloat?
+        for index in 0..<all.count {
+            let one = all.element(boundBy: index)
+            guard one.exists else { continue }
+            if let best = shortest {
+                shortest = min(best, one.frame.height)
+            } else {
+                shortest = one.frame.height
+            }
+        }
+        return shortest
+    }
+
     /// The place's own text grows with the type size.
     ///
     /// **Measured, not read off a headline**: a named Dynamic Type audit
-    /// finding has twice been a false positive on this track, so this compares
-    /// each element at the ordinary size and at AX5. It measures everything
-    /// this item drew that `testAssistant_Audit` is asked to forgive, and that
-    /// pairing is the point: the audit's exemptions
+    /// finding has now been a false positive four times on this track, so this
+    /// compares each element at the ordinary size and at AX5. It measures
+    /// everything this item drew that `testAssistant_Audit` is asked to
+    /// forgive, and that pairing is the point: the audit's exemptions
     /// (``assistantScalingFalsePositives``) name these very labels, so if one
     /// of them ever stops scaling this case fails and the exemption cannot
     /// hide it.
@@ -755,15 +873,33 @@ extension StubHouseUITests {
     /// the floor and not the text. The glyphs were growing the whole time, in
     /// the dimension that has no floor: 97.0 → 267.3 points wide. Height is
     /// kept for the elements that wrap, where height is the thing that grows.
+    /// `clear all` is measured by width for the same reason — S005 reported it
+    /// at exactly 44 points tall, which is a `HomeLink`'s hit target.
     ///
     /// **The hint is scrolled to.** At AX5 the header cell alone is 301 points
     /// tall, so the empty-state hint is below the fold and a lazy list leaves
     /// it *unbuilt*, not merely off screen (NIGHT-RULES §5). `if hint.exists`
     /// silently recorded nothing and the case reported only the chip, because
     /// `continueAfterFailure` is false and the chip failed first.
+    ///
+    /// ### Two more train S005 paid for
+    ///
+    /// **Every element is looked for from the top of the list**
+    /// (``assistantScrollListToTop(_:flicks:)``), because the scroll that
+    /// reaches the hint leaves `new chat` behind it and unbuilt.
+    ///
+    /// **A second pass, with a chat already on the phone.** S005's audit swept
+    /// a list with a row in it and a conversation, and named seven labels that
+    /// only exist there. They are reached by seeding the store at launch
+    /// (`-domovoi-phone-chats seed`, ``AssistantStoreSeam``) and tapping the
+    /// row — not by typing a question at AX5 over a 178-point list with the
+    /// keyboard up, which is the kind of driving that loses a cell. Nothing
+    /// here asserts behaviour against seeded data: this case measures frames.
     @MainActor
     func testAssistant_DynamicTypeHoldsAtAccessibilityXXXL() throws {
-        func sizes(_ mode: String, _ tag: String) -> [String: CGFloat] {
+
+        /// The empty list: the picker, the header and the empty state.
+        func onEmptyList(_ mode: String, _ tag: String) -> [String: CGFloat] {
             control("reset-fixtures", "{}", port: 6601, what: "the fixtures before \(tag)")
             let app = assistantLaunch(model: "fake", mode: mode)
             XCTAssertTrue(reachPhonePlace(app), "the phone's place never drew at \(tag)")
@@ -776,21 +912,16 @@ extension StubHouseUITests {
 
             // The sentences, by height, each of them `.fixedSize(horizontal:
             // false, vertical: true)` so that it wraps rather than squeezes.
-            let byHeight: [(String, XCUIElement)] = [
-                ("subtitle", startingWith(app, AssistantUnderTest.subtitleBoth)),
-                // The two the audit names on the empty list. `staticTexts`,
-                // not `buttons`: the audit's findings are against the leaf
-                // text (`type=48`), and `new chat`'s button shares its label
-                // while carrying the same 44-point floor the chip does.
-                ("new-chat", app.staticTexts[ChatStringsUnderTest.newChat].firstMatch),
-                ("no-chats-yet", app.staticTexts[AssistantUnderTest.noChatsYet].firstMatch),
-                ("hint", startingWith(app, AssistantUnderTest.emptyHintPhone)),
-            ]
-            for (key, element) in byHeight {
-                // Built, not just on screen: at AX5 the foot of this list is
-                // unbuilt until it is scrolled to.
-                guard scrollUntilBuilt(app, element) else { continue }
-                out[key] = element.frame.height
+            // `staticTexts`, not `buttons`: the audit's findings are against
+            // the leaf text (`type=48`), and `new chat`'s button shares its
+            // label while carrying the same 44-point floor the chip does.
+            for (key, label) in [
+                ("subtitle", AssistantUnderTest.subtitleBoth),
+                ("new-chat", ChatStringsUnderTest.newChat),
+                ("no-chats-yet", AssistantUnderTest.noChatsYet),
+                ("hint", AssistantUnderTest.emptyHintPhone),
+            ] {
+                if let height = assistantTextHeight(app, label) { out[key] = height }
             }
 
             evidence(app, "assistant-type-\(tag)")
@@ -798,17 +929,72 @@ extension StubHouseUITests {
             return out
         }
 
-        let ordinary = sizes(StubHouseUITests.ordinaryTypeSize, "large")
-        let big = sizes("UICTContentSizeCategoryAccessibilityXXXL", "ax5")
+        /// A list with one seeded chat on it, and that chat opened.
+        func onSeededChat(_ mode: String, _ tag: String) -> [String: CGFloat] {
+            control("reset-fixtures", "{}", port: 6601, what: "the fixtures before \(tag)")
+            let app = assistantLaunch(model: "fake", chats: "seed", mode: mode)
+            XCTAssertTrue(reachPhonePlace(app), "the phone's place never drew at \(tag)")
+            var out: [String: CGFloat] = [:]
+
+            // The row, its caption and its age; then the footer, which is
+            // below the row and needs the scroll of its own that
+            // ``assistantTextHeight(_:_:inList:)`` makes for every key.
+            for (key, label) in [
+                ("row-title", AssistantUnderTest.arborio),
+                ("row-place", AssistantUnderTest.chipPhone),
+                ("row-age", AssistantUnderTest.justNow),
+                ("privacy", AssistantUnderTest.privacyLineOne),
+            ] {
+                if let height = assistantTextHeight(app, label) { out[key] = height }
+            }
+            // `clear all` by width, for the chip's reason: it is a `HomeLink`
+            // with a 44-point hit target and S005 measured it at exactly 44.
+            let clear = app.buttons[AssistantUnderTest.clearAll].firstMatch
+            if scrollUntilBuilt(app, clear) { out["clear-all"] = clear.frame.width }
+
+            // The conversation. The row's own button carries the title as its
+            // label (`AssistantPhoneRowView`), which is how every other case
+            // here opens one.
+            assistantScrollListToTop(app)
+            let row = app.buttons[AssistantUnderTest.arborio].firstMatch
+            if scrollUntilBuilt(app, row) {
+                row.tap()
+                for (key, label) in [
+                    ("bubble-asked", AssistantUnderTest.arborio),
+                    ("bubble-reply", AssistantUnderTest.paperBag),
+                ] {
+                    if let height = assistantTextHeight(app, label, inList: false) {
+                        out[key] = height
+                    }
+                }
+            } else {
+                XCTFail("the seeded chat has no row to open at \(tag)")
+            }
+
+            evidence(app, "assistant-type-\(tag)")
+            app.terminate()
+            return out
+        }
+
+        var ordinary = onEmptyList(StubHouseUITests.ordinaryTypeSize, "large")
+        var big = onEmptyList("UICTContentSizeCategoryAccessibilityXXXL", "ax5")
+        ordinary.merge(onSeededChat(StubHouseUITests.ordinaryTypeSize, "large-row")) { a, _ in a }
+        big.merge(onSeededChat("UICTContentSizeCategoryAccessibilityXXXL", "ax5-row")) { a, _ in a }
         print("ASSISTANT TYPE large=\(ordinary) ax5=\(big)")
-        // **All five verdicts, not the first one.** `continueAfterFailure` is
+
+        // **Every verdict, not the first one.** `continueAfterFailure` is
         // false for this class, and on S003 that turned four measurements into
         // one line: the chip failed and the hint's own absence at AX5 was
-        // never reported. Five elements are five findings.
+        // never reported. Twelve elements are twelve findings.
         let wasContinuing = continueAfterFailure
         continueAfterFailure = true
         defer { continueAfterFailure = wasContinuing }
-        for key in ["chip", "subtitle", "new-chat", "no-chats-yet", "hint"] {
+        let keys = [
+            "chip", "subtitle", "new-chat", "no-chats-yet", "hint",
+            "row-title", "row-place", "row-age", "privacy", "clear-all",
+            "bubble-asked", "bubble-reply",
+        ]
+        for key in keys {
             guard let small = ordinary[key] else {
                 XCTFail("\(key) was not on screen at the ordinary size — nothing was measured")
                 continue
@@ -820,11 +1006,10 @@ extension StubHouseUITests {
             XCTAssertGreaterThan(
                 grown, small * 1.3,
                 "\(key) is \(grown) at AX5 against \(small) at large — a fixed frame, not "
-                    + "scaled text (chip measured by width, every other key by height)"
+                    + "scaled text (chip and clear-all measured by width, every other key by height)"
             )
         }
     }
-
     /// Apple's own audit, over the phone's list and over a conversation,
     /// classified by **signature**.
     ///
@@ -940,6 +1125,23 @@ enum AssistantUnderTest {
     /// ``AssistantStrings/clearAllBody(_:)`` with the one chat these cases
     /// seed. The count is the point of the sentence, so it is in the match.
     static let clearAllCount = "kept on this phone (1)"
+
+    /// ``AssistantStrings/privacyLine(_:)`` with the one seeded chat, **whole**.
+    ///
+    /// Whole and not a prefix because ``StubHouseUITests/AssistantAuditExemption``
+    /// matches on `label='<this>'` with its closing quote: a prefix would
+    /// forgive nothing. Its first words are ``privacyHead``, which is what a
+    /// query uses — a query string over 128 characters throws (NIGHT-RULES §5).
+    static let privacyLineOne =
+        "1 kept on this phone, in the app's private storage and outside backups. The model sees "
+        + "the chat you are in and nothing else on the phone: not your other files, contacts or location."
+    static let privacyHead = "1 kept on this phone, in the app's private storage"
+
+    /// `relTime`'s word for a chat written a moment ago (`Format.swift:149`),
+    /// which is every seeded one. It is also the row's accessibility
+    /// **value**, so a row and the header's `new chat` button can be told
+    /// apart.
+    static let justNow = "just now"
 
     /// ``AssistantStrings/deleteText(_:)``'s tail — the one sentence that says
     /// a phone chat is not the household's.
