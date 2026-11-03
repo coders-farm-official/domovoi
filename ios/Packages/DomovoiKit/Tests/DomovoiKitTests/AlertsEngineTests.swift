@@ -141,7 +141,8 @@ final class AlertsEngineTests: XCTestCase {
             serverKey: { keyNow.current },
             clock: { Self.nowMs }
         )
-        XCTAssertFalse(await engine.catchUp())
+        let gaveUp = await engine.catchUp()
+        XCTAssertFalse(gaveUp)
         XCTAssertEqual(2, calls.current, "the page, then the newest-fire check")
         XCTAssertEqual(40, books.firesSeen(Self.keyA), "the old house's mark is untouched")
         XCTAssertNil(books.firesSeen(Self.keyB))
@@ -192,7 +193,8 @@ final class AlertsEngineTests: XCTestCase {
         rig.books.setFiresSeen(Self.keyA, id: 40, at: Self.ago(600))
         rig.books.setAlerted(["\(Self.keyA)|4|\(Self.nowMs)"])
 
-        XCTAssertFalse(await rig.engine.catchUp(), "the server did not answer")
+        let answered = await rig.engine.catchUp()
+        XCTAssertFalse(answered, "the server did not answer")
         XCTAssertEqual(40, rig.books.firesSeen(Self.keyA))
         XCTAssertEqual(["\(Self.keyA)|4|\(Self.nowMs)"], rig.books.alerted())
         XCTAssertTrue(rig.centre.added.isEmpty)
@@ -208,7 +210,8 @@ final class AlertsEngineTests: XCTestCase {
         rig.books.setFiresSeen(Self.keyA, id: 40, at: Self.ago(600))
         rig.books.setAlerted(["\(Self.keyA)|4|\(Self.nowMs)"])
 
-        XCTAssertTrue(await rig.engine.catchUp())
+        let caughtUp = await rig.engine.catchUp()
+        XCTAssertTrue(caughtUp)
         XCTAssertEqual(40, rig.books.firesSeen(Self.keyA), "the mark stands")
         XCTAssertFalse(rig.books.alerted().isEmpty)
     }
@@ -231,7 +234,8 @@ final class AlertsEngineTests: XCTestCase {
         rig.books.setFiresSeen(Self.keyA, id: 40, at: Self.ago(3_600))
         rig.books.setAlerted(["\(Self.keyA)|4|\(Self.nowMs)"])
 
-        XCTAssertTrue(await rig.engine.catchUp())
+        let caughtUp = await rig.engine.catchUp()
+        XCTAssertTrue(caughtUp)
         XCTAssertEqual(3, rig.books.firesSeen(Self.keyA), "the mark is the new history's")
         XCTAssertEqual(1, rig.centre.added.count, "the fire that just went off posts")
         XCTAssertFalse(
@@ -272,7 +276,8 @@ final class AlertsEngineTests: XCTestCase {
             AlertsTimerList(serverNow: Self.nowISO, timers: timers.current)
         }))
 
-        XCTAssertTrue(await rig.engine.syncMirror())
+        var synced = await rig.engine.syncMirror()
+        XCTAssertTrue(synced)
         XCTAssertEqual(
             ["timer_fire:\(Self.keyA):1", "timer_fire:\(Self.keyA):2"],
             rig.centre.added.map(\.identifier),
@@ -286,7 +291,8 @@ final class AlertsEngineTests: XCTestCase {
         timers.set([
             AlertsTimer(id: 1, expiresAt: Self.ago(-900), createdAt: Self.nowISO, label: "pasta", roomID: "kitchen"),
         ])
-        XCTAssertTrue(await rig.engine.syncMirror())
+        synced = await rig.engine.syncMirror()
+        XCTAssertTrue(synced)
         XCTAssertEqual(["timer_fire:\(Self.keyA):2"], rig.centre.log.current.removedPending)
         XCTAssertEqual(
             "timer_fire:\(Self.keyA):1", rig.centre.added.last?.identifier,
@@ -305,7 +311,8 @@ final class AlertsEngineTests: XCTestCase {
             alarms: [AlertsMirrorAlarm(timerID: 1, kind: "timer", triggerAtMs: Self.nowMs + 600_000)]
         )
         let rig = makeRig(reader: FakeAlertsReader(), state: .denied, mirror: stored)
-        XCTAssertTrue(await rig.engine.syncMirror())
+        let synced = await rig.engine.syncMirror()
+        XCTAssertTrue(synced)
         XCTAssertEqual(["timer_fire:\(Self.keyA):1"], rig.centre.log.current.removedPending)
         XCTAssertEqual(AlertsMirrorBook(serverKey: Self.keyA), rig.mirror.mirror())
         XCTAssertTrue(rig.reader.paths.current.isEmpty, "nothing would post, so nothing is read")
