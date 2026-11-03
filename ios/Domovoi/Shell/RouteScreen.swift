@@ -132,7 +132,11 @@ struct RouteScreen: View {
             ImagesPluginBand(model: model) { ImagesView(model: model) }
         case .news:
             // slot: news
-            ScreenPlaceholder(route: route, onThisPhone: false)
+            // ``NewsView`` says what is left out and why there is no control
+            // for any of it. **No capability gate**: `/api/news` is core, so
+            // this renders on every house (`Route.swift:83-89` gates
+            // `stations` and `images` only).
+            NewsView(model: model)
         case .people:
             // slot: people
             ScreenPlaceholder(route: route, onThisPhone: false)
