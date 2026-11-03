@@ -124,6 +124,10 @@ extension StubHouseUITests {
         /// ``ImagesStrings/tile(position:)`` — a tile's label since the audit
         /// rejected the file name as one.
         static func tile(position: Int) -> String { "picture \(position)" }
+        /// The page's scroll view, named in `ImagesView.swift` so that
+        /// ``imagesPage(_:)`` can pick it out from the shell's phone bar at
+        /// any type size. Not a word anybody reads — an identifier.
+        static let pageIdentifier = "images-page"
     }
 
     // MARK: - getting there
@@ -313,12 +317,51 @@ extension StubHouseUITests {
         app.buttons.matching(NSPredicate(format: "value == %@", name)).firstMatch
     }
 
-    /// The page's own scroll view: the tallest one in the tree.
+    /// The page's own scroll view, **by name**.
+    ///
+    /// This took the tallest scroll view in the tree, and the tallest one is
+    /// not always the page. At an ordinary type size it is — 568 points
+    /// against the phone bar's 146 — but at AX5 the plugin band above the
+    /// page leaves it a **102-point** window (DECISIONS, "At an accessibility
+    /// size the band leaves the page a 102-point window") and the phone bar
+    /// is then the taller of the two. Train S004 flicked the phone bar for a
+    /// whole minute, the flick landed on `music`, and
+    /// ``testImages_AtTheLargestTypeSize()`` measured the Music screen: eight
+    /// leaves at `large` against **none** at AX5, a case that compared
+    /// nothing while reporting that it had looked. The picture is what said
+    /// so — `images-ax5-AX5` is a track called *Veldrassen Overture*.
+    ///
+    /// `images-page` is `ImagesView.swift`'s own identifier on that scroll
+    /// view, which is the one thing in the tree that says *what* an element
+    /// is rather than how big it happens to be at this type size.
+    /// The fallback below is **not** the old rule put back. It is the old
+    /// rule with the phone bar taken out of the running: the bar is the one
+    /// scroll view that reaches the bottom of the window, and the page always
+    /// ends above it. It exists because no other view in this app carries an
+    /// identifier, so whether SwiftUI puts one on a `ScrollView` is a thing
+    /// this branch is finding out on a train — and a nil page would take
+    /// every scrolling case on this screen down with it, not just the one.
     @MainActor
     func imagesPage(_ app: XCUIApplication) -> XCUIElement? {
-        guard app.scrollViews.firstMatch.waitForExistence(timeout: 20) else { return nil }
-        return app.scrollViews.allElementsBoundByIndex
+        // Waiting on *a* scroll view and then asking for the named one, not
+        // waiting 20 seconds on the name: this is called inside every flick
+        // loop on the screen, and a 20-second wait per call would turn a
+        // missing identifier into a run that times out rather than one that
+        // falls back.
+        guard app.scrollViews.firstMatch.waitForExistence(timeout: 20) else {
+            print("=== NO SCROLL VIEW AT ALL — tree follows ===")
+            print(app.debugDescription)
+            return nil
+        }
+        let named = app.scrollViews[ImagesWords.pageIdentifier]
+        if named.exists { return named }
+        print("=== NO `\(ImagesWords.pageIdentifier)` SCROLL VIEW — falling back ===")
+        let floor = app.frame.maxY - 1
+        let all = app.scrollViews.allElementsBoundByIndex
+        let page = all.filter { $0.frame.maxY < floor }
             .max(by: { $0.frame.height < $1.frame.height })
+            ?? all.max(by: { $0.frame.height < $1.frame.height })
+        return page
     }
 
     @MainActor
@@ -962,7 +1005,13 @@ extension StubHouseUITests {
             imagesScrollToTop(app)
             take()
             guard let page = imagesPage(app) else { return out }
-            for _ in 0..<30 where out.count < leaves.count {
+            // **Sixty, not thirty.** A flick moves about a window's worth and
+            // the window is 102 points at AX5 against 1626 points of content,
+            // so thirty flicks is roughly the whole page with nothing to
+            // spare — and a walk that runs out of flicks silently measures
+            // fewer leaves rather than failing. Each flick past the foot
+            // costs nothing.
+            for _ in 0..<60 where out.count < leaves.count {
                 page.swipeUp(velocity: .slow)
                 take()
             }
@@ -1002,7 +1051,11 @@ extension StubHouseUITests {
             measured[label] = sizes
             evidence(app, "images-ax5-\(label)")
             let tile = imagesTile(app, showing: StubImages.tileOne)
-            if imagesScrollUntilBuilt(app, tile) {
+            // Sixty for the same reason the walk takes sixty: at AX5 the tile
+            // is at the foot of 1626 points seen through a 102-point window.
+            // `heights` has already walked most of the way down, so this is
+            // the rest of it.
+            if imagesScrollUntilBuilt(app, tile, flicks: 60) {
                 tileSides[label] = tile.frame.width
             }
             evidence(app, "images-ax5-\(label)-tiles")
@@ -1032,13 +1085,20 @@ extension StubHouseUITests {
         // the type size; a fixed `frame(width: 84)` would be identical at both
         // sizes, which is rule §3's own example and is the thing a height
         // comparison of text cannot see.
-        if let narrow = tileSides["large"], let wide = tileSides["AX5"] {
-            XCTAssertGreaterThan(
-                wide,
-                narrow * 1.4,
-                "the tile's side is fixed rather than @ScaledMetric (\(narrow) -> \(wide))"
-            )
-        }
+        //
+        // **Both sides are required, not measured if convenient.** Train S004
+        // never built the tile at AX5 — it was flicking the phone bar — and
+        // the `if let` turned the one check of the one `@ScaledMetric` on this
+        // screen into nothing at all, silently, while the case went on to
+        // report the text leaves. A check that disappears when the screen it
+        // checks cannot be reached is a check that proves nothing.
+        let narrow = try XCTUnwrap(tileSides["large"], "the tile never built at the ordinary size")
+        let wide = try XCTUnwrap(tileSides["AX5"], "the tile never built at AX5")
+        XCTAssertGreaterThan(
+            wide,
+            narrow * 1.4,
+            "the tile's side is fixed rather than @ScaledMetric (\(narrow) -> \(wide))"
+        )
     }
 
     // MARK: - Apple's audit
@@ -1066,9 +1126,11 @@ extension StubHouseUITests {
         evidence(app, "images-audited")
         let (floor, rest) = Self.floorAndRest(found)
 
-        let bottom = app.scrollViews.allElementsBoundByIndex
-            .max(by: { $0.frame.height < $1.frame.height })?
-            .frame.maxY ?? 0
+        // The page's own bottom edge, by its identifier rather than by being
+        // the tallest scroll view on screen — the tallest is the phone bar at
+        // an accessibility size, and the edge a row can straddle is this
+        // one's. ``imagesPage(_:)`` carries that measurement.
+        let bottom = imagesPage(app)?.frame.maxY ?? 0
         XCTAssertGreaterThan(bottom, 0, "no scroll view to take a bottom edge from")
         let unexplained = rest.filter { line in
             // A Dynamic Type headline **with** an element is not a defect

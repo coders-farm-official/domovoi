@@ -46,9 +46,28 @@ struct ImagesComposer: View {
     /// and Chat's composer carries the whole note for
     /// (`ChatConversationView.swift:205-214`). Android has no `imeAction`
     /// here either, so there is nothing to port.
+    ///
+    /// **The hint is drawn here rather than handed to `TextField`.** SwiftUI
+    /// renders a field's own placeholder in `UIColor.placeholderText`, which
+    /// measures **1.72:1** against the field's white interior on the audit's
+    /// own screenshot (train S004) — under Apple's 4.5:1 and under every
+    /// other piece of text on this screen, the lowest of which is 5.07:1.
+    /// That is what Apple's audit reports as the screen's one
+    /// `Contrast failed`, and it arrives with `element: nil` because a
+    /// placeholder is not an accessibility element of its own, so nothing in
+    /// the tree can be named for it. There is no API to recolour it, so the
+    /// hint is an overlay in ``Color/fgMuted`` — 7.43:1 on white, the token
+    /// every other muted line on this screen already uses. Android's
+    /// `OutlinedTextField` placeholder is `onSurfaceVariant`, a proper muted
+    /// ink rather than a near-white one, so this is also the faithful colour.
+    ///
+    /// The overlay is `accessibilityHidden` and takes no hits: the field
+    /// keeps the same `accessibilityLabel`, and a second element carrying the
+    /// same words would be a duplicate for VoiceOver and for every case that
+    /// reaches for the field by that label.
     private var prompt: some View {
         TextField(
-            ImagesStrings.promptPlaceholder,
+            "",
             text: Binding(get: { images.prompt }, set: { images.prompt = $0 }),
             axis: .vertical
         )
@@ -62,6 +81,23 @@ struct ImagesComposer: View {
         // prompt, and a field VoiceOver cannot name while it has content is
         // a field nobody can find again.
         .accessibilityLabel(ImagesStrings.promptPlaceholder)
+        // After the style, so the overlay is laid out over the field at its
+        // bordered size rather than at the bare one.
+        .overlay(alignment: .topLeading) {
+            if images.prompt.isEmpty {
+                Text(ImagesStrings.promptPlaceholder)
+                    .foregroundStyle(Color.fgMuted)
+                    // It wraps at an accessibility size like every other line
+                    // on this screen, rather than being squeezed flat.
+                    .fixedSize(horizontal: false, vertical: true)
+                    // `.roundedBorder`'s own content insets, so the hint sits
+                    // where the caret will.
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 7)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+        }
     }
 
     /// `Button` with the `AutoAwesome` glyph and the word (`:229-242`).

@@ -116,6 +116,24 @@ struct ImagesView: View {
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        // **The page says which scroll view it is.**
+        //
+        // `StubHouseUITests+Images.swift`'s `imagesPage(_:)` used to take the
+        // tallest scroll view in the tree, which is the page at an ordinary
+        // type size and is **not** the page at AX5: the band above it leaves
+        // the page a 102-point window (DECISIONS, "At an accessibility size
+        // the band leaves the page a 102-point window") while the shell's
+        // phone bar is a 146-point scroll view of its own. Train S004 flicked
+        // the phone bar instead and the flick landed on `music`, so
+        // `testImages_AtTheLargestTypeSize` measured Music and compared
+        // nothing. An identifier is the only thing in the tree that tells two
+        // scroll views apart by *what they are* rather than by their size;
+        // `images-page` is spelt the same in that file.
+        //
+        // `.accessibilityIdentifier` alone names this element — it does not
+        // make the scroll view an accessibility element or merge its children,
+        // so nothing VoiceOver reads changes.
+        .accessibilityIdentifier("images-page")
         .task {
             // Built here rather than in `init`, for ``HomeView``'s reason:
             // the model needs the container and a `@State` initialiser runs
