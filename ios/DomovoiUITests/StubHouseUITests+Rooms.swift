@@ -529,7 +529,11 @@ extension StubHouseUITests {
         XCTAssertTrue(roomsTab(app, RoomsStringsUnderTest.tabTimers), "no timers tab")
         let row = containing(app, "pasta water")
         XCTAssertTrue(row.waitForExistence(timeout: 20), "the timer to cancel is not there")
-        let cancels = app.buttons[RoomsStringsUnderTest.cancel]
+        // A query, not `app.buttons[...]`: the subscript hands back the single
+        // matching element, which has no `count` and no `element(boundBy:)` —
+        // and this case needs the FIRST of three same-labelled cancels.
+        let cancels = app.buttons
+            .matching(NSPredicate(format: "label == %@", RoomsStringsUnderTest.cancel))
         XCTAssertTrue(cancels.firstMatch.waitForExistence(timeout: 10), "no cancel button")
         evidence(app, "rooms-20-cancel")
         // The first row's own cancel: the rows are in the fixture's order and
@@ -620,7 +624,10 @@ extension StubHouseUITests {
         XCTAssertTrue(roomsWaitFor(app, "The Rite of Spring"), "the library row is missing")
         XCTAssertTrue(containing(app, "Lost Mariner").exists, "the external row is missing")
         XCTAssertTrue(containing(app, "Nightwaves").exists, "the external row's channel is missing")
-        let adds = app.buttons[RoomsStringsUnderTest.add]
+        // A query, not the subscript: this case counts the `add` buttons, and
+        // `app.buttons[...]` is one element with no `count`.
+        let adds = app.buttons
+            .matching(NSPredicate(format: "label == %@", RoomsStringsUnderTest.add))
         evidence(app, "rooms-23-played")
         // **One** row may be added, and the server says which: two buttons
         // would mean the library row had one too.
