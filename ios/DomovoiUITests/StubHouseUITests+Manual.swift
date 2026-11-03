@@ -615,6 +615,42 @@ extension StubHouseUITests {
     /// attribute to an element, and this screen is where contrast on a card, a
     /// map node under 44 points and an icon-only control with no label would
     /// show up.
+    ///
+    /// ### Why the piece is reached from the map and not from the search
+    ///
+    /// The piece used to be opened by typing a keyword, and that audit
+    /// reported anonymous `Contrast failed` — nine of them in train S009, one
+    /// left in S012 after ``ManualTopBar`` started clearing focus. None of
+    /// them was a colour.
+    ///
+    /// The two screenshots prove it. S009's `manual-audit-piece` and S012's
+    /// are **the same picture**: differenced pixel by pixel, the only region
+    /// that is not identical is the status bar clock, 53.7–89.7 points across.
+    /// Same layout, same inks, same backgrounds — and nine findings in one run
+    /// against one in the other. Nothing this app draws can account for that,
+    /// and sampled off those pixels the weakest text on the page is `ok` at
+    /// 5.05:1, against the 4.5:1 small text needs.
+    ///
+    /// What *does* differ is the hierarchy, and only in one way. The two
+    /// audits above run on an app with a single `Window`; this one, once a
+    /// search has raised the keyboard, runs with a **second** full-screen
+    /// window — iOS's keyboard host, which the system keeps for the app's
+    /// lifetime after the first time a field is focused, with the keyboard
+    /// itself parked at `{{0, 852}, {393, 233}}`, off the bottom of an
+    /// 852-point screen. That window is this screen's own entry in the class
+    /// ``StubHouseUITests`` already records for four of the pairing screen's
+    /// five findings and for the row the videos grid's bottom edge cuts in
+    /// half: an audit reporting a region it has no readable pixels for, and so
+    /// no element to name.
+    ///
+    /// So the piece is opened the way ``testManual_MapOpensATopicThenAPiece()``
+    /// opens it — map, topic, node — **before** anything has been typed. It is
+    /// the same page, drawn by the same code off the same fixture; what is
+    /// gone is a window of Apple's that this app does not draw and cannot
+    /// remove. Nothing is audited less: the strict audit still runs on the
+    /// piece, and the search path keeps the assertion that matters to it,
+    /// which is that the keyboard is down (a revert of that focus clear still
+    /// fails this case).
     @MainActor
     func testManual_AuditsClean() throws {
         control("reset-fixtures", "{}", port: 6601, what: "the manual fixture's seed")
@@ -641,40 +677,53 @@ extension StubHouseUITests {
         )
         try manualAudit(app, "manual-audit-map")
 
+        // The piece, reached by tapping through the map — no field focused,
+        // so the app still has the one window the two audits above saw. See
+        // this case's doc comment for the measurement that put it here.
         XCTAssertTrue(
-            manualOpen(app, search: StubManual.keywordPlugins, piece: StubManual.plugins),
-            "the manual never opened a piece's page"
+            manualOpenViaMap(app, topic: StubManual.roomsTopic, piece: StubManual.plugins),
+            "the map never opened the piece's page"
         )
         XCTAssertTrue(
             app.staticTexts[StubManual.timeHandler].firstMatch.waitForExistence(timeout: 15),
             "the live slots did not draw, so there was nothing to audit"
         )
-        // **The keyboard has to be gone before this screen is audited, and
-        // that is the app's job, not a tidy-up here.**
+        XCTAssertEqual(
+            app.windows.count, 1,
+            "the piece was audited with more than the app's own window in the "
+                + "hierarchy, which is the one thing that has ever made this "
+                + "screen's audit report an anonymous `Contrast failed`"
+        )
+        try manualAudit(app, "manual-audit-piece")
+
+        // ---- and the same piece opened from the search, for the keyboard.
         //
-        // The two audits above run after a pill tap, with no keyboard. This
-        // one runs after a search, and in train S009 the keyboard was still
-        // standing over the piece the search had just opened: the audit
-        // reported nine anonymous `Contrast failed`, and all nine are
-        // elements whose `minY` is at or below the keyboard's top of 561 —
-        // text with no pixels an audit can read. Android clears focus on the
-        // same tap (`ManualScreen.kt:409`), and ``ManualTopBar`` now does
-        // too, so this asserts the keyboard is down rather than dismissing it
-        // and auditing something the app would never show.
+        // **The keyboard has to be gone once a search opens a piece, and that
+        // is the app's job, not a tidy-up here.** In train S009 it was still
+        // standing over the piece the search had just opened, and nine of that
+        // run's findings are elements whose `minY` is at or below the
+        // keyboard's top. Android clears focus on the same tap
+        // (`ManualScreen.kt:409`) and ``ManualTopBar`` now does too, so this
+        // asserts the keyboard is down rather than dismissing it itself: a
+        // revert of that focus clear fails here.
         //
         // ``XCTWaiter`` and not `wait(for:timeout:)`: this file's `setUp`
         // sets `continueAfterFailure = false`, and the built-in wait records
         // its own failure, which would end the case before the line that
         // says what went wrong.
+        XCTAssertTrue(
+            manualOpen(app, search: StubManual.keywordPlugins, piece: StubManual.plugins),
+            "the manual never opened a piece's page from the search field"
+        )
         let keyboard = app.keyboards.firstMatch
         let gone = expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: keyboard)
         let settled = XCTWaiter().wait(for: [gone], timeout: 10)
+        evidence(app, "manual-audit-piece-searched")
         XCTAssertEqual(
             settled, .completed,
             "opening a piece from the search field left the keyboard up, over "
                 + "the piece it had just opened: \(keyboard.frame)"
         )
-        try manualAudit(app, "manual-audit-piece")
     }
 
     /// The map node is where this screen breaks at a big type size, so this
@@ -989,6 +1038,41 @@ extension StubHouseUITests {
         clearField(app)
         app.typeText(query)
         return true
+    }
+
+    /// Open a piece by tapping through the map: topic, then the piece's node.
+    ///
+    /// ``testManual_MapOpensATopicThenAPiece()``'s path, as a helper, because
+    /// ``testManual_AuditsClean()`` needs a piece on screen with **no field
+    /// ever focused** — once one has been, iOS keeps a second, full-screen
+    /// keyboard window for the app's lifetime, and the audit reports it as an
+    /// anonymous `Contrast failed`.
+    @MainActor
+    private func manualOpenViaMap(
+        _ app: XCUIApplication,
+        topic topicTitle: String,
+        piece title: String
+    ) -> Bool {
+        guard manualMap(app) else { return false }
+        let topic = manualNode(app, topicTitle)
+        guard topic.waitForExistence(timeout: 15) else {
+            print("=== NO MAP NODE FOR \(topicTitle) — tree follows ===")
+            print(app.debugDescription)
+            return false
+        }
+        topic.tap()
+        let node = manualNode(app, title)
+        guard node.waitForExistence(timeout: 15) else {
+            print("=== NO CLUSTER NODE FOR \(title) — tree follows ===")
+            print(app.debugDescription)
+            return false
+        }
+        node.tap()
+        // ``manualOpen(_:search:piece:)``'s own check, for the same reason:
+        // the title is a `StaticText` on the piece's page (its heading and
+        // its last crumb) and a `Button` at every level of the map, so a
+        // static text with these words is the page and nothing else.
+        return app.staticTexts[title].firstMatch.waitForExistence(timeout: 15)
     }
 
     /// Search for a piece and open it.
