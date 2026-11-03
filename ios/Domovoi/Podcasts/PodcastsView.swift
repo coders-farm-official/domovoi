@@ -224,6 +224,17 @@ struct PodcastsView: View {
             // other `.bordered` button in this app already names
             // (`HomeTimersView.swift:290`, `ConnectionDialogView.swift:445`).
             .tint(Color.brandInk)
+            // **And the label colour, which the tint alone does not settle.**
+            // A `.bordered` button draws a wash of its own tint behind the
+            // label as well as in it, and the wash lifts the background: the
+            // ink is 5.4:1 on white but about 4.4:1 on a 12-15% amber wash
+            // over white, which is the band Apple reports as "not high enough
+            // unless font size is larger" — and did report, against this
+            // button, on train S007 after the tint above had already been
+            // put right. ``Color/brandFg`` is near-black, so it is over 15:1
+            // on the wash whatever iOS picks for its opacity, and it is what
+            // this app already draws on amber.
+            .foregroundStyle(Color.brandFg)
             .disabled(podcasts.polling)
 
             Button {
@@ -235,12 +246,19 @@ struct PodcastsView: View {
             }
             .buttonStyle(.borderedProminent)
             // The other half of the same pattern: a prominent button draws the
-            // tint as its **fill** with ``Color/brandFg`` over it, so this one
-            // takes ``Color/brand`` where its neighbour takes the ink
-            // (`HomeAnnounceView.swift:162`). Not flagged on S004 — fixed with
-            // its neighbour because an untinted prominent button is the same
-            // omission and inherits whatever the accent happens to be.
+            // tint as its **fill**, so this one takes ``Color/brand`` where
+            // its neighbour takes the ink (`HomeAnnounceView.swift:158-163`).
+            //
+            // **The `foregroundStyle` is half of it, and it was missing.**
+            // This comment used to say the fill had ``Color/brandFg`` over it
+            // and nothing in the code made that true: SwiftUI draws a
+            // prominent button's label white unless it is told otherwise, and
+            // white on this amber is 2.05:1. Apple's audit failed it outright
+            // on train S007 — a finding this file had been classifying as a
+            // measurement artifact, against a comment that was arguing for
+            // its own correctness.
             .tint(Color.brand)
+            .foregroundStyle(Color.brandFg)
         }
     }
 

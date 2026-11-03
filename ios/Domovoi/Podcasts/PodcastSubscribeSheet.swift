@@ -212,6 +212,11 @@ struct PodcastSubscribeSheet: View {
             // (`PodcastsView.swift:216`); this sheet is not audited by a case
             // here, so it is the same fix made before the same finding.
             .tint(Color.brandInk)
+            // And the label colour with it, for the reason train S007 made
+            // measurable on `poll now`: the wash a bordered button draws
+            // behind its label costs the ink about a point of contrast
+            // (`PodcastsView.swift:227-237`).
+            .foregroundStyle(Color.brandFg)
             .disabled(!enabled)
         }
     }
@@ -270,8 +275,10 @@ struct PodcastDiscoveryRow: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 .buttonStyle(.bordered)
-                // ``Color/brandInk``, for the field's reason above.
+                // ``Color/brandInk``, for the field's reason above, and
+                // ``Color/brandFg`` on it for the wash's.
                 .tint(Color.brandInk)
+                .foregroundStyle(Color.brandFg)
                 .disabled(busy)
                 // Fifteen hits means fifteen buttons all saying `add`, so
                 // each one says what it adds.

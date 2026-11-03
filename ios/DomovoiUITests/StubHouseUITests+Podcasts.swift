@@ -163,6 +163,26 @@ extension StubHouseUITests {
         )
     }
 
+    /// How many subscriptions the house answers with, through the same
+    /// control route: `short` is three, which is a grid that fits on the
+    /// phone with nothing to scroll.
+    ///
+    /// Only the audit uses it. Apple's audit **moves the page it is
+    /// auditing** — on train S007 the grid's content offset went from 137.3
+    /// to -326.3 while `performAccessibilityAudit` ran, and the pager loaded
+    /// two more pages under it (5711 → 7520 points of content) — and the
+    /// contrast readings it took along the way were not readings of this
+    /// app's colours: one of eight identical `0/0 downloaded` lines failed
+    /// and the other seven passed. A screen with nothing to scroll has one
+    /// layout, so every reading is of the thing that is actually drawn.
+    @MainActor
+    func setPodcastShows(_ mode: String) {
+        control(
+            "podcasts-mode", "{\"shows_mode\": \"\(mode)\"}",
+            port: 6601, what: "the house to answer \(mode) shows"
+        )
+    }
+
     /// The unsubscribe's failure mode, through the same control route.
     /// `gone` is the 404 a stale card gets (`podcasts.py:265-269`) — the one
     /// failure on this screen that lands while a sheet is still up.
@@ -528,8 +548,24 @@ extension StubHouseUITests {
             .matching(NSPredicate(format: "label CONTAINS %@", StubPodcasts.subscribedToast))
             .firstMatch
         XCTAssertTrue(toast.waitForExistence(timeout: 25), "nothing was said about the subscribe")
-        let added = app.buttons[StubPodcasts.newFeed].firstMatch
+        // **The text, not the button.** The new row has `title: null`, so its
+        // card is *drawn* by its feed URL and *spoken* as the word
+        // (``PodcastShow/spokenTitle``, the S004 audit fix that
+        // `testPodcasts_AShowWithNoTitleFallsBackToItsFeed` pins). This asked
+        // `app.buttons[newFeed]` and went on asking it after the label
+        // changed, so on train S007 it failed against a grid that was holding
+        // the new show perfectly well, one card from the top.
+        let added = app.staticTexts[StubPodcasts.newFeed].firstMatch
         XCTAssertTrue(added.waitForExistence(timeout: 25), "the new show is not on the grid")
+        // And it is a *card* and not loose text somewhere: the card speaks
+        // the word, and before the subscribe there was exactly one card doing
+        // that (the seeded untitled feed), so two is the new one.
+        let untitledCards = app.descendants(matching: .button)
+            .matching(NSPredicate(format: "label == %@", StubPodcasts.untitledWord))
+        XCTAssertEqual(
+            2, untitledCards.count,
+            "the feed URL is on screen but not as a second untitled card"
+        )
         XCTAssertTrue(
             app.staticTexts[StubPodcasts.countLineAfterSubscribe].waitForExistence(timeout: 20),
             "the count line did not take the new show in"
@@ -587,9 +623,23 @@ extension StubHouseUITests {
             .matching(NSPredicate(format: "label CONTAINS %@", StubPodcasts.subscribedToast))
             .firstMatch
         XCTAssertTrue(toast.waitForExistence(timeout: 25), "nothing was said about the subscribe")
+        // The static text, for the reason the RSS case above gives: a show
+        // the house has not fetched yet has no title, so its card draws the
+        // feed URL and speaks the word `podcast`. Asking the button for a URL
+        // asks for the one thing ``PodcastShow/spokenTitle`` exists to
+        // prevent.
         XCTAssertTrue(
-            app.buttons[StubPodcasts.directoryHitFeed].waitForExistence(timeout: 25),
+            app.staticTexts[StubPodcasts.directoryHitFeed].waitForExistence(timeout: 25),
             "the hit's own feed is not the show that was added"
+        )
+        // Still discriminating: `Hearth & Hob` is the hit's *title* in the
+        // directory, and the sheet it was on is gone, so a grid card drawn
+        // from the needle or from the hit's title rather than from its feed
+        // would leave that word on screen.
+        XCTAssertFalse(
+            app.staticTexts[StubPodcasts.directoryHit].exists,
+            "the added show is drawn by the directory's title, which the "
+                + "house did not send back"
         )
         evidence(app, "podcasts-52-added-from-directory")
     }
@@ -858,26 +908,86 @@ extension StubHouseUITests {
     ///  - `Label not human-readable` on the untitled show's card, whose
     ///    spoken name was a whole URL (``PodcastShow/spokenTitle``).
     ///
-    /// The other two signatures are classified rather than fixed, each
-    /// against a measurement this file makes itself. Neither is excused by
-    /// count, so a third signature - or either of these moving to a leaf
-    /// nobody measured - still fails this case.
+    /// ### What train S007 found, and why this case now shortens the grid
+    ///
+    /// Three more contrast findings, and they were two different things.
+    ///
+    ///  - `Contrast failed` on `subscribe` was **real**: the button took
+    ///    `.tint(Color.brand)` and no `foregroundStyle`, so SwiftUI drew its
+    ///    label in white on amber at 2.05:1. Every other prominent button in
+    ///    this app pairs the two (`HomeAnnounceView.swift:158-163`); this one
+    ///    said in a comment that it did, and did not. Fixed in the view.
+    ///  - `Contrast nearly passed` on `poll now` is the same omission one
+    ///    style along: a `.bordered` button draws a wash of its own tint
+    ///    behind the label, and that wash lifts the background enough to drop
+    ///    ``Color/brandInk`` from 5.4:1 on white to about 4.4:1 on it - which
+    ///    is exactly the band Apple reports as "unless font size is larger".
+    ///    The label is ``Color/brandFg`` now, near-black on a pale amber pill.
+    ///  - `Contrast failed` on one `0/0 downloaded` was **not** real, and the
+    ///    geometry says why: `performAccessibilityAudit` scrolls the page it
+    ///    audits. The content offset went 137.3 → -326.3 during that one run
+    ///    and the pager loaded two more pages under it (5711 → 7520 points),
+    ///    which is how one of eight identical lines failed while the other
+    ///    seven passed.
+    ///
+    /// So the audit is pointed at a grid of three shows that fits on the
+    /// phone (``setPodcastShows(_:)``). It still holds every distinct leaf -
+    /// a title, an author, a counts line, a card with no title at all - and
+    /// it holds still, which is the difference between reading this app's
+    /// colours and reading a list mid-flight.
+    ///
+    /// The one remaining signature is classified rather than fixed, against a
+    /// measurement this file makes itself. It is not excused by count, so a
+    /// second signature - or this one moving to a leaf nobody measured -
+    /// still fails this case.
     @MainActor
     func testPodcasts_TheScreenPassesApplesAccessibilityAudit() throws {
+        // Three shows, so the whole screen fits and nothing scrolls
+        // (``setPodcastShows(_:)`` carries the measurement from train S007).
+        // The reset is what hands the next case back its sixty-two.
+        resetPodcastHouse()
+        setPodcastShows("short")
         let (app, landed) = openPodcasts()
         XCTAssertTrue(landed, "the shows list never answered")
+        XCTAssertTrue(
+            app.staticTexts[StubPodcasts.shortCountLine].waitForExistence(timeout: 20),
+            "the house did not answer the short grid, so this audit would "
+                + "run over a list that scrolls under it"
+        )
+        // Where the foot of the grid sits before the audit runs.
+        // `Tuesday Night Shift 01` sorts last of the three, so its card is
+        // the foot; a foot that is on screen and stays exactly where it was
+        // is the whole claim that nothing scrolled under the audit.
+        let foot = app.buttons[StubPodcasts.fillerShow].firstMatch
+        XCTAssertTrue(foot.waitForExistence(timeout: 20), "the short grid's last card is not drawn")
+        let page = app.scrollViews.allElementsBoundByIndex
+            .max(by: { $0.frame.height < $1.frame.height })
+        let before = foot.frame
+        XCTAssertLessThan(
+            before.maxY, page?.frame.maxY ?? 0,
+            "the short grid runs past the bottom of the page, so the audit "
+                + "can scroll it and its contrast readings are of whatever "
+                + "was mid-flight"
+        )
+
         let found = try auditIssues(app, "podcasts-grid")
         evidence(app, "podcasts-80-grid-audited")
         let (floor, rest) = Self.floorAndRest(found)
         print("PODCASTS AUDIT floor=\(floor) rest=\(rest.count)")
         for line in rest { print("PODCASTS AUDIT REST :: \(line)") }
 
-        // The page's own scroll view - the tallest on screen, as
-        // ``podcastsScrollUntilBuilt`` takes it and for the same reason.
-        let page = app.scrollViews.allElementsBoundByIndex
-            .max(by: { $0.frame.height < $1.frame.height })
-        let bottom = page?.frame.maxY ?? 0
-        XCTAssertGreaterThan(bottom, 0, "no scroll view to take a bottom edge from")
+        // And the same card, after. The findings below are only worth
+        // classifying if they were taken off a layout that held still, so
+        // this is asserted rather than assumed - and it is what makes the
+        // `Contrast failed`-at-the-viewport-edge exemption this case used to
+        // carry unnecessary, which is why that exemption is gone rather than
+        // kept as a safety net. An exemption with no case under it is a hole
+        // for the next real finding to fall through.
+        XCTAssertEqual(
+            before, foot.frame,
+            "the page moved while Apple's audit ran, so its contrast "
+                + "readings are of a list mid-flight (train S007)"
+        )
 
         let unexplained = rest.filter { line in
             // **A Dynamic Type headline with an element attached.** This file
@@ -891,26 +1001,13 @@ extension StubHouseUITests {
             if Self.knownAnonymousHeadlines.contains(where: { line.hasPrefix($0) }) {
                 return false
             }
-            // **A contrast finding against an element the viewport cuts in
-            // half.** Of the three identical `0/0 downloaded` lines on screen
-            // - same colour, same font, same canvas - exactly one failed, the
-            // one spanning 765.7 to 780.0 against a content area ending at
-            // 770. Half an element has no pixels to read. Stations reported
-            // the same thing at 765.5 and Rooms at 760.3 in the same run, and
-            // every list on this phone has a row at that edge; scrolling one
-            // card makes it a different card's turn. Pinned to the geometry,
-            // so a contrast failure anywhere else on the screen still fails.
-            if line.hasPrefix("Contrast failed"), let box = Self.frame(in: line),
-               box.minY < bottom, box.maxY > bottom {
-                return false
-            }
             return true
         }
         XCTAssertEqual(
             [],
             unexplained,
-            "the audit found something neither the measurement nor the "
-                + "viewport edge explains:\n" + unexplained.joined(separator: "\n")
+            "the audit found something the Dynamic Type measurement above "
+                + "does not explain:\n" + unexplained.joined(separator: "\n")
         )
     }
 }
@@ -952,6 +1049,10 @@ enum StubPodcasts {
     /// `showing 49 of 62 shows`.
     static let countLineAfterUnsubscribe = "showing 49 of 61 shows"
     static let oneShowCountLine = "showing 1 of 1 shows"
+
+    /// The whole grid under `shows_mode: "short"` — three shows, no second
+    /// page, and nothing below the fold for Apple's audit to scroll to.
+    static let shortCountLine = "showing 3 of 3 shows"
 
     // the shows
     static let kitchenTable = "The Kitchen Table"
