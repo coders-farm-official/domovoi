@@ -512,4 +512,49 @@ final class PhoneUploadModelTests: XCTestCase {
         await settle({ model.state == .saved("saved \"beach.jpg\" to Photos") }, "the saved state")
         XCTAssertEqual(added.current, 1)
     }
+    // MARK: - a file the person picked, whose bytes are already in hand
+
+    /// PHPicker and the document picker hand over `Data` and no durable URL,
+    /// so ``PhoneUploadModel/uploadPicked(name:bytes:kind:)`` must post
+    /// **those** bytes and never call the row-reading seam.
+    func testAPickedFilePostsTheBytesItWasGivenAndNeverReadsARow() async {
+        let said = Shared<PhoneServerWriteStatus?>(PhoneServerWriteStatus(libraries: [library("core:music", "Music")]))
+        let posts = Posts()
+        let model = model(
+            said: said,
+            posts: posts,
+            // Discriminating: if anything called the row seam, the body would
+            // say `from the row` and this case fails rather than passing on
+            // bytes that happen to be the right length.
+            bytes: { _ in Data("from the row".utf8) }
+        )
+        model.start()
+        await settle({ model.target != nil }, "the write status")
+
+        model.uploadPicked(name: "quenlo lullaby.mp3", bytes: Data("picked bytes".utf8), kind: .audio)
+        await settle({ posts.count == 1 }, "the picked upload")
+        XCTAssertEqual(posts.lastPath, PhoneUploadPath.music)
+        XCTAssertTrue(
+            posts.lastBody.contains("picked bytes"),
+            "the picker's own bytes are what goes up: \(posts.lastBody)"
+        )
+        XCTAssertFalse(posts.lastBody.contains("from the row"))
+        XCTAssertEqual(model.toast, "uploaded \"quenlo lullaby.mp3\" to Music")
+    }
+
+    /// A picked file over the ceiling: the refusal is a **toast**, because
+    /// there is no row whose control could have been left out, and nothing is
+    /// posted.
+    func testAPickedFileOverTheCapIsRefusedWithoutPosting() async {
+        let said = Shared<PhoneServerWriteStatus?>(PhoneServerWriteStatus(libraries: [library("core:music", "Music")]))
+        let posts = Posts()
+        let model = model(said: said, posts: posts)
+        model.start()
+        await settle({ model.target != nil }, "the write status")
+
+        let huge = Data(count: Int(PhoneUploadModel.cap) + 1)
+        model.uploadPicked(name: "grendalf huge raw.wav", bytes: huge, kind: .audio)
+        XCTAssertEqual(posts.count, 0)
+        XCTAssertEqual(model.toast, PhoneMediaStrings.tooBigToUpload(Int64(huge.count)))
+    }
 }

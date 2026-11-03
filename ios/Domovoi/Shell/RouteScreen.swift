@@ -21,6 +21,19 @@ struct RouteScreen: View {
     let model: ShellModel
     let route: Route
 
+    /// Which side of the server-or-device switch each page is showing.
+    ///
+    /// **Not `@State`.** This view is created fresh for every pushed
+    /// destination (`WorkspaceView.swift:159`), so a `@State` here would last
+    /// as long as one visit to one page — and Android's `LocalSourceChoices`
+    /// is provided by the **workspace** shell and lasts as long as the server
+    /// does (`YourDevice.kt:57`). ``ShellModel`` is do-not-edit, so the
+    /// lifetime is kept by ``PhoneSourceChoicesStore``, which is keyed to the
+    /// address for exactly that reason.
+    private var sources: PhoneSourceChoices {
+        PhoneSourceChoicesStore.of(server: model.inputs.serverURL)
+    }
+
     var body: some View {
         if !route.visibleWith(model.visibility) {
             let note = route.unavailableNote(model.capabilities)
@@ -55,17 +68,37 @@ struct RouteScreen: View {
             HomeView(model: model)
         case .music:
             // Only the library half is built; ``MusicView`` says what is left
-            // out and why there is no control for any of it.
-            MusicView(model: model)
+            // out and why there is no control for any of it. **Wrapped, not
+            // changed**: the `server:` closure holds exactly the line that
+            // was here (`ScreenRouter.kt:60`).
+            PhoneSourceSwitchView(
+                page: .music,
+                choices: sources,
+                serverTitle: model.serverChoice.title,
+                server: { MusicView(model: model) },
+                device: { PhoneDeviceMusicView(model: model) }
+            )
         case .videos:
             // ``VideosView`` says what is left out and why there is no
-            // control for any of it.
-            VideosView(model: model)
+            // control for any of it (`ScreenRouter.kt:64`).
+            PhoneSourceSwitchView(
+                page: .videos,
+                choices: sources,
+                serverTitle: model.serverChoice.title,
+                server: { VideosView(model: model) },
+                device: { PhoneDeviceVideosView(model: model) }
+            )
         case .files:
             // ``FilesView`` says what is left out and why there is no control
             // for any of it — including the delete Android draws and cannot
-            // do from a phone.
-            FilesView(model: model)
+            // do from a phone (`ScreenRouter.kt:73`).
+            PhoneSourceSwitchView(
+                page: .files,
+                choices: sources,
+                serverTitle: model.serverChoice.title,
+                server: { FilesView(model: model) },
+                device: { PhoneDeviceFilesView(model: model) }
+            )
         case .chat:
             // ``ChatView`` says what is left out and why. **The capability
             // check above is Chat's AI check**: a house with

@@ -72,6 +72,19 @@ public final class PhoneUploadModel {
     /// What the person is told. One at a time, as the shell draws them.
     public private(set) var toast: String?
 
+    /// Bytes already in hand, for a file that came from a picker rather than
+    /// from a list.
+    ///
+    /// PHPicker and the document picker both run **out of process** and hand
+    /// over the bytes themselves — there is no asset and no durable file URL
+    /// to read later, and the document picker's security scope is closed by
+    /// the time any `await` returns. So those bytes are parked here and
+    /// ``upload(_:to:)`` takes them in place of calling ``read``.
+    ///
+    /// Dropped in ``finish(_:_:_:)``, so a picked file is not held in memory
+    /// after its upload has answered.
+    private var picked: [String: Data] = [:]
+
     /// The rows whose file is on its way, by ``PhoneUploadKey``.
     ///
     /// A set and not a map of percents: nothing can report one (above).
@@ -186,6 +199,8 @@ public final class PhoneUploadModel {
     public func serverChanged() {
         epoch += 1
         running.removeAll()
+        // The bytes of a pick belonged to the house that has gone.
+        picked.removeAll()
         toast = nil
     }
 
@@ -237,12 +252,44 @@ public final class PhoneUploadModel {
     /// request. A second tap **does not** start a second upload — it says so
     /// (`DeviceUpload.kt:257`), which is the difference between one file
     /// posted and two.
+    /// Send something the person picked, whose bytes are already in hand.
+    ///
+    /// The one upload in this item that is **not** a row: PHPicker and the
+    /// document picker are the two doors that need no permission at all
+    /// (``PhonePickToSendView``), and what they hand over is `Data`.
+    ///
+    /// A picked file over ``cap`` gets the refusal as a **toast** rather than
+    /// a missing control, which is the one place this item departs from "a
+    /// control that cannot do what it says is not drawn": the picker *is* the
+    /// control, nothing is known about the file until after the pick, and a
+    /// pick that produced silence would be worse than one that says the file
+    /// is too big.
+    public func uploadPicked(name: String, bytes: Data, kind itemKind: PhoneMediaKind) {
+        let item = PhoneMediaItem(
+            // The size is in the key, so picking a different file of the same
+            // name is a different upload rather than "already uploading".
+            id: "picked:\(name):\(bytes.count)",
+            libraryID: "phone:picked",
+            name: name,
+            kind: itemKind,
+            sizeBytes: Int64(bytes.count),
+            origin: .file(URL(fileURLWithPath: "/picked/\(name)"))
+        )
+        picked[item.id] = bytes
+        upload(item)
+    }
+
     public func upload(_ item: PhoneMediaItem, to dest: PhoneUploadDest? = nil) {
         guard gate() else { return }
         guard let to = dest ?? destination(for: item) else { return }
         let key = PhoneUploadKey.of(item, kind)
         if let size = item.sizeBytes, size > Self.cap {
-            // No control is drawn on such a row, so this is a floor.
+            // No control is drawn on such a ROW, so this is a floor — but it
+            // is the real path for a PICKED file, whose size is not known
+            // until after the pick (``uploadPicked(name:bytes:kind:)``), so
+            // the bytes are let go of here too rather than held for an
+            // upload that will never run.
+            picked.removeValue(forKey: item.id)
             toast = PhoneMediaStrings.tooBigToUpload(size)
             return
         }
@@ -282,13 +329,24 @@ public final class PhoneUploadModel {
         // warned about.
         let mine = epoch
         let name = item.name
+        // Captured before the `await` with everything else: a picked file's
+        // bytes belong to the pick that started this upload.
+        let inHand = picked[item.id]
+        let rowID = item.id
         let boundary = newBoundary()
         let bytesOf = read
         let post = send
         let row = item
         Task { @MainActor [weak self] in
             do {
-                let bytes = try await bytesOf(row)
+                // Not `inHand ?? bytesOf(row)`: `??`'s right side is an
+                // AUTOCLOSURE, and an `async` call cannot go in one.
+                let bytes: Data
+                if let inHand {
+                    bytes = inHand
+                } else {
+                    bytes = try await bytesOf(row)
+                }
                 // Read through the optional rather than unwrapping `self`:
                 // `guard let self` once per scope is all Swift allows, and
                 // the one after the POST is the one that must not be dropped.
@@ -308,13 +366,13 @@ public final class PhoneUploadModel {
                 guard let self, mine == self.epoch else { return }
                 let reply = (try? JSONDecoder().decode(PhoneUploadReply.self, from: answer))
                     ?? PhoneUploadReply(saved: 0)
-                self.finish(key, mine, phoneUploadDoneText(name, to, reply))
+                self.finish(key, mine, phoneUploadDoneText(name, to, reply), picked: rowID)
             } catch is CancellationError {
                 guard let self, mine == self.epoch else { return }
-                self.finish(key, mine, nil)
+                self.finish(key, mine, nil, picked: rowID)
             } catch {
                 guard let self, mine == self.epoch else { return }
-                self.finish(key, mine, phoneUploadFailureText(name, error))
+                self.finish(key, mine, phoneUploadFailureText(name, error), picked: rowID)
                 // A refusal the button did not know about — blocked since the
                 // page opened — so ask again, and it shows
                 // (`DeviceUpload.kt:283`).
@@ -325,9 +383,13 @@ public final class PhoneUploadModel {
 
     /// The row is done: stop its ring and say what happened, unless the house
     /// changed under it.
-    private func finish(_ key: String, _ mine: Int, _ said: String?) {
+    private func finish(_ key: String, _ mine: Int, _ said: String?, picked id: String?) {
         guard mine == epoch else { return }
         running.remove(key)
+        // A picked file's bytes are not kept after its upload has answered.
+        // The row's own id, passed down — never parsed back out of the
+        // upload key, which is a different string with its own prefix.
+        if let id { picked.removeValue(forKey: id) }
         if let said { toast = said }
     }
 

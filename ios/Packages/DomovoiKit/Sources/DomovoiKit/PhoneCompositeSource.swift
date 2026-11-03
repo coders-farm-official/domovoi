@@ -71,3 +71,48 @@ public struct PhoneCompositeSource: PhoneMediaReading {
         return nil
     }
 }
+
+/// A phone source whose inner source can be replaced after a screen is
+/// already reading it.
+///
+/// It exists because of one real bug caught while wiring the folder picker:
+/// ``PhoneFolderSource`` is a value built from a **snapshot** of the folder
+/// list, so a folder added through the picker was saved, listed by the
+/// picker, and then did not appear on the page — the page's source still held
+/// the list as it was when the page was built. Re-reading the libraries could
+/// not find it, because the thing being re-read was the old snapshot.
+///
+/// A reference type is the fix, and the lock is not decoration: a page's
+/// rows are read off the main actor while the picker replaces the inner
+/// source on it.
+///
+/// The inner source is taken out **under the lock and then let go of**,
+/// never held across the `await`: a lock held over a file read is a main
+/// thread waiting on a disk.
+public final class PhoneSwappableSource: PhoneMediaReading, @unchecked Sendable {
+
+    private let lock = NSLock()
+    private var inner: any PhoneMediaReading
+
+    public init(_ inner: any PhoneMediaReading) {
+        self.inner = inner
+    }
+
+    /// The folder list changed. Anything already in flight finishes against
+    /// the source it started with, which is right: it was asked for.
+    public func replace(with next: any PhoneMediaReading) {
+        lock.withLock { inner = next }
+    }
+
+    private var current: any PhoneMediaReading { lock.withLock { inner } }
+
+    public func libraries() async -> [FileLibrary] { await current.libraries() }
+
+    public func page(_ request: PhoneMediaRequest) async throws -> PhoneMediaPage {
+        try await current.page(request)
+    }
+
+    public func bytes(of item: PhoneMediaItem) async throws -> Data {
+        try await current.bytes(of: item)
+    }
+}

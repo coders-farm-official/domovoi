@@ -75,6 +75,28 @@ struct PhonePhotosSource: PhoneMediaReading {
         await PHPhotoLibrary.requestAuthorization(for: .readWrite)
     }
 
+    /// Open iOS's own "select more photos" sheet.
+    ///
+    /// The only control that can change ``PHAuthorizationStatus/limited``
+    /// from inside the app, and the reason the limited state is drawn at all
+    /// rather than left looking like an empty library (DECISIONS).
+    ///
+    /// The view controller is found from the key window because
+    /// `presentLimitedLibraryPicker(from:)` takes one and SwiftUI has none to
+    /// give. **Nothing happens when there is no window** rather than a force
+    /// unwrap: this runs from a tap, and a tap during a scene transition is a
+    /// real thing.
+    @MainActor
+    static func chooseMore() async {
+        let host = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows)
+            .first(where: \.isKeyWindow)?
+            .rootViewController
+        guard let host else { return }
+        PHPhotoLibrary.shared().presentLimitedLibraryPicker(from: host)
+    }
+
     /// **Empty while the person has not allowed it**, which is what makes the
     /// screen draw the gate rather than an empty library: a library row
     /// saying `photos` with nothing under it would read as "you have no
