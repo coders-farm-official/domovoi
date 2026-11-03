@@ -49,10 +49,12 @@ final class PhoneCompositeSourceTests: XCTestCase {
     /// screen's choice: Videos puts photos first because that is where a
     /// phone's own videos are.
     func testTheLibrariesComeOutInThePartsOwnOrder() async {
-        let videos = PhoneCompositeSource([photos, folders])
-        XCTAssertEqual(await videos.libraries().map(\.id), [PhoneFolderList.photosID, "phone:folder:/a"])
-        let files = PhoneCompositeSource([folders, photos])
-        XCTAssertEqual(await files.libraries().map(\.id), ["phone:folder:/a", PhoneFolderList.photosID])
+        // Hoisted, not inside the assert: `XCTAssertEqual` takes
+        // autoclosures and an `await` cannot go in one.
+        let forVideos = await PhoneCompositeSource([photos, folders]).libraries().map(\.id)
+        XCTAssertEqual(forVideos, [PhoneFolderList.photosID, "phone:folder:/a"])
+        let forFiles = await PhoneCompositeSource([folders, photos]).libraries().map(\.id)
+        XCTAssertEqual(forFiles, ["phone:folder:/a", PhoneFolderList.photosID])
     }
 
     /// Discriminating bytes on purpose: a route that took the first part
