@@ -329,8 +329,7 @@ struct PrinterCardView: View {
         VStack(alignment: .leading, spacing: 8) {
             if printer.canPrint {
                 Button(PrintingStrings.testPage) { panel.testPage(printer) }
-                    .buttonStyle(.bordered)
-                    .tint(Color.brandInk)
+                    .buttonStyle(PrintingOutlineButtonStyle())
                     .disabled(panel.busy != nil)
             }
             // `identify` is the server's verdict on whether this printer has
@@ -338,8 +337,7 @@ struct PrinterCardView: View {
             // the gate the button would 409 on every printer that has not.
             if printer.identify {
                 Button(PrintingStrings.whichOneIsIt) { panel.identify(printer) }
-                    .buttonStyle(.bordered)
-                    .tint(Color.brandInk)
+                    .buttonStyle(PrintingOutlineButtonStyle())
                     .disabled(panel.busy != nil)
             }
             // ``Printer/webPage`` is nil unless `admin_url` is `http(s)` — an
@@ -574,9 +572,113 @@ struct PrintingPill: View {
             .fixedSize(horizontal: false, vertical: true)
             .padding(.horizontal, 10)
             .frame(minHeight: 44)
+            // **The wash is the surface the label is measured against.**
+            // `0.12` of the ink under the ink itself was measured off train
+            // I001's own screenshot at **4.41:1** — under the 4.5 a caption
+            // needs, and the same fault, one shade milder, that failed the
+            // two card buttons at 4.06:1 (``PrintingOutlineButtonStyle``).
+            // Apple's audit named the buttons and not this pill, which is the
+            // margin between 4.06 and 4.41 and not a reason to leave it: the
+            // classification here is the measurement.
+            //
+            // `0.07` over this card is **4.72:1**, and the selected state is
+            // carried by a full-ink stroke rather than by a deeper wash, so
+            // "on" stays legible without darkening what the word sits on.
             .background(
-                Capsule().fill(on ? Color.brandInk.opacity(0.12) : Color.fgMuted.opacity(0.08))
+                Capsule().fill(on ? Color.brandInk.opacity(0.07) : Color.fgMuted.opacity(0.08))
             )
+            .overlay {
+                if on { Capsule().strokeBorder(Color.brandInk, lineWidth: 1) }
+            }
+    }
+}
+
+// MARK: - the outlined button
+
+/// Android's `OutlinedButton` on this phone: a stroke, **no fill**, and the
+/// label in ``Color/brandInk`` — the style every secondary button on this
+/// screen and in both sheets takes.
+///
+/// ### Why not `.bordered`
+///
+/// `.buttonStyle(.bordered).tint(Color.brandInk)` is a *filled* chip: it
+/// washes the surface with the tint and then draws the label in the same
+/// tint, so the label is read against a wash of itself. That is what failed
+/// `testPrinting_PanelAudit` on train I001 — "Contrast nearly passed:
+/// Contrast is not high enough for element unless font size is larger",
+/// against `label='Test page'`, plus a second copy of the same finding with
+/// no element at all.
+///
+/// Measured off that run's own screenshot (`printing-25-audit`, 3x):
+///
+/// ```
+/// Test page      ink #975800 on the wash #E4D9C9   4.06:1   (needs 4.5)
+/// the same ink on the bare card #F5F5F5            5.19:1
+/// ```
+///
+/// So the ink was never the defect — `brandInk` is 5.19:1 on this card — and
+/// the fix is to take the wash away rather than to recolour the words.
+///
+/// **The unattributed second finding is the same button, one row down.** At
+/// the panel's top `Which one is it?` sits at `y = 763…797` against a scroll
+/// view that ends at `y = 770`: the strip of it above the edge is capsule
+/// fill with no glyph in it, so Apple had the finding and no pixels to pin it
+/// to. The picture says it — the row below `Test page` is a sliver of tan
+/// behind the phone bar — where two tree diffs could not.
+///
+/// `SystemSettingsSpareButtonStyle` and `AiSettingsOutlinedButtonStyle`
+/// are the same move on their own screens, made the same night; this one
+/// carries the item's prefix for the same reason theirs do.
+struct PrintingOutlineButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        PrintingOutlineButtonLabel(configuration: configuration)
+    }
+}
+
+/// The style's body as a `View`.
+///
+/// `@Environment(\.isEnabled)` can only be read inside a view — a
+/// `ButtonStyle` has no environment of its own — and these buttons really are
+/// disabled (`panel.busy`, `job.copies`, `scan.busy`), so a style that read
+/// the default would draw a dead control as a live one
+/// ([[no-misleading-controls]]). ``Color/fgMuted`` is the disabled pair, 6.81:1
+/// on this card.
+///
+/// Internal and item-prefixed, not `private`: the style it serves is used
+/// from three other files in this folder, and an opaque `Body` whose
+/// underlying type is less visible than the conformance is a question this
+/// branch cannot put to a compiler before the train.
+struct PrintingOutlineButtonLabel: View {
+
+    let configuration: ButtonStyleConfiguration
+
+    @Environment(\.isEnabled) private var isEnabled
+
+    /// The side inset, scaled: at an accessibility size a fixed inset makes a
+    /// much wider label look pinched.
+    @ScaledMetric private var sidePadding: CGFloat = 14
+
+    private var ink: Color { isEnabled ? Color.brandInk : Color.fgMuted }
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 8, style: .continuous)
+        return configuration.label
+            .font(.subheadline)
+            .foregroundStyle(ink)
+            // The label wraps rather than shrinking — the standing rule — so
+            // a long word at an accessibility size grows the button.
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, sidePadding)
+            .padding(.vertical, 7)
+            // 44, not the 34.3 `.bordered` drew here: these are taps.
+            .frame(minHeight: 44)
+            .background { shape.strokeBorder(ink, lineWidth: 1) }
+            // Pressed feedback without a fill, so the label's contrast stays
+            // a function of one surface only.
+            .opacity(configuration.isPressed ? 0.55 : 1)
+            // Without this the gap between the stroke and the words is not
+            // part of the button and the 44 points would be a lie.
+            .contentShape(shape)
     }
 }
 
@@ -769,8 +871,7 @@ struct PrinterJobRow: View {
     private var cancel: some View {
         if job.canCancel, !job.finished {
             Button(PrintingStrings.cancel) { panel.cancelJob(job, on: printerID) }
-                .buttonStyle(.bordered)
-                .tint(Color.brandInk)
+                .buttonStyle(PrintingOutlineButtonStyle())
         }
     }
 }

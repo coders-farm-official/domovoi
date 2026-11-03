@@ -136,12 +136,10 @@ struct PrintersPanelView: View {
     private func foundCard(_ panel: PrintersPanelModel) -> some View {
         PanelCard(title: PrintingStrings.foundTitle, sub: PrintingStrings.foundBody) {
             Button(panel.lookLabel) { panel.look(again: panel.found != nil) }
-                .buttonStyle(.bordered)
-                .tint(Color.brandInk)
+                .buttonStyle(PrintingOutlineButtonStyle())
                 .disabled(panel.looking)
             Button(PrintingStrings.addByAddress) { panel.addByAddressRequested() }
-                .buttonStyle(.bordered)
-                .tint(Color.brandInk)
+                .buttonStyle(PrintingOutlineButtonStyle())
             if panel.looking {
                 ProgressView()
                     .progressViewStyle(.linear)
@@ -245,8 +243,7 @@ struct PrintingFoundRow: View {
 
     private var add: some View {
         Button(PrintingStrings.add) { panel.addRequested(row) }
-            .buttonStyle(.bordered)
-            .tint(Color.brandInk)
+            .buttonStyle(PrintingOutlineButtonStyle())
             .disabled(panel.busy != nil)
     }
 }

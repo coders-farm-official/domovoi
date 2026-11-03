@@ -200,8 +200,7 @@ struct ScanSheetView: View {
             // will take another page.
             if scan.canScanMore {
                 Button(PrintingStrings.scanAnotherPage) { scan.scanAnotherPage() }
-                    .buttonStyle(.bordered)
-                    .tint(Color.brandInk)
+                    .buttonStyle(PrintingOutlineButtonStyle())
             }
             if scan.canFinish {
                 Button(PrintingStrings.doneButton) { scan.finish() }
@@ -211,8 +210,7 @@ struct ScanSheetView: View {
             }
             if scan.scan?.finished == false {
                 Button(PrintingStrings.cancel) { scan.cancel() }
-                    .buttonStyle(.bordered)
-                    .tint(Color.brandInk)
+                    .buttonStyle(PrintingOutlineButtonStyle())
                     .disabled(scan.busy)
             }
         }
