@@ -348,6 +348,16 @@ final class HealthPanelModelTests: XCTestCase {
             let host = request.url?.host ?? ""
             guard path == "/api/containers/incidents" else {
                 switch path {
+                // **Both houses answer `/api/health`**, and they have to: a
+                // token-bearing request is held until the server has proved
+                // itself on this network, and no verdict is a hold
+                // (`IdentityGate.requireAdmitted`). A 404 here means the
+                // guard read is never sent at all, which is how this test
+                // first failed.
+                case "/api/health":
+                    return .json(
+                        #"{"status":"ok","db_reachable":true,"domovoi_reachable":true,"stt":"ok"}"#
+                    )
                 case "/api/config":
                     return .json(#"{"bot_name":"either","home_problems_visibility":"everyone"}"#)
                 case "/api/containers/summary":

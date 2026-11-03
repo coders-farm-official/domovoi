@@ -409,7 +409,11 @@ final class HealthIncidentsTests: XCTestCase {
         let mine = healthShellBanner(tier: .household, payload: decoded, summary: nil, shared: false)
         XCTAssertTrue(mine.show)
         XCTAssertEqual(.tamper, mine.tone)
-        XCTAssertTrue(mine.text.contains("domovoi"), "the server's own words, as given")
+        XCTAssertEqual(
+            decoded.banner.text, mine.text,
+            "the server's own words, as given — including the sentence about what is paused"
+        )
+        XCTAssertTrue(mine.text.contains("web search helper"))
         XCTAssertTrue(mine.frozen)
 
         let tablet = healthShellBanner(tier: .household, payload: decoded, summary: nil, shared: true)
