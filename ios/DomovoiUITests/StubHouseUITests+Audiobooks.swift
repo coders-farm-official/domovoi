@@ -47,11 +47,19 @@ extension StubHouseUITests {
     /// is the only thing in the app that writes that word and
     /// ``AudiobooksModel/countText`` is nil until the list has answered, so it
     /// cannot exist before a completed read.
+    ///
+    /// **`freshPlaces` resets the half the house does not own.** The phone's
+    /// places are a file in its own Application Support
+    /// (``BookPositionFile``) and `reset-fixtures` puts the *house* back, not
+    /// the phone — so a place written by one run is still there for the next
+    /// one, and reinstalling the app over in a Simulator keeps it.
+    /// ``AudiobooksView/keptPlaces()`` has what that cost on train S010.
     @MainActor
     func openAudiobooks(
         _ mode: String = StubHouseUITests.ordinaryTypeSize,
         reset: Bool = true,
-        grow: Int? = nil
+        grow: Int? = nil,
+        freshPlaces: Bool = false
     ) -> (app: XCUIApplication, landed: Bool) {
         if reset {
             control("reset-fixtures", "{}", port: 6601, what: "the audiobook seed")
@@ -59,7 +67,9 @@ extension StubHouseUITests {
         if let grow {
             control("audiobooks-grow", "{\"books\":\(grow)}", port: 6601, what: "a library bigger than one page")
         }
-        let app = launch(mode: mode, push: "Audiobooks", pushDelay: Self.pushDelay)
+        let app = freshPlaces
+            ? audiobooksLaunchWithNoPlacesKept(mode: mode)
+            : launch(mode: mode, push: "Audiobooks", pushDelay: Self.pushDelay)
         let count = app.descendants(matching: .staticText)
             .matching(NSPredicate(format: "label BEGINSWITH %@", "showing "))
             .firstMatch
@@ -74,6 +84,34 @@ extension StubHouseUITests {
         // `reindex`, the field, and then nothing). It still has to exist, so
         // this scrolls to it rather than settling for less.
         return (app, audiobooksScroll(app, to: count))
+    }
+
+    /// ``StubHouseUITests/launch(mode:paired:server:port:strip:push:pushDelay:)``
+    /// for the audiobooks route, plus `-domovoi-audiobook-places-fresh`.
+    ///
+    /// A copy of the shared launcher's body rather than a parameter on it:
+    /// `StubHouseUITests.swift` is shared with every other item tonight and
+    /// this item may not edit it (NIGHT-RULES §2). The arguments are the ones
+    /// `openAudiobooks` passes above and nothing else, so the only difference
+    /// between a fresh-places launch and an ordinary one is the extra flag.
+    /// If the shared launcher gains something every case needs, it belongs
+    /// here too — which is the cost of the copy, written down.
+    @MainActor
+    func audiobooksLaunchWithNoPlacesKept(
+        mode: String = StubHouseUITests.ordinaryTypeSize
+    ) -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-domovoi-server", "127.0.0.1:6601",
+            "-domovoi-token", Self.token,
+            "-domovoi-audit-push", "Audiobooks",
+            "-domovoi-audit-push-delay", "\(Self.pushDelay)",
+            "-UIPreferredContentSizeCategoryName", mode,
+            "-domovoi-audiobook-places-fresh",
+        ]
+        app.launch()
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 30))
+        return app
     }
 
     /// Open one book's page from the library and wait for its head.
@@ -683,9 +721,21 @@ extension StubHouseUITests {
     /// places, so a dialog here would mean `asks` fires on a book nobody has
     /// touched — and every first play in the house would ask a pointless
     /// question.
+    ///
+    /// **Launched with no places kept, because this case is the one that
+    /// writes one.** It taps the start control and then waits eight seconds
+    /// for a question that must not come — and eight seconds of playback is a
+    /// place, saved in the phone's own file, which `reset-fixtures` does not
+    /// touch and a reinstall over the top keeps. Train S010 read
+    /// `your place: 0:08 of 8:00:00 · 0%` and a `resume` button on
+    /// `uncovered: Tehanu`: its own previous run's eight seconds. The app was
+    /// right — a place past five seconds *is* `resume` (`BookPage.kt:173`) —
+    /// and the case could only ever pass once per Simulator. So the book is
+    /// fresh by construction here (``AudiobooksView/keptPlaces()``), and this
+    /// run leaves nothing behind for the next one either.
     @MainActor
     func testAudiobooks_AFreshBookGoesStraightToPlay() throws {
-        let (app, landed) = openAudiobooks()
+        let (app, landed) = openAudiobooks(freshPlaces: true)
         XCTAssertTrue(landed, "the audiobooks list never answered")
         XCTAssertTrue(openBook(app, StubAudiobooks.tehanu), "Tehanu's page never drew")
 

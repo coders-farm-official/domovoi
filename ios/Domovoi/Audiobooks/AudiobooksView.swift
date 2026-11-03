@@ -134,7 +134,11 @@ struct AudiobooksView: View {
             // model needs the container and a `@State` initialiser runs
             // before the view has one.
             if books == nil {
-                books = AudiobooksModel(in: model.container, deviceID: model.deviceID)
+                books = AudiobooksModel(
+                    in: model.container,
+                    deviceID: model.deviceID,
+                    places: Self.keptPlaces()
+                )
             }
             if let books {
                 // **The Player merge.** Nil until this line, and nil draws no
@@ -422,6 +426,41 @@ struct AudiobooksView: View {
             // scrolling, and VoiceOver's reader does not scroll at all.
             HomeLink(AudiobooksStrings.loadMore) { books.list.loadMore() }
         }
+    }
+
+    // MARK: - where the phone's places rest
+
+    /// Nil — the file in Application Support — except under one DEBUG launch
+    /// argument, which gives this screen an **in-memory** store instead.
+    ///
+    /// `audiobook-places.json` is the one piece of this feature's state that
+    /// `reset-fixtures` cannot put back: it is the phone's, not the house's,
+    /// and it survives the app being reinstalled over in a Simulator.
+    /// ``StubHouseUITests/testAudiobooks_AFreshBookGoesStraightToPlay()``
+    /// needs a book with no place *anywhere*, and it is the case that writes
+    /// one: it taps the start control and then waits eight seconds for a
+    /// question that must not come, and eight seconds of playback is a place.
+    /// Train S010's tree showed exactly that — `your place: 0:08 of 8:00:00`
+    /// on `uncovered: Tehanu` and a `resume` where the case wanted `play`,
+    /// left behind by its own previous run. The app was right; the case could
+    /// only pass once per Simulator.
+    ///
+    /// So the fix is a store that cannot outlive the process, which also
+    /// leaves nothing for the next run. `#if DEBUG` and `ProcessInfo` for
+    /// ``DomovoiApp/store(vault:)``'s reasons, word for word: it is out of
+    /// any build that could ship, and a launch argument lives for one process
+    /// where a default would persist and outlive the test that set it.
+    ///
+    /// Only this screen's own store. The player reads it through
+    /// ``AudiobooksModel/positions``, so a seeded launch keeps nothing
+    /// anywhere; nothing else on the phone is touched.
+    private static func keptPlaces() -> (any SavedState)? {
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-domovoi-audiobook-places-fresh") {
+            return BookPositionMemory()
+        }
+        #endif
+        return nil
     }
 }
 
