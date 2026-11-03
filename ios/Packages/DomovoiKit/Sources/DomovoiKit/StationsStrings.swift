@@ -141,8 +141,11 @@ public enum StationsStrings {
     /// The result row's play button (`StationSearch.kt:541`).
     public static func playNamed(_ name: String) -> String { "play \(name)" }
 
-    /// The favourite-match row's play glyph (`StationSearch.kt:385`).
-    public static let play = "play"
+    // Android's favourite-match row also carries a play **glyph**
+    // (`StationSearch.kt:427`, `contentDescription = "play"`). Not ported:
+    // here the whole row is the tap (``StationsPlayTap``), so a second
+    // affordance inside it would be a control with nothing of its own to do.
+    // DECISIONS, "The match row's play glyph".
 
     public static let favorite = "favorite"
     public static let unfavorite = "unfavorite"
@@ -212,6 +215,24 @@ public enum StationsStrings {
             return "\(StationsRules.freq(f)) FM"
         }
         return station.countryCode ?? "online"
+    }
+
+    /// The instant-favourites row's trailing text — `FavoriteMatchRow`
+    /// (`StationSearch.kt:414`).
+    ///
+    /// **Not ``head(_:)``.** This row is Android's one place that falls back
+    /// to the **call sign** before the country, and that appends whatever the
+    /// ICY poller last heard: a local FM favourite the import left without a
+    /// frequency reads `WJIM` here where ``head(_:)`` would say `US`, and a
+    /// favourite with a track keeps it.
+    public static func matchHead(_ station: StationsRow) -> String {
+        let lead: String
+        if station.source == "fm", let f = station.frequencyMHz {
+            lead = "\(StationsRules.freq(f)) FM"
+        } else {
+            lead = station.callSign ?? station.countryCode ?? "online"
+        }
+        return [lead, station.nowPlaying].compactMap { $0 }.joined(separator: " · ")
     }
 
     /// `"97.5 FM · sampling every 180s"` (`StationsScreen.kt:514`).

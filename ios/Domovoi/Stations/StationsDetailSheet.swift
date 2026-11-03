@@ -38,6 +38,7 @@ struct StationsDetailSheet: View {
                 VStack(alignment: .leading, spacing: 14) {
                     identity
                     if let track = row.nowPlaying { callout(track) }
+                    playHere
                     Divider()
                     fields
                     Divider()
@@ -131,6 +132,33 @@ struct StationsDetailSheet: View {
             Color.brand.opacity(0.12),
             in: RoundedRectangle(cornerRadius: 10, style: .continuous)
         )
+    }
+
+    /// `play here` — the expanded favourite row's button
+    /// (`StationsScreen.kt:604`).
+    ///
+    /// Drawn **only** when something can actually play this station, which is
+    /// the same three-way split ``StationsPlayTap`` makes for a row:
+    ///
+    /// * No engine in this build (``StationsModel/canPlayAnything``, which is
+    ///   what this branch's route slot passes): **nothing is drawn**, and
+    ///   ``StationsView`` says so once on the page rather than per station
+    ///   ([[no-misleading-controls]]).
+    /// * An engine, and a URL nothing can open: the reason, from
+    ///   ``StationsModel/whyNotPlayable(_:)``, instead of a dead button.
+    /// * Otherwise the control, which is what makes the engine's arrival one
+    ///   argument in `RouteScreen`'s `stations` slot and nothing else.
+    @ViewBuilder private var playHere: some View {
+        if stations.canPlay(row) {
+            HomeLink(StationsStrings.playHere) { stations.play(row) }
+                .disabled(stations.isBusy(row))
+        } else if let why = stations.whyNotPlayable(row) {
+            Text(why)
+                .font(.caption)
+                .foregroundStyle(Color.fgMuted)
+                .fixedSize(horizontal: false, vertical: true)
+                .multilineTextAlignment(.leading)
+        }
     }
 
     // MARK: - the five fields (`:120`)

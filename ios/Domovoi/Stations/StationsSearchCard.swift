@@ -200,18 +200,44 @@ struct StationsSearchCard: View {
                 .font(.caption)
                 .foregroundStyle(Color.fgMuted)
                 .fixedSize(horizontal: false, vertical: true)
-            // Wraps rather than scrolls sideways: six short words fit on two
-            // lines of a phone, and a horizontal scroller hides the chips
-            // past the edge at an accessibility size.
-            HStack(spacing: 6) {
-                ForEach(StationsStrings.tagPresets, id: \.self) { tag in
-                    Button(tag) { stations.tapTag(tag) }
-                        .font(.caption)
-                        .buttonStyle(.bordered)
-                        .frame(minHeight: 44)
+            // Wraps rather than scrolls sideways: a horizontal scroller hides
+            // the chips past the edge at an accessibility size. Android uses a
+            // `FlowRow` (`StationSearch.kt:278`); SwiftUI has none, and a
+            // plain `HStack` does not wrap — it compresses, which with
+            // `minimumScaleFactor` rejected everywhere means it truncates
+            // (`ind…`, `clas…`). So the three layouts are offered explicitly
+            // and `ViewThatFits` takes the first that fits, the idiom this app
+            // already uses in `Music/MusicView.swift:282`,
+            // `MusicStatsView.swift:20` and `MusicRoomCards.swift:126`.
+            //
+            // Six `.caption` words plus `.bordered` padding are about 390
+            // points against the ~326 a 390-point phone leaves inside this
+            // card, so the one-row branch is refused at the ordinary size
+            // already and two rows of three is what normally draws; at an
+            // accessibility size it is one chip a line.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 6) { chips(StationsStrings.tagPresets) }
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 6) { chips(Array(StationsStrings.tagPresets.prefix(3))) }
+                    HStack(spacing: 6) { chips(Array(StationsStrings.tagPresets.suffix(3))) }
                 }
+                VStack(alignment: .leading, spacing: 6) { chips(StationsStrings.tagPresets) }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    /// One chip per word. `.fixedSize(horizontal: true, ...)` is what makes a
+    /// chip refuse to be squeezed: without it the row would still "fit" by
+    /// truncating every label, and `ViewThatFits` would never reach the
+    /// wrapped branches.
+    @ViewBuilder private func chips(_ tags: [String]) -> some View {
+        ForEach(tags, id: \.self) { tag in
+            Button(tag) { stations.tapTag(tag) }
+                .font(.caption)
+                .buttonStyle(.bordered)
+                .frame(minHeight: 44)
+                .fixedSize(horizontal: true, vertical: false)
         }
     }
 
@@ -254,7 +280,10 @@ struct StationsFavoriteMatchRow: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .multilineTextAlignment(.leading)
                 Spacer(minLength: 4)
-                Text(StationsStrings.head(row))
+                // ``StationsStrings/matchHead(_:)``, not `head(_:)`: this row
+                // leads with the call sign and carries the ICY track
+                // (`StationSearch.kt:414`).
+                Text(StationsStrings.matchHead(row))
                     .font(.caption)
                     .foregroundStyle(Color.fgMuted)
                     .fixedSize(horizontal: false, vertical: true)
@@ -322,7 +351,11 @@ struct StationsSearchResultRow: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .multilineTextAlignment(.leading)
                 }
-                Text(StationsStrings.head(row))
+                // The country alone, and `—` when the directory has none —
+                // `Text(hit.country_code ?: "—")` (`StationSearch.kt:534`).
+                // Not ``StationsStrings/head(_:)``: its `online` fallback
+                // reads as a value on a row where every hit is online.
+                Text(row.countryCode ?? StationsStrings.dash)
                     .font(.caption)
                     .foregroundStyle(Color.fgMuted)
                     .fixedSize(horizontal: false, vertical: true)

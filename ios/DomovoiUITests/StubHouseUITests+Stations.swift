@@ -37,7 +37,7 @@ import XCTest
 /// connection sheet, which NIGHT-RULES §1 forbids on a Simulator: it starts a
 /// LAN discovery sweep across Kamron's real home network. The case exists in
 /// the package, where the round trip can be parked:
-/// `StationsModelTests.testAPlayAnsweredAfterTheHouseChangedLandsNowhere`.
+/// `StationsModelTests.testAPlayThatLandsAfterTheHouseChangedIsDropped`.
 /// [[read-after-await-wrong-key]].
 ///
 /// **Playing.** This branch's route slot passes `StationsNoPlayback`, so no
@@ -59,7 +59,6 @@ extension StubHouseUITests {
         /// `favorited DESC, name ASC` sorts last — so it exists only once the
         /// **second** page has been asked for.
         static let firstFavourite = "Favourite Kestrel 01"
-        static let lastOfPageOne = "Favourite Kestrel 20"
         static let secondPageRow = "Favourite Kestrel 22"
 
         /// The three now-playing branches, one row each.
@@ -72,18 +71,16 @@ extension StubHouseUITests {
         /// promote, and the favourites list must not hold it.
         static let playedOnly = "Played Once Gull"
 
-        /// The FM row: 97.5, no `stream_url`, so `resolve` is offered.
+        /// The FM favourite: 97.5, no `stream_url`, so `resolve` is offered.
         static let fmRow = "WJIM-FM"
 
-        /// The catalogue. `02` collides with favourite `Kestrel 02`'s
-        /// `external_id`, so the search answers it with a real id and
-        /// `favorited: true` — a `saved` pill and no POST. `01` is a fresh
-        /// `id == 0` hit.
+        /// An FM row that is **not** favourited, so the FM browse has
+        /// something to answer that the favourites list does not hold — and
+        /// 88.5, so the exact-frequency filter has something to exclude.
+        static let unfavouritedFm = "KQED-FM"
+
+        /// The catalogue. `01` is a fresh `id == 0` hit.
         static let freshHit = "Catalogue Ibis 01"
-        static let alreadySaved = "Catalogue Ibis 02"
-        /// `http://127.0.0.1:9000/stream` — the host-local URL
-        /// `StationsRules.playable` must refuse.
-        static let hostLocalHit = "Catalogue Ibis 03"
 
         /// Kestrel 04's four detections, one per branch of the source pill.
         static let localDetection = "Red Fire Serpent"
@@ -120,10 +117,24 @@ extension StubHouseUITests {
         static let unreachable = "couldn't reach the server"
         static let retry = "retry"
         static let loadMore = "load more"
-        static let onlineScope = "online stations"
         static let fmScope = "local fm"
         static let queryHint = "search stations — name, callsign, network…"
+        static let fmQueryHint = "name, call sign, city, or frequency (e.g. 97.5)"
+        /// The first clause of the FM tip. Matched with ``startingWith`` —
+        /// the whole sentence is past the 128-character query limit that
+        /// throws (NIGHT-RULES §5).
+        static let fmTipOpening = "Tip: leave the box blank"
         static let search = "search"
+        /// The submit button's word in the FM scope (`StationSearch.kt:222`).
+        static let browse = "browse"
+        /// `fmHead` for the two FM rows: the call sign leads, then the
+        /// frequency.
+        static let wjimHead = "WJIM · 97.5 FM"
+        static let lansing = "Lansing, MI"
+        static let noStreamURL = "no stream URL — polling can't reach this station"
+        static let resolve = "resolve"
+        static let pasteURL = "paste url"
+        static let foundSimulcast = "found simulcast for WJIM"
         static let yourFavorites = "your favorites"
         static let oneMatch = "1 match"
         static let noMatch = "no stations match"
@@ -135,6 +146,7 @@ extension StubHouseUITests {
         static let noLiveMetadata = "no live metadata"
         static let listening = "listening…"
         static let recentDetections = "recent detections"
+        static let unknownArtist = "unknown artist"
         static let localPill = "local"
         static let inLibrary = "in library"
         static let newPill = "new"
@@ -194,15 +206,24 @@ extension StubHouseUITests {
     /// Flick the page until an element is built, and say whether it was.
     ///
     /// This screen is a `ScrollView` + `LazyVStack`, not a `List`, so there is
-    /// no `collectionView` for ``scrollUntilBuilt(_:_:flicks:)`` to drive —
-    /// `app.swipeUp()` is what the Files cases use for the same shape. A
+    /// no `collectionView` for ``scrollUntilBuilt(_:_:flicks:)`` to drive. A
     /// lazy list's foot is **unbuilt**, not off screen, so this is the only
     /// way page two is ever asked for.
+    ///
+    /// **`.slow`, never a bare `swipeUp()`.** `scrollUntilBuilt` measured the
+    /// default velocity and rejected it (`StubHouseUITests.swift:2735-2746`:
+    /// a flick at the default velocity is worth about a viewport, and eight
+    /// of them scrolled *past* the row it was looking for), which is the same
+    /// thing NIGHT-RULES §5 says. Momentum past row 19 is momentum past the
+    /// `onAppear` that asks for page two, so the bare gesture fails this
+    /// screen's paging case for a reason that is the gesture's. Twenty-four
+    /// flicks because a slow one moves a fraction of a viewport and the
+    /// favourites sit below the band, the header, the search card and Recent.
     @MainActor
-    func scrollStationsUntil(_ app: XCUIApplication, _ element: XCUIElement, flicks: Int = 14) -> Bool {
+    func scrollStationsUntil(_ app: XCUIApplication, _ element: XCUIElement, flicks: Int = 24) -> Bool {
         for _ in 0..<flicks {
             if element.exists { return true }
-            app.swipeUp()
+            app.swipeUp(velocity: .slow)
         }
         if !element.exists {
             print("=== \(flicks) FLICKS AND STILL UNBUILT — tree follows ===")
@@ -422,8 +443,15 @@ extension StubHouseUITests {
             )
         }
 
-        // Tap a row's body — twice, on two rows, one of them the host-local
-        // hit that even a build WITH an engine must refuse.
+        // Tap a row's body — twice, on two rows, one a favourite and one a
+        // Recent row, because the two are different views.
+        //
+        // Not the host-local catalogue hit that even a build WITH an engine
+        // must refuse: with no engine, `whyNotPlayable` is nil for every row
+        // (that sentence is about a station, and here nothing can play at
+        // all), so the per-station refusal has nothing to draw and nothing
+        // to assert. `StationsModelTests.testAnUnplayableStationSaysWhyAndSendsNothing`
+        // covers the rule itself.
         containing(app, StubStations.firstFavourite).tap()
         containing(app, StubStations.playedOnly).tap()
         evidence(app, "stations-12-nothing-plays")
@@ -495,6 +523,152 @@ extension StubHouseUITests {
         XCTAssertTrue(
             containing(app, StubStations.fmRow).exists,
             "the last favourite (\(StubStations.fmRow)) is missing from page two"
+        )
+        // And the foot's own word goes away when there is nothing more: page
+        // two answered 3 of a page of 20, so `canLoadMore` is false. It
+        // cannot be asserted *present* from here — the foot of a lazy list is
+        // unbuilt until it is scrolled to, and scrolling to it is what loads
+        // the page that removes it.
+        XCTAssertFalse(
+            app.buttons[StationsWords.loadMore].exists,
+            "the list still offers `load more` with all 23 favourites loaded, so the "
+                + "short last page was read as a full one"
+        )
+    }
+
+    // MARK: - 5b. the FM half of the screen, and the stream editor
+
+    /// The other half of the search card, and the one field with three faces
+    /// — one launch, because reaching the second is a scroll away from the
+    /// first.
+    ///
+    /// Nothing else in this file touches the FM scope or the stream editor,
+    /// so without this case a break in either passes every assertion: the
+    /// scope switch, the FM placeholder, the tip, the `browse` word, the
+    /// `WJIM · 97.5 FM` head, the market line, the exact-frequency path, the
+    /// `no stations match` state, the empty stream face and `resolve` are all
+    /// drawn only here.
+    ///
+    /// **What discriminates what.** `KQED-FM` is the FM row that is *not*
+    /// favourited, so its presence is the browse reading
+    /// `/stations?source=fm` rather than the favourites; `Catalogue Ibis` is
+    /// in no FM row, so its absence is the scope not having gone to
+    /// `/search`; and `KQED` going away when `97.5` is typed is the number
+    /// being sent as `frequency_mhz=` and not as a `q` ILIKE, which `88.5`
+    /// would survive.
+    ///
+    /// Return, not the button, submits the two typed browses: it runs the
+    /// search *and* puts the keyboard away, and the chevron this case taps
+    /// later sits where the keyboard was.
+    @MainActor
+    func testStations_TheFmScopeBrowsesTheImportAndOffersAResolve() throws {
+        let (app, landed) = openStations()
+        XCTAssertTrue(landed, "Stations never drew its subtitle")
+
+        // --- the scope switch changes the box, the tip and the button.
+        let fm = app.buttons[StationsWords.fmScope]
+        XCTAssertTrue(fm.waitForExistence(timeout: 20), "there is no local-fm scope button")
+        fm.tap()
+        XCTAssertTrue(
+            startingWith(app, StationsWords.fmTipOpening).waitForExistence(timeout: 20),
+            "the FM tip never drew, so the scope did not switch"
+        )
+        XCTAssertTrue(
+            app.textFields[StationsWords.fmQueryHint].waitForExistence(timeout: 20),
+            "the query box kept the online placeholder after the scope switched"
+        )
+        let browse = app.buttons[StationsWords.browse]
+        XCTAssertTrue(browse.waitForExistence(timeout: 20), "the submit button does not say browse")
+        evidence(app, "stations-29-fm-scope")
+
+        // --- browse with an empty box walks the whole import.
+        browse.tap()
+        XCTAssertTrue(
+            containing(app, StationsWords.wjimHead).waitForExistence(timeout: 25),
+            "an empty-box browse answered nothing: the FM scope is not reading "
+                + "/stations?source=fm"
+        )
+        XCTAssertTrue(
+            containing(app, StationsWords.lansing).exists,
+            "the FM row drew no market, so its third line is missing"
+        )
+        XCTAssertTrue(
+            containing(app, StubStations.unfavouritedFm).exists,
+            "\(StubStations.unfavouritedFm) is missing: the browse answered the favourites "
+                + "rather than every FM row"
+        )
+        XCTAssertFalse(
+            containing(app, "Catalogue Ibis").exists,
+            "an online catalogue hit is in the FM results, so the scope went to /search"
+        )
+        evidence(app, "stations-30-fm-browse")
+
+        // --- a number is an EXACT frequency, not a `q`.
+        let box = app.textFields[StationsWords.fmQueryHint]
+        box.tap()
+        app.typeText("97.5\n")
+        XCTAssertTrue(
+            containing(app, StationsWords.wjimHead).waitForExistence(timeout: 25),
+            "97.5 found nothing, and \(StubStations.fmRow) is on 97.5"
+        )
+        XCTAssertFalse(
+            containing(app, StubStations.unfavouritedFm).exists,
+            "88.5 survived a 97.5 filter: the number was sent as q= rather than as "
+                + "frequency_mhz="
+        )
+        evidence(app, "stations-31-fm-frequency")
+
+        // --- and a frequency nothing is on is an empty state, not a blank.
+        box.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
+        clearField(app)
+        app.typeText("88.3\n")
+        XCTAssertTrue(
+            app.staticTexts[StationsWords.noMatch].waitForExistence(timeout: 25),
+            "a frequency nothing is on drew no empty state, so a browse that found "
+                + "nothing is indistinguishable from one that failed"
+        )
+        evidence(app, "stations-32-fm-no-match")
+
+        // --- the stream field's empty face, on the one favourite the FCC
+        //     import left without a URL. It sorts last, so this is below the
+        //     second page of the favourites list.
+        let chevron = stationsChevron(app, StubStations.fmRow)
+        XCTAssertTrue(
+            scrollStationsUntil(app, chevron),
+            "\(StubStations.fmRow) never built in the favourites, so the stream editor "
+                + "was never reached"
+        )
+        chevron.tap()
+        XCTAssertTrue(
+            app.staticTexts[StationsWords.recentDetections].waitForExistence(timeout: 25),
+            "the chevron did not open \(StubStations.fmRow)'s detail"
+        )
+        XCTAssertTrue(
+            containing(app, StationsWords.noStreamURL).exists,
+            "a station with no stream_url does not say so: the field's empty face never drew"
+        )
+        XCTAssertTrue(
+            app.buttons[StationsWords.pasteURL].exists,
+            "the empty face offers no paste url, so there is no way to type one in"
+        )
+        let resolve = app.buttons[StationsWords.resolve]
+        XCTAssertTrue(
+            resolve.exists,
+            "an FM row with a call sign offers no resolve, which is the only automatic "
+                + "way it ever gets a URL"
+        )
+        evidence(app, "stations-33-stream-empty")
+
+        // --- resolve, and what the house was asked.
+        resolve.tap()
+        XCTAssertTrue(
+            containing(app, StationsWords.foundSimulcast).waitForExistence(timeout: 30),
+            "resolve said nothing: the simulcast answer landed nowhere"
+        )
+        evidence(app, "stations-34-resolved")
+        XCTAssertEqual(
+            1, (stationsSent()["resolve"] ?? []).count,
+            "the resolve POST was not sent exactly once: \(stationsSent())"
         )
     }
 
@@ -637,9 +811,41 @@ extension StubHouseUITests {
 
         XCTAssertTrue(containing(app, StubStations.localDetection).exists, "no local detection")
         XCTAssertTrue(containing(app, StubStations.icyDetection).exists, "no icy detection")
+        // The unknown-artist branch, off the **meta** line and not the title:
+        // `Thirteen Palisades` is the title of the detection whose artist is
+        // null, so a screen that drew `artist ?? ""` would pass an assertion
+        // on the title alone. The title and the meta are one element — the
+        // inner `VStack` of `StationsDetectionRow` combines its children — so
+        // this reads both off one label.
+        let nameless = containing(app, StubStations.namelessArtist)
         XCTAssertTrue(
-            containing(app, StubStations.namelessArtist).exists,
+            nameless.exists,
             "the detection with no artist is missing, so the unknown-artist branch never drew"
+        )
+        XCTAssertTrue(
+            nameless.label.contains(StationsWords.unknownArtist),
+            "the detection with no artist does not say unknown artist: \(nameless.label)"
+        )
+        // The fourth branch of the source pill: `fingerprint_source: null`
+        // becomes `—` (`StationsRules.detectionSource`). Two `—` are expected
+        // in this sheet and nothing else in it is empty — detection 4001 has
+        // no title, detection 4002 no source, and row 104's own five fields
+        // are all populated in the fixture — so a null source mapped to a
+        // word of its own drops this to one.
+        let dashes = app.staticTexts.matching(NSPredicate(format: "label == %@", "—"))
+        XCTAssertGreaterThanOrEqual(
+            dashes.count, 2,
+            "a null fingerprint_source did not become the — pill: only "
+                + "\(dashes.count) em-dash leaves in the sheet, and the missing title "
+                + "accounts for one of them"
+        )
+        // ...and the `shazam` row is tied to its artist, not only to the pill
+        // word: `Velvet Caiman` is the detection whose title is null, so this
+        // is also the branch where the title falls back to `—`.
+        XCTAssertTrue(
+            containing(app, StubStations.unknownSourceArtist).exists,
+            "the detection with an unknown source is missing its artist, so the "
+                + "verbatim-source row was never drawn"
         )
         XCTAssertTrue(app.staticTexts[StationsWords.localPill].exists, "no local pill")
         XCTAssertTrue(app.staticTexts[StationsWords.inLibrary].exists, "no in-library pill")
