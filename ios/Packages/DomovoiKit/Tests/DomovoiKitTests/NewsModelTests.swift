@@ -195,6 +195,13 @@ final class NewsModelTests: XCTestCase {
     }
 
     private func rig(house: House = House()) -> (NewsModel, House) {
+        let (model, house, _) = rigged(house: house)
+        return (model, house)
+    }
+
+    /// The same rig with the container in hand, for the one test that has to
+    /// assert the screen really joined the socket.
+    private func rigged(house: House = House()) -> (NewsModel, House, AppContainer) {
         house.install()
         let store = InMemoryShellStore(serverURL: server, token: "household-abc")
         store.trustServer(server, identity: TestIdentity.real.pin)
@@ -205,7 +212,7 @@ final class NewsModelTests: XCTestCase {
             clock: { 0 },
             configuration: StubURLProtocol.session(timeout: 1)
         )
-        return (NewsModel(in: container), house)
+        return (NewsModel(in: container), house, container)
     }
 
     private func settleUntil(
@@ -938,6 +945,41 @@ final class NewsModelTests: XCTestCase {
             categories,
             model.categories.fetches,
             "the categories are a static set with no event types"
+        )
+    }
+
+    /// **A frame from the container reaches the reads** — the wiring, not the
+    /// filter.
+    ///
+    /// ``NewsModel/received(_:)`` was correct and had **no caller** when the
+    /// views were written: the model filtered `news.changed` and nothing ever
+    /// handed it a frame, so every push on this screen was dropped and the
+    /// screen was live only because each write refreshes its own reads. The
+    /// test above (`testTheRightPushRereadsTheRightThing`) calls `received`
+    /// by hand and passes either way, which is exactly how a seam with no
+    /// caller stays invisible ([[reasoning-that-hides-a-bug]]). This one goes
+    /// in through ``AppContainer/stateEventArrived(_:)``, which is what the
+    /// socket calls, and also asserts the ticket is given back — a screen
+    /// that left and kept its sink would re-read for ever.
+    func testTheScreenJoinsTheSocketAndLeavesIt() async {
+        let (model, _, container) = rigged()
+        let before = container.stateEventSinkCount
+        await started(model)
+        XCTAssertEqual(
+            container.stateEventSinkCount,
+            before + 1,
+            "the screen never joined the container's frames"
+        )
+
+        let topics = model.detail!.topics.fetches
+        container.stateEventArrived(StateEvent(type: "news.changed", frame: "{}"))
+        await settleUntil({ model.detail!.topics.fetches > topics }, "the topics re-read")
+
+        model.stop()
+        XCTAssertEqual(
+            container.stateEventSinkCount,
+            before,
+            "the screen went away and kept its sink on the container"
         )
     }
 

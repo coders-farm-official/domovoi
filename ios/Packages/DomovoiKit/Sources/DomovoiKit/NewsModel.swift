@@ -69,6 +69,21 @@ public final class NewsModel {
 
     private let container: AppContainer
 
+    /// This screen's ticket on ``AppContainer/onStateEvent(_:)``, claimed in
+    /// ``start()`` and given back in ``stop()``.
+    ///
+    /// **Added when the views were built, because ``received(_:)`` had no
+    /// caller.** The model filtered `news.changed` and
+    /// `people.last_seen.changed` correctly and nothing ever handed it a
+    /// frame: every push on this screen was dropped, and the screen was live
+    /// only because each write refreshes its own reads. That is the
+    /// seam-with-no-caller shape this track has paid for before
+    /// ([[reasoning-that-hides-a-bug]]) — ``HomeModel`` (`:267-271`) and
+    /// ``MusicModel`` (`:219-223`) each join the container themselves, and so
+    /// does this. Weakly, so a screen that has gone is not kept alive by the
+    /// container.
+    private var eventSink: Int?
+
     public init(in container: AppContainer) {
         self.container = container
         let client = container.client
@@ -189,6 +204,11 @@ public final class NewsModel {
     /// The screen appeared: be keyed to the server again, and read what has
     /// not been read.
     public func start() {
+        if eventSink == nil {
+            eventSink = container.onStateEvent { [weak self] frame in
+                Task { @MainActor in self?.received(frame) }
+            }
+        }
         people.refresh()
         categories.refresh()
         // A detail built before the screen went away is restarted rather than
@@ -221,6 +241,10 @@ public final class NewsModel {
     /// the same person when the screen comes back, and a stopped model never
     /// reads again.
     public func stop() {
+        if let eventSink {
+            container.removeStateEventSink(eventSink)
+            self.eventSink = nil
+        }
         people.stop()
         categories.stop()
         detail?.pause()
