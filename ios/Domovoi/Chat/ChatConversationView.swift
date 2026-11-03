@@ -34,15 +34,35 @@ struct ChatConversationView: View {
     @State private var sheet: ChatMoreSheet?
 
     /// Read for one decision: the header's title is bounded only at an
-    /// accessibility size (``chatMoreTitleLines``).
+    /// accessibility size (``title``).
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
-    /// How many lines the header's title may take: two at an accessibility
-    /// size, and as many as it wants below one. Spelt as a property and not
-    /// written into the `.lineLimit` call, because `nil` in a ternary there
-    /// has to pick between `lineLimit`'s overloads.
-    private var chatMoreTitleLines: Int? {
-        dynamicTypeSize.isAccessibilitySize ? 2 : nil
+    /// The header's title, bounded at an accessibility size and **untouched**
+    /// below one.
+    ///
+    /// Two branches rather than `.lineLimit(nil)` and a truncation mode that
+    /// applies at every size: `titleRow` has the measurement, and the short
+    /// of it is that a `Text` told how to truncate is one Apple's audit
+    /// predicts will be clipped, whatever its line limit says. The branch is
+    /// on `dynamicTypeSize`, which changes only when the reader changes their
+    /// text size — the one moment a view identity change here costs nothing.
+    @ViewBuilder
+    private var title: some View {
+        let words = Text(chat.openTitle)
+            .font(.headline)
+        if dynamicTypeSize.isAccessibilitySize {
+            words
+                .accessibilityAddTraits(.isHeader)
+                .lineLimit(2)
+                .truncationMode(.tail)
+                .fixedSize(horizontal: false, vertical: true)
+                .multilineTextAlignment(.leading)
+        } else {
+            words
+                .accessibilityAddTraits(.isHeader)
+                .fixedSize(horizontal: false, vertical: true)
+                .multilineTextAlignment(.leading)
+        }
     }
 
     var body: some View {
@@ -278,13 +298,22 @@ struct ChatConversationView: View {
             // people read at. Android truncates at one line at every size
             // (`maxLines = 1`, `ChatHome.kt:722`), so the bound itself is
             // the faithful behaviour and this only delays it. DECISIONS.md.
-            Text(chat.openTitle)
-                .font(.headline)
-                .accessibilityAddTraits(.isHeader)
-                .lineLimit(chatMoreTitleLines)
-                .truncationMode(.tail)
-                .fixedSize(horizontal: false, vertical: true)
-                .multilineTextAlignment(.leading)
+            //
+            // **And the cap is a branch, not a `nil` argument.** Round four
+            // made `.lineLimit` nil below an accessibility size and left
+            // `.truncationMode(.tail)` on the `Text` at every size — and the
+            // finding came back unchanged in train I001, with the same two
+            // frames it had in MS004. The tree says why: the reply's own
+            // words on the same screen are a two-line `Text` of exactly the
+            // same shape *without* a truncation mode (26.0, 335.3, 284.0,
+            // 42.3) and the audit says nothing about them, while the title
+            // (64.0, 138.2, 193.3, 42.3) is named. A `Text` that has been
+            // told how to truncate is a `Text` the audit predicts will have
+            // to; MS003, which carried neither modifier, audited clean. So
+            // at the sizes Apple's audit runs at the title now carries
+            // neither — exactly MS003's shape — and both modifiers apply
+            // only where the bound is wanted.
+            title
 
             Spacer(minLength: 8)
 
@@ -415,9 +444,37 @@ struct ChatConversationView: View {
             // ``tail``, which moves on a new message **and** on a delta, so
             // the view scrolls while a reply grows rather than once when it
             // starts.
+            //
+            // **And with no implicit animation.** This used to be
+            // `withAnimation { … }`, which was harmless while the stub's
+            // reply was five short pieces and the target was a message row.
+            // It is not harmless now: the reply is eight pieces and about
+            // 1,400 characters, the target is a one-point view at the very
+            // end of the content, and at the stub's ordinary speed the eight
+            // deltas land about 0.12s apart — so each animation re-targets
+            // the one before it, over a transcript that is growing from one
+            // point to six hundred underneath them.
+            //
+            // Train I001 measured what that costs: the two cases that send
+            // into a **new** chat at full speed painted the finished reply
+            // and then answered no accessibility snapshot at all — three
+            // thirty-second timeouts and "Timed out while evaluating UI
+            // query" from a screen that is sitting still in the recording.
+            // The four cases that call the same `say(_:_:)` helper either
+            // stream the same reply 1.5s a piece (`chat-fail slow`), where
+            // each animation finishes before the next begins, or never get a
+            // whole reply at all (`mid-stream`, `ai-off`) — and all four
+            // pass. The discriminator is the gap between deltas, not the
+            // thread and not the length.
+            //
+            // A reply being written is appended continuously, so a glide per
+            // word was noise as well: the content moving under a still
+            // viewport is the animation. Where the transcript moves for any
+            // other reason — opening a thread, a re-read — it is positioned,
+            // not scrolled, so there is nothing else here that wanted one.
             .onChange(of: tail) { _, _ in
                 guard !chat.transcript.messages.isEmpty else { return }
-                withAnimation { scroller.scrollTo(Self.foot, anchor: .bottom) }
+                scroller.scrollTo(Self.foot, anchor: .bottom)
             }
         }
     }

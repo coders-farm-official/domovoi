@@ -213,6 +213,25 @@ extension StubHouseUITests {
             print(app.debugDescription)
             return false
         }
+        // **The picker scrolls at an accessibility size.** It is capped at
+        // three fifths of what Chat is given, so that the list keeps a usable
+        // share rather than the 43.3 points train I001 measured
+        // (``AssistantPlaceSwitch``) — and at AX5 that puts the second chip
+        // partly past the picker's own fold. Everything is still reachable;
+        // this is the reaching. Nothing is assumed: if the chip cannot be
+        // brought under the finger, this says so and prints the tree.
+        if !chip.isHittable {
+            let picker = app.scrollViews.firstMatch
+            for _ in 0..<8 {
+                if chip.isHittable { break }
+                if !assistantCreep(picker, towards: .foot) { break }
+            }
+        }
+        guard chip.isHittable else {
+            print("=== THE PHONE CHIP CANNOT BE REACHED — tree follows ===")
+            print(app.debugDescription)
+            return false
+        }
         chip.tap()
         let drew = startingWith(app, AssistantUnderTest.subtitleBoth).waitForExistence(timeout: 25)
         if !drew {
@@ -881,13 +900,24 @@ extension StubHouseUITests {
     @MainActor
     @discardableResult
     func assistantCreep(_ view: XCUIElement, towards end: AssistantCreepEnd) -> Bool {
-        guard view.exists else { return false }
+        guard assistantScrollable(view) else { return false }
         // Dragging the content UP (finger from low to high) walks towards the
         // foot; the other way walks back to the top.
         let starts: [CGFloat] = end == .foot ? [0.75, 0.95, 0.55] : [0.25, 0.05, 0.45]
         let span: CGFloat = end == .foot ? -0.5 : 0.5
         let before = assistantContentOffset(view)
         for from in starts {
+            // **Checked again before every press, not once at the top.**
+            // Train I001: the phone's list was 43.3 points tall, a step's
+            // first drag left it with no height at all, and the second
+            // resolved `coordinate` against a view that was no longer in the
+            // tree — so the case died with "No matches found for …
+            // CollectionView" instead of reporting the measurement it was
+            // taking, and the stray gesture had already carried the app off
+            // the screen under test. A view that has gone, or that has no
+            // height to drag across, is a view that cannot be scrolled, which
+            // is what `false` says here.
+            guard assistantScrollable(view) else { return false }
             let start = view.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: from))
             let finish = view.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: from + span))
             start.press(
@@ -904,6 +934,18 @@ extension StubHouseUITests {
             if let now = assistantContentOffset(view), now != was { return true }
         }
         return false
+    }
+
+    /// Whether a view is there **and** big enough for a drag to land in.
+    ///
+    /// A frame of no height is not a scroller: `coordinate(dy: 0.75)` and
+    /// `coordinate(dy: 0.25)` of it are the same point, so the press and the
+    /// drag are one **tap**, somewhere a case never meant to touch. Train
+    /// I001 is where that tap went.
+    @MainActor
+    func assistantScrollable(_ view: XCUIElement) -> Bool {
+        guard view.exists else { return false }
+        return view.frame.height >= 1
     }
 
     /// Where a scrolling view's content sits, as the y of its own first child
