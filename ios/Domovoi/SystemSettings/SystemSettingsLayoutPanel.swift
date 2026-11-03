@@ -77,41 +77,47 @@ struct SystemSettingsLayoutPanel: View {
                 // (it reads our own model) and ``PhoneBarView``
                 // (`ShellChromeViews.swift:257`) keeps drawing the old tabs.
                 //
-                // ### The nudge has to be one the **bar's own body** reads
+                // ### What is measured, and what is left
                 //
-                // This was `model.path = model.path`, which writes the
-                // tracked `navigation` struct through public API, and train
-                // S002 measured it doing nothing: the preview line gained
-                // `files`, the bottom bar stayed at four tabs
-                // (`testSystemSettings_AppLayoutAddsAndRemovesATab`, and the
-                // tree attached to it has the bar with `Home Music Videos
-                // Chat` and no `Files`).
+                // **The data path is sound** —
+                // `SystemSettingsLayoutRedrawTests` is that measurement, and
+                // it was missing for two rounds. An edit here writes the
+                // store the shell reads, and ``ShellModel/phoneBar`` answers
+                // the new list back on the very next read, with no nudge at
+                // all. So nothing is wrong with the write, the cast, the
+                // encoding or the filter; the only thing that was ever
+                // missing is the **invalidation**.
                 //
-                // The reason is where the reads are. `PhoneBarView.body`
-                // reads `model.phoneBar` and nothing else of the model;
-                // `model.barSelects(route)` — the one call that touches
-                // `navigation` — is inside the `ForEach` *content* closure,
-                // which SwiftUI runs outside the body's observation scope.
-                // So writing `navigation` invalidates a view that never
-                // registered for it.
+                // ### Why the nudge is deferred and not called straight
                 //
-                // What that body **does** reach, through
-                // ``ShellModel/visibility`` → ``ShellModel/isPaired`` and
-                // ``ShellModel/sharedScreenAnswer``, is ``ShellModel/inputs``
-                // — and ``ShellModel/refresh()`` is the only public write of
-                // it. Its own doc calls it "where every one of those changes
-                // is already noticed". The cost is real and accepted: a bar
-                // edit re-keys the address-keyed reads
-                // (`ShellModel.swift:820-832`). The two socket calls are
-                // no-ops while the address has not changed and the socket is
-                // not parked, and nothing in `refresh()` sends a device
-                // register.
+                // Two different tracked mutations, made synchronously from
+                // the button's own action, moved nothing: `model.path =
+                // model.path` on train S002 and `model.refresh()` on train
+                // S005. Both trains show the same picture — the preview line
+                // gains `files`, the bar keeps four tabs for the ten seconds
+                // the case waits.
+                //
+                // What has always worked is the same call from a **sink**:
+                // ``ShellModel`` subscribes the server-selection and address
+                // sinks as `Task { @MainActor in self?.refresh() }`
+                // (`ShellModel.swift:258`, `:264`), and
+                // `testPickingAServerMovesTheAppWithNobodyCallingRefresh`
+                // holds that a picker write moves the whole shell. The one
+                // difference between the two is *when*: a sink's refresh
+                // lands on a later turn of the main actor, after SwiftUI has
+                // finished the update the action is inside, and a second
+                // observable mutated part-way through that update is a
+                // mutation some views have already been laid out past.
+                //
+                // So this goes where that one goes. One turn later is not
+                // perceptible, and it is the shape this app already has
+                // evidence for.
                 //
                 // The real fix is still one line in `ShellModel`, written up
                 // as the second **Needs a shared change** in this item's
                 // `DECISIONS.md`. A reviewer should fold it in and delete
                 // this closure.
-                afterWrite: { [model] in model.refresh() }
+                afterWrite: { [model] in Task { @MainActor in model.refresh() } }
             )
         }
         // A paired install is treated as **shared** until the server answers

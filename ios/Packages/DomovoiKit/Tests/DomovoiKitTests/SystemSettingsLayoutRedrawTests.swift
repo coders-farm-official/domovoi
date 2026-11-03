@@ -21,7 +21,14 @@ final class SystemSettingsLayoutRedrawTests: XCTestCase {
     /// builds one, with the reachability loop parked so nothing touches the
     /// network. The probe answers `false`, which is the state an unpaired
     /// phone is permanently in anyway.
-    private func shell(token: String? = "t") -> (ShellModel, InMemoryShellStore) {
+    ///
+    /// **Unpaired, deliberately.** ``DeviceRegistry/isSharedScreen(answer:paired:)``
+    /// is `answer ?? paired`, so a phone holding a token and no answer yet
+    /// counts as a shared screen — and a shared screen has neither `chat` nor
+    /// `files` in either list, which would make this file measure the filter
+    /// instead of the write. The Simulator's phone has its answer by the time
+    /// anyone reaches Settings; its bar carries `chat`, which is the proof.
+    private func shell(token: String? = nil) -> (ShellModel, InMemoryShellStore) {
         let store = InMemoryShellStore(serverURL: "http://127.0.0.1:6633", token: token)
         let container = AppContainer(
             store: store,
@@ -46,7 +53,7 @@ final class SystemSettingsLayoutRedrawTests: XCTestCase {
         let (shell, store) = shell()
         XCTAssertFalse(
             shell.visibility.sharedScreen,
-            "a phone holding a token is not a shared screen here; `files` would be filtered out"
+            "an unpaired phone is never masked as a shared screen; `files` has to be eligible"
         )
         XCTAssertEqual([.home, .music, .videos, .chat], shell.phoneBar)
 
