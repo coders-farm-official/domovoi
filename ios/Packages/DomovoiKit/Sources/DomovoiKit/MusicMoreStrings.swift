@@ -19,6 +19,15 @@ public enum MusicMoreStrings {
     public static let tabPlaylists = "playlists"
     public static let tabPlayer = "player"
 
+    // MARK: - cover art (`player/CoverArt.kt`)
+
+    /// What VoiceOver says for a cover on a **sheet**, where there is one of
+    /// them and whether the song has art is worth being told. Android hides
+    /// the cover from TalkBack everywhere and so does this on a list; these
+    /// two sentences are iOS-only (IOS-ONLY-STRINGS.md).
+    public static let coverArt = "cover art"
+    public static let noCoverArt = "no cover art"
+
     // MARK: - the playlists tab (`PlaylistsTab.kt`)
 
     /// `PlaylistsTab.kt:49-53`, both lines.

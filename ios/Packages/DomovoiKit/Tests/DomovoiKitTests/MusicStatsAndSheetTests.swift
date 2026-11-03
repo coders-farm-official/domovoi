@@ -247,8 +247,28 @@ final class MusicStatsAndSheetTests: XCTestCase {
 
     // MARK: - the tabs
 
-    func testTheTabsAreTheThreeThatHaveSomethingBehindThem() {
-        XCTAssertEqual([.library, .queue, .stats], MusicTab.allCases)
+    /// The bar is built from ``MusicTab/shown(hasPlayer:)``, never from
+    /// `allCases` — the MusicMore batch added `playlists` (which ships) and
+    /// `player` (which does not, because nothing conforms to
+    /// ``MusicMorePlayerEngine`` yet).
+    func testTheTabsAreTheOnesThatHaveSomethingBehindThem() {
+        XCTAssertEqual([.library, .queue, .playlists, .stats], MusicTab.shown(hasPlayer: false))
+        XCTAssertEqual(
+            [.library, .player, .queue, .playlists, .stats],
+            MusicTab.shown(hasPlayer: true)
+        )
+        // `allCases` holds the player; a bar built from it would offer a tab
+        // with no engine behind it, which is the thing `shown` exists for.
+        XCTAssertTrue(MusicTab.allCases.contains(.player))
+        XCTAssertFalse(MusicTab.shown(hasPlayer: false).contains(.player))
+    }
+
+    func testThePlaylistsTabShowsAZeroAndTheQueueTabDoesNot() {
+        XCTAssertEqual("playlists · 0", MusicTab.playlists.label(playlistCount: 0))
+        XCTAssertEqual("playlists · 3", MusicTab.playlists.label(playlistCount: 3))
+        // Nil is not zero here either: a read in flight is not an empty house.
+        XCTAssertEqual("playlists", MusicTab.playlists.label(playlistCount: nil))
+        XCTAssertEqual("player", MusicTab.player.label())
     }
 
     func testATabCarriesItsCountOnlyWhenThereIsOne() {
