@@ -98,8 +98,8 @@ struct PhonePhotosSource: PhoneMediaReading {
         // its completion handler hands back the local identifiers the person
         // just added, so the call suspends until the sheet is dismissed.
         // Nothing here needs the identifiers — ``libraries()`` re-reads the
-        // library from `PHAsset` when the screen comes back — so they are
-        // discarded rather than threaded through.
+        // library from `PHAuthorizationStatus` when the screen reloads — so
+        // they are discarded rather than threaded through.
         _ = await PHPhotoLibrary.shared().presentLimitedLibraryPicker(from: host)
     }
 

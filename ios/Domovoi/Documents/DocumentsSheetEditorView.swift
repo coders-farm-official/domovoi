@@ -74,13 +74,25 @@ struct DocumentsSheetEditorView: View {
             .navigationTitle(entry.displayTitle)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                // The text editor's bar, for the text editor's reason:
+                // ``DocumentsEditorBarLabel``. The audit never reached this
+                // screen in train S008 — the text editor's contrast finding
+                // ended the case first — and the two bars were identical, so
+                // this one carried the same defect unreported.
                 ToolbarItem(placement: .cancellationAction) {
-                    Button(DocumentsStrings.close) { closeRequested() }
+                    Button { closeRequested() } label: {
+                        DocumentsEditorBarLabel(word: DocumentsStrings.close, live: true)
+                    }
+                    .buttonStyle(.plain)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     if sheet?.offersSave == true {
-                        Button(DocumentsStrings.save) { sheet?.save() }
-                            .disabled(!(sheet?.canSave ?? false))
+                        let live = sheet?.canSave ?? false
+                        Button { sheet?.save() } label: {
+                            DocumentsEditorBarLabel(word: DocumentsStrings.save, live: live)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(!live)
                     }
                 }
             }

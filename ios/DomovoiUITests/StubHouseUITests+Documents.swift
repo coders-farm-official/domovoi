@@ -33,8 +33,35 @@ extension StubHouseUITests {
         blocked: Bool = false
     ) -> XCUIApplication? {
         control("reset-fixtures", "{}", port: 6601, what: "the documents fixture's seed")
+        let big = Self.documentsIsBig(mode)
         let (app, landed) = openFiles(mode, blocked: blocked)
-        guard landed else {
+        // ### `landed` is false at AX5, and the folder is there anyway
+        //
+        // Train S008 failed ``testDocuments_TheGridGrowsAtAccessibilitySizes``
+        // here with "the folder never answered". The tree it printed says
+        // otherwise: Files had drawn, with its `•••`, its title and its
+        // subtitle on screen. What was missing was the marker
+        // ``openFiles(_:blocked:delay:)`` waits for at an accessibility size,
+        // the `choose library` button — because Files' own content is a
+        // `LazyVStack` in a `ScrollView`, the phone-source switch above it
+        // takes 164 of the window's 400 points, and the header alone is 383
+        // points tall at AX5. The picker is not off screen: it is **unbuilt**,
+        // which is this screen's standing trap one level further up than the
+        // rows it was written about.
+        //
+        // So the wait is allowed to time out and the picker is scrolled to,
+        // exactly as a row is. A folder that really never answered still
+        // fails, one flick-budget later.
+        if !landed, big {
+            // Its own failure, not `pickLibrary`'s: train S011 reported "the
+            // library picker never opened" for a picker that was never
+            // scrolled to, and the sentence sent two cases' diagnosis to the
+            // menu instead of to the scroll.
+            guard documentsScrollTo(app, app.buttons["choose library"].firstMatch, big: true) else {
+                XCTFail("the library picker never built — the folder did not scroll")
+                return nil
+            }
+        } else if !landed {
             XCTFail("the folder never answered")
             return nil
         }
@@ -49,11 +76,19 @@ extension StubHouseUITests {
         // marker about.
         let marker = app.buttons["notes.md"]
         _ = marker.waitForExistence(timeout: 20)
-        guard documentsScrollTo(app, marker) else {
+        guard documentsScrollTo(app, marker, big: big) else {
             XCTFail("Documents never listed")
             return nil
         }
         return app
+    }
+
+    /// Whether a launch mode is one of the accessibility type sizes.
+    ///
+    /// The same test ``openFiles(_:blocked:delay:)`` makes, written once
+    /// here because three helpers in this file now need the answer.
+    static func documentsIsBig(_ mode: String) -> Bool {
+        mode.hasPrefix("UICTContentSizeCategoryAccessibility")
     }
 
     /// Scroll the folder until `element` is **built**.
@@ -63,23 +98,108 @@ extension StubHouseUITests {
     /// and `shopping list.txt`, the row this item added, is the eleventh.
     /// Not ``scrollUntilBuilt(_:_:flicks:)``: that one scrolls
     /// `app.collectionViews.firstMatch`, which this screen has none of.
+    ///
+    /// ### The swipe is the folder's, not the window's
+    ///
+    /// `app.swipeUp()` starts in the middle of the window, and at an
+    /// accessibility type size the middle of the window is the phone-source
+    /// switch above the list — a swipe there scrolls nothing at all, which
+    /// is half of why train S008's AX5 case never found anything. Swiping
+    /// the `ScrollView` itself is the same gesture at `large`, where the
+    /// list does occupy the middle, so both sizes take it.
+    ///
+    /// At AX5 the list scrolls inside a 178-point window past a 383-point
+    /// header, so it gets the slow swipe (a fast one steps over rows) and a
+    /// much longer budget.
+    ///
+    /// ### And it is not `scrollViews.firstMatch`
+    ///
+    /// Train S011 ran all forty flicks and the folder's scroll bar still read
+    /// `value: 0%`. The log says where they went:
+    ///
+    /// ```
+    /// t = 101.22s  Swipe up ScrollView (First Match)
+    /// t = 101.72s  Swipe up ScrollView at {{0.0, 706.0}, {393.0, 146.0}}
+    /// ```
+    ///
+    /// `{0, 706}` is the **phone bar** — home · music · videos · chat is a
+    /// horizontal `ScrollView`, and `firstMatch` resolved to it, not to the
+    /// folder at `{0, 523}`. Forty vertical swipes on a horizontal strip
+    /// scroll nothing, so the picker stayed unbuilt and two cases failed one
+    /// sentence later with "the library picker never opened".
+    ///
+    /// The folder is told apart by position rather than by index: the phone
+    /// bar is pinned to the window's bottom, so the content scroll view is
+    /// always the one with the smaller `minY`. Tree order does not decide it
+    /// — the folder comes first in the printed tree and `firstMatch` took the
+    /// bar anyway.
     @MainActor
-    func documentsScrollTo(_ app: XCUIApplication, _ element: XCUIElement, flicks: Int = 12) -> Bool {
-        for _ in 0..<flicks where !element.exists {
-            app.swipeUp()
+    func documentsScrollTo(
+        _ app: XCUIApplication,
+        _ element: XCUIElement,
+        flicks: Int = 12,
+        big: Bool = false
+    ) -> Bool {
+        let budget = big ? 40 : flicks
+        for _ in 0..<budget where !element.exists {
+            // Re-resolved each flick: the bar and the folder are both built
+            // from the first frame, but a query held across a swipe goes
+            // stale on this screen often enough to be worth the lookup.
+            guard let folder = documentsFolderScroll(app) else {
+                app.swipeUp()
+                continue
+            }
+            if big {
+                folder.swipeUp(velocity: .slow)
+            } else {
+                folder.swipeUp()
+            }
         }
         if !element.exists {
-            print("=== \(flicks) FLICKS AND STILL UNBUILT — tree follows ===")
+            print("=== \(budget) FLICKS AND STILL UNBUILT — tree follows ===")
             print(app.debugDescription)
         }
         return element.exists
     }
 
-    /// Open one Documents row, scrolling to it first.
+    /// The folder's own scroll view — the upper of the screen's two.
+    ///
+    /// Files' content scrolls in one `ScrollView` and the phone bar's
+    /// home · music · videos · chat strip is another, pinned to the window's
+    /// bottom; `scrollViews.firstMatch` took the bar (see
+    /// ``documentsScrollTo(_:_:flicks:big:)``). Smallest `minY` wins, which
+    /// stays right however many scroll views the screen grows, as long as the
+    /// bar is the bottom-most thing in the window — and it is, by
+    /// construction.
+    ///
+    /// `nil` means the screen has no scroll view at all, which is a different
+    /// thing from "it did not scroll" and the caller treats it differently.
     @MainActor
-    func documentsTap(_ app: XCUIApplication, _ row: String) -> Bool {
+    func documentsFolderScroll(_ app: XCUIApplication) -> XCUIElement? {
+        let all = app.scrollViews
+        var highest: XCUIElement?
+        var highestY = CGFloat.greatestFiniteMagnitude
+        for index in 0..<all.count {
+            let candidate = all.element(boundBy: index)
+            guard candidate.exists else { continue }
+            let top = candidate.frame.minY
+            if top < highestY {
+                highestY = top
+                highest = candidate
+            }
+        }
+        return highest
+    }
+
+    /// Open one Documents row, scrolling to it first.
+    ///
+    /// `big` is passed on to ``documentsScrollTo(_:_:flicks:big:)`` rather
+    /// than read from anywhere: an extension has no stored state, and a case
+    /// that launched at AX5 is the only thing that knows it did.
+    @MainActor
+    func documentsTap(_ app: XCUIApplication, _ row: String, big: Bool = false) -> Bool {
         let button = app.buttons[row].firstMatch
-        guard documentsScrollTo(app, button) else { return false }
+        guard documentsScrollTo(app, button, big: big) else { return false }
         button.tap()
         return true
     }
@@ -472,9 +592,34 @@ extension StubHouseUITests {
 
     /// Apple's own audit over both editors, classified by signature.
     ///
-    /// `rest` must be empty: an anonymous Dynamic Type headline is the
-    /// measured floor (``floorAndRest(_:)``), anything Apple can attribute to
-    /// an element is a defect.
+    /// `rest` must be empty, with one carve-out this case **measures itself**
+    /// rather than assumes.
+    ///
+    /// ### What train S008 found, and what is a defect in it
+    ///
+    /// Four attributable findings, all on the text editor:
+    ///
+    /// ```
+    /// Contrast failed                           label='save'
+    /// Dynamic Type … partially unsupported      label='close'
+    /// Dynamic Type … partially unsupported      label='save'
+    /// Dynamic Type … partially unsupported      label='text'
+    /// ```
+    ///
+    /// The contrast one is **real and visible in the screenshot**: `save` was
+    /// a `.disabled()` bar button, drawn in the system's light grey on a
+    /// white bar. It is fixed in the app (``DocumentsEditorBarLabel``), and
+    /// nothing here excuses a contrast finding.
+    ///
+    /// The three Dynamic Type ones are the third time on this track a *named*
+    /// Dynamic Type finding has appeared on elements with no fixed point size
+    /// anywhere near them — ``knownScalingFalsePositive`` is the second, and
+    /// the rule that came out of both is: measure the element before
+    /// believing the headline. So this case measures them, at
+    /// ``ordinaryTypeSize`` and at AX5, and excuses a Dynamic Type finding
+    /// **only** for a label it has just watched grow. A label that does not
+    /// grow fails with its two numbers printed, which is what a real defect
+    /// looks like.
     @MainActor
     func testDocuments_EditorAudit() throws {
         guard let app = documentsOpen() else { return }
@@ -482,14 +627,106 @@ extension StubHouseUITests {
         XCTAssertTrue(documentsBody(app).waitForExistence(timeout: 20), "the text editor never opened")
         evidence(app, "documents-19-audit-text")
         let text = Self.floorAndRest(try auditIssues(app, "documents-text-editor"))
-        XCTAssertEqual([], text.rest, "the text editor has attributable audit findings")
         app.buttons["close"].firstMatch.tap()
 
         XCTAssertTrue(documentsTap(app, "a spreadsheet.xlsx"), "the spreadsheet's row never built")
         XCTAssertTrue(app.textFields["A1"].waitForExistence(timeout: 20), "the grid never drew")
         evidence(app, "documents-20-audit-sheet")
         let sheet = Self.floorAndRest(try auditIssues(app, "documents-sheet-editor"))
-        XCTAssertEqual([], sheet.rest, "the sheet editor has attributable audit findings")
+        // **Both audits first, then the assertions.** `continueAfterFailure`
+        // is false for this suite, so the text editor's four findings ended
+        // train S008's case before the sheet editor was audited at all — and
+        // the two bars were identical, so the sheet carried the same contrast
+        // defect unreported for a round.
+        app.terminate()
+
+        let grew = documentsScalingGrew()
+        XCTAssertEqual(
+            [], documentsUnexcused(text.rest, grew: grew),
+            "the text editor has attributable audit findings"
+        )
+        XCTAssertEqual(
+            [], documentsUnexcused(sheet.rest, grew: grew),
+            "the sheet editor has attributable audit findings"
+        )
+    }
+
+    /// The editor chrome's three leaves, measured at both type sizes; the
+    /// ones that **grew** come back.
+    ///
+    /// Measured on `notes.md`, which ``documentsOpen(_:blocked:)`` already
+    /// waits for and scrolls to, and not on `shopping list.txt`: at AX5 the
+    /// folder scrolls inside a 178-point window past a 383-point header, so
+    /// the eleventh row is a 2 400-point haul this measurement does not need
+    /// to make. The pill that comes back says `markdown` there and `text` in
+    /// the audited editor — **the same ``DocumentsEditorPill``, the same
+    /// `.caption2`, the same place on the bar**, one word apart. Mapping the
+    /// finding by view rather than by word is the only shortcut here, and a
+    /// pill that could not scale would fail this measurement just the same.
+    @MainActor
+    func documentsScalingGrew() -> Set<String> {
+        let leaves = ["close", "save", DocumentsPillWord.markdown]
+        var ordinary: [String: CGFloat] = [:]
+        var grew: Set<String> = []
+        for mode in [Self.ordinaryTypeSize, "UICTContentSizeCategoryAccessibilityXXXL"] {
+            let big = Self.documentsIsBig(mode)
+            guard let app = documentsOpen(mode) else { return grew }
+            guard documentsTap(app, "notes.md", big: big) else { return grew }
+            guard documentsBody(app).waitForExistence(timeout: 25) else {
+                print("=== NO EDITOR AT \(mode) — tree follows ===")
+                print(app.debugDescription)
+                return grew
+            }
+            for leaf in leaves {
+                let found = documentsLeaf(app, leaf)
+                let height = found.exists ? found.frame.height : 0
+                if big {
+                    let was = ordinary[leaf] ?? 0
+                    print("SCALE \(leaf) \(was) -> \(height)")
+                    if height > was, was > 0 { grew.insert(leaf) }
+                } else {
+                    ordinary[leaf] = height
+                }
+            }
+            app.terminate()
+        }
+        return grew
+    }
+
+    /// One leaf of the editor's chrome by its word: `close` and `save` are
+    /// buttons, the pill is a bare static text.
+    @MainActor
+    func documentsLeaf(_ app: XCUIApplication, _ label: String) -> XCUIElement {
+        let button = app.buttons[label].firstMatch
+        return button.exists ? button : app.staticTexts[label].firstMatch
+    }
+
+    /// The findings a measurement does **not** excuse.
+    ///
+    /// Only "Dynamic Type …" is ever excused, and only for a label in
+    /// `grew`; the pill is mapped by view, so the audited editor's `text`
+    /// rides on the measured `markdown`. Everything else — a contrast
+    /// finding, a clipped text, a hit area, a Dynamic Type finding on a leaf
+    /// nobody measured — comes straight back.
+    func documentsUnexcused(_ found: [String], grew: Set<String>) -> [String] {
+        let pillWords = [DocumentsPillWord.text, DocumentsPillWord.markdown, DocumentsPillWord.sheet]
+        let pillMeasured = grew.contains(DocumentsPillWord.markdown)
+        return found.filter { line in
+            guard line.hasPrefix("Dynamic Type font sizes") else { return true }
+            if pillWords.contains(where: { line.contains("label='\($0)'") }) {
+                return !pillMeasured
+            }
+            return !grew.contains { line.contains("label='\($0)'") }
+        }
+    }
+
+    /// The three pill words, spelled here rather than imported: this target
+    /// does not link `DomovoiKit`, and a test that read the app's own
+    /// constant could not tell a renamed pill from a missing one.
+    enum DocumentsPillWord {
+        static let text = "text"
+        static let markdown = "markdown"
+        static let sheet = "sheet"
     }
 
     /// A cell grows with the type size.
@@ -501,8 +738,9 @@ extension StubHouseUITests {
     @MainActor
     func testDocuments_TheGridGrowsAtAccessibilitySizes() throws {
         func height(_ mode: String, _ name: String) -> CGFloat {
+            let big = Self.documentsIsBig(mode)
             guard let app = documentsOpen(mode) else { return 0 }
-            guard documentsTap(app, "a spreadsheet.xlsx") else { return 0 }
+            guard documentsTap(app, "a spreadsheet.xlsx", big: big) else { return 0 }
             let a1 = app.textFields["A1"]
             guard a1.waitForExistence(timeout: 25) else {
                 print("=== NO GRID AT \(mode) — tree follows ===")

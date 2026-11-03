@@ -53,10 +53,6 @@ struct PhonePickToSendView: View {
                     // `maxSelectionCount:` only exists on the array overload,
                     // so asking for both does not compile.
                     PhotosPicker(
-                        // `maxSelectionCount:` belongs to the MULTIPLE-selection
-                        // initialiser, which binds `[PhotosPickerItem]`; with a
-                        // single optional binding there is no count to cap, and
-                        // naming it made the compiler pick the array overload.
                         selection: $picked,
                         matching: .any(of: [.images, .videos])
                     ) {
