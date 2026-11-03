@@ -159,7 +159,18 @@ struct PhoneDeviceVideosView: View {
                     item: item,
                     posters: device.posters,
                     uploads: device.uploads,
-                    onPlay: { playing = item }
+                    // **A folder tile enters the folder; it does not play.**
+                    // Android's grid is `MediaStore.Video`, which is flat and
+                    // has no folders in it at all
+                    // (`LocalMediaScreens.kt:294`); a picked folder can have
+                    // sub-folders, and ``PhoneMemorySource``/``PhoneFolderSource``
+                    // keep them in a kind-narrowed page on purpose — hiding
+                    // them would hide the way down to the videos inside. A
+                    // play badge over one would be the misleading control the
+                    // owner's rule forbids.
+                    onOpen: item.isDir
+                        ? { device.list.enter(item) }
+                        : { playing = item }
                 )
                 .onAppear {
                     // The grid threshold, not the list one: a grid builds
@@ -186,11 +197,14 @@ struct PhoneVideoTile: View {
     let item: PhoneMediaItem
     let posters: PhonePosterStore
     let uploads: PhoneUploadModel?
-    let onPlay: () -> Void
+
+    /// Play a video, or walk into a folder — the caller decides which, and
+    /// the tile draws itself to match.
+    let onOpen: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Button(action: onPlay) {
+            Button(action: onOpen) {
                 Rectangle()
                     // Opaque, never a material: a contrast audit cannot read
                     // a colour that is whatever happens to be behind it, and
@@ -212,7 +226,7 @@ struct PhoneVideoTile: View {
             // The video, not the word `play`: VoiceOver reads a grid of forty
             // of these, and forty rows saying "play" name nothing.
             .accessibilityLabel(item.name)
-            .accessibilityHint(VideoStrings.play)
+            .accessibilityHint(item.isDir ? FileStrings.folder : VideoStrings.play)
 
             HStack(alignment: .top, spacing: 6) {
                 VStack(alignment: .leading, spacing: 2) {
@@ -227,7 +241,7 @@ struct PhoneVideoTile: View {
                     }
                 }
                 Spacer(minLength: 2)
-                if let uploads {
+                if let uploads, !item.isDir {
                     if uploads.offersUpload(item) {
                         PhoneUploadRowButton(
                             state: uploads.state(for: PhoneUploadKey.of(item, uploads.kind)),
@@ -255,7 +269,12 @@ struct PhoneVideoTile: View {
     }
 
     @ViewBuilder private var frame: some View {
-        if let assetID, let image = posters.poster(assetID) {
+        if item.isDir {
+            Image(systemName: "folder.fill")
+                .font(.system(size: 26))
+                .foregroundStyle(Color.fgMuted)
+                .accessibilityHidden(true)
+        } else if let assetID, let image = posters.poster(assetID) {
             Image(uiImage: image)
                 .resizable()
                 .aspectRatio(contentMode: .fill)
@@ -267,7 +286,15 @@ struct PhoneVideoTile: View {
         }
     }
 
-    private var badge: some View {
+    /// The play circle — **not drawn on a folder**, which gets the folder
+    /// glyph as its whole face instead.
+    @ViewBuilder private var badge: some View {
+        if !item.isDir {
+            playBadge
+        }
+    }
+
+    private var playBadge: some View {
         Image(systemName: "play.fill")
             .font(.system(size: 18, weight: .semibold))
             .foregroundStyle(Color.brandFg)
