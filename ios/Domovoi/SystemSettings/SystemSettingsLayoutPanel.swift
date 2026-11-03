@@ -284,7 +284,28 @@ struct SystemSettingsLayoutPanel: View {
             }
             .frame(minHeight: 44)
         }
-        .buttonStyle(.bordered)
+        // ``SystemSettingsSpareButtonStyle`` and not `.bordered`.
+        //
+        // Android draws these as an `OutlinedButton` (`PhoneBarPanel.kt:125`):
+        // a border, and the label on the card behind it. SwiftUI's `.bordered`
+        // is a different thing — it *fills* with a wash of the tint — and the
+        // port took it for the nearest shape without measuring what it does to
+        // the two colours.
+        //
+        // Measured on train S005's own screenshot: the wash is `rgb(228, 217,
+        // 201)` and the label is ``Color/brandInk``, `rgb(151, 88, 0)`, which
+        // is **4.01:1**. Body text needs 4.5:1. The same ink on the card
+        // behind it is **5.19:1** — the three chevrons in the row above are
+        // that pair and Apple's audit passes them.
+        //
+        // The audit had not named it yet only because these buttons sit at the
+        // foot of a card taller than the viewport, so the scroll view cuts
+        // them to a 21-point sliver of flat fill with no glyph in it — and a
+        // slab of one colour is what the one anonymous `Contrast failed` on
+        // that train was: `1.00:1`, measured. An outline leaves the card's own
+        // colour showing through the sliver instead, so the same cut reads as
+        // the card. Both findings are the one call.
+        .buttonStyle(SystemSettingsSpareButtonStyle())
         // Android's own `contentDescription` on the glyph
         // (`PhoneBarPanel.kt:131`), which is the whole button's label here:
         // the visible text is only the route's name, and "Files" alone does
@@ -481,5 +502,48 @@ private struct SystemSettingsLayoutButtonLabel: View {
         configuration.label
             .foregroundStyle(isEnabled ? Color.brandInk : Color.fgMuted)
             .opacity(configuration.isPressed ? 0.55 : 1)
+    }
+}
+
+/// Android's `OutlinedButton` (`PhoneBarPanel.kt:125`): a stroked pill with
+/// **no fill**, so the label is read against the card and not against a wash
+/// of itself.
+///
+/// See the call site for the measurement that moved it off `.bordered`. The
+/// disabled state is drawn here for ``SystemSettingsLayoutButtonStyle``'s
+/// reason — the platform fades a disabled control past what the call site
+/// asked for — and it is ``Color/fgMuted``, 6.81:1 on this card, which is the
+/// pair the four bar indexes already use.
+private struct SystemSettingsSpareButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        SystemSettingsSpareButtonLabel(configuration: configuration)
+    }
+}
+
+private struct SystemSettingsSpareButtonLabel: View {
+
+    let configuration: ButtonStyleConfiguration
+
+    @Environment(\.isEnabled) private var isEnabled
+
+    /// The pill's horizontal padding, scaled: at an accessibility size the
+    /// label is much wider and a fixed inset makes the chip look pinched.
+    @ScaledMetric private var sidePadding: CGFloat = 14
+
+    private var ink: Color { isEnabled ? Color.brandInk : Color.fgMuted }
+
+    var body: some View {
+        configuration.label
+            .padding(.horizontal, sidePadding)
+            .foregroundStyle(ink)
+            .background {
+                // The press state is the fill, which exists only while a
+                // finger is down — the one moment there is no text to read on
+                // it, so it is the one place a wash of the ink is safe.
+                Capsule().fill(ink.opacity(configuration.isPressed ? 0.18 : 0))
+            }
+            .overlay { Capsule().stroke(ink, lineWidth: 1) }
+            // The pill is the target, not the glyph and the word inside it.
+            .contentShape(Capsule())
     }
 }
