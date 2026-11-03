@@ -44,11 +44,33 @@ public struct DocumentsSheetGrid: Equatable, Sendable, Decodable {
     public let maxRows: Int
     public let maxCols: Int
 
-    public init(relPath: String = "", rows: [[DocumentsSheetCell?]] = [], maxRows: Int = 1000, maxCols: Int = 60) {
+    /// Whether the body actually **carried** a `rows` key.
+    ///
+    /// `rows` decodes to `[]` both for `{"rows": []}` — a sheet `+ New` has
+    /// just made, which must open — and for a 200 that is not this route's
+    /// answer at all: a captive portal's JSON, an older server on the
+    /// address, a renamed key. Told apart by `?? []` they are the same thing,
+    /// and the second one opens a file that still has content as a blank
+    /// grid; one keystroke then PUTs eight rows of blanks, which
+    /// `_write_xlsx_grid` diffs cell by cell and so empties the window.
+    /// ``DocumentsEditorModel/body(_:for:)`` refuses exactly this body for
+    /// exactly this reason — the sheet half had no equivalent guard.
+    ///
+    /// True in the memberwise init, so `+ New`'s empty grid still opens.
+    public let hadRows: Bool
+
+    public init(
+        relPath: String = "",
+        rows: [[DocumentsSheetCell?]] = [],
+        maxRows: Int = 1000,
+        maxCols: Int = 60,
+        hadRows: Bool = true
+    ) {
         self.relPath = relPath
         self.rows = rows
         self.maxRows = maxRows
         self.maxCols = maxCols
+        self.hadRows = hadRows
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -60,14 +82,19 @@ public struct DocumentsSheetGrid: Equatable, Sendable, Decodable {
 
     public init(from decoder: any Decoder) throws {
         guard let values = try? decoder.container(keyedBy: CodingKeys.self) else {
-            self.init()
+            // Not even a JSON object — an array, a string, a number. There
+            // was no `rows` key to find.
+            self.init(hadRows: false)
             return
         }
         self.init(
             relPath: try values.decodeIfPresent(String.self, forKey: .relPath) ?? "",
             rows: try values.decodeIfPresent([[DocumentsSheetCell?]].self, forKey: .rows) ?? [],
             maxRows: try values.decodeIfPresent(Int.self, forKey: .maxRows) ?? 1000,
-            maxCols: try values.decodeIfPresent(Int.self, forKey: .maxCols) ?? 60
+            maxCols: try values.decodeIfPresent(Int.self, forKey: .maxCols) ?? 60,
+            // `contains`, not `rows.isEmpty`: the two bodies this tells apart
+            // both leave `rows` empty. See ``hadRows``.
+            hadRows: values.contains(.rows)
         )
     }
 
@@ -157,16 +184,22 @@ public final class DocumentsSheetModel {
 
     private let deviceID: String?
     private let send: @Sendable (String, String, Data?) async throws -> Data
-    private var epoch = 0
 
     /// How many grids this model has been handed.
     ///
-    /// A save and a read can be in flight at once — Files reloads the folder,
-    /// or somebody else's save landed and the person pulled the sheet again —
-    /// and when the read wins the race the grid on screen is **newer** than
-    /// the one that was sent. Marking the newer grid "as saved" then would
-    /// make an edit that is still unsent look saved. The save still says
-    /// `saved`, because it did save; it just does not touch the baseline.
+    /// A save and a read can be in flight at once — the retry link calls
+    /// ``read()`` again — and when the read wins the race the grid on screen
+    /// is **newer** than the one that was sent. Marking the newer grid "as
+    /// saved" then would make an edit that is still unsent look saved. The
+    /// save still says `saved`, because it did save; it just does not touch
+    /// the baseline.
+    ///
+    /// There is deliberately **no file epoch beside it**: one model is built
+    /// per presentation of ``DocumentsSheetEditorView`` and `entry` never
+    /// changes under it, so a guard keyed on "which file" would be a seam
+    /// with no caller — the defect class [[reasoning-that-hides-a-bug]]
+    /// records, and what this model shipped with. See
+    /// `overnight/documents/DECISIONS.md`.
     private var generation = 0
 
     public init(
@@ -248,14 +281,21 @@ public final class DocumentsSheetModel {
 
     public func read() {
         load = .loading
-        let mine = epoch
         let path = DocumentsPath.sheet(rel: entry.rel)
         let call = send
         Task { @MainActor [weak self] in
             do {
                 let body = try await call("GET", path, nil)
-                guard let self, mine == self.epoch else { return }
+                guard let self else { return }
                 guard let read = try? DomovoiClient.decode(body, as: DocumentsSheetGrid.self) else {
+                    self.load = .failed(DocumentsStrings.couldNotLoad(DocumentsEditorModel.notDomovoi))
+                    return
+                }
+                // A 200 with no `rows` key is **not an empty sheet** — see
+                // ``DocumentsSheetGrid/hadRows``. Opened as one, it shows a
+                // blank grid for a file that still has content, and the first
+                // keystroke saves the blankness back over it.
+                guard read.hadRows else {
                     self.load = .failed(DocumentsStrings.couldNotLoad(DocumentsEditorModel.notDomovoi))
                     return
                 }
@@ -267,7 +307,7 @@ public final class DocumentsSheetModel {
                 self.generation += 1
                 self.load = .ready
             } catch {
-                guard let self, mine == self.epoch else { return }
+                guard let self else { return }
                 // A 415 is the server's **answer**: this sheet type is not
                 // one it round-trips (`_assert_sheet_editor_may_write`).
                 // Android treats its own `SheetUnsupported` and a 415 the
@@ -295,10 +335,9 @@ public final class DocumentsSheetModel {
         guard canSave else { return }
         saving = true
         saveFailure = nil
-        let mine = epoch
-        // The grid, the path and the rows are all taken BEFORE the await: a
-        // save that lands after this model moved on must not mark another
-        // file's grid saved ([[read-after-await-wrong-key]]).
+        // The grid is taken BEFORE the await, with the baseline it was read
+        // at: a read that lands first makes what is on screen newer than what
+        // was sent, and only the sent grid may become the baseline.
         let sent = grid
         let base = generation
         let path = DocumentsPath.sheet(rel: entry.rel)
@@ -307,7 +346,7 @@ public final class DocumentsSheetModel {
         Task { @MainActor [weak self] in
             do {
                 _ = try await call("PUT", path, body)
-                guard let self, mine == self.epoch else { return }
+                guard let self else { return }
                 self.saving = false
                 // Only when nothing newer has been read since: see
                 // ``generation``.
@@ -315,7 +354,7 @@ public final class DocumentsSheetModel {
                 self.toast = DocumentsStrings.saved
                 self.onSaved?()
             } catch {
-                guard let self, mine == self.epoch else { return }
+                guard let self else { return }
                 self.saving = false
                 // 413 (a row past the column cap), 409 (an `.xlsx` holding
                 // charts or pivots, which the server will not strip) and 415

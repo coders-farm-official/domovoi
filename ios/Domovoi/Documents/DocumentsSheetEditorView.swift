@@ -200,32 +200,15 @@ struct DocumentsSheetEditorView: View {
                     .font(.caption)
                     .foregroundStyle(Color.fgMuted)
                     .frame(minHeight: 28)
-                    .frame(width: DocumentsSheetMetrics.cell(for: dynamicTypeSize))
+                    .frame(width: cellWidth)
             }
         }
     }
 
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-}
-
-/// How wide a cell and its gutter are.
-///
-/// A column has to have **some** width — a spreadsheet without aligned
-/// columns is not one — so this is the one place in the item with a figure in
-/// it, and the figure grows with the type size rather than being fixed. The
-/// cell's **height** is never set: it is `minHeight: 44` and the text inside
-/// decides the rest, which is what
-/// `testDocuments_TheGridGrowsAtAccessibilitySizes` measures.
-enum DocumentsSheetMetrics {
-    /// `110.dp` for a cell and `34.dp` for the gutter (`SheetEditor.kt:179`,
-    /// `:190`), scaled by roughly what the type size does to a line of text.
-    static func cell(for size: DynamicTypeSize) -> CGFloat {
-        size.isAccessibilitySize ? 180 : 110
-    }
-
-    static func gutter(for size: DynamicTypeSize) -> CGFloat {
-        size.isAccessibilitySize ? 56 : 34
-    }
+    /// The same metric the cells use, and it has to be the same: column
+    /// letters that scaled differently from the columns would stop sitting
+    /// over them. See ``DocumentsSheetCellField/cellWidth``.
+    @ScaledMetric(relativeTo: .footnote) private var cellWidth: CGFloat = 110
 }
 
 /// The row-number column on the left.
@@ -233,13 +216,16 @@ struct DocumentsSheetGutterCell: View {
 
     let label: String
 
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    /// `34.dp` (`SheetEditor.kt:190`), scaled. See
+    /// ``DocumentsSheetCellField/cellWidth`` for why this is a
+    /// `@ScaledMetric` and not a jump at the accessibility sizes.
+    @ScaledMetric(relativeTo: .caption) private var gutterWidth: CGFloat = 34
 
     var body: some View {
         Text(label)
             .font(.caption)
             .foregroundStyle(Color.fgMuted)
-            .frame(width: DocumentsSheetMetrics.gutter(for: dynamicTypeSize))
+            .frame(width: gutterWidth)
             .frame(minHeight: 28)
             // The number is already announced as part of each cell's address
             // (`B12`), so a reader that stopped on every gutter cell would
@@ -275,7 +261,20 @@ struct DocumentsSheetCellField: View {
     let row: Int
     let column: Int
 
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    /// `110.dp` (`SheetEditor.kt:179`), **scaled continuously**.
+    ///
+    /// A column has to have some width — a spreadsheet without aligned
+    /// columns is not one — so this is the one figure in the item, and it is
+    /// the one place a `frame(width:)` is set. It was a two-step jump on
+    /// `isAccessibilitySize`, which meant that from `.large` to `.xxxLarge` —
+    /// ordinary sizes, none of them accessibility sizes — the `.footnote`
+    /// text inside grew by about a third while the cell stayed 110pt, so
+    /// contents truncated and four-digit row numbers clipped in the gutter
+    /// (NIGHT-RULES §3). The header's own cells and
+    /// ``DocumentsSheetGutterCell`` carry the same two metrics, and the
+    /// header must: column letters that stopped scaling with the columns
+    /// would stop sitting over them.
+    @ScaledMetric(relativeTo: .footnote) private var cellWidth: CGFloat = 110
 
     var body: some View {
         TextField(
@@ -292,7 +291,7 @@ struct DocumentsSheetCellField: View {
         .padding(.horizontal, 6)
         // Width is set, height is not: `minHeight` is the floor and the
         // text decides the rest, so a cell grows with the type size.
-        .frame(width: DocumentsSheetMetrics.cell(for: dynamicTypeSize))
+        .frame(width: cellWidth)
         .frame(minHeight: 44)
         .overlay(
             Rectangle()

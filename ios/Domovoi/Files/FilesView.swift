@@ -187,7 +187,20 @@ struct FilesView: View {
         .onChange(of: newDoc?.created) { _, made in
             guard let made, let files else { return }
             files.entries.reload(fresh: true)
-            editing = DocumentsEditorCover(for: made, in: files.selectedID)
+            // "Exactly as tapping its row would" means the row's own tap when
+            // there is no editor for it. `+ New -> Spreadsheet` keeps an
+            // extension already in `_SHEET_EXTS` (`documents.py:779`), so a
+            // name typed as `Budget.xls` really creates `Budget.xls` — whose
+            // category is `download`, so the cover is nil. Setting `editing`
+            // to nil there closed the prompt and did nothing at all. The
+            // fallback is ``FilesModel/tapped(_:)``, which is what
+            // ``FileRowView/tap()`` reaches for the same file: for a `.xls`,
+            // the save sheet.
+            if let cover = DocumentsEditorCover(for: made, in: files.selectedID) {
+                editing = cover
+            } else {
+                files.tapped(made)
+            }
             newDoc?.opened()
         }
     }

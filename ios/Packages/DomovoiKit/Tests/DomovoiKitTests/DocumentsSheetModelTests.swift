@@ -85,10 +85,30 @@ final class DocumentsSheetModelTests: XCTestCase {
         XCTAssertEqual(8, wide.padded.count)
     }
 
-    func testAnEmptyAnswerIsStillAGridToTypeIn() {
-        let empty = DocumentsSheetGrid()
+    /// `{"rows": []}` — what a sheet `+ New` has just made answers with — is
+    /// still a grid to type in, and `hadRows` says it really was one.
+    func testAnEmptyAnswerIsStillAGridToTypeIn() throws {
+        let empty = try JSONDecoder().decode(
+            DocumentsSheetGrid.self, from: Data(#"{"rel_path":"new.csv","rows":[]}"#.utf8)
+        )
+        XCTAssertTrue(empty.hadRows)
         XCTAssertEqual(8, empty.padded.count)
         XCTAssertEqual(4, empty.padded[0].count)
+        // The memberwise init is `+ New`'s own empty grid: also a real one.
+        XCTAssertTrue(DocumentsSheetGrid().hadRows)
+    }
+
+    /// A 200 that is **not this route's answer** — a proxy page that happens
+    /// to be JSON, an older server, a renamed key — carries no `rows` at all,
+    /// and `?? []` cannot tell it from `{"rows": []}`.
+    func testABodyWithNoRowsKeyIsNotAnEmptySheet() throws {
+        let other = try JSONDecoder().decode(
+            DocumentsSheetGrid.self, from: Data(#"{"status":"ok","message":"hello"}"#.utf8)
+        )
+        XCTAssertFalse(other.hadRows)
+        // Not an object at all: there was no key to find either.
+        let array = try JSONDecoder().decode(DocumentsSheetGrid.self, from: Data("[]".utf8))
+        XCTAssertFalse(array.hadRows)
     }
 
     // MARK: - column names
@@ -112,6 +132,39 @@ final class DocumentsSheetModelTests: XCTestCase {
     }
 
     // MARK: - the model
+
+    /// The harm the guard is for: shown as an empty, **saveable** sheet, one
+    /// keystroke PUTs eight rows of blanks and the server's diff clears every
+    /// cell in the window. So the grid is never offered — the model fails, as
+    /// ``DocumentsEditorModel/body(_:for:)`` already did for the text half.
+    func testASheetReadThatIsNotThisRoutesAnswerFails() async throws {
+        let calls = Calls()
+        let model = sheet(calls: calls) { _, _ in Data(#"{"status":"ok"}"#.utf8) }
+        model.read()
+        await settleUntil({ model.load != .loading }, "the refusal")
+        XCTAssertEqual(
+            DocumentsSheetLoad.failed(DocumentsStrings.couldNotLoad(DocumentsEditorModel.notDomovoi)),
+            model.load
+        )
+        // Nothing to type into and nothing to save back.
+        XCTAssertTrue(model.grid.isEmpty)
+        XCTAssertFalse(model.canSave)
+        XCTAssertFalse(model.offersSave)
+    }
+
+    /// And the sheet `+ New` just made still opens.
+    func testASheetWithAnEmptyRowsArrayOpens() async throws {
+        let calls = Calls()
+        let model = sheet("new.csv", calls: calls) { _, _ in
+            Data(#"{"rel_path":"new.csv","rows":[],"max_rows":1000,"max_cols":60}"#.utf8)
+        }
+        model.read()
+        await settleUntil({ model.load == .ready }, "the new sheet")
+        XCTAssertEqual(8, model.grid.count)
+        XCTAssertEqual(4, model.columns)
+        model.setCell(row: 0, column: 0, to: "Item")
+        XCTAssertTrue(model.canSave)
+    }
 
     private struct Calls: Sendable {
         let lines = Shared<[String]>([])
