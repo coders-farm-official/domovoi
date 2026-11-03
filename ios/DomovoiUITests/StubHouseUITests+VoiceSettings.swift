@@ -695,6 +695,48 @@ extension StubHouseUITests {
     /// ``StubHouseUITests/testTheVideosGridAudits``, which set aside a row the
     /// grid's bottom edge cut in half — widened because at AX5 an element can
     /// miss the viewport entirely rather than straddle it.
+    ///
+    /// ### The three findings of the first full-class run, and what the
+    /// picture showed that the tree did not
+    ///
+    /// Run I001 failed the `large` half on three `Contrast failed`, each
+    /// naming a shell-header element: `unverified` at `(299, 69.5, 52, 13.3)`,
+    /// `  live` at `(351, 69, 26, 14.3)` and `127.0.0.1:6601` at
+    /// `(203.3, 69, 79.7, 14.3)`. None of the three is this section's — they
+    /// are `ShellChromeViews.swift`'s pill row, above the navigation bar at
+    /// `y = 93.3` and so outside this screen's viewport entirely — and the
+    /// floor was exactly the `knownPushedBarFloor` of 8, so the Voices
+    /// section itself gave the audit nothing to say. **This case is not
+    /// changed for them.**
+    ///
+    /// Their colours are not what they are about either, and the evidence is
+    /// `127.0.0.1:6601`: it carries no `foregroundStyle` at all, so it is the
+    /// primary label colour on a `.quaternary` capsule — near-black on light
+    /// grey, which cannot fail a contrast reading. `  live` is `fgMuted` on
+    /// the canvas it was measured against, which the project has passing.
+    /// Three elements in three colours, all failing hard, all inside one
+    /// 15-point band: that is one reading taken of something that is not
+    /// them.
+    ///
+    /// The screenshot says what: a SpringBoard notification banner —
+    /// `AlertsStrings.incidentTamperTitle`, "Signs of tampering" — covering
+    /// the screen from `y ≈ 43` to `y ≈ 103`, over all three. It is in the
+    /// evidence of every audit from `testAlerts_WhenAlertsAreOnALedgerFireIsDelivered`
+    /// (10:18) onward — Home's at 11:42, About's at 12:57, this one's at
+    /// 13:09 — and it reads `now` in each, so it is re-posted on launch, not
+    /// one banner lingering. Notification authorisation is a fact about the
+    /// install, so once that case grants it every later launch in the run
+    /// redelivers the seeded incident of `fixtures/health.py` and every later
+    /// audit reads the header through the banner.
+    ///
+    /// Dismissing it belongs in `StubHouseUITests.swift`'s own launch, not
+    /// here: six cases across five units are reading through the same banner,
+    /// and a private copy in this file would mend one of them. It is written
+    /// up in `overnight/voicesettings/DECISIONS.md` under "Needs a shared
+    /// change". What this case must keep doing meanwhile is report it, which
+    /// is why nothing below is relaxed: a finding that names an element is a
+    /// defect until a **measurement** says otherwise, and the measurement
+    /// here says the defect is the banner rather than the ink.
     @MainActor
     func testVoiceSettings_Audit() throws {
         let ax5 = "UICTContentSizeCategoryAccessibilityXXXL"
