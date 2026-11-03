@@ -72,6 +72,17 @@ public enum ImagesStrings {
     /// `ImagesScreen.kt:353`, the cancel button's only label.
     public static let cancel = "cancel"
 
+    /// The **dialog's** dismiss button — `ui/components/Dialogs.kt:41`, where
+    /// every `ConfirmDialog` in the Android app gets the word.
+    ///
+    /// The same word as ``cancel`` and deliberately a second constant: one of
+    /// them is "stop making this picture" and the other is "don't delete
+    /// anything", they come from two different Kotlin files, and either could
+    /// be reworded without the other. Every other screen in this app keeps
+    /// its own (``ChatStrings/renameCancel``, ``MusicStrings/cancel``,
+    /// ``ShellStrings/trustCancel``), which is the shape being followed.
+    public static let dialogCancel = "cancel"
+
     /// **iOS-only.** Android's cancel is `runCatching { … }` with no
     /// `onFailure` (`ImagesScreen.kt:350`): a cancel that fails says nothing
     /// at all and the row stays where it was, which on this screen reads as a
@@ -137,6 +148,18 @@ public enum ImagesStrings {
     /// exactly this, one screen over (`FileViewers.swift:191`), and a second
     /// voice for one failure is how two screens come to disagree.
     public static let couldNotShowPicture = FileStrings.notAPicture
+
+    /// **iOS-only.** The picture decoded and the phone could not write the
+    /// copy an activity sheet reads from. Android never reaches this: it
+    /// writes into a `FileProvider` cache and reports the *whole* open
+    /// through one toast (`ServerFileTransfer.kt:84`), so a write failure and
+    /// a "no app opens this" are one sentence there. IOS-ONLY-STRINGS §7.
+    ///
+    /// No detail interpolated, and deliberately: the failure is inside this
+    /// app's own container, so there is no server message to pass on and
+    /// `NSError`'s own wording for a full disk is not a sentence to show
+    /// somebody.
+    public static let couldNotHandOverPicture = "couldn't get this picture ready to share"
 
     /// Also reused — ``FileStrings/close`` and ``FileStrings/retry``, named
     /// here so the next reader does not go looking for a new one.
