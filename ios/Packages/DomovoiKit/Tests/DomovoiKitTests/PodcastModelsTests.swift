@@ -220,6 +220,65 @@ final class PodcastModelsTests: XCTestCase {
         XCTAssertEqual(2, bareEpisodes.items.count)
     }
 
+    // MARK: - what the views stage added
+
+    /// What a card reads out after its name.
+    ///
+    /// A card is one accessibility element with a label of its own, which
+    /// **replaces** whatever its children would have read — so the author is
+    /// said in the value or it is not said at all. Pinned here because that
+    /// is invisible in the view and invisible to Apple's audit: a card with
+    /// no author in its value audits clean and tells a VoiceOver user
+    /// nothing about who makes the show.
+    func testACardSaysItsAuthorAndItsCountsToVoiceOver() {
+        let show = PodcastShow(
+            id: 7, title: "The Kitchen Table", author: "Marisa Whitlock",
+            episodeCount: 57, downloadedCount: 9
+        )
+        XCTAssertEqual("Marisa Whitlock · 9/57 downloaded", show.spokenDetail)
+        // The counts in the server's order, which a swap would read `57/9`.
+        XCTAssertEqual("9/57 downloaded", show.downloadedLine)
+
+        // A show the feed named nobody for says the counts alone — never
+        // `nil ·` or a stray separator.
+        let anonymous = PodcastShow(id: 8, title: "Untitled", episodeCount: 3)
+        XCTAssertEqual("0/3 downloaded", anonymous.spokenDetail)
+        // Whitespace is not an author (``displayTitle``'s judgement, applied
+        // to the same field).
+        let blank = PodcastShow(id: 9, title: "Blank", author: "   ", episodeCount: 1)
+        XCTAssertEqual("0/1 downloaded", blank.spokenDetail)
+    }
+
+    /// Which row the episodes list colours.
+    ///
+    /// ``PodcastEpisode/metaLine`` shows a `download_status` only when there
+    /// is **no file**, so `downloadFailed` has to agree with it: a row that
+    /// has the audio must not be coloured by a stale word left over from an
+    /// earlier attempt, which is a row the server really can send
+    /// (`download_status` is not cleared on a later success for a different
+    /// episode, and a reader comparing the two fields would see them
+    /// disagree).
+    func testOnlyARowWithNoFileCountsAsAFailedDownload() {
+        let failed = PodcastEpisode(
+            id: 1, title: "Burnt ends", durationSec: 1800, hasFile: false,
+            downloadStatus: "failed"
+        )
+        XCTAssertTrue(failed.downloadFailed)
+        XCTAssertEqual("30:00 · failed", failed.metaLine)
+
+        let pending = PodcastEpisode(id: 2, hasFile: false, downloadStatus: "pending")
+        XCTAssertFalse(pending.downloadFailed, "pending is not failed")
+
+        let stale = PodcastEpisode(
+            id: 3, durationSec: 60, hasFile: true, downloadStatus: "failed"
+        )
+        XCTAssertFalse(
+            stale.downloadFailed,
+            "a row that has its audio was coloured by an old status word"
+        )
+        XCTAssertEqual("1:00", stale.metaLine, "and its line says nothing about it either")
+    }
+
     /// Both lists answer under `items`, not under a per-endpoint key the way
     /// the video feed does (``VideoRow/itemsKey`` is `"videos"`).
     func testBothRowsReadTheirRowsFromItems() {
