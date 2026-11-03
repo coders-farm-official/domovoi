@@ -154,6 +154,103 @@ extension StubHouseUITests {
         app.buttons.matching(NSPredicate(format: "label == %@", StubPhoneMedia.upload))
     }
 
+    // MARK: - the page under the switch
+
+    /// The scrolling page **under the source switch** — the upper of the
+    /// window's full-width scroll views.
+    ///
+    /// ### Why the server side's own cases need this (train I001)
+    ///
+    /// The switch is pinned above the page: ``PhoneSourceSwitchView`` is a
+    /// `VStack` of the pill and the two sides, so the side that is shown
+    /// scrolls in whatever the pill leaves. At `large` the pill is 45 points
+    /// and nothing notices. At AX5 it is **164**, and the folder's
+    /// `ScrollView` on a 393×852 phone is 178.7 points tall (the trees under
+    /// `overnight-trains/I001/ALL/att/testFilesAtTheLargestTypeSize/`).
+    /// SwiftUI builds a `LazyVStack` about two viewports deep, Files' header
+    /// alone is 383.7 points, and so the `choose library` button — the second
+    /// lazy item — is **unbuilt**, not off screen. Five of the Files and
+    /// Videos cases this item wrapped were written before there was a pill
+    /// and waited for a marker that can no longer arrive on its own.
+    ///
+    /// Width decides before position, as ``documentsFolderScroll(_:)``'s own
+    /// note says: the breadcrumb strip is a *horizontal* `ScrollView` inset
+    /// in the folder's 16-point gutter, so it is 32 points narrower, and once
+    /// the folder has scrolled it sits above its own clipping parent and
+    /// would win on `minY`. Among what is left, the smallest `minY` is the
+    /// page, because the phone bar is pinned to the window's bottom.
+    ///
+    /// The **frame**, not the element: an `XCUIElement` is re-resolved on
+    /// every use, and a case that drags more than once wants the geometry it
+    /// started from (``testPhoneMedia_TheDeviceSideTextGrowsAtAX5`` learnt
+    /// this about the device side's list).
+    @MainActor
+    func phoneSourcePageFrame(_ app: XCUIApplication) -> CGRect? {
+        let window = app.windows.firstMatch.frame.width
+        let all = app.scrollViews
+        var best: CGRect?
+        var bestY = CGFloat.greatestFiniteMagnitude
+        for index in 0..<all.count {
+            let candidate = all.element(boundBy: index)
+            guard candidate.exists else { continue }
+            let box = candidate.frame
+            guard window <= 0 || box.width >= window - 1 else { continue }
+            if box.minY < bestY {
+                bestY = box.minY
+                best = box
+            }
+        }
+        return best
+    }
+
+    /// One drag of that page, for a case that measures as it goes.
+    ///
+    /// A press-then-drag, not `swipeUp()`: a flick's momentum carries it over
+    /// rows, and at AX5 a row stepped over is a leaf that was never built and
+    /// so never measured. And never `app.swipeUp()`, whose gesture starts in
+    /// the middle of the window — which at AX5 **is the pill**, so it scrolls
+    /// nothing at all.
+    @MainActor
+    func phoneSourceDragUp(_ app: XCUIApplication, _ frame: CGRect) {
+        let origin = app.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
+        origin
+            .withOffset(CGVector(dx: frame.midX, dy: frame.maxY - 16))
+            .press(
+                forDuration: 0.1,
+                thenDragTo: origin.withOffset(
+                    CGVector(dx: frame.midX, dy: frame.minY + 16)
+                )
+            )
+    }
+
+    /// Drag the page under the switch until `element` is **built**.
+    ///
+    /// `true` the moment it exists — so at an ordinary type size, where the
+    /// pill costs 45 points and everything is built already, this does
+    /// nothing and costs one query. A screen that really never answered still
+    /// fails, one budget later, with its tree printed.
+    @MainActor
+    @discardableResult
+    func phoneSourceScrollTo(
+        _ app: XCUIApplication,
+        _ element: XCUIElement,
+        drags: Int = 24
+    ) -> Bool {
+        if element.exists { return true }
+        guard let frame = phoneSourcePageFrame(app), frame.height > 48 else {
+            print("=== NO PAGE UNDER THE SWITCH TO SCROLL — tree follows ===")
+            print(app.debugDescription)
+            return false
+        }
+        for _ in 0..<drags {
+            phoneSourceDragUp(app, frame)
+            if element.exists { return true }
+        }
+        print("=== \(drags) DRAGS AND STILL UNBUILT — tree follows ===")
+        print(app.debugDescription)
+        return false
+    }
+
     // MARK: - the switch
 
     /// Every page starts on the server's side (`YourDevice.kt:30`).
