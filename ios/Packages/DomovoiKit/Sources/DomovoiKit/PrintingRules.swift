@@ -479,6 +479,22 @@ public enum PrintingStrings {
     public static let printButton = "Print"
     public static let sending = "sending…"
 
+    /// The two copies buttons' **visible** labels are Android's own
+    /// characters (`PrintSheet.kt:181,183`), and these are what VoiceOver
+    /// reads instead of "minus" and "plus". iOS-only, because Compose's
+    /// `OutlinedButton { Text("−") }` carries its glyph as its label and
+    /// Android's TalkBack reads the glyph; the characters themselves are
+    /// unchanged. Recorded in
+    /// `design-notes/ios/overnight/printing/IOS-ONLY-STRINGS.md`.
+    public static let fewerCopiesGlyph = "−"
+    public static let moreCopiesGlyph = "+"
+    public static let fewerCopies = "one fewer copy"
+    public static let moreCopies = "one more copy"
+
+    /// `"page 2"` — a thumbnail's description, Android's own
+    /// (`PrintSheet.kt:299`'s `contentDescription`).
+    public static func pageNumber(_ page: Int) -> String { "page \(page)" }
+
     /// How many characters the `pages` field takes (`PrintSheet.kt:169`).
     public static let pagesFieldLimit = 60
     /// `PrintersPanel.kt:509,519`.
