@@ -395,7 +395,7 @@ struct SettingsSectionScreen: View {
             PrintersPanelView(model: model)
         case "app-layout":
             // slot: app-layout
-            SettingsSectionNotBuilt()
+            SystemSettingsLayoutPanel(model: model)
         case "wake-words":
             // slot: wake-words
             VoiceSettingsDashboardPanel(model: model, section: section)
@@ -423,13 +423,13 @@ struct SettingsSectionScreen: View {
             VoiceSettingsDashboardPanel(model: model, section: section)
         case "about":
             // slot: about
-            SettingsSectionNotBuilt()
+            SystemSettingsAboutPanel(model: model)
         case "health":
             // slot: health
             HealthPanelView(model: model)
         case "advanced":
             // slot: advanced
-            SettingsSectionNotBuilt()
+            SystemSettingsAdvancedPanel(model: model)
         default:
             SettingsSectionNotBuilt()
         }
