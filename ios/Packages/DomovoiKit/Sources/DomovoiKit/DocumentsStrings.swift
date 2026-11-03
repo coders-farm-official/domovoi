@@ -78,6 +78,14 @@ public enum DocumentsStrings {
     /// not draw ([[no-misleading-controls]]).
     public static let cannotChangeFilesHere = "this phone can't change files here"
 
+    /// What tapping a row that opens an editor does, for the row's
+    /// accessibility hint. Android's `primaryVerb` answers `"Edit"` for the
+    /// same rows (`FileKinds.kt:122`); lower-cased here because the four
+    /// verbs beside it are (`FileStrings.verbOpen`, `verbRead`, `verbView`,
+    /// `verbSave`), and a hint that said `Edit` next to `read` would look
+    /// like a different kind of thing.
+    public static let verbEdit = "edit"
+
     // MARK: - + New
 
     /// The header button. `FilesScreen.kt:556` — the word is "new" beside a

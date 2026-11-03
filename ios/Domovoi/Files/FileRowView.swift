@@ -14,6 +14,21 @@ struct FileRowView: View {
     let entry: FileEntry
     let files: FilesModel
 
+    /// Open this row in one of the document editors instead of doing what
+    /// ``FilesModel/tapped(_:)`` would.
+    ///
+    /// The hook the Documents item adds, and deliberately the **only** one:
+    /// ``DocumentsKinds/editor(for:in:)`` is the single question asked, it
+    /// answers nil for every library but Documents and for everything the
+    /// port leaves out, and where it answers nil this row behaves exactly as
+    /// it did before. Nil here — the screen is not Files' own — leaves the
+    /// row unchanged too.
+    ///
+    /// **No second `Edit` in the row's menu.** The tap is already the edit,
+    /// and this screen's rule is the one `testWhatEachLibraryOffersOnARow`
+    /// pins: a row whose tap is already a save does not offer a second one.
+    var onEdit: ((FileEntry) -> Void)? = nil
+
     /// The icon column's width, which **grows with the type size**.
     ///
     /// It was a flat 26, and `Image.font(.body)` scales: at AX5 the glyph is
@@ -28,14 +43,17 @@ struct FileRowView: View {
         HStack(spacing: 8) {
             if let action = tappable {
                 Button {
-                    files.tapped(entry)
+                    tap()
                 } label: {
                     face
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(entry.displayTitle)
                 .accessibilityValue(files.meta(for: entry))
-                .accessibilityHint(FileKinds.verb(action) ?? "")
+                // The hint says what the tap does, so it has to follow the
+                // tap: `edit` where an editor opens, Android's own answer for
+                // the same rows (`primaryVerb`, `FileKinds.kt:122`).
+                .accessibilityHint(edits ? DocumentsStrings.verbEdit : (FileKinds.verb(action) ?? ""))
             } else {
                 // **Not a disabled button.** A file too big to pull into
                 // memory has nothing to tap, and a greyed-out row would look
@@ -45,6 +63,20 @@ struct FileRowView: View {
                     .accessibilityElement(children: .combine)
             }
             menu
+        }
+    }
+
+    /// Whether this row opens a document editor. One question, asked once —
+    /// the tap and the hint must never disagree about it.
+    private var edits: Bool {
+        onEdit != nil && DocumentsKinds.editor(for: entry, in: files.selectedID) != nil
+    }
+
+    private func tap() {
+        if edits, let onEdit {
+            onEdit(entry)
+        } else {
+            files.tapped(entry)
         }
     }
 
