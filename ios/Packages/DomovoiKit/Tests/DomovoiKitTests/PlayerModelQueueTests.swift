@@ -480,12 +480,54 @@ final class PlayerModelQueueTests: XCTestCase {
     func testTheLastPartFinishingMovesToTheNextQueueItem() {
         let h = PlayerHarness()
         h.model.play([PlayerSeed.folderBook, PlayerSeed.transmission])
-        h.model.itemFinishedForTests()
-        h.model.itemFinishedForTests()
+        // Through the engine, not `itemFinishedForTests()`: `AVQueuePlayer`
+        // drops the finished source, and each part advance has narrowed the
+        // engine to the book's own parts — so on the last part it is holding
+        // exactly one. The index moving is not enough; the engine has to be
+        // holding the next item's source, or nothing plays while `isPlaying`
+        // stays true.
+        h.engine.finishCurrentItem()
+        h.engine.finishCurrentItem()
         XCTAssertEqual(h.model.index, 0, "still the book, now on its third part")
-        h.model.itemFinishedForTests()
+        h.engine.finishCurrentItem()
         XCTAssertEqual(h.model.index, 1)
         XCTAssertEqual(h.model.current?.uid, "lib-11")
+        XCTAssertEqual(
+            h.engine.lastSetItems,
+            ["http://10.0.0.42:6369/api/music/library/11/audio"],
+            "the engine was narrowed to the book's parts, so the hand-off has to rebuild"
+        )
+        XCTAssertTrue(h.model.isPlaying, "and it is actually playing, not just saying so")
+    }
+
+    func testAPlainQueueAdvanceDoesNotRestartTheNextTrack() {
+        // The other half of the rule above: with no folder book involved the
+        // engine still holds the queue's tail and has advanced itself, so a
+        // rebuild here would start the next song from zero again.
+        let h = PlayerHarness()
+        h.model.play([PlayerSeed.transmission, PlayerSeed.atmosphere])
+        h.engine.forget()
+        h.engine.finishCurrentItem()
+        XCTAssertEqual(h.model.index, 1)
+        XCTAssertFalse(
+            h.engine.calls.contains { if case .setItems = $0 { return true } else { return false } },
+            "nothing to rebuild: AVQueuePlayer moved on by itself"
+        )
+    }
+
+    func testAFailedEngineIsGivenItsSourcesAgainBeforePlaying() {
+        // A network drop mid-track leaves the item in `player.items()` with a
+        // failed status, so `itemCount` is not zero and the status is not
+        // `.idle`: without the `.failed` case the play button called `play()`
+        // on a dead item and then claimed to be playing over silence.
+        let h = PlayerHarness()
+        h.model.play([PlayerSeed.transmission, PlayerSeed.atmosphere])
+        h.model.pause()
+        h.engine.forget()
+        h.engine.status = .failed("stream ended")
+        h.model.resume()
+        XCTAssertFalse(h.engine.lastSetItems.isEmpty, "the sources must be set again before play()")
+        XCTAssertEqual(h.engine.playCount, 1)
     }
 
     // MARK: - the lock screen

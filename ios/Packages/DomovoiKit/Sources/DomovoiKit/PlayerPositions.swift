@@ -85,14 +85,23 @@ public struct PlayerServerPositions: Sendable {
     }
 
     /// The GET's query, in Android's order (`PlayerController.kt:591`).
+    ///
+    /// The person goes on only when it parses as an **integer**: the server
+    /// types `person_id` as one on all four routes (`podcasts.py:527`,
+    /// `audiobooks.py:603`, `PositionSave` at `podcasts.py:111`), so a
+    /// non-numeric id was a 422 — and a 422 on the read is swallowed into
+    /// "start at the top", which is a three-hour book silently resuming at
+    /// zero. `VideoModels.swift:454` already does exactly this, for exactly
+    /// this reason.
     public static func readQuery(deviceID: String, personID: String?) -> String {
         var q = "?device_id=\(escaped(deviceID))"
-        if let personID, !personID.isEmpty { q += "&person_id=\(escaped(personID))" }
+        if let personID, let number = Int64(personID) { q += "&person_id=\(number)" }
         return q
     }
 
-    /// A device id is generated, but a person id is a row the house named, so
-    /// neither goes into a query string raw: `&` in one would split the query.
+    /// A device id is generated and goes into a query string raw otherwise:
+    /// `&` in one would split the query. (The person id needs no escaping now
+    /// that only an integer is ever sent.)
     private static func escaped(_ value: String) -> String {
         let safe = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))
         return value.addingPercentEncoding(withAllowedCharacters: safe) ?? value
@@ -104,6 +113,10 @@ public struct PlayerServerPositions: Sendable {
     /// from everything else the phone sends; `person_id` is present only when
     /// a listener is identified, because the server keys the row by
     /// (device, person) and a null person is a different row from no person.
+    /// It is a **number**, not a string: `PositionSave.person_id` is
+    /// `Optional[int]` (`podcasts.py:111`), and a string there is a 422 that
+    /// `try? await client.send` drops on the floor — the place never saved at
+    /// all. So a non-numeric id is left out rather than sent.
     public static func saveBody(
         deviceID: String,
         personID: String?,
@@ -115,7 +128,7 @@ public struct PlayerServerPositions: Sendable {
             "position_sec": Int(positionSec.isFinite ? max(positionSec, 0) : 0),
             "speed": Double(speed),
         ]
-        if let personID, !personID.isEmpty { body["person_id"] = personID }
+        if let personID, let number = Int64(personID) { body["person_id"] = number }
         return (try? JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])) ?? Data("{}".utf8)
     }
 }

@@ -42,14 +42,32 @@ final class PlayerPositionsTests: XCTestCase {
             "?device_id=phone-1"
         )
         XCTAssertEqual(
-            PlayerServerPositions.readQuery(deviceID: "phone-1", personID: "kamron"),
-            "?device_id=phone-1&person_id=kamron"
+            PlayerServerPositions.readQuery(deviceID: "phone-1", personID: "7"),
+            "?device_id=phone-1&person_id=7"
         )
         XCTAssertEqual(
             PlayerServerPositions.readQuery(deviceID: "phone-1", personID: ""),
             "?device_id=phone-1",
             "an empty person is no person: the server keys the row by (device, person)"
         )
+    }
+
+    func testANonNumericPersonIsLeftOutRatherThanSentAsA422() throws {
+        // `person_id` is typed `Optional[int]` on all four routes
+        // (`podcasts.py:527`, `:111`, `audiobooks.py:603`). A name there was a
+        // 422 — swallowed on the read into "start at the top", so a book
+        // resumed at zero, and dropped on the write by `try?`, so the place
+        // was never saved at all. `VideoModels.swift:454` already sends it
+        // only when it parses.
+        XCTAssertEqual(
+            PlayerServerPositions.readQuery(deviceID: "phone-1", personID: "kamron"),
+            "?device_id=phone-1",
+            "a name is not a person id the server can take"
+        )
+        let body = try fields(PlayerServerPositions.saveBody(
+            deviceID: "phone-1", personID: "kamron", positionSec: 1, speed: 1
+        ))
+        XCTAssertNil(body["person_id"])
     }
 
     func testAnAmpersandInAnIdIsEscapedRatherThanSplittingTheQuery() {
@@ -89,9 +107,13 @@ final class PlayerPositionsTests: XCTestCase {
 
     func testThePersonIsIncludedOnlyWhenThereIsOne() throws {
         let named = try fields(PlayerServerPositions.saveBody(
-            deviceID: "phone-1", personID: "kamron", positionSec: 1, speed: 1
+            deviceID: "phone-1", personID: "7", positionSec: 1, speed: 1
         ))
-        XCTAssertEqual(named["person_id"] as? String, "kamron")
+        XCTAssertEqual(named["person_id"] as? Int, 7, "a number: `PositionSave.person_id` is an int")
+        let wire = String(decoding: PlayerServerPositions.saveBody(
+            deviceID: "phone-1", personID: "7", positionSec: 1, speed: 1
+        ), as: UTF8.self)
+        XCTAssertTrue(wire.contains("\"person_id\":7"), wire)
         let blank = try fields(PlayerServerPositions.saveBody(
             deviceID: "phone-1", personID: "", positionSec: 1, speed: 1
         ))
@@ -235,7 +257,7 @@ final class PlayerPositionsTests: XCTestCase {
 
     func testThePersonIsSentOnceTheHouseHasIdentifiedAListener() async {
         let h = PlayerHarness()
-        h.model.listenerPersonID = "kamron"
+        h.model.listenerPersonID = "7"
         h.model.play([PlayerSeed.episode])
         h.engine.currentTimeSec = 90
         h.model.tickForTests()
@@ -245,7 +267,7 @@ final class PlayerPositionsTests: XCTestCase {
             "the place being flushed"
         )
         let body = PlayerHouse.bodies(for: "/api/podcasts/positions/9").last
-        XCTAssertEqual(body?["person_id"] as? String, "kamron", "the server keys the row by (device, person)")
+        XCTAssertEqual(body?["person_id"] as? Int, 7, "the server keys the row by (device, person)")
     }
 
     func testPausingASongFlushesNothing() async {

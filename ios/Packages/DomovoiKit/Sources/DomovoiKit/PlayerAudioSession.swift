@@ -35,6 +35,15 @@ public protocol PlayerAudioSessionControl: AnyObject {
     @discardableResult
     func activate(_ category: PlayerAudioCategory) -> Bool
 
+    /// Set the category **without** activating.
+    ///
+    /// What the microphone lease's release wants: the category has to come off
+    /// `.playAndRecord` so the next `play()` is a music or spoken session, but
+    /// activating a `.playback` session while this player is silent takes the
+    /// process-wide session off whatever picked the audio up during the call —
+    /// the rule above, one layer along (``PlayerModel``'s `micFreed()`).
+    func setCategory(_ category: PlayerAudioCategory)
+
     /// Give the session back, so another app can have it.
     func deactivate()
 
@@ -58,19 +67,29 @@ public final class AVAudioSessionControl: PlayerAudioSessionControl {
     public func activate(_ category: PlayerAudioCategory) -> Bool {
         let session = AVAudioSession.sharedInstance()
         do {
-            switch category {
-            case .music:
-                try session.setCategory(.playback, mode: .default)
-            case .spoken:
-                try session.setCategory(.playback, mode: .spokenAudio)
-            case .recording:
-                try session.setCategory(.playAndRecord, mode: .spokenAudio, options: [.defaultToSpeaker])
-            }
+            try apply(category, to: session)
             try session.setActive(true)
             active = category
             return true
         } catch {
             return false
+        }
+    }
+
+    public func setCategory(_ category: PlayerAudioCategory) {
+        // No `setActive(true)`: see the protocol's comment. `active` is not
+        // touched either — it answers what is *activated*, and nothing is.
+        try? apply(category, to: AVAudioSession.sharedInstance())
+    }
+
+    private func apply(_ category: PlayerAudioCategory, to session: AVAudioSession) throws {
+        switch category {
+        case .music:
+            try session.setCategory(.playback, mode: .default)
+        case .spoken:
+            try session.setCategory(.playback, mode: .spokenAudio)
+        case .recording:
+            try session.setCategory(.playAndRecord, mode: .spokenAudio, options: [.defaultToSpeaker])
         }
     }
 
@@ -89,6 +108,9 @@ public final class AVAudioSessionControl: PlayerAudioSessionControl {
 public final class RecordingPlayerAudioSession: PlayerAudioSessionControl {
     public private(set) var active: PlayerAudioCategory?
     public private(set) var activations: [PlayerAudioCategory] = []
+    /// The categories set without an activation — what a case asserts when the
+    /// microphone lease is released while the player is paused.
+    public private(set) var categories: [PlayerAudioCategory] = []
     public private(set) var deactivations = 0
 
     public init() {}
@@ -96,8 +118,13 @@ public final class RecordingPlayerAudioSession: PlayerAudioSessionControl {
     @discardableResult
     public func activate(_ category: PlayerAudioCategory) -> Bool {
         activations.append(category)
+        categories.append(category)
         active = category
         return true
+    }
+
+    public func setCategory(_ category: PlayerAudioCategory) {
+        categories.append(category)
     }
 
     public func deactivate() {

@@ -39,6 +39,15 @@ public protocol PlayerAudioEngine: AnyObject {
     /// book is one thing.
     func seek(toSec sec: Double)
 
+    /// Whether what the engine is about to hold is **speech**.
+    ///
+    /// Set before ``setItems(_:startingAt:offsetSec:)`` — the pitch algorithm
+    /// is a per-item property, and one engine holds a queue that mixes songs,
+    /// podcasts and books, so a value fixed for the engine's life gave a
+    /// narrator the music algorithm (and the other way round) for every item
+    /// after the first.
+    var spokenAudio: Bool { get set }
+
     /// Both `rate` **and** `defaultRate`.
     ///
     /// Setting only `rate` means the next `play()` silently goes back to 1.0 —
@@ -99,7 +108,6 @@ public protocol PlayerAudioEngine: AnyObject {
 public final class AVQueueAudioEngine: PlayerAudioEngine {
 
     private let player = AVQueuePlayer()
-    private var observer: Any?
 
     /// The end-of-item observers, in a box the `deinit` can reach.
     ///
@@ -108,12 +116,28 @@ public final class AVQueueAudioEngine: PlayerAudioEngine {
     /// pointing at a dead player — so the tokens live in a nonisolated box
     /// instead of a property, which is the only shape that lets both the main
     /// actor and the deallocator clear them.
+    /// The periodic time observer's token lives here too, for the same
+    /// reason: `removeTimeObserver` has to be called before the player is
+    /// deallocated, and until it is the block keeps firing `didTick` into a
+    /// model being torn down. An isolated property could not be reached from
+    /// `deinit`, and nothing else ever cleared it — `removeAll()` does not.
     private final class Observers: @unchecked Sendable {
         var tokens: [NSObjectProtocol] = []
+        var player: AVQueuePlayer?
+        var timeToken: Any?
 
-        func clear() {
+        /// Just the end-of-item notifications: what a new list of sources
+        /// replaces. The time observer outlives every rebuild.
+        func clearItemObservers() {
             for token in tokens { NotificationCenter.default.removeObserver(token) }
             tokens = []
+        }
+
+        func clear() {
+            clearItemObservers()
+            if let timeToken { player?.removeTimeObserver(timeToken) }
+            timeToken = nil
+            player = nil
         }
     }
 
@@ -132,12 +156,13 @@ public final class AVQueueAudioEngine: PlayerAudioEngine {
     /// `.varispeed` is the one that makes a narrator sound like a chipmunk and
     /// must never be the default; `.timeDomain` is cheap and good to about 2×,
     /// which is where almost every podcast listener lives.
-    private let spokenAudio: Bool
+    public var spokenAudio: Bool
 
     public init(spokenAudio: Bool = false) {
         self.spokenAudio = spokenAudio
         player.actionAtItemEnd = .advance
-        observer = player.addPeriodicTimeObserver(
+        endObservers.player = player
+        endObservers.timeToken = player.addPeriodicTimeObserver(
             forInterval: CMTime(seconds: 0.5, preferredTimescale: 600),
             queue: .main
         ) { [weak self] _ in
@@ -150,7 +175,7 @@ public final class AVQueueAudioEngine: PlayerAudioEngine {
     }
 
     public func setItems(_ urls: [URL], startingAt: Int, offsetSec: Double) {
-        endObservers.clear()
+        endObservers.clearItemObservers()
         player.removeAllItems()
         sources = urls
         base = min(max(startingAt, 0), Swift.max(urls.count - 1, 0))
@@ -228,7 +253,7 @@ public final class AVQueueAudioEngine: PlayerAudioEngine {
     public var canPlaySlowForward: Bool { player.currentItem?.canPlaySlowForward ?? false }
 
     public func removeAll() {
-        endObservers.clear()
+        endObservers.clearItemObservers()
         player.removeAllItems()
         sources = []
         base = 0

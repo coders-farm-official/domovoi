@@ -1,5 +1,9 @@
 import Foundation
 import Observation
+#if os(iOS)
+import AVFoundation
+import UIKit
+#endif
 
 // ===========================================================================
 // THE PUBLIC API — what the five consumers code against
@@ -40,6 +44,11 @@ import Observation
 //   positions: (any PlayerPositionStore)?      // the Audiobooks item
 //   listenerPersonID: String?                  // who is listening
 //   serverChanged(to:)                         // the shell
+//
+// Nothing has to be plugged in for the system's own events: the audio
+// interruption, the route change, the media-services reset and the move to the
+// background are observed by this type itself (``observeSystem()``), so
+// `noteEnteredBackground()` is public only for the tests.
 //
 // `play(_:)` returns the room it left, as Android's `playItems` does, so a
 // consumer can say "paused office". `cast(to:)` returns an outcome whose
@@ -255,20 +264,123 @@ public final class PlayerModel {
         wire()
     }
 
+    deinit {
+        systemObservers.clear()
+    }
+
     private func wire() {
         engine.didTick = { [weak self] in self?.tick() }
         engine.didFinishItem = { [weak self] in self?.itemFinished() }
         nowPlaying.handler = { [weak self] command, position in
             self?.remoteCommand(command, position: position)
         }
+        observeSystem()
         // Taking the microphone pauses the player: a recording owner needs
         // `.playAndRecord`, which ducks or stops playback, and room mode or a
         // drop-in call are not things to talk over. The lease's release puts
-        // the session back (`DECISIONS.md`).
+        // the session's **category** back without activating it
+        // (``micFreed()``, `DECISIONS.md`).
         PlayerMicArbiter.shared.whenTaken(
             { _ in Task { @MainActor [weak self] in self?.micTaken() } },
             whenFreed: { Task { @MainActor [weak self] in self?.micFreed() } }
         )
+    }
+
+    /// The notification tokens, in a box the `deinit` can reach.
+    ///
+    /// The same shape and the same reason as ``AVQueueAudioEngine``'s: a
+    /// `@MainActor` class cannot touch its isolated storage from `deinit`, and
+    /// an observer that outlives the model keeps a closure alive pointing at a
+    /// dead player.
+    private final class SystemObservers: @unchecked Sendable {
+        var tokens: [NSObjectProtocol] = []
+
+        func clear() {
+            for token in tokens { NotificationCenter.default.removeObserver(token) }
+            tokens = []
+        }
+    }
+
+    private nonisolated let systemObservers = SystemObservers()
+
+    /// Hook up the three things the system does to our audio behind our back,
+    /// and the one moment iOS gives us before the process is killed.
+    ///
+    /// Android gets the first two free from the ExoPlayer
+    /// (`setHandleAudioBecomingNoisy(true)` and `handleAudioFocus = true`,
+    /// `PlayerController.kt:89-98`) and the third from
+    /// `PlaybackService.onTaskRemoved` (`PlaybackService.kt:80`). iOS hands
+    /// them over as notifications, so this is the wiring; the **decision** is
+    /// ``PlayerInterruption``, which is pure and tested, and what it decides
+    /// is carried out by ``react(to:mediaServicesReset:)``.
+    private func observeSystem() {
+        #if os(iOS)
+        let centre = NotificationCenter.default
+        systemObservers.tokens.append(centre.addObserver(
+            forName: AVAudioSession.interruptionNotification, object: nil, queue: .main
+        ) { [weak self] note in
+            let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt
+            let began = raw == AVAudioSession.InterruptionType.began.rawValue
+            let options = AVAudioSession.InterruptionOptions(
+                rawValue: note.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0
+            )
+            MainActor.assumeIsolated {
+                self?.react(to: PlayerInterruption.interruption(
+                    began: began, shouldResume: options.contains(.shouldResume)
+                ))
+            }
+        })
+        systemObservers.tokens.append(centre.addObserver(
+            forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main
+        ) { [weak self] note in
+            let raw = note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt
+            let gone = raw == AVAudioSession.RouteChangeReason.oldDeviceUnavailable.rawValue
+            MainActor.assumeIsolated {
+                self?.react(to: PlayerInterruption.routeChange(oldDeviceUnavailable: gone))
+            }
+        })
+        systemObservers.tokens.append(centre.addObserver(
+            forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.react(to: PlayerInterruption.mediaServicesReset, mediaServicesReset: true)
+            }
+        })
+        systemObservers.tokens.append(centre.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.noteEnteredBackground() }
+        })
+        #endif
+    }
+
+    /// Carry out ``PlayerInterruption``'s decision.
+    ///
+    /// Split from the notification wiring above so the package tests can drive
+    /// it on a machine with no `AVAudioSession` at all (``reactForTests``).
+    ///
+    /// Nothing happens while casting: the room's audio is not ours to pause,
+    /// and `pause()` while casting would send the **room** a pause because a
+    /// phone call came in here.
+    private func react(to reaction: PlayerInterruption.Reaction, mediaServicesReset: Bool = false) {
+        guard !target.isCasting, current != nil else { return }
+        if mediaServicesReset {
+            // Every AVFoundation object below us is stale. A pause here would
+            // leave a play button that does nothing — the control Kamron's
+            // rule forbids — so the sources are set again, and playback picks
+            // up only if it was going.
+            let wasPlaying = isPlaying
+            isPlaying = false
+            engine.removeAll()
+            rebuildEngine(offsetSec: positionSec, keepPlaying: false)
+            if wasPlaying { resumeLocal() } else { refreshNowPlaying() }
+            return
+        }
+        switch reaction {
+        case .pause: if isPlaying { pause() }
+        case .resume: resumeLocal()
+        case .nothing: break
+        }
     }
 
     // MARK: - the queue
@@ -574,6 +686,13 @@ public final class PlayerModel {
     /// The current source reached its end.
     func itemFinishedForTests() { itemFinished() }
 
+    /// What the system's interruption / route-change / media-reset
+    /// notifications end up calling. The notifications themselves only exist
+    /// on iOS, so this is how a macOS test run reaches the behaviour.
+    func reactForTests(_ reaction: PlayerInterruption.Reaction, mediaServicesReset: Bool = false) {
+        react(to: reaction, mediaServicesReset: mediaServicesReset)
+    }
+
     /// One tick of the countdown without waiting.
     @discardableResult
     func sleepTickForTests() -> Bool {
@@ -595,6 +714,10 @@ public final class PlayerModel {
             engine.removeAll()
             return
         }
+        // The pitch algorithm is per item, and one engine holds a queue that
+        // mixes songs with speech, so it is set on every rebuild rather than
+        // once for the engine's life (``PlayerAudioEngine/spokenAudio``).
+        engine.spokenAudio = item.isSpoken
         let urls: [URL]
         if item.parts.count > 1 {
             urls = item.parts[min(partIndex, item.parts.count - 1)...]
@@ -625,7 +748,14 @@ public final class PlayerModel {
     private func resumeLocal() {
         guard current != nil else { return }
         activateSession()
-        if engine.itemCount == 0 || engine.status == .idle {
+        // `.failed` counts, which is what the comment above always said and
+        // the condition did not: a network drop mid-track leaves the item in
+        // `player.items()` with a failed status, so an `itemCount`/`.idle`
+        // test skipped the rebuild and `play()` went to a dead item — a play
+        // button that does nothing.
+        var needsItems = engine.itemCount == 0 || engine.status == .idle
+        if case .failed = engine.status { needsItems = true }
+        if needsItems {
             rebuildEngine(offsetSec: positionSec, keepPlaying: false)
         }
         engine.setRate(speed)
@@ -664,6 +794,16 @@ public final class PlayerModel {
     /// A folder book moves to its next **part** and keeps one position
     /// (``PlayerBookTimeline``); everything else moves to the next queue item.
     private func itemFinished() {
+        // Whether the engine is holding a book's parts rather than the queue's
+        // tail, read BEFORE the index moves: a part advance narrows the engine
+        // to `item.parts[partIndex...]` (``rebuildEngine``), so on the last
+        // part it is holding one source. Letting the queue advance fall
+        // through without a rebuild then left the engine with nothing to play
+        // while `isPlaying` stayed true and the lock screen kept claiming a
+        // rate — silence under a playing lock screen, with no tick to correct
+        // it (AVPlayer's periodic observer does not fire with no current
+        // item). `advanceItem()` always rebuilt; this path did not.
+        let wasNarrowed = (current?.parts.count ?? 0) > 1
         if let item = current, item.parts.count > 1, partIndex < item.parts.count - 1 {
             partIndex += 1
             rebuildEngine(offsetSec: 0, keepPlaying: isPlaying)
@@ -673,7 +813,14 @@ public final class PlayerModel {
         if index < queue.count - 1 {
             index += 1
             partIndex = 0
-            updatePosition()
+            // Conditional: in the plain case `AVQueuePlayer` has already
+            // advanced itself, and an unconditional rebuild would restart the
+            // new item from zero.
+            if wasNarrowed {
+                rebuildEngine(offsetSec: 0, keepPlaying: isPlaying)
+            } else {
+                updatePosition()
+            }
             refreshNowPlaying()
             return
         }
@@ -779,11 +926,16 @@ public final class PlayerModel {
     }
 
     private func micFreed() {
-        // Put the session back where playback can use it. Playback is **not**
-        // resumed: the person paused for a call, and starting the podcast up
-        // again as they hang up is the behaviour nobody asked for.
-        guard current != nil else { return }
-        session.activate(current?.isSpoken == true ? .spoken : .music)
+        // Put the **category** back where playback can use it, without
+        // activating. Playback is not resumed — the person paused for a call,
+        // and starting the podcast up again as they hang up is the behaviour
+        // nobody asked for — and activating a `.playback` session while this
+        // player is silent takes the process-wide session off whatever picked
+        // the audio up during the call, to play nothing
+        // (``PlayerAudioSession``'s own rule, one layer along). The next
+        // `play()` / `resumeLocal()` activates it.
+        guard let item = current else { return }
+        session.setCategory(item.isSpoken ? .spoken : .music)
     }
 
     // MARK: - the spoken position

@@ -91,16 +91,23 @@ public final class MPNowPlayingPublisher: PlayerNowPlayingPublisher {
         guard let path, let url = PlayerArtwork.model(coverPath: path, absolute: absolute),
               let source = URL(string: url) else {
             artworkTask?.cancel()
-            artworkFor = nil
-            var d = MPNowPlayingInfoCenter.default().nowPlayingInfo ?? [:]
-            d[MPMediaItemPropertyArtwork] = nil
-            MPNowPlayingInfoCenter.default().nowPlayingInfo = d
+            dropArtwork()
             return
         }
-        // The same picture is not fetched twice, and a cover the server
-        // already said it has none of is not asked for again
-        // (``PlayerArtwork/noteFailure(_:status:)``).
-        guard artworkFor != url, !PlayerArtwork.isMissing(url) else { return }
+        // The same picture is not fetched twice: a plain no-op, because what is
+        // on the lock screen is already this track's.
+        guard artworkFor != url else { return }
+        // A cover the server already said it has none of is not asked for
+        // again (``PlayerArtwork/noteFailure(_:status:)``) — but the previous
+        // track's sleeve has to come **off**. `publish()` merges into the
+        // existing dictionary deliberately, so artwork survives a metadata
+        // update; every no-artwork exit therefore has to clear it itself, or
+        // track B plays under track A's cover.
+        guard !PlayerArtwork.isMissing(url) else {
+            artworkTask?.cancel()
+            dropArtwork()
+            return
+        }
         artworkFor = url
         artworkTask?.cancel()
         artworkTask = Task { [weak self] in
@@ -108,6 +115,7 @@ public final class MPNowPlayingPublisher: PlayerNowPlayingPublisher {
             let status = (response as? HTTPURLResponse)?.statusCode
             if status != 200 {
                 PlayerArtwork.noteFailure(url, status: status)
+                self?.dropArtwork()
                 return
             }
             guard let image = UIImage(data: data) else { return }
@@ -125,6 +133,17 @@ public final class MPNowPlayingPublisher: PlayerNowPlayingPublisher {
             d[MPMediaItemPropertyArtwork] = artwork
             MPNowPlayingInfoCenter.default().nowPlayingInfo = d
         }
+    }
+
+    /// Take any artwork off the lock screen, and forget which cover is on it.
+    ///
+    /// Written back into `MPNowPlayingInfoCenter` rather than left to the next
+    /// `publish()`, which merges and would keep the stale key.
+    private func dropArtwork() {
+        artworkFor = nil
+        var d = MPNowPlayingInfoCenter.default().nowPlayingInfo ?? [:]
+        d[MPMediaItemPropertyArtwork] = nil
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = d
     }
 
     private func wireIfNeeded() {

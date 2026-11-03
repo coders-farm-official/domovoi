@@ -36,6 +36,11 @@ final class FakePlayerEngine: PlayerAudioEngine {
     var canPlayFastForward = true
     var canPlaySlowForward = true
 
+    /// What the model last said about the sources it handed over — the pitch
+    /// algorithm is per item, so a case can check that a book in a mixed queue
+    /// gets the speech one.
+    var spokenAudio = false
+
     private(set) var held: [String] = []
 
     var itemCount: Int { held.count }
@@ -75,6 +80,15 @@ final class FakePlayerEngine: PlayerAudioEngine {
         held = urls.map(\.absoluteString)
         calls.append(.setItems(urls: held, startingAt: startingAt, offsetSec: offsetSec))
         currentTimeSec = offsetSec
+    }
+
+    /// The current source reaching its end, **as `AVQueuePlayer` does it**: the
+    /// finished item is gone from the queue before anyone is told. Without the
+    /// drop a fake can never run out of sources, which is how an engine left
+    /// holding nothing after the last part of a folder book went unseen.
+    func finishCurrentItem() {
+        if !held.isEmpty { held.removeFirst() }
+        didFinishItem?()
     }
 
     func play() {
