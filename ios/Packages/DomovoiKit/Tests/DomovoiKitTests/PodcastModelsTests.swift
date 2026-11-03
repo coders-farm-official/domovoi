@@ -556,9 +556,13 @@ final class PodcastModelsTests: XCTestCase {
             PodcastStrings.unsubscribeBody("The Kitchen Table")
         )
         XCTAssertEqual("failed: 404: not found", PodcastStrings.unsubscribeFailed("404: not found"))
+        // iOS-only twice over: neither app's screen can cast an episode to a
+        // room, and this one cannot play one on the phone either - nothing in
+        // the app owns a `PlayerModel`. It said `played on this phone` until
+        // train S004, which is a promise the screen has no control for.
         XCTAssertEqual(
-            "subscriptions + episodes, played on this phone", PodcastStrings.subtitle,
-            "iOS-only: neither app's screen can cast an episode to a room"
+            "subscriptions + episodes, listened to in the dashboard",
+            PodcastStrings.subtitle
         )
     }
 
