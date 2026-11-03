@@ -124,7 +124,12 @@ struct RouteScreen: View {
             AudiobooksView(model: model)
         case .images:
             // slot: images
-            ScreenPlaceholder(route: route, onThisPhone: false)
+            // The band wraps the screen exactly as `ScreenRouter.kt:67` wraps
+            // `ImagesScreen()` in `PluginScreenFrame(CAP_IMAGEGEN)`, and
+            // draws the content bare on a house whose manifest has no
+            // imagegen plugin (`PluginFrame.kt:98-101`). ``ImagesView`` says
+            // what is left out and why there is no control for it.
+            ImagesPluginBand(model: model) { ImagesView(model: model) }
         case .news:
             // slot: news
             ScreenPlaceholder(route: route, onThisPhone: false)
