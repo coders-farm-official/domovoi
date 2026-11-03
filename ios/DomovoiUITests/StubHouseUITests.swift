@@ -169,7 +169,7 @@ final class StubHouseUITests: XCTestCase {
     /// way from here to audit the chrome without Home's content under it.
     @MainActor
     private func launch(
-        mode: String = Self.ordinaryTypeSize,
+        mode: String = StubHouseUITests.ordinaryTypeSize,
         paired: Bool = true,
         server: Bool = true,
         port: Int = 6601,
@@ -1719,7 +1719,7 @@ final class StubHouseUITests: XCTestCase {
     /// answered.
     @MainActor
     private func openVideos(
-        _ mode: String = Self.ordinaryTypeSize,
+        _ mode: String = StubHouseUITests.ordinaryTypeSize,
         delay: Double? = nil
     ) -> (app: XCUIApplication, landed: Bool) {
         let app = launch(mode: mode, push: "Videos", pushDelay: delay ?? Self.pushDelay)
@@ -2120,7 +2120,7 @@ final class StubHouseUITests: XCTestCase {
     /// which also only exists once the libraries have landed.
     @MainActor
     private func openFiles(
-        _ mode: String = Self.ordinaryTypeSize,
+        _ mode: String = StubHouseUITests.ordinaryTypeSize,
         blocked: Bool = false,
         delay: Double? = nil
     ) -> (app: XCUIApplication, landed: Bool) {
@@ -2648,7 +2648,7 @@ final class StubHouseUITests: XCTestCase {
     /// — so `landed` is false by design and that case asserts the note.
     @MainActor
     private func openChat(
-        _ mode: String = Self.ordinaryTypeSize,
+        _ mode: String = StubHouseUITests.ordinaryTypeSize,
         aiOff: Bool = false,
         fail: String? = nil,
         delay: Double? = nil
