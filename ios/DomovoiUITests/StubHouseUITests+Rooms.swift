@@ -167,6 +167,21 @@ extension StubHouseUITests {
     /// something vertically into view, **tap an inert word next to it**:
     /// XCUITest scrolls to an element before touching it, which is how this
     /// file reaches a switch at y 1128 and the slider at y 922.
+    ///
+    /// ### Why the horizontal travel is a measured drag and not a flick
+    ///
+    /// Train S006's one failure. `swipeLeft()`/`swipeRight()` are flicks:
+    /// they carry momentum, so each one travels a distance nobody chose. At
+    /// AX5 the seven tab words are 1587 points wide in a 361-point strip, and
+    /// the two ends of `timers` straddle the clip by a few points — so a flick
+    /// aimed at it overshot, the next flick (direction chosen afresh) overshot
+    /// back, and the strip oscillated through all ten flicks without ever
+    /// coming to rest on the tab. The tree printed at the failure even showed
+    /// `timers` wholly inside the strip: the last flick had landed, the loop
+    /// had simply run out. A press-and-drag has no momentum, so it moves the
+    /// content by the number of points asked for and converges in one or two
+    /// steps from either side. The flicks stay as a fallback — if the drag
+    /// gesture is not recognised at all, nothing else would move the strip.
     @MainActor
     func roomsBring(
         _ element: XCUIElement,
@@ -180,11 +195,62 @@ extension StubHouseUITests {
             if seat.contains(it) { return true }
             if vertical {
                 if it.midY > seat.midY { view.swipeUp(velocity: .slow) } else { view.swipeDown(velocity: .slow) }
+            } else if !roomsDrag(view, by: roomsShortfall(it, in: seat)) {
+                break
+            }
+        }
+        if view.frame.contains(element.frame) { return true }
+        // Fallback: the old flicks, in case the drag gesture moved nothing.
+        for _ in 0..<flicks {
+            let seat = view.frame
+            let it = element.frame
+            if seat.contains(it) { return true }
+            if vertical {
+                if it.midY > seat.midY { view.swipeUp(velocity: .slow) } else { view.swipeDown(velocity: .slow) }
             } else {
                 if it.midX > seat.midX { view.swipeLeft() } else { view.swipeRight() }
             }
         }
         return view.frame.contains(element.frame)
+    }
+
+    /// How far, in points, a strip's content must move for `it` to sit wholly
+    /// inside `seat` — negative to move content left, positive to move it
+    /// right, zero when it already fits.
+    ///
+    /// The eight-point margin is why this converges where the flicks did not:
+    /// landing a tab exactly on the clip's edge is landing it outside, and a
+    /// drag measured to the edge lands there about half the time.
+    func roomsShortfall(_ it: CGRect, in seat: CGRect) -> CGFloat {
+        let margin: CGFloat = 8
+        if it.maxX > seat.maxX { return -(it.maxX - seat.maxX + margin) }
+        if it.minX < seat.minX { return (seat.minX - it.minX) + margin }
+        return 0
+    }
+
+    /// Drag a horizontal scroller by a measured number of points, and say
+    /// whether a drag was attempted.
+    ///
+    /// The whole gesture has to stay inside the strip — a touch that leaves it
+    /// is a touch on something else — so one drag travels at most 80% of the
+    /// strip's width and ``roomsBring``'s loop does the rest.
+    @MainActor
+    func roomsDrag(_ view: XCUIElement, by dx: CGFloat) -> Bool {
+        guard dx != 0 else { return true }
+        let width = view.frame.width
+        guard width > 40 else { return false }
+        let travel = max(-width * 0.8, min(width * 0.8, dx))
+        let from = view.coordinate(
+            withNormalizedOffset: CGVector(dx: travel < 0 ? 0.9 : 0.1, dy: 0.5)
+        )
+        // The press before the move is what makes this a drag rather than a
+        // flick; it is also long enough that the tab word under the finger
+        // cannot read the gesture as a tap.
+        from.press(
+            forDuration: 0.4,
+            thenDragTo: from.withOffset(CGVector(dx: travel, dy: 0))
+        )
+        return true
     }
 
     /// Pick one of the seven tabs by its word.
