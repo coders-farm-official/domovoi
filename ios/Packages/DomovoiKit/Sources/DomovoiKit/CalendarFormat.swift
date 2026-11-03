@@ -132,16 +132,17 @@ public func calendarWeekRangeLabel(_ anchor: CalendarDay) -> String {
 /// **This is where this port deliberately differs from Android.**
 /// `CalendarModels.kt:113` is `yyyy-MM-dd'T'HH:mm:ss` with no offset at all,
 /// sent at `CalendarScreen.kt:104-105`. The column is `TIMESTAMPTZ`
-/// (`V001__baseline.sql:229`) and nothing in `web/backend/db.py` sets a
-/// session `TimeZone`, so Postgres resolves a naive value in the server's zone
-/// — and the house box runs on UTC. An event the Android app creates is
-/// therefore stored as though its wall-clock time were UTC and read back
-/// shifted by the device's offset, five or six hours for Kamron, in the app
-/// and on the dashboard both.
+/// (`V001__baseline.sql:231`), and asyncpg encodes a naive `datetime` with
+/// `astimezone(utc)` (`pgproto/codecs/datetime.pyx:222`), which reads it in
+/// the **web backend process's** zone. On a house the installer set up that
+/// is the household's zone, so an Android save lands right at home. It is
+/// wrong whenever the phone's zone is not the server's (travelling, or a
+/// server never given `--timezone`): the save then means that wall clock in
+/// the *server's* zone and reads back shifted by the difference.
 ///
 /// The dashboard this screen is a port of sends `new Date(s).toISOString()`
-/// (`calendar.jsx:36`), an absolute instant, and so does this. DECISIONS §2
-/// reports the Android defect; it is not fixed there tonight.
+/// (`calendar.jsx:36`), an absolute instant that depends on no one's zone, and
+/// so does this. The Android side is `ANDROID-DEFECTS-FOUND-BY-IOS.md` #27.
 ///
 /// Spelt out by `DateComponents` rather than left to `ISO8601DateFormatter`
 /// for ``calendarPath(dayStartMs:timeZone:)``'s reason: a test pins the whole
