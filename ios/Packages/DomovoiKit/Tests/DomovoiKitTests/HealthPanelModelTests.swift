@@ -397,15 +397,18 @@ final class HealthPanelModelTests: XCTestCase {
         model.guardRead.refresh()
         await settle(for: park.arrived, what: "house A's incidents read")
 
-        // The person moves house while that read is still open.
+        // The person moves house while that read is still open, and only
+        // then does house A's answer arrive. (The release comes before the
+        // wait for house B because a parked `URLProtocol` holds the thread it
+        // is loading on — `ParkedRequest` says so — so house B's request
+        // cannot finish while house A's is still in the dispatcher.)
         XCTAssertTrue(store.setServerURL(otherServer))
         container.serverAddressChanged()
+        park.release.set(true)
         await settleUntil(
             { model.guardRead.data?.openIncidents.first?.summary == "house B's own incident" },
             "house B's read"
         )
-        // Only now does house A's answer arrive.
-        park.release.set(true)
         await nothingHappens()
         XCTAssertFalse(park.ranOut.current, "the park timed out, so this asserts nothing")
 
@@ -413,6 +416,9 @@ final class HealthPanelModelTests: XCTestCase {
             "house B's own incident", model.guardRead.data?.openIncidents.first?.summary,
             "house A's answer landed after the switch and must not have replaced house B's"
         )
+        // The assertion that does not depend on which answer landed first:
+        // house A's read never got as far as remembering anything, because
+        // it was cancelled when the address changed.
         XCTAssertEqual(
             "house B's own incident", memory.snapshot(for: otherServer)?.openIncidents.first?.summary,
             "and house B's `previous` is its own — house A's list under this key is what keepList would keep"
