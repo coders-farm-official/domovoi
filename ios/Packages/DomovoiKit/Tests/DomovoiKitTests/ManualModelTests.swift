@@ -11,6 +11,113 @@ import XCTest
 /// JVM suite covers `ManualContent.kt` only, so the screen's own decisions —
 /// the level machine, the link resolution, the sessions read keyed on the
 /// rooms — are tested here for the first time on either phone.
+/// At file scope, not inside the test class: a `static let` on a
+/// `@MainActor` type is main-actor isolated, and a `Sendable` house cannot
+/// take one as a default value.
+/// A `domovoi-manual/2` with everything the screen's branches need: three
+/// topics (one of them the centre's), an alias, a plugin's piece, a
+/// `route:` link of each kind, and a say block with a feature on it.
+private let manualSeededDocument = """
+{"schema":"domovoi-manual/2","doc_base":"https://example.com/blob/{ref}/",
+ "labels":{"start_here":"start here","map":"map","checklist_unknown":"not sure"},
+ "wake_word":{"default":"hey_jarvis","names":{"hey_jarvis":"Hey Jarvis","alexa":"Alexa"},
+              "quoted":"\\u201c{phrase}\\u201d",
+              "note":"Some rooms answer to another word: {list}.",
+              "note_item":"\\u201c{phrase}\\u201d in {rooms}","note_join":"; "},
+ "handler_needs_feature":{"double_check":"ai"},
+ "routes":{"music":{"dashboard":"#music","app":{"screen":"Music"}},
+           "chat":{"dashboard":"#chat","app":{"screen":"Chat"}},
+           "settings/rooms":{"dashboard":"#settings/rooms",
+                             "app":{"screen":"Settings","tab":"rooms"}},
+           "settings/voices":{"dashboard":"#settings/voices","app":{"dashboard":true}},
+           "nowhere":{"app":{}}},
+ "centre":{"id":"domovoi","title":"Domovoi","subtitle":"your home","opens":"how-it-works"},
+ "start":{"title":"Start here",
+          "blocks":[{"type":"p","text":"the manual of this house"},
+                    {"type":"live","slot":"wake-word"},
+                    {"type":"say","phrases":[
+                       {"text":"what time is it?","handler":"clock"},
+                       {"text":"it is nine","handler":"clock","then":true},
+                       {"text":"are you sure?","handler":"double_check","needs":"ai"}]},
+                    {"type":"checklist"}],
+          "checklist":[
+            {"id":"claim-admin","done_when":"admin_claimed","platforms":["dashboard"],
+             "text":"Claim the admin account"},
+            {"id":"first-room","done_when":"rooms","platforms":["dashboard","app"],
+             "text":"Add your first room"},
+            {"id":"wake-word","done_when":"room_heard","platforms":["dashboard","app"],
+             "text":"Say the wake word"},
+            {"id":"introduce","done_when":"people","platforms":["dashboard","app"],
+             "text":"Introduce yourself"},
+            {"id":"music","done_when":"music","platforms":["dashboard","app"],
+             "text":"Add your music"},
+            {"id":"app","done_when":"phone_app","platforms":["dashboard"],
+             "text":"Put the app on your phones","app_text":"Pair this phone",
+             "app_done_when":"this_phone_paired"}]},
+ "topics":[{"id":"how-it-works","title":"How it works","centre":true,
+            "pieces":["what-it-is"],"intro":"start at the middle"},
+           {"id":"music-and-media","title":"Music and media",
+            "pieces":["playlists","internet-radio","pl-alias"]},
+           {"id":"rooms-and-devices","title":"Rooms and devices","pieces":["pi-room"]}],
+ "pieces":[
+   {"id":"what-it-is","topic":"how-it-works","title":"What it is",
+    "blocks":[{"type":"p","text":"[Music](route:music) and [Chat](route:chat)"},
+              {"type":"p","text":"[Rooms](route:settings/rooms), [Voices](route:settings/voices)"},
+              {"type":"p","text":"[nowhere](route:nowhere) and [a piece](node:pi-room)"}],
+    "more":{"text":"More detail","target":"README.md#what"}},
+   {"id":"playlists","topic":"music-and-media","title":"Playlists","subtitle":"make a list",
+    "keywords":["queue"],"blocks":[{"type":"live","slot":"things-to-say"}]},
+   {"id":"internet-radio","topic":"music-and-media","title":"Internet radio",
+    "subtitle":"stations","keywords":["stream"],"plugin":"radio",
+    "blocks":[{"type":"p","text":"a plugin's page"}]},
+   {"id":"pl-alias","topic":"music-and-media","title":"Lists","alias_of":"playlists"},
+   {"id":"pi-room","topic":"rooms-and-devices","title":"A Raspberry Pi room",
+    "subtitle":"a speaker and a mic","keywords":["satellite"],
+    "blocks":[{"type":"live","slot":"rooms"}]}]}
+"""
+
+private final class ManualTestHouse: Sendable {
+    let manual = Shared<StubURLProtocol.Answer>(.json(manualSeededDocument))
+    let rooms = Shared<String>("[]")
+    let handlers = Shared<String>(#"{"handlers":[],"stale":false}"#)
+    let plugins = Shared<String>(#"{"plugins":[]}"#)
+    let version = Shared<String>(#"{"version":"1.0.0"}"#)
+    let people = Shared<String>("[]")
+    let stats = Shared<String>(#"{"total_tracks":0}"#)
+    /// room id → that room's sessions body.
+    let sessions = Shared<[String: String]>([:])
+    /// Which rooms were asked for their sessions, in order.
+    let sessionsAsked = Shared<[String]>([])
+
+    func install() {
+        StubURLProtocol.dispatch { [self] request in
+            guard let parts = request.url.flatMap({
+                URLComponents(url: $0, resolvingAgainstBaseURL: false)
+            }) else { return .json("{}") }
+            let path = parts.path
+            if path == "/api/health" {
+                let challenge = (parts.queryItems ?? []).first { $0.name == "challenge" }?.value
+                return .json((try? TestIdentity.real.healthBody(challenge: challenge)) ?? "{}")
+            }
+            if path == manualPath { return manual.current }
+            if path == "/api/satellites" { return .json(rooms.current) }
+            if path == "/api/capabilities/manual" { return .json(handlers.current) }
+            if path == "/api/plugins" { return .json(plugins.current) }
+            if path == "/api/config/version" { return .json(version.current) }
+            if path == "/api/people" { return .json(people.current) }
+            if path == "/api/music/library/stats" { return .json(stats.current) }
+            if path.hasPrefix("/api/satellites/"), path.hasSuffix("/sessions") {
+                let room = path
+                    .dropFirst("/api/satellites/".count)
+                    .dropLast("/sessions".count)
+                sessionsAsked.mutate { $0.append(String(room)) }
+                return .json(sessions.current[String(room)] ?? "[]")
+            }
+            return .json("{}")
+        }
+    }
+}
+
 @MainActor
 final class ManualModelTests: XCTestCase {
 
@@ -29,115 +136,11 @@ final class ManualModelTests: XCTestCase {
 
     // MARK: - the house
 
-    /// A `domovoi-manual/2` with everything the screen's branches need: three
-    /// topics (one of them the centre's), an alias, a plugin's piece, a
-    /// `route:` link of each kind, and a say block with a feature on it.
-    static let seeded = """
-    {"schema":"domovoi-manual/2","doc_base":"https://example.com/blob/{ref}/",
-     "labels":{"start_here":"start here","map":"map","checklist_unknown":"not sure"},
-     "wake_word":{"default":"hey_jarvis","names":{"hey_jarvis":"Hey Jarvis","alexa":"Alexa"},
-                  "quoted":"\\u201c{phrase}\\u201d",
-                  "note":"Some rooms answer to another word: {list}.",
-                  "note_item":"\\u201c{phrase}\\u201d in {rooms}","note_join":"; "},
-     "handler_needs_feature":{"double_check":"ai"},
-     "routes":{"music":{"dashboard":"#music","app":{"screen":"Music"}},
-               "chat":{"dashboard":"#chat","app":{"screen":"Chat"}},
-               "settings/rooms":{"dashboard":"#settings/rooms",
-                                 "app":{"screen":"Settings","tab":"rooms"}},
-               "settings/voices":{"dashboard":"#settings/voices","app":{"dashboard":true}},
-               "nowhere":{"app":{}}},
-     "centre":{"id":"domovoi","title":"Domovoi","subtitle":"your home","opens":"how-it-works"},
-     "start":{"title":"Start here",
-              "blocks":[{"type":"p","text":"the manual of this house"},
-                        {"type":"live","slot":"wake-word"},
-                        {"type":"say","phrases":[
-                           {"text":"what time is it?","handler":"clock"},
-                           {"text":"it is nine","handler":"clock","then":true},
-                           {"text":"are you sure?","handler":"double_check","needs":"ai"}]},
-                        {"type":"checklist"}],
-              "checklist":[
-                {"id":"claim-admin","done_when":"admin_claimed","platforms":["dashboard"],
-                 "text":"Claim the admin account"},
-                {"id":"first-room","done_when":"rooms","platforms":["dashboard","app"],
-                 "text":"Add your first room"},
-                {"id":"wake-word","done_when":"room_heard","platforms":["dashboard","app"],
-                 "text":"Say the wake word"},
-                {"id":"introduce","done_when":"people","platforms":["dashboard","app"],
-                 "text":"Introduce yourself"},
-                {"id":"music","done_when":"music","platforms":["dashboard","app"],
-                 "text":"Add your music"},
-                {"id":"app","done_when":"phone_app","platforms":["dashboard"],
-                 "text":"Put the app on your phones","app_text":"Pair this phone",
-                 "app_done_when":"this_phone_paired"}]},
-     "topics":[{"id":"how-it-works","title":"How it works","centre":true,
-                "pieces":["what-it-is"],"intro":"start at the middle"},
-               {"id":"music-and-media","title":"Music and media",
-                "pieces":["playlists","internet-radio","pl-alias"]},
-               {"id":"rooms-and-devices","title":"Rooms and devices","pieces":["pi-room"]}],
-     "pieces":[
-       {"id":"what-it-is","topic":"how-it-works","title":"What it is",
-        "blocks":[{"type":"p","text":"[Music](route:music) and [Chat](route:chat)"},
-                  {"type":"p","text":"[Rooms](route:settings/rooms), [Voices](route:settings/voices)"},
-                  {"type":"p","text":"[nowhere](route:nowhere) and [a piece](node:pi-room)"}],
-        "more":{"text":"More detail","target":"README.md#what"}},
-       {"id":"playlists","topic":"music-and-media","title":"Playlists","subtitle":"make a list",
-        "keywords":["queue"],"blocks":[{"type":"live","slot":"things-to-say"}]},
-       {"id":"internet-radio","topic":"music-and-media","title":"Internet radio",
-        "subtitle":"stations","keywords":["stream"],"plugin":"radio",
-        "blocks":[{"type":"p","text":"a plugin's page"}]},
-       {"id":"pl-alias","topic":"music-and-media","title":"Lists","alias_of":"playlists"},
-       {"id":"pi-room","topic":"rooms-and-devices","title":"A Raspberry Pi room",
-        "subtitle":"a speaker and a mic","keywords":["satellite"],
-        "blocks":[{"type":"live","slot":"rooms"}]}]}
-    """
-
-    private final class House: Sendable {
-        let manual = Shared<StubURLProtocol.Answer>(.json(ManualModelTests.seeded))
-        let rooms = Shared<String>("[]")
-        let handlers = Shared<String>(#"{"handlers":[],"stale":false}"#)
-        let plugins = Shared<String>(#"{"plugins":[]}"#)
-        let version = Shared<String>(#"{"version":"1.0.0"}"#)
-        let people = Shared<String>("[]")
-        let stats = Shared<String>(#"{"total_tracks":0}"#)
-        /// room id → that room's sessions body.
-        let sessions = Shared<[String: String]>([:])
-        /// Which rooms were asked for their sessions, in order.
-        let sessionsAsked = Shared<[String]>([])
-
-        func install() {
-            StubURLProtocol.dispatch { [self] request in
-                guard let parts = request.url.flatMap({
-                    URLComponents(url: $0, resolvingAgainstBaseURL: false)
-                }) else { return .json("{}") }
-                let path = parts.path
-                if path == "/api/health" {
-                    let challenge = (parts.queryItems ?? []).first { $0.name == "challenge" }?.value
-                    return .json((try? TestIdentity.real.healthBody(challenge: challenge)) ?? "{}")
-                }
-                if path == manualPath { return manual.current }
-                if path == "/api/satellites" { return .json(rooms.current) }
-                if path == "/api/capabilities/manual" { return .json(handlers.current) }
-                if path == "/api/plugins" { return .json(plugins.current) }
-                if path == "/api/config/version" { return .json(version.current) }
-                if path == "/api/people" { return .json(people.current) }
-                if path == "/api/music/library/stats" { return .json(stats.current) }
-                if path.hasPrefix("/api/satellites/"), path.hasSuffix("/sessions") {
-                    let room = path
-                        .dropFirst("/api/satellites/".count)
-                        .dropLast("/sessions".count)
-                    sessionsAsked.mutate { $0.append(String(room)) }
-                    return .json(sessions.current[String(room)] ?? "[]")
-                }
-                return .json("{}")
-            }
-        }
-    }
-
     private func rig(
         server address: String? = nil,
         visibility: RouteVisibility? = nil
-    ) -> (ManualModel, House, InMemoryShellStore) {
-        let house = House()
+    ) -> (ManualModel, ManualTestHouse, InMemoryShellStore) {
+        let house = ManualTestHouse()
         house.install()
         let url = address ?? server
         let store = InMemoryShellStore(serverURL: url, token: "household-abc")
@@ -548,11 +551,11 @@ final class ManualModelTests: XCTestCase {
     func testAnAnswerForTheHouseWeHaveLeftLandsNowhere() async {
         let arrived = Shared<Bool>(false)
         let release = Shared<Bool>(false)
-        let first = Self.seeded.replacingOccurrences(
+        let first = manualSeededDocument.replacingOccurrences(
             of: "the manual of this house",
             with: "the first house's sentence"
         )
-        let second = Self.seeded.replacingOccurrences(
+        let second = manualSeededDocument.replacingOccurrences(
             of: "the manual of this house",
             with: "the second house's sentence"
         )
