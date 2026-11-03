@@ -1098,6 +1098,19 @@ extension StubHouseUITests {
         )
     }
 
+    /// One finding's signature: a `Contrast failed` the audit could not
+    /// attribute to any element.
+    ///
+    /// It is the signature of **pixels the audit could not read**, not of a
+    /// colour — `StubHouseUITests.knownAnonymousHeadlines`' own doc comment
+    /// says so for Home's five, four of which were "elements the bar was
+    /// drawn over or that straddled a scroll edge". It is spelled out here
+    /// rather than added to that set, because it is not a floor: it is a
+    /// *retry* condition, and a finding that survives the retry still fails.
+    static func peopleAnonymousContrast(_ line: String) -> Bool {
+        line.hasPrefix("Contrast failed") && line.hasSuffix("| element: nil")
+    }
+
     /// Apple's audit on the roster, classified by signature.
     ///
     /// `rest` is what this asserts: a finding Apple can attribute to an
@@ -1105,16 +1118,68 @@ extension StubHouseUITests {
     /// ``knownPushedBarFloor`` are a measured platform floor. A total pinned
     /// here would hide a new contrast finding the moment one of the floor's
     /// went away.
+    ///
+    /// ### Why it audits more than once
+    ///
+    /// On train I001 — the first run of the whole class together — this case
+    /// failed with three `Contrast failed | element: nil` against a People
+    /// screen whose colours are **measured to pass**: every text leaf in the
+    /// run's own screenshot sits at 5.0:1 or better against what is behind
+    /// it (the roster avatars, the nearest things to the line, measure
+    /// 5.04–5.25:1 white-on-fill). Nothing on People had changed since train
+    /// S011, where the same screen audited 0.
+    ///
+    /// What *had* changed is that the class now runs together. The run's
+    /// screenshot shows an iOS notification banner — `Signs of tampering ·
+    /// The web search helper is running a different image than the one
+    /// Domovoi ex…` — sitting over the top of the app, posted by another
+    /// item once an alerts case granted notification authorisation for the
+    /// rest of the run. The banner belongs to SpringBoard, so it is in no
+    /// app tree and the audit can attribute nothing it finds under it: three
+    /// anonymous findings, one per covered top-bar leaf. Home proves it is
+    /// not a People defect — `knownHomeIssues` is 0, Home's code did not
+    /// change, and in that same run Home reported the same three anonymous
+    /// contrast findings with the same banner in its screenshot.
+    ///
+    /// So when everything left is that one signature, the screen is given
+    /// time to clear and audited again. **This cannot hide a colour defect**:
+    /// a colour is still there eight seconds later, and the one real contrast
+    /// defect this screen has had — the first avatar palette, white on a
+    /// green at 4.10:1 — was reported by every single run it was in (S002,
+    /// S005, S008) and by none after it was darkened. Both audits are
+    /// printed, and a finding that survives fails the case exactly as before.
     @MainActor
     func testPeople_PassesTheAccessibilityAudit() throws {
         let app = peopleLaunch()
         evidence(app, "people-audit")
-        let found = try auditIssues(app, "people-audit")
-        let split = Self.floorAndRest(found)
+        var split = Self.floorAndRest(try auditIssues(app, "people-audit"))
         print("PEOPLE AUDIT floor=\(split.floor) rest=\(split.rest.count)")
+
+        // Three audits with two eight-second waits between them: a banner is
+        // on screen for about five seconds, and I001 had one arrive during
+        // this case and another during Home's.
+        var attempt = 1
+        while attempt < 3,
+            !split.rest.isEmpty,
+            split.rest.allSatisfy({ Self.peopleAnonymousContrast($0) })
+        {
+            print(
+                "PEOPLE AUDIT attempt \(attempt) was all anonymous contrast — "
+                    + "something is drawn over the app; waiting it out"
+            )
+            let until = Date().addingTimeInterval(8)
+            while Date() < until { usleep(500_000) }
+            attempt += 1
+            let name = "people-audit-\(attempt)"
+            evidence(app, name)
+            split = Self.floorAndRest(try auditIssues(app, name))
+            print("PEOPLE AUDIT attempt \(attempt) floor=\(split.floor) rest=\(split.rest.count)")
+        }
+
         XCTAssertTrue(
             split.rest.isEmpty,
-            "Apple's audit has findings against People beyond the anonymous floor: "
+            "Apple's audit has findings against People beyond the anonymous floor, in "
+                + "\(attempt) audit(s) of an uncovered screen: "
                 + split.rest.joined(separator: " / ")
         )
     }
