@@ -55,6 +55,15 @@ public enum PeopleStrings {
     /// words a failed read gets when the error carried none.
     public static let requestFailed = "request failed"
 
+    /// `ErrorState`'s own title and its one control (`Kit.kt:282-299`).
+    ///
+    /// Every failed read on this screen draws these two — the roster's, and
+    /// each of the four sub-reads' — because F-A008's rule is that a read
+    /// which failed says so and offers the retry, where an empty note would
+    /// be a claim about the person.
+    public static let couldNotReach = "couldn't reach the server"
+    public static let retry = "retry"
+
     // MARK: - the denylist
 
     /// `PeopleScreen.kt:240`, `:316`.
@@ -179,6 +188,26 @@ public enum PeopleStrings {
     public static func saveFailed(_ why: String) -> String { "save failed: \(why)" }
     public static func patchFailed(_ why: String) -> String { "patch failed: \(why)" }
     public static func deleteFailed(_ why: String) -> String { "delete failed: \(why)" }
+
+    /// A row's own `approve` / `reject` / `forget`, **named after the memory
+    /// it acts on**.
+    ///
+    /// Android's three controls are the bare words (`PersonTabs.kt:397-402`),
+    /// which is ambiguous the moment a person has two memories: VoiceOver
+    /// reads three identical buttons per row, and Voice Control's "tap
+    /// forget" has no answer. The visible word is unchanged and stays the
+    /// label's first word, so "tap approve" still matches.
+    /// Not visible text, so not an IOS-ONLY string.
+    public static func memoryControl(_ verb: String, _ body: String) -> String {
+        "\(verb) \(body)"
+    }
+
+    /// The two `save` buttons, told apart. Both are the word `save` on screen
+    /// (`PersonTabs.kt:185`, `:292`) — and a screen with two identical
+    /// buttons is one a reader cannot address. Same rule as
+    /// ``memoryControl(_:_:)``.
+    public static let saveMemoryControl = "save memory"
+    public static let saveFavoriteControl = "save favorite"
 
     /// `PersonTabs.kt:351-352`.
     public static let forgetMemoryTitle = "forget memory"
