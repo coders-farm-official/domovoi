@@ -108,6 +108,22 @@ public enum RoomsApi {
     }
 }
 
+/// ``failureText(_:_:)`` for an error a `Task` closure has erased to
+/// `any Error`.
+///
+/// A `Task { }` body is not typed-throws, so its `catch` binds `any Error`
+/// even though every call inside these ones throws ``DomovoiError`` and
+/// nothing else. ``ChatModel/write(verb:method:path:body:said:)`` spells that
+/// out as two catch clauses at each site; this says it once, and keeps Chat's
+/// fallback — an error nobody expected is reported as the transport's, with
+/// its own text kept rather than swallowed.
+func roomsFailure(_ action: String, _ error: any Error) -> String {
+    guard let trouble = error as? DomovoiError else {
+        return failureText(action, .unreachable("\(error)"))
+    }
+    return failureText(action, trouble)
+}
+
 extension RoomsModel {
 
     // MARK: - broadcast to every room
@@ -144,7 +160,7 @@ extension RoomsModel {
                 } catch {
                     guard let self, self.stillHome(epoch) else { return }
                     self.broadcasting = false
-                    self.say(failureText("broadcast", error))
+                    self.say(roomsFailure("broadcast", error))
                 }
             }
         }
@@ -192,7 +208,7 @@ extension RoomsModel {
             } catch {
                 guard let self, self.stillHome(epoch) else { return }
                 self.reads(for: roomID).busy = nil
-                self.say(failureText("announce", error))
+                self.say(roomsFailure("announce", error))
             }
         }
     }
@@ -249,7 +265,7 @@ extension RoomsModel {
                 try await client.send(method: "POST", path: path, body: body)
                 said = RoomsStrings.volumeSet(room: roomID, level: level)
             } catch {
-                said = failureText("volume", error)
+                said = roomsFailure("volume", error)
             }
             guard let self, self.stillHome(epoch) else { return }
             self.say(said)
@@ -290,7 +306,7 @@ extension RoomsModel {
                 let reads = self.reads(for: roomID)
                 reads.busy = nil
                 reads.timerScopeOverride = previous
-                self.say(failureText("change timer announcements", error))
+                self.say(roomsFailure("change timer announcements", error))
             }
         }
     }
@@ -338,7 +354,7 @@ extension RoomsModel {
             } catch {
                 guard let self, self.stillHome(epoch) else { return }
                 self.reads(for: roomID).busy = nil
-                self.say(failureText("change quiet hours", error))
+                self.say(roomsFailure("change quiet hours", error))
             }
         }
     }
@@ -370,9 +386,9 @@ extension RoomsModel {
                 try await client.send(method: "DELETE", path: path)
                 said = RoomsStrings.cancelled(kind: kind, id: timerID)
             } catch {
-                said = error.failure?.status == 404
+                said = (error as? DomovoiError)?.failure?.status == 404
                     ? RoomsStrings.timerAlreadyFinished
-                    : failureText("cancel", error)
+                    : roomsFailure("cancel", error)
             }
             guard let self, self.stillHome(epoch) else { return }
             let reads = self.reads(for: roomID)
@@ -404,7 +420,7 @@ extension RoomsModel {
                 self.roster.refresh()
             } catch {
                 guard let self, self.stillHome(epoch) else { return }
-                self.say(failureText("hang up", error))
+                self.say(roomsFailure("hang up", error))
             }
         }
     }
@@ -453,8 +469,8 @@ extension RoomsModel {
                 // is Chat's reader for exactly this — the `{"detail": …}`
                 // FastAPI sends — so there is one way to take a refusal's
                 // words out of a body rather than two.
-                let detail = serverDetail(in: error.failure?.body)
-                self.say(detail ?? failureText("add", error))
+                let detail = serverDetail(in: (error as? DomovoiError)?.failure?.body)
+                self.say(detail ?? roomsFailure("add", error))
                 // Nothing was queued, so the optimistic mark goes back.
                 self.reads(for: roomID).queuedAdds.remove(rowID)
             }

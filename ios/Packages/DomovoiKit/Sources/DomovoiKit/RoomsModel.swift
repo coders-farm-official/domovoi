@@ -96,7 +96,7 @@ public final class RoomsModel {
     /// What is typed into the broadcast field.
     public var broadcastDraft = ""
 
-    public private(set) var broadcasting = false
+    public internal(set) var broadcasting = false
 
     /// Seconds to add to each room's reported `elapsed_sec`, so the song
     /// clocks move between reads (`SatellitesScreen.kt:108`).
