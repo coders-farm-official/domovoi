@@ -105,9 +105,17 @@ extension StubHouseUITests {
     /// composer is a vertical-axis `TextField`, so its Return key makes a
     /// newline (NIGHT-RULES §3) and there is no key to press; what closes it
     /// is a drag on the transcript, which the screen now honours
-    /// (`.scrollDismissesKeyboard(.interactively)`). The search field above
+    /// (`.scrollDismissesKeyboard(.immediately)`). The search field above
     /// the thread list is single-line with `.submitLabel(.search)`, so a
     /// newline typed into *that* one submits and ends the edit.
+    ///
+    /// **A drag that leaves the element it starts in.** `swipeDown` is
+    /// bounded by the element, so on the 68-point transcript of a thread with
+    /// a job strip it was a gesture of about forty points: enough to scroll,
+    /// not enough for the interactive dismissal the screen used to ask for,
+    /// and twelve in a row left the keyboard where it was (train MS003). The
+    /// screen now dismisses on the first scroll, and this drags 320 points —
+    /// clamped inside the window — so that either behaviour would be enough.
     @MainActor
     func chatMoreCloseKeyboard(
         _ app: XCUIApplication,
@@ -117,7 +125,16 @@ extension StubHouseUITests {
         for round in 0..<12 {
             if !app.keyboards.firstMatch.exists { return true }
             if let dragging, dragging.exists {
-                dragging.swipeDown(velocity: .slow)
+                let from = dragging.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+                let reach = min(320, app.frame.height - dragging.frame.midY - 8)
+                if reach > 40 {
+                    from.press(
+                        forDuration: 0.2,
+                        thenDragTo: from.withOffset(CGVector(dx: 0, dy: reach))
+                    )
+                } else {
+                    dragging.swipeDown(velocity: .slow)
+                }
             } else if submitting, round == 0 {
                 app.typeText(XCUIKeyboardKey.return.rawValue)
             } else {
@@ -268,6 +285,66 @@ extension StubHouseUITests {
         return app.buttons.matching(starts).firstMatch
     }
 
+    /// Every one of `leaves` that this transcript can be made to build, with
+    /// the size it was measured at.
+    ///
+    /// **A leaf not on screen is unbuilt, not merely out of sight**
+    /// (NIGHT-RULES §5), and at AccessibilityXXXL one line of a reply is most
+    /// of the transcript's height: thirteen leaves fit the viewport at `large`
+    /// and two or three of them do at AX5. A measurement that only read what
+    /// the landing happened to show would have compared three pairs and the
+    /// case would have said it proved nothing — so this walks the transcript
+    /// from its foot towards its head, taking each leaf the first time it
+    /// exists.
+    ///
+    /// The first measurement and never a later one: a leaf measures the same
+    /// wherever it has been scrolled to, and taking the first means a leaf
+    /// that scrolls out of the tree again is still measured.
+    @MainActor
+    func chatMoreLeafSizes(
+        _ app: XCUIApplication,
+        _ leaves: [String],
+        flicks: Int = 12
+    ) -> [String: CGSize] {
+        var found: [String: CGSize] = [:]
+        func sweep() {
+            for leaf in leaves where found[leaf] == nil {
+                let element = chatMoreLeaf(app, leaf)
+                if element.exists { found[leaf] = element.frame.size }
+            }
+        }
+        sweep()
+        guard let scroller = chatMoreTranscript(app) else { return found }
+        for _ in 0..<flicks where found.count < leaves.count {
+            scroller.swipeDown(velocity: .slow)
+            sweep()
+        }
+        return found
+    }
+
+    /// Whether a leaf measured at `large` grew when the type size did.
+    ///
+    /// **Height alone cannot answer it, and said so.** A leaf under a
+    /// 44-point hit-area rule is 44 points tall at `large` whatever its words
+    /// are, and one line of `.caption` at AccessibilityXXXL is about 44 points
+    /// tall by itself — so the internet chip measured `44.0 -> 44.0` and a
+    /// case that asked 1.25x of that failed a chip whose words scale
+    /// perfectly well: the same two trees have it **96.7 points wide at
+    /// `large` and 265.7 at AX5** (train MS003). Text that ignored Dynamic
+    /// Type would keep both numbers, so this takes the growth of whichever
+    /// of the two moved — the area, when the height is pinned by a floor.
+    ///
+    /// The bar is the one the two Dynamic Type cases already used: 1.25 for a
+    /// leaf that starts at 40 points or more (a floor, or a line already
+    /// large), 1.8 for a line of text that starts small.
+    @MainActor
+    func chatMoreGrew(_ small: CGSize, _ big: CGSize) -> Bool {
+        let bar: CGFloat = small.height >= 40 ? 1.25 : 1.8
+        if big.height >= small.height * bar { return true }
+        let was = small.width * small.height
+        return was > 0 && big.width * big.height >= was * bar
+    }
+
     /// Type `words` into the composer, press **its** send button, and answer
     /// whether the send was taken.
     ///
@@ -317,6 +394,66 @@ extension StubHouseUITests {
         chatMoreReset()
         let (app, landed) = openChat(mode)
         guard landed else {
+            XCTFail("the thread list never answered")
+            return nil
+        }
+        guard openChatMoreThread(app, search: search, title: title, waitingFor: words) else {
+            XCTFail("\(title) drew no transcript")
+            return nil
+        }
+        return app
+    }
+
+    /// The same, on a phone that has **never seen a draft version**.
+    ///
+    /// ### Why a case needs this
+    ///
+    /// Which version the canvas opens with its changes on is decided by what
+    /// this phone has already looked at (``ChatMoreDraftSeenStore``, Android's
+    /// `DraftSeen`), and that is kept in `UserDefaults`: it survives the
+    /// launch, the case and the whole run, and a Simulator is not erased
+    /// between trains. So the first run of
+    /// `testChatMore_TheCanvasShowsChangesForAVersionNotSeenHere` marked
+    /// draft 42's v2 seen, and in the next train the switch came up **off**
+    /// — correctly, for a phone that had seen it, which is precisely the
+    /// phone the case must not be (train MS003: `value: 0`).
+    ///
+    /// `-<key> <value>` puts a value in `UserDefaults`' argument domain,
+    /// which outranks everything the app has written, and the store reads its
+    /// blob with `data(forKey:)` — a string is not `Data`, so the read
+    /// answers nil and the store starts empty. Nothing in the app is built
+    /// for the test: the launch argument is `Foundation`'s own.
+    ///
+    /// Only at `large` — the draft cases are not the Dynamic Type ones — and
+    /// ``openChat(_:aiOff:fail:delay:)``'s own waiting, which this cannot
+    /// call because it has no argument for an extra launch argument.
+    @MainActor
+    func openChatMoreForgettingDrafts(
+        search: String,
+        title: String,
+        waitingFor words: String
+    ) -> XCUIApplication? {
+        resetChatHouse()
+        setChatAI(on: true)
+        setChatFail(nil)
+        chatMoreReset()
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-domovoi-server", "127.0.0.1:6601",
+            "-domovoi-token", StubHouseUITests.token,
+            "-domovoi-audit-push", "Chat",
+            "-domovoi-audit-push-delay", "\(StubHouseUITests.pushDelay)",
+            // ``UserDefaultsSavedState/chatDraftSeenKey``, spelt out: this
+            // target does not import DomovoiKit, by design (see the note at
+            // the foot of `StubHouseUITests.swift`).
+            "-domovoi.chat.draftseen", "forget",
+            "-UIPreferredContentSizeCategoryName", StubHouseUITests.ordinaryTypeSize,
+        ]
+        app.launch()
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 30))
+        guard app.buttons[StubChat.fridge].firstMatch.waitForExistence(timeout: 40) else {
+            print("=== THE THREAD LIST NEVER ANSWERED — tree follows ===")
+            print(app.debugDescription)
             XCTFail("the thread list never answered")
             return nil
         }
@@ -669,7 +806,11 @@ extension StubHouseUITests {
     /// the switch doing something, rather than the switch existing.
     @MainActor
     func testChatMore_TheCanvasShowsChangesForAVersionNotSeenHere() throws {
-        guard let app = openChatMore(
+        // **A phone that has not seen draft 42's v2**, which is the one thing
+        // this case is about and the one thing the Simulator remembers
+        // between runs (``openChatMoreForgettingDrafts(search:title:waitingFor:)``
+        // says how, and what it cost).
+        guard let app = openChatMoreForgettingDrafts(
             search: "Four letters",
             title: StubChatMore.letters,
             waitingFor: StubChatMore.lettersLast
@@ -787,6 +928,32 @@ extension StubHouseUITests {
         let landed = kept.waitForExistence(timeout: 30)
         evidence(app, "chatmore-15-draft-saved")
         XCTAssertTrue(landed, "the second save does not say which version it wrote")
+        // **What a just-written version shows is its CHANGES**, not its body:
+        // the canvas opens a version this phone has not seen with the switch
+        // on (``ChatMoreDraftRules/changesOn(version:seen:)``, Android's
+        // `changesOnFor`, `DraftUi.kt:319`), and v2 is one second old. So the
+        // typed words have to be in the diff, which is the server's own answer
+        // about what the save changed — the stub computes it from the text it
+        // was sent, as `_with_changes` does (`chat_drafts.py:451`).
+        XCTAssertTrue(
+            containing(app, StubChatMore.typed).exists,
+            "the changes of the version just written do not hold the words that were typed"
+        )
+        // And the body itself, with the changes switched off: the same words,
+        // read back from the version the server wrote rather than from the
+        // editor that is now closed.
+        let changes = app.switches[ChatMoreStringsUnderTest.changes].firstMatch
+        guard changes.waitForExistence(timeout: 15) else {
+            evidence(app, "chatmore-16-no-changes-switch")
+            XCTFail("a version written by hand draws no changes switch")
+            return
+        }
+        changes.tap()
+        XCTAssertTrue(
+            chatMoreWaitUntil { (changes.value as? String) == "0" },
+            "the changes switch would not go off"
+        )
+        evidence(app, "chatmore-16-draft-saved-body")
         XCTAssertTrue(
             containing(app, StubChatMore.typed).exists,
             "the version that was just written does not hold the words that were typed"
@@ -1028,7 +1195,10 @@ extension StubHouseUITests {
         // built nothing at all — the tree the case printed held one zero-size
         // view where the rows should be, and the card could have arrived
         // twice over without this seeing it (train MS002). The screen now
-        // honours a drag to dismiss, which is what gives those points back.
+        // dismisses on the first scroll of the transcript, which is what
+        // gives those points back: an *interactive* dismissal was tried
+        // first and could not be completed from a 68-point viewport, so
+        // twelve drags in a row left the keyboard standing (train MS003).
         let transcript = chatMoreTranscript(app)
         XCTAssertTrue(
             chatMoreCloseKeyboard(app, submitting: false, dragging: transcript),
@@ -1556,7 +1726,7 @@ extension StubHouseUITests {
             ("chip", ChatMoreStringsUnderTest.internetOff),
         ]
 
-        var measured: [String: [String: CGFloat]] = [:]
+        var measured: [String: [String: CGSize]] = [:]
         for (label, mode) in [
             ("large", StubHouseUITests.ordinaryTypeSize),
             ("AX5", "UICTContentSizeCategoryAccessibilityXXXL"),
@@ -1569,7 +1739,7 @@ extension StubHouseUITests {
             ) else { return }
             usleep(1_000_000)
             evidence(app, "chatmore-42-scale-\(label)")
-            var seen: [String: CGFloat] = [:]
+            var seen: [String: CGSize] = [:]
             for (leaf, words) in leaves {
                 // `staticTexts`, not `.any`: a card's words sit inside views
                 // that carry the same label, and `.any` measures a 44-point
@@ -1577,8 +1747,8 @@ extension StubHouseUITests {
                 let found = app.staticTexts
                     .matching(NSPredicate(format: "label == %@", words))
                     .firstMatch
-                if found.exists { seen[leaf] = found.frame.height }
-                print("CHATMORE SCALE [\(label)] \(leaf) height=\(seen[leaf] ?? -1)")
+                if found.exists { seen[leaf] = found.frame.size }
+                print("CHATMORE SCALE [\(label)] \(leaf) size=\(seen[leaf] ?? .zero)")
             }
             measured[label] = seen
             app.terminate()
@@ -1588,15 +1758,14 @@ extension StubHouseUITests {
         let big = measured["AX5"] ?? [:]
         var compared = 0
         var stuck: [String] = []
-        for (leaf, height) in small.sorted(by: { $0.key < $1.key }) {
+        for (leaf, was) in small.sorted(by: { $0.key < $1.key }) {
             guard let grown = big[leaf] else { continue }
             compared += 1
-            // The chip's words sit inside a 44-point pill, so 44 is already
-            // its height at `large` and 1.8x cannot be asked of it — the same
-            // two bars, for the same reason, as
-            // ``testChatMore_TheConversationsTextGrowsWithTheTypeSize()``.
-            let bar: CGFloat = height >= 40 ? 1.25 : 1.8
-            if grown < height * bar { stuck.append("\(leaf) \(height)->\(grown)") }
+            // ``chatMoreGrew(_:_:)`` and not a height: the chip's words sit
+            // inside a 44-point pill and one line of AX5 `.caption` is 44
+            // points tall by itself, so this leaf's height cannot tell a
+            // frozen chip from a scaling one. Its width can, and does.
+            if !chatMoreGrew(was, grown) { stuck.append("\(leaf) \(was)->\(grown)") }
         }
         XCTAssertEqual([], stuck, "a leaf of the lookup card does not scale")
         XCTAssertGreaterThanOrEqual(
@@ -1708,6 +1877,11 @@ extension StubHouseUITests {
     /// the growth there is to see. Anything that starts at 40 points or more
     /// is measured against **1.25x** for that reason, which 44 to 64 clears
     /// and 44 to 44 does not.
+    ///
+    /// And where a floored leaf's words still fit on one line at AX5, 44 to
+    /// 44 is all either size has to say — so the comparison is
+    /// ``chatMoreGrew(_:_:)``, which falls back to the leaf's area. That is
+    /// what the chip needed, and the measurement is in that method.
     @MainActor
     func testChatMore_TheConversationsTextGrowsWithTheTypeSize() throws {
         // The two threads the audit ran over, each with the leaves it named
@@ -1723,26 +1897,29 @@ extension StubHouseUITests {
              StubChatMore.cardLeaves),
         ]
 
-        var measured: [String: [String: CGFloat]] = [:]
+        var measured: [String: [String: CGSize]] = [:]
         for (label, mode) in [
             ("large", StubHouseUITests.ordinaryTypeSize),
             ("AX5", "UICTContentSizeCategoryAccessibilityXXXL"),
         ] {
-            var seen: [String: CGFloat] = [:]
+            var seen: [String: CGSize] = [:]
             for screen in screens {
                 guard let app = openChatMore(
                     mode, search: screen.search, title: screen.title, waitingFor: screen.words
                 ) else { return }
                 usleep(1_000_000)
                 evidence(app, "chatmore-45-leaves-\(label)-\(screen.name)")
+                // Scrolling for them, because at AX5 the transcript holds two
+                // or three of these at a time
+                // (``chatMoreLeafSizes(_:_:flicks:)``).
+                let sizes = chatMoreLeafSizes(app, screen.leaves)
                 for leaf in screen.leaves {
-                    let found = chatMoreLeaf(app, leaf)
                     // Keyed by screen as well as by words: the model's name is
                     // on both threads, and one key would have the second
                     // screen's measurement overwrite the first's.
-                    if found.exists { seen["\(screen.name)/\(leaf)"] = found.frame.height }
+                    if let size = sizes[leaf] { seen["\(screen.name)/\(leaf)"] = size }
                     print("CHATMORE LEAF [\(label)] \(screen.name)/\(leaf)"
-                        + " height=\(seen["\(screen.name)/\(leaf)"] ?? -1)")
+                        + " size=\(sizes[leaf] ?? .zero)")
                 }
                 app.terminate()
             }
@@ -1753,11 +1930,13 @@ extension StubHouseUITests {
         let big = measured["AX5"] ?? [:]
         var compared = 0
         var stuck: [String] = []
-        for (leaf, height) in small.sorted(by: { $0.key < $1.key }) {
+        for (leaf, was) in small.sorted(by: { $0.key < $1.key }) {
             guard let grown = big[leaf] else { continue }
             compared += 1
-            let bar: CGFloat = height >= 40 ? 1.25 : 1.8
-            if grown < height * bar { stuck.append("\(leaf) \(height)->\(grown)") }
+            // The three answers of the lookup card are 44-point buttons, so
+            // their height is a floor and not a measurement:
+            // ``chatMoreGrew(_:_:)`` takes whichever of the two numbers moved.
+            if !chatMoreGrew(was, grown) { stuck.append("\(leaf) \(was)->\(grown)") }
         }
         XCTAssertEqual([], stuck, "a leaf the audit named does not scale after all")
         XCTAssertGreaterThanOrEqual(

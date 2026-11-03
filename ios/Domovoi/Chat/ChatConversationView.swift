@@ -244,9 +244,28 @@ struct ChatConversationView: View {
             // the model's own title job names a thread after the first reply
             // and a rename on another device shows while this is open. A
             // stored string could do neither.
+            //
+            // **At most two lines.** Android's conversation header is one
+            // line with an ellipsis (`maxLines = 1`, `ChatHome.kt:722`); this
+            // was unbounded, and a title is as long as a person's first
+            // question. "The lease and the boiler at Fernbrook" wrapped to
+            // **311 points** at AccessibilityXXXL, and the title, the chip
+            // and the composer then left the transcript a viewport of
+            // exactly zero: the thread drew no messages at all and the case
+            // that opened it reported a screen with no transcript to scroll
+            // (`testChatMore_TheConversationsTextGrowsWithTheTypeSize`,
+            // train MS003).
+            //
+            // Two and not Android's one, because two lines still hold a
+            // title like that one whole at `large` — where Apple's audit
+            // runs, and a line it has to truncate there is a finding — while
+            // bounding the header at an accessibility size, which is the
+            // thing that was broken. DECISIONS.md.
             Text(chat.openTitle)
                 .font(.headline)
                 .accessibilityAddTraits(.isHeader)
+                .lineLimit(2)
+                .truncationMode(.tail)
                 .fixedSize(horizontal: false, vertical: true)
                 .multilineTextAlignment(.leading)
 
@@ -362,10 +381,19 @@ struct ChatConversationView: View {
             // read without closing the keyboard, and there was no gesture
             // that closed it (`testChatMore_ACardOnANewReplyArrivesWithout`
             // `ReopeningTheThread`, train MS002, which measured a built
-            // transcript of exactly nothing). `.interactively` and not
-            // `.immediately`, so a flick of the transcript does not dismiss a
-            // keyboard somebody is still typing into.
-            .scrollDismissesKeyboard(.interactively)
+            // transcript of exactly nothing).
+            //
+            // **`.immediately`, and `.interactively` was measured wrong
+            // here.** An interactive dismissal travels with the finger: it
+            // completes when the drag has carried the keyboard most of the
+            // way down, and it springs back when the drag is short. The
+            // viewport a person is dragging in is the 68 points above, which
+            // is a drag of about forty before the finger reaches the
+            // keyboard's own top -- twelve of them in a row did not move it
+            // (train MS003). The transcript on this screen is the one place
+            // where a flick has to be enough, because when the keyboard is
+            // up there is nowhere else to flick.
+            .scrollDismissesKeyboard(.immediately)
             // Follow the reply down the screen as it is written. Keyed on
             // ``tail``, which moves on a new message **and** on a delta, so
             // the view scrolls while a reply grows rather than once when it
