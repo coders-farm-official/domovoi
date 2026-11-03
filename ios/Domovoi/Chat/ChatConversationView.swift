@@ -24,9 +24,25 @@ struct ChatConversationView: View {
 
     @State private var typed = ""
 
+    /// The rest of the conversation -- the extras, the cards, the jobs, the
+    /// chip and a spoken turn (``ChatMoreModel``). Built in `.task` for
+    /// ``ChatView``'s reason: the model needs the container and a `@State`
+    /// initialiser runs before the view has one.
+    @State private var more: ChatMoreModel?
+    /// One draft at a time, open in the canvas.
+    @State private var draft: ChatMoreDraftModel?
+    @State private var sheet: ChatMoreSheet?
+
     var body: some View {
         VStack(spacing: 0) {
             titleRow
+            // The per-thread internet switch (``ChatMoreInternetChipView``).
+            // Honest now: the chip turns a chat's lookups on, and the card a
+            // lookup then stops at is one this app can answer.
+            if let more, chat.openThread != nil {
+                ChatMoreInternetChipView(more: more)
+                    .padding(.horizontal, 12)
+            }
             Divider()
             if let note = chat.aiOffNote {
                 // **In place of the whole conversation**, which is what
@@ -42,9 +58,122 @@ struct ChatConversationView: View {
                 aiOff(note)
             } else {
                 transcript
+                // Every live and interrupted long-document job of this
+                // thread, under the transcript and above the composer
+                // (`ChatScreen.kt:1036`).
+                if let more { ChatMoreJobCardsView(more: more) }
                 composer
             }
         }
+        .task {
+            if more == nil {
+                more = ChatMoreModel(
+                    in: model.container,
+                    deviceID: model.deviceID,
+                    // The re-read after a card answer or a spoken turn, which
+                    // is what `ChatScreen.kt:917` does: the kept rows arrive
+                    // in the transcript rather than being invented from the
+                    // stream.
+                    reopen: { [weak chat] in
+                        guard let chat, let id = chat.openThread else { return }
+                        chat.open(thread: id, title: chat.openTitle)
+                    }
+                )
+            }
+            if draft == nil {
+                draft = ChatMoreDraftModel(in: model.container, deviceID: model.deviceID)
+            }
+            openExtras()
+        }
+        // A thread opened from this screen (a new chat's first send makes
+        // one) or from the list.
+        .onChange(of: chat.openThread) { _, _ in openExtras() }
+        // A send, a retry or a `chat.changed` moved the transcript, so the
+        // extras -- which are a **second read of the same route** -- have to
+        // follow it. ``ChatMoreDetail`` says at length why there are two.
+        .onChange(of: chat.transcript.messages.count) { _, _ in more?.refresh() }
+        .onChange(of: model.inputs.serverURL) { _, _ in
+            more?.serverChanged()
+            draft?.serverChanged()
+        }
+        // **The toast is the shell's**, as ``ChatView`` does it: a toast about
+        // a stop that failed must outlive this screen.
+        //
+        // `said` is a `String??`: the model is optional until `.task` has
+        // built it and its toast is optional too, so one `??  nil` flattens
+        // the pair before it is unwrapped. Two levels of optional read as one
+        // in a `guard let`, which would have handed `showToast` an optional.
+        .onChange(of: more?.toast) { _, said in
+            guard let text = said ?? nil else { return }
+            model.showToast(text)
+            more?.setToast(nil)
+        }
+        .onChange(of: draft?.toast) { _, said in
+            guard let text = said ?? nil else { return }
+            model.showToast(text)
+            draft?.setToast(nil)
+        }
+        // **One `.sheet` over four cases**, which is ``ChatSheet``'s shape and
+        // not a preference: several `.sheet` modifiers on one view do not
+        // reliably coexist.
+        .sheet(item: $sheet) { which in
+            if let more { sheetBody(which, more) }
+        }
+    }
+
+    /// Point ``ChatMoreModel`` at the thread this screen has open.
+    ///
+    /// `internetAllowed` comes off the list's own row
+    /// (``ChatThread/internetAllowed``) rather than from a third read of a
+    /// thread the screen already has.
+    private func openExtras() {
+        guard let id = chat.openThread else {
+            more?.close()
+            return
+        }
+        let allowed = chat.threads.data?.threads.first { $0.id == id }?.internetAllowed
+            ?? chat.archivedThreads.data?.threads.first { $0.id == id }?.internetAllowed
+            ?? false
+        more?.open(thread: id, internetAllowed: allowed)
+    }
+
+    @ViewBuilder
+    private func sheetBody(_ which: ChatMoreSheet, _ more: ChatMoreModel) -> some View {
+        switch which {
+        case .source(let source):
+            ChatMoreSourceSheetView(source: source, client: model.container.client) {
+                sheet = nil
+            }
+        case .report(let report):
+            ChatMoreReportSheetView(report: report) { sheet = nil }
+        case .draft:
+            if let draft {
+                ChatMoreDraftCanvasView(model: draft) {
+                    draft.close()
+                    sheet = nil
+                }
+            }
+        case .talk:
+            ChatMoreTalkView(chat: chat, more: more) { sheet = nil }
+        }
+    }
+
+    /// What a row's own controls do. Each one only opens something; the
+    /// writes are ``ChatMoreModel``'s and ``ChatMoreDraftModel``'s, because
+    /// **a lazy row never holds a `Task`** (NIGHT-RULES section 3).
+    private var rowActions: ChatMoreRowActions {
+        ChatMoreRowActions(
+            source: { sheet = .source($0) },
+            draft: { id, version in
+                draft?.open(draft: id, at: version)
+                sheet = .draft(id, version)
+            },
+            report: { id in
+                guard let report = more?.report(for: id, appVersion: ChatMoreAppVersion.short)
+                else { return }
+                sheet = .report(report)
+            }
+        )
     }
 
     // MARK: - the title row
@@ -138,8 +267,17 @@ struct ChatConversationView: View {
                         if index == chat.transcript.windowDividerIndex {
                             windowDivider
                         }
-                        ChatBubbleView(message: message, chat: chat)
-                            .id(message.ordinal)
+                        ChatBubbleView(
+                            message: message,
+                            chat: chat,
+                            more: more,
+                            // The last row is the only one whose heads-up
+                            // card may be answered (`ChatScreen.kt:1008`):
+                            // the server 409s a pick on anything else.
+                            isLastRow: index == messages.count - 1,
+                            actions: rowActions
+                        )
+                        .id(message.ordinal)
                     }
                     retry
                 }
@@ -216,14 +354,38 @@ struct ChatConversationView: View {
                     .textFieldStyle(.roundedBorder)
                     .lineLimit(1...5)
                     .accessibilityLabel(ChatStrings.composerHint)
-                Button(ChatStrings.send) { send() }
-                    .buttonStyle(.borderedProminent)
-                    .frame(minHeight: 44)
-                    // ``ChatModel/canSend``: not while a reply is being
-                    // written, and not while the house's AI is off. The field
-                    // itself stays live so a message can be typed while the
-                    // last reply finishes.
+                // **The mic or the send button, never both** -- Android's one
+                // rule here (`ChatScreen.kt:1157`, `:1165`), and
+                // ``ChatMoreVoiceRules/micOffered(typed:)`` is the gate.
+                //
+                // And only with a thread: `startVoice` makes one first on
+                // Android (`:466`), `POST /threads/{id}/voice` needs an id,
+                // and a thread is ``ChatModel``'s to create. So a brand-new
+                // chat keeps the send button until its first message has made
+                // the thread -- rather than a mic that would 404.
+                if let more, chat.openThread != nil, more.micOffered(typed: typed) {
+                    Button {
+                        sheet = .talk
+                    } label: {
+                        Image(systemName: "mic")
+                            .font(.body)
+                            .frame(minWidth: 44, minHeight: 44)
+                            .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color.brandInk)
+                    .accessibilityLabel(ChatMoreStrings.talk)
                     .disabled(!chat.canSend)
+                } else {
+                    Button(ChatStrings.send) { send() }
+                        .buttonStyle(.borderedProminent)
+                        .frame(minHeight: 44)
+                        // ``ChatModel/canSend``: not while a reply is being
+                        // written, and not while the house's AI is off. The
+                        // field itself stays live so a message can be typed
+                        // while the last reply finishes.
+                        .disabled(!chat.canSend)
+                }
             }
             .padding(12)
         }
@@ -246,16 +408,42 @@ struct ChatBubbleView: View {
 
     let message: ChatLiveMessage
     let chat: ChatModel
+    /// The rest of the row (``ChatMoreRowTop``, ``ChatMoreRowCards``,
+    /// ``ChatMoreRowBottom``). Nil until ``ChatConversationView`` has built
+    /// it, and then every row has it.
+    let more: ChatMoreModel?
+    let isLastRow: Bool
+    let actions: ChatMoreRowActions
 
     private var mine: Bool { message.role == "user" }
+
+    /// Whether something else is the reply: a lookup card, a heads-up card or
+    /// a draft card is drawn **in place of** the words
+    /// (``ChatMoreRowExtras/replacesWords``, `ChatScreen.kt:984`, `:1010`,
+    /// `:1449`) -- the row's own `content` is the server's wording of the
+    /// card, which the card then says better.
+    private var carded: Bool {
+        guard let id = message.id else { return false }
+        return more?.extras(for: id)?.replacesWords == true
+    }
 
     var body: some View {
         HStack {
             if mine { Spacer(minLength: 32) }
             VStack(alignment: mine ? .trailing : .leading, spacing: 4) {
-                words
+                ChatMoreRowTop(message: message, more: more)
+                if carded, let more {
+                    ChatMoreRowCards(
+                        message: message, more: more, isLastRow: isLastRow, actions: actions
+                    )
+                } else {
+                    words
+                }
                 attribution
                 failure
+                ChatMoreRowBottom(
+                    message: message, more: more, isLastRow: isLastRow, actions: actions
+                )
             }
             .padding(10)
             .background(

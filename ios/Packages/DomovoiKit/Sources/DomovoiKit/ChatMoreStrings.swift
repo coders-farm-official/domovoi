@@ -31,6 +31,47 @@ public enum ChatMoreStrings {
     /// `ChatDocsUi.kt:186` — what a tap on a chip does.
     public static func openSource(_ label: String) -> String { "open \(label)" }
 
+    /// The page sheet's caption over the sentence the reply actually used.
+    ///
+    /// **iOS-only.** Android marks the `match` inside the passage with a
+    /// background wash and nothing else (`SourceSheet`, `ChatDocsUi.kt:196`).
+    /// A wash inside an `AttributedString` is invisible to VoiceOver — the
+    /// element's label is the whole passage either way — so a reader who
+    /// cannot see the colour would have no way at all to tell which sentence
+    /// was cited. The wash is still drawn; this is the line above it, and it
+    /// is drawn only when the match was actually found in the passage
+    /// (``ChatMoreSourceRules/matchRange(in:match:)``).
+    public static let theSentenceTheReplyUsed = "the sentence the reply used"
+
+    /// A thumbnail's own label.
+    ///
+    /// **iOS-only.** Android draws a message's pictures as bare `AsyncImage`s
+    /// with no `contentDescription` (`ChatScreen.kt:1395-1408`), which is an
+    /// image a screen reader cannot name. NIGHT-RULES §3 requires a label on
+    /// every icon-only control, and the upload's own file name is the only
+    /// thing about the picture this app knows.
+    public static func pictureNamed(_ name: String) -> String {
+        name.isEmpty ? "a picture" : "picture \(name)"
+    }
+
+    /// Said in a thumbnail's place when the fetch failed.
+    ///
+    /// **iOS-only**, and for the same reason: Android's `AsyncImage` leaves an
+    /// empty box, and an empty box is a leaf an audit has to measure and a
+    /// person cannot read.
+    public static let pictureDidntLoad = "this picture didn't load"
+
+    /// The job bar's spoken value: how much of the document has been read.
+    ///
+    /// **iOS-only.** Android's bar is a `LinearProgressIndicator` inside a
+    /// `liveRegion` whose *text* is the server's line (`DocJobCard`,
+    /// `ChatDocsUi.kt:330`), and a SwiftUI `ProgressView(value:total:)` reads
+    /// out as a bare percentage unless it is given one — "4 of 11 parts" is
+    /// the same fact the bar draws.
+    public static func partsRead(read: Int, parts: Int) -> String {
+        "\(read) of \(parts) part\(parts == 1 ? "" : "s") read"
+    }
+
     // MARK: - long-document jobs (`ChatDocsUi.kt:301`)
 
     /// `ChatDocsUi.kt:345`. The server writes the job's own progress line, so
