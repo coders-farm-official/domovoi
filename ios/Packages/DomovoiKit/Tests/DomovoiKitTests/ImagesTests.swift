@@ -227,6 +227,17 @@ final class ImagesTests: XCTestCase {
             "Delete this generation and its 4 images? This can't be undone.",
             ImagesStrings.deleteBody(images: row.imageNames.count)
         )
+        // **A tile says its position and never "of n".** The card draws three
+        // of this row's four pictures, so a label reading `picture 1 of 3`
+        // would be counting the tiles while sounding like a count of the
+        // pictures — and the only count on this card that means anything is
+        // the dialog's four, asserted above.
+        XCTAssertEqual("picture 1", ImagesStrings.tile(position: 1))
+        XCTAssertEqual("picture 3", ImagesStrings.tile(position: row.tileNames.count))
+        XCTAssertFalse(
+            ImagesStrings.tile(position: 1).contains("of"),
+            "a tile's label counts the tiles, which is not the number of pictures"
+        )
     }
 
     /// `:273`'s plural, at the three counts that matter: none, Kotlin's one

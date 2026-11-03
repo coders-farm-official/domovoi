@@ -7,8 +7,8 @@ import Foundation
 /// Anything here that is **not** Android's own sentence is marked
 /// **iOS-only** and recorded, with its reason, in
 /// `design-notes/ios/overnight/images/IOS-ONLY-STRINGS.md`. There are
-/// **three**, each marked below and recorded with its reason there (§3, §5,
-/// §7).
+/// **four**, each marked below and recorded with its reason there (§3, §5,
+/// §7, §8).
 ///
 /// The ellipsis in `describe the image…` and `working…` is U+2026, the
 /// separator in the meta lines is U+00B7 with a space either side, and the
@@ -98,6 +98,23 @@ public enum ImagesStrings {
 
     /// `ImagesScreen.kt:431`, the delete button's only label.
     public static let delete = "delete"
+
+    /// **iOS-only.** One tile's screen-reader label.
+    ///
+    /// Android's `contentDescription` is the file's own name (`:407`), and
+    /// that is what this said until Apple's audit answered
+    /// `Label not human-readable` against `kingfisher-02.png`
+    /// (train S001, 2026-11-02): a label VoiceOver spells out character by
+    /// character is not a name a person hears. The file name is not lost —
+    /// it is the tile's ``accessibilityValue`` and the picture sheet's own
+    /// title — so a tile still says which file it is, after saying what it
+    /// is. IOS-ONLY-STRINGS §8.
+    ///
+    /// **The position, and never "of n".** The card draws at most three of a
+    /// generation's pictures and a generation can hold four
+    /// (``deleteBody(images:)`` counts them all), so "picture 2 of 3" would
+    /// be a count of the tiles claiming to be a count of the pictures.
+    public static func tile(position: Int) -> String { "picture \(position)" }
 
     /// `ImagesScreen.kt:277`.
     public static let deleteTitle = "delete generation"

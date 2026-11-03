@@ -68,6 +68,17 @@ extension StubHouseUITests {
 
         /// History row 21: four images, full params, a prompt that wraps.
         static let historyPromptWord = "kingfisher"
+        /// The whole prompt, as `fixtures/images.py:207-209` writes it.
+        ///
+        /// Here because two cases need the leaf *itself* and not a word in
+        /// it: ``testImages_AtTheLargestTypeSize()`` measures its height at
+        /// both type sizes, and the audit case pins Apple's one attributed
+        /// `Text clipped` to this label — the three-line cap is Android's
+        /// (`ImagesScreen.kt:417-422`) and the measurement is what says the
+        /// three lines grow.
+        static let historyPrompt =
+            "a kingfisher on a frozen reed, painted as a woodblock print, "
+            + "with a wide pale sky above the ice and a single red seal in the corner"
         static let historyMeta = "sdxl-turbo · 1024 × 1024 · 28 steps · seed 773451"
         /// The three tiles that are drawn, and the fourth that is not. The
         /// first name carries a **space**, which is what proves the path
@@ -110,6 +121,9 @@ extension StubHouseUITests {
         static let deleteTitle = "delete generation"
         static let deleted = "deleted"
         static let close = "close"
+        /// ``ImagesStrings/tile(position:)`` — a tile's label since the audit
+        /// rejected the file name as one.
+        static func tile(position: Int) -> String { "picture \(position)" }
     }
 
     // MARK: - getting there
@@ -125,9 +139,20 @@ extension StubHouseUITests {
     /// that line cannot exist until `…/models` has answered and been decoded
     /// — a marker that only a *completed read* can produce, which is the
     /// lesson `houseName(in:)` carries. For the three states where that line
-    /// is a card instead, the caller passes `waitingFor:`. At AX5 the header
-    /// and the engine line fill the window, so the marker is the same one:
-    /// it is above everything else on the page.
+    /// is a card instead, the caller passes `waitingFor:`.
+    ///
+    /// **At AX5 it cannot be `engine running`**, and this said it could. On a
+    /// 393 × 852 phone at that size the shell's own header takes 300 points,
+    /// the navigation bar 44 and the plugin band 256, which leaves the page a
+    /// **102-point** window over 1626 points of content: the engine line is
+    /// some 600 points down it and a `LazyVStack`'s foot is unbuilt, not
+    /// merely off screen, so the marker never appeared and the case failed
+    /// 40 seconds later having opened the screen perfectly (train S001,
+    /// `testImages_AtTheLargestTypeSize`). That case passes
+    /// `waitingFor: StubImages.pluginName` — the band, which no other screen
+    /// draws and which is on the window at every type size. The 102-point
+    /// window itself is a real thing to decide about and is in DECISIONS,
+    /// "At an accessibility size the band leaves the page a 102-point window".
     @MainActor
     func openImages(
         _ mode: String = StubHouseUITests.ordinaryTypeSize,
@@ -272,6 +297,20 @@ extension StubHouseUITests {
     func imagesScrollToTop(_ app: XCUIApplication, flicks: Int = 30) {
         guard let page = imagesPage(app) else { return }
         for _ in 0..<flicks { page.swipeDown(velocity: .slow) }
+    }
+
+    /// One tile of a history card, by **the file it shows**.
+    ///
+    /// Not `app.buttons[name]` any more. A tile's label is now
+    /// `picture 1`/`picture 2`/`picture 3` — Apple's audit answered
+    /// `Label not human-readable` to a file name (train S001), and a label
+    /// reading `picture 1` repeats on every history card besides. The file
+    /// name is the tile's **value**, which is unique on the screen and is
+    /// still what proves the path escape: `kingfisher 01.png` carries a
+    /// space.
+    @MainActor
+    func imagesTile(_ app: XCUIApplication, showing name: String) -> XCUIElement {
+        app.buttons.matching(NSPredicate(format: "value == %@", name)).firstMatch
     }
 
     /// The page's own scroll view: the tallest one in the tree.
@@ -643,14 +682,29 @@ extension StubHouseUITests {
     func testImages_AHistoryCardShowsThreeTilesOfFour() throws {
         let (app, landed) = openImages()
         XCTAssertTrue(landed, "Images never opened")
-        let first = app.buttons[StubImages.tileOne]
+        let first = imagesTile(app, showing: StubImages.tileOne)
         XCTAssertTrue(imagesScrollUntilBuilt(app, first), "the first tile is not on the card")
-        XCTAssertTrue(app.buttons[StubImages.tileTwo].exists, "the second tile is missing")
-        XCTAssertTrue(app.buttons[StubImages.tileThree].exists, "the third tile is missing")
+        XCTAssertTrue(
+            imagesTile(app, showing: StubImages.tileTwo).exists,
+            "the second tile is missing"
+        )
+        XCTAssertTrue(
+            imagesTile(app, showing: StubImages.tileThree).exists,
+            "the third tile is missing"
+        )
         evidence(app, "images-tiles")
         XCTAssertFalse(
-            containing(app, StubImages.fourthImage).exists,
+            imagesTile(app, showing: StubImages.fourthImage).exists,
             "a fourth picture is drawn, which Android does not draw"
+        )
+        // **Two ways of being wrong, and the second one is new.** The fourth
+        // file's name is now a tile's *value* rather than its label, so a
+        // fourth tile could also be caught by the label it would carry —
+        // which is the assertion that still works if a future card ever draws
+        // a tile without a value.
+        XCTAssertFalse(
+            app.buttons[ImagesWords.tile(position: 4)].exists,
+            "a fourth tile is on the card"
         )
     }
 
@@ -666,7 +720,7 @@ extension StubHouseUITests {
     func testImages_TappingATileOpensThePicture() throws {
         let (app, landed) = openImages()
         XCTAssertTrue(landed, "Images never opened")
-        let tile = app.buttons[StubImages.tileOne]
+        let tile = imagesTile(app, showing: StubImages.tileOne)
         XCTAssertTrue(imagesScrollUntilBuilt(app, tile), "the first tile is not on the card")
         tile.tap()
 
@@ -676,11 +730,11 @@ extension StubHouseUITests {
         XCTAssertTrue(closer.waitForExistence(timeout: 30), "no picture sheet opened")
         evidence(app, "images-picture")
         // **In the navigation bar, not anywhere in the tree.** The tile that
-        // was just tapped carries the same label — `ImagesTile` sets
-        // `.accessibilityLabel(name)` (`ImagesJobCards.swift:315`) — and it
-        // is still behind the presented sheet, so `containing` was true
-        // before the sheet drew anything and would stay true with
-        // `.navigationTitle(name)` deleted (`ImagesPictureSheet.swift:62`).
+        // was just tapped still carries the file's name — as its
+        // `accessibilityValue` now rather than its label — and it is still
+        // behind the presented sheet, so `containing` was true before the
+        // sheet drew anything and would stay true with `.navigationTitle(name)`
+        // deleted (`ImagesPictureSheet.swift:62`).
         XCTAssertTrue(
             app.navigationBars.staticTexts[StubImages.tileOne]
                 .waitForExistence(timeout: 10),
@@ -874,6 +928,12 @@ extension StubHouseUITests {
             ("error", StubImages.failedError),
             ("meta", StubImages.historyMeta),
             ("band", StubImages.pluginName),
+            // The history prompt, added after train S001: the audit case
+            // explains Apple's one attributed `Text clipped` by the
+            // three-line cap being deliberate, and an explanation with no
+            // measurement behind it is how a stuck leaf gets excused. If this
+            // leaf ever stops growing, that excuse fails here first.
+            ("prompt", StubImages.historyPrompt),
         ]
 
         /// Every leaf, **walked down from the top of the page**.
@@ -915,7 +975,15 @@ extension StubHouseUITests {
             ("large", Self.ordinaryTypeSize),
             ("AX5", "UICTContentSizeCategoryAccessibilityXXXL"),
         ] {
-            let (app, landed) = openImages(mode)
+            // **The band, not the engine line.** At AX5 the page gets a
+            // 102-point window and its foot is unbuilt, so `engine running`
+            // — 600 points down it — is not there to wait for, and this case
+            // spent 40 seconds failing to find it on a screen it had opened
+            // (train S001). The band is the one thing only this screen draws
+            // that the window always holds; `heights` walks down to the rest
+            // from the top by itself. ``openImages(_:how:plugin:waitingFor:delay:)``
+            // carries the measurement.
+            let (app, landed) = openImages(mode, waitingFor: StubImages.pluginName)
             XCTAssertTrue(landed, "Images never opened at \(label)")
             usleep(2_000_000)
             // **The text leaves first, from the top of the page.** Five of
@@ -933,7 +1001,7 @@ extension StubHouseUITests {
             let sizes = heights(app)
             measured[label] = sizes
             evidence(app, "images-ax5-\(label)")
-            let tile = app.buttons[StubImages.tileOne]
+            let tile = imagesTile(app, showing: StubImages.tileOne)
             if imagesScrollUntilBuilt(app, tile) {
                 tileSides[label] = tile.frame.width
             }
@@ -991,7 +1059,7 @@ extension StubHouseUITests {
         // be, is at the foot of a lazy list: an audit of a screen whose cards
         // are unbuilt audits the header.
         XCTAssertTrue(
-            imagesScrollUntilBuilt(app, app.buttons[StubImages.tileOne]),
+            imagesScrollUntilBuilt(app, imagesTile(app, showing: StubImages.tileOne)),
             "the history card never built, so this audited the header only"
         )
         let found = try auditIssues(app, "images-audit")
@@ -1018,6 +1086,40 @@ extension StubHouseUITests {
             // element is in the recorded string at all.
             if line.hasPrefix("Contrast failed"), let box = Self.frame(in: line),
                box.minY < bottom, box.maxY > bottom {
+                return false
+            }
+            // **`Text clipped`, anonymous.** The headline says only that text
+            // *may* be clipped at a larger size, and with no element there is
+            // nothing to look at: `[[audit-reports-one-issue]]` — `element: nil`
+            // means the audit had no measurement, not that it found an
+            // anonymous view. Chat is the screen that paid for this one and
+            // carries the whole note (`StubHouseUITests.swift:3653-3662`); what
+            // stands behind it here is the same thing that stands behind it
+            // there — ``testImages_AtTheLargestTypeSize()`` measures seven of
+            // this screen's leaves at `large` and at AX5 and fails if one of
+            // them does not grow. An attributed one is *not* covered: it falls
+            // through to the assertion below.
+            if line.hasPrefix("Text clipped"), line.hasSuffix("| element: nil") {
+                return false
+            }
+            // **`Text clipped`, naming the history prompt.** This one Apple
+            // can attribute, which is normally this file's definition of a
+            // defect — and it is right that the text is cut: the prompt is
+            // `lineLimit(3)` with a tail ellipsis, which is Android's own
+            // `maxLines = 3` (`ImagesScreen.kt:417-422`). What makes it a cap
+            // rather than a squeeze is that the three lines **grow**:
+            // ``testImages_AtTheLargestTypeSize()`` measures this very leaf
+            // by this very label at `large` and at AX5 and fails if it does
+            // not double. Nothing is lost to a screen reader either — the
+            // element's accessibility label is the whole prompt, which is why
+            // the finding can print all 131 characters of it.
+            //
+            // Pinned to **this leaf**: the same headline against any other
+            // element on the screen is not explained and fails below. Train
+            // S001 had it against the prompt at 118.7 points wide, with the
+            // second and third tiles reported across it; the card is a column
+            // since, so the prompt has the card's whole width.
+            if line.hasPrefix("Text clipped"), line.contains(StubImages.historyPrompt) {
                 return false
             }
             return true

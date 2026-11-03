@@ -178,8 +178,6 @@ struct ImagesHistoryCard: View {
     let onOpen: (String) -> Void
     let onDelete: () -> Void
 
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-
     var body: some View {
         content
             .padding(16)
@@ -191,29 +189,36 @@ struct ImagesHistoryCard: View {
     }
 
     /// Android is one `Row`: the tiles, a text column of weight 1.4, the
-    /// delete (`:396-433`).
+    /// delete (`:396-433`). **Here it is a column at every type size**, and
+    /// the row is gone.
     ///
-    /// **At an accessibility size it becomes a column**, and this is the
-    /// layout the AX5 case is measuring. Three 84-point squares beside three
-    /// lines of a prompt is the arrangement that straddles the viewport edge
-    /// once the squares grow with the type size and the text needs six lines
-    /// instead of three — the exact shape `[[audit-reports-one-issue]]`
-    /// records a finding for, which two tree diffs missed and the screenshot
-    /// explained.
-    @ViewBuilder private var content: some View {
-        if dynamicTypeSize.isAccessibilitySize {
-            VStack(alignment: .leading, spacing: 10) {
-                thumbnails
-                text
-                HStack {
-                    Spacer(minLength: 8)
-                    deleteButton
-                }
-            }
-        } else {
-            HStack(alignment: .top, spacing: 12) {
-                thumbnails
-                text
+    /// The row was Android's own arrangement and it did not survive a 393-point
+    /// phone. The strip was capped at 140 points to leave the text something,
+    /// which left the prompt 118.7 points wide — three lines of about fifteen
+    /// characters, ending `painted as a wo…` — and put the second and third
+    /// tiles *outside* the strip's clip. A horizontal `ScrollView` clips what
+    /// it draws but **not** what it reports: both tiles stayed in the
+    /// accessibility tree at x = 124 and x = 216, straight across the prompt at
+    /// x = 164.6, so Apple's audit read a picture where it expected text and
+    /// answered with three `Text clipped` and one `Contrast failed` it could
+    /// not attribute to any element — the audit had no measurement to give
+    /// (`[[audit-reports-one-issue]]`), and the screenshot in train S001 is
+    /// what placed them. VoiceOver's touch exploration has the same trouble for
+    /// real: a finger on the prompt lands on a tile that is not on the screen.
+    ///
+    /// In a column the three 84-point tiles want 268 of the card's 329 points
+    /// and all three fit, so nothing is reported outside the strip, and the
+    /// prompt gets the whole width instead of a seventh of it. At an
+    /// accessibility size this was already the layout, for rule §3's reason;
+    /// the one thing that changes there is that `delete` is now on its own
+    /// line at every size, which is the price of the tiles not overlapping the
+    /// only two lines that say what made the picture. DECISIONS, "The history
+    /// card is a column, not Android's row".
+    private var content: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            thumbnails
+            text
+            HStack {
                 Spacer(minLength: 8)
                 deleteButton
             }
@@ -233,30 +238,36 @@ struct ImagesHistoryCard: View {
         // column's `weight(1.4f)` (`ImagesScreen.kt:394-416`), so the tiles
         // get at most ~42% of the row and scroll inside that.
         //
-        // A plain `HStack` of three 84-point tiles does not fit here and took
-        // the text with it: on a 393-point phone the stack's 16 and the card's
-        // 16 leave 329, and the fixed children already want 268 (tiles) + 44
-        // (delete) + 36 (gaps) + 8 (the `Spacer` minimum) = 356 — so the
-        // flexible text column was proposed **zero** width and the prompt and
-        // the meta line, the only two things that say what made the picture,
-        // were crushed to nothing while the tiles overflowed anyway. At an
-        // accessibility size `side` is ~300 points each and a vertically
-        // scrolling `ScrollView` clips horizontally, so the second and third
-        // pictures were off the viewport and could not be tapped at all
-        // (2026-11-02 review). No UI case could see it: they assert
+        // A plain `HStack` of three 84-point tiles does not fit beside the
+        // text and took the text with it: on a 393-point phone the stack's 16
+        // and the card's 16 leave 329, and the fixed children already want
+        // 268 (tiles) + 44 (delete) + 36 (gaps) + 8 (the `Spacer` minimum) =
+        // 356 — so the flexible text column was proposed **zero** width and
+        // the prompt and the meta line, the only two things that say what made
+        // the picture, were crushed to nothing while the tiles overflowed
+        // anyway (2026-11-02 review). No UI case could see it: they assert
         // existence, and existence does not depend on width.
+        //
+        // The strip is still a `ScrollView` now that it has the card's whole
+        // width: at an accessibility size `side` is ~300 points each, three of
+        // them want ~920, and the alternative to scrolling them is clipping
+        // two pictures off the card with no way to reach them.
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                ForEach(job.tileNames, id: \.self) { name in
-                    ImagesTile(name: name, tiles: tiles) { onOpen(name) }
+                ForEach(Array(job.tileNames.enumerated()), id: \.element) { index, name in
+                    ImagesTile(
+                        name: name,
+                        // 1-based, because a person hears it: `picture 1`.
+                        position: index + 1,
+                        tiles: tiles
+                    ) { onOpen(name) }
                 }
             }
         }
-        // The strip's share of the row, Android's weights' ~42% of a compact
-        // card. In the accessibility branch the strip is on its own line, so
-        // it takes the card's full width and only scrolls when the tiles
-        // outgrow it.
-        .frame(maxWidth: dynamicTypeSize.isAccessibilitySize ? .infinity : 140)
+        // The card's whole width at every type size. At `large` all three
+        // tiles fit inside it, which is what ``content`` being a column buys:
+        // nothing is drawn — or reported — outside the strip's own frame.
+        .frame(maxWidth: .infinity, alignment: .leading)
         // The tile is square and the strip must not grow a line taller than
         // one: a horizontal `ScrollView` is otherwise greedy vertically.
         .fixedSize(horizontal: false, vertical: true)
@@ -312,6 +323,10 @@ struct ImagesHistoryCard: View {
 struct ImagesTile: View {
 
     let name: String
+
+    /// Where this picture sits on the card, 1-based — what VoiceOver says.
+    let position: Int
+
     let tiles: VideoPosterStore
     let onOpen: () -> Void
 
@@ -336,10 +351,20 @@ struct ImagesTile: View {
                 .contentShape(.rect)
         }
         .buttonStyle(.plain)
-        // Android's `contentDescription = name` (`:407`). The file's own name
-        // and not "image": a card can hold three of these and three rows
-        // saying "image" name nothing.
-        .accessibilityLabel(name)
+        // Android's `contentDescription` is the file's own name (`:407`), and
+        // so was this until Apple's audit answered `Label not human-readable`
+        // against `kingfisher-02.png` in train S001: a label VoiceOver spells
+        // out one character at a time is not a name anybody hears. The
+        // position says which picture this is, which is the whole job
+        // Android's name was doing on a card holding three of them —
+        // ``ImagesStrings/tile(position:)``, IOS-ONLY-STRINGS §8.
+        .accessibilityLabel(ImagesStrings.tile(position: position))
+        // **The file name is not lost.** It is what this tile *is*, the sheet
+        // it opens is titled with it, and it is what the UI cases match a
+        // particular tile by — a name carrying a space is how the path escape
+        // is proved end to end. A value is read after the label, so VoiceOver
+        // still says it; the audit's complaint was about the label.
+        .accessibilityValue(name)
         // Asked for by the tile, fetched by the store, which is what makes
         // this row own nothing.
         .task(id: path) { tiles.want(path) }
