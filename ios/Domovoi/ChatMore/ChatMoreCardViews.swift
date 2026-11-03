@@ -66,14 +66,30 @@ struct ChatMoreLookupCardView: View {
         }
     }
 
+    /// **The 44 points go on the LABEL, not on the `Button`.**
+    ///
+    /// `Button(label) { }.frame(minHeight: 44)` reads as if it sized the
+    /// control and does not: the frame grows the button's *layout* box, while
+    /// both the hit area and the accessibility frame stay the label's own.
+    /// Apple's audit measured these three answers at 18 points tall and said
+    /// so — "Hit area is too small" on `Allow once`, `Allow in this chat` and
+    /// `Not now`, train MS001 — which is a 44-point rule written down and not
+    /// kept. Sizing inside `label:` and taking the whole rectangle with
+    /// `contentShape` is the idiom the chip and the pill in this file already
+    /// use, and the one every tappable thing here now uses.
     private func answer(_ label: String, _ decision: String, strong: Bool) -> some View {
-        Button(label) {
+        Button {
             more.decideLookup(message: message, decision: decision)
+        } label: {
+            Text(label)
+                .font(.subheadline)
+                .fixedSize(horizontal: false, vertical: true)
+                .multilineTextAlignment(.leading)
+                .frame(minHeight: 44)
+                .contentShape(.rect)
         }
         .buttonStyle(.plain)
-        .font(.subheadline)
         .foregroundStyle(strong ? Color.brandInk : Color.fgMuted)
-        .frame(minHeight: 44)
     }
 
     /// The words of the answer as they arrive, where the reply will be
@@ -161,13 +177,20 @@ struct ChatMoreHeadsUpCardView: View {
     private var options: some View {
         VStack(alignment: .leading, spacing: 4) {
             ForEach(card.offerable, id: \.id) { option in
-                Button(option.label) {
+                // The 44 points inside `label:` — see ``answer(_:_:strong:)``
+                // in this file for what the other way round measured.
+                Button {
                     more.pickHeadsUp(message: message, option: option.id)
+                } label: {
+                    Text(option.label)
+                        .font(.subheadline)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .multilineTextAlignment(.leading)
+                        .frame(minHeight: 44)
+                        .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
-                .font(.subheadline)
                 .foregroundStyle(Color.brandInk)
-                .frame(minHeight: 44)
             }
         }
     }
@@ -195,11 +218,18 @@ struct ChatMoreHeadsUpCardView: View {
             // `card.never_label || "don't warn me about this again"`
             // (`chat_documents.jsx:329`). Unwrapping the raw field left those
             // kinds with no way to be silenced at all.
-            Button(card.neverText) { more.silenceHeadsUp(kind: card.kind) }
-                .buttonStyle(.plain)
-                .font(.caption)
-                .foregroundStyle(Color.fgMuted)
-                .frame(minHeight: 44)
+            Button {
+                more.silenceHeadsUp(kind: card.kind)
+            } label: {
+                Text(card.neverText)
+                    .font(.caption)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .multilineTextAlignment(.leading)
+                    .frame(minHeight: 44)
+                    .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Color.fgMuted)
         }
     }
 

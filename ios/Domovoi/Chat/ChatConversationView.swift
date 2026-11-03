@@ -298,45 +298,76 @@ struct ChatConversationView: View {
     private var transcript: some View {
         ScrollViewReader { scroller in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 10) {
-                    let messages = chat.transcript.messages
-                    ForEach(Array(messages.enumerated()), id: \.element.ordinal) { index, message in
-                        // `WindowDivider` (`ChatHome.kt:655`) at
-                        // ``ChatTranscript/windowDividerIndex`` and **nowhere
-                        // else** — the index is the model's answer, nil when
-                        // nothing fell out of the model's view and nil for an
-                        // id this client does not hold, so a fixed row would
-                        // be wrong in both of those cases.
-                        if index == chat.transcript.windowDividerIndex {
-                            windowDivider
+                // An explicit `VStack` around the rows and the foot: a
+                // `ScrollView` takes ONE view, and two statements in its
+                // builder are a `TupleView` with no layout of its own.
+                VStack(spacing: 0) {
+                    LazyVStack(alignment: .leading, spacing: 10) {
+                        let messages = chat.transcript.messages
+                        ForEach(Array(messages.enumerated()), id: \.element.ordinal) { index, message in
+                            // `WindowDivider` (`ChatHome.kt:655`) at
+                            // ``ChatTranscript/windowDividerIndex`` and **nowhere
+                            // else** — the index is the model's answer, nil when
+                            // nothing fell out of the model's view and nil for an
+                            // id this client does not hold, so a fixed row would
+                            // be wrong in both of those cases.
+                            if index == chat.transcript.windowDividerIndex {
+                                windowDivider
+                            }
+                            ChatBubbleView(
+                                message: message,
+                                chat: chat,
+                                more: more,
+                                // The last row is the only one whose heads-up
+                                // card may be answered (`ChatScreen.kt:1008`):
+                                // the server 409s a pick on anything else.
+                                isLastRow: index == messages.count - 1,
+                                actions: rowActions
+                            )
+                            .id(message.ordinal)
                         }
-                        ChatBubbleView(
-                            message: message,
-                            chat: chat,
-                            more: more,
-                            // The last row is the only one whose heads-up
-                            // card may be answered (`ChatScreen.kt:1008`):
-                            // the server 409s a pick on anything else.
-                            isLastRow: index == messages.count - 1,
-                            actions: rowActions
-                        )
-                        .id(message.ordinal)
+                        retry
                     }
-                    retry
+                    .padding(16)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    // **The scroll target, and not the last row.**
+                    //
+                    // `scrollTo(lastRow, anchor: .bottom)` reads as "put that
+                    // row's foot at the foot of the viewport", and only does that
+                    // while the row FITS. A long reply is one row taller than the
+                    // screen, and SwiftUI then settles for making the row
+                    // visible: a Simulator measured the end of a 1,400-character
+                    // reply at y=782 with the keyboard's top at 561 — 277 points
+                    // of the answer behind the keyboard, and the scroller had
+                    // fired on every delta all the way there
+                    // (`testChatMore_ReplyFollowsItsOwnGrowth`, train MS001).
+                    //
+                    // A zero-height view at the end of the content has no height
+                    // to fight: its foot and the content's foot are the same
+                    // point, so `anchor: .bottom` can only mean the one thing. It
+                    // sits **outside** the `LazyVStack`, so it is built whether or
+                    // not the list has reached its own end, and `Color.clear`
+                    // draws nothing and leaves the audit no leaf to measure.
+                    Color.clear
+                        .frame(height: 1)
+                        .id(Self.foot)
                 }
-                .padding(16)
-                .frame(maxWidth: .infinity, alignment: .leading)
             }
             // Follow the reply down the screen as it is written. Keyed on
             // ``tail``, which moves on a new message **and** on a delta, so
             // the view scrolls while a reply grows rather than once when it
             // starts.
             .onChange(of: tail) { _, _ in
-                guard let last = chat.transcript.messages.last else { return }
-                withAnimation { scroller.scrollTo(last.ordinal, anchor: .bottom) }
+                guard !chat.transcript.messages.isEmpty else { return }
+                withAnimation { scroller.scrollTo(Self.foot, anchor: .bottom) }
             }
         }
     }
+
+    /// The id of the zero-height view at the very end of the transcript.
+    ///
+    /// A `String` and not a row's ordinal, so it can never collide with one.
+    private static let foot = "chat-transcript-foot"
 
     /// What "the transcript moved" means for the scroller: how many messages
     /// there are, and how long the last one's words are.

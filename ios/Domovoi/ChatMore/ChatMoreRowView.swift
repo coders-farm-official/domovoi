@@ -199,10 +199,21 @@ struct ChatMoreDocMarkerView: View {
                 .foregroundStyle(Color.fgMuted)
                 .fixedSize(horizontal: false, vertical: true)
                 .multilineTextAlignment(.leading)
+            // **`fgMuted` and not `warnInk`**, which is also Android's own
+            // colour for these lines (`ChatDocsUi.kt:160`). The port reached
+            // for the amber ink because a note is a caveat, and inside a
+            // message bubble that ink does not read: `warnInk` is 5.73:1 on
+            // white, the bubble is a `fgMuted` wash over it, and on the
+            // sender's bubble — the heavier of the two washes — Apple's audit
+            // measured it at the edge and said "Contrast nearly passed" about
+            // this very line (train MS001). `fgMuted` is 7.44:1 on white and
+            // about 5.8:1 on that wash, so it clears 4.5:1 where the amber
+            // did not. The same change on ``ChatMoreReplyDocsView``'s notes,
+            // which sit on the lighter wash and were next.
             ForEach(ChatMoreSourceRules.noteLines(document.notes), id: \.self) { note in
                 Text(note)
                     .font(.caption2)
-                    .foregroundStyle(Color.warnInk)
+                    .foregroundStyle(Color.fgMuted)
                     .fixedSize(horizontal: false, vertical: true)
                     .multilineTextAlignment(.leading)
             }
@@ -334,10 +345,12 @@ struct ChatMoreReplyDocsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
+            // `fgMuted`, as Android has it (`ChatDocsUi.kt:170`) and for the
+            // contrast reason ``ChatMoreDocMarkerView`` spells out.
             ForEach(ChatMoreSourceRules.noteLines(doc.notes), id: \.self) { note in
                 Text(note)
                     .font(.caption2)
-                    .foregroundStyle(Color.warnInk)
+                    .foregroundStyle(Color.fgMuted)
                     .fixedSize(horizontal: false, vertical: true)
                     .multilineTextAlignment(.leading)
             }

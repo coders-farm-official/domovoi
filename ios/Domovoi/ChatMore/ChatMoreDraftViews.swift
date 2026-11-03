@@ -47,15 +47,24 @@ struct ChatMoreDraftCardView: View {
             // is ``ChatMoreRowBottom``'s idiom for the row menu and the only
             // thing that tells four "open" buttons in one transcript apart,
             // for VoiceOver and for a UI case alike.
-            Button(ChatMoreStrings.open, action: open)
-                .accessibilityLabel(ChatMoreStrings.open)
-                .accessibilityValue(
-                    ChatMoreStrings.draftCard(title: draft.title, version: draft.version)
-                )
-                .buttonStyle(.plain)
-                .font(.subheadline)
-                .foregroundStyle(Color.brandInk)
-                .frame(minHeight: 44)
+            //
+            // The 44 points go inside `label:`: on the `Button` they size its
+            // layout box and leave the hit area and the accessibility frame
+            // the label's own 18 points (``ChatMoreLookupCardView``'s
+            // `answer(_:_:strong:)` has the measurement).
+            Button(action: open) {
+                Text(ChatMoreStrings.open)
+                    .font(.subheadline)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(minHeight: 44)
+                    .contentShape(.rect)
+            }
+            .accessibilityLabel(ChatMoreStrings.open)
+            .accessibilityValue(
+                ChatMoreStrings.draftCard(title: draft.title, version: draft.version)
+            )
+            .buttonStyle(.plain)
+            .foregroundStyle(Color.brandInk)
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)

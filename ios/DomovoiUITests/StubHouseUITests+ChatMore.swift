@@ -121,7 +121,101 @@ extension StubHouseUITests {
         }
         field.tap()
         app.typeText(search)
-        return openThread(app, title, waitingFor: words)
+        // **The filtered row is unbuilt, not merely off screen.** ``openThread``
+        // waits for the row and does not scroll, which is right at `large` and
+        // wrong at an accessibility size: the search field takes the keyboard
+        // with it, and at AX5 what is left of the list between the shell's
+        // 300-point header and the keyboard is **55 points** — a sixth of one
+        // row. `testChatMore_TheCardsGrowWithTheTypeSize` and
+        // `testChatMore_Audits` each waited twenty seconds for a row the list
+        // was never going to build (train MS001), and the tree it printed had
+        // the search field with `Lisbon` in it and no row under it at all.
+        //
+        // So scroll the filtered list until the row exists, the way ``openChat``
+        // already has to for the archived entry, and only then hand over.
+        let row = app.buttons[title].firstMatch
+        if !row.exists, !scrollUntilBuilt(app, row) {
+            print("=== NO CHAT ROW for \(title) after scrolling — tree follows ===")
+            print(app.debugDescription)
+            return false
+        }
+        row.tap()
+        // **A thread opens at its foot**, so a case that names the thread's
+        // FIRST words names a row the transcript may not have built: thread
+        // 19's nine rows are 1,150 points of content in a 476-point viewport
+        // and the tree held every row but the first (train MS001). Where that
+        // happens, scroll the transcript up until the words are there rather
+        // than reporting a screen that drew perfectly well.
+        //
+        // Not ``openThread``, which this replaces: it waits twenty-five
+        // seconds and prints a tree before answering, and both of those are
+        // noise when the next thing to do is scroll.
+        let landing = startingWith(app, words)
+        if landing.waitForExistence(timeout: 25) { return true }
+        let scroller = app.scrollViews.firstMatch
+        for _ in 0..<15 {
+            if scroller.exists { scroller.swipeDown(velocity: .slow) } else { app.swipeDown() }
+            if landing.exists { return true }
+        }
+        print("=== THREAD \(title) DREW NO TRANSCRIPT — tree follows ===")
+        print(app.debugDescription)
+        return false
+    }
+
+    /// The **leaf** whose label starts with `words`: a line of text, or the
+    /// control it is the label of.
+    ///
+    /// Never ``startingWith(_:_:)`` when the thing wanted is a measurement.
+    /// That query is over `.any` and takes the outermost match, which on a
+    /// transcript is the message's whole container: the long-reply case
+    /// measured a 768-point box for a line of text and said so in its own log
+    /// (train MS001). A `staticTexts` query is the line itself, and the three
+    /// leaves the audit named that are buttons report as buttons with no text
+    /// child of their own, so those are looked for second.
+    @MainActor
+    func chatMoreLeaf(_ app: XCUIApplication, _ words: String) -> XCUIElement {
+        let starts = NSPredicate(format: "label BEGINSWITH %@", words)
+        let text = app.staticTexts.matching(starts).firstMatch
+        if text.exists { return text }
+        return app.buttons.matching(starts).firstMatch
+    }
+
+    /// Type `words` into the composer, press **its** send button, and answer
+    /// whether the send was taken.
+    ///
+    /// ``say(_:_:)`` reads that off the person's own words appearing in the
+    /// transcript, and on a thread whose reply is tall that is a race it
+    /// loses: on thread 20 the reply is a card three hundred points high, so
+    /// within the second after the tap the question had been pushed off the
+    /// top of the transcript and the case reported "the composer would not
+    /// send" about a send that had gone out, been answered, and minted the
+    /// very card the case went on to look for (train MS001).
+    ///
+    /// The composer's own answer does not move: `ChatModel.send` clears the
+    /// box only when it took the message (`if chat.send(typed) { typed = "" }`,
+    /// `ChatConversationView.swift`), so a box that no longer holds the words
+    /// is a send that went out — and a refused one leaves them sitting there,
+    /// which is what this still fails on.
+    @MainActor
+    func chatMoreSay(_ app: XCUIApplication, _ words: String) -> Bool {
+        let field = composerField(app)
+        guard field.waitForExistence(timeout: 20) else {
+            print("=== NO COMPOSER — tree follows ===")
+            print(app.debugDescription)
+            return false
+        }
+        field.tap()
+        app.typeText(words)
+        guard let send = composerSend(app) else { return false }
+        send.tap()
+        for _ in 0..<40 {
+            if startingWith(app, words).exists { return true }
+            if !((field.value as? String) ?? "").contains(words) { return true }
+            usleep(500_000)
+        }
+        print("=== THE COMPOSER STILL HOLDS \(words) — tree follows ===")
+        print(app.debugDescription)
+        return false
     }
 
     /// Launch, reset the fixture, and open one of the eleven threads.
@@ -390,7 +484,7 @@ extension StubHouseUITests {
         guard let app = openChatMore(
             search: "Four letters",
             title: StubChatMore.letters,
-            waitingFor: StubChatMore.lettersAsked
+            waitingFor: StubChatMore.lettersLast
         ) else { return }
         evidence(app, "chatmore-05-draft-cards")
 
@@ -428,7 +522,7 @@ extension StubHouseUITests {
         guard let app = openChatMore(
             search: "Four letters",
             title: StubChatMore.letters,
-            waitingFor: StubChatMore.lettersAsked
+            waitingFor: StubChatMore.lettersLast
         ) else { return }
         guard openDraftCard(app, StubChatMore.guttersCard) else { return }
 
@@ -486,7 +580,7 @@ extension StubHouseUITests {
         guard let app = openChatMore(
             search: "Four letters",
             title: StubChatMore.letters,
-            waitingFor: StubChatMore.lettersAsked
+            waitingFor: StubChatMore.lettersLast
         ) else { return }
         guard openDraftCard(app, StubChatMore.fenceCard) else { return }
 
@@ -549,7 +643,7 @@ extension StubHouseUITests {
         guard let app = openChatMore(
             search: "Four letters",
             title: StubChatMore.letters,
-            waitingFor: StubChatMore.lettersAsked
+            waitingFor: StubChatMore.lettersLast
         ) else { return }
         guard openDraftCard(app, StubChatMore.shedCard) else { return }
 
@@ -763,7 +857,10 @@ extension StubHouseUITests {
         ) else { return }
         // After the launch's reset, and before the send it changes.
         chatMoreControl("{\"card_after_send\":true}")
-        XCTAssertTrue(say(app, "and the mowing rota?"), "the composer would not send")
+        // ``chatMoreSay(_:_:)`` and not ``say(_:_:)``: this thread's reply is
+        // a card tall enough to push the question off the top within the
+        // second, and the composer clearing is the signal that does not move.
+        XCTAssertTrue(chatMoreSay(app, "and the mowing rota?"), "the composer would not send")
 
         let asked = exactly(app, StubChatMore.sentCardQueryQuoted)
         let arrived = asked.waitForExistence(timeout: 60)
@@ -1312,7 +1409,12 @@ extension StubHouseUITests {
         for (leaf, height) in small.sorted(by: { $0.key < $1.key }) {
             guard let grown = big[leaf] else { continue }
             compared += 1
-            if grown < height * 1.8 { stuck.append("\(leaf) \(height)->\(grown)") }
+            // The chip's words sit inside a 44-point pill, so 44 is already
+            // its height at `large` and 1.8x cannot be asked of it — the same
+            // two bars, for the same reason, as
+            // ``testChatMore_TheConversationsTextGrowsWithTheTypeSize()``.
+            let bar: CGFloat = height >= 40 ? 1.25 : 1.8
+            if grown < height * bar { stuck.append("\(leaf) \(height)->\(grown)") }
         }
         XCTAssertEqual([], stuck, "a leaf of the lookup card does not scale")
         XCTAssertGreaterThanOrEqual(
@@ -1391,6 +1493,99 @@ extension StubHouseUITests {
         }
     }
 
+    /// Every leaf Apple's Dynamic Type audit **names** on a conversation, and
+    /// the measurement that says what the finding is worth.
+    ///
+    /// ### Why this case exists
+    ///
+    /// `testChatMore_Audits` came back with six findings of
+    /// "Dynamic Type font sizes are partially unsupported: User will not be
+    /// able to change the font size of this element" on the document thread
+    /// and five on the card thread, each naming a leaf (train MS001). A
+    /// finding that names an element is a defect until measured otherwise —
+    /// that rule is how the modal bug on this track was found — so these were
+    /// measured, and it is this case, not a comment, that keeps them
+    /// measured.
+    ///
+    /// Two of the eleven are not this item's code at all (the assistant
+    /// bubble's words and the model's name are `ChatBubbleView`'s), which is
+    /// the first sign that the headline is about the screen rather than about
+    /// anything a ChatMore view does: nothing under `ios/Domovoi/ChatMore/`
+    /// names a point size, clamps `dynamicTypeSize` or asks for a custom font,
+    /// and `minimumScaleFactor` is rejected on this track.
+    ///
+    /// ### The two bars, and why there are two
+    ///
+    /// A line of text at `large` and the same line at AX5 is a 3.6x growth on
+    /// this app's bars (13.3 to 48.0 points), so **1.8x** is a loose bar that
+    /// still cannot be passed by a leaf that does not scale.
+    ///
+    /// A **control** cannot be asked for that: the 44-point hit area is a
+    /// floor under it (NIGHT-RULES section 3), so `Allow once` is already 44
+    /// points tall at `large` with an 18-point line in it, and 44 to 64 is all
+    /// the growth there is to see. Anything that starts at 40 points or more
+    /// is measured against **1.25x** for that reason, which 44 to 64 clears
+    /// and 44 to 44 does not.
+    @MainActor
+    func testChatMore_TheConversationsTextGrowsWithTheTypeSize() throws {
+        // The two threads the audit ran over, each with the leaves it named
+        // there. Every leaf is a label **prefix**, so a sentence longer than
+        // 128 characters is never put in a query (NIGHT-RULES section 5), and
+        // the lists are ``StubChatMore``'s own — the same ones
+        // `testChatMore_Audits` classifies by.
+        let screens: [(name: String, search: String, title: String,
+                       words: String, leaves: [String])] = [
+            ("doc", "Fernbrook", StubChatMore.lease, StubChatMore.leaseReply,
+             StubChatMore.docLeaves),
+            ("card", "Lisbon", StubChatMore.lisbon, StubChatMore.lisbonAsked,
+             StubChatMore.cardLeaves),
+        ]
+
+        var measured: [String: [String: CGFloat]] = [:]
+        for (label, mode) in [
+            ("large", StubHouseUITests.ordinaryTypeSize),
+            ("AX5", "UICTContentSizeCategoryAccessibilityXXXL"),
+        ] {
+            var seen: [String: CGFloat] = [:]
+            for screen in screens {
+                guard let app = openChatMore(
+                    mode, search: screen.search, title: screen.title, waitingFor: screen.words
+                ) else { return }
+                usleep(1_000_000)
+                evidence(app, "chatmore-45-leaves-\(label)-\(screen.name)")
+                for leaf in screen.leaves {
+                    let found = chatMoreLeaf(app, leaf)
+                    // Keyed by screen as well as by words: the model's name is
+                    // on both threads, and one key would have the second
+                    // screen's measurement overwrite the first's.
+                    if found.exists { seen["\(screen.name)/\(leaf)"] = found.frame.height }
+                    print("CHATMORE LEAF [\(label)] \(screen.name)/\(leaf)"
+                        + " height=\(seen["\(screen.name)/\(leaf)"] ?? -1)")
+                }
+                app.terminate()
+            }
+            measured[label] = seen
+        }
+
+        let small = measured["large"] ?? [:]
+        let big = measured["AX5"] ?? [:]
+        var compared = 0
+        var stuck: [String] = []
+        for (leaf, height) in small.sorted(by: { $0.key < $1.key }) {
+            guard let grown = big[leaf] else { continue }
+            compared += 1
+            let bar: CGFloat = height >= 40 ? 1.25 : 1.8
+            if grown < height * bar { stuck.append("\(leaf) \(height)->\(grown)") }
+        }
+        XCTAssertEqual([], stuck, "a leaf the audit named does not scale after all")
+        XCTAssertGreaterThanOrEqual(
+            compared,
+            8,
+            "too few leaves were found to stand behind the audit's classification:"
+                + " \(small) / \(big)"
+        )
+    }
+
     // MARK: - the audit
 
     /// Apple's audit over a conversation with the new things in it.
@@ -1435,7 +1630,26 @@ extension StubHouseUITests {
         let clipped = rest.filter {
             $0.hasPrefix("Text clipped") && $0.hasSuffix("| element: nil")
         }
-        let unexplained = rest.filter { !clipped.contains($0) }
+        // **The one headline that is allowed to name an element here**, and
+        // only for the eleven leaves that have been measured growing.
+        //
+        // "Dynamic Type font sizes are partially unsupported" is already in
+        // ``StubHouseUITests/knownAnonymousHeadlines`` for findings with no
+        // element, because every leaf it could name in the bars was measured
+        // growing 13.3 to 48.0 points. On a conversation it names leaves — six
+        // on the document thread, five on the card thread (train MS001),
+        // including the assistant bubble's own words and the model's name,
+        // which are `ChatBubbleView`'s and not this item's. So each named leaf
+        // is measured by
+        // ``testChatMore_TheConversationsTextGrowsWithTheTypeSize()``, and
+        // this classifies **only** the ones that case covers: a finding
+        // naming anything else still fails, and if one of the eleven ever
+        // stops scaling it is that case, not this one, that says so.
+        let scaled = rest.filter { line in
+            guard line.hasPrefix("Dynamic Type font sizes are") else { return false }
+            return StubChatMore.auditNamedLeaves.contains { line.contains("label='\($0)") }
+        }
+        let unexplained = rest.filter { !clipped.contains($0) && !scaled.contains($0) }
         XCTAssertEqual(
             [],
             unexplained,
@@ -1452,6 +1666,37 @@ extension StubHouseUITests {
 /// These are the stub's own (`stubhouse.py`'s `CHAT_THREADS` and
 /// `CHAT_MESSAGES`, and `fixtures/chatmore.py`).
 enum StubChatMore {
+
+    /// The model every seeded reply carries (`stubhouse.py`'s `_msg`), drawn
+    /// under the words by `ChatBubbleView`'s attribution.
+    static let model = "qwen3:8b"
+
+    /// The leaves Apple's Dynamic Type audit names on the **document** thread,
+    /// as label prefixes.
+    ///
+    /// One list, read by two cases: `testChatMore_Audits` classifies a named
+    /// finding only for these, and
+    /// `testChatMore_TheConversationsTextGrowsWithTheTypeSize` measures
+    /// exactly these growing. Two lists would drift and the classification
+    /// would outlive its measurement.
+    static let docLeaves: [String] = [
+        leaseReply, replyNote, model, markerPrefix, leaseNote,
+        ChatMoreStringsUnderTest.sources,
+    ]
+
+    /// The same, on the **card** thread. The three answers are among them, and
+    /// are buttons rather than lines of text.
+    static let cardLeaves: [String] = [
+        ChatMoreStringsUnderTest.mayILookThisUp,
+        lisbonQueryQuoted,
+        ChatMoreStringsUnderTest.goesTo(duck),
+        ChatMoreStringsUnderTest.allowOnce,
+        ChatMoreStringsUnderTest.allowInThisChat,
+        ChatMoreStringsUnderTest.notNow,
+        model,
+    ]
+
+    static var auditNamedLeaves: [String] { docLeaves + cardLeaves }
 
     // Thread 18: a document and a reply over it.
     static let lease = "The lease and the boiler at Fernbrook"
@@ -1472,6 +1717,16 @@ enum StubChatMore {
     // Thread 19: four draft cards, one draft each.
     static let letters = "Four letters about Fernbrook"
     static let lettersAsked = "Write the landlord a letter about the boiler"
+    /// The thread's **last** question, which is where it opens.
+    ///
+    /// A thread opens at its foot, and this one's nine rows are 1,150 points
+    /// of content: the transcript built every row but the first, so a case
+    /// landing on ``lettersAsked`` waited for a row that was never going to be
+    /// built (train MS001). Landing here keeps all four draft cards built,
+    /// which is what each of these four cases then opens one of;
+    /// ``openChatMoreThread`` scrolls for the first words where a case does
+    /// want them.
+    static let lettersLast = "And the shed"
     /// The four cards' sentences, which are what the canvas is opened by.
     static let boilerCard = "draft: Boiler service at Fernbrook, version 2"
     static let guttersCard = "draft: Gutters at Fernbrook, version 2"

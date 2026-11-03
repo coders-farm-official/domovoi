@@ -44,24 +44,37 @@ struct ChatMoreJobCardView: View {
                     .accessibilityLabel(ChatMoreStrings.partsRead(read: job.read, parts: job.parts))
             }
             if job.live {
-                Button(ChatMoreStrings.stop) { more.stopJob(job.id) }
-                    .buttonStyle(.plain)
-                    .font(.subheadline)
-                    .foregroundStyle(Color.errInk)
-                    .frame(minHeight: 44)
-                    .disabled(more.answering)
+                // The 44 points inside `label:`, not on the `Button` — see
+                // ``ChatMoreLookupCardView`` for what the other way measured.
+                Button {
+                    more.stopJob(job.id)
+                } label: {
+                    Text(ChatMoreStrings.stop)
+                        .font(.subheadline)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(minHeight: 44)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Color.errInk)
+                .disabled(more.answering)
             } else if !ChatMoreJobRules.interrupted([job]).isEmpty {
                 // An interrupted job's own offer (`ChatScreen.kt:1022`). A
                 // **stopped** one's "carry on" belongs to the row its newest
                 // reply is (``ChatMoreModel/carryOn(for:)``), which is why
                 // this branch is only the interrupted case.
-                Button(ChatMoreJobRules.carryOnText(ChatMoreJobRules.left(job))) {
+                Button {
                     more.resumeJob(job.id)
+                } label: {
+                    Text(ChatMoreJobRules.carryOnText(ChatMoreJobRules.left(job)))
+                        .font(.subheadline)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .multilineTextAlignment(.leading)
+                        .frame(minHeight: 44)
+                        .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
-                .font(.subheadline)
                 .foregroundStyle(Color.brandInk)
-                .frame(minHeight: 44)
                 .disabled(more.answering)
             }
             if let failure = job.error, !failure.detail.isEmpty {
