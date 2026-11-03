@@ -1,0 +1,922 @@
+import XCTest
+
+/// "On this phone": the server-or-device switch, the phone's own lists, and
+/// the upload.
+///
+/// Every case is named `testPhoneMedia_…` so a train can hand its result back
+/// to this item, and every piece of evidence is named `phonemedia-…`.
+///
+/// ### Why every case launches with `-domovoi-phone-media`
+///
+/// PHPicker, the document picker and the Photos save alert are all
+/// **out-of-process** UI that XCUITest cannot hold steady, and a Simulator's
+/// photo library is whatever the last person left in it. So the phone's own
+/// library is a `#if DEBUG` fake behind that argument (``PhoneMediaFake``),
+/// and the real pickers are covered by a hand pass on Kamron's phone, which
+/// DECISIONS says in as many words.
+///
+/// Every fake name carries a nonsense word the stub house never uses —
+/// `quenlo`, `zarbis`, `grendalf`, `marsden`, `brevik` — so a case asserting
+/// "the phone's row is here and the server's is not" cannot pass by matching
+/// a word both sides happen to share.
+///
+/// ### One case `MAP.md` §4.5 planned is deliberately not here
+///
+/// `AnswerForTheOldServerDoesNotLandUnderTheNew`. The only way to change
+/// servers from inside the app is the connection sheet, and NIGHT-RULES §1
+/// forbids opening one on a Simulator — it starts a LAN discovery sweep
+/// across Kamron's real home network. The property is covered where it can
+/// be: `PhoneUploadModelTests` switches the house **inside** the round trip,
+/// which is the shape [[read-after-await-wrong-key]] asks for. In its place
+/// is `AFailureNeverShowsTheServersFieldList`, which tests the other half of
+/// the same reply path and is reachable.
+extension StubHouseUITests {
+
+    // MARK: - getting there
+
+    /// Put the house back where every case below expects it.
+    ///
+    /// **Two controls, not one.** `reset-fixtures` resets the fixture
+    /// modules, and `phonemedia.py` is one of them — but the files **block**
+    /// is not a fixture: it is `FILES_BLOCKED` inside `stubhouse.py` itself
+    /// (`:352`), flipped through its own control, and `reset-fixtures` does
+    /// not touch it. Without the second line, every case that ran after
+    /// `ABlockedDeviceSeesTheCardAndNoUploadButton` would see a blocked
+    /// device and no upload button, and the failure would read as this
+    /// item's bug.
+    @MainActor
+    func phoneReset(port: Int = 6601) {
+        control("reset-fixtures", "{}", port: port, what: "the phone-media upload seed")
+        control("files-blocked", "{\"blocked\":false}", port: port, what: "the files block, off")
+    }
+
+    /// How the next upload answers.
+    @MainActor
+    func phoneUpload(_ body: String, port: Int = 6601) {
+        control("phonemedia-upload", body, port: port, what: "how the next upload answers")
+    }
+
+    /// Launch with the phone's own library faked.
+    ///
+    /// ``StubHouseUITests/launch(mode:paired:server:port:strip:push:pushDelay:)``
+    /// cannot take an extra argument and is do-not-edit, so this assembles
+    /// the same list plus `-domovoi-phone-media`. It stays in step with that
+    /// one by holding the same four flags in the same order.
+    @MainActor
+    func phoneLaunch(
+        push route: String?,
+        media: String = "seeded",
+        mode: String = StubHouseUITests.ordinaryTypeSize,
+        server: Bool = true,
+        port: Int = 6601
+    ) -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchArguments = server ? ["-domovoi-server", "127.0.0.1:\(port)"] : []
+        if server { app.launchArguments += ["-domovoi-token", Self.token] }
+        app.launchArguments += ["-domovoi-phone-media", media]
+        if let route {
+            app.launchArguments += [
+                "-domovoi-audit-push", route,
+                "-domovoi-audit-push-delay", "\(Self.pushDelay)",
+            ]
+        }
+        app.launchArguments += ["-UIPreferredContentSizeCategoryName", mode]
+        app.launch()
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 30))
+        return app
+    }
+
+    /// Tap `your device` and wait for the phone's side to have drawn.
+    ///
+    /// It waits for a **row**, not for the segment to look selected: the
+    /// segment changes the instant it is tapped, and a case that carried on
+    /// from there would assert against a side whose first page had not
+    /// landed.
+    @MainActor
+    func phoneSwitchToDevice(_ app: XCUIApplication, waitingFor row: String) -> Bool {
+        let segment = app.buttons[StubPhoneMedia.yourDevice].firstMatch
+        guard segment.waitForExistence(timeout: 30) else {
+            print("=== NO `your device` SEGMENT — tree follows ===")
+            print(app.debugDescription)
+            return false
+        }
+        segment.tap()
+        let landed = containing(app, row).waitForExistence(timeout: 30)
+        if !landed {
+            print("=== THE DEVICE SIDE DREW NO `\(row)` — tree follows ===")
+            print(app.debugDescription)
+        }
+        return landed
+    }
+
+    /// Tap `your device` and wait for the phone page's **header**.
+    ///
+    /// The looser sibling of ``phoneSwitchToDevice(_:waitingFor:)``, for the
+    /// one case that must carry on before a row has been built: at AX5 the
+    /// device list's rows are all below the fold and unbuilt, so a case that
+    /// scrolls to find them cannot first wait for one. Everything else here
+    /// keeps the stricter gate — a case that asserted against a side whose
+    /// first page had not landed is exactly what that one was written for.
+    ///
+    /// The header is not proof the rows arrived, which is why this is not
+    /// the default: it is proof the **device page** is what the switch drew.
+    @MainActor
+    func phoneSwitchToDeviceHeader(_ app: XCUIApplication, waitingFor header: String) -> Bool {
+        let segment = app.buttons[StubPhoneMedia.yourDevice].firstMatch
+        guard segment.waitForExistence(timeout: 30) else {
+            print("=== NO `your device` SEGMENT — tree follows ===")
+            print(app.debugDescription)
+            return false
+        }
+        segment.tap()
+        let landed = app.staticTexts[header].firstMatch.waitForExistence(timeout: 30)
+        if !landed {
+            print("=== THE DEVICE SIDE DREW NO `\(header)` — tree follows ===")
+            print(app.debugDescription)
+        }
+        return landed
+    }
+
+    /// Every **button** whose label is exactly `upload`: the row controls,
+    /// and nothing else.
+    ///
+    /// `.buttons` and not ``containing(_:_:)``'s `.any`, which is this file's
+    /// habit everywhere else, for one reason found by reading
+    /// ``PhonePickToSendView``: the two picker doors sit on the same page and
+    /// their words begin with the same one. They are now `upload a photo` and
+    /// `upload a file` (the review's low finding: `open in another app` is
+    /// Android's open-with on a file you already have, the opposite
+    /// direction), so an **exact** match on `upload` is what separates the
+    /// row controls from the doors — a `BEGINSWITH` or an `.any` query would
+    /// turn every count below into "two more than it should be".
+    @MainActor
+    func phoneUploadControls(_ app: XCUIApplication) -> XCUIElementQuery {
+        app.buttons.matching(NSPredicate(format: "label == %@", StubPhoneMedia.upload))
+    }
+
+    // MARK: - the switch
+
+    /// Every page starts on the server's side (`YourDevice.kt:30`).
+    ///
+    /// A default of `.device` would hide the house's whole library behind a
+    /// phone screen on every fresh launch, which is the thing Android's
+    /// comment on that line is about.
+    @MainActor
+    func testPhoneMedia_TheSwitchIsOnTheServerSideFirst() throws {
+        phoneReset()
+        let app = phoneLaunch(push: "Music")
+        let segment = app.buttons[StubPhoneMedia.yourDevice].firstMatch
+        XCTAssertTrue(segment.waitForExistence(timeout: 40), "the switch never drew")
+        evidence(app, "phonemedia-switch-default")
+        XCTAssertFalse(
+            segment.isSelected,
+            "`your device` is the chosen side on a fresh launch — every page starts on the server's"
+        )
+        // And the phone's side is not merely unselected but **not on screen**:
+        // the fake's track is the discriminator, and the stub house has no
+        // such word anywhere.
+        XCTAssertFalse(
+            containing(app, StubPhoneMedia.phoneTrackWord).exists,
+            "the phone's rows are readable with the server's side chosen"
+        )
+    }
+
+    /// The side that is shown is the only side that can be read.
+    ///
+    /// The exact defect `ShownOrParked` exists to prevent
+    /// (`YourDevice.kt:181`): both sides stay composed, so without
+    /// `accessibilityHidden` and `allowsHitTesting(false)` the hidden one is
+    /// still in the tree and still takes taps.
+    @MainActor
+    func testPhoneMedia_SwitchingToTheDeviceShowsThePhoneAndNotTheServer() throws {
+        phoneReset()
+        let app = phoneLaunch(push: "Videos")
+        // The server's side first, so the absence asserted afterwards is a
+        // thing that went away rather than a thing that never drew.
+        let serverTile = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label == %@", StubPhoneMedia.serverVideo))
+            .firstMatch
+        XCTAssertTrue(serverTile.waitForExistence(timeout: 40), "the server's videos never drew")
+
+        XCTAssertTrue(phoneSwitchToDevice(app, waitingFor: StubPhoneMedia.phoneVideo))
+        evidence(app, "phonemedia-device-videos")
+        XCTAssertFalse(
+            serverTile.exists,
+            "the server's grid is still in the tree behind the phone's — the parked side is not hidden"
+        )
+    }
+
+    /// Switching to the phone and back finds the server's page where it was
+    /// left — the folder, not the root (`YourDevice.kt:134`).
+    @MainActor
+    func testPhoneMedia_TheServerSideKeepsItsPlaceAcrossASwitch() throws {
+        phoneReset()
+        let app = phoneLaunch(push: "Files")
+        let folder = app.buttons[StubPhoneMedia.serverFolder].firstMatch
+        XCTAssertTrue(folder.waitForExistence(timeout: 40), "the server's Files never drew")
+        folder.tap()
+        // A file that exists **only inside** that folder, so "we are still in
+        // Albums" cannot be satisfied by the root listing.
+        let inside = containing(app, StubPhoneMedia.serverFileInsideFolder)
+        XCTAssertTrue(inside.waitForExistence(timeout: 30), "the folder never opened")
+
+        XCTAssertTrue(phoneSwitchToDevice(app, waitingFor: StubPhoneMedia.phoneTrackWord))
+        // **The SERVER's segment**, by its identifier. Tapping `your device`
+        // a second time is what this case used to do, and `onPick(.device)`
+        // is idempotent — so it never left the phone's side, and the
+        // assertion below could only pass if the parked server side leaked
+        // into the accessibility tree, which is the very defect
+        // `ShownOrParked` exists to prevent. The server's segment cannot be
+        // found by label: its label is the house's own name.
+        let back = app.buttons[StubPhoneMedia.serverSegment].firstMatch
+        XCTAssertTrue(back.waitForExistence(timeout: 20), "the switch has no server segment")
+        back.tap()
+        evidence(app, "phonemedia-server-kept-its-place")
+        // Back on the server's side, and still in the folder. A container
+        // that rebuilt the server side would be at its root, asking the
+        // server again.
+        XCTAssertTrue(
+            inside.waitForExistence(timeout: 20),
+            "the server's side went back to its root — the parked composition was thrown away"
+        )
+    }
+
+    /// The choice is per page, not one shared flag (`YourDevice.kt:27`).
+    @MainActor
+    func testPhoneMedia_EachPageRemembersItsOwnSide() throws {
+        phoneReset()
+        let app = phoneLaunch(push: "Videos")
+        XCTAssertTrue(phoneSwitchToDevice(app, waitingFor: StubPhoneMedia.phoneVideo))
+
+        // The phone bar, whose buttons are labelled with the route's own name
+        // (`ShellChromeViews.swift:304`).
+        let toMusic = app.buttons[StubPhoneMedia.musicTab].firstMatch
+        guard toMusic.waitForExistence(timeout: 20) else {
+            print("=== NO PHONE BAR — tree follows ===")
+            print(app.debugDescription)
+            return XCTFail("the phone bar has no Music tab to navigate by")
+        }
+        toMusic.tap()
+
+        let segment = app.buttons[StubPhoneMedia.yourDevice].firstMatch
+        XCTAssertTrue(segment.waitForExistence(timeout: 30), "Music drew no switch")
+        evidence(app, "phonemedia-per-page-side")
+        XCTAssertFalse(
+            segment.isSelected,
+            "Music opened on the phone's side because Videos was set to it — one flag for three pages"
+        )
+
+        app.buttons[StubPhoneMedia.videosTab].firstMatch.tap()
+        XCTAssertTrue(
+            containing(app, StubPhoneMedia.phoneVideo).waitForExistence(timeout: 30),
+            "Videos forgot that it was on the phone's side"
+        )
+    }
+
+    // MARK: - the local shell, where there is no server
+
+    /// The hook into ``LocalShellView`` landed: a phone with no server shows
+    /// its own media and not the "not built yet" placeholder.
+    @MainActor
+    func testPhoneMedia_TheLocalShellShowsThePhoneNotAPlaceholder() throws {
+        let app = phoneLaunch(push: nil, server: false)
+        let track = containing(app, StubPhoneMedia.phoneTrackWord)
+        XCTAssertTrue(track.waitForExistence(timeout: 40), "the local shell drew no phone media")
+        evidence(app, "phonemedia-local-shell")
+        XCTAssertFalse(
+            app.staticTexts[StubPhoneMedia.notBuiltYet].exists,
+            "the local shell is still drawing the placeholder this item replaced"
+        )
+    }
+
+    /// No server, so no upload control anywhere — Android's `upload = null`
+    /// (`LocalMediaScreens.kt:118`), and the owner's rule: a button that
+    /// would fail on every tap is not drawn.
+    @MainActor
+    func testPhoneMedia_TheLocalShellOffersNoUploadWithNoServer() throws {
+        let app = phoneLaunch(push: nil, server: false)
+        XCTAssertTrue(
+            containing(app, StubPhoneMedia.phoneTrackWord).waitForExistence(timeout: 40),
+            "the local shell drew no phone media, so an absent upload proves nothing"
+        )
+        evidence(app, "phonemedia-local-no-upload")
+        XCTAssertEqual(
+            phoneUploadControls(app).count, 0,
+            "an uploader reached the local shell, where there is no server to upload to"
+        )
+    }
+
+    // MARK: - the upload
+
+    /// A track goes through the **Music** door and the toast says so.
+    ///
+    /// Two things at once, both of which have been got wrong: the wrong door
+    /// (`/api/files/upload` into `core:music` asks the core's admin-only
+    /// sweep and indexes nothing — `PhoneUpload.kt:36`), and the music
+    /// door's `saved` being an **int** where the files door's is a list. A
+    /// decoder that took only the list shape would report "nothing was
+    /// uploaded" here.
+    @MainActor
+    func testPhoneMedia_UploadingATrackSaysWhereItWent() throws {
+        phoneReset()
+        let app = phoneLaunch(push: "Music")
+        XCTAssertTrue(phoneSwitchToDevice(app, waitingFor: StubPhoneMedia.phoneTrackWord))
+
+        // **Exactly one** upload control on this page, which is itself the
+        // assertion: the folder row has none, and the 200 MB row has none
+        // because it is over the ceiling.
+        XCTAssertEqual(
+            phoneUploadControls(app).count, 1,
+            "the device side of Music should offer one upload — the one row under the cap"
+        )
+        phoneUploadControls(app).element(boundBy: 0).tap()
+
+        let toast = app.staticTexts[StubPhoneMedia.uploadedTrack].firstMatch
+        let said = toast.waitForExistence(timeout: 40)
+        evidence(app, "phonemedia-upload-track")
+        XCTAssertTrue(said, "the upload never said where the track went")
+    }
+
+    /// A video names the library it landed in — and on this house that is
+    /// **Documents**, which no other case produces.
+    ///
+    /// The stub's `/api/files/libraries` has `core:music` and
+    /// `core:documents` and **no** `core:videos` (`stubhouse.py:251`), so
+    /// ``phoneDefaultHomeLibrary(_:_:)``'s chain falls past Videos, past
+    /// Other, and lands on Documents. A house whose Videos folder is not a
+    /// Files library is a real configuration, and a row that uploaded to the
+    /// wrong library cannot pass this.
+    @MainActor
+    func testPhoneMedia_UploadingAVideoNamesTheLibraryItLandedIn() throws {
+        phoneReset()
+        let app = phoneLaunch(push: "Videos")
+        XCTAssertTrue(phoneSwitchToDevice(app, waitingFor: StubPhoneMedia.phoneVideo))
+        XCTAssertEqual(
+            phoneUploadControls(app).count, 1,
+            "the folder tile should offer no upload, and the one video should"
+        )
+        phoneUploadControls(app).element(boundBy: 0).tap()
+
+        let toast = app.staticTexts[StubPhoneMedia.uploadedVideoToDocuments].firstMatch
+        let said = toast.waitForExistence(timeout: 40)
+        evidence(app, "phonemedia-upload-video")
+        XCTAssertTrue(
+            said,
+            "the video's toast did not name Documents — the default-home-library chain is wrong"
+        )
+    }
+
+    /// The ring runs while the upload does, and the done toast still arrives.
+    ///
+    /// The ring is what catches a `Task` left on a lazy row: a row recycled
+    /// while it scrolls cancels one, and the upload would stop mid-file with
+    /// nothing said.
+    @MainActor
+    func testPhoneMedia_AProgressRingShowsWhileAnUploadRuns() throws {
+        phoneReset()
+        phoneUpload("{\"delay_ms\":6000}")
+        let app = phoneLaunch(push: "Music")
+        XCTAssertTrue(phoneSwitchToDevice(app, waitingFor: StubPhoneMedia.phoneTrackWord))
+        phoneUploadControls(app).element(boundBy: 0).tap()
+
+        let busy = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label == %@", StubPhoneMedia.uploading))
+            .firstMatch
+        let ringed = busy.waitForExistence(timeout: 15)
+        evidence(app, "phonemedia-upload-ring")
+        XCTAssertTrue(ringed, "no row said it was uploading while a six-second upload ran")
+        XCTAssertTrue(
+            app.staticTexts[StubPhoneMedia.uploadedTrack].firstMatch.waitForExistence(timeout: 60),
+            "the upload started and never finished — the task did not outlive the row"
+        )
+    }
+
+    /// A second tap does not post the file twice — it says so
+    /// (`DeviceUpload.kt:257`).
+    @MainActor
+    func testPhoneMedia_ASecondTapDoesNotStartASecondUpload() throws {
+        phoneReset()
+        phoneUpload("{\"delay_ms\":6000}")
+        let app = phoneLaunch(push: "Music")
+        XCTAssertTrue(phoneSwitchToDevice(app, waitingFor: StubPhoneMedia.phoneTrackWord))
+        phoneUploadControls(app).element(boundBy: 0).tap()
+
+        // The same control, under its busy name: the button stays tappable
+        // while it is busy on purpose, because the tap is how the refusal and
+        // this message get said at all.
+        let busy = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label == %@", StubPhoneMedia.uploading))
+            .firstMatch
+        XCTAssertTrue(busy.waitForExistence(timeout: 15), "the first upload never showed as busy")
+        busy.tap()
+
+        let toast = app.staticTexts[StubPhoneMedia.alreadyUploading].firstMatch
+        let said = toast.waitForExistence(timeout: 20)
+        evidence(app, "phonemedia-second-tap")
+        XCTAssertTrue(said, "a second tap on a running upload posted the file again instead of saying so")
+    }
+
+    // MARK: - the refusals
+
+    /// A blocked device gets the card, and the button says why **without a
+    /// tap**.
+    ///
+    /// ### The assertion this case was first written with, and why it was
+    /// wrong
+    ///
+    /// "and no upload button". It is in ``PhoneUploadRowButton`` in as many
+    /// words, and it is Android's rule (`DeviceUpload.kt:338`): a refused
+    /// button stays drawn and stays tappable, because the tap is the only
+    /// place the reason gets said out loud and the only thing that re-reads
+    /// the status. Hiding it would leave somebody with a refusal and nowhere
+    /// to read it. The owner's no-misleading-controls rule is satisfied the
+    /// other way round — the card above the list says uploads are off before
+    /// anything is tapped, and the button carries the same sentence as its
+    /// accessibility **value**, which is what this case measures. The row
+    /// over the ceiling is the one that genuinely has no control
+    /// (``testPhoneMedia_AFileOverTheCapHasNoUploadControl``), because
+    /// nothing could ever make that tap work.
+    @MainActor
+    func testPhoneMedia_ABlockedDeviceSeesTheCardAndTheButtonSaysWhy() throws {
+        phoneReset()
+        control("files-blocked", "{\"blocked\":true}", port: 6601, what: "an admin's files block")
+        defer { control("files-blocked", "{\"blocked\":false}", port: 6601, what: "the block, off again") }
+
+        let app = phoneLaunch(push: "Music")
+        XCTAssertTrue(phoneSwitchToDevice(app, waitingFor: StubPhoneMedia.phoneTrackWord))
+
+        // The card is a paragraph, so it is matched by a fragment of its
+        // tail: a query string over 128 characters throws
+        // (NSInternalInconsistencyException, train S001).
+        let card = containing(app, StubPhoneMedia.adminLiftsTheBlock)
+        let drawn = card.waitForExistence(timeout: 30)
+        evidence(app, "phonemedia-blocked")
+        XCTAssertTrue(drawn, "a blocked device was not told who lifts the block")
+
+        let button = phoneUploadControls(app).element(boundBy: 0)
+        XCTAssertTrue(button.waitForExistence(timeout: 20), "the refused row has no button to read")
+        // The server's own sentence, which names **this** device — not a
+        // generic "uploads are off". A value that came back empty would mean
+        // VoiceOver reads the word `upload` and stops, and somebody would tap
+        // it to find out why.
+        XCTAssertEqual(
+            button.value as? String, StubPhoneMedia.blockedReason,
+            "the refused button does not say why it is refused"
+        )
+    }
+
+    /// A refusal that arrives **after** the page opened is said, and then
+    /// shown: the 403 asks the server again, and the card appears
+    /// (`DeviceUpload.kt:283`).
+    ///
+    /// Without that re-read the button would keep saying `upload` for the
+    /// rest of the visit.
+    @MainActor
+    func testPhoneMedia_ARefusalAfterThePageOpenedIsSaidAndShown() throws {
+        phoneReset()
+        let app = phoneLaunch(push: "Music")
+        XCTAssertTrue(phoneSwitchToDevice(app, waitingFor: StubPhoneMedia.phoneTrackWord))
+        XCTAssertEqual(
+            phoneUploadControls(app).count, 1,
+            "the page has to open unblocked, or the refusal below is not a change"
+        )
+
+        // The door refuses, and the admin's block goes on at the same moment
+        // — which is what a real block is: the 403 and the `writable: false`
+        // the re-read then sees are one event on the server.
+        phoneUpload("{\"fail\":\"403\"}")
+        control("files-blocked", "{\"blocked\":true}", port: 6601, what: "a block that lands mid-visit")
+        defer { control("files-blocked", "{\"blocked\":false}", port: 6601, what: "the block, off again") }
+
+        phoneUploadControls(app).element(boundBy: 0).tap()
+        let toast = app.staticTexts[StubPhoneMedia.uploadRefused].firstMatch
+        let said = toast.waitForExistence(timeout: 40)
+        evidence(app, "phonemedia-late-refusal")
+        XCTAssertTrue(said, "a 403 was not reported in the server's own words")
+        XCTAssertTrue(
+            containing(app, StubPhoneMedia.adminLiftsTheBlock).waitForExistence(timeout: 30),
+            "the 403 did not make the page ask again, so the button is still lying"
+        )
+    }
+
+    /// A 422 is reported as a failure, in the `upload failed:` vocabulary —
+    /// never as the `upload refused:` one, and never as an upload.
+    ///
+    /// Here in place of the server-switch case NIGHT-RULES §1 forbids (see
+    /// this file's note), because it tests the other half of the same reply
+    /// path: ``phoneUploadFailureText`` splits on the **status**, and a 403 is
+    /// a refusal while everything else is a failure. A branch that reported
+    /// every non-2xx as a refusal would tell somebody an admin had blocked
+    /// their phone when the door had simply fallen over.
+    ///
+    /// ### What this case does **not** assert, and the open call it left
+    ///
+    /// That FastAPI's field list never reaches the person. It does:
+    /// ``phoneServerDetail(_:)`` correctly declines a `detail` that is a
+    /// list, but the fall-through is ``failureText(_:_:)``, whose message is
+    /// the shared `"{status}: {body first 200 chars}"` convention — so a 422
+    /// does show `string_too_short` and `loc` in the toast. That is the
+    /// convention every screen in both apps uses (CONVENTIONS rule 4), not
+    /// this item's wiring, so it is written up in DECISIONS for the owner
+    /// rather than asserted against here.
+    @MainActor
+    func testPhoneMedia_AFailureIsNotReportedAsARefusalOrAnUpload() throws {
+        phoneReset()
+        let app = phoneLaunch(push: "Music")
+        XCTAssertTrue(phoneSwitchToDevice(app, waitingFor: StubPhoneMedia.phoneTrackWord))
+
+        phoneUpload("{\"fail\":\"422\"}")
+        phoneUploadControls(app).element(boundBy: 0).tap()
+
+        let failed = startingWith(app, StubPhoneMedia.uploadFailedPrefix)
+        let said = failed.waitForExistence(timeout: 40)
+        evidence(app, "phonemedia-422")
+        XCTAssertTrue(said, "a 422 was never reported as a failure")
+        XCTAssertFalse(
+            startingWith(app, StubPhoneMedia.uploadRefusedPrefix).exists,
+            "a 422 was reported in the 403's words — somebody is told their phone is blocked"
+        )
+        XCTAssertFalse(
+            app.staticTexts[StubPhoneMedia.uploadedTrack].firstMatch.exists,
+            "a 422 was reported as a successful upload"
+        )
+    }
+
+    /// A row over the ceiling has **no upload control** and a line saying how
+    /// big it is (``PhoneUploadModel/cap``, and ``FileSaveModel``'s own
+    /// pattern the other way round).
+    ///
+    /// A cap enforced only inside `upload()` would be a button that always
+    /// fails, which is what this asserts is not there.
+    @MainActor
+    func testPhoneMedia_AFileOverTheCapHasNoUploadControl() throws {
+        phoneReset()
+        let app = phoneLaunch(push: "Music")
+        XCTAssertTrue(phoneSwitchToDevice(app, waitingFor: StubPhoneMedia.phoneTrackWord))
+
+        let note = startingWith(app, StubPhoneMedia.tooBigPrefix)
+        let drawn = note.waitForExistence(timeout: 30)
+        evidence(app, "phonemedia-over-the-cap")
+        XCTAssertTrue(drawn, "the 200 MB row did not say why it has no upload")
+        // The row under the cap keeps its control; the one over it has none.
+        // One, not zero and not two: that is the whole claim.
+        XCTAssertEqual(
+            phoneUploadControls(app).count, 1,
+            "the row over the ceiling was given an upload button that would always fail"
+        )
+        XCTAssertTrue(
+            containing(app, StubPhoneMedia.phoneBigFileWord).exists,
+            "the oversized row is not even listed, so the note above belongs to nothing"
+        )
+    }
+
+    // MARK: - the phone's own states
+
+    /// A folder with nothing in it is an empty folder, not a failure and not
+    /// a filter that matched nothing.
+    @MainActor
+    func testPhoneMedia_AnEmptyFolderSaysSoAndIsNotAFailure() throws {
+        phoneReset()
+        let app = phoneLaunch(push: "Music", media: "empty")
+        XCTAssertTrue(phoneSwitchToDevice(app, waitingFor: StubPhoneMedia.noMusicOnDevice))
+        evidence(app, "phonemedia-empty-folder")
+        XCTAssertTrue(
+            containing(app, StubPhoneMedia.downloadsLandHere).exists,
+            "the empty state is missing its second line"
+        )
+        XCTAssertFalse(
+            containing(app, StubPhoneMedia.noLongerReadable).exists,
+            "an empty folder was reported as unreadable"
+        )
+    }
+
+    /// A folder whose bookmark stopped resolving says so, where an empty list
+    /// would read as "you have no music".
+    @MainActor
+    func testPhoneMedia_AFolderThatStoppedResolvingSaysSoRatherThanLookingEmpty() throws {
+        phoneReset()
+        let app = phoneLaunch(push: "Music", media: "unreadable")
+        XCTAssertTrue(phoneSwitchToDevice(app, waitingFor: StubPhoneMedia.noLongerReadable))
+        evidence(app, "phonemedia-unreadable-folder")
+        XCTAssertFalse(
+            containing(app, StubPhoneMedia.noMusicOnDevice).exists,
+            "an unreadable folder was drawn as an empty one"
+        )
+    }
+
+    // MARK: - Dynamic Type, measured
+
+    /// The switch's segments grow with the type size.
+    ///
+    /// **Measured at two sizes**, not read off a headline: Android's pill is
+    /// 40 dp (`YourDevice.kt:196`) and a straight port would be
+    /// `frame(height: 40)` — which does not clip, so nothing but a
+    /// measurement finds it. A named Dynamic Type audit finding has twice
+    /// been a false positive on this track, which is the other half of why
+    /// this is a measurement.
+    @MainActor
+    func testPhoneMedia_TheSwitchSegmentsGrowWithTheTypeSize() throws {
+        phoneReset()
+        let small = phoneLaunch(push: "Music")
+        let ordinary = small.buttons[StubPhoneMedia.yourDevice].firstMatch
+        XCTAssertTrue(ordinary.waitForExistence(timeout: 40), "the switch never drew at L")
+        let atL = ordinary.frame.height
+        evidence(small, "phonemedia-segment-L")
+        small.terminate()
+
+        let big = phoneLaunch(push: "Music", mode: "UICTContentSizeCategoryAccessibilityXXXL")
+        let huge = big.buttons[StubPhoneMedia.yourDevice].firstMatch
+        XCTAssertTrue(huge.waitForExistence(timeout: 40), "the switch never drew at AX5")
+        let atAX5 = huge.frame.height
+        evidence(big, "phonemedia-segment-AX5")
+
+        XCTAssertGreaterThan(
+            atAX5, atL,
+            "the segment is \(atL) points at L and \(atAX5) at AX5 — a fixed height, ported from the 40 dp pill"
+        )
+    }
+
+    // MARK: - the audit
+
+    /// Apple's own audit of the device side of Files.
+    ///
+    /// One audit case per screen, classified by **signature** with
+    /// ``floorAndRest(_:)`` and never a pinned total: the floor is the
+    /// anonymous Dynamic Type finding every pushed screen in this app
+    /// carries, and anything the audit can attribute to an element is a
+    /// defect to fix. Files is the device page with the most on it — the
+    /// library picker, the two add doors, the breadcrumb, the filter, the
+    /// rows and their icon-only upload buttons.
+    ///
+    /// ### What train S006 reported, and which half of it was real
+    ///
+    /// Fourteen findings Apple could attribute. **One was a defect**: `Label
+    /// not human-readable` against the server's segment, whose whole label is
+    /// the house's address — fixed where it belongs, in
+    /// ``PhoneSourceSegment`` (`PhoneMediaStrings.serverSideLabel(_:)`).
+    ///
+    /// The other thirteen were `Dynamic Type font sizes are partially
+    /// unsupported` against the device rows' titles, their meta lines, their
+    /// durations, the count line and the too-big note — every one of them
+    /// `.subheadline` or `.caption` with no fixed size anywhere near it. A
+    /// named Dynamic Type finding is **not a defect by virtue of being
+    /// named**: it has now been a false positive three times on this track
+    /// (the `favorites only` switch, the Videos grid, the Files list), and
+    /// the only honest answer is a measurement, which
+    /// ``testPhoneMedia_TheDeviceSideTextGrowsAtAX5`` is. So this case drops
+    /// that one headline from `rest` and keeps every other kind — the same
+    /// split `testTheFilesListAudits` makes over the server side of the very
+    /// same rows. A leaf that really is stuck fails the measurement.
+    ///
+    /// The floor is printed rather than pinned: the device page carries both
+    /// anonymous and named findings of that headline, and a pinned total is
+    /// what let a new contrast finding in unnoticed once already.
+    @MainActor
+    @available(iOS 17.0, *)
+    func testPhoneMedia_TheDeviceSideHasNoAuditFindings() throws {
+        phoneReset()
+        let app = phoneLaunch(push: "Files")
+        XCTAssertTrue(phoneSwitchToDevice(app, waitingFor: StubPhoneMedia.phoneTrackWord))
+        evidence(app, "phonemedia-files-audit")
+
+        let found = try auditIssues(app, "phonemedia-files")
+        let split = Self.floorAndRest(found)
+        print("PHONEMEDIA AUDIT floor=\(split.floor) rest=\(split.rest.count)")
+        for line in split.rest { print("PHONEMEDIA AUDIT REST :: \(line)") }
+
+        let unexplained = split.rest.filter { !$0.hasPrefix("Dynamic Type font sizes") }
+        XCTAssertEqual(
+            [], unexplained,
+            "the device side of Files has a finding of its own"
+        )
+    }
+
+    /// The leaves Apple's audit names on the device side of Files, measured
+    /// at `large` and at AX5.
+    ///
+    /// The companion to the classification above, and the test that actually
+    /// decides whether those thirteen findings were defects. Five code sites
+    /// cover all thirteen: ``PhoneMediaRowView``'s title (`.subheadline`) and
+    /// its meta and duration (`.caption`), ``PhoneDeviceChrome``'s count line
+    /// and ``PhoneUploadTooBigNote``. A folder's name is the sixth, and it is
+    /// the row title drawn inside a `Button` rather than a combined row —
+    /// worth its own measurement because the wrapper differs.
+    ///
+    /// Matched on `.staticTexts` rather than `.any`, which is this file's
+    /// habit elsewhere: every one of the thirteen was reported as `type=48`,
+    /// and an `.any` query would take the enclosing row or button — a
+    /// different element from the one the audit flagged, and one that grows
+    /// for its own reasons.
+    ///
+    /// A leaf that cannot be found is skipped, not failed, because the fake
+    /// library's foot is unbuilt at AX5; the case fails instead if fewer than
+    /// two leaves could be compared, so it can never pass by measuring
+    /// nothing.
+    ///
+    /// ### Why it no longer waits for a row, and no longer swipes the app
+    ///
+    /// Train S009 failed this case at AX5 with "the device side never drew",
+    /// and the tree it printed said the opposite: `phone-source-device` was
+    /// `Selected`, the device header and both upload doors were drawn, and
+    /// the device list's content was 2995 points of unbuilt rows. Two
+    /// mistakes of this case, both about AX5 and neither about the app:
+    ///
+    /// 1. ``phoneSwitchToDevice(_:waitingFor:)`` gates on a **row**, which
+    ///    is right for every other case here and wrong for this one — the
+    ///    thing this case then scrolls to find cannot be the thing it waits
+    ///    for. It gates on the device header instead, which is the first
+    ///    line of the device page at any type size.
+    /// 2. `app.swipeUp()` swipes the centre of the window. At AX5 the stub
+    ///    launch chrome takes the top 300 points and the switch becomes a
+    ///    column, so the window's centre lands **on the switch** and the
+    ///    list never moved. The swipe goes to the device page's own
+    ///    `ScrollView`, picked by the header it contains (the server side's
+    ///    `ScrollView` is still in the tree at the same frame, holding its
+    ///    place across the switch, so `.firstMatch` alone would take either).
+    ///
+    /// Each leaf's height is recorded the **first flick it is built on** and
+    /// never overwritten, rather than reading all six once at the end. At
+    /// AX5 the viewport is a little over one row tall, so no single scroll
+    /// position holds two leaves; measuring as they appear is what makes the
+    /// comparison possible at all, and it measures four more leaves at
+    /// `large` than the single read did.
+    @MainActor
+    func testPhoneMedia_TheDeviceSideTextGrowsAtAX5() throws {
+        let leaves = [
+            ("row-title", "label == 'quenlo lullaby.mp3'"),
+            ("row-meta", "label BEGINSWITH '3.0 MB · '"),
+            ("row-duration", "label == '3:34'"),
+            ("folder-name", "label == 'Trips'"),
+            ("count", "label BEGINSWITH 'showing 5 of'"),
+            ("too-big", "label BEGINSWITH 'too big to upload from a phone'"),
+        ]
+
+        /// Flick the device list to its foot, taking each leaf's height the
+        /// first time it exists.
+        ///
+        /// The drag is two **coordinates**, not `list.swipeUp()`, and they
+        /// are worked out once from the list's frame before the first flick.
+        /// An `XCUIElement` is re-resolved on every use, and the only handle
+        /// on this `ScrollView` is the header it contains — a header that is
+        /// in a `LazyVStack` and unbuilds the moment it scrolls off, so the
+        /// second flick would have had nothing to send a swipe to.
+        func heights(_ app: XCUIApplication, _ frame: CGRect) -> [String: CGFloat] {
+            let origin = app.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
+            let from = origin.withOffset(
+                CGVector(dx: frame.midX, dy: frame.maxY - 16)
+            )
+            let to = origin.withOffset(
+                CGVector(dx: frame.midX, dy: frame.minY + 16)
+            )
+            var out: [String: CGFloat] = [:]
+            // A press-then-drag, not a flick: a flick's momentum carries it
+            // over rows, and at AX5 a row stepped over is a leaf that was
+            // never built and so never measured. It also moves only the drag
+            // distance, hence a count this high — at AX5 the viewport is
+            // under 180 points and the device list's content is 2995.
+            let flicks = 24
+            for flick in 0...flicks {
+                for (leaf, predicate) in leaves where out[leaf] == nil {
+                    let found = app.staticTexts
+                        .matching(NSPredicate(format: predicate))
+                        .firstMatch
+                    if found.exists { out[leaf] = found.frame.height }
+                }
+                if out.count == leaves.count { break }
+                if flick < flicks { from.press(forDuration: 0.1, thenDragTo: to) }
+            }
+            return out
+        }
+
+        phoneReset()
+        var measured: [String: [String: CGFloat]] = [:]
+        for (label, mode) in [
+            ("large", Self.ordinaryTypeSize),
+            ("AX5", "UICTContentSizeCategoryAccessibilityXXXL"),
+        ] {
+            let app = phoneLaunch(push: "Files", mode: mode)
+            XCTAssertTrue(
+                phoneSwitchToDeviceHeader(app, waitingFor: StubPhoneMedia.phoneFilesSubtitle),
+                "the device side never drew at \(label)"
+            )
+            let list = app.scrollViews
+                .containing(
+                    NSPredicate(format: "label == %@", StubPhoneMedia.phoneFilesSubtitle)
+                )
+                .firstMatch
+            XCTAssertTrue(
+                list.waitForExistence(timeout: 15),
+                "the device page's list is not a scroll view at \(label)"
+            )
+            let here = heights(app, list.frame)
+            evidence(app, "phonemedia-scale-\(label)")
+            measured[label] = here
+            for (leaf, height) in here.sorted(by: { $0.key < $1.key }) {
+                print("PHONEMEDIA SCALE [\(label)] \(leaf) height=\(height)")
+            }
+            app.terminate()
+        }
+
+        let small = measured["large"] ?? [:]
+        let big = measured["AX5"] ?? [:]
+        var compared = 0
+        var stuck: [String] = []
+        for (leaf, height) in small.sorted(by: { $0.key < $1.key }) {
+            guard let grown = big[leaf] else { continue }
+            compared += 1
+            // 1.8 is the factor `testTheFilesListTextGrowsAtAX5` settled on
+            // over the same two text styles: `large` to AX5 is about three
+            // times the line height, and a leaf that wrapped already at
+            // `large` grows by less than its font does.
+            if grown < height * 1.8 { stuck.append("\(leaf) \(height)->\(grown)") }
+        }
+        XCTAssertEqual([], stuck, "a leaf Apple flagged really does not scale")
+        XCTAssertGreaterThanOrEqual(
+            compared,
+            2,
+            "nothing could be compared, so this proved nothing: \(small) / \(big)"
+        )
+    }
+}
+
+/// What the phone's faked library and the stub house hold, **by the words
+/// that appear on screen**.
+///
+/// Spelt out here rather than imported, like every other string this file
+/// matches on: a query that silently followed a renamed constant would stop
+/// testing what it claims to. The fake's are ``PhoneMediaFake``'s
+/// (`ios/Domovoi/PhoneMedia/PhoneDeviceSources.swift`); the server's are the
+/// stub's own (`design-notes/ios/stubhouse/stubhouse.py`).
+enum StubPhoneMedia {
+
+    // ---- the switch ----------------------------------------------------
+
+    /// `PhoneMediaStrings.yourDevice` (`YourDevice.kt:215`).
+    static let yourDevice = "your device"
+    /// The server's segment, by `PhoneSourceSwitchPill.serverSegmentID`. Its
+    /// LABEL is the house's own name, so an identifier is the only stable
+    /// handle on it.
+    static let serverSegment = "phone-source-server"
+    /// The phone bar's buttons carry the route's own name
+    /// (`ShellChromeViews.swift:304`), which is `Route`'s raw value.
+    static let musicTab = "Music"
+    static let videosTab = "Videos"
+
+    // ---- the fake's rows, each with a word the stub never uses ----------
+
+    /// The 3 MB track: the one row on the device side of Music with an
+    /// upload control.
+    static let phoneTrackWord = "quenlo"
+    /// The 8 MB video, which is the one video tile.
+    static let phoneVideo = "zarbis"
+    /// The 200 MB row, which must be listed and must have **no** control.
+    static let phoneBigFileWord = "grendalf"
+
+    // ---- the server's rows, which the phone's side must not show --------
+
+    /// The stub's first video, whose tile label is its name
+    /// (`stubhouse.py:397`, index 0).
+    static let serverVideo = "a long one.mp4"
+    /// A folder of the stub's first Files library, `core:music`
+    /// (`stubhouse.py:285`).
+    static let serverFolder = "Albums"
+    /// A file that exists **only inside** `Albums`, so "still in the folder"
+    /// cannot be satisfied by the root listing.
+    static let serverFileInsideFolder = "a song.mp3"
+
+    // ---- what the app says ---------------------------------------------
+
+    static let upload = "upload"
+    /// `PhoneMediaStrings.uploadingLabel(nil)` — there is no percentage,
+    /// because `DomovoiClient.raw` reports none.
+    static let uploading = "uploading"
+    static let uploadedTrack = "uploaded \"quenlo lullaby.mp3\" to Music · indexing…"
+    /// Documents, not Videos: the stub has no `core:videos` **Files**
+    /// library.
+    static let uploadedVideoToDocuments = "uploaded \"zarbis dune ride.mp4\" to Documents · indexing…"
+    static let alreadyUploading = "\"quenlo lullaby.mp3\" is already uploading"
+    static let uploadRefused = "upload refused: \"a simulator\" may not upload here"
+    static let uploadFailedPrefix = "upload failed"
+    /// ``PhoneMediaStrings/uploadRefused(_:)``'s own opening, which only a
+    /// 403 may use.
+    static let uploadRefusedPrefix = "upload refused"
+    /// A prefix of `PhoneMediaStrings.tooBigToUpload(_:)`, matched as a
+    /// prefix so the byte formatting is not this case's business.
+    static let tooBigPrefix = "too big to upload from a phone"
+    /// A fragment of the refused card's blocked tail
+    /// (`PhoneMediaStrings.blockedTail`), short enough to be a legal query.
+    static let adminLiftsTheBlock = "An admin lifts the block"
+    /// `FILES_BLOCKED_REASON` (`stubhouse.py:354`), which is what
+    /// `/api/files/browse` returns as `blocked_reason` and what the button
+    /// reads out as its value.
+    static let blockedReason = "\"a simulator\" is blocked from changing files by an admin"
+    /// `PhoneMediaStrings.phoneFilesSubtitle` — the device page's own second
+    /// line, and the first thing on it that is drawn at every type size.
+    /// Spelt out here, like every other string this file matches on.
+    static let phoneFilesSubtitle = "on this phone — folders you add, and your photos"
+    static let noMusicOnDevice = "no music on this device"
+    static let downloadsLandHere = "downloads from a domovoi land in Downloads/Domovoi"
+    static let noLongerReadable = "no longer readable"
+    /// What ``ScreenPlaceholder`` drew in the local shell before this item.
+    static let notBuiltYet = "on this phone — not built yet"
+}
