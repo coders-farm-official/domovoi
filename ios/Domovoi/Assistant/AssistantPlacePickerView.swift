@@ -14,6 +14,29 @@ import SwiftUI
 /// house's is neutral (`PlaceChip`, `ChatHome.kt:691`). The **ink** token and
 /// not ``Color/brand``: the brand is 2.05:1 on white and a chip's words are
 /// text somebody has to read.
+///
+/// ### The selected chip's fill is 0.10, and that is a contrast number
+///
+/// Apple's audit reported "Contrast nearly passed" against the selected
+/// `on this phone` chip on train S003, and it was right. ``Color/brandInk``
+/// is documented at **5.65:1 on white** — but the chip is not on white, it is
+/// on its own fill, and the fill was ``Color/fgMuted`` at 0.18. `fgMuted` is
+/// 7.44:1 on the light canvas, so at 0.18 over white the chip's background
+/// sits at a relative luminance of about 0.749 and the ink's ratio **against
+/// what it is actually drawn on** falls to roughly **4.30:1** — under the
+/// 4.5:1 that `.caption` needs, which is exactly what "nearly passed … unless
+/// font size is larger" means.
+///
+/// This is the same mistake the shared token's own doc comment warns about
+/// (`fgMuted` measured against the white canvas, failing on
+/// `secondarySystemBackground`), made one layer further in: a measured ratio
+/// read as if the surface under it were still white.
+///
+/// The fix is the **fill**, not the ink and not the font. At 0.10 the
+/// background is about 0.855 and brandInk measures **4.87:1**, which passes;
+/// the house chip's `fgMuted` on the same fill is 6.07:1. Nothing is lost,
+/// because the fill was never what said which chip is chosen: the stroke is
+/// (0.45 against 0.18), and VoiceOver is told by ``traits(picked:)``.
 struct AssistantPlacePickerView: View {
 
     let choices: [ChatPlace]
@@ -96,8 +119,11 @@ struct AssistantPlacePickerView: View {
             .padding(.vertical, 6)
             .frame(minHeight: 44)
             .background(
+                // 0.10, not 0.18: the file's doc comment has the measurement.
+                // A darker fill under `brandInk` is a contrast defect, and the
+                // stroke below is what actually says which chip is chosen.
                 RoundedRectangle(cornerRadius: 14)
-                    .fill(Color.fgMuted.opacity(picked ? 0.18 : 0.06))
+                    .fill(Color.fgMuted.opacity(picked ? 0.10 : 0.04))
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 14)

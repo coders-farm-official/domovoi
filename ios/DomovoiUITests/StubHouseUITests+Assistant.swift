@@ -32,6 +32,58 @@ import XCTest
 /// previous case's data (`AssistantStoreSeam` says so where it is written).
 extension StubHouseUITests {
 
+    // MARK: - the audit findings this item has measured
+
+    /// One audit finding this item has **measured and found to be wrong**,
+    /// pinned by its headline and the element it names.
+    ///
+    /// Both halves, because the headline alone would forgive the same
+    /// complaint about any element on the screen, and the element alone would
+    /// forgive a contrast defect on a label that happens to also be here.
+    struct AssistantAuditExemption {
+        let headline: String
+        let label: String
+
+        func matches(_ line: String) -> Bool {
+            line.hasPrefix(headline) && line.contains("label='\(label)'")
+        }
+    }
+
+    /// Apple's Dynamic Type audit, wrong about three of this item's labels.
+    ///
+    /// Train S003 reported "Dynamic Type font sizes are partially unsupported"
+    /// against three leaves of the phone's empty list — `no chats yet`,
+    /// `start one — …` and `new chat`. Each is a plain `Text` with a semantic
+    /// font and `.fixedSize(horizontal: false, vertical: true)`, which is the
+    /// shape that scales; the fourth element on the same screen with exactly
+    /// that shape, the two-place subtitle, was measured in the same run at
+    /// **33.67 → 208.67 points** between the ordinary size and AX5. The audit
+    /// reported nothing against it.
+    ///
+    /// So this is the third time on this track that a *named* Dynamic Type
+    /// finding was a false positive (``knownScalingFalsePositive`` is the
+    /// second), and it is forgiven the same way: by signature, never by
+    /// removing a modifier to quiet it, and never by a pinned total.
+    ///
+    /// **This list is not a promise, it is a pairing.** Every label in it is
+    /// measured at both type sizes by
+    /// `testAssistant_DynamicTypeHoldsAtAccessibilityXXXL`, which fails if one
+    /// of them stops growing. Forgiving a finding here while that case holds
+    /// is forgiving it on evidence; forgiving one without adding it there
+    /// would be asserting less, which NIGHT-RULES §5 forbids.
+    ///
+    /// Nothing else is forgiven. The contrast finding S003 raised against the
+    /// selected `on this phone` chip was **real** and was fixed in
+    /// `AssistantPlacePickerView.swift`, which has the arithmetic.
+    static let assistantScalingFalsePositives: [AssistantAuditExemption] = {
+        let headline = "Dynamic Type font sizes are partially unsupported"
+        return [
+            AssistantUnderTest.noChatsYet,
+            AssistantUnderTest.emptyHintPhone,
+            ChatStringsUnderTest.newChat,
+        ].map { AssistantAuditExemption(headline: headline, label: $0) }
+    }()
+
     // MARK: - getting to the place
 
     /// A launch with the phone place's engine chosen.
@@ -576,13 +628,31 @@ extension StubHouseUITests {
         app.buttons[ChatStringsUnderTest.actionRename].tap()
         let field = app.textFields[ChatStringsUnderTest.renameField].firstMatch
         XCTAssertTrue(field.waitForExistence(timeout: 20), "the rename sheet has no field")
-        field.tap()
+        // **Tap at the far right, not in the middle.** `field.tap()` put the
+        // caret where it landed — in the middle of the title the sheet comes
+        // pre-filled with — and `clearField` is sixty backspaces, which delete
+        // only what is BEFORE the caret. Train S003 therefore renamed the chat
+        // to "Fennel notes arborio rice": the head was deleted, the new words
+        // were inserted, and the tail after the caret survived. The app had
+        // renamed it correctly; the case had asked for the wrong name.
+        // NIGHT-RULES §5 says this is how a field is appended to, and it is
+        // equally how one is emptied.
+        field.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
         clearField(app)
         app.typeText(AssistantUnderTest.renamed)
         app.buttons[ChatStringsUnderTest.renameSave].firstMatch.tap()
         XCTAssertTrue(
             app.buttons[AssistantUnderTest.renamed].waitForExistence(timeout: 20),
             "the rename did not reach the list"
+        )
+        // And the old title is **gone**. The assert above only says the new
+        // words arrived somewhere; this says they replaced something, which is
+        // what a rename is. S003's half-rename happened to fail the exact
+        // match too, but only because the surviving tail was at the end of the
+        // label — a tail left anywhere else would have read as a pass.
+        XCTAssertFalse(
+            app.buttons[AssistantUnderTest.arborio].exists,
+            "the renamed row still answers to the title it was renamed from"
         )
 
         // Archive, and back.
@@ -670,33 +740,75 @@ extension StubHouseUITests {
     ///
     /// **Measured, not read off a headline**: a named Dynamic Type audit
     /// finding has twice been a false positive on this track, so this compares
-    /// each element's height at the ordinary size and at AX5. The two measured
-    /// are the ones this item drew: the picker's chip (a scaled glyph beside
-    /// text, and the row-to-column swap) and the two-place subtitle (a
-    /// sentence that must wrap rather than be squeezed — `minimumScaleFactor`
-    /// is rejected everywhere in this app).
+    /// each element at the ordinary size and at AX5. It measures everything
+    /// this item drew that `testAssistant_Audit` is asked to forgive, and that
+    /// pairing is the point: the audit's exemptions
+    /// (``assistantScalingFalsePositives``) name these very labels, so if one
+    /// of them ever stops scaling this case fails and the exemption cannot
+    /// hide it.
+    ///
+    /// ### Two corrections train S003 paid for
+    ///
+    /// **The chip is measured by WIDTH.** Its height was compared and the case
+    /// failed at 46.67 against 44.00 — but the chip carries `.frame(minHeight:
+    /// 44)` for the hit-target rule, so at the ordinary size its height *is*
+    /// the floor and not the text. The glyphs were growing the whole time, in
+    /// the dimension that has no floor: 97.0 → 267.3 points wide. Height is
+    /// kept for the elements that wrap, where height is the thing that grows.
+    ///
+    /// **The hint is scrolled to.** At AX5 the header cell alone is 301 points
+    /// tall, so the empty-state hint is below the fold and a lazy list leaves
+    /// it *unbuilt*, not merely off screen (NIGHT-RULES §5). `if hint.exists`
+    /// silently recorded nothing and the case reported only the chip, because
+    /// `continueAfterFailure` is false and the chip failed first.
     @MainActor
     func testAssistant_DynamicTypeHoldsAtAccessibilityXXXL() throws {
-        func heights(_ mode: String, _ tag: String) -> [String: CGFloat] {
+        func sizes(_ mode: String, _ tag: String) -> [String: CGFloat] {
             control("reset-fixtures", "{}", port: 6601, what: "the fixtures before \(tag)")
             let app = assistantLaunch(model: "fake", mode: mode)
             XCTAssertTrue(reachPhonePlace(app), "the phone's place never drew at \(tag)")
             var out: [String: CGFloat] = [:]
+
+            // The picker's chip: a scaled glyph beside text, and the
+            // row-to-column swap. By width — see the doc comment.
             let chip = assistantChip(app, AssistantUnderTest.chipPhone)
-            if chip.exists { out["chip"] = chip.frame.height }
-            let subtitle = startingWith(app, AssistantUnderTest.subtitleBoth)
-            if subtitle.exists { out["subtitle"] = subtitle.frame.height }
-            let hint = startingWith(app, AssistantUnderTest.emptyHintPhone)
-            if hint.exists { out["hint"] = hint.frame.height }
+            if chip.exists { out["chip"] = chip.frame.width }
+
+            // The sentences, by height, each of them `.fixedSize(horizontal:
+            // false, vertical: true)` so that it wraps rather than squeezes.
+            let byHeight: [(String, XCUIElement)] = [
+                ("subtitle", startingWith(app, AssistantUnderTest.subtitleBoth)),
+                // The two the audit names on the empty list. `staticTexts`,
+                // not `buttons`: the audit's findings are against the leaf
+                // text (`type=48`), and `new chat`'s button shares its label
+                // while carrying the same 44-point floor the chip does.
+                ("new-chat", app.staticTexts[ChatStringsUnderTest.newChat].firstMatch),
+                ("no-chats-yet", app.staticTexts[AssistantUnderTest.noChatsYet].firstMatch),
+                ("hint", startingWith(app, AssistantUnderTest.emptyHintPhone)),
+            ]
+            for (key, element) in byHeight {
+                // Built, not just on screen: at AX5 the foot of this list is
+                // unbuilt until it is scrolled to.
+                guard scrollUntilBuilt(app, element) else { continue }
+                out[key] = element.frame.height
+            }
+
             evidence(app, "assistant-type-\(tag)")
             app.terminate()
             return out
         }
 
-        let ordinary = heights(StubHouseUITests.ordinaryTypeSize, "large")
-        let big = heights("UICTContentSizeCategoryAccessibilityXXXL", "ax5")
+        let ordinary = sizes(StubHouseUITests.ordinaryTypeSize, "large")
+        let big = sizes("UICTContentSizeCategoryAccessibilityXXXL", "ax5")
         print("ASSISTANT TYPE large=\(ordinary) ax5=\(big)")
-        for key in ["chip", "subtitle", "hint"] {
+        // **All five verdicts, not the first one.** `continueAfterFailure` is
+        // false for this class, and on S003 that turned four measurements into
+        // one line: the chip failed and the hint's own absence at AX5 was
+        // never reported. Five elements are five findings.
+        let wasContinuing = continueAfterFailure
+        continueAfterFailure = true
+        defer { continueAfterFailure = wasContinuing }
+        for key in ["chip", "subtitle", "new-chat", "no-chats-yet", "hint"] {
             guard let small = ordinary[key] else {
                 XCTFail("\(key) was not on screen at the ordinary size — nothing was measured")
                 continue
@@ -707,7 +819,8 @@ extension StubHouseUITests {
             }
             XCTAssertGreaterThan(
                 grown, small * 1.3,
-                "\(key) is \(grown) at AX5 against \(small) at large — a fixed frame, not scaled text"
+                "\(key) is \(grown) at AX5 against \(small) at large — a fixed frame, not "
+                    + "scaled text (chip measured by width, every other key by height)"
             )
         }
     }
@@ -719,7 +832,14 @@ extension StubHouseUITests {
     /// anything else on the screen changes, and
     /// ``StubHouseUITests/floorAndRest(_:)`` is what the whole file classifies
     /// by. Anything the audit can attribute to an element is a defect — that
-    /// is how the modal-dialog contrast bug was found.
+    /// is how the modal-dialog contrast bug was found, and how S003 found this
+    /// item's one real one (the selected chip's fill, fixed in
+    /// `AssistantPlacePickerView.swift`).
+    ///
+    /// The one exception is ``assistantScalingFalsePositives``, three Dynamic
+    /// Type findings measured at both type sizes and found to be wrong. Read
+    /// that list before adding to it: every label in it must also be measured
+    /// by `testAssistant_DynamicTypeHoldsAtAccessibilityXXXL`.
     @MainActor
     func testAssistant_Audit() throws {
         control("reset-fixtures", "{}", port: 6601, what: "the fixtures before the audit case")
@@ -735,9 +855,16 @@ extension StubHouseUITests {
             // does not reliably widen availability into a declaration.
             guard #available(iOS 17.0, *) else { return }
             let split = Self.floorAndRest(try auditIssues(app, "assistant-\(name)"))
-            floors[name] = split.floor
-            findings[name] = split.rest
-            print("ASSISTANT AUDIT [\(name)] floor=\(split.floor) other=\(split.rest.count)")
+            let real = split.rest.filter { line in
+                !Self.assistantScalingFalsePositives.contains { $0.matches(line) }
+            }
+            let forgiven = split.rest.count - real.count
+            floors[name] = split.floor + forgiven
+            findings[name] = real
+            print(
+                "ASSISTANT AUDIT [\(name)] floor=\(split.floor) measured-scaling=\(forgiven)"
+                    + " other=\(real.count)"
+            )
             for line in split.rest { print("ASSISTANT AUDIT [\(name)]   \(line)") }
         }
 
@@ -759,7 +886,15 @@ extension StubHouseUITests {
         )
         try sweep("list-with-a-row")
 
-        for (name, rest) in findings {
+        // **All three screens' verdicts, in a fixed order.** `findings` is a
+        // dictionary and `continueAfterFailure` is false, so S003 reported
+        // whichever screen the iteration happened to reach first and said
+        // nothing about the other two — a queue where there is a set.
+        let wasContinuing = continueAfterFailure
+        continueAfterFailure = true
+        defer { continueAfterFailure = wasContinuing }
+        for name in findings.keys.sorted() {
+            let rest = findings[name] ?? []
             XCTAssertTrue(
                 rest.isEmpty,
                 "the audit attributed \(rest.count) finding(s) on \(name) to an element: \(rest)"
