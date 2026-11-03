@@ -26,6 +26,10 @@ struct PrinterCardView: View {
 
     @Environment(\.dynamicTypeSize) private var typeSize
 
+    /// Opens the printer's own web page in Safari. Taken from the environment
+    /// rather than drawn as a `Link`; see ``actions``.
+    @Environment(\.openURL) private var openURL
+
     /// The dot's diameter, which **grows with the type size**. A flat
     /// `frame(width:)` on a glyph is the mistake `FileRowView` carries a
     /// paragraph about (`FileRowView.swift:32-40`); a status dot beside text
@@ -339,13 +343,28 @@ struct PrinterCardView: View {
                     .disabled(panel.busy != nil)
             }
             // ``Printer/webPage`` is nil unless `admin_url` is `http(s)` — an
-            // `ipp:` URI or a scheme Safari would refuse draws no link, which
-            // is the same rule applied to a `Link`.
+            // `ipp:` URI or a scheme Safari would refuse draws no control at
+            // all, rather than one whose tap goes nowhere.
+            //
+            // **A ``HomeLink``, not a `Link`.** Apple's audit failed this one
+            // control twice on train S009 — "Hit area is too small" and
+            // "Contrast failed" — against `type=9 label='printer's own page'
+            // frame=(30, 122.3, 127.7, 18)`. Eighteen points: the
+            // `.frame(minHeight: 44)` that was here *reserved* the height and
+            // the `Link` went on hit-testing, and being measured on, its drawn
+            // text, which is the half of the fix ``HomeLink`` was written to
+            // state (`HomeCardView.swift:112-121` — the 44 **and** the
+            // `contentShape`). The frame straddled the navigation bar's lower
+            // edge at 137.3, so half of what the audit sampled behind the text
+            // was the blurred bar rather than the card.
+            //
+            // Android is a `TextButton` here, beside two `OutlinedButton`s
+            // (`PrintersPanel.kt:406-411`) — a button, not a bare link — so
+            // the button is also the faithful port, and it is the same
+            // ``HomeLink`` the `recent jobs` line below already uses, which
+            // the same audit passed.
             if let page = printer.webPage {
-                Link(PrintingStrings.printersOwnPage, destination: page)
-                    .font(.subheadline)
-                    .foregroundStyle(Color.brandInk)
-                    .frame(minHeight: 44)
+                HomeLink(PrintingStrings.printersOwnPage) { openURL(page) }
             }
         }
     }
@@ -664,14 +683,40 @@ struct PrinterJobRow: View {
         // A row that becomes a column once the type is big: a title, a state
         // line and a `cancel` do not fit across a phone at AX5.
         if typeSize.isAccessibilitySize {
-            VStack(alignment: .leading, spacing: 4) { face }
+            VStack(alignment: .leading, spacing: 4) {
+                spoken
+                cancel
+            }
         } else {
             HStack(alignment: .top, spacing: 10) {
-                VStack(alignment: .leading, spacing: 2) { face }
+                spoken
                 Spacer(minLength: 4)
                 cancel
             }
         }
+    }
+
+    /// The job's three lines as **one** accessibility element.
+    ///
+    /// Two reasons, and the audit is the second of them. A job is one thing —
+    /// VoiceOver saying "scan.pdf", then "done · a simulator · 12m ago" as a
+    /// separate stop is three stops for one row, and the `cancel` beside it
+    /// stays its own element so it is still reachable.
+    ///
+    /// The audit's: on train S009 Apple failed `type=48 label='scan.pdf'`
+    /// with "The accessibilityLabel of this element is not human-readable" —
+    /// a bare filename, which is a label its check reads as an identifier.
+    /// **The title is not changed to please it**: it is the house's own
+    /// `title` for the job (`jobs.py`), and a title the server sends is not
+    /// ours to reword. Combined, the row reads "scan.pdf, done · a simulator ·
+    /// 12m ago", which is a sentence — and the same combine is what the two
+    /// job rows beside it (`the council letter`, `a spreadsheet.xlsx`) would
+    /// have wanted anyway.
+    private var spoken: some View {
+        VStack(alignment: .leading, spacing: typeSize.isAccessibilitySize ? 4 : 2) {
+            face
+        }
+        .accessibilityElement(children: .combine)
     }
 
     @ViewBuilder
@@ -692,7 +737,9 @@ struct PrinterJobRow: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .multilineTextAlignment(.leading)
         }
-        if typeSize.isAccessibilitySize { cancel }
+        // The `cancel` is **not** here: it is a sibling of ``spoken`` in both
+        // layouts, because a button swallowed by `children: .combine` is a
+        // button nothing can reach.
     }
 
     /// `state · who · 10 min ago` (`PrintersPanel.kt:432-437`).

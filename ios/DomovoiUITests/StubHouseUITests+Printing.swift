@@ -511,14 +511,19 @@ extension StubHouseUITests {
         XCTAssertTrue(printingScrollToHittable(app, open), "no recent-jobs link on a printer card")
         open.tap()
 
-        let failed = app.staticTexts["the council letter"]
+        // Matched by label across element types, not as `staticTexts`: since
+        // the S009 audit a job's three lines are **one** accessibility
+        // element (`PrinterJobRow.spoken`), so the row reports as the
+        // combined element and its title is that element's prefix. The
+        // assertions below are the same three facts, read off the one label.
+        let failed = startingWith(app, "the council letter")
         XCTAssertTrue(failed.waitForExistence(timeout: 25), "the job log is empty — the wrapper was not decoded")
         evidence(app, "printing-11-recent-jobs")
         XCTAssertTrue(
-            app.staticTexts["The printer said: cover open."].exists,
+            containing(app, "The printer said: cover open.").exists,
             "the failed job's reason is not shown, so the person is told only that it failed"
         )
-        XCTAssertTrue(app.staticTexts["a spreadsheet.xlsx"].exists, "the printing job is not listed")
+        XCTAssertTrue(startingWith(app, "a spreadsheet.xlsx").exists, "the printing job is not listed")
         // The in-flight job's **progress**, not its bare state: Android is
         // `(if (j.finished) j.state else j.progress.ifBlank { j.state })`
         // (`PrintersPanel.kt:432-437`) and the server sends `progress` as a
@@ -911,7 +916,9 @@ extension StubHouseUITests {
         let open = app.buttons["recent jobs"].firstMatch
         if printingScrollToHittable(app, open) {
             open.tap()
-            _ = app.staticTexts["the council letter"].waitForExistence(timeout: 20)
+            // The job rows are one combined element each since S009, so this
+            // waits on the label's prefix rather than on a `staticTexts` hit.
+            _ = startingWith(app, "the council letter").waitForExistence(timeout: 20)
         }
         evidence(app, "printing-25-audit")
         let split = Self.floorAndRest(try auditIssues(app, "printing-panel"))
