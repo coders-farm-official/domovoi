@@ -114,42 +114,35 @@ struct MusicView: View {
     /// anchor and the follow flag are not rebuilt every tick.
     @State private var roomLyrics: [String: MusicRoomLyricsModel] = [:]
 
-    /// The track whose sheet is open, with the lyrics model for it.
+    /// Which of this screen's three sheets is up, and the model behind it.
     ///
-    /// Wrapped for the same reason the two below are, and for one more: a
-    /// model built inside a `.sheet` content closure is built again every
-    /// time that sheet re-renders, which resets the anchor and the follow
-    /// flag — a lyrics panel that never scrolls.
-    @State private var sheetTrack: OpenTrack?
-
-    /// One track sheet's track and its lyrics model, keyed by the track.
-    private struct OpenTrack: Identifiable {
-        let id: Int64
-        let track: LibraryTrack
-        let lyrics: MusicRoomLyricsModel
-    }
-
-    /// The playlist whose sheet is open, and its model.
+    /// **One sheet presentation, over one value.** This screen has three
+    /// sheets and `AppShellView.swift:54` already wrote down what three
+    /// `.sheet` modifiers on one view does: "the later modifier commonly
+    /// wins and the earlier silently never presents". It compiles, and
+    /// nothing in `pkgtest.sh` can see it. So which sheet is up is one value
+    /// with one answer.
     ///
-    /// Wrapped, because `.sheet(item:)` takes an `Identifiable` and a model
-    /// is a class with no `id` — and giving one an `id` in the package to
-    /// suit a sheet presentation would be a change to a shared file for a
-    /// view's convenience.
-    @State private var sheetPlaylist: OpenPlaylist?
+    /// The models live **in the case** rather than being built in the sheet's
+    /// content closure, because that closure runs again on every re-render —
+    /// and a lyrics model rebuilt per render is one whose anchor and follow
+    /// flag reset ten times a second.
+    @State private var sheet: MusicMoreSheet?
 
-    /// The track whose add-to-playlist sheet is open, and its model.
-    @State private var addingTrack: OpenAdd?
-
-    /// One playlist detail model, keyed by the playlist it is about.
-    private struct OpenPlaylist: Identifiable {
-        let id: Int64
-        let detail: MusicPlaylistDetailModel
-    }
-
-    /// One add-to-playlist model, keyed by the track it is about.
-    private struct OpenAdd: Identifiable {
-        let id: Int64
-        let add: MusicAddToPlaylistModel
+    /// One of the three, with what it needs.
+    ///
+    /// Presented through `.sheet(isPresented:)` rather than
+    /// ``ShellSheet``'s `.sheet(item:)`, and the difference is the one
+    /// interaction this item adds: `add to playlist` **replaces** the track
+    /// sheet. Changing `item` while a sheet is up asks SwiftUI to dismiss
+    /// and present inside one state change; `isPresented` stays true and the
+    /// content closure re-reads this value, which is a content swap and
+    /// nothing more. Each case also carries a main-actor model, so an
+    /// `Identifiable` `id` would be a nonisolated witness reaching them.
+    private enum MusicMoreSheet {
+        case track(LibraryTrack, MusicRoomLyricsModel)
+        case playlist(MusicPlaylistDetailModel)
+        case addTo(LibraryTrack, MusicAddToPlaylistModel)
     }
 
     /// Whether this view is on screen, as `onAppear`/`onDisappear` report it.
@@ -300,19 +293,18 @@ struct MusicView: View {
             guard text != nil, let said = playlists?.takeToast() else { return }
             model.showToast(said)
         }
-        .onChange(of: sheetPlaylist?.detail.toast) { _, text in
-            guard text != nil, let said = sheetPlaylist?.detail.takeToast() else { return }
-            model.showToast(said)
-        }
-        .onChange(of: addingTrack?.add.toast) { _, text in
-            guard text != nil, let said = addingTrack?.add.takeToast() else { return }
+        // Whichever sheet is up, its model's toast. One `onChange` rather
+        // than one per sheet, because only one of them can be up.
+        .onChange(of: sheetToast) { _, text in
+            guard text != nil, let said = takeSheetToast() else { return }
             model.showToast(said)
         }
         // A write from the add-to-playlist sheet changed something the
         // screen behind it is showing: the star on a library row, and the
         // playlists tab's counts.
-        .onChange(of: addingTrack?.add.mutated ?? false) { _, changed in
-            guard changed, addingTrack?.add.takeMutated() == true else { return }
+        .onChange(of: addMutated) { _, changed in
+            guard changed else { return }
+            guard case .addTo(_, let add) = sheet, add.takeMutated() else { return }
             music?.library.reload()
             playlists?.read.refresh()
         }
@@ -328,36 +320,79 @@ struct MusicView: View {
             // wrong-key defect in its most visible shape.
             for one in roomLyrics.values { one.stop() }
             roomLyrics = [:]
-            // The open sheets are about a playlist id and a track id of the
-            // house that has gone; both close themselves, and these are the
-            // screen's half of that.
-            sheetTrack = nil
-            sheetPlaylist = nil
-            addingTrack = nil
+            // Whatever sheet is up is about a playlist id or a track id of
+            // the house that has gone; the models close themselves, and this
+            // is the screen's half of that.
+            sheet = nil
         }
-        .sheet(item: $sheetTrack) { open in
-            if let music, let covers {
-                MusicTrackSheet(
-                    music: music,
-                    track: open.track,
-                    covers: covers,
-                    lyrics: open.lyrics,
-                    onAddToPlaylist: { openAddToPlaylist(open.track) }
-                )
+        // `isPresented`, not `item`: see ``MusicMoreSheet``.
+        .sheet(isPresented: sheetUp) {
+            switch sheet {
+            case .track(let track, let lyrics):
+                if let music, let covers {
+                    MusicTrackSheet(
+                        music: music,
+                        track: track,
+                        covers: covers,
+                        lyrics: lyrics,
+                        onAddToPlaylist: { openAddToPlaylist(track) }
+                    )
+                }
+            case .playlist(let detail):
+                if let covers, let music {
+                    MusicPlaylistSheet(
+                        detail: detail,
+                        covers: covers,
+                        rooms: music.castRooms
+                    )
+                }
+            case .addTo(_, let add):
+                MusicAddToPlaylistSheet(add: add)
+            case .none:
+                // The slot emptied while the sheet was coming down. Nothing
+                // rather than a half-built sheet.
+                EmptyView()
             }
         }
-        .sheet(item: $sheetPlaylist) { open in
-            if let covers, let music {
-                MusicPlaylistSheet(
-                    detail: open.detail,
-                    covers: covers,
-                    rooms: music.castRooms
-                )
-            }
+    }
+
+    /// Whether a sheet is up. The setter only ever **closes** one: a sheet is
+    /// opened by putting a case in ``sheet``, never by a bare `true`.
+    private var sheetUp: Binding<Bool> {
+        Binding(
+            get: { sheet != nil },
+            set: { up in if !up { sheet = nil } }
+        )
+    }
+
+    /// The toast whichever model is behind the open sheet is holding.
+    ///
+    /// Here rather than on ``MusicMoreSheet`` because reading a model is
+    /// main-actor work and this view is where that isolation already is.
+    private var sheetToast: String? {
+        switch sheet {
+        case .playlist(let detail): return detail.toast
+        case .addTo(_, let add): return add.toast
+        case .track, .none: return nil
         }
-        .sheet(item: $addingTrack) { open in
-            MusicAddToPlaylistSheet(add: open.add)
+    }
+
+    private func takeSheetToast() -> String? {
+        switch sheet {
+        case .playlist(let detail): return detail.takeToast()
+        case .addTo(_, let add): return add.takeToast()
+        case .track, .none: return nil
         }
+    }
+
+    /// Whether the add-to-playlist sheet has written something.
+    ///
+    /// A computed property rather than the expression inline in `onChange`,
+    /// because an `onChange(of:)` over a `switch` is not an expression the
+    /// compiler will take.
+    private var addMutated: Bool {
+        if case .addTo(_, let add) = sheet { return add.mutated }
+        return false
     }
 
     // MARK: - the models the new tabs and sheets hang off
@@ -380,32 +415,34 @@ struct MusicView: View {
     /// ``MusicRoomLyricsModel``'s own, not something invented here.
     private func openTrack(_ track: LibraryTrack) {
         guard let lyricsStore, let nudges, let music else { return }
-        let model = MusicRoomLyricsModel(
+        let lyrics = MusicRoomLyricsModel(
             room: music.rooms.first { $0.trackID == track.id }?.roomID ?? "",
             store: lyricsStore,
             nudges: nudges
         )
-        model.offer(trackID: track.id)
-        sheetTrack = OpenTrack(id: track.id, track: track, lyrics: model)
+        lyrics.offer(trackID: track.id)
+        sheet = .track(track, lyrics)
     }
 
     private func openPlaylist(_ playlist: Playlist) {
         guard let deviceID = model.deviceID else { return }
-        sheetPlaylist = OpenPlaylist(
-            id: playlist.id,
-            detail: MusicPlaylistDetailModel(
-                playlist: playlist,
-                container: model.container,
-                deviceID: deviceID
-            )
-        )
+        sheet = .playlist(MusicPlaylistDetailModel(
+            playlist: playlist,
+            container: model.container,
+            deviceID: deviceID
+        ))
     }
 
+    /// Open the add-to-playlist sheet, **in place of** the track sheet it was
+    /// reached from.
+    ///
+    /// Not over it. A sheet presented from inside a sheet is the second half
+    /// of the hazard ``MusicMoreSheet`` exists for, and Android reaches this
+    /// sheet from the library row's own `+` rather than from the track
+    /// drawer (`LibraryTab.kt:229`) — so one at a time is also the faithful
+    /// shape. Closing it comes back to Music, which is where the row is.
     private func openAddToPlaylist(_ track: LibraryTrack) {
-        addingTrack = OpenAdd(
-            id: track.id,
-            add: MusicAddToPlaylistModel(track: track, container: model.container)
-        )
+        sheet = .addTo(track, MusicAddToPlaylistModel(track: track, container: model.container))
     }
 
     /// Keep one lyrics model per room the server reported, and tell each one
