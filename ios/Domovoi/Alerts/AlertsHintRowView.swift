@@ -84,13 +84,26 @@ struct AlertsHintRowView: View {
 
     var body: some View {
         if model.shown {
-            row
-                // 44 points, which is both Android's `heightIn(min = 44.dp)`
-                // (`HomeSections.kt:355`) and Apple's minimum. The row holds
-                // two controls, so the minimum is on the row and
-                // `contentShape` is on each control rather than here.
-                .frame(minHeight: 44)
+            // `.hidden()` under `-domovoi-alerts-hide-hint`, and **not** no
+            // row at all: the audit baseline has to be the same Home with the
+            // same geometry, or the subtraction measures the fold rather than
+            // the row (``AlertsHintModel/blankedForBaseline``, DECISIONS §17).
+            // `.hidden()` draws nothing and contributes no accessibility
+            // element while keeping every point of the row's space.
+            if model.blankedForBaseline {
+                sized.hidden()
+            } else {
+                sized
+            }
         }
+    }
+
+    /// The row at its minimum height — 44 points, which is both Android's
+    /// `heightIn(min = 44.dp)` (`HomeSections.kt:355`) and Apple's minimum.
+    /// The row holds two controls, so the minimum is on the row and
+    /// `contentShape` is on each control rather than here.
+    private var sized: some View {
+        row.frame(minHeight: 44)
     }
 
     @ViewBuilder
@@ -201,52 +214,72 @@ struct AlertsHintLifecycle: ViewModifier {
 
     @Environment(\.scenePhase) private var phase
 
+    /// `model.explaining` as the presentation's binding. The setter only ever
+    /// closes: a swipe cannot dismiss a `fullScreenCover`, so the one writer
+    /// is the card's own `not now`, and this exists so that a dismissal
+    /// driven by iOS (a scene going away mid-card) cannot leave the model
+    /// claiming a card that is no longer on screen.
+    private var explaining: Binding<Bool> {
+        Binding(get: { model.explaining }, set: { if !$0 { model.closeExplain() } })
+    }
+
     func body(content: Content) -> some View {
-        // **Hidden, not merely behind**, while the card is up — the same
-        // line `SettingsPlaceholder` carries (`RouteScreen.swift:196-203`)
-        // and for the same measured reason: `DialogCard`'s `.isModal` stops
-        // VoiceOver *navigating* out of the card, but Home's rows stay in the
-        // tree under a 35% scrim, where Apple's audit reports them as
-        // `Contrast failed` — truthfully, since they are unreadable.
-        // **A `ZStack` with the hide as the outermost modifier of the content
-        // branch, not `content.accessibilityHidden(…).overlay { card }`.**
+        // **A presentation that covers the window, not a sibling in a
+        // `ZStack`** — and that is a measurement, not a preference.
         //
-        // The overlay form is what train S006 ran, and it measured as doing
-        // nothing: with the card up, Apple's audit still reported `Contrast
-        // failed` against `domovoi / home`, `unverified`, the address pill
-        // and all four tab labels — every one of them a view behind the 35%
-        // scrim, every one of them still in the tree
-        // (`overnight-trains/S006/Alerts/att/testAlerts_TurningOnAlertsExplainsItselfFirst/`,
-        // the tree attachment and the picture). The shape below is
-        // ``SettingsPlaceholder``'s (`RouteScreen.swift:196-206`), which is
-        // the one placement in this app where the hide was observed to take:
-        // the flag sits on the content branch with nothing composed after it.
+        // Every dialog in this app is a ``DialogCard``: a 35% black scrim
+        // with the card on top. `.isModal` stops VoiceOver *navigating* out
+        // of the card, but it leaves Home's rows in the tree, rendered under
+        // the scrim, where Apple's audit reports them as `Contrast failed` —
+        // truthfully, since they are unreadable. ``SettingsPlaceholder``
+        // answers that with `screen.accessibilityHidden(…)` beside the card
+        // in a `ZStack` (`RouteScreen.swift:196-206`), and that is what this
+        // modifier carried into trains S006 and S009. Both measured it doing
+        // nothing: with the card up the audit still named `domovoi / home`,
+        // the address pill, `unverified`, `Kitchen` and the four bar labels,
+        // and the S009 tree attachment lists the whole of Home as siblings of
+        // the card
+        // (`overnight-trains/S009/Alerts/att/testAlerts_TurningOnAlertsExplainsItselfFirst/`).
         //
-        // If a later train still reports those seven, the remaining
-        // difference is the level rather than the shape — this modifier is on
-        // the window's root, above the `TabView`, where ``SettingsPlaceholder``
-        // is inside a route — and the fix is then a shared one, written up in
-        // DECISIONS §15.
-        ZStack {
-            content
-                .accessibilityHidden(model.explaining)
-            // The explain card is here and not at the row for the same reason
-            // the read is: the row is inside a card inside a lazy grid, and a
-            // dialog presented from a view that can be torn down by a scroll
-            // is a dialog that can vanish mid-sentence. This also makes the
-            // hook into Home **one** line, which is the other half of why
-            // this modifier exists.
-            if model.explaining {
+        // Two placements, one difference: ``SettingsPlaceholder`` is *inside*
+        // a `NavigationStack` destination, and this modifier is on the
+        // window's root, *above* that stack. `.accessibilityHidden` is a
+        // SwiftUI attribute and does not cross into the UIKit controller that
+        // hosts the stack's content, so from here it reaches the chrome and
+        // nothing else. The shape was changed first (S009, DECISIONS §15)
+        // because it was the half this item could change alone; it was the
+        // level.
+        //
+        // So the card stops being a sibling and becomes a presentation.
+        // `fullScreenCover` is `UIModalPresentationStyle.fullScreen`, and
+        // UIKit takes the presenting controller's views out of the window
+        // once the transition ends — there is then nothing behind the card to
+        // audit, to read at 35%, or to reach with VoiceOver, without any
+        // shared file being touched. The card keeps its own look: the cover's
+        // content is still ``AlertsPermissionCardView``, scrim and all.
+        //
+        // `.accessibilityHidden` stays on the content as well. It costs a
+        // boolean, it is what hides the chrome during the transition, and if
+        // a future SwiftUI presents this over the window rather than in place
+        // of it, the chrome is still out of the tree.
+        content
+            .accessibilityHidden(model.explaining)
+            // The card is presented from the app's root and not from the row
+            // for the same reason the read is: the row is inside a card
+            // inside a scroll view, and a dialog presented from a view that a
+            // scroll can tear down is a dialog that can vanish mid-sentence.
+            // This also makes the hook into Home **one** line, which is the
+            // other half of why this modifier exists.
+            .fullScreenCover(isPresented: explaining) {
                 AlertsPermissionCardView(model: model)
             }
-        }
-        .task { await model.refresh() }
-        .onChange(of: phase) { _, now in
-            guard now == .active else { return }
-            // A `Task` on the screen's root, which outlives every card on
-            // it — the house rule the model's own doc comment explains.
-            Task { await model.refresh() }
-        }
+            .task { await model.refresh() }
+            .onChange(of: phase) { _, now in
+                guard now == .active else { return }
+                // A `Task` on the screen's root, which outlives every card on
+                // it — the house rule the model's own doc comment explains.
+                Task { await model.refresh() }
+            }
     }
 }
 

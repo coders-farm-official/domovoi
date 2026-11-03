@@ -136,16 +136,33 @@ public final class AlertsHintModel {
 
     /// Whether the row is drawn. ``AlertsHintRowView`` asks this and nothing
     /// else, so "is there a row" has one answer.
-    public var shown: Bool {
+    public var shown: Bool { line != nil }
+
+    /// `-domovoi-alerts-hide-hint`: draw the row's **space**, with nothing in
+    /// it, so a UI case can audit the same screen twice and subtract.
+    ///
+    /// Read by ``AlertsHintRowView``, which answers it with `.hidden()` —
+    /// no pixels, no accessibility element, and the layout unchanged. The
+    /// flag deliberately does **not** go through ``shown``: a row that is not
+    /// there at all is not a baseline for a row that is, and train S009
+    /// measured the difference. Dropping the row moved every one of Home's
+    /// rows up by 62 points, which was enough to lift the kitchen room row
+    /// (`{{32, 736.3}, {209, 60.3}}`) clear of the scroll view's bottom edge
+    /// at y=770 — so the launch *with* the row had one element cut by the
+    /// fold and the launch without it had none, and the audit's one extra
+    /// `Contrast failed` was that cut rather than anything the row drew
+    /// (DECISIONS §17). Same geometry, same findings, and what is left over
+    /// is the row's.
+    public var blankedForBaseline: Bool {
         #if DEBUG
-        if Self.hiddenForBaseline { return false }
+        return Self.hiddenForBaseline
+        #else
+        return false
         #endif
-        return line != nil
     }
 
     #if DEBUG
-    /// `-domovoi-alerts-hide-hint`: draw Home **without** the row, so a UI
-    /// case can audit the same screen twice and subtract.
+    /// The argument itself, read once.
     ///
     /// It exists because of a measurement rather than a convenience. Apple's
     /// audit reported one `Contrast failed` **with no element** against Home

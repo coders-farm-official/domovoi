@@ -115,8 +115,12 @@ extension StubHouseUITests {
             "-UIPreferredContentSizeCategoryName", mode,
         ]
         if forgetHint { app.launchArguments += ["-domovoi-alerts-forget-hint"] }
-        // The audit baseline: the same Home, drawn without the row
-        // (``AlertsHintModel/shown``, DEBUG only).
+        // The audit baseline: the same Home, with the row's space drawn
+        // **blank** — `.hidden()`, so no pixels and no accessibility element
+        // and not one point of layout moved
+        // (``AlertsHintModel/blankedForBaseline``, DEBUG only). It used to
+        // drop the row outright, and that is what train S009 showed to be
+        // the wrong baseline: see the case's own comment.
         if hideHint { app.launchArguments += ["-domovoi-alerts-hide-hint"] }
         app.launch()
         XCTAssertTrue(app.wait(for: .runningForeground, timeout: 30))
@@ -382,8 +386,8 @@ extension StubHouseUITests {
     /// it is on screen above the timers card in every one of this item's
     /// screenshots.
     ///
-    /// So the first launch draws Home **without** the row
-    /// (`-domovoi-alerts-hide-hint`) and the second with it, and what this
+    /// So the first launch draws Home with the row's **space and nothing in
+    /// it** (`-domovoi-alerts-hide-hint`) and the second with it, and what this
     /// case asserts is that the second set is not larger — compared by
     /// signature, because adding a row moves every frame under it by about
     /// fifty points and a frame is not what identifies a finding. The AX5
@@ -402,7 +406,7 @@ extension StubHouseUITests {
         }
         control("reset-fixtures", "{}", port: 6601, what: "the alerts fixture's seed")
 
-        // **The baseline first: the same Home, without the row.**
+        // **The baseline first: the same Home, with the row's space blank.**
         //
         // S006 reported one finding here — `Contrast failed` with **no
         // element** — and an unattributed finding is not evidence about this
@@ -413,11 +417,24 @@ extension StubHouseUITests {
         // question Apple's own output cannot, and it is strictly stronger
         // than the empty-set assertion it replaces: *any* finding the row
         // adds fails this, named or anonymous.
+        //
+        // **The baseline has to keep the row's space**, and on S009 it did
+        // not. `-domovoi-alerts-hide-hint` dropped the row entirely, which
+        // moved every row below it up by 62 points, and the two audits were
+        // then of two different geometries: with the row, Home's kitchen room
+        // row sat at `{{32, 736.3}, {209, 60.3}}` and was cut by the scroll
+        // view's bottom edge at y=770; without it, the same row sat at
+        // `674.3` and was whole. Apple reported the cut as one anonymous
+        // `Contrast failed` and the subtraction had nothing to cancel it
+        // against — a finding about where Home's own content lands, read as
+        // the alerts row's. The flag now draws the row `.hidden()`: same
+        // layout to the point, no pixels, no element. What the subtraction
+        // leaves is the row's drawing and only that.
         let base = alertsLaunch(hideHint: true)
         XCTAssertTrue(houseName(in: base).waitForExistence(timeout: 20))
         XCTAssertFalse(
             alertsHintRow(in: base).exists,
-            "`-domovoi-alerts-hide-hint` did not hide the row, so this is not a baseline"
+            "`-domovoi-alerts-hide-hint` left the row in the tree, so this is not a baseline"
         )
         let baseFound = Set(try auditIssues(base, "alerts-baseline").map(Self.alertsSignature))
         evidence(base, "alerts-audit-baseline")
@@ -500,23 +517,28 @@ extension StubHouseUITests {
             "`turn on` did not explain anything"
         )
         evidence(app, "alerts-explain-card")
-        // The card is the one state in which the card is auditable, and the
-        // only other `DialogCard` in the app (`RouteScreen.swift:196-203`)
-        // needed `.accessibilityHidden` on what is behind it: `.isModal`
-        // keeps VoiceOver inside the card but leaves Home's rows in the tree
-        // under a 35% scrim, where Apple reports them as `Contrast failed`
-        // — truthfully. This is the assertion that says the card carries it.
+        // The card is the one state in which the card is auditable, and
+        // nothing behind a modal may be left half-readable under its scrim:
+        // `.isModal` keeps VoiceOver inside the card but leaves Home's rows
+        // in the tree under a 35% black, where Apple reports them as
+        // `Contrast failed` — truthfully. This is the assertion that says the
+        // card carries it.
         if #available(iOS 17.0, *) {
             let (cardFloor, cardRest) = Self.floorAndRest(try auditIssues(app, "alerts-explain"))
             print("alerts: explain-card audit floor=\(cardFloor) rest=\(cardRest.count)")
-            // On S006 every one of these named a view **behind** the scrim —
-            // the header, the address pill, `unverified`, the four tab
-            // labels — because `content.accessibilityHidden(…).overlay { … }`
-            // hid nothing. ``AlertsHintLifecycle`` is now the `ZStack` shape
-            // ``SettingsPlaceholder`` uses. A finding naming a view outside
-            // the card is therefore still the hide, not the card, and the
-            // message says so rather than leaving the next reader to diff
-            // two trees for it (DECISIONS §15).
+            // On S006 and again on S009 every one of these named a view
+            // **behind** the scrim — the header, the address pill,
+            // `unverified`, `Kitchen`, the four bar labels — first through
+            // `content.accessibilityHidden(…).overlay { … }` and then through
+            // the `ZStack` shape ``SettingsPlaceholder`` uses. Neither hid
+            // anything, because `.accessibilityHidden` does not cross the
+            // `NavigationStack`'s UIKit boundary from the window's root.
+            // ``AlertsHintLifecycle`` now presents the card as a
+            // `fullScreenCover`, which takes Home out of the window
+            // altogether. A finding naming a view outside the card is
+            // therefore still the hide and not the card, and the message says
+            // so rather than leaving the next reader to diff two trees for it
+            // (DECISIONS §15).
             XCTAssertEqual(
                 [], cardRest,
                 "the audit named these while the card is up — anything that is not the "
