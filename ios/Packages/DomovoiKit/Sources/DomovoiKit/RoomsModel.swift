@@ -101,6 +101,16 @@ public final class RoomsModel {
 
     public internal(set) var broadcasting = false
 
+    /// The phone's clock, as this model reads it.
+    ///
+    /// Public because every relative time on this screen — `2h ago`,
+    /// `fires in 3m`, a timer's remaining seconds — is rendered in a view
+    /// against the same clock the rules take, and ``nowMs`` itself is the
+    /// injected closure the tests replace. Reading it does not observe
+    /// anything; what redraws these lines once a second is ``extraSec``,
+    /// which the tick writes and the same bodies read.
+    public var clockMs: Int64 { nowMs() }
+
     /// Seconds to add to each room's reported `elapsed_sec`, so the song
     /// clocks move between reads (`SatellitesScreen.kt:108`).
     ///

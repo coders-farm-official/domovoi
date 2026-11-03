@@ -128,6 +128,13 @@ public enum RoomsStrings {
     /// (`SatOverviewTab.kt:294`).
     public static let volumeUnknown = "unknown"
 
+    /// **iOS only.** A `Slider` has no words of its own, and Android's has no
+    /// content description either (`SatOverviewTab.kt:296`) — which on a
+    /// screen with one slider per room would read out as nothing at all. The
+    /// help line underneath is a sentence, not a label, so this is the short
+    /// one: `volume in kitchen`.
+    public static func volumeFor(room: String) -> String { "volume in \(room)" }
+
     /// The two nudges' content descriptions (`SatOverviewTab.kt:305,318`).
     public static let quieter = "quieter"
     public static let louder = "louder"

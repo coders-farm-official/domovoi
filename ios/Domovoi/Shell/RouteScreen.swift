@@ -93,7 +93,12 @@ struct RouteScreen: View {
             ScreenPlaceholder(route: route, onThisPhone: false)
         case .satellites:
             // slot: satellites
-            ScreenPlaceholder(route: route, onThisPhone: false)
+            // ``RoomsView`` says what is left out and why there is no control
+            // for any of it. `navigate(.satellites)` resolves to Settings →
+            // Rooms (``settingsTabFor(_:)``), so this branch is only ever
+            // reached by a direct `go(.satellites)` — filled with the same
+            // view so that it is not a dead screen.
+            RoomsView(model: model)
         case .calendar:
             // slot: calendar
             ScreenPlaceholder(route: route, onThisPhone: false)
@@ -319,7 +324,10 @@ struct SettingsSectionScreen: View {
             PhonesAndBrowsersPanel(model: model, askingToForget: $askingToForget)
         case "rooms":
             // slot: rooms
-            SettingsSectionNotBuilt()
+            // `embedded:` is Android's own flag (`SatellitesScreen.kt:80`):
+            // the section already has the heading, and Settings already
+            // scrolls, so the screen draws neither of its own here.
+            RoomsView(model: model, embedded: true)
         case "printers":
             // slot: printers
             SettingsSectionNotBuilt()
