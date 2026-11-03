@@ -77,20 +77,39 @@ final class PeopleModelTests: XCTestCase {
             return "[\(rows.joined(separator: ","))]"
         }
 
+        /// Both lists empty, for the house with nobody in it. A switch on
+        /// the seed rather than a second dispatcher, because a dispatcher
+        /// without the `/api/health` case below is one the identity gate
+        /// refuses — and then every assertion is about nothing.
+        let empty = Shared<Bool>(false)
+
         func install() {
             StubURLProtocol.dispatch { request in
-                switch request.url?.path {
+                guard
+                    let url = request.url,
+                    let parts = URLComponents(url: url, resolvingAgainstBaseURL: false)
+                else { return .json("{}", status: 404) }
+                switch parts.path {
+                case "/api/health":
+                    // The identity gate's probe. Without it every read below
+                    // is refused and every assertion is about nothing.
+                    let challenge = (parts.queryItems ?? [])
+                        .first { $0.name == "challenge" }?.value
+                    return .json(
+                        (try? TestIdentity.real.healthBody(challenge: challenge)) ?? "{}"
+                    )
                 case "/api/people":
                     let status = self.rosterStatus.current
                     guard status == 200 else {
                         return .json(#"{"detail":"the roster is down"}"#, status: status)
                     }
-                    return .json(self.roster)
+                    return .json(self.empty.current ? "[]" : self.roster)
                 case "/api/denylist":
                     let status = self.denylistStatus.current
                     guard status == 200 else {
                         return .json(#"{"detail":"nope"}"#, status: status)
                     }
+                    guard !self.empty.current else { return .json("[]") }
                     return .json("""
                     [{"id":1,"denylisted_at":"\(self.ago(86_400 * 40))","notes":null},
                      {"id":2,"denylisted_at":"\(self.ago(86_400 * 5))","notes":null}]
@@ -228,9 +247,9 @@ final class PeopleModelTests: XCTestCase {
     }
 
     func testAnEmptyHouseSaysNobodyIsEnrolled() async {
-        let (model, _) = rig()
-        // Both lists empty: the roster and the denylist.
-        StubURLProtocol.dispatch { _ in .json("[]") }
+        let house = House(now: now)
+        house.empty.set(true)
+        let (model, _) = rig(house)
         await started(model)
         XCTAssertEqual(model.rosterState, .nobodyEnrolled)
         XCTAssertEqual(model.subtitle, "0 enrolled · 0 heard in the last 5 min")

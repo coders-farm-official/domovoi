@@ -102,8 +102,18 @@ final class PersonDetailModelTests: XCTestCase {
         """
 
         func answer(_ request: URLRequest) -> StubURLProtocol.Answer {
-            let path = request.url?.path ?? ""
+            guard
+                let url = request.url,
+                let parts = URLComponents(url: url, resolvingAgainstBaseURL: false)
+            else { return .json("{}", status: 404) }
+            let path = parts.path
             let method = request.httpMethod ?? "GET"
+            if path == "/api/health" {
+                // The identity gate's probe. Without it every read below is
+                // refused and every assertion is about nothing.
+                let challenge = (parts.queryItems ?? []).first { $0.name == "challenge" }?.value
+                return .json((try? TestIdentity.real.healthBody(challenge: challenge)) ?? "{}")
+            }
             if method != "GET" {
                 let body = request.httpBody.map { String(decoding: $0, as: UTF8.self) } ?? ""
                 writes.mutate { $0.append((method, path, body)) }
@@ -356,6 +366,11 @@ final class PersonDetailModelTests: XCTestCase {
     func testThePendingRowsAloneAreNotNoMemoriesYet() async {
         let (model, _) = rig()
         StubURLProtocol.dispatch { request in
+            if request.url?.path == "/api/health" {
+                let parts = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
+                let challenge = (parts?.queryItems ?? []).first { $0.name == "challenge" }?.value
+                return .json((try? TestIdentity.real.healthBody(challenge: challenge)) ?? "{}")
+            }
             if request.url?.path == "/api/people/1/memories" {
                 return .json("""
                 [{"id":2,"person_id":1,"body":"bakes sourdough","status":"pending",
@@ -540,7 +555,12 @@ final class PersonDetailModelTests: XCTestCase {
         let (model, _) = rig()
         await showing(model, kamron)
         StubURLProtocol.dispatch { request in
-            (request.httpMethod ?? "GET") == "GET"
+            if request.url?.path == "/api/health" {
+                let parts = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
+                let challenge = (parts?.queryItems ?? []).first { $0.name == "challenge" }?.value
+                return .json((try? TestIdentity.real.healthBody(challenge: challenge)) ?? "{}")
+            }
+            return (request.httpMethod ?? "GET") == "GET"
                 ? .json("[]")
                 : .json(#"{"detail":"the memory store is full"}"#, status: 500)
         }
