@@ -174,9 +174,12 @@ final class AssistantEngineTests: XCTestCase {
 
     func testTheFakeStreamsWordsAndRepeatsItsLastReply() async throws {
         let engine = FakeAssistantEngine(script: [.words("one two"), .words("three")])
-        XCTAssertEqual(try await collect(engine), ["one", " two"])
-        XCTAssertEqual(try await collect(engine), ["three"])
-        XCTAssertEqual(try await collect(engine), ["three"], "the last reply repeats")
+        let first = try await collect(engine)
+        let second = try await collect(engine)
+        let third = try await collect(engine)
+        XCTAssertEqual(first, ["one", " two"])
+        XCTAssertEqual(second, ["three"])
+        XCTAssertEqual(third, ["three"], "the last reply repeats")
         XCTAssertEqual(engine.asked.count, 3)
     }
 
