@@ -251,7 +251,7 @@ public final class PrintingScanModel {
 
     private func call(
         _ action: String,
-        _ body: @escaping @Sendable () async throws(DomovoiError) -> PrintingScanJob
+        _ body: @escaping @Sendable () async throws -> PrintingScanJob
     ) {
         busy = true
         Task { @MainActor [weak self] in

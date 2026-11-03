@@ -412,7 +412,7 @@ public final class PrintersPanelModel {
     private func change(
         _ action: String,
         _ printerID: Int,
-        _ body: @escaping @Sendable () async throws(DomovoiError) -> Printer
+        _ body: @escaping @Sendable () async throws -> Printer
     ) {
         guard busy == nil else { return }
         busy = action
