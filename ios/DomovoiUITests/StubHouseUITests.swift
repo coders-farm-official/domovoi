@@ -3593,6 +3593,18 @@ final class StubHouseUITests: XCTestCase {
 
         func heights(_ app: XCUIApplication) -> [String: CGFloat] {
             var out: [String: CGFloat] = [:]
+            // **Back to the top first.** ``scrollUntilBuilt(_:_:flicks:)``
+            // only ever scrolls *down*, and at AX5 `openChat` has already
+            // scrolled the list to reach the archived entry — so the first
+            // leaf this looks for, the subtitle, was already above the
+            // viewport. The search for it then flicked further down, past
+            // everything else, and the AX5 pass measured **none** of the five
+            // (2026-11-02). Walking down from the top is the whole trick, and
+            // it only works from the top.
+            let list = app.collectionViews.firstMatch
+            if list.waitForExistence(timeout: 20) {
+                for _ in 0..<30 { list.swipeDown(velocity: .slow) }
+            }
             for (leaf, predicate) in leaves {
                 // **staticTexts, not .any.** A row's words sit inside a button
                 // carrying the same label, and .any measured the button:
