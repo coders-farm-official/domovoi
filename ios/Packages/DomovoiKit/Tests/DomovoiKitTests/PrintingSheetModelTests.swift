@@ -416,38 +416,38 @@ final class PrintingSheetModelTests: XCTestCase {
     /// `over_limit` is a refusal the household's limits have already decided,
     /// so Print is **not pressable** rather than pressed and refused.
     func testOverTheLimitRefusesBeforeAnythingIsSent() async {
-        let (model, server, clock) = printRig()
-        model.start()
-        await settleUntil({ model.preview != nil }, "the first preview")
-
-        // A house that allows 20 and a preview asked for 21.
+        // A printer that takes 99 copies in a house whose limit is 20: the
+        // preview is the only thing that knows, which is the point.
         let twentyOne = PrintersResponse(
-            printers: [Printer(id: 1, canPrint: true, choices: PrintingChoices(copiesMax: 99))],
+            printers: [Printer(id: 1, name: "office printer", canPrint: true,
+                               choices: PrintingChoices(copiesMax: 99))],
             hasPrinter: true,
             defaultPrinterID: 1
         )
-        let (over, _, overClock) = printRig(server, printers: twentyOne)
-        over.start()
-        await settleUntil({ over.preview != nil }, "the second sheet's preview")
-        for _ in 0..<21 {
-            over.moreCopies()
-            overClock.tick()
-        }
-        await settleUntil({ over.preview?.overLimit != nil }, "the refusal in advance")
-        XCTAssertEqual(over.preview?.overLimit, "That's more copies than this house allows (20).")
-        XCTAssertFalse(over.canPrint)
+        let (model, server, clock) = printRig(Server(), printers: twentyOne)
+        model.start()
+        await settleUntil({ model.preview != nil }, "the first preview")
+        XCTAssertTrue(model.canPrint)
+
+        for _ in 0..<21 { model.moreCopies() }
+        XCTAssertEqual(model.copies, 22)
+        // One preview survives the twenty-one changes (each cancels the one
+        // before it); the permits are generous because the cancelled ones die
+        // through the same gate.
+        clock.tick(40)
+        await settleUntil({ model.preview?.overLimit != nil }, "the refusal in advance")
+        XCTAssertEqual(model.preview?.overLimit, "That's more copies than this house allows (20).")
+        XCTAssertFalse(model.canPrint)
 
         let before = server.asked.current.filter { $0 == "/api/print/jobs" }.count
-        over.submit()
+        model.submit()
         for _ in 0..<200 { await Task.yield() }
         XCTAssertEqual(
             server.asked.current.filter { $0 == "/api/print/jobs" }.count,
             before,
             "a job went out for a preview the server had already refused"
         )
-        _ = clock
         model.stop()
-        over.stop()
     }
 
     /// Print, then the job to its end: the intermediate `printing · 1 of 3`
@@ -518,15 +518,17 @@ final class PrintingSheetModelTests: XCTestCase {
         )
         XCTAssertNil(model.preview, "the first preview is still held")
 
-        // Inside the round trip.
+        // Inside the round trip: the printer changes while printer 1's
+        // preview is still held open at the server.
         model.pick(printer: model.printers[1])
+        // Then it is let go. Released here rather than after the second
+        // answer because a parked `URLProtocol` holds the worker thread it
+        // was called on — the same order `ChatModelTests`'
+        // read-after-await case uses.
+        server.release.set(true)
         clock.tick()
         await settleUntil({ model.preview?.printerID == 2 }, "printer 2's preview")
-
-        // Now let printer 1's answer go. It is for a printer nobody has
-        // chosen any more.
-        server.release.set(true)
-        for _ in 0..<2_000 { await Task.yield() }
+        for _ in 0..<500 { await Task.yield() }
 
         XCTAssertEqual(model.preview?.printerID, 2, "printer 1's answer landed under printer 2")
         XCTAssertEqual(model.preview?.printerName, "the colour one")
