@@ -89,6 +89,25 @@ public struct PodcastShow: PagedRow, Identifiable, Equatable, Sendable {
         return PodcastStrings.untitledShow
     }
 
+    /// What the card's **accessibility label** says, which is not always what
+    /// the card draws.
+    ///
+    /// ``displayTitle``'s middle fallback is the feed URL, and a URL is the
+    /// only name an untitled show has, so it stays on the screen. It must not
+    /// stay in the label: Apple's audit failed the grid on train S004 with
+    /// "The accessibilityLabel of this element is not human-readable",
+    /// naming the card whose label was `https://feeds.example.com/untitled-feed.xml`
+    /// — and it is right, because what VoiceOver does with that is spell a URL
+    /// one slash at a time. So the spoken name skips straight to the word, and
+    /// the feed URL is read from the card's own text by anyone who goes
+    /// looking.
+    ///
+    /// Two fallbacks, not three, is the whole difference from ``displayTitle``.
+    public var spokenTitle: String {
+        if let title, !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return title }
+        return PodcastStrings.untitledShow
+    }
+
     /// `"9/57 downloaded"` — the card's mono line (`PodcastsScreen.kt:256`).
     ///
     /// Not grouped: Android interpolates the two ints raw, and a show with

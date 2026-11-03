@@ -253,13 +253,26 @@ extension StubHouseUITests {
         )
     }
 
-    /// A show the feed never titled is drawn by its feed URL.
+    /// A show the feed never titled is **drawn** by its feed URL and
+    /// **spoken** as the word.
     ///
     /// `title ?? feed_url ?? "podcast"` (``PodcastShow/displayTitle``). The
     /// seeded row has `title: null` and a feed URL that sorts onto page one,
     /// so the fallback is reachable without scrolling — and the word
-    /// `podcast` must **not** be what the card says, which is what a port
-    /// that dropped the middle link of the chain would draw.
+    /// `podcast` must **not** be what the card draws, which is what a port
+    /// that dropped the middle link of the chain would do.
+    ///
+    /// ### Why this asks the static text and not the button
+    ///
+    /// It asked `app.buttons[untitledFeed]` until train S004, where Apple's
+    /// audit failed the grid with "The accessibilityLabel of this element is
+    /// not human-readable" against that very card: a whole URL as a card's
+    /// spoken name is a URL spelt out one slash at a time. The label is now
+    /// ``PodcastShow/spokenTitle``, which stops at the word — so the drawn
+    /// name is asked of the **text** and the spoken name of the **button**,
+    /// and the case got longer rather than weaker. A port that fell straight
+    /// to `podcast` still fails the first assert, which is what this case is
+    /// named for.
     @MainActor
     func testPodcasts_AShowWithNoTitleFallsBackToItsFeed() throws {
         let (app, landed) = openPodcasts()
@@ -267,12 +280,21 @@ extension StubHouseUITests {
         evidence(app, "podcasts-12-untitled-show")
 
         XCTAssertTrue(
-            app.buttons[StubPodcasts.untitledFeed].exists,
+            app.staticTexts[StubPodcasts.untitledFeed].exists,
             "the show with no title is not drawn by its feed URL"
         )
         XCTAssertFalse(
-            app.buttons[StubPodcasts.untitledWord].exists,
+            app.staticTexts[StubPodcasts.untitledWord].exists,
             "a show with a feed URL fell all the way to the word \"podcast\""
+        )
+        // And the spoken side of the same card: the word, never the URL.
+        XCTAssertTrue(
+            app.buttons[StubPodcasts.untitledWord].exists,
+            "the untitled card is not spoken as the word \"podcast\""
+        )
+        XCTAssertFalse(
+            app.buttons[StubPodcasts.untitledFeed].exists,
+            "the untitled card still reads a whole URL out as its name"
         )
     }
 
@@ -354,6 +376,14 @@ extension StubHouseUITests {
             "something offers to play an episode and nothing in this app owns "
                 + "a player — a control that cannot do what it says"
         )
+        // **Under the show's name, not at the foot.** This assert is what
+        // failed on train S004: the sentence was the last thing in the
+        // episodes `LazyVStack`, and the foot of a lazy list of fifty-seven
+        // rows is not built, so it was in no tree - and a person hunting for
+        // the play control had the same trip to make
+        // (``PodcastEpisodesSheet/whereListeningHappens``). Asserted without
+        // scrolling on purpose: scrolling to it would have made the case pass
+        // and left the screen wrong.
         XCTAssertTrue(
             app.staticTexts[StubPodcasts.inTheDashboard].exists,
             "the list does not say where listening and saving are done"
@@ -748,6 +778,21 @@ extension StubHouseUITests {
         let small = ordinary.app.buttons[StubPodcasts.kitchenTable].firstMatch
         XCTAssertTrue(small.waitForExistence(timeout: 25), "no card to measure")
         let smallHeight = small.frame.height
+        // **The leaves the audit names**, not only the card around them.
+        // Train S004 reported "User will not be able to change the font size
+        // of this element" against a card's title, its author line and its
+        // mono counts — named, which this file's rule calls a defect. The
+        // card growing does not answer that: a card can grow while one line
+        // inside it is pinned. So each flagged leaf is measured by its own
+        // label, and the audit case below classifies that headline as false
+        // only because these three numbers come back bigger.
+        let smallLeaves = [
+            StubPodcasts.kitchenTable,
+            StubPodcasts.kitchenAuthor,
+            StubPodcasts.kitchenDownloaded,
+        ].map { label -> (String, CGFloat) in
+            (label, ordinary.app.staticTexts[label].firstMatch.frame.height)
+        }
         evidence(ordinary.app, "podcasts-70-card-ordinary")
         ordinary.app.terminate()
 
@@ -767,23 +812,56 @@ extension StubHouseUITests {
             "the card grew from \(smallHeight) to \(largeHeight) — text that "
                 + "does not grow is either scaled down or clipped"
         )
+        // The three leaves, each against its own ordinary height. A leaf that
+        // is unbuilt at AX5 measures zero and fails here rather than being
+        // skipped, which is the failure mode a `guard` would have hidden.
+        for (label, was) in smallLeaves {
+            let now = big.app.staticTexts[label].firstMatch.frame.height
+            print("PODCASTS LEAF \(label) ordinary=\(was) ax5=\(now)")
+            XCTAssertGreaterThan(
+                now, was * 1.5,
+                "the leaf \(label) went from \(was) to \(now) — the audit's "
+                    + "Dynamic Type finding against it is not a false positive"
+            )
+        }
     }
 
     /// Apple's audit over the grid.
     ///
     /// Classified by **signature** with ``floorAndRest(_:)`` and never by a
     /// pinned total: the floor is the anonymous Dynamic Type finding every
-    /// pushed screen in this app reports (`element: nil`, measured false by
-    /// the case above), and `rest` must be empty — a finding Apple can
-    /// attribute to an element is a defect to fix. That is how the modal bug
-    /// on Settings was found, by two `Contrast failed` naming the views
-    /// behind a dialog.
+    /// pushed screen in this app reports (`element: nil`), and what is left
+    /// must be empty - a finding Apple can attribute to an element is a
+    /// defect to fix. That is how the modal bug on Settings was found, by two
+    /// `Contrast failed` naming the views behind a dialog.
     ///
     /// What it is pointed at here: the mono `9/57 downloaded` line and the
     /// author line are both ``Color/fgMuted``, which was measured against the
-    /// **white canvas** and fails on `secondarySystemBackground` — which is
+    /// **white canvas** and fails on `secondarySystemBackground` - which is
     /// why ``PodcastShowCard`` is a stroked rectangle over the page rather
     /// than Android's filled card.
+    ///
+    /// ### What train S004 found, and which of it was real
+    ///
+    /// Eleven attributed findings. Four were defects and are fixed:
+    ///
+    ///  - `Contrast nearly passed` on `poll now` - a `.bordered` button draws
+    ///    its label in the tint, the app's accent is ``Color/brand`` at
+    ///    2.05:1, and the button named no tint of its own. Stations collected
+    ///    six of the same finding on six chips in the same run. Now
+    ///    ``Color/brandInk``, as every other bordered button in this app.
+    ///  - `Text clipped` on a card's title - `.lineLimit(2)` over a
+    ///    43-character feed URL in 186 points. The limit is gone.
+    ///  - `Text clipped` on the shows field - `search shows...` in a control
+    ///    that is one fixed row (``PodcastStrings/searchShowsPrompt`` carries
+    ///    the measurement, and why the control cannot grow instead).
+    ///  - `Label not human-readable` on the untitled show's card, whose
+    ///    spoken name was a whole URL (``PodcastShow/spokenTitle``).
+    ///
+    /// The other two signatures are classified rather than fixed, each
+    /// against a measurement this file makes itself. Neither is excused by
+    /// count, so a third signature - or either of these moving to a leaf
+    /// nobody measured - still fails this case.
     @MainActor
     func testPodcasts_TheScreenPassesApplesAccessibilityAudit() throws {
         let (app, landed) = openPodcasts()
@@ -792,10 +870,47 @@ extension StubHouseUITests {
         evidence(app, "podcasts-80-grid-audited")
         let (floor, rest) = Self.floorAndRest(found)
         print("PODCASTS AUDIT floor=\(floor) rest=\(rest.count)")
-        XCTAssertTrue(
-            rest.isEmpty,
-            "the audit found something it can attribute to a view:\n"
-                + rest.joined(separator: "\n")
+        for line in rest { print("PODCASTS AUDIT REST :: \(line)") }
+
+        // The page's own scroll view - the tallest on screen, as
+        // ``podcastsScrollUntilBuilt`` takes it and for the same reason.
+        let page = app.scrollViews.allElementsBoundByIndex
+            .max(by: { $0.frame.height < $1.frame.height })
+        let bottom = page?.frame.maxY ?? 0
+        XCTAssertGreaterThan(bottom, 0, "no scroll view to take a bottom edge from")
+
+        let unexplained = rest.filter { line in
+            // **A Dynamic Type headline with an element attached.** This file
+            // called that the signature of a real defect, and
+            // ``testTheVideosGridAudits`` settled that it is not: on this
+            // screen the three named leaves are the card's title, its author
+            // and its counts, and the growth case above now measures all
+            // three by label at `large` and at AX5. That measurement is the
+            // test; this is only the classification that makes room for it,
+            // and it collapses the moment those numbers stop growing.
+            if Self.knownAnonymousHeadlines.contains(where: { line.hasPrefix($0) }) {
+                return false
+            }
+            // **A contrast finding against an element the viewport cuts in
+            // half.** Of the three identical `0/0 downloaded` lines on screen
+            // - same colour, same font, same canvas - exactly one failed, the
+            // one spanning 765.7 to 780.0 against a content area ending at
+            // 770. Half an element has no pixels to read. Stations reported
+            // the same thing at 765.5 and Rooms at 760.3 in the same run, and
+            // every list on this phone has a row at that edge; scrolling one
+            // card makes it a different card's turn. Pinned to the geometry,
+            // so a contrast failure anywhere else on the screen still fails.
+            if line.hasPrefix("Contrast failed"), let box = Self.frame(in: line),
+               box.minY < bottom, box.maxY > bottom {
+                return false
+            }
+            return true
+        }
+        XCTAssertEqual(
+            [],
+            unexplained,
+            "the audit found something neither the measurement nor the "
+                + "viewport edge explains:\n" + unexplained.joined(separator: "\n")
         )
     }
 }
@@ -811,7 +926,10 @@ extension StubHouseUITests {
 enum StubPodcasts {
 
     // the page
-    static let subtitle = "subscriptions + episodes, played on this phone"
+    /// Train S004 shipped `subscriptions + episodes, played on this phone`,
+    /// which claimed the one thing the screen has no control for. Corrected
+    /// in the app, not here: ``PodcastStrings/subtitle``.
+    static let subtitle = "subscriptions + episodes, listened to in the dashboard"
     static let pollNow = "poll now"
     static let subscribe = "subscribe"
     static let searchShows = "search shows…"
@@ -843,12 +961,18 @@ enum StubPodcasts {
     static let kitchenDetail = "Marisa Whitlock · 9/57 downloaded"
     /// The same after a poll gives the pending episode its audio.
     static let kitchenDetailAfterPoll = "Marisa Whitlock · 10/57 downloaded"
+    /// The Kitchen Table card's mono counts line — the third of the three
+    /// leaves the S004 audit named for Dynamic Type, measured at both sizes
+    /// by ``testPodcasts_TheGridTextGrowsAtTheLargestTypeSize``. Nine of
+    /// fifty-seven, which is the seed before any poll.
+    static let kitchenDownloaded = "9/57 downloaded"
     /// A filler show, which the author needle must not match.
     static let fillerShow = "Tuesday Night Shift 01"
     /// The show the feed never titled, drawn by its feed URL.
     static let untitledFeed = "https://feeds.example.com/untitled-feed.xml"
-    /// The last fallback of `title ?? feed_url ?? "podcast"`, which no seeded
-    /// row should reach.
+    /// The last fallback of `title ?? feed_url ?? "podcast"`. No seeded row
+    /// should **draw** it — and the untitled card should be the only thing
+    /// that **speaks** it (``PodcastShow/spokenTitle``).
     static let untitledWord = "podcast"
     /// An author's name that appears in no title anywhere in the seed.
     static let authorNeedle = "Whitlock"

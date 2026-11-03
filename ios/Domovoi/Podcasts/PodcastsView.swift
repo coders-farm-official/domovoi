@@ -214,6 +214,16 @@ struct PodcastsView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             .buttonStyle(.bordered)
+            // **The tint, because a bordered button's label is the accent
+            // colour** and this app's accent is ``Color/brand`` — amber, which
+            // its own doc comment calls "a fill, never text" at 2.05:1 on
+            // white. Apple's audit reported "Contrast is not high enough for
+            // element unless font size is larger" against this button on train
+            // S004; Stations got the same finding on six untinted chips in the
+            // same run. ``Color/brandInk`` is 5.65:1, and it is what every
+            // other `.bordered` button in this app already names
+            // (`HomeTimersView.swift:290`, `ConnectionDialogView.swift:445`).
+            .tint(Color.brandInk)
             .disabled(podcasts.polling)
 
             Button {
@@ -224,6 +234,13 @@ struct PodcastsView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             .buttonStyle(.borderedProminent)
+            // The other half of the same pattern: a prominent button draws the
+            // tint as its **fill** with ``Color/brandFg`` over it, so this one
+            // takes ``Color/brand`` where its neighbour takes the ink
+            // (`HomeAnnounceView.swift:162`). Not flagged on S004 — fixed with
+            // its neighbour because an untinted prominent button is the same
+            // omission and inherits whatever the accent happens to be.
+            .tint(Color.brand)
         }
     }
 
@@ -233,7 +250,12 @@ struct PodcastsView: View {
     private var searchField: some View {
         if let podcasts {
             TextField(
-                PodcastStrings.searchShows,
+                // **The short prompt, the full spoken label**, which
+                // ``PodcastStrings/searchShowsPrompt`` carries the measurement
+                // for: Apple's audit named this field for clipping at larger
+                // type sizes with `search shows…` in it, and the control is
+                // one fixed row that cannot grow to hold it.
+                PodcastStrings.searchShowsPrompt,
                 text: Binding(get: { podcasts.filter }, set: { podcasts.typed($0) })
             )
             .textFieldStyle(.roundedBorder)
@@ -390,19 +412,32 @@ struct PodcastShowCard: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(show.displayTitle)
                         .font(.subheadline)
-                        // Two lines and `fixedSize`, not Android's one line
-                        // with an ellipsis: a show whose name is its feed URL
+                        // **No line limit at all**, where this read
+                        // `.lineLimit(2)`. The reasoning was already the right
+                        // one — a show whose name is its feed URL
                         // (``PodcastShow/displayTitle``'s second fallback) is
                         // unrecognisable truncated, and `minimumScaleFactor`
-                        // is rejected throughout this app.
-                        .lineLimit(2)
+                        // is rejected throughout this app — but two lines is
+                        // still a truncation, and Apple's audit on train S004
+                        // reported "Text of this element may be clipped at
+                        // larger Dynamic Type sizes" against this very leaf
+                        // holding a 43-character URL in 186 points. Videos hit
+                        // the same finding from `lineLimit(1)` and answered it
+                        // by adding a line (`VideosView.swift:326`); on a card
+                        // whose whole name can be a URL the honest answer is
+                        // to let it wrap as far as it needs. `fixedSize` is
+                        // what then gives it the room.
                         .fixedSize(horizontal: false, vertical: true)
                         .multilineTextAlignment(.leading)
                     if let author = show.author, !author.isEmpty {
                         Text(author)
                             .font(.caption)
                             .foregroundStyle(Color.fgMuted)
-                            .lineLimit(2)
+                            // The limit goes for the same reason, and this one
+                            // was never worth having: an author is one short
+                            // line everywhere the audit looked, so the cap
+                            // only ever bit at the type sizes where it must
+                            // not.
                             .fixedSize(horizontal: false, vertical: true)
                             .multilineTextAlignment(.leading)
                     }
@@ -425,7 +460,12 @@ struct PodcastShowCard: View {
         .buttonStyle(.plain)
         // The whole card is the button, so what it reads out is the show and
         // not the word "open": VoiceOver goes through fifty of these.
-        .accessibilityLabel(show.displayTitle)
+        //
+        // ``PodcastShow/spokenTitle`` and not `displayTitle`: the drawn name
+        // of an untitled show is its feed URL, which Apple's audit failed on
+        // train S004 as a label that is not human-readable — and spelling a
+        // URL out is not a name. The URL stays in the card's text.
+        .accessibilityLabel(show.spokenTitle)
         // The author **and** the counts: a labelled button is one element and
         // its children stop being read, so an author said only in a `Text`
         // would be said to nobody (``PodcastShow/spokenDetail``).

@@ -205,6 +205,13 @@ struct PodcastSubscribeSheet: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             .buttonStyle(.bordered)
+            // ``Color/brandInk``, never the inherited accent: a bordered
+            // button's label *is* the tint, and this app's accent is
+            // ``Color/brand`` at 2.05:1 on white. Apple's audit failed the
+            // grid's `poll now` for exactly that on train S004
+            // (`PodcastsView.swift:216`); this sheet is not audited by a case
+            // here, so it is the same fix made before the same finding.
+            .tint(Color.brandInk)
             .disabled(!enabled)
         }
     }
@@ -263,6 +270,8 @@ struct PodcastDiscoveryRow: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 .buttonStyle(.bordered)
+                // ``Color/brandInk``, for the field's reason above.
+                .tint(Color.brandInk)
                 .disabled(busy)
                 // Fifteen hits means fifteen buttons all saying `add`, so
                 // each one says what it adds.

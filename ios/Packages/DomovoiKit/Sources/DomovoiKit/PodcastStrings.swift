@@ -25,7 +25,16 @@ public enum PodcastStrings {
     /// episode has none, and there is no server route that plays an episode
     /// in a room at all. The claim is dropped rather than carried over:
     /// DECISIONS.md, "No play to a room".
-    public static let subtitle = "subscriptions + episodes, played on this phone"
+    ///
+    /// **`played on this phone` was a second, worse claim**, and it shipped
+    /// on train S004. It said the one thing this screen is built not to do:
+    /// nothing in this app owns a ``PlayerModel``, so no episode plays here
+    /// either (``PodcastsView``, "What is not"). A subtitle that promises
+    /// playback over a screen with no play control is the misleading-control
+    /// rule failing one level up from a control, so the sentence now names
+    /// the place that *can* play an episode — the same place
+    /// ``PodcastStrings/inTheDashboard`` names, in the same words.
+    public static let subtitle = "subscriptions + episodes, listened to in the dashboard"
 
     /// `PodcastsScreen.kt:134`.
     public static let pollNow = "poll now"
@@ -36,8 +45,38 @@ public enum PodcastStrings {
     /// (`PodcastsScreen.kt:136, 155`).
     public static let subscribe = "subscribe"
 
-    /// `PodcastsScreen.kt:142`.
+    /// `PodcastsScreen.kt:142`. **The field's accessibility label**, and no
+    /// longer the glyphs in it — see ``searchShowsPrompt``.
     public static let searchShows = "search shows…"
+
+    /// What the shows field actually *draws* in its empty state.
+    ///
+    /// **iOS-only, and it is a measurement rather than a preference.** Apple's
+    /// audit named this field on train S004 with "Text of this element may be
+    /// clipped at larger Dynamic Type sizes" — 361 points of width holding
+    /// `search shows…`, which at AX5 needs around 460. Videos ships the same
+    /// control, the same style and the same modifiers with `filter…` and the
+    /// audit says nothing about it (`VideosView.swift:158`), so the length of
+    /// the placeholder is the whole difference.
+    ///
+    /// The control cannot grow to fit: a `.roundedBorder` field is one fixed
+    /// row, and the two ways out of that are both worse. `axis: .vertical`
+    /// needs `lineLimit(2...)` to clear "Hit area is too small", which makes a
+    /// search box permanently two lines tall for everybody —
+    /// ``MusicView/searchField`` weighed exactly that and took it only at the
+    /// accessibility sizes — and this finding arrives at the *ordinary* size,
+    /// where that variant is not drawn. So the glyphs shorten and the spoken
+    /// label does not: VoiceOver still hears ``searchShows`` in full, which is
+    /// what carries "shows" rather than "episodes".
+    public static let searchShowsPrompt = "search…"
+
+    /// The episodes field's drawn prompt, for ``searchShowsPrompt``'s reason.
+    ///
+    /// `search episodes…` is three characters longer again. The sheet is not
+    /// audited by a case here, so this one is the prediction rather than the
+    /// finding — fixed with it because the same control at the same width
+    /// cannot hold a longer sentence than the one that was measured.
+    public static let searchEpisodesPrompt = "search…"
 
     /// The noun ``Paging/countText(shown:total:noun:)`` counts with
     /// (`PodcastsScreen.kt:170`).

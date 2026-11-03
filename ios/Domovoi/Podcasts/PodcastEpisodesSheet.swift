@@ -24,8 +24,9 @@ import SwiftUI
 /// audio engine to play into (``PodcastsView``'s doc comment has the whole
 /// reason). The meta line still says `· pending` or `· failed` where the
 /// button would be, which is the answer to "why can I not play this", and
-/// ``PodcastStrings/inTheDashboard`` at the foot says where listening is
-/// done.
+/// ``PodcastStrings/inTheDashboard``, under the show's name, says where
+/// listening is done (``whereListeningHappens`` — it was at the foot until
+/// train S004 proved nobody reaches the foot of a lazy list).
 ///
 /// **`save to this device`**, for the reason in ``PodcastStrings/inTheDashboard``:
 /// an episode row carries no size and the app's only save path has a 64 MiB
@@ -47,6 +48,7 @@ struct PodcastEpisodesSheet: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
                     heading
+                    whereListeningHappens
                     unsubscribeTrouble
                     searchField
                     list
@@ -167,7 +169,9 @@ struct PodcastEpisodesSheet: View {
 
     private var searchField: some View {
         TextField(
-            PodcastStrings.searchEpisodes,
+            // The short prompt and the full spoken label, for the reason
+            // ``PodcastStrings/searchEpisodesPrompt`` carries.
+            PodcastStrings.searchEpisodesPrompt,
             text: Binding(get: { podcasts.episodeFilter }, set: { podcasts.typedEpisode($0) })
         )
         .textFieldStyle(.roundedBorder)
@@ -226,15 +230,28 @@ struct PodcastEpisodesSheet: View {
             }
             footer(episodes)
         }
-        // Where listening and saving happen, said once at the foot — the same
-        // move ``FilesView`` makes for its missing delete, and in a `Text`
-        // rather than a disabled button for the same reason: a greyed-out
-        // play control is the exact thing this screen is built not to draw.
+    }
+
+    /// Where listening and saving happen, said **under the show's name** and
+    /// above the list.
+    ///
+    /// In a `Text` rather than a disabled button, for the reason this whole
+    /// screen exists on: a greyed-out play control is the exact thing it is
+    /// built not to draw.
+    ///
+    /// It was at the **foot** of the episodes list until train S004, which is
+    /// where ``FilesView`` says its missing delete — and on a list of
+    /// fifty-seven lazy rows that is nowhere. The case that asked for it found
+    /// no such text in the tree, because a `LazyVStack`'s foot is not built
+    /// until it is scrolled to, and a person looking for the play control they
+    /// cannot find has exactly the same problem: the sentence that answers the
+    /// question has to be where the question is asked. Files gets away with
+    /// the foot because its note sits under a short list of folders.
+    private var whereListeningHappens: some View {
         Text(PodcastStrings.inTheDashboard)
             .font(.caption)
             .foregroundStyle(Color.fgMuted)
             .fixedSize(horizontal: false, vertical: true)
-            .padding(.top, 8)
     }
 
     @ViewBuilder

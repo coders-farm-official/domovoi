@@ -85,6 +85,38 @@ final class PodcastModelsTests: XCTestCase {
         XCTAssertEqual(PodcastStrings.untitledShow, nothing.displayTitle)
     }
 
+    /// The **spoken** name skips the feed URL that the drawn one falls to.
+    ///
+    /// Two fallbacks where ``PodcastShow/displayTitle`` has three, and the
+    /// difference is a measurement: Apple's audit failed the grid on train
+    /// S004 with "The accessibilityLabel of this element is not
+    /// human-readable" against the card whose label was a whole feed URL. A
+    /// URL is the only name an untitled show has, so it stays on the screen
+    /// and leaves the label.
+    ///
+    /// The titled case is asserted too, because a `spokenTitle` that always
+    /// answered the word would pass the interesting half of this test and
+    /// make fifty cards read alike.
+    func testTheSpokenNameOfAShowNeverReadsOutAFeedURL() throws {
+        let feedOnly: PodcastShow = try decode(
+            #"{"id":3,"feed_url":"https://example.org/f.xml","title":null}"#
+        )
+        XCTAssertEqual("https://example.org/f.xml", feedOnly.displayTitle, "drawn")
+        XCTAssertEqual(PodcastStrings.untitledShow, feedOnly.spokenTitle, "spoken")
+
+        let titled: PodcastShow = try decode(
+            #"{"id":6,"feed_url":"https://example.org/f.xml","title":"The Kitchen Table"}"#
+        )
+        XCTAssertEqual("The Kitchen Table", titled.spokenTitle)
+
+        // A blank title is not a title here either, the judgement
+        // ``displayTitle`` already makes.
+        let blankTitle: PodcastShow = try decode(
+            #"{"id":7,"feed_url":"https://example.org/f.xml","title":"   "}"#
+        )
+        XCTAssertEqual(PodcastStrings.untitledShow, blankTitle.spokenTitle)
+    }
+
     // MARK: - an episode
 
     func testAFullEpisodeRowDecodesEverySnakeCaseField() throws {
