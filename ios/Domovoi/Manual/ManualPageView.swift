@@ -14,15 +14,47 @@ import SwiftUI
 // literal here would be a second source of truth that drifts from it.
 // ---------------------------------------------------------------------------
 
+/// A page's content, in its own scroll view or bare.
+///
+/// The manual's three levels each scroll under a pinned top bar at the
+/// ordinary type sizes and sit inside the screen's one scroll view at an
+/// accessibility size, where the bar alone is most of the screen
+/// (``ManualView/ready(_:cached:_:)``). This is the whole of that difference,
+/// in one place, so a level never has to know which it is.
+struct ManualScrollIf<Content: View>: View {
+
+    private let scrolls: Bool
+    private let content: Content
+
+    /// Written out rather than left to the memberwise initialiser: a
+    /// `@ViewBuilder` on a stored property works, and a builder spelt out in
+    /// the initialiser is the shape every other container in this app has.
+    init(scrolls: Bool, @ViewBuilder content: () -> Content) {
+        self.scrolls = scrolls
+        self.content = content()
+    }
+
+    var body: some View {
+        if scrolls {
+            ScrollView { content }
+        } else {
+            content
+        }
+    }
+}
+
 /// Start here (`StartPage`, `ManualScreen.kt:710`): the eyebrow, the title,
 /// every block the app shows, then the way to the map.
 struct ManualStartPage: View {
 
     let doc: ManualDoc
     let manual: ManualModel
+    /// ``ManualView/ready(_:cached:_:)``'s decision: false when the screen
+    /// has put the top bar and this page in one scroll view of its own.
+    var scrolls: Bool = true
 
     var body: some View {
-        ScrollView {
+        ManualScrollIf(scrolls: scrolls) {
             LazyVStack(alignment: .leading, spacing: 8) {
                 Text(doc.label("eyebrow", fallback: ManualStrings.Fallback.eyebrow))
                     .font(.caption)
@@ -69,6 +101,8 @@ struct ManualPiecePage: View {
     let doc: ManualDoc
     let piece: ManualPiece
     let manual: ManualModel
+    /// See ``ManualStartPage/scrolls``.
+    var scrolls: Bool = true
 
     @Environment(\.dynamicTypeSize) private var typeSize
 
@@ -77,7 +111,7 @@ struct ManualPiecePage: View {
     @Environment(\.openURL) private var openURL
 
     var body: some View {
-        ScrollView {
+        ManualScrollIf(scrolls: scrolls) {
             LazyVStack(alignment: .leading, spacing: 8) {
                 heading
                 ForEach(piece.blocks.indices, id: \.self) { at in
@@ -188,9 +222,11 @@ struct ManualMapPage: View {
     let manual: ManualModel
     let focus: ManualTopic?
     let reduceMotion: Bool
+    /// See ``ManualStartPage/scrolls``.
+    var scrolls: Bool = true
 
     var body: some View {
-        ScrollView {
+        ManualScrollIf(scrolls: scrolls) {
             VStack(alignment: .leading, spacing: 0) {
                 ManualMapStage(
                     doc: doc,

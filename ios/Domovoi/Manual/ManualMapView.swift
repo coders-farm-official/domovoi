@@ -391,17 +391,35 @@ struct ManualMapNode: View {
                             .foregroundStyle(Color.brandInk)
                             .accessibilityHidden(true)
                     }
+                    // **No `lineLimit`, and `fixedSize` vertically.** Android
+                    // caps both of a node's texts at two lines inside a
+                    // fixed 104 dp card (`ManualScreen.kt:641`). A node's
+                    // *width* here is the phone's two-column width and does
+                    // not scale, so at an accessibility size the two longest
+                    // titles in the shipped document — `Rooms & devices` and
+                    // `Music & media` — need three lines and a two-line cap
+                    // cuts them: Apple's audit named exactly those two in
+                    // train S006 for "Text of this element may be clipped at
+                    // larger Dynamic Type sizes". That is a real cut, not the
+                    // false positive the headline has twice been on this
+                    // track — the measurement is in
+                    // ``testManual_GrowsAtAnAccessibilitySize``. The cap is
+                    // dropped instead of answered with
+                    // `minimumScaleFactor`, which this app rejects
+                    // everywhere, and the node's height is a `minHeight` over
+                    // a `@ScaledMetric`, so the card grows to hold the lines
+                    // and the stage grows with it.
                     Text(node.title)
                         .font(.system(.footnote, design: .monospaced).weight(.semibold))
-                        .lineLimit(2)
                         .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 if !node.subtitle.isEmpty || !node.tags.isEmpty {
                     Text(secondLine)
                         .font(.caption)
                         .foregroundStyle(Color.fgMuted)
-                        .lineLimit(2)
                         .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
             .padding(.horizontal, 11)

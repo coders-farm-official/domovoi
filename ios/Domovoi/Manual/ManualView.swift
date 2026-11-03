@@ -74,6 +74,10 @@ struct ManualView: View {
     /// the right one.
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    /// Read here as well as in ``ManualTopBar``: who owns the scroll view
+    /// changes with it (see ``ready(_:cached:_:)``).
+    @Environment(\.dynamicTypeSize) private var typeSize
+
     /// **The system's, not the override installed below.** `.environment`
     /// applies to a view's descendants, so the action this screen hands its
     /// pages is not the one this screen itself holds — which is what keeps
@@ -83,8 +87,12 @@ struct ManualView: View {
     var body: some View {
         VStack(spacing: 0) {
             if let manual {
-                ManualTopBar(manual: manual)
-                page(manual)
+                if let load = manual.load, case .ready(let doc, let cached) = load {
+                    ready(doc, cached: cached, manual)
+                } else {
+                    ManualTopBar(manual: manual)
+                    page(manual)
+                }
             } else {
                 loading
             }
@@ -129,12 +137,50 @@ struct ManualView: View {
             .accessibilityLabel(ManualStrings.Fallback.eyebrow)
     }
 
+    /// The manual itself: the top bar, the `cached` line, and the level.
+    ///
+    /// **Who scrolls changes with the type size.** Below the accessibility
+    /// sizes the top bar is pinned and each level scrolls under it, which is
+    /// Android's shape (`ManualScreen.kt:349`: `ManualTop` above
+    /// `ManualBody`). At an accessibility size the bar is two stacked pills,
+    /// the crumbs and a growing search field — 310 of the 400 points this
+    /// screen is given on a 6.1" phone, measured in train S006, which left
+    /// the manual itself a 90-point slot to be read through. So the bar and
+    /// the page share **one** scroll view there and the bar scrolls away.
+    /// Nothing is lost: the bar's controls are the first thing in the scroll,
+    /// a flick from anywhere.
+    @ViewBuilder private func ready(
+        _ doc: ManualDoc,
+        cached: Bool,
+        _ manual: ManualModel
+    ) -> some View {
+        if typeSize.isAccessibilitySize {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    ManualTopBar(manual: manual)
+                    if cached { cachedLine }
+                    // The level draws **without** a scroll view of its own:
+                    // two nested vertical scrolls would fight for the same
+                    // drag, and the inner one would be the 90-point slot
+                    // this branch exists to get rid of.
+                    level(doc, manual, scrolls: false)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        } else {
+            ManualTopBar(manual: manual)
+            if cached { cachedLine }
+            level(doc, manual, scrolls: true)
+        }
+    }
+
     @ViewBuilder private func page(_ manual: ManualModel) -> some View {
         if let load = manual.load {
             switch load {
             case .ready(let doc, let cached):
-                if cached { cachedLine }
-                level(doc, manual)
+                // Not reached: ``body`` sends `.ready` to ``ready(_:cached:_:)``.
+                // Kept so this function still answers for every load state.
+                ready(doc, cached: cached, manual)
             case .noManual:
                 noManual(manual)
             case .failed:
@@ -198,27 +244,46 @@ struct ManualView: View {
 
     // MARK: - the manual
 
-    @ViewBuilder private func level(_ doc: ManualDoc, _ manual: ManualModel) -> some View {
+    /// `scrolls`: whether the level brings its own scroll view, which is
+    /// ``ready(_:cached:_:)``'s decision and nothing else's.
+    @ViewBuilder private func level(
+        _ doc: ManualDoc,
+        _ manual: ManualModel,
+        scrolls: Bool
+    ) -> some View {
         switch manual.place {
         case .start:
-            ManualStartPage(doc: doc, manual: manual)
+            ManualStartPage(doc: doc, manual: manual, scrolls: scrolls)
         case .piece(let id):
             if let piece = doc.piece(id) {
-                ManualPiecePage(doc: doc, piece: piece, manual: manual)
+                ManualPiecePage(doc: doc, piece: piece, manual: manual, scrolls: scrolls)
             } else {
                 // The level survived a server switch and the new document has
                 // no such piece. Kotlin falls to the map here
                 // (`doc.piece(pieceOf(at)) == null`), and so does this.
-                ManualMapPage(doc: doc, manual: manual, focus: nil, reduceMotion: reduceMotion)
+                ManualMapPage(
+                    doc: doc,
+                    manual: manual,
+                    focus: nil,
+                    reduceMotion: reduceMotion,
+                    scrolls: scrolls
+                )
             }
         case .map:
-            ManualMapPage(doc: doc, manual: manual, focus: nil, reduceMotion: reduceMotion)
+            ManualMapPage(
+                doc: doc,
+                manual: manual,
+                focus: nil,
+                reduceMotion: reduceMotion,
+                scrolls: scrolls
+            )
         case .topic(let id):
             ManualMapPage(
                 doc: doc,
                 manual: manual,
                 focus: doc.topic(id),
-                reduceMotion: reduceMotion
+                reduceMotion: reduceMotion,
+                scrolls: scrolls
             )
         }
     }

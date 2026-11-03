@@ -80,6 +80,16 @@ extension StubHouseUITests {
     @MainActor
     func testManual_ChecklistShowsTheAppLinesAndTicksWhatIsDone() throws {
         control("reset-fixtures", "{}", port: 6601, what: "the manual fixture's seed")
+        // **Armed, not assumed.** The seed leaves `/api/music/library/stats`
+        // to the house, and `musicmore.py` sorts after the manual's fixture
+        // and answers it with a library of its own — so in train S006 the
+        // music line read `done` in the very case asserting it could not be
+        // told. This arms the state the case is about: the route 503s, the
+        // read fails, and `tracks` is nil.
+        control(
+            "manual-tracks", "{\"unreadable\": true}",
+            port: 6601, what: "a library whose stats cannot be read"
+        )
         var app = launch(push: "Manual", pushDelay: Self.pushDelay)
         XCTAssertTrue(manualStart(app), "the manual never drew Start here")
         XCTAssertTrue(
@@ -107,8 +117,8 @@ extension StubHouseUITests {
             containing(app, StubManual.internetLine).exists,
             "a dashboard-only checklist line was drawn in the app"
         )
-        // Nothing serves the library's stats yet, so `music` cannot be told
-        // from here — and that is a third state, not "not done".
+        // The stats route 503s, so `music` cannot be told from here — and
+        // that is a third state, not "not done".
         XCTAssertTrue(
             app.images[StubManual.unknownTick].firstMatch.exists,
             "a line the app cannot judge was drawn as judged"
@@ -290,31 +300,69 @@ extension StubHouseUITests {
         )
     }
 
-    /// `manualRouteOpens`: a link the app cannot open reads as the words it is.
+    /// `manualRouteOpens`: a link the app cannot open does nothing and reads
+    /// as the words it is; the one beside it opens its screen.
     ///
     /// With the server's AI features off, `Route.chat` is not visible, so the
     /// `route:chat` link in the seeded paragraph must not be a link — while
-    /// `route:settings/rooms` beside it in the same sentence stays one and
-    /// lands on Settings → Rooms. That pairing is the point: a port that drew
+    /// `route:settings/rooms` in the paragraph under it stays one and lands
+    /// on Settings → Rooms. That pairing is the point: a port that drew
     /// neither as a link would pass the first half alone.
+    ///
+    /// **This taps, where the first version of this case queried.** A live
+    /// link is an `AttributedString` run inside one `Text`
+    /// (`ManualPageView.swift:481`), and SwiftUI gives such a run no element
+    /// of its own: in train S006 the whole sentence came back as a single
+    /// `StaticText` with no link and no button beneath it, so "is it a link"
+    /// was unanswerable from the tree and the case failed a screen that was
+    /// right. What a person can actually tell apart is what a tap does, and
+    /// that is the stronger claim anyway — it is the behaviour the rule
+    /// exists for, not its styling. The fixture puts the live link alone in
+    /// its paragraph so a tap lands on its own words (`fixtures/manual.py`),
+    /// and the query for a control is kept: if a future SwiftUI does expose
+    /// these runs, a dead one drawn as a link still fails here.
     @MainActor
     func testManual_AnUnopenableRouteLinkIsNotALink() throws {
         control("reset-fixtures", "{}", port: 6601, what: "the manual fixture's seed")
         control("chat-ai", "{\"on\": false}", port: 6601, what: "the server's AI features off")
         let app = launch(push: "Manual", pushDelay: Self.pushDelay)
         let reached = manualOpen(app, search: StubManual.keywordWhatItIs, piece: StubManual.whatItIs)
-        // A control of **either** kind. What matters is whether the words are
-        // tappable at all, and `Text`'s link runs and a `Button` are both
-        // controls — a query for one alone would call a port that drew the
-        // other a failure.
+        // A control of **either** kind. `Text`'s link runs and a `Button` are
+        // both controls — a query for one alone would call a port that drew
+        // the other a failure.
         let chatIsALink = manualControl(app, StubManual.chatLink).exists
-        let chatIsStillSaid = containing(app, StubManual.chatLink).exists
-        let roomsLink = manualControl(app, StubManual.roomsLink)
-        let roomsIsALink = roomsLink.waitForExistence(timeout: 10)
+        // Static texts only, not ``StubHouseUITests/containing(_:_:)``: this
+        // one is tapped, and an `.any` first match can be the container the
+        // sentence sits in — whose centre is some other row entirely.
+        let chatSentence = app.staticTexts
+            .matching(NSPredicate(format: "label CONTAINS %@", StubManual.chatLink))
+            .firstMatch
+        let chatIsStillSaid = chatSentence.waitForExistence(timeout: 10)
         evidence(app, "manual-links-ai-off")
+
+        // ---- the dead leg: tapping its words must do nothing.
+        var deadLinkWentSomewhere = false
+        if chatIsStillSaid {
+            chatSentence.tap()
+            // Not an absence check on its own: `waitForExistence` on the
+            // Rooms panel would wait out its timeout on every healthy run.
+            // The piece's own heading is the discriminator — it is still
+            // here if nothing was opened.
+            deadLinkWentSomewhere =
+                !app.staticTexts[StubManual.whatItIs].firstMatch.exists
+                || startingWith(app, StubManual.roomsSectionSub).exists
+            evidence(app, "manual-dead-link-tapped")
+        }
+
+        // ---- the live leg: its own paragraph, so a tap lands on the link.
+        let roomsControl = manualControl(app, StubManual.roomsLink)
+        let roomsWords = roomsControl.exists
+            ? roomsControl
+            : app.staticTexts[StubManual.roomsLink].firstMatch
+        let roomsIsThere = roomsWords.waitForExistence(timeout: 10)
         var landed = false
-        if roomsIsALink {
-            roomsLink.tap()
+        if roomsIsThere {
+            roomsWords.tap()
             landed = startingWith(app, StubManual.roomsSectionSub).waitForExistence(timeout: 15)
             evidence(app, "manual-link-landed-on-rooms")
         }
@@ -330,8 +378,13 @@ extension StubHouseUITests {
             chatIsStillSaid,
             "the words of the unopenable link vanished; it should read as plain text"
         )
-        XCTAssertTrue(roomsIsALink, "an openable `route:` link was not drawn as a link")
-        XCTAssertTrue(landed, "the openable link did not land on Settings → Rooms")
+        XCTAssertFalse(
+            deadLinkWentSomewhere,
+            "tapping the words of a link this server cannot open took the screen "
+                + "somewhere — an unopenable link must be inert, not just unstyled"
+        )
+        XCTAssertTrue(roomsIsThere, "the openable `route:` link's words were not drawn at all")
+        XCTAssertTrue(landed, "tapping the openable link did not land on Settings → Rooms")
     }
 
     // MARK: - the live slots
@@ -780,8 +833,7 @@ extension StubHouseUITests {
         to element: XCUIElement,
         flicks: Int = 25
     ) -> Bool {
-        let scroller = app.scrollViews.firstMatch
-        guard scroller.waitForExistence(timeout: 20) else {
+        guard let scroller = manualScroller(app) else {
             print("=== NO MANUAL SCROLL VIEW — tree follows ===")
             print(app.debugDescription)
             return false
@@ -797,12 +849,52 @@ extension StubHouseUITests {
         return element.exists
     }
 
+    /// The scroll view the manual's page is in.
+    ///
+    /// **Not `app.scrollViews.firstMatch`.** The phone's bottom tab strip is
+    /// a scroll view too, and in train S006 the first match was that strip
+    /// (`Find the ScrollView at {{0.0, 706.0}, {393.0, 146.0}}`):
+    /// twenty-five flicks went into the tab bar and the manual never moved.
+    /// The manual's scroller is the one above the strip, so this takes the
+    /// top-most of them — the keyboard rule
+    /// (`keyboards.firstMatch.frame.minY`) applied to a scroll view.
+    @MainActor
+    private func manualScroller(_ app: XCUIApplication) -> XCUIElement? {
+        guard app.scrollViews.firstMatch.waitForExistence(timeout: 20) else { return nil }
+        return app.scrollViews.allElementsBoundByIndex
+            .filter { $0.exists && $0.frame.height > 1 }
+            .min(by: { $0.frame.minY < $1.frame.minY })
+    }
+
+    /// Flick back up until a control of the top bar can be tapped.
+    ///
+    /// At an accessibility size the bar scrolls **with** the page
+    /// (``ManualView``'s `ready`, which is why: pinned, the bar alone was 310
+    /// of this screen's 400 points), so a case that has flicked to the foot
+    /// of a page has pushed the pills and the search field off the top. Below
+    /// those sizes the bar is pinned, the control is hittable already and
+    /// this returns without touching anything.
+    @MainActor
+    private func manualToTop(
+        _ app: XCUIApplication,
+        until control: XCUIElement,
+        flicks: Int = 25
+    ) -> Bool {
+        if control.exists && control.isHittable { return true }
+        guard let scroller = manualScroller(app) else { return false }
+        for _ in 0..<flicks {
+            if control.exists && control.isHittable { return true }
+            scroller.swipeDown(velocity: .slow)
+        }
+        return control.exists && control.isHittable
+    }
+
     /// Put the screen on Start here, whatever level the last launch left in
     /// `@SceneStorage`.
     @MainActor
     private func manualStart(_ app: XCUIApplication) -> Bool {
         let pill = app.buttons[StubManual.startPill].firstMatch
-        guard pill.waitForExistence(timeout: 30) else {
+        guard pill.waitForExistence(timeout: 30), manualToTop(app, until: pill) else {
             print("=== NO MANUAL TOP BAR — tree follows ===")
             print(app.debugDescription)
             return false
@@ -815,7 +907,7 @@ extension StubHouseUITests {
     @MainActor
     private func manualMap(_ app: XCUIApplication) -> Bool {
         let pill = app.buttons[StubManual.mapPill].firstMatch
-        guard pill.waitForExistence(timeout: 30) else {
+        guard pill.waitForExistence(timeout: 30), manualToTop(app, until: pill) else {
             print("=== NO MANUAL TOP BAR — tree follows ===")
             print(app.debugDescription)
             return false
@@ -863,7 +955,7 @@ extension StubHouseUITests {
     @MainActor
     private func manualType(_ app: XCUIApplication, _ query: String) -> Bool {
         let field = app.textFields[StubManual.searchPlaceholder].firstMatch
-        guard field.waitForExistence(timeout: 30) else {
+        guard field.waitForExistence(timeout: 30), manualToTop(app, until: field) else {
             print("=== NO MANUAL SEARCH FIELD — tree follows ===")
             print(app.debugDescription)
             return false
