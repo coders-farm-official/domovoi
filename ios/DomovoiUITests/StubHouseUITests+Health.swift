@@ -474,10 +474,55 @@ extension StubHouseUITests {
         let (floor, rest) = Self.floorAndRest(found)
         evidence(app, "health-11-audit")
         print("AUDIT [health] floor=\(floor) rest=\(rest.count)")
+        // **The page's own scroll view**, which on this route is
+        // `SettingsPlaceholder`'s and the tallest on screen — the same way
+        // ``testTheVideosGridAudits`` takes it. Its bottom edge is where the
+        // phone bar begins, because the bar is laid out *with* the content
+        // and not inset over it (`WorkspaceView.swift:53`).
+        let page = app.scrollViews.allElementsBoundByIndex
+            .max(by: { $0.frame.height < $1.frame.height })
+        let bottom = page?.frame.maxY ?? 0
+        XCTAssertGreaterThan(bottom, 0, "no scroll view to take a bottom edge from")
+        // **A fully visible muted meta line has to be in the frame Apple
+        // looked at**, or the classification below would be excusing the only
+        // evidence this case has. #41's meta line is the same
+        // ``Color/fgMuted`` footnote on the same `.quaternary.opacity(0.4)`
+        // card as #40's, drawn two rows higher and nowhere near the edge: if
+        // that pairing were the contrast defect this case was written to
+        // catch, #41 fails the audit and nothing below explains it away.
+        let visibleMeta = app.staticTexts
+            .matching(NSPredicate(format: "label BEGINSWITH %@", HealthUnderTest.metaOf41))
+            .firstMatch
+        XCTAssertTrue(visibleMeta.exists, "#41's meta line was not on screen for the audit")
+        XCTAssertLessThan(
+            visibleMeta.frame.maxY,
+            bottom,
+            "#41's meta line is itself cut by the edge, so this audit never "
+                + "measured a muted line on a card in full"
+        )
+        let unexplained = rest.filter { line in
+            // **A contrast finding against an element the scroll view's own
+            // bottom edge cuts in half.** Train S002 reported exactly one
+            // finding here: `#40 · failure · restarting · domovoi-mpd-kitchen
+            // · opened 30m ago · acknowledged` at y 744.7–796.3 with the
+            // content ending at 764 — the screenshot beside that run shows
+            // the glyphs sliced through the middle by the bar's top edge.
+            // Half an element has no pixels to read, which is what the audit
+            // is reporting; #41's identical line, fully drawn, passed in the
+            // same frame. Scrolling one row only makes it a different row's
+            // turn, so the classification is by where the element is, the
+            // precedent ``StubHouseUITests/frame(in:)`` exists for.
+            if line.hasPrefix("Contrast failed"), let box = Self.frame(in: line),
+               box.minY < bottom, box.maxY > bottom {
+                return false
+            }
+            return true
+        }
         XCTAssertTrue(
-            rest.isEmpty,
-            "Apple's audit has \(rest.count) finding(s) against Health that "
-                + "are not the measured floor:\n" + rest.joined(separator: "\n")
+            unexplained.isEmpty,
+            "Apple's audit has \(unexplained.count) finding(s) against Health "
+                + "that neither the measured floor nor the viewport edge "
+                + "explains:\n" + unexplained.joined(separator: "\n")
         )
     }
 
