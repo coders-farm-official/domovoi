@@ -344,20 +344,26 @@ extension StubHouseUITests {
         let deep = app.buttons[StubAudiobooks.fillerDeep].firstMatch
         XCTAssertTrue(audiobooksScroll(app, to: deep), "the list never built \(StubAudiobooks.fillerDeep)")
 
-        let chip = app.buttons[StubAudiobooks.sortNewest].firstMatch
-        XCTAssertTrue(
-            audiobooksScroll(app, to: chip, flicks: 40, up: true),
-            "the sort chips never came back into the list's window"
-        )
-        // **The before half of the measurement.** If the heading were already
-        // off the top of the window when the chip was tapped, "the heading is
-        // gone afterwards" would say nothing about the handshake.
+        // **Back to the head, and far enough back that the heading is in the
+        // window** — not merely until the chip is *built*. A lazy stack builds
+        // a little beyond the viewport, so the pass that first makes the chip
+        // exist can leave it, and the heading above it, off the top of the
+        // window: train X007 tapped the chip at y 159 with the heading at
+        // about 29, above the list's own 93.3. "The heading is gone
+        // afterwards" says nothing unless it was there to begin with, so this
+        // scrolls on the measurement rather than on existence.
         let heading = app.buttons[StubAudiobooks.reindex].firstMatch
-        XCTAssertTrue(
-            audiobooksInWindow(app, heading),
-            "the heading is not in the window before the tap, so this case "
-                + "cannot tell a scroll from where the list already was"
-        )
+        var backAtTheHead = false
+        for _ in 0..<40 {
+            if audiobooksInWindow(app, heading) {
+                backAtTheHead = true
+                break
+            }
+            audiobooksList(app).swipeDown(velocity: .slow)
+        }
+        XCTAssertTrue(backAtTheHead, "the head of the list never came back into its window")
+        let chip = app.buttons[StubAudiobooks.sortNewest].firstMatch
+        XCTAssertTrue(chip.exists, "the sort chips are not under the heading")
         chip.tap()
 
         XCTAssertTrue(
@@ -1462,8 +1468,11 @@ enum StubAudiobooks {
     /// How far below the list's own top the first row of a new list may sit:
     /// the navigation bar's 44 points and a little. Measured — train S012's
     /// healthy tree has it at **44.0**, and train X007's `wantsTop`-less one
-    /// at **281.7**.
-    static let topSlack: CGFloat = 60
+    /// at **281.7**. Eighty, not the measured 44: the slack is there for the
+    /// bar's height changing under a Dynamic Type or a layout it has not been
+    /// measured at, and 80 is still a third of the distance the broken state
+    /// sat at.
+    static let topSlack: CGFloat = 80
 
     /// The library grown past one page: nine seeded plus sixty fillers. The
     /// fillers sort between `Dune` and `Grasshopper Lies Heavy`, so page one
