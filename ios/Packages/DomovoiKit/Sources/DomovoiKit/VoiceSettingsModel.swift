@@ -246,28 +246,28 @@ public final class VoiceSettingsModel {
         // request at.
         let asked = container.store.serverURL
         inFlight = Task { @MainActor [weak self] in
-            // A `Result` of bytes-or-**message** rather than two `catch`
-            // arms, for two reasons: the cancellation check belongs after the
-            // await on both paths (a cancelled request's failure is not a
-            // failure to report), and the failure is only ever used as a
-            // sentence, so carrying `any Error` across the hop would be
-            // carrying something nothing reads.
-            let outcome: Result<Data, String>
+            // The answer is settled first and acted on after, rather than in
+            // the `catch` arms, because the cancellation check belongs after
+            // the await on **both** paths: a cancelled request's failure is
+            // not a failure to report. (`Result` would be the natural shape,
+            // but its `Failure` must be an `Error` and what is carried here
+            // is a sentence — the failure is only ever used as one.)
+            var bytes: Data?
+            var reason: String?
             do {
-                outcome = .success(
-                    try await client.raw(method: "GET", path: path, timeout: Self.sampleTimeout)
+                bytes = try await client.raw(
+                    method: "GET", path: path, timeout: Self.sampleTimeout
                 )
             } catch let trouble as DomovoiError {
-                outcome = .failure(trouble.message)
+                reason = trouble.message
             } catch {
-                outcome = .failure("\(error)")
+                reason = "\(error)"
             }
             guard !Task.isCancelled else { return }
-            switch outcome {
-            case .success(let bytes):
+            if let bytes {
                 self?.sampleArrived(bytes, for: id, from: asked)
-            case .failure(let reason):
-                self?.sampleFailed(reason, for: id, from: asked)
+            } else {
+                self?.sampleFailed(reason ?? "request failed", for: id, from: asked)
             }
         }
     }
