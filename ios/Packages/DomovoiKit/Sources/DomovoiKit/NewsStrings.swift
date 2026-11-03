@@ -52,8 +52,17 @@ public enum NewsStrings {
 
     /// The chip's label for VoiceOver. **iOS-only**: Android's chip is a
     /// `Surface(onClick:)` whose only child is the name, so the name *is* the
-    /// control's label; here the bubble and the name are two views and a
-    /// reader would otherwise hear the initial twice.
+    /// control's label; a control labelled `Kamron` says nothing about what
+    /// tapping it does.
+    ///
+    /// This used to say the label was here because the bubble and the name
+    /// were two views and a reader would otherwise hear the initial twice.
+    /// That was true of the chip's first shape and it was also the defect:
+    /// two views in a `Button`'s label is what put the name in the tree
+    /// wearing the pill's frame, and five `Contrast failed` with it
+    /// (``NewsPeopleChipRow``). The bubble is now drawn over the pill rather
+    /// than inside the label, so there is one view there and nothing to
+    /// de-duplicate — the label earns its place on what it says instead.
     public static func personChip(_ name: String) -> String { "\(name)'s news" }
 
     // MARK: - one person

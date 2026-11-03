@@ -233,9 +233,39 @@ struct NewsCategoryChip: View {
                     on ? Color.brand : Color(.secondarySystemBackground),
                     in: Capsule()
                 )
+                // **The outline is the chip's only shape, and it was under
+                // the bar.** Measured off train R001's own foot screenshot
+                // (`overnight-trains/R001/News/att/testNews_PassesApplesAccessibilityAudit/news-12-audited-foot…png`,
+                // 3x), an unpicked chip's fill is `secondarySystemBackground`
+                // at 242,242,247 and the card under it is 241,241,242 —
+                // **1.01:1**. The fill draws nothing. The ring is the only
+                // thing saying where the tap target is and which chips are
+                // on, which makes it a graphic carrying meaning, and Apple's
+                // bar for one of those is 3:1:
+                //
+                //     unpicked ring  fgMuted@0.35 (188,187,188)  1.71:1 light, 1.98:1 dark
+                //     unpicked ring  fgMuted@0.70                3.34:1 light, 4.05:1 dark
+                //     picked ring    brandInk on brand           2.76:1
+                //     picked ring    brandFg  on brand           8.49:1
+                //
+                // So the picked ring takes `brandFg`, which is already the
+                // measured pair for this fill and already the colour of the
+                // word inside it, and the unpicked one goes to 0.7. The two
+                // **fills** stay as they are: there is no token that puts
+                // 3:1 between a quiet chip and a near-white card without
+                // making the chip a block of colour, and Android's unpicked
+                // chip is a quiet surface with a border too
+                // (`NewsDetail.kt:306-322`).
+                //
+                // This is **not** the ten `Contrast failed` train R001
+                // reported against these nine chips and the `saved feed`
+                // heading: those were measured at 5.07:1 and 18.60:1 off that
+                // same screenshot and are the integration build's app-wide
+                // audit sweep (`integration/news.md`, round 2). This is a
+                // defect that diagnosis turned up on its way past.
                 .overlay(
                     Capsule().stroke(
-                        on ? Color.brandInk : Color.fgMuted.opacity(0.35),
+                        on ? Color.brandFg : Color.fgMuted.opacity(0.7),
                         lineWidth: 1
                     )
                 )

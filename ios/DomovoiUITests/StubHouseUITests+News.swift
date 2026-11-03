@@ -823,8 +823,25 @@ extension StubHouseUITests {
         // down before the next one starts. Nothing is audited less: the page
         // as it lands, the confirmation, and the foot are all still walked —
         // each by a process that has walked nothing else.
+        //
+        // **Train I001 lost it again, and not to an audit.** `Lost connection
+        // to the application (pid 71471)` at t = 13.47s, inside the *first*
+        // `openNews` — before a tap, a swipe or a single
+        // `performAccessibilityAudit`. The run's screen recording is what
+        // settles what was in the frame: at t = 4, 6, 9, 12 and 13.4 seconds
+        // the app is on **Home**, with an Alerts local notification ("Signs
+        // of tampering", `AlertsStrings.swift:77`) banner over it until
+        // t = 12.0. The seeded push is `runningForeground + pushDelay`,
+        // which this launch put at t ≈ 15.4 — so the process died about two
+        // seconds *before* News was ever built, and no line of this screen's
+        // code had run. The twelve sibling cases in the same run reached
+        // `news-person-heading` through this very helper, case 204 of 372 in
+        // a two-hour Simulator. Nothing here is changed for it: this is the
+        // crowd death I1H2-SIM-REPORT.md run 11 could not pin, and a case
+        // cannot be written around a process that is taken from it.
         var findings: [String] = []
         var mishaps: [String] = []
+        var pins: [String] = []
 
         // **Nothing below here asserts until every app has been terminated.**
         // `setUp` sets `continueAfterFailure = false`, so the first failed
@@ -845,25 +862,36 @@ extension StubHouseUITests {
             // Train S008's page pass reported six `Contrast failed` and
             // `issue.element` was `nil` on every one — not one `Find the …`
             // in the log, so the audit itself had nothing to attribute them
-            // to. They are the same six S005 named: the five chip leaves
-            // ``newsChipArtefact(_:)`` explains and the clipped
+            // to. They are the same six S005 named: the five chip leaves the
+            // app no longer puts in the tree, and the clipped
             // `news-topic-word-tech` ``newsOutsideTheViewport(_:_:)`` does.
             // Unattributed they are six unknowns, and every classifier in
             // this file reads the element.
             //
-            // The difference between the two runs is three seconds: S005's
-            // page pass ran at t = 18.5s and resolved every element, S008's
-            // at t = 15.4s and resolved none. The dialog and foot passes get
-            // that settling for free from their own taps and swipes, and
-            // both of them did attribute findings in the same run. This is
-            // the page pass being given the same thing on purpose — the foot
-            // of a 1111-point page existing, the category grid built, and a
-            // beat after them.
+            // The difference between the two runs looked like three seconds:
+            // S005's page pass ran at t = 18.5s and resolved every element,
+            // S008's at t = 15.4s and resolved none. The dialog and foot
+            // passes get that settling for free from their own taps and
+            // swipes, and both of them did attribute findings in the same
+            // run. So the page pass is given the same thing on purpose — the
+            // foot of a 1111-point page existing, the category grid built,
+            // and a beat after them.
+            //
+            // **The timing explanation is spent.** With the waits below, R002
+            // audited this page at t = 20.4s and still attributed none of the
+            // six. The waits stay — auditing a half-built page is its own
+            // defect and the dialog and foot passes have no equivalent — but
+            // what makes a finding anonymous here is not how late it runs.
+            // Five of the six were the chip leaves, by count and by S005's
+            // own attribution of them, and those are now out of the tree; a
+            // sixth that arrives anonymous is an unknown this case reports
+            // rather than discounts.
             _ = newsElement(app, "news-story-meta-301").waitForExistence(timeout: 25)
             _ = app.buttons["news-category-entertainment"].waitForExistence(timeout: 10)
             let settled = XCTestExpectation(description: "the page settled before the audit")
             _ = XCTWaiter.wait(for: [settled], timeout: 3)
 
+            pins += newsChipRowIsOneElement(app)
             findings += try auditNews(app, "news", "the page")
         } catch {
             mishaps.append("the page audit could not be run: \(error)")
@@ -919,6 +947,49 @@ extension StubHouseUITests {
             // looked at — which is the half of the first fix that would have
             // been asserting less. Scrolled down, they are ordinary visible
             // elements and the audit reads them properly.
+            //
+            // **Train R001 named ten elements here that this run's own
+            // pixels clear, and they are not News's.** Its foot pass
+            // reported `Contrast failed` against all nine
+            // `news-category-…` Buttons and against the `saved feed`
+            // heading. Sampled from the attachment that run took **of this
+            // very pass** (`news-12-audited-foot…png`, 3x, at the elements'
+            // own frames): the chip word is 151,88,0 on 242,242,247 —
+            // **5.07:1** — and `saved feed` is 0,0,0 on 241,241,242 —
+            // **18.60:1**. Both clear 4.5:1 for body text.
+            //
+            // The control is what settles it. Train S008's foot screenshot
+            // and R001's differ **only in the status-bar clock**
+            // (`ImageChops.difference` bounding box = x 54–89, y 23–36
+            // points, nothing else in 393 x 852), the two trees carry the
+            // same frames, and S008's audit named none of these ten. Same
+            // pixels, same geometry, opposite verdict: the colours are not
+            // the finding.
+            //
+            // **And R002 cleared all ten without a line of anyone else's
+            // code changing.** Round 2 read the difference as an app-wide
+            // sweep coming from the window's root —
+            // `AlertsHintLifecycle.body(content:)` puts
+            // `.accessibilityHidden(model.explaining)` on the whole app
+            // (`ios/Domovoi/Alerts/AlertsHintRowView.swift:265-266`, hooked
+            // in at `ios/Domovoi/DomovoiApp.swift:214`) — and cited a
+            // synthesised `Button` layer in R001's chip row as its cost.
+            // Both halves were wrong, and this run says so: the root
+            // modifier is still there in R002, and its foot pass names
+            // neither a category chip nor `saved feed`. The only thing that
+            // changed between the two runs is this screen's own ring
+            // (`fgMuted@0.35` to `0.7`, `brandInk` to `brandFg`), which is
+            // the chips' half; `saved feed` does not turn on a ring and is a
+            // run-to-run difference in what the auditor would sample. The
+            // extra `Button` layer was round 1's own
+            // `accessibilityElement(children: .ignore)` — S005, S008 and
+            // S011 predate it and R001 and R002 both carry it, and
+            // ``HomeAttentionView``'s rows wear the same layer from the same
+            // modifier in the same run.
+            //
+            // Nothing is classified for any of it: a `Contrast failed`
+            // naming an element of this screen fails this case.
+            // `integration/news.md` round 3 carries the numbers.
             for _ in 0..<12 { app.swipeUp(velocity: .slow) }
             evidence(app, "news-12-audited-foot")
             findings += try auditNews(app, "news-foot", "the foot of the page")
@@ -929,53 +1000,84 @@ extension StubHouseUITests {
         XCTAssertEqual([], mishaps, "the audit never reached what it was meant to look at")
         XCTAssertEqual(
             [],
+            pins,
+            "a person chip is drawing leaves of its own again, which is what "
+                + "Apple's audit read as five `Contrast failed`"
+        )
+        XCTAssertEqual(
+            [],
             findings,
             "Apple's audit has findings beyond the measured anonymous floor, "
-                + "the chip row's classified artefact, the content the "
-                + "viewport has clipped away, the two meta lines measured to "
-                + "scale, and the page this app hides behind a dialog"
+                + "the content the viewport has clipped away, the two meta "
+                + "lines measured to scale, and the page this app hides "
+                + "behind a dialog. Nothing else is discounted: a "
+                + "`Contrast failed` naming a category chip, `saved feed` or "
+                + "a person chip is this screen's to fix — R001 named ten of "
+                + "them and R002 named none, with only this screen's own ring "
+                + "changed in between (the foot pass's comment carries that "
+                + "measurement). An anonymous one is an unknown, and the page "
+                + "pass's comment says what the six used to be"
         )
     }
 
-    /// A `Contrast failed` against one of the **person chips' own leaves**,
-    /// which is the composite chip's shape and not a colour.
+    /// Every person chip is **one** accessibility element.
     ///
-    /// Train S002 reported five, and they are the whole roster: `Kamron`,
-    /// `Chevy`, `Alex`, `alex ` — every name, picked and unpicked alike —
-    /// and the initial in the one chip the horizontal scroller cuts in half.
-    /// Every one of them arrives as a bare `type=48` leaf with **no
-    /// identifier**, and with the frame of the whole chip: `label='Kamron'
-    /// frame=(16, 217.3, 113, 44)` is the 113-point pill, not the 60 points
-    /// of text in it.
+    /// The five `Contrast failed` this screen carried for five trains were
+    /// the chip row's own leaves: a `StaticText` per name wearing the pill's
+    /// 113 x 44 frame, and the initial of the chip the scroller clips. The
+    /// fix is in ``NewsPeopleChipRow``, and it is a shape rather than a
+    /// colour, so this is what holds it: a chip with any text descendant is
+    /// a chip whose children are back in the tree, and the audit below will
+    /// report them again.
     ///
-    /// Measured off the run's own screenshot, there is no pair under 4.5:1
-    /// in that row: the picked chip is ``Color/brandFg`` on ``Color/brand``
-    /// at 8.49:1 — the app's one measured prominent pair — and the unpicked
-    /// ones are `Color.primary` on `secondarySystemBackground`, which is over
-    /// 15:1. What *is* inside each of those frames is the 28-point amber
-    /// avatar, and the glyphs cover about a tenth of the box: the two
-    /// dominant colours in a chip's frame are its fill and the bubble, about
-    /// 1.8:1 apart, and neither is the text. That is what the audit reports
-    /// when it cannot find the text in a box — the same shape as Home's
-    /// `Button, {{333,119},{44,44}}, label: 'live'`, a 10-point mark in a
-    /// 44-point frame, which five rounds there never cleared either
-    /// (``HomeHeaderView``'s note).
+    /// It has already earned its place. Round 1's fix *read* as if it had
+    /// worked — the chip gained an element with the right label and the right
+    /// traits — and this pin is what said the leaves were still underneath it
+    /// in R001 and R002, which no reading of the tree's top line would have.
     ///
-    /// **Narrow on purpose.** It takes a contrast finding only when it names
-    /// one of these leaves by label and carries no identifier, so a contrast
-    /// failure against anything the chip row *draws with an identifier* — a
-    /// future wording, a recoloured pill — still fails this case. The
-    /// `accessibilityHidden` on ``NewsAvatarBubble`` is no help: the audit
-    /// reported the hidden initial anyway, so it is not walking the
-    /// accessibility tree alone, and nothing available from a UI test
-    /// changes what it samples. DECISIONS.md.
-    static func newsChipArtefact(_ line: String) -> Bool {
-        guard line.hasPrefix("Contrast failed"), !line.contains("id=") else { return false }
-        // The People seed's roster and its initials — `fixtures/people.py`,
-        // which this screen defers to.
-        let leaves = ["Kamron", "Chevy", "Alex", "alex ", "K", "C", "A"]
-        return leaves.contains { line.contains("label='\($0)'") }
+    /// Asked of the whole roster rather than of one chip, because the leaf
+    /// that cost the fifth finding belonged to the **last** chip — the one
+    /// hanging off the scroller's right edge — and a check of the first
+    /// would never have seen it.
+    @MainActor
+    func newsChipRowIsOneElement(_ app: XCUIApplication) -> [String] {
+        // The People seed's roster, in `last_seen_at DESC` order
+        // (`fixtures/people.py`; this screen defers to it).
+        // An explicit result type: a multi-statement closure whose branches
+        // are `String` and `nil` is one Swift will not always infer.
+        return ["Kamron", "Chevy", "Alex", "alex "].compactMap { (name: String) -> String? in
+            let chip = app.buttons["news-chip-\(name)"]
+            guard chip.exists else { return "no chip for \(name)" }
+            let leaves = chip.staticTexts.count
+            return leaves == 0 ? nil : "the \(name) chip exposes \(leaves) text leaves"
+        }
     }
+
+    // **The chip row's five `Contrast failed` are fixed in the app, not
+    // classified here.** `newsChipArtefact(_:)` used to wave them through on
+    // the reasoning that the audit could not find the text in a composite
+    // chip and that nothing a UI test did would change what it sampled. The
+    // second half of that was wrong, and the run it was written from says so:
+    // S005's own hierarchy has each chip Button holding two `StaticText`
+    // children, the name of them carrying the **pill's** frame rather than
+    // the text's, while the identically-framed Buttons beside them audited
+    // clean. So the audit was reading leaves that should never have been in
+    // the tree.
+    //
+    // **Round 1 reached for `accessibilityElement(children: .ignore)` and it
+    // did nothing.** R001 and R002 ran with it and this pin reported all four
+    // chips exposing two leaves in both: on a `Button` that modifier adds a
+    // wrapper element and leaves the control and its leaves underneath it.
+    // ``HomeAttentionView``'s rows are the same three-deep shape in the same
+    // run, so it is the modifier and not this screen. What takes the leaves
+    // out is a label that is a single `Text` — the bubble moved out of the
+    // label and over the pill (``NewsPeopleChipRow/chip(_:stacked:)``), which
+    // is the shape of every pill in this app that audits clean.
+    //
+    // Nothing is discounted in their place: a `Contrast failed` anywhere in
+    // the chip row now fails this case, and ``newsChipRowIsOneElement``
+    // pins the shape the fix depends on so a regression cannot quietly bring
+    // the findings back as "the known five".
 
     /// A `Contrast failed` against an element the page's own scroll view has
     /// **clipped away** — past its bottom edge or above its top one.
@@ -1133,9 +1235,7 @@ extension StubHouseUITests {
         for found in split.rest {
             // In this order, and each one narrow: a line no classifier claims
             // lands in `rest` and fails the caller.
-            if Self.newsChipArtefact(found) {
-                counts["chip-row artefacts", default: 0] += 1
-            } else if Self.newsOutsideTheViewport(viewport, found) {
+            if Self.newsOutsideTheViewport(viewport, found) {
                 counts["outside the viewport", default: 0] += 1
             } else if Self.newsScalingFalsePositive(found) {
                 counts["measured scaling false positives", default: 0] += 1
