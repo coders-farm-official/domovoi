@@ -17,13 +17,18 @@ import Observation
 /// ### What this does not do, and why there is no control for it
 ///
 /// **Playing an episode**, the resume prompt, and the resume position
-/// read/write. iOS has no audio engine in this branch: the engine is
-/// `wf/ios-n-player`, merged at the views stage. ``PodcastPath/audio(episodeID:download:)``,
-/// ``PodcastPosition``, ``PodcastPath/savePositionBody(deviceID:personID:positionSec:speed:)``
-/// and ``PodcastRules/offersResume(positionSec:)`` are the seam it needs and
-/// say so in their own doc comments; **nothing in this model calls them**,
-/// and if the engine cannot take a remote-URL item none of the three controls
-/// is drawn at all — not drawn disabled, not stubbed (DECISIONS.md).
+/// read/write. `wf/ios-n-player` is merged and its engine *can* take a
+/// remote-URL episode — but **nothing in the app owns a ``PlayerModel``**:
+/// it is on neither ``AppContainer`` nor ``ShellModel``, and putting it there
+/// is a change to shared infrastructure this branch must not make. A player
+/// this screen built for itself would be destroyed when somebody left
+/// Podcasts, so the play control, the resume dialog and the position
+/// read/write are left out entirely — not drawn disabled, not stubbed
+/// (DECISIONS.md, "Phone playback has an engine and no owner").
+/// ``PodcastPath/audio(episodeID:download:)``, ``PodcastPosition``,
+/// ``PodcastPath/savePositionBody(deviceID:personID:positionSec:speed:)`` and
+/// ``PodcastRules/offersResume(positionSec:)`` are the seam, and
+/// **nothing in this model calls them**.
 ///
 /// **Playing to a room.** Neither app can: a room plays library track ids
 /// through `POST /api/music/play-tracks` and an episode has none
@@ -33,7 +38,7 @@ import Observation
 ///
 /// **Saving an episode to the device.** No download manager on iOS, a 64 MiB
 /// ceiling on the one save path there is, and **no size on the row** to check
-/// it against. ``PodcastStrings/savingIsInTheDashboard`` is what the screen
+/// it against. ``PodcastStrings/inTheDashboard`` is what the screen
 /// says instead.
 ///
 /// **The "listening as *name*" pill.** This app stores no listener person, so

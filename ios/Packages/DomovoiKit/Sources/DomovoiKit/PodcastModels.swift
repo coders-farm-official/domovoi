@@ -97,6 +97,23 @@ public struct PodcastShow: PagedRow, Identifiable, Equatable, Sendable {
     public var downloadedLine: String {
         "\(downloadedCount)/\(episodeCount) \(PodcastStrings.downloadedSuffix)"
     }
+
+    /// Everything on the card except its name, in one sentence, for the
+    /// card's `accessibilityValue`.
+    ///
+    /// A card is **one** accessibility element — fifty shows must not be a
+    /// hundred and fifty stops — and giving it a label replaces whatever its
+    /// children would have read. So the author has to be said here or it is
+    /// not said at all, which is the sort of omission the audit cannot see
+    /// and a reader of the view cannot either. The separator is a middle dot
+    /// rather than a comma because VoiceOver already pauses between a label
+    /// and a value.
+    public var spokenDetail: String {
+        if let author, !author.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return "\(author) · \(downloadedLine)"
+        }
+        return downloadedLine
+    }
 }
 
 /// One episode of one show, as `GET /api/podcasts/subscriptions/{id}/episodes`
@@ -226,6 +243,17 @@ public struct PodcastEpisode: PagedRow, Identifiable, Equatable, Sendable {
     /// place, and a disabled filled button is the shape this track has twice
     /// been caught shipping. Same decision as ``FilePath/deleteNeedsAnAdmin``.
     public var canPlay: Bool { hasFile }
+
+    /// Whether the house **tried** to fetch this episode's audio and could
+    /// not (`download_status = 'failed'`,
+    /// `podcast_feed_poller.py:435, 440`).
+    ///
+    /// The one branch of the meta line that is not ordinary news, so it is
+    /// the one the row colours — and `hasFile` is checked first for
+    /// ``metaLine``'s reason: a status is only shown when there is no file,
+    /// so a row that has the audio is never coloured by a stale word from the
+    /// attempt before.
+    public var downloadFailed: Bool { !hasFile && downloadStatus == "failed" }
 }
 
 /// One chapter mark. `EpisodeChapterRow` (`PodcastsModels.kt:19-23`).

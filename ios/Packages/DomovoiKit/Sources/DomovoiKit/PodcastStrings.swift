@@ -47,6 +47,17 @@ public enum PodcastStrings {
     /// (`PodcastsScreen.kt:256`).
     public static let downloadedSuffix = "downloaded"
 
+    /// The paged footer's two controls, which Android spells in
+    /// `PagedFooter` rather than in the Podcasts file
+    /// (`ui/components/Paged.kt:152-155`) — so these are Android's words.
+    ///
+    /// `FileStrings` and `MusicStrings` say `try again` for the first of
+    /// these, which is a divergence that predates this screen; Podcasts
+    /// takes the Kotlin's own word, since that is what a person comparing
+    /// the two apps over one house reads.
+    public static let retry = "retry"
+    public static let loadMore = "load more"
+
     // MARK: - the shows grid's four states
 
     /// What `ErrorState` falls back to when the failure carried no message
@@ -121,9 +132,6 @@ public enum PodcastStrings {
     /// ``PodcastEpisode/metaLine``.
     public static let chapters = "chapters"
 
-    /// The play button's VoiceOver label (`PodcastsEpisodes.kt:229`).
-    public static let play = "play"
-
     /// `Unsubscribe from "<title or feed>"? Downloaded episodes are removed.`
     /// (`PodcastsEpisodes.kt:198`).
     ///
@@ -135,6 +143,11 @@ public enum PodcastStrings {
     public static func unsubscribeBody(_ show: String) -> String {
         "Unsubscribe from \"\(show)\"? Downloaded episodes are removed."
     }
+
+    /// The confirm's other button, which `ConfirmDialog` spells itself
+    /// (`ui/components/Dialogs.kt:41`) — so it is Android's word, not a new
+    /// one, even though the Podcasts file never writes it down.
+    public static let cancel = "cancel"
 
     /// `PodcastsEpisodes.kt:206`.
     public static let unsubscribed = "Unsubscribed"
@@ -149,15 +162,24 @@ public enum PodcastStrings {
         "failed: \(why)"
     }
 
-    /// Where an episode's audio is saved from, since this app draws no
-    /// save-to-device control.
+    /// Where an episode is listened to and saved from, since this app draws
+    /// neither control.
     ///
-    /// **iOS-only.** iOS has no download manager, and the app's only save
-    /// path pulls a whole file into memory with a 64 MiB ceiling
+    /// **iOS-only**, and one sentence rather than two because the two
+    /// omissions have one answer: the dashboard. Said at the foot of the
+    /// episodes list, where somebody would go looking for a play button.
+    ///
+    /// **Saving**: iOS has no download manager, and the app's only save path
+    /// pulls a whole file into memory with a 64 MiB ceiling
     /// (`FileSave.swift:40-48`) while an episode row carries **no size** at
-    /// all to check it against (`podcasts.py:311-317`). DECISIONS.md, "No
-    /// save this episode to the device".
-    public static let savingIsInTheDashboard = "saving an episode is done in the dashboard"
+    /// all to check it against (`podcasts.py:311-317`).
+    ///
+    /// **Playing**: the engine exists on this branch
+    /// (``PlayerItem/fromEpisode(id:title:show:durationSec:artwork:chapters:)``)
+    /// and nothing in the app owns one, so a screen that made its own would
+    /// stop playing the moment somebody left Podcasts. DECISIONS.md,
+    /// "Phone playback has an engine and no owner".
+    public static let inTheDashboard = "playing or saving an episode is done in the dashboard"
 
     // MARK: - subscribing
 
@@ -181,17 +203,28 @@ public enum PodcastStrings {
     /// `PodcastsSubscribe.kt:99`.
     public static let subscribed = "Subscribed"
 
-    // MARK: - resuming, if the player engine lands
+    // MARK: - playing, when a screen may own the engine
+
+    /// The play button's VoiceOver label (`PodcastsEpisodes.kt:229`).
+    ///
+    /// **Nothing draws it.** See ``youWereAt(_:)`` below for the whole
+    /// reason: the engine merged, and there is nowhere for one to live.
+    public static let play = "play"
 
     /// The resume prompt's words (`PodcastsScreen.kt:316-343`).
     ///
-    /// **Nothing draws these today.** The play control, the position read and
-    /// this dialog are built only if `wf/ios-n-player`'s engine can take a
-    /// remote-URL item, which is decided at the views stage — DECISIONS.md,
-    /// "Phone playback waits on the Player item". They are transcribed now
-    /// because the words are Android's and the views stage must not invent
-    /// them; if the engine is unusable they stay unused and the screen is
-    /// browse, subscribe and poll.
+    /// **Nothing draws these.** `wf/ios-n-player`'s engine *can* take a
+    /// remote-URL episode — ``PlayerItem/fromEpisode(id:title:show:durationSec:artwork:chapters:)``
+    /// builds exactly the item this screen would hand it — but nothing in the
+    /// app **owns** a ``PlayerModel``: it is not on ``AppContainer`` or
+    /// ``ShellModel``, and adding it there is a change to shared
+    /// infrastructure this branch must not make (NIGHT-RULES §2). A player
+    /// built by this screen would be destroyed when somebody left Podcasts,
+    /// which is a play button that stops playing — DECISIONS.md, "Phone
+    /// playback has an engine and no owner".
+    ///
+    /// They are transcribed because the words are Android's and whoever wires
+    /// the owner must not invent them.
     public static func youWereAt(_ position: String) -> String {
         "You were at \(position)."
     }

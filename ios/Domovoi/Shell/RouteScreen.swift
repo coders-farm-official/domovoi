@@ -78,7 +78,10 @@ struct RouteScreen: View {
             SettingsPlaceholder(model: model)
         case .podcasts:
             // slot: podcasts
-            ScreenPlaceholder(route: route, onThisPhone: false)
+            // ``PodcastsView`` says what is left out and why there is no
+            // control for any of it — including playing an episode, which
+            // has an engine on this branch and nowhere for one to live.
+            PodcastsView(model: model)
         case .audiobooks:
             // slot: audiobooks
             ScreenPlaceholder(route: route, onThisPhone: false)
