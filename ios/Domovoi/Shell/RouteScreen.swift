@@ -81,7 +81,11 @@ struct RouteScreen: View {
             ScreenPlaceholder(route: route, onThisPhone: false)
         case .audiobooks:
             // slot: audiobooks
-            ScreenPlaceholder(route: route, onThisPhone: false)
+            // The **server** half. ``AudiobooksView`` says what is left out
+            // and why there is no control for any of it; the phone's own
+            // shelf is the PhoneMedia item's, which replaces this one line
+            // again with its source switch wrapping the same view.
+            AudiobooksView(model: model)
         case .images:
             // slot: images
             ScreenPlaceholder(route: route, onThisPhone: false)

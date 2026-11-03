@@ -79,6 +79,40 @@ public enum AudiobooksStrings {
     /// `BookPage.kt:217`.
     public static let chaptersLabel = "chapters"
 
+    /// `BookPage.kt:143`'s `contentDescription = "back to audiobooks"` — the
+    /// back row's label, which is what VoiceOver reads for the one control
+    /// that leaves a book's page.
+    public static let backToLibrary = "back to audiobooks"
+
+    /// The chapter the place falls in, **said** rather than only shaded.
+    ///
+    /// Android marks it with a `brandSoft` background and nothing else
+    /// (`BookUi.kt:283`), which a reader does not hear. This app's standing
+    /// rule is that a colour is never the only carrier of meaning, so the
+    /// highlighted row carries the words as its accessibility value.
+    /// **iOS-only.**
+    public static func chapterPlayingNow(_ startsAt: String) -> String {
+        "\(startsAt) — where you are now"
+    }
+
+    /// The resume dialog's way out.
+    ///
+    /// Android leans on `onDismissRequest` (`BookUi.kt:167`), which on a
+    /// phone is a tap outside the alert. This app's one dialog shape
+    /// (``DialogCard``) has no such gesture, so without a control the dialog
+    /// would be a trap. The word is the shell's own
+    /// (`PairingScreenView.swift`'s `not now`). **iOS-only.**
+    public static let notNow = "not now"
+
+    /// A failed read's retry, which is ``VideoStrings``' word for the same
+    /// control on the same shape of list.
+    public static let retry = "retry"
+
+    /// Another page of books, drawn **as well as** the scroll trigger: the
+    /// trigger cannot fire for a list the person has stopped scrolling, and
+    /// VoiceOver's reader does not scroll at all.
+    public static let loadMore = "load more"
+
     /// A chapter the server gave no title (`BookUi.kt:296`).
     public static func chapterNumber(_ number: Int) -> String { "chapter \(number)" }
 
