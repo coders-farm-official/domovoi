@@ -90,7 +90,7 @@ final class PhoneFolderSourceTests: XCTestCase {
 
         let videos = try await page(kinds: PhoneMediaKind.videoOnly)
         XCTAssertEqual(videos.items.map(\.name), ["Trip"])
-        XCTAssertTrue(videos.items[0].isDir)
+        XCTAssertEqual(videos.items.first?.isDir, true)
     }
 
     /// Folders first, then by name case-insensitively.
@@ -114,7 +114,7 @@ final class PhoneFolderSourceTests: XCTestCase {
         let first = try await page(limit: 2)
         XCTAssertEqual(first.items.count, 2)
         XCTAssertEqual(first.total, 5)
-        XCTAssertTrue(first.serverHasMore)
+        XCTAssertEqual(first.serverHasMore, true)
     }
 
     /// A path with `..` in it is refused rather than resolved — the escape the
