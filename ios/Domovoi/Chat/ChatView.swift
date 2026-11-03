@@ -28,12 +28,19 @@ import SwiftUI
 ///
 /// ### What is not, and why there is no control for it
 ///
-/// **The place chip and the place picker.** Android's Chat is one tab over two
-/// places — the model on the phone and the house — and a chip on each row says
-/// which. This app has one place, so a chip would say the same thing on every
-/// row for ever: furniture, not information. The household fact it carries is
-/// said where it bites instead, in the delete confirmation
-/// (``ChatStrings/serverDeleteNote``).
+/// **The place chip and the place picker are no longer absent**, and this
+/// paragraph used to say why they were: "this app has one place, so a chip
+/// would say the same thing on every row for ever: furniture, not
+/// information." That was true until the assistant's milestone 1, which makes
+/// the phone a second place — so the chip is information again and
+/// ``AssistantPlaceSwitch`` draws it, above this screen, in new files. The
+/// household fact the chip carries is still *also* said where it bites, in the
+/// delete confirmation (``ChatStrings/serverDeleteNote``), because that is the
+/// sentence a person reads at the moment it matters.
+///
+/// On an iPhone whose system model is unavailable — not eligible, Apple
+/// Intelligence off, the model not ready, or iOS 18 to 25 — there is one place
+/// again and nothing is drawn: no chip, no picker, no second list.
 ///
 /// **The paperclip.** Pictures and documents a row already has are drawn
 /// (``ChatMoreRowTop``), and neither can be **sent**: ``ChatModel/send(_:)``
@@ -99,10 +106,24 @@ struct ChatView: View {
     var body: some View {
         Group {
             if let chat {
-                if chat.conversationOpen {
-                    ChatConversationView(chat: chat, model: model)
-                } else {
-                    list(chat)
+                // **The assistant item's one hook into Chat** (M1): the phone
+                // as a second place. ``AssistantPlaceSwitch`` draws the place
+                // picker and either this screen or the phone's own list — and
+                // on every iPhone without the system model it draws exactly
+                // what was here before, no chip and no picker, which is
+                // [[no-misleading-controls]] doing its job rather than a
+                // feature flag. Everything it needs is in new files.
+                AssistantPlaceSwitch(
+                    model: model,
+                    serverChatOn: chat.aiEnabled,
+                    serverHasModel: assistantServerHasChatModel(chat.models.data),
+                    houseConversationOpen: chat.conversationOpen
+                ) {
+                    if chat.conversationOpen {
+                        ChatConversationView(chat: chat, model: model)
+                    } else {
+                        list(chat)
+                    }
                 }
             } else {
                 ProgressView()
