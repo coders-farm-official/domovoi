@@ -455,7 +455,11 @@ struct ManualSegPill: View {
         )
         .overlay {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .strokeBorder(active ? Color.brandInk : .quaternary)
+                // See ManualMapView: a ternary of two unlike shape styles
+                // needs `AnyShapeStyle` on both arms.
+                .strokeBorder(
+                    active ? AnyShapeStyle(Color.brandInk) : AnyShapeStyle(.quaternary)
+                )
         }
         // The pills are a two-way choice and the lit one is not merely
         // coloured: VoiceOver is told which is picked.

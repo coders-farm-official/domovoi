@@ -416,7 +416,15 @@ struct ManualMapNode: View {
         )
         .overlay {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(node.hub ? Color.brandInk.opacity(0.6) : .quaternary)
+                // `AnyShapeStyle` because the two arms are different styles
+                // (a `Color` and the system's `.quaternary`); `strokeBorder`
+                // infers one `S` from the ternary and would otherwise demand
+                // `Color.quaternary`, which does not exist as a static.
+                .strokeBorder(
+                    node.hub
+                        ? AnyShapeStyle(Color.brandInk.opacity(0.6))
+                        : AnyShapeStyle(.quaternary)
+                )
         }
         // The Kotlin's `contentDescription = listOfNotNull(title, sub)
         // .joinToString(": ")` (`:650`), so a node reads as one thing rather
