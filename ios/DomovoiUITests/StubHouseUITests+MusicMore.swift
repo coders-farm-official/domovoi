@@ -8,13 +8,17 @@ import XCTest
 ///
 /// ### Which track each case uses, and why it matters
 ///
-/// `fixtures/musicmore.py` seeds five tracks whose words nothing else in the
+/// `fixtures/musicmore.py` seeds six tracks whose words nothing else in the
 /// house uses. **Track 501 is the one the parlour is playing**, so its title
 /// is on screen twice — once on its library row and once on the room card —
 /// and `containing(app, …).firstMatch` cannot say which. So no case here
 /// opens 501's library row: the membership cases use **503**, the cover and
-/// plain-lyrics cases **502**, and the Favorites and create cases **505**,
-/// each of which appears exactly once.
+/// plain-lyrics cases **502**, the Favorites and create cases **505**, and
+/// the timing-chip case **506**, each of which appears exactly once.
+///
+/// **Track 506 is synced and no room plays it** — the only combination that
+/// reaches the no-room branch, where the timing chips would write nowhere and
+/// are therefore not drawn.
 ///
 /// ### One sheet at a time
 ///
@@ -150,6 +154,46 @@ extension StubHouseUITests {
         let close = app.buttons[MusicMoreUnderTest.close]
         if close.exists { close.tap() }
         _ = waitUntilGone(close, timeout: 15)
+    }
+
+    /// What the open sheet says about **its own** write.
+    ///
+    /// Matched by `identifier`, which only `MusicMoreSheetStatus` carries, so
+    /// nothing behind the sheet can satisfy it. That matters: the shell's
+    /// toast is an overlay on the shell's content and a page sheet covers it,
+    /// so these outcomes used to be drawn behind the sheet that was still up
+    /// — and four of these cases passed anyway, because
+    /// `app.descendants(matching: .any)` reaches an element behind a sheet
+    /// (NIGHT-RULES §5). Asserted this way they fail if the message is
+    /// invisible.
+    @MainActor
+    func sheetSaid(
+        _ app: XCUIApplication,
+        startsWith prefix: String,
+        timeout: Double = 20
+    ) -> Bool {
+        app.staticTexts.matching(
+            NSPredicate(
+                format: "identifier == %@ AND label BEGINSWITH %@",
+                MusicMoreUnderTest.sheetStatus, prefix
+            )
+        ).firstMatch.waitForExistence(timeout: timeout)
+    }
+
+    /// ``sheetSaid(_:startsWith:timeout:)`` for a phrase inside the sentence
+    /// rather than at the front of it.
+    @MainActor
+    func sheetSaid(
+        _ app: XCUIApplication,
+        containing phrase: String,
+        timeout: Double = 20
+    ) -> Bool {
+        app.staticTexts.matching(
+            NSPredicate(
+                format: "identifier == %@ AND label CONTAINS %@",
+                MusicMoreUnderTest.sheetStatus, phrase
+            )
+        ).firstMatch.waitForExistence(timeout: timeout)
     }
 
     /// How many elements on screen carry a label containing `text`.
@@ -385,10 +429,9 @@ extension StubHouseUITests {
         )
         containing(app, MusicMoreUnderTest.quietHours).tap()
 
-        let said = startingWith(app, MusicMoreUnderTest.alreadyInPrefix)
         XCTAssertTrue(
-            said.waitForExistence(timeout: 20),
-            "a 409 was not reported as the track already being there"
+            sheetSaid(app, startsWith: MusicMoreUnderTest.alreadyInPrefix),
+            "the sheet did not itself report the 409 as the track already being there"
         )
         evidence(app, "musicmore-50-already-in")
         XCTAssertEqual(
@@ -420,10 +463,9 @@ extension StubHouseUITests {
         )
 
         containing(app, MusicMoreUnderTest.favorites).tap()
-        let said = startingWith(app, MusicMoreUnderTest.favoritedPrefix)
         XCTAssertTrue(
-            said.waitForExistence(timeout: 20),
-            "tapping Favorites did not say the track was favourited — "
+            sheetSaid(app, startsWith: MusicMoreUnderTest.favoritedPrefix),
+            "the sheet did not say the track was favourited — "
                 + "the playlist route 400s for id 0"
         )
         evidence(app, "musicmore-60-favorited")
@@ -471,8 +513,8 @@ extension StubHouseUITests {
         create.tap()
 
         XCTAssertTrue(
-            startingWith(app, MusicMoreUnderTest.createdPrefix).waitForExistence(timeout: 20),
-            "the create did not report the name it was given"
+            sheetSaid(app, startsWith: MusicMoreUnderTest.createdPrefix),
+            "the sheet did not report the name the create was given"
         )
         evidence(app, "musicmore-70-created")
         // **One** close, not two: the add sheet replaced the track sheet it
@@ -550,7 +592,7 @@ extension StubHouseUITests {
         let (app, landed) = openMusicMore()
         XCTAssertTrue(landed, "Music never drew")
 
-        let line = startingWith(app, MusicMoreUnderTest.firstSyncedLine)
+        let line = startingWith(app, MusicMoreUnderTest.activeSyncedLine)
         XCTAssertTrue(
             line.waitForExistence(timeout: 30),
             "the playing room's card carries no lyric line"
@@ -559,6 +601,13 @@ extension StubHouseUITests {
         XCTAssertEqual(
             0, countContaining(app, MusicMoreUnderTest.plainFirstWords),
             "another track's plain text is on the room card"
+        )
+        // The line is the one the room's CLOCK is on, not the document's
+        // first: the parlour is seeded past the last timed line, so a card
+        // that simply drew `lines.first` would show this instead.
+        XCTAssertEqual(
+            0, countContaining(app, MusicMoreUnderTest.firstSyncedLine),
+            "the card shows the document's first line rather than the room's position"
         )
     }
 
@@ -624,11 +673,20 @@ extension StubHouseUITests {
         XCTAssertTrue(landed, "Music never drew")
 
         XCTAssertTrue(openTrackSheet(app, MusicMoreUnderTest.sablewind), "505's sheet never opened")
-        // Give the read time to come back and be shown, so this is not an
-        // assertion about a frame that had not drawn yet.
+        // **Synchronised on the absence, not sampled after a sibling.**
+        //
+        // Waiting for `add to playlist` said nothing about the 503 having
+        // landed: `HomeLink(addToPlaylist)` and the lyrics header are emitted
+        // in the same body pass, and until the refusal arrives `result` is
+        // nil, `isHidden` is false, and the panel legitimately draws its
+        // header over a spinner. So the four `.exists` checks raced one round
+        // trip and would fail on a loaded Simulator as though the app had
+        // drawn a header over a refused read. The sheet opens with
+        // `open: true`, so the header is `hide lyrics`, and its going away is
+        // the refusal landing.
         XCTAssertTrue(
-            containing(app, MusicMoreUnderTest.addToPlaylist).waitForExistence(timeout: 25),
-            "505's sheet did not finish drawing"
+            waitUntilGone(app.buttons[MusicMoreUnderTest.hideLyrics], timeout: 25),
+            "a refused read left the lyrics header up"
         )
         evidence(app, "musicmore-110-lyrics-refused")
         XCTAssertFalse(
@@ -636,12 +694,13 @@ extension StubHouseUITests {
             "a refused read drew a lyrics header"
         )
         XCTAssertFalse(
-            app.buttons[MusicMoreUnderTest.hideLyrics].exists,
-            "a refused read drew a lyrics header"
-        )
-        XCTAssertFalse(
             app.buttons[MusicMoreUnderTest.retry].exists,
             "a refused read offered a retry that would refuse every time"
+        )
+        // The rest of the sheet is there — only the panel is gone.
+        XCTAssertTrue(
+            containing(app, MusicMoreUnderTest.addToPlaylist).exists,
+            "505's sheet did not draw at all, so the absences prove nothing"
         )
         closeSheet(app)
 
@@ -652,6 +711,52 @@ extension StubHouseUITests {
             "no sheet draws a lyrics header at all, so the first half proved nothing"
         )
         evidence(app, "musicmore-111-lyrics-header-present")
+    }
+
+    /// A track sheet for a song **no room is playing** shows the words and
+    /// the source, and **no timing chips**.
+    ///
+    /// Track 506 is synced and no room plays it, which is the only
+    /// combination that reaches the no-room branch. An offset is stored per
+    /// room (`MusicLyricsNudgeStore.set` returns without writing for a blank
+    /// one), so with no room behind the panel the three chips were three taps
+    /// that changed nothing and did not even move the label beside them —
+    /// the control the owner's rule forbids, and the panel's own doc comment
+    /// claimed it was not drawn.
+    ///
+    /// The panel having drawn at all is asserted first, so a sheet that
+    /// simply failed to show lyrics cannot pass this. The other half — that
+    /// the chips **are** offered once there is a room — is
+    /// `MusicRoomLyricsModel.maySetTiming` and is asserted in
+    /// `MusicMoreModelTests`: reaching it through the UI would mean opening
+    /// the library row of the very track the parlour is playing, whose title
+    /// is on screen twice and which no case here opens (the header).
+    @MainActor
+    func testMusicMore_NoRoomNoTimingChips() throws {
+        musicMoreReset()
+        let (app, landed) = openMusicMore()
+        XCTAssertTrue(landed, "Music never drew")
+
+        XCTAssertTrue(openTrackSheet(app, MusicMoreUnderTest.harrowgate), "506's sheet never opened")
+        XCTAssertTrue(
+            startingWith(app, MusicMoreUnderTest.harrowgateLine).waitForExistence(timeout: 25),
+            "506's synced document drew no lines, so there is nothing to assert about its chips"
+        )
+        evidence(app, "musicmore-115-no-room-no-timing")
+        XCTAssertFalse(
+            app.buttons[MusicMoreUnderTest.lyricsEarlier].exists,
+            "a panel with no room behind it offered a timing chip that writes nowhere"
+        )
+        XCTAssertFalse(
+            app.buttons[MusicMoreUnderTest.resetLyricsTiming].exists,
+            "a panel with no room behind it offered `reset` for an offset it cannot store"
+        )
+        // And it is not the whole footer that is missing: the source label is
+        // the panel's own and is drawn beside where the chips would be.
+        XCTAssertTrue(
+            containing(app, MusicMoreUnderTest.sidecarSource).exists,
+            "the panel drew no footer at all, so the absent chips prove nothing"
+        )
     }
 
     /// A room on a library track carries a lyric line; a room playing a
@@ -674,7 +779,7 @@ extension StubHouseUITests {
             "the streaming room's card is not on screen, so there is nothing to assert about it"
         )
         XCTAssertTrue(
-            startingWith(app, MusicMoreUnderTest.firstSyncedLine).waitForExistence(timeout: 30),
+            startingWith(app, MusicMoreUnderTest.activeSyncedLine).waitForExistence(timeout: 30),
             "the library room's card carries no lyric line"
         )
         evidence(app, "musicmore-120-room-cards")
@@ -705,7 +810,7 @@ extension StubHouseUITests {
         app.buttons[MusicMoreUnderTest.play].tap()
 
         XCTAssertTrue(
-            containing(app, MusicMoreUnderTest.playingInCellar).waitForExistence(timeout: 20),
+            sheetSaid(app, containing: MusicMoreUnderTest.playingInCellar),
             "the play named a room other than the chip that was picked"
         )
         evidence(app, "musicmore-130-played-in-picked-room")
@@ -906,7 +1011,24 @@ enum MusicMoreUnderTest {
     static let playingInCellar = "in cellar"
 
     // the lyrics
+    /// The parlour's **permanently active** line.
+    ///
+    /// Not the first line. The room is seeded past the last timed line
+    /// (26 s) at 30 s, because a room's position runs on at wall-clock rate:
+    /// any seed inside the line list makes "which line is showing" a question
+    /// about how long the Simulator took, and the active line would move on
+    /// twice inside a 30 s wait.
+    static let activeSyncedLine = "Down past the hollow tide"
+    /// 501's FIRST line, which at the seeded position must **not** be the one
+    /// the card shows — the half of the assertion that discriminates.
     static let firstSyncedLine = "Hold the greenlit awning"
+    /// 506: synced lyrics, no room playing it.
+    static let harrowgate = "Harrowgate Lantern"
+    static let harrowgateLine = "Lanterns down the harrowgate"
+    static let lyricsEarlier = "lyrics earlier"
+    static let resetLyricsTiming = "reset lyrics timing"
+    /// 501's and 506's `source_label`, which the panel's footer draws.
+    static let sidecarSource = "lyric file beside the song"
     static let plainFirstWords = "Pellucid marrow, bleach the rafters"
     /// The whole phrase, not the first word: `instrumental break` is a gap
     /// line's own label elsewhere in the panel.
@@ -935,6 +1057,11 @@ enum MusicMoreUnderTest {
     static let createNewPlaylist = "create new playlist"
     static let playlistNameHint = "playlist name…"
     static let create = "create"
+    /// What a sheet says about its own write, **inside** the sheet
+    /// (`MusicMoreSheetStatus.identifier`). Asserted by identifier rather
+    /// than by a label query, because a label query reaches elements behind
+    /// the sheet and that is exactly the bug this replaced.
+    static let sheetStatus = "musicmore-sheet-status"
 
     // the sentences a toast says, as prefixes
     //

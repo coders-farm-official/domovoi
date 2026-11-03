@@ -72,6 +72,23 @@ public final class MusicPlaylistDetailModel {
 
     public private(set) var toast: String?
 
+    /// Whether ``toast`` is a **failure** rather than an outcome.
+    ///
+    /// The sheets report their own outcomes inline now (a page sheet covers
+    /// the shell's toast, so a message forwarded there was drawn behind the
+    /// sheet that was still up and nobody ever saw it), and an inline line
+    /// has to be inked: a failure is `errInk`, everything else `fgMuted`.
+    /// Sniffing the sentence for the word "failed" would be a classifier over
+    /// wording, so the flag is set where the sentence is.
+    public private(set) var toastFailed = false
+
+    /// Every ``toast`` goes through here, so the flag cannot drift from the
+    /// sentence beside it.
+    private func say(_ said: String, failed: Bool = false) {
+        toast = said
+        toastFailed = failed
+    }
+
     private let container: AppContainer
     private let deviceID: String
     private var eventSink: Int?
@@ -103,10 +120,21 @@ public final class MusicPlaylistDetailModel {
     /// order neither tap asked for.
     public var mayWrite: Bool { !busy }
 
-    public func mayMoveUp(_ index: Int) -> Bool { mayEdit && mayWrite && index > 0 }
+    /// Whether an arrow is **drawn** for this row — a question about the
+    /// playlist and the index, and deliberately **not** about `busy`.
+    ///
+    /// It used to include ``mayWrite``, and the effect was that one tap on
+    /// `move down` took every arrow and every `remove` off every row until
+    /// the PATCH came back: on a slow house the whole list's trailing
+    /// controls collapsed and a second tap landed on empty row space. The
+    /// one-write-at-a-time rule needs the action refused — ``move(from:by:)``
+    /// and ``remove(_:)`` still guard on ``mayWrite`` — not the control taken
+    /// away. The view expresses the in-flight state with `.disabled`, which
+    /// keeps the layout still.
+    public func mayMoveUp(_ index: Int) -> Bool { mayEdit && index > 0 }
 
     public func mayMoveDown(_ index: Int) -> Bool {
-        mayEdit && mayWrite && index < tracks.count - 1
+        mayEdit && index < tracks.count - 1
     }
 
     /// The room a `play` would go to: the picked chip while the server still
@@ -170,7 +198,7 @@ public final class MusicPlaylistDetailModel {
     }
 
     public func takeToast() -> String? {
-        defer { toast = nil }
+        defer { toast = nil; toastFailed = false }
         return toast
     }
 
@@ -188,9 +216,9 @@ public final class MusicPlaylistDetailModel {
     @discardableResult
     public func play(shuffle: Bool, rooms: [String]) -> Bool {
         guard let room = room(in: rooms) else { return false }
-        toast = shuffle
+        say(shuffle
             ? MusicMoreStrings.shufflingPlaylist(playlist.name, room: room)
-            : MusicMoreStrings.playingPlaylist(playlist.name, room: room)
+            : MusicMoreStrings.playingPlaylist(playlist.name, room: room))
         let client = container.client
         let body = MusicPlaylistsModel.playBody(
             room: room,
@@ -206,9 +234,9 @@ public final class MusicPlaylistDetailModel {
                     body: body
                 )
             } catch let trouble {
-                self?.toast = shuffle
+                self?.say(shuffle
                     ? MusicMoreStrings.shufflePlaylistFailed(trouble.message)
-                    : MusicMoreStrings.playPlaylistFailed(trouble.message)
+                    : MusicMoreStrings.playPlaylistFailed(trouble.message), failed: true)
             }
         }
         return true
@@ -227,8 +255,11 @@ public final class MusicPlaylistDetailModel {
         let wanted = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard mayEdit, mayWrite, !wanted.isEmpty else { return false }
         let note = description.trimmingCharacters(in: .whitespacesAndNewlines)
-        let glyph = String(emoji.trimmingCharacters(in: .whitespacesAndNewlines)
-            .prefix(MusicMoreStrings.emojiMaxLength))
+        // Clamped by what the **wire** counts as well as by clusters:
+        // `cover_emoji` is `max_length=16` in code points, and four grapheme
+        // clusters can be twenty-eight of them
+        // (``MusicMoreStrings/emojiMaxScalars``).
+        let glyph = MusicMoreStrings.clampEmoji(emoji)
         busy = true
         let client = container.client
         let path = MusicPlaylistPath.one(playlist.id)
@@ -248,9 +279,9 @@ public final class MusicPlaylistDetailModel {
                     coverEmoji: glyph
                 )
                 self.editing = false
-                self.toast = MusicMoreStrings.playlistUpdated
+                self.say(MusicMoreStrings.playlistUpdated)
             } catch let trouble {
-                self?.toast = MusicMoreStrings.updateFailed(trouble.message)
+                self?.say(MusicMoreStrings.updateFailed(trouble.message), failed: true)
             }
         }
         return true
@@ -288,7 +319,7 @@ public final class MusicPlaylistDetailModel {
                 // refused by ``mayWrite``, so `before` is the server's order
                 // or the one previous optimistic step.
                 self.localOrder = before
-                self.toast = MusicMoreStrings.reorderFailed(trouble.message)
+                self.say(MusicMoreStrings.reorderFailed(trouble.message), failed: true)
             }
         }
         return true
@@ -309,10 +340,10 @@ public final class MusicPlaylistDetailModel {
                 try await client.send(method: "DELETE", path: path)
                 guard let self else { return }
                 self.localOrder = nil
-                self.toast = MusicMoreStrings.removedFromPlaylist(label, playlist: name)
+                self.say(MusicMoreStrings.removedFromPlaylist(label, playlist: name))
                 self.read.refresh()
             } catch let trouble {
-                self?.toast = MusicMoreStrings.removeFromPlaylistFailed(trouble.message)
+                self?.say(MusicMoreStrings.removeFromPlaylistFailed(trouble.message), failed: true)
             }
         }
         return true
@@ -333,10 +364,10 @@ public final class MusicPlaylistDetailModel {
             do throws(DomovoiError) {
                 try await client.send(method: "DELETE", path: path)
                 guard let self else { return }
-                self.toast = MusicMoreStrings.deletedPlaylist(name)
+                self.say(MusicMoreStrings.deletedPlaylist(name))
                 self.deleted = true
             } catch let trouble {
-                self?.toast = MusicMoreStrings.deletePlaylistFailed(trouble.message)
+                self?.say(MusicMoreStrings.deletePlaylistFailed(trouble.message), failed: true)
             }
         }
         return true

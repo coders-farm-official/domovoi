@@ -1212,4 +1212,33 @@ final class MusicMoreRulesTests: XCTestCase {
         )
         XCTAssertFalse(MusicAddToPlaylistModel.isFavorites(Playlist(id: 7, name: "road trip")))
     }
+
+    /// **The emoji is clamped by what the wire counts, not only by what
+    /// `String.count` counts.**
+    ///
+    /// `PlaylistPatch.cover_emoji` is `max_length=16` and Pydantic measures
+    /// code points. A family emoji is one grapheme cluster and seven of them,
+    /// so four families are 4 to `String.prefix(4)` and 28 to the server —
+    /// and the PATCH comes back 422 with nothing a person could do about it.
+    /// Android never had this: `it.take(4)` takes UTF-16 units, which can
+    /// never exceed 16.
+    func testTheEmojiIsClampedToWhatTheServerWillTake() {
+        let family = "👨‍👩‍👧‍👦"
+        XCTAssertEqual(1, family.count, "one grapheme cluster")
+        XCTAssertEqual(7, family.unicodeScalars.count, "seven code points")
+
+        let four = String(repeating: family, count: 4)
+        XCTAssertEqual(4, four.count, "four clusters, which the old clamp let through")
+        let clamped = MusicMoreStrings.clampEmoji(four)
+        XCTAssertLessThanOrEqual(
+            clamped.unicodeScalars.count, MusicMoreStrings.emojiMaxScalars,
+            "the clamped value is still longer than the server's max_length"
+        )
+
+        // The ordinary case is untouched, and the cluster cap still bites.
+        XCTAssertEqual("ABCD", MusicMoreStrings.clampEmoji("  ABCDE  "))
+        // And the typed-field clamp does **not** trim, or a space could not
+        // be typed at all.
+        XCTAssertEqual("A ", MusicMoreStrings.clampEmojiLength("A "))
+    }
 }

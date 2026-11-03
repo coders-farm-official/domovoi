@@ -52,8 +52,17 @@ public final class MusicRoomLyricsModel {
 
     // MARK: - what is drawn
 
-    /// Which room this follows.
-    public let room: String
+    /// Which room this follows, or **nil for a document with no room behind
+    /// it** — a track sheet opened for a song nobody is playing.
+    ///
+    /// Optional rather than an empty string, which is what it was: an empty
+    /// room asked `GET /api/music/now-playing//lyrics`, a path FastAPI's
+    /// `{room_id}` cannot match, so every such sheet cost a guaranteed 404
+    /// and a 404 line in the house's log before the track's own read ran. It
+    /// also made the timing chips dead — ``MusicLyricsNudgeStore/set(_:ms:)``
+    /// refuses a blank room — which is the control the owner's rule forbids
+    /// (``maySetTiming``).
+    public let room: String?
 
     /// The library track the room is on, or nil for a stream or a file outside
     /// the library — in which case there is nothing to show and no header
@@ -85,7 +94,7 @@ public final class MusicRoomLyricsModel {
     private var onScreen = false
 
     public init(
-        room: String,
+        room: String?,
         store: MusicLyricsStore,
         nudges: MusicLyricsNudgeStore,
         clock: @Sendable @escaping () -> Int64 = TokenHealth.monotonicMs,
@@ -131,7 +140,33 @@ public final class MusicRoomLyricsModel {
     }
 
     /// The nudge chip's label for this room.
-    public var nudgeLabel: String { nudges.label(room) }
+    public var nudgeLabel: String {
+        guard let keptRoom else { return MusicLyricsNudge.label(0) }
+        return nudges.label(keptRoom)
+    }
+
+    /// Whether the timing row may be drawn at all.
+    ///
+    /// Two things have to be true, and only one of them was being asked:
+    /// there must be a timed document for an offset to move, **and** there
+    /// must be a room to store the offset against. With no room
+    /// ``MusicLyricsNudgeStore/set(_:ms:)`` returns without writing, so the
+    /// three chips were three taps that changed nothing and did not even
+    /// move the label beside them — the control
+    /// [[no-misleading-controls]] forbids, in the quietest form this file
+    /// has.
+    public var maySetTiming: Bool { !timedLines.isEmpty && keptRoom != nil }
+
+    /// The room, if there is one worth asking about: nil, or blank, is none.
+    ///
+    /// One question asked in one place, because three call sites used to ask
+    /// it each in their own way.
+    private var keptRoom: String? {
+        guard let room, !room.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+        return room
+    }
 
     // MARK: - lifecycle
 
@@ -193,18 +228,23 @@ public final class MusicRoomLyricsModel {
         republish()
     }
 
+    /// The three nudge calls each refuse a model with no room rather than
+    /// calling a store that would silently drop the write.
     public func nudgeLater() {
-        nudges.later(room)
+        guard let keptRoom else { return }
+        nudges.later(keptRoom)
         republish()
     }
 
     public func nudgeEarlier() {
-        nudges.earlier(room)
+        guard let keptRoom else { return }
+        nudges.earlier(keptRoom)
         republish()
     }
 
     public func resetNudge() {
-        nudges.reset(room)
+        guard let keptRoom else { return }
+        nudges.reset(keptRoom)
         republish()
     }
 
@@ -220,12 +260,16 @@ public final class MusicRoomLyricsModel {
 
     private func read() {
         reading?.cancel()
-        let room = self.room
+        // Captured before the `await`, like every other key on this track.
+        // Nil means there is no room read to make at all — not an empty one:
+        // `GET /api/music/now-playing//lyrics` is a path the server cannot
+        // match, so asking it is a 404 bought for nothing.
+        let room = keptRoom
         reading = Task { @MainActor [weak self] in
             guard let self else { return }
             // The reading carries its own anchor; `store.room` stamps it with
             // this phone's clock and caches the doc for the track sheet.
-            if let reading = await self.store.room(room) {
+            if let room, let reading = await self.store.room(room) {
                 guard !Task.isCancelled else { return }
                 self.apply(reading)
                 if self.result != nil { self.republish(); return }
@@ -289,7 +333,7 @@ public final class MusicRoomLyricsModel {
             nowMs: clock(),
             playing: anchor.playing,
             durationSec: anchor.durationSec,
-            nudgeMs: nudges.offset(room)
+            nudgeMs: keptRoom.map { nudges.offset($0) } ?? 0
         )
         positionMs = MusicLyricsMath.steady(
             previousMs: positionMs,

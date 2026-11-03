@@ -57,21 +57,36 @@ struct MusicLyricsPanelView: View {
         max(minHeight, containerHeight / 2)
     }
 
+    /// **One `.task`, one `.onDisappear`, on a view whose identity does not
+    /// change with what is drawn.**
+    ///
+    /// They used to hang off the `else` arm of `if lyrics.isHidden`, and that
+    /// arm flips: `isHidden` is true until the first answer names a track and
+    /// becomes true again the moment a refusal lands. Every flip runs
+    /// `stop()` on the leaving arm and `start()` on the arriving one, SwiftUI
+    /// does not order the two against each other, and a `stop()` that lands
+    /// last cancels the read and the republish loop the arriving arm just
+    /// started — a panel frozen on whatever was last drawn. The same shape,
+    /// worse, was ``MusicRoomLyricLine``'s.
+    ///
+    /// The cost is that a hidden panel is a zero-size subview rather than an
+    /// `EmptyView`, so its container's spacing is still spent on it. Nothing
+    /// is drawn and no element exists — which is what the rule is about —
+    /// and it is the smaller of the two prices (DECISIONS).
     var body: some View {
-        if lyrics.isHidden {
-            // Nothing. Not an empty section, not a header.
-            EmptyView()
-        } else {
-            VStack(alignment: .leading, spacing: 8) {
-                header
-                if open {
-                    stateBody(for: lyrics.state)
-                    footer
+        ZStack(alignment: .topLeading) {
+            if !lyrics.isHidden {
+                VStack(alignment: .leading, spacing: 8) {
+                    header
+                    if open {
+                        stateBody(for: lyrics.state)
+                        footer
+                    }
                 }
             }
-            .task { lyrics.start() }
-            .onDisappear { lyrics.stop() }
         }
+        .task { lyrics.start() }
+        .onDisappear { lyrics.stop() }
     }
 
     // MARK: - the header
@@ -241,7 +256,13 @@ struct MusicLyricsPanelView: View {
             HomeLink(MusicMoreStrings.follow) { lyrics.follow() }
                 .accessibilityLabel(MusicMoreStrings.followTheSongAgain)
         }
-        if isTimed { timingRow }
+        // ``MusicRoomLyricsModel/maySetTiming``, not `isTimed`: a track sheet
+        // opened for a song no room is playing has a timed document and **no
+        // room**, and an offset with no room to store it against is a write
+        // the nudge store drops. Three chips, three taps, nothing moved — the
+        // control [[no-misleading-controls]] forbids, which `isTimed` alone
+        // drew.
+        if lyrics.maySetTiming { timingRow }
     }
 
     /// The per-room nudge: a quarter of a second each way, and a reset.
@@ -296,28 +317,36 @@ struct MusicRoomLyricLine: View {
 
     let lyrics: MusicRoomLyricsModel
 
+    /// **The lifecycle is outside the conditional.**
+    ///
+    /// It used to be on all three arms, and `current` is nil for an
+    /// instrumental gap — so the arm, and with it the view's identity,
+    /// flipped every time the room crossed into or out of a break, which a
+    /// real `.lrc` is full of. Each flip ran `stop()` on the leaving arm and
+    /// `start()` on the arriving one; `start()` re-issues
+    /// `GET /api/music/now-playing/{room}/lyrics`, so every gap boundary cost
+    /// a round trip per room card on screen, and because SwiftUI does not
+    /// order a removed view's `onDisappear` against an inserted view's
+    /// `task`, a `stop()` landing last cancelled the 100 ms republish loop
+    /// and froze the card on the words last drawn until the next
+    /// now-playing push.
+    ///
+    /// One `ZStack`, one `.task`, one `.onDisappear`. The zero-size empty
+    /// case is what the `else` arm already was.
     var body: some View {
-        if lyrics.isHidden {
-            EmptyView()
-        } else if let line = current {
-            Text(line)
-                .font(.caption)
-                // A lyric is text, so an ink token. `brandInk` is 5.65:1;
-                // `Color.brand` as text is 2.05:1.
-                .foregroundStyle(Color.brandInk)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .task { lyrics.start() }
-                .onDisappear { lyrics.stop() }
-        } else {
-            // The model still has to run for the line to ever appear, so the
-            // empty case is an empty view with the same lifecycle rather
-            // than nothing at all.
-            Color.clear
-                .frame(height: 0)
-                .task { lyrics.start() }
-                .onDisappear { lyrics.stop() }
+        ZStack(alignment: .leading) {
+            if !lyrics.isHidden, let line = current {
+                Text(line)
+                    .font(.caption)
+                    // A lyric is text, so an ink token. `brandInk` is 5.65:1;
+                    // `Color.brand` as text is 2.05:1.
+                    .foregroundStyle(Color.brandInk)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
+        .task { lyrics.start() }
+        .onDisappear { lyrics.stop() }
     }
 
     /// The active line's words, or nil for a gap, a plain doc, or before the

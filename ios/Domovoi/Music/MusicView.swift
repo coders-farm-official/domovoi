@@ -293,10 +293,19 @@ struct MusicView: View {
             guard text != nil, let said = playlists?.takeToast() else { return }
             model.showToast(said)
         }
-        // Whichever sheet is up, its model's toast. One `onChange` rather
-        // than one per sheet, because only one of them can be up.
-        .onChange(of: sheetToast) { _, text in
-            guard text != nil, let said = takeSheetToast() else { return }
+        // **A sheet's outcome is not handed to the shell's toast.** That
+        // toast is an overlay on the shell's content
+        // (`AppShellView.swift:35`), a sibling of this view rather than of
+        // the sheet presented from it, so a page sheet covers it: every
+        // message these sheets produce was drawn behind the sheet that was
+        // still up. They report inline now
+        // (``MusicMoreSheetStatus``).
+        //
+        // The one exception is the delete, which dismisses the sheet first —
+        // so there is no sheet left to say it in, and the sentence is taken
+        // here, on `deleted`, while the model is still in `sheet`.
+        .onChange(of: playlistDeleted) { _, gone in
+            guard gone, let said = takeDeletedPlaylistToast() else { return }
             model.showToast(said)
         }
         // A write from the add-to-playlist sheet changed something the
@@ -365,24 +374,20 @@ struct MusicView: View {
         )
     }
 
-    /// The toast whichever model is behind the open sheet is holding.
+    /// Whether the open playlist sheet's playlist is gone.
     ///
     /// Here rather than on ``MusicMoreSheet`` because reading a model is
     /// main-actor work and this view is where that isolation already is.
-    private var sheetToast: String? {
-        switch sheet {
-        case .playlist(let detail): return detail.toast
-        case .addTo(_, let add): return add.toast
-        case .track, .none: return nil
-        }
+    private var playlistDeleted: Bool {
+        if case .playlist(let detail) = sheet { return detail.deleted }
+        return false
     }
 
-    private func takeSheetToast() -> String? {
-        switch sheet {
-        case .playlist(let detail): return detail.takeToast()
-        case .addTo(_, let add): return add.takeToast()
-        case .track, .none: return nil
-        }
+    /// The delete's own sentence, taken before the sheet's dismissal empties
+    /// ``sheet``. Every other outcome a sheet produces is said in the sheet.
+    private func takeDeletedPlaylistToast() -> String? {
+        guard case .playlist(let detail) = sheet else { return nil }
+        return detail.takeToast()
     }
 
     /// Whether the add-to-playlist sheet has written something.
@@ -416,7 +421,12 @@ struct MusicView: View {
     private func openTrack(_ track: LibraryTrack) {
         guard let lyricsStore, let nudges, let music else { return }
         let lyrics = MusicRoomLyricsModel(
-            room: music.rooms.first { $0.trackID == track.id }?.roomID ?? "",
+            // Nil, **not** `?? ""`: an empty room made the model ask
+            // `GET /api/music/now-playing//lyrics`, a path the server's
+            // `{room_id}` cannot match, so every sheet for a song nobody is
+            // playing cost a guaranteed 404 before the fallback ran — and it
+            // drew three timing chips whose writes the nudge store dropped.
+            room: music.rooms.first { $0.trackID == track.id }?.roomID,
             store: lyricsStore,
             nudges: nudges
         )

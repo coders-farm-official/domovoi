@@ -49,6 +49,23 @@ public final class MusicAddToPlaylistModel {
 
     public private(set) var toast: String?
 
+    /// Whether ``toast`` is a **failure** rather than an outcome.
+    ///
+    /// The sheets report their own outcomes inline now (a page sheet covers
+    /// the shell's toast, so a message forwarded there was drawn behind the
+    /// sheet that was still up and nobody ever saw it), and an inline line
+    /// has to be inked: a failure is `errInk`, everything else `fgMuted`.
+    /// Sniffing the sentence for the word "failed" would be a classifier over
+    /// wording, so the flag is set where the sentence is.
+    public private(set) var toastFailed = false
+
+    /// Every ``toast`` goes through here, so the flag cannot drift from the
+    /// sentence beside it.
+    private func say(_ said: String, failed: Bool = false) {
+        toast = said
+        toastFailed = failed
+    }
+
     /// Set once a write has gone through, so the screen can close the sheet
     /// and tell the list behind it to re-read (Android's `onMutated`).
     public private(set) var mutated = false
@@ -149,7 +166,7 @@ public final class MusicAddToPlaylistModel {
     }
 
     public func takeToast() -> String? {
-        defer { toast = nil }
+        defer { toast = nil; toastFailed = false }
         return toast
     }
 
@@ -201,12 +218,12 @@ public final class MusicAddToPlaylistModel {
             do throws(DomovoiError) {
                 try await client.send(method: method, path: path, body: body)
                 guard let self else { return }
-                self.toast = Self.note(
+                self.say(Self.note(
                     favorites: favorites,
                     removing: inIt,
                     playlist: name,
                     track: label
-                )
+                ))
                 self.settled()
             } catch let trouble {
                 guard let self else { return }
@@ -214,11 +231,11 @@ public final class MusicAddToPlaylistModel {
                     // Already there: the state that was asked for. Said as
                     // such, and the reads are still refreshed, because the
                     // memberships this phone holds were out of date.
-                    self.toast = MusicMoreStrings.alreadyInPlaylist(label, playlist: name)
+                    self.say(MusicMoreStrings.alreadyInPlaylist(label, playlist: name))
                     self.settled()
                     return
                 }
-                self.toast = MusicMoreStrings.addToPlaylistFailed(trouble.message)
+                self.say(MusicMoreStrings.addToPlaylistFailed(trouble.message), failed: true)
                 // The memberships this phone showed were wrong about something;
                 // re-read rather than leaving a tick on a row the server
                 // refused.
@@ -257,7 +274,7 @@ public final class MusicAddToPlaylistModel {
                 // without an id is a server this app does not understand, so
                 // the create is reported and the add is not attempted.
                 guard created.id != MusicPlaylistPath.favoritesID else {
-                    self?.toast = MusicMoreStrings.createFailed(MusicMoreStrings.createGaveNoID)
+                    self?.say(MusicMoreStrings.createFailed(MusicMoreStrings.createGaveNoID), failed: true)
                     self?.settled()
                     return
                 }
@@ -268,10 +285,10 @@ public final class MusicAddToPlaylistModel {
                 )
                 guard let self else { return }
                 self.newName = ""
-                self.toast = MusicMoreStrings.createdAndAdded(wanted, title: label)
+                self.say(MusicMoreStrings.createdAndAdded(wanted, title: label))
                 self.settled()
             } catch let trouble {
-                self?.toast = MusicMoreStrings.createFailed(trouble.message)
+                self?.say(MusicMoreStrings.createFailed(trouble.message), failed: true)
             }
         }
         return true

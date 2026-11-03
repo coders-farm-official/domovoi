@@ -941,7 +941,7 @@ final class MusicMoreModelTests: XCTestCase {
 
     private func panel(
         _ house: House,
-        room: String = "living room",
+        room: String? = "living room",
         now: Shared<Int64>
     ) -> (MusicRoomLyricsModel, AppContainer) {
         let (container, _, _) = rig(house: house)
@@ -1090,6 +1090,67 @@ final class MusicMoreModelTests: XCTestCase {
         XCTAssertEqual(30_250, model.positionMs)
         XCTAssertEqual("timing \u{2212}0.25 s", model.nudgeLabel)
 
+    }
+
+    /// **A panel with no room behind it offers no timing row.**
+    ///
+    /// A track sheet opened for a song nobody is playing has a timed document
+    /// and no room. An offset is stored per room, and
+    /// `MusicLyricsNudgeStore.set` returns without writing for a blank one —
+    /// so the three chips were three taps that changed nothing and did not
+    /// even move the label beside them, which is the control
+    /// [[no-misleading-controls]] forbids. Both halves are asserted, because
+    /// either alone could pass wrongly: no room means no row, a room means a
+    /// row.
+    func testTimingIsOfferedOnlyWhereThereIsARoomToStoreItAgainst() async {
+        let house = House(playlists: playlistsJSON, tracks: tracksJSON)
+        let now = Shared<Int64>(0)
+        let (roomless, _) = panel(house, room: nil, now: now)
+        // The screen's own now-playing read is what names the track when
+        // there is no room to ask.
+        roomless.offer(trackID: 12)
+        roomless.start()
+        defer { roomless.stop() }
+        await settleUntil({ roomless.result != nil }, "the track's own read")
+
+        XCTAssertFalse(roomless.timedLines.isEmpty, "the document is the timed kind")
+        XCTAssertFalse(roomless.maySetTiming, "no room, so nowhere to store an offset")
+        XCTAssertEqual("timing", roomless.nudgeLabel)
+        roomless.nudgeLater()
+        roomless.nudgeEarlier()
+        roomless.resetNudge()
+        XCTAssertEqual(
+            "timing", roomless.nudgeLabel,
+            "a nudge with no room wrote something somewhere"
+        )
+
+        let (followed, _) = panel(house, now: now)
+        followed.start()
+        defer { followed.stop() }
+        await settleUntil({ followed.result != nil }, "the room read")
+        XCTAssertTrue(followed.maySetTiming, "a room-followed timed panel may be nudged")
+    }
+
+    /// A blank room is the same as none: it was an empty string before, and
+    /// an empty room asked `GET /api/music/now-playing//lyrics` — a path the
+    /// server's `{room_id}` cannot match, so every such sheet cost a
+    /// guaranteed 404 before the fallback ran.
+    func testABlankRoomIsNoRoomAndIsNotAsked() async {
+        let house = House(playlists: playlistsJSON, tracks: tracksJSON)
+        // Any room read at all would answer 404 here, and the panel would
+        // fall back — so the assertion is the **count**, not the outcome.
+        let now = Shared<Int64>(0)
+        let (model, _) = panel(house, room: "   ", now: now)
+        model.offer(trackID: 12)
+        let before = StubURLProtocol.requestCount
+        model.start()
+        defer { model.stop() }
+        await settleUntil({ model.result != nil }, "the track's own read")
+        XCTAssertEqual(
+            before + 1, StubURLProtocol.requestCount,
+            "the blank room was asked as well as the track"
+        )
+        XCTAssertFalse(model.maySetTiming)
     }
 
     func testMovingHouseClearsThePanel() async {

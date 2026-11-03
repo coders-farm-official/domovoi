@@ -106,8 +106,33 @@ public enum MusicMoreStrings {
     public static let descriptionPlaceholder = "description (optional)"
     public static let emojiPlaceholder = "emoji"
 
-    /// `PlaylistDrawer.kt:288` — `it.take(4)`.
+    /// `PlaylistDrawer.kt:288` — `it.take(4)`, counted in **grapheme
+    /// clusters** here, which is what `String.prefix` and `String.count` mean.
     public static let emojiMaxLength = 4
+
+    /// What the **server** counts.
+    ///
+    /// `PlaylistPatch.cover_emoji` is `max_length=16` and Pydantic measures
+    /// code points, so four grapheme clusters are not four of anything the
+    /// server recognises: a family emoji is seven code points, and four of
+    /// them are 4 to `String.count` and 28 to the server — a PATCH that comes
+    /// back 422 and an edit that reports `update failed: 422 …` with nothing
+    /// a person could do about it. Android's `it.take(4)` takes UTF-16 units,
+    /// which can never exceed 16, so it never had this.
+    public static let emojiMaxScalars = 16
+
+    /// The emoji trimmed and clamped to what may be sent.
+    public static func clampEmoji(_ raw: String) -> String {
+        clampEmojiLength(raw.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    /// Both clamps and **no trim**, for the field as it is typed: trimming
+    /// there would eat a space the moment it was pressed.
+    public static func clampEmojiLength(_ raw: String) -> String {
+        let clusters = String(raw.prefix(emojiMaxLength))
+        guard clusters.unicodeScalars.count > emojiMaxScalars else { return clusters }
+        return String(String.UnicodeScalarView(clusters.unicodeScalars.prefix(emojiMaxScalars)))
+    }
 
     public static let playlistUpdated = "playlist updated"
     public static func updateFailed(_ reason: String) -> String { "update failed: \(reason)" }

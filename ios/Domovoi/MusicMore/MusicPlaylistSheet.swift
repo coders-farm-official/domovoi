@@ -51,6 +51,11 @@ struct MusicPlaylistSheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     identity
+                    // This sheet's own outcomes, **in** the sheet
+                    // (``MusicMoreSheetStatus``). `deleted "…"` is the one
+                    // exception and stays the shell's, because the delete
+                    // dismisses this first.
+                    MusicMoreSheetStatus(said: detail.toast, failed: detail.toastFailed)
                     Divider()
                     play
                     if detail.mayEdit {
@@ -216,11 +221,12 @@ struct MusicPlaylistSheet: View {
                     .onChange(of: draftEmoji) { _, now in
                         // `it.take(4)` (`PlaylistDrawer.kt:288`), applied as
                         // it is typed rather than silently on save, so the
-                        // field never shows something the server will not be
-                        // sent.
-                        if now.count > MusicMoreStrings.emojiMaxLength {
-                            draftEmoji = String(now.prefix(MusicMoreStrings.emojiMaxLength))
-                        }
+                        // field never holds something the server will refuse
+                        // — **including** the code-point cap the clusters
+                        // clamp cannot see
+                        // (``MusicMoreStrings/clampEmojiLength(_:)``).
+                        let clamped = MusicMoreStrings.clampEmojiLength(now)
+                        if clamped != now { draftEmoji = clamped }
                     }
                     .accessibilityLabel(MusicMoreStrings.emojiPlaceholder)
                 HStack(spacing: 16) {
@@ -343,6 +349,13 @@ struct MusicPlaylistTrackRow: View {
     /// (``MusicPlaylistDetailModel/mayMoveUp(_:)`` and the rest), so the row
     /// does no index arithmetic of its own and **none of them is drawn for
     /// the virtual Favorites**, whose every write route is refused.
+    ///
+    /// **Whether a control is drawn and whether it may be used now are two
+    /// different questions.** They were one: every `may…` included
+    /// `mayWrite`, so one tap on an arrow took all three controls off all the
+    /// rows until the PATCH returned — a visible collapse of the list's
+    /// trailing edge, and a second tap landing on empty space. The in-flight
+    /// state is `.disabled` on the row, so the controls stay where they are.
     @ViewBuilder
     private var edits: some View {
         HStack(spacing: 0) {
@@ -352,12 +365,13 @@ struct MusicPlaylistTrackRow: View {
             if detail.mayMoveDown(index) {
                 control("arrow.down", MusicMoreStrings.moveDown) { detail.move(from: index, by: 1) }
             }
-            if detail.mayEdit, detail.mayWrite {
+            if detail.mayEdit {
                 control("minus.circle", MusicMoreStrings.removeFromPlaylist, tint: Color.errInk) {
                     detail.remove(track)
                 }
             }
         }
+        .disabled(!detail.mayWrite)
     }
 
     private func control(

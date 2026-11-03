@@ -35,6 +35,11 @@ struct MusicAddToPlaylistSheet: View {
                         .font(.footnote)
                         .foregroundStyle(Color.fgMuted)
                         .fixedSize(horizontal: false, vertical: true)
+                    // This sheet's own outcomes, **in** the sheet: a page
+                    // sheet covers the shell's toast, so a message forwarded
+                    // there was drawn behind this and never read
+                    // (``MusicMoreSheetStatus``).
+                    MusicMoreSheetStatus(said: add.toast, failed: add.toastFailed)
                     if add.isFirstLoad {
                         ProgressView()
                             .frame(maxWidth: .infinity, alignment: .center)
