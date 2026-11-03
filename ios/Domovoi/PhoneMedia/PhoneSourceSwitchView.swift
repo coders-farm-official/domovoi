@@ -46,6 +46,16 @@ import SwiftUI
 /// overlaying the window, so everything above the scrolling content is still
 /// on screen. Nothing to step aside from, for a different reason than the one
 /// that was written here.
+///
+/// **It does not step aside for a type size either, and that is the one
+/// Android's rule nearly covers.** `keyboardCrowdsTheWindow()`
+/// (`AppShell.kt:498`) returns early unless the IME is up, so its
+/// `CONTENT_FLOOR` of 260 dp is a keyboard rule and Android has no answer for
+/// a window the *text* has made short. iOS does need one — at
+/// `AccessibilityXXXL` this switch left the page 178.7 of 852 points, 81
+/// under that floor — and the answer taken here is to **collapse** rather
+/// than to vanish: a control that goes away at a type size never comes back,
+/// where a keyboard does. See ``PhoneSourceSwitchPill``.
 struct PhoneSourceSwitchView<Server: View, Device: View>: View {
 
     let page: PhoneMediaPageKind
@@ -113,11 +123,60 @@ struct PhoneSourceSwitchView<Server: View, Device: View>: View {
     }
 }
 
-/// The 40-point pill with two segments.
+/// The 40-point pill with two segments — and, at an accessibility type size,
+/// one row that names the side it is showing.
 ///
 /// `YourDevice.kt:196`. Split out from the container so the container is only
 /// about keeping both sides alive, and so this can be measured on its own at
 /// two type sizes.
+///
+/// ### Why the column became a menu, measured
+///
+/// The first port obeyed the standing Dynamic Type rule — "swap a row to a
+/// column on `dynamicTypeSize.isAccessibilitySize`" — and every piece of it
+/// was what the rules ask for: `@ScaledMetric` glyphs, no
+/// `minimumScaleFactor`, labels free to wrap. It was still the wrong control,
+/// and what says so is a measurement rather than taste. From R003's
+/// `AccessibilityXXXL` tree of Music
+/// (`overnight-trains/R003/MusicMore/testMusicMore_TheTabStripTextGrowsAtAX5.log`),
+/// on a 393×852 phone:
+///
+/// | band | points | owner |
+/// |---|---|---|
+/// | the shell's top bar (crumb, server chip, `unverified`, `live`) | 300.3 | Shell |
+/// | `NavigationBar` | 44 | SwiftUI |
+/// | **this control**, as a column | **164** | here |
+/// | the page the person came for | **178.7** | — |
+/// | the phone bar | 146 | Shell |
+///
+/// The column is 164 because the server's own address wraps to two 49-point
+/// lines (`phone-source-server` at `{{15.5, 351.8}, {362, 99}}`) above a
+/// 60-point `your device` — so the single biggest band this unit controls is
+/// spent on a two-way switch, permanently, at exactly the sizes the people
+/// who need large text use.
+///
+/// Android's shell has a rule for a window this short and the rule is an
+/// absolute floor: `AppShell.kt:481`'s `CONTENT_FLOOR = 260.dp`, below which
+/// `SourceSwitch` (`YourDevice.kt:198`) and `PageHeader` (`Kit.kt:212`) do not
+/// draw at all. 178.7 is **81 points under that floor**. Android's trigger is
+/// the keyboard, which goes away; a type size does not, so porting the rule
+/// literally would make "your device" permanently unreachable at an
+/// accessibility size — a control that vanishes is worse than a cramped one.
+///
+/// So at accessibility sizes the switch collapses to **one row**: a `Menu`
+/// naming the side the page is showing, whose two choices are full-width
+/// readable rows carrying the server's whole address and `your device`. One
+/// 49-point line of `.subheadline` plus this view's own 16 points of vertical
+/// padding is about 65 points instead of 164, which hands the page back
+/// roughly 99 and puts it above Android's floor. Nothing is shrunk, nothing
+/// is hidden, and the words the column showed in full are still shown in full
+/// — in the menu, where there is a whole screen to show them on.
+/// ``StubHouseUITests/testPhoneMedia_TheSwitchSegmentsGrowWithTheTypeSize``
+/// measures both the text's growth and the page's height, so the floor is
+/// asserted and not argued.
+///
+/// **Default sizes are unchanged.** The pill below an accessibility size is
+/// Android's 40 dp row of two segments, to the point.
 struct PhoneSourceSwitchPill: View {
 
     let serverTitle: String
@@ -127,14 +186,13 @@ struct PhoneSourceSwitchPill: View {
     @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
-        // **A column at an accessibility size.** Android's pill is a 40 dp
-        // row of two segments; two long labels side by side at AX5 — a house
-        // called "the flat upstairs" beside "your device" — cannot both fit
-        // across a phone, and the standing rule here is to swap the row for a
-        // column rather than shrink the text.
         Group {
             if typeSize.isAccessibilitySize {
-                VStack(spacing: 6) { segments }
+                PhoneSourceCollapsedSwitch(
+                    serverTitle: serverTitle,
+                    source: source,
+                    onPick: onPick
+                )
             } else {
                 HStack(spacing: 6) { segments }
             }
@@ -142,6 +200,7 @@ struct PhoneSourceSwitchPill: View {
         // `selectableGroup` is Android's (`YourDevice.kt:200`); the iOS
         // equivalent is the two segments carrying `.isSelected` themselves,
         // which they do, under one container VoiceOver reads as a tab bar.
+        // The collapsed row is one control and reads as one.
         .accessibilityElement(children: .contain)
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
@@ -179,6 +238,154 @@ struct PhoneSourceSwitchPill: View {
 
     static let serverSegmentID = "phone-source-server"
     static let deviceSegmentID = "phone-source-device"
+
+    /// The collapsed row's own handle, for the same reason the server's
+    /// segment has one: at an accessibility size the row is labelled with
+    /// whichever side is current, so there is no fixed label to find it by.
+    static let collapsedID = "phone-source-switch"
+}
+
+/// The accessibility-size switch: one row that says which side the page is
+/// showing, and a menu that offers the other.
+///
+/// Why this exists at all, and what the column it replaces cost, is in
+/// ``PhoneSourceSwitchPill``'s doc comment. What is here is the shape.
+///
+/// ### The row truncates and the menu does not, deliberately
+///
+/// `lineLimit(1)` on the row is Android's own `maxLines = 1, overflow =
+/// Ellipsis` (`YourDevice.kt:251-252`), and it is the whole point of the
+/// collapse: one line is a fixed height, and a fixed height is what the page
+/// under it gets back. A house whose address or name is longer than the row
+/// therefore shows `127.0.0.1:660…` — which would be a control that cannot
+/// say what it is for, except that the **menu** shows the same name on a
+/// full-width row that wraps as far as it needs, and VoiceOver is given the
+/// whole of it either way (``accessibilityLabel``, below, never the truncated
+/// glyphs). `minimumScaleFactor` is rejected throughout this app and is not
+/// what is happening here: nothing is shrunk.
+///
+/// ### What VoiceOver gets
+///
+/// The row's label is ``PhoneMediaStrings/showingSide(_:)`` over the current
+/// side's spoken name — so "showing the server at 127.0.0.1:6601", never a
+/// bare address, which is the finding train S006 raised against
+/// ``PhoneSourceSegment``. The two menu rows carry the same spoken names and
+/// the current one carries `.isSelected`, so "which side is on" and "the
+/// other one is offered here" are both answered without sight.
+struct PhoneSourceCollapsedSwitch: View {
+
+    let serverTitle: String
+    let source: PhoneContentSource
+    let onPick: (PhoneContentSource) -> Void
+
+    /// ``PhoneSourceSegment``'s reason, unchanged: the glyph is drawn at
+    /// `.footnote` and is about twice as wide at AX5, and a fixed
+    /// `frame(width:)` there draws the icon column across the row's words.
+    @ScaledMetric(relativeTo: .footnote) private var glyphWidth: CGFloat = 18
+
+    var body: some View {
+        Menu {
+            // `allCases`, in the enum's own order, which is the order the two
+            // segments are drawn in (`YourDevice.kt:212`, `:215`): the
+            // server's side first, because that is the side every page starts
+            // on.
+            ForEach(PhoneContentSource.allCases, id: \.self) { side in
+                Button {
+                    onPick(side)
+                } label: {
+                    // A checkmark for the side that is on — the platform's own
+                    // way of saying so in a menu — and the side's own glyph
+                    // otherwise. The row above says which is current too; this
+                    // is what says it *inside* the menu, where the row is
+                    // covered.
+                    Label(
+                        Self.title(of: side, serverTitle),
+                        systemImage: side == source ? "checkmark" : Self.glyph(of: side)
+                    )
+                }
+                .accessibilityLabel(Self.voice(of: side, serverTitle))
+                .accessibilityAddTraits(side == source ? [.isButton, .isSelected] : .isButton)
+                .accessibilityIdentifier(Self.identifier(of: side))
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: Self.glyph(of: source))
+                    .font(.footnote)
+                    .frame(width: glyphWidth)
+                    // Decorative: the row's own label says which side it is.
+                    .accessibilityHidden(true)
+                Text(Self.title(of: source, serverTitle))
+                    .font(.subheadline)
+                    // One line, so the row is one line tall. See this type's
+                    // doc comment for why truncating here is not a control
+                    // that lies.
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer(minLength: 6)
+                Image(systemName: "chevron.down")
+                    .font(.footnote)
+                    .accessibilityHidden(true)
+            }
+            // `brandInk` inside the label, not `.foregroundStyle` on the
+            // `Menu`: a menu tints its label with the accent colour, and the
+            // ink tokens are what this app's contrast is measured in —
+            // `brandInk` is 5.65:1 against 2.05:1 for ``Color/brand``.
+            .foregroundStyle(Color.brandInk)
+            .padding(.horizontal, 12)
+            // 44, the platform minimum every tappable thing here is held to.
+            // At an accessibility size the single line of `.subheadline` is
+            // taller than that on its own, so this binds only in the band
+            // just above `large`.
+            .frame(minHeight: 44)
+            .frame(maxWidth: .infinity)
+            .contentShape(.rect)
+            .overlay(
+                RoundedRectangle(cornerRadius: 10)
+                    .stroke(Color.brandInk, lineWidth: 1)
+            )
+            .background(
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(Color.brand.opacity(0.12))
+            )
+        }
+        // `.plain`, so the menu draws the row above and no chrome of its own:
+        // the row's height is the page's height, and a bordered menu style
+        // would spend points nobody chose.
+        .buttonStyle(.plain)
+        .accessibilityLabel(PhoneMediaStrings.showingSide(Self.voice(of: source, serverTitle)))
+        .accessibilityHint(PhoneMediaStrings.pickWhichSide)
+        .accessibilityIdentifier(PhoneSourceSwitchPill.collapsedID)
+    }
+
+    /// The words on screen for a side — the house's own name, or
+    /// ``PhoneMediaStrings/yourDevice``. The same two strings the segments
+    /// show (`YourDevice.kt:212`, `:215`).
+    static func title(of side: PhoneContentSource, _ serverTitle: String) -> String {
+        side == .server ? serverTitle : PhoneMediaStrings.yourDevice
+    }
+
+    /// What VoiceOver says for a side. The server's visible words are an
+    /// address, which is not a label (train S006), so the two differ there and
+    /// nowhere else.
+    static func voice(of side: PhoneContentSource, _ serverTitle: String) -> String {
+        side == .server
+            ? PhoneMediaStrings.serverSideLabel(serverTitle)
+            : PhoneMediaStrings.yourDevice
+    }
+
+    /// `YourDevice.kt:212`'s `Icons.Filled.Dns` and `:215`'s
+    /// `Icons.Filled.PhoneAndroid`, as ``PhoneSourceSwitchPill`` spells them.
+    static func glyph(of side: PhoneContentSource) -> String {
+        side == .server ? "house" : "iphone"
+    }
+
+    /// The same handles the two segments carry, so a case finds the side it
+    /// means at either type size.
+    static func identifier(of side: PhoneContentSource) -> String {
+        side == .server
+            ? PhoneSourceSwitchPill.serverSegmentID
+            : PhoneSourceSwitchPill.deviceSegmentID
+    }
 }
 
 /// One segment. `YourDevice.kt:222`'s `SourceSegment`: brand-soft fill and a

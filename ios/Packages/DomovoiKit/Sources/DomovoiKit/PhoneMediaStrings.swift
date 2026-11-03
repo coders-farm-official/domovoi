@@ -197,6 +197,25 @@ public enum PhoneMediaStrings {
         "the server at \(title)"
     }
 
+    /// What VoiceOver says for the **collapsed** switch — the one row
+    /// ``PhoneSourceCollapsedSwitch`` draws at an accessibility type size,
+    /// where two segments across a phone cost the page 164 of its 852 points.
+    ///
+    /// The row shows one side's name and offers the other in a menu, so its
+    /// label has to say which of the two the name belongs to; the name on its
+    /// own ("127.0.0.1:6601") reads as a heading rather than as a control.
+    /// Over ``serverSideLabel(_:)`` or ``yourDevice``, never over the
+    /// truncated glyphs on screen.
+    ///
+    /// **iOS-only.** Android's switch never collapses — it is a fixed 40 dp
+    /// row whose segments ellipsise (`YourDevice.kt:204`, `:251-252`) — so
+    /// there is no Kotlin wording to port. `sourceswitch-r4.md` records it.
+    public static func showingSide(_ side: String) -> String { "showing \(side)" }
+
+    /// The collapsed switch's hint: what the menu behind it is for.
+    /// **iOS-only**, for ``showingSide(_:)``'s reason.
+    public static let pickWhichSide = "choose which side this page shows"
+
     // MARK: - saving to this phone
 
     /// The second destination this item adds beside the share sheet.
