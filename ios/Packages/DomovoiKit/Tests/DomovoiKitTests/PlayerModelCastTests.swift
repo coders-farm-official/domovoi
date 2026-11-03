@@ -49,6 +49,43 @@ final class PlayerModelCastTests: XCTestCase {
         XCTAssertEqual(h.engine.pauseCount, 1)
     }
 
+    func testTheCastsBodyIsWhatPlayTracksAsksFor() async {
+        let h = PlayerHarness()
+        h.model.play(three, startAt: 1)
+        h.engine.currentTimeSec = 30
+        h.model.tickForTests()
+        _ = await h.model.cast(to: "office")
+
+        let body = PlayerHouse.bodies(for: "/api/music/play-tracks").last
+        XCTAssertEqual(body?["room_id"] as? String, "office")
+        XCTAssertEqual(body?["track_ids"] as? [Int], [12, 13])
+        XCTAssertEqual(body?["start_sec"] as? Int, 30)
+        XCTAssertNil(
+            body?["start_paused"],
+            "sent only when it is set: a core from before 2026-10-01 ignores it and plays"
+        )
+    }
+
+    func testStartSecIsLeftOutEntirelyWhenTheTrackStartsAtItsTop() async {
+        let h = PlayerHarness()
+        h.model.play(three)
+        _ = await h.model.cast(to: "office")
+        let body = PlayerHouse.bodies(for: "/api/music/play-tracks").last
+        XCTAssertNil(
+            body?["start_sec"],
+            "a server from before start_sec ignores it, and 0 is not a seek worth sending"
+        )
+    }
+
+    func testAPausedPhoneSendsStartPausedSoTheRoomWaitsThere() async {
+        let h = PlayerHarness()
+        h.model.play(three)
+        h.model.pause()
+        _ = await h.model.cast(to: "office")
+        let body = PlayerHouse.bodies(for: "/api/music/play-tracks").last
+        XCTAssertEqual(body?["start_paused"] as? Bool, true)
+    }
+
     func testTheCastPlanFollowsThePhonesPosition() {
         let h = PlayerHarness()
         h.model.play(three, startAt: 1)
