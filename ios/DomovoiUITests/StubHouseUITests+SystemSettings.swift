@@ -151,7 +151,7 @@ extension StubHouseUITests {
             line,
             "after `default` the bar reads “\(line)”"
         )
-        let note = startingWith(app, SystemSettingsStringsUnderTest.backToNote)
+        let note = systemSettingsLine(app, beginningWith: SystemSettingsStringsUnderTest.backToNote)
         evidence(app, "systemsettings-default-after")
         XCTAssertTrue(
             note.waitForExistence(timeout: 10),
@@ -196,8 +196,19 @@ extension StubHouseUITests {
         }
 
         // Down to two tabs — home and music — and then the one rule left.
-        app.buttons[SystemSettingsStringsUnderTest.takeChatOff].tap()
-        app.buttons[SystemSettingsStringsUnderTest.takeVideosOff].tap()
+        // Each removal is waited for: the row it belongs to is redrawn by the
+        // write before it, and a tap on an element that is not there yet
+        // fails with a message about the control rather than about the rule
+        // this case is here for.
+        for off in [
+            SystemSettingsStringsUnderTest.takeChatOff,
+            SystemSettingsStringsUnderTest.takeVideosOff,
+        ] {
+            let control = app.buttons[off]
+            XCTAssertTrue(control.waitForExistence(timeout: 10), "no `\(off)` button")
+            XCTAssertTrue(control.isEnabled, "`\(off)` is dead above `PhoneBar.min`")
+            control.tap()
+        }
         let line = systemSettingsBarLine(app)
         XCTAssertEqual(
             SystemSettingsStringsUnderTest.twoTabLine,
@@ -457,7 +468,11 @@ extension StubHouseUITests {
             open.isEnabled,
             "the button is dead against a saved server — the address came back nil"
         )
-        let address = containing(app, SystemSettingsStringsUnderTest.dashboardHash)
+        // `staticTexts`, not every element type: the assertion below reads
+        // this label, and a container that matched would answer with its own.
+        let address = app.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS %@", SystemSettingsStringsUnderTest.dashboardHash)
+        ).firstMatch
         XCTAssertTrue(
             address.exists,
             "the dashboard address is not on screen, or it does not end "
@@ -509,7 +524,7 @@ extension StubHouseUITests {
                 systemSettingsSettledBar(app),
                 "the preview line never settled at the \(name) type size"
             )
-            let line = startingWith(app, SystemSettingsStringsUnderTest.barLinePrefix)
+            let line = systemSettingsLine(app, beginningWith: SystemSettingsStringsUnderTest.barLinePrefix)
             XCTAssertTrue(line.exists, "no preview line at the \(name) type size")
             heights[name] = line.frame.height
             evidence(app, "systemsettings-layout-\(name)")
@@ -614,10 +629,21 @@ extension StubHouseUITests {
         return true
     }
 
+    /// A `staticText` whose label begins with `text`.
+    ///
+    /// ``StubHouseUITests/startingWith(_:_:)`` searches **every** element
+    /// type, which is right for "is this sentence on screen" and wrong here:
+    /// these three cases read a label and one of them measures a frame, and a
+    /// container that happens to match would answer with its own geometry.
+    @MainActor
+    func systemSettingsLine(_ app: XCUIApplication, beginningWith text: String) -> XCUIElement {
+        app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", text)).firstMatch
+    }
+
     /// The monospaced preview line under the rows, as it reads now.
     @MainActor
     func systemSettingsBarLine(_ app: XCUIApplication) -> String {
-        let line = startingWith(app, SystemSettingsStringsUnderTest.barLinePrefix)
+        let line = systemSettingsLine(app, beginningWith: SystemSettingsStringsUnderTest.barLinePrefix)
         guard line.waitForExistence(timeout: 10) else {
             print("NO PREVIEW LINE — tree follows")
             print(app.debugDescription)
