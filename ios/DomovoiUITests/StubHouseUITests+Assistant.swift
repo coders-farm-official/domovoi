@@ -427,14 +427,24 @@ extension StubHouseUITests {
         let keyboard = app.keyboards.firstMatch
         XCTAssertTrue(keyboard.waitForExistence(timeout: 20), "the keyboard never came up")
         evidence(app, "assistant-composer")
-        let sends = app.buttons.matching(NSPredicate(format: "label == %@", ChatStringsUnderTest.send))
+        // **Caseless**, and the keyboard asked directly. iOS labels the
+        // Return key with a capitalised word, so a case-sensitive `label ==
+        // "send"` matched nothing but the app's own button — which is always
+        // above the keyboard, so the frame loop below could not fail for the
+        // regression this case is named after.
+        let saysSend = NSPredicate(format: "label ==[c] %@", ChatStringsUnderTest.send)
+        XCTAssertEqual(
+            keyboard.buttons.matching(saysSend).count, 0,
+            "the Return key of a vertical field is labelled send — it makes a newline, it cannot send"
+        )
+        let sends = app.buttons.matching(saysSend)
         XCTAssertGreaterThan(sends.count, 0, "the composer has no send button at all")
         for index in 0..<sends.count {
             let candidate = sends.element(boundBy: index)
             guard candidate.exists else { continue }
             XCTAssertLessThanOrEqual(
                 candidate.frame.maxY, keyboard.frame.minY,
-                "a keyboard key is labelled send — the Return key of a vertical field cannot send"
+                "a send is on the keyboard — the Return key of a vertical field cannot send"
             )
         }
     }

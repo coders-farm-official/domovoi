@@ -82,8 +82,26 @@ public final class AssistantPhoneModel {
     /// The conversation open, whole. Nil for the list.
     public private(set) var conversation: AssistantConversation?
 
-    /// A reply is being written.
+    /// A reply is being written — **anywhere in this place**, which is the
+    /// one-session rule ``send(_:)`` guards on.
     public private(set) var sending = false
+
+    /// The conversation the reply being written belongs to, nil when none is.
+    ///
+    /// ``sending`` on its own is this *screen's* flag, and a screen outlives
+    /// the conversation on it: read as if it were about the chat in front of
+    /// the person it draws a spinner on somebody else's reply and offers
+    /// `stop` where nothing is being written. Android has no such state —
+    /// `AssistantController.open`/`newConversation` stop the reply first
+    /// (`AssistantController.kt:2896-2906`) and `:3896` clears `replying`
+    /// when a reply lands in a conversation that is not the open one — and
+    /// here the reply is deliberately *not* stopped, so the conversation it
+    /// belongs to has to be written down instead.
+    public private(set) var replyingTo: String?
+
+    /// A reply is being written **in the conversation on screen**: what the
+    /// composer and the last bubble read.
+    public var sendingHere: Bool { replyingTo != nil && replyingTo == conversation?.id }
 
     /// The words of the reply so far, which is **not** in ``conversation``
     /// until it finishes: a message is saved once, with its mark on it.
@@ -295,7 +313,22 @@ public final class AssistantPhoneModel {
         conversation = open
         store.save(open)
         load()
-        run(on: open.id, history: turns(of: open.messages), rebuildingWindow: false)
+        run(on: open.id, history: historyOf(open), rebuildingWindow: false)
+    }
+
+    /// The history to ask with: **from the window down**, not the whole chat.
+    ///
+    /// Once a chat has overflowed, ``AssistantConversation/windowFrom`` is
+    /// where the model's view begins, and asking with everything above it
+    /// again only buys a second `exceededContextWindowSize` and a second
+    /// engine call for every later turn — with the divider walking one message
+    /// down the screen each time. Android never does this because LiteRT trims
+    /// inside the runtime and reports the window
+    /// (`ConversationStore.kt:128`); here the app has to remember it.
+    private func historyOf(_ open: AssistantConversation) -> [AssistantTurn] {
+        guard !open.messages.isEmpty else { return [] }
+        let from = min(max(open.windowFrom ?? 0, 0), open.messages.count - 1)
+        return turns(of: Array(open.messages[from...]))
     }
 
     /// "try again" (`ChatHome.kt:686`): the last reply is dropped and the
@@ -311,7 +344,7 @@ public final class AssistantPhoneModel {
         conversation = open
         store.save(open)
         load()
-        run(on: open.id, history: turns(of: open.messages), rebuildingWindow: false)
+        run(on: open.id, history: historyOf(open), rebuildingWindow: false)
     }
 
     /// `canRetry` (`ChatScreen.kt:1302`) for this place: a finished reply, at
@@ -347,6 +380,7 @@ public final class AssistantPhoneModel {
         // belongs to, and the visit it was asked in.
         let epoch = visits
         sending = true
+        replyingTo = id
         live = ""
         stopped = false
         reply = Task { [weak self] in
@@ -377,12 +411,11 @@ public final class AssistantPhoneModel {
             }
 
             if failure == .contextWindowExceeded, !rebuildingWindow {
-                self.rebuildWindow(on: id, epoch: epoch)
+                self.rebuildWindow(on: id)
                 return
             }
             self.finish(
                 on: id,
-                epoch: epoch,
                 text: text,
                 firstTextMs: firstTextMs,
                 failure: failure
@@ -391,15 +424,30 @@ public final class AssistantPhoneModel {
     }
 
     /// Whether the conversation `id` is still the one on screen, in the same
-    /// visit.
+    /// visit — the guard for the **live words only**.
     ///
-    /// Both halves are needed: the id alone would let a reply land in the
-    /// *second* opening of the same chat (where a rename or a delete may have
-    /// happened in between), and the epoch alone would let one chat's reply
-    /// land in another opened at the same count.
+    /// Live words are a visit's: a chunk written into ``live`` after the
+    /// person left and came back would be a stream nothing on screen is
+    /// following, so both halves are needed here.
     private func stillShowing(_ id: String, _ epoch: Int) -> Bool {
         epoch == visits && conversation?.id == id
     }
+
+    /// Whether `id` is the conversation on screen, **whatever visit it is**.
+    ///
+    /// The guard for everything that replaces ``conversation`` with what was
+    /// just written to disk — the reply, the window, the title. The epoch
+    /// cannot be part of it: ``close()`` and ``open(_:)`` each bump
+    /// ``visits``, so a person who leaves the chat while the reply is being
+    /// written and taps the same row again is two epochs on, and an
+    /// epoch-gated refresh would leave them looking at the copy loaded at
+    /// `open()` — their question, no answer, no spinner — with the reply on
+    /// disk all along. The id alone is enough and is safe: what is written
+    /// back is the file just saved (so a rename or an archive that happened
+    /// mid-reply is in it), ``send(_:)`` guards on `!sending` so the
+    /// re-opened conversation cannot have a second turn in flight, and a
+    /// conversation deleted in between does not load at all.
+    private func showing(_ id: String) -> Bool { conversation?.id == id }
 
     /// The model forgot the beginning: write down where its view starts now,
     /// and ask once more with the shorter history.
@@ -410,15 +458,15 @@ public final class AssistantPhoneModel {
     /// and the honest answer is the smallest one that cannot overflow again.
     /// The divider then sits above that question, which is exactly what
     /// ``ChatStrings/windowNote`` says.
-    private func rebuildWindow(on id: String, epoch: Int) {
+    private func rebuildWindow(on id: String) {
         guard var open = store.load(id) else {
-            finish(on: id, epoch: epoch, text: "", firstTextMs: nil, failure: .contextWindowExceeded)
+            finish(on: id, text: "", firstTextMs: nil, failure: .contextWindowExceeded)
             return
         }
         let lastQuestion = open.messages.lastIndex(where: \.fromUser) ?? 0
         open.windowFrom = lastQuestion
         store.save(open)
-        if stillShowing(id, epoch) { conversation = open }
+        if showing(id) { conversation = open }
         run(
             on: id,
             history: turns(of: Array(open.messages[lastQuestion...])),
@@ -436,12 +484,11 @@ public final class AssistantPhoneModel {
     /// they come back.
     private func finish(
         on id: String,
-        epoch: Int,
         text: String,
         firstTextMs: Int64?,
         failure: AssistantEngineError?
     ) {
-        let wasStopped = stopped && stillShowing(id, epoch)
+        let wasStopped = stopped && showing(id)
         var message = AssistantMessage(
             from: .domovoi,
             text: text,
@@ -475,12 +522,13 @@ public final class AssistantPhoneModel {
             saved.messages.append(message)
             saved.updated = message.at
             store.save(saved)
-            if stillShowing(id, epoch) { conversation = saved }
+            if showing(id) { conversation = saved }
         }
         // `sending` and `live` are this screen's, not the conversation's: a
         // reply that landed in a chat the person has left still has to let the
         // composer go, and the list still has to show the new time.
         sending = false
+        replyingTo = nil
         live = nil
         stopped = false
         load()
@@ -499,7 +547,6 @@ public final class AssistantPhoneModel {
     /// way, which is why nothing on screen says this failed.
     public func titleIfNeeded(_ id: String) async {
         guard var open = store.load(id), open.needsTitle, let exchange = open.firstExchange() else { return }
-        let epoch = visits
         let written = try? await engine.title(
             system: AssistantPersona.titleSystem,
             prompt: AssistantPersona.titlePrompt(question: exchange.question, answer: exchange.answer),
@@ -517,7 +564,7 @@ public final class AssistantPhoneModel {
         }
         open = now
         store.save(open)
-        if stillShowing(id, epoch) { conversation = open }
+        if showing(id) { conversation = open }
         load()
     }
 
@@ -674,9 +721,19 @@ public final class AssistantPhoneModel {
         lastPlaceStore.write(Data(place.key.utf8))
     }
 
-    /// Everything in flight, dropped — the app went to the background, or Chat
-    /// left the screen.
+    /// Everything in flight, dropped — the app went to the background, or
+    /// Chat left the screen.
+    ///
+    /// `stopped` is set **before** the cancel, exactly as ``stop()`` does it:
+    /// without it ``finish(on:text:firstTextMs:failure:)`` sees `wasStopped`
+    /// false and saves the half-written reply either as a whole answer with no
+    /// mark or — on Apple's engine, which maps `CancellationError` to
+    /// `.failed("stopped")` — with the nonsense sentence "The model stopped:
+    /// stopped". Leaving Chat is the commonest interruption there is, and the
+    /// one distinction this milestone is built around is a reply the person
+    /// stopped against one that failed.
     public func stopEverything() {
+        stopped = true
         debounce?.cancel()
         reply?.cancel()
         engine.cancel()

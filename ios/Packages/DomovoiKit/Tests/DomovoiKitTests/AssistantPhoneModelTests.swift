@@ -377,6 +377,133 @@ final class AssistantPhoneModelTests: XCTestCase {
         XCTAssertEqual(saved.messages.count, 2, "and the reply is there too")
     }
 
+    /// The **same** chat left and re-opened while the model is writing: the
+    /// answer has to be on screen when it lands.
+    ///
+    /// `close()` and `open()` each bump the visit count, so an epoch-gated
+    /// refresh left the re-opened chat showing the copy loaded at `open()` —
+    /// the question, no answer, no spinner — with the reply saved to disk all
+    /// along. The switch is *inside* the round trip, which is the only place
+    /// it can be made.
+    func testTheSameChatReOpenedMidReplyStillGetsTheAnswer() async {
+        let (model, store) = make(FakeAssistantEngine(script: [
+            FakeAssistantEngine.Reply(
+                chunks: [.append("keep them "), .append("in a paper bag")],
+                delay: .milliseconds(60)
+            ),
+        ]))
+        model.load()
+        model.newChat()
+        let id = try! XCTUnwrap(model.conversation?.id)
+        model.send("how do I keep mushrooms")
+
+        await untilWriting(model)
+        model.close()
+        model.open(id)
+        XCTAssertEqual(model.conversation?.messages.count, 1, "only the question so far")
+
+        await settle(model)
+        XCTAssertEqual(
+            model.conversation?.messages.count, 2,
+            "the open chat shows the answer, not just the question it asked"
+        )
+        XCTAssertEqual(model.transcript.last?.text, "keep them in a paper bag")
+        XCTAssertEqual(store.load(id)?.messages.count, 2)
+    }
+
+    /// Chat leaving the screen (`stopEverything`) is a **stop**, not a
+    /// failure.
+    ///
+    /// Without the mark the half-written reply is saved as a whole answer with
+    /// nothing to say it was cut off — or, on Apple's engine, with "The model
+    /// stopped: stopped". Leaving Chat is the commonest interruption there is.
+    func testLeavingChatMidReplyLeavesAStopAndNotAFailure() async {
+        let (model, store) = make(FakeAssistantEngine(script: [
+            FakeAssistantEngine.Reply(
+                chunks: [.append("half a "), .append("sentence more")],
+                delay: .milliseconds(50)
+            ),
+        ]))
+        model.load()
+        model.newChat()
+        let id = try! XCTUnwrap(model.conversation?.id)
+        model.send("go on then")
+
+        await untilWriting(model)
+        model.stopEverything()
+        await until("the reply to be saved") { store.load(id)?.messages.count == 2 }
+
+        let reply = try! XCTUnwrap(store.load(id)?.messages.last)
+        XCTAssertTrue(reply.stopped, "a reply the person walked away from keeps the stop mark")
+        XCTAssertNil(reply.error, "a stop is not a failure, and not 'The model stopped: stopped'")
+    }
+
+    /// The spinner and the stop belong to the conversation the reply is
+    /// **in**, not to the screen.
+    ///
+    /// Read as the screen's, `sending` drew a spinner on another chat's last
+    /// message and offered a `stop` that killed the first chat's reply.
+    func testSendingHereIsOnlyTrueInTheChatTheReplyIsIn() async {
+        let (model, store) = make(FakeAssistantEngine(script: [
+            FakeAssistantEngine.Reply(
+                chunks: [.append("the answer"), .append(" to the first")],
+                delay: .milliseconds(40)
+            ),
+        ]))
+        var other = AssistantConversation(id: "c-other", created: 1, updated: 1)
+        other.messages = [AssistantMessage(from: .user, text: "an older chat", at: 1)]
+        store.save(other)
+        model.load()
+
+        model.newChat()
+        let first = try! XCTUnwrap(model.conversation?.id)
+        model.send("the first question")
+        await untilWriting(model)
+        XCTAssertTrue(model.sendingHere, "the chat that asked is the one being written in")
+        XCTAssertEqual(model.replyingTo, first)
+
+        model.open("c-other")
+        XCTAssertTrue(model.sending, "a reply is still being written somewhere")
+        XCTAssertFalse(model.sendingHere, "but not here — no spinner and no stop in this chat")
+
+        await settle(model)
+        XCTAssertNil(model.replyingTo)
+        XCTAssertFalse(model.sendingHere)
+    }
+
+    /// A chat that has overflowed once asks from its window afterwards.
+    ///
+    /// Taking the whole chat again made every later turn overflow first: two
+    /// engine calls a question, and a divider that walked one message down the
+    /// screen each time. Android starts from the window LiteRT reported
+    /// (`ConversationStore.kt:128`).
+    func testALaterTurnAsksFromTheWindowAndDoesNotOverflowAgain() async {
+        let engine = FakeAssistantEngine(script: [.words("The second answer.")])
+        let (model, store) = make(engine)
+        var open = AssistantConversation(id: "c-full", created: 1, updated: 2)
+        open.messages = [
+            AssistantMessage(from: .user, text: "the forgotten question", at: 1),
+            AssistantMessage(from: .domovoi, text: "the forgotten answer", at: 2),
+            AssistantMessage(from: .user, text: "the question that overflowed", at: 3),
+            AssistantMessage(from: .domovoi, text: "the answer after the rebuild", at: 4),
+        ]
+        open.windowFrom = 2
+        store.save(open)
+        model.load()
+        model.open(open.id)
+        model.send("and one more")
+        await settle(model)
+
+        XCTAssertEqual(engine.asked.count, 1, "one engine call, not an overflow and a retry")
+        XCTAssertEqual(
+            engine.asked[0].history.map(\.text),
+            ["the question that overflowed", "the answer after the rebuild", "and one more"],
+            "the history starts at the window, not at the first message"
+        )
+        XCTAssertEqual(store.load(open.id)?.windowFrom, 2, "and the divider stays where it was")
+        XCTAssertEqual(model.windowDividerIndex, 2)
+    }
+
     // MARK: - the writes
 
     func testRenameFlattensAndCutsAndAnEmptyNameGoesBackToTheFirstWords() {

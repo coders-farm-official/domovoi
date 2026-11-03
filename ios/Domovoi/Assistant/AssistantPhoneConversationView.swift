@@ -149,8 +149,14 @@ struct AssistantPhoneConversationView: View {
                             windowDivider
                         }
                         AssistantPhoneBubbleView(
+                            // ``AssistantPhoneModel/sendingHere``, not
+                            // `sending`: `sending` is true while a reply is
+                            // written in **any** of this place's chats, so in
+                            // another chat opened mid-reply it drew a spinner
+                            // on that chat's last message — and said "Domovoi,
+                            // writing" of a reply that had failed hours ago.
                             message: message,
-                            writing: phone.sending && index == messages.count - 1
+                            writing: phone.sendingHere && index == messages.count - 1
                         )
                         .id(index)
                     }
@@ -223,7 +229,7 @@ struct AssistantPhoneConversationView: View {
                     .textFieldStyle(.roundedBorder)
                     .lineLimit(1...5)
                     .accessibilityLabel(ChatStrings.composerHint)
-                if phone.sending {
+                if phone.sendingHere {
                     // The composer turns into a stop while a reply is being
                     // written (`AssistantChat.kt:143`), which is why there is
                     // no disabled `send`: the one control in that spot always
@@ -232,10 +238,18 @@ struct AssistantPhoneConversationView: View {
                         .buttonStyle(.bordered)
                         .frame(minHeight: 44)
                 } else {
+                    // Disabled, not absent and not lying, while a reply is
+                    // being written in **another** of this place's chats: the
+                    // model allows one reply at a time (``send`` guards on
+                    // `sending`), so a `send` that looked live here would do
+                    // nothing when tapped.
                     Button(ChatStrings.send) { send() }
                         .buttonStyle(.borderedProminent)
                         .frame(minHeight: 44)
-                        .disabled(typed.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .disabled(
+                            typed.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                || phone.sending
+                        )
                 }
             }
             .padding(12)
