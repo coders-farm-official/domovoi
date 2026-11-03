@@ -86,8 +86,6 @@ public final class PeopleModel {
     /// three screens is up.
     public private(set) var denylistOpen = false
 
-    public private(set) var toast: String?
-
     public init(
         in container: AppContainer,
         clock: @Sendable @escaping () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1000) }
@@ -213,8 +211,6 @@ public final class PeopleModel {
 
     public func closeDenylist() { denylistOpen = false }
 
-    public func setToast(_ said: String?) { toast = said }
-
     // MARK: - coming and going
 
     /// The screen appeared: read both lists and listen for the push.
@@ -242,7 +238,6 @@ public final class PeopleModel {
         selectedID = nil
         denylistOpen = false
         filter = ""
-        toast = nil
         roster.serverChanged()
         denylist.serverChanged()
     }

@@ -177,6 +177,10 @@ public final class PersonDetailModel {
         guard person != nil else { return }
         generation += 1
         load?.cancel()
+        // Every other generation bump (`show(_:)`, `close()`) releases the
+        // write flag; this one must too, so the flag's lifetime never
+        // outlives the generation that owns it.
+        busy = nil
         reload()
     }
 
@@ -561,8 +565,15 @@ public final class PersonDetailModel {
         Task { @MainActor [weak self] in
             do {
                 try await body(client)
-                guard let self, self.generation == mine else { return }
-                self.busy = nil
+                guard let self else { return }
+                // The flag is released whatever the generation did while the
+                // request was out: `refresh()` bumps the generation too (a
+                // retry on one of the memory tab's three error cards does
+                // exactly that), and a write that returned early here used to
+                // leave `busy` set for ever, which killed all six writes this
+                // screen allows until the detail was closed.
+                if self.busy == what { self.busy = nil }
+                guard self.generation == mine else { return }
                 onSuccess(self)
                 self.toast = said
                 // `detail.refresh()` after every write (`PersonTabs.kt:99`):
@@ -570,8 +581,9 @@ public final class PersonDetailModel {
                 // the list is re-read rather than patched up locally.
                 self.refresh()
             } catch {
-                guard let self, self.generation == mine else { return }
-                self.busy = nil
+                guard let self else { return }
+                if self.busy == what { self.busy = nil }
+                guard self.generation == mine else { return }
                 self.toast = failedText(Self.why(error))
             }
         }

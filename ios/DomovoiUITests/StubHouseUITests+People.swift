@@ -512,8 +512,14 @@ extension StubHouseUITests {
         XCTAssertTrue(peopleTab(app, "memory"), "no memory tab")
         let approve = app.buttons["approve \(PeopleUnderTest.pendingMemory)"]
         XCTAssertTrue(approve.waitForExistence(timeout: 20), "the pending memory has no approve")
+        // Waits, like the post-condition below does: `reload()` runs its five
+        // reads in order (sessions, conversations, memories, favourites,
+        // preferences), so `approve` existing only proves the MEMORIES read
+        // landed — the tab still reads `memory (3)` until favourites answers
+        // one round trip later, and a non-waiting `.exists` here failed a
+        // correct app on a loaded Simulator.
         XCTAssertTrue(
-            app.buttons[PeopleUnderTest.memoryTabSix].exists,
+            app.buttons[PeopleUnderTest.memoryTabSix].waitForExistence(timeout: 20),
             "the memory tab does not count three memories and three favourites before the patch"
         )
         approve.tap()

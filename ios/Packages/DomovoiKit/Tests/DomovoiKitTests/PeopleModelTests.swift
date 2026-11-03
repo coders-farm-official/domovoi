@@ -363,13 +363,11 @@ final class PeopleModelTests: XCTestCase {
         await started(model)
         model.select(model.people[2])
         model.typed("alex")
-        model.setToast("something")
 
         model.serverChanged()
         XCTAssertNil(model.selected)
         XCTAssertEqual(model.filter, "")
         XCTAssertFalse(model.denylistOpen)
-        XCTAssertNil(model.toast)
     }
 
     /// The denylist route has no auth dependency at all (`denylist.py:22`),

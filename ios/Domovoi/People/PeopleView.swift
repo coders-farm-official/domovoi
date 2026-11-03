@@ -137,11 +137,13 @@ struct PeopleView: View {
         // **The toasts are the shell's**, drawn over the whole app: a toast
         // about a memory that would not save must outlive a scroll, and does
         // outlive this screen.
-        .onChange(of: people?.toast) { _, said in
-            guard let said else { return }
-            model.showToast(said)
-            people?.setToast(nil)
-        }
+        //
+        // Every toast on this screen is a write's, so ``PersonDetailModel`` is
+        // the only producer. ``PeopleModel`` had a `toast` of its own with
+        // nothing ever assigning it — Android does not toast a roster read
+        // that failed either (`RosterPane` draws `ErrorState` only), so the
+        // property and this observer for it were both removed rather than
+        // left as a seam with no caller.
         .onChange(of: detail?.toast) { _, said in
             guard let said else { return }
             model.showToast(said)

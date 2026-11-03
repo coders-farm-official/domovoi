@@ -660,6 +660,43 @@ final class PersonDetailModelTests: XCTestCase {
         XCTAssertTrue(model.memoryRows.isEmpty)
     }
 
+    /// A `refresh()` landing between a write's start and its answer must not
+    /// strand the write flag.
+    ///
+    /// The memory tab draws three independent error cards whose `retry` is
+    /// `detail.refresh()`, so this is one tap away whenever one of the three
+    /// reads refused: the reader saves a memory, taps `retry` on the
+    /// preferences card, and the POST then returns into a generation that has
+    /// moved. It used to leave ``PersonDetailModel/busy`` set for ever, which
+    /// killed all six writes this screen allows until the detail was closed.
+    func testARefreshDuringAWriteDoesNotStrandTheWriteFlag() async {
+        let (model, house) = rig()
+        await showing(model, kamron)
+        let park = parkRequest(
+            to: "/api/people/1/memories",
+            answering: { .json("", status: 204) },
+            otherwise: { house.answer($0) }
+        )
+
+        model.typedMemory("allergic to shellfish")
+        model.saveMemory()
+        await settleUntil({ park.arrived.current }, "the POST")
+        XCTAssertEqual(model.busy, "memory")
+
+        // The retry, inside the parked round trip — the only arrangement that
+        // reproduces it.
+        model.refresh()
+        park.release.set(true)
+        await nothingHappens()
+
+        XCTAssertFalse(park.ranOut.current, "the park outlasted the session timeout")
+        XCTAssertNil(model.busy, "the flag outlived the write that set it")
+        // The text is still in the field (`onSuccess` never ran, by the
+        // generation guard), so the only thing that could stop a second save
+        // is the flag.
+        XCTAssertTrue(model.canSaveMemory, "the reader can no longer save anything")
+    }
+
     /// Closing the detail drops the in-flight reads' right to publish too.
     func testClosingTheDetailDropsWhatIsInFlight() async {
         let (model, house) = rig()
