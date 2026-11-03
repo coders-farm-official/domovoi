@@ -58,7 +58,17 @@ struct ScanSheetView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     if let scan {
-                        pickers(scan)
+                        // **The pickers go away once a scan has started.**
+                        // Android returns out of the column after drawing
+                        // them only while `s == null` (`ScanSheet.kt:115-156`),
+                        // so a running or finished scan shows the state line,
+                        // the bar, the thumbnails and the buttons and nothing
+                        // else. Three greyed menus above "Saved to Documents
+                        // as …" are controls that cannot act, which is the
+                        // one rule this screen is built on.
+                        if scan.scan == nil {
+                            pickers(scan)
+                        }
                         progress(scan)
                         buttons(scan)
                     } else {
@@ -112,7 +122,6 @@ struct ScanSheetView: View {
             PrintingMenuRow(
                 title: PrintingStrings.scannerLabel,
                 chosen: scan.scanner?.displayTitle ?? "",
-                enabled: scan.scan == nil,
                 options: scan.scanners.map { scanner in
                     PrintingMenuRow.Option(label: scanner.displayTitle) {
                         scan.pick(scanner: scanner)
@@ -127,7 +136,6 @@ struct ScanSheetView: View {
             PrintingMenuRow(
                 title: PrintingStrings.glassOrFeeder,
                 chosen: printingSourceLabel(scan.source),
-                enabled: scan.scan == nil,
                 options: controls.sources.map { value in
                     PrintingMenuRow.Option(label: printingSourceLabel(value)) {
                         scan.pick(source: value)
@@ -139,7 +147,6 @@ struct ScanSheetView: View {
             PrintingMenuRow(
                 title: PrintingStrings.colourLabel,
                 chosen: printingColorLabel(scan.color ?? ""),
-                enabled: scan.scan == nil,
                 options: controls.colors.map { value in
                     PrintingMenuRow.Option(label: printingColorLabel(value)) {
                         scan.pick(color: value)

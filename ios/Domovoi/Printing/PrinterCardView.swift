@@ -38,9 +38,25 @@ struct PrinterCardView: View {
             statusBlock
             supplies
             pills
-            defaults
+            // **Only a printer that can print gets the printing half of the
+            // card.** Android wraps the Default switch, the room chips, the
+            // two dropdowns and the recent-jobs link in `if (p.canPrint)`
+            // (`PrintersPanel.kt:340,352,415`). `can_print` is
+            // `bool(row.get("ipp_address"))` (`devices.py:241`), so a
+            // scan-only eSCL device is a shape the server really produces —
+            // and on one of those a "one per house" switch cannot make it the
+            // house's print default (`devices.pick_printer` needs an IPP
+            // address), the room chips cannot either, and the recent list is
+            // forever "nothing printed yet". Three controls that cannot do
+            // what they say ([[no-misleading-controls]]). The heading,
+            // status, ink and pills stay: those are true of a scanner too.
+            if printer.canPrint {
+                defaults
+            }
             actions
-            jobs
+            if printer.canPrint {
+                jobs
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
@@ -97,7 +113,13 @@ struct PrinterCardView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             if let job = printer.activeJob {
-                Text(PrintingStrings.activeJobLine(job.title, job.progress))
+                // ``PrintingJob/progressLine``, not the raw `progress`:
+                // Android is `j.progress.ifBlank { j.state }.lowercase()`
+                // (`PrintersPanel.kt:322-324`), and the decoder's own
+                // contract defaults `progress` to "" for an older house —
+                // which would render "the council letter: " with nothing
+                // after the colon.
+                Text(PrintingStrings.activeJobLine(job.title, job.progressLine))
                     .font(.caption)
                     .foregroundStyle(Color.fgMuted)
                     .fixedSize(horizontal: false, vertical: true)
@@ -108,32 +130,52 @@ struct PrinterCardView: View {
     @ViewBuilder
     private var dotAndState: some View {
         let state = printer.status.state.lowercased()
-        let checked = PrintingStrings.checked(
-            relTime(printer.status.checkedAt, nowMs: Int64(Date().timeIntervalSince1970 * 1000))
-        )
+        // Optional, and drawn only when there is a timestamp: Android draws
+        // the line inside `p.status.checkedAt?.let { ... }`
+        // (`PrintersPanel.kt:313-315`), `checked_at` is genuinely null for a
+        // printer nothing has polled yet (`devices.py:270`), and
+        // ``relTime(_:nowMs:)`` answers "—" for a nil one — so a printer
+        // added a second ago would read "· checked —".
+        let checked = printer.status.checkedAt.map { at in
+            PrintingStrings.checked(
+                relTime(at, nowMs: Int64(Date().timeIntervalSince1970 * 1000))
+            )
+        }
         if typeSize.isAccessibilitySize {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
-                    PrinterStatusDot(tone: printer.status.tone, size: dotSize)
+                    PrinterStatusDot(
+                        tone: printer.status.tone,
+                        size: dotSize,
+                        live: printer.status.isPrinting
+                    )
                     Text(state)
                         .font(.caption)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                Text(checked)
-                    .font(.caption)
-                    .foregroundStyle(Color.fgMuted)
-                    .fixedSize(horizontal: false, vertical: true)
+                if let checked {
+                    Text(checked)
+                        .font(.caption)
+                        .foregroundStyle(Color.fgMuted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         } else {
             HStack(spacing: 6) {
-                PrinterStatusDot(tone: printer.status.tone, size: dotSize)
+                PrinterStatusDot(
+                    tone: printer.status.tone,
+                    size: dotSize,
+                    live: printer.status.isPrinting
+                )
                 Text(state)
                     .font(.caption)
                     .fixedSize(horizontal: false, vertical: true)
-                Text(checked)
-                    .font(.caption)
-                    .foregroundStyle(Color.fgMuted)
-                    .fixedSize(horizontal: false, vertical: true)
+                if let checked {
+                    Text(checked)
+                        .font(.caption)
+                        .foregroundStyle(Color.fgMuted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
     }
@@ -207,10 +249,20 @@ struct PrinterCardView: View {
                         .font(.caption)
                         .foregroundStyle(Color.fgMuted)
                         .fixedSize(horizontal: false, vertical: true)
+                    // The rooms are captured by VALUE for the tap. They are
+                    // `printers.data?.rooms`, which every list read replaces
+                    // — the minute refresh, an add, a retry — so a tap that
+                    // landed against a frame drawn before a read that
+                    // shortened the list would trap on an out-of-range
+                    // subscript and take the app with it.
+                    let chips = panel.rooms
                     PrintingPillRow(
-                        labels: panel.rooms.map(\.chipLabel),
+                        labels: chips.map(\.chipLabel),
                         on: Set(roomChipsOn),
-                        tap: { index in panel.toggleRoom(printer, panel.rooms[index]) }
+                        tap: { index in
+                            guard index < chips.count else { return }
+                            panel.toggleRoom(printer, chips[index])
+                        }
                     )
                 }
             }
@@ -322,18 +374,48 @@ struct PrinterCardView: View {
 /// measured for text on the app's canvas, and a 9-point circle is neither.
 /// The state's own word is beside it in ordinary ink, so the colour is never
 /// the only thing carrying the meaning.
+///
+/// `live` is Android's own argument (`StatusDot`, `Kit.kt:63-80`, passed
+/// `live = p.status.state == "printing"` at `PrintersPanel.kt:312`): a halo
+/// that scales out of the dot while the printer is working. It is dropped
+/// under Reduce Motion, where a thing that never stops moving is the exact
+/// complaint that setting exists for — and nothing is lost, because the
+/// state's word beside it already says "printing".
 struct PrinterStatusDot: View {
 
     let tone: String
     let size: CGFloat
+    /// Whether the printer is working right now (``PrinterStatus/isPrinting``).
+    var live: Bool = false
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    @State private var pulsing = false
 
     var body: some View {
-        Circle()
-            .fill(fill)
-            .frame(width: size, height: size)
-            // Decoration: the state is spelled out in the text beside it, and
-            // a dot VoiceOver reads as "image" twice per card is noise.
-            .accessibilityHidden(true)
+        ZStack {
+            if live, !reduceMotion {
+                Circle()
+                    .fill(fill)
+                    .frame(width: size, height: size)
+                    .scaleEffect(pulsing ? 2.4 : 1)
+                    .opacity(pulsing ? 0 : 0.4)
+                    .animation(
+                        .easeOut(duration: 1.6).repeatForever(autoreverses: false),
+                        value: pulsing
+                    )
+                    .onAppear { pulsing = true }
+            }
+            Circle()
+                .fill(fill)
+                .frame(width: size, height: size)
+        }
+        // The halo is twice the dot and must not push the row's text along:
+        // it is drawn over a frame the size of the dot itself.
+        .frame(width: size, height: size)
+        // Decoration: the state is spelled out in the text beside it, and
+        // a dot VoiceOver reads as "image" twice per card is noise.
+        .accessibilityHidden(true)
     }
 
     private var fill: Color {
@@ -385,7 +467,12 @@ struct PrinterSupplyBar: View {
     private var line: String {
         let level = printingSupplyFraction(supply)
             .map { "\(Int(($0 * 100).rounded()))%" } ?? PrintingStrings.unknownLevel
-        return "\(supply.name) \(level)" + (supply.low ? PrintingStrings.lowSuffix : "")
+        // ``PrinterSupply/id``, not `name`: it is `name.isEmpty ? kind : name`,
+        // which is Android's `s.name.ifBlank { s.kind }`
+        // (`PrintersPanel.kt:468`). `capabilities.py` can emit a cartridge
+        // with no name, and " 8% · low" names nothing — in the row and in its
+        // VoiceOver label both.
+        return "\(supply.id) \(level)" + (supply.low ? PrintingStrings.lowSuffix : "")
     }
 
     /// The printer's own colour, when it named one this app can read.
@@ -609,9 +696,16 @@ struct PrinterJobRow: View {
     }
 
     /// `state · who · 10 min ago` (`PrintersPanel.kt:432-437`).
+    ///
+    /// An **unfinished** job shows its progress sentence, not its bare state:
+    /// Android is `(if (j.finished) j.state else j.progress.ifBlank { j.state }).lowercase()`,
+    /// and the server already sends `progress` as a finished sentence —
+    /// "printing · 3 of 6" (`domovoi/printing/jobs.py:107-109`). Dropping it
+    /// loses the one number a person wants from a job still going.
     private var meta: String {
         let age = relTime(job.createdAt, nowMs: Int64(Date().timeIntervalSince1970 * 1000))
-        return [job.state.lowercased(), job.who, age]
+        let word = job.finished ? job.state.lowercased() : job.progressLine
+        return [word, job.who, age]
             .filter { !$0.isEmpty }
             .joined(separator: " · ")
     }

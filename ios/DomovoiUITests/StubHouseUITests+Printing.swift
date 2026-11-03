@@ -241,8 +241,13 @@ extension StubHouseUITests {
             containing(app, "black toner 8%").exists,
             "the reported toner level is not on screen"
         )
+        // The WHOLE line, not `containing("low")`: that matched card 1's
+        // "follow the printer" (fol-LOW) and so passed against an app that
+        // had dropped ``PrintingStrings/lowSuffix`` entirely. The supply row
+        // is one combined accessibility element whose label is exactly
+        // `PrinterSupplyBar.line`, so this is unambiguous.
         XCTAssertTrue(
-            containing(app, "low").exists,
+            startingWith(app, "black toner 8% \u{00b7} low").exists,
             "the printer called the toner low and nothing says so"
         )
         XCTAssertTrue(
@@ -339,6 +344,32 @@ extension StubHouseUITests {
             1,
             app.buttons.matching(NSPredicate(format: "label == %@", "colour by default")).count,
             "colour by default is drawn for a mono printer (or for neither)"
+        )
+
+        // The scan-only device (`can_print: false`, which is what the server
+        // answers for a device with no IPP address, `devices.py:241`) gets
+        // none of the printing half of a card: Android hides the Default
+        // switch, the room chips, the dropdowns and the recent-jobs link
+        // behind `if (p.canPrint)` (`PrintersPanel.kt:340,352,415`). On a
+        // flatbed the switch cannot make it the house's print default, the
+        // chips cannot either and the log is forever empty — three controls
+        // that cannot do what they say.
+        // `exists`, not a scroll: the panel's cards are not lazy, so every
+        // card is built from the first frame (printingScrollToHittable's
+        // own note says why).
+        XCTAssertTrue(
+            app.staticTexts["the flatbed"].exists,
+            "the scan-only device has no card"
+        )
+        XCTAssertEqual(
+            2,
+            app.switches.matching(NSPredicate(format: "label CONTAINS %@", "Default")).count,
+            "the Default switch is drawn on the scan-only device, which cannot be the print default"
+        )
+        XCTAssertEqual(
+            2,
+            app.buttons.matching(NSPredicate(format: "label == %@", "recent jobs")).count,
+            "a recent-jobs link is drawn on a device that can never have printed anything"
         )
     }
 
@@ -488,6 +519,15 @@ extension StubHouseUITests {
             "the failed job's reason is not shown, so the person is told only that it failed"
         )
         XCTAssertTrue(app.staticTexts["a spreadsheet.xlsx"].exists, "the printing job is not listed")
+        // The in-flight job's **progress**, not its bare state: Android is
+        // `(if (j.finished) j.state else j.progress.ifBlank { j.state })`
+        // (`PrintersPanel.kt:432-437`) and the server sends `progress` as a
+        // finished sentence (`jobs.py:107-109`). "printing" alone would drop
+        // the one number a person wants from a job that is still going.
+        XCTAssertTrue(
+            containing(app, "printing \u{00b7} 2 of 6").exists,
+            "the unfinished job shows its bare state, not how far along it is"
+        )
         // One of the three jobs has `can_cancel: true`.
         XCTAssertEqual(
             1,
@@ -659,7 +699,10 @@ extension StubHouseUITests {
             "the sheet never showed the intermediate progress — the two-second poll did not run"
         )
         XCTAssertTrue(
-            app.staticTexts["Printed: scan.pdf (3 pages)"].waitForExistence(timeout: 30),
+            // `scan`, not `scan.pdf`: `_forward_print` sends the **stem** as
+            // the job's title (`web/backend/api/printers.py:257-258`), which
+            // the fixture now matches.
+            app.staticTexts["Printed: scan (3 pages)"].waitForExistence(timeout: 30),
             "the job finished and the sheet does not say how it went"
         )
         evidence(app, "printing-19-job-done")

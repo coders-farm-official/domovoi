@@ -75,6 +75,9 @@ public final class PrintingJobModel {
 
     public private(set) var toast: String?
 
+    /// The debounce, which **is** cancelled on every option change, and the
+    /// request, which is not — see ``schedulePreview(immediately:)``.
+    private var debounceTask: Task<Void, Never>?
     private var previewTask: Task<Void, Never>?
     private var pollTask: Task<Void, Never>?
 
@@ -204,6 +207,8 @@ public final class PrintingJobModel {
     /// cancelling the print — unlike a scan, which is half-saved until it is
     /// finished and so **is** cancelled (``PrintingScanModel/dismiss()``).
     public func stop() {
+        debounceTask?.cancel()
+        debounceTask = nil
         previewTask?.cancel()
         previewTask = nil
         pollTask?.cancel()
@@ -265,22 +270,41 @@ public final class PrintingJobModel {
 
     // MARK: - the preview
 
+    /// Ask for a preview of the options as they stand, after a pause.
+    ///
+    /// **Only the pause is cancelled** when the options change again. The
+    /// request itself is left to land, and what decides whether its answer is
+    /// used is the key captured before the `await` (``readPreview(printerID:options:)``).
+    /// Cancelling the request instead would be simpler and would also look
+    /// right — `URLSession.data(for:)` is cancellation-aware, so the stale
+    /// answer would never arrive — but then the key check would be dead code
+    /// no path could reach, and the two cases named for
+    /// [[read-after-await-wrong-key]] would pass against an app that had
+    /// dropped it. The key is the thing that must be correct, so the key is
+    /// the thing that is exercised. (Android's `LaunchedEffect` re-keys, which
+    /// cancels its coroutine, but `runAction`'s result is discarded by the
+    /// same key — so the behaviour is Android's either way.)
     private func schedulePreview(immediately: Bool = false) {
         // Once the sheet is the job, it stops being the options
         // (`PrintSheet.kt:94`).
         guard job == nil else { return }
-        previewTask?.cancel()
+        debounceTask?.cancel()
         previewing = true
         let askedFor = printerID
         let askedWith = options
         let pause = immediately || preview == nil ? 0 : Self.previewDebounceMs
-        previewTask = Task { @MainActor [weak self] in
+        debounceTask = Task { @MainActor [weak self] in
             guard let wait = self?.wait else { return }
             if pause > 0 {
                 do { try await wait(pause) } catch { return }
             }
             guard !Task.isCancelled, let self else { return }
-            await self.readPreview(printerID: askedFor, options: askedWith)
+            let request = Task { @MainActor [weak self] in
+                guard let self else { return }
+                await self.readPreview(printerID: askedFor, options: askedWith)
+            }
+            self.previewTask = request
+            await request.value
         }
     }
 
@@ -289,18 +313,27 @@ public final class PrintingJobModel {
             let answer = try await io.preview(target, printerID: askedFor, options: askedWith)
             // The key, captured BEFORE the await, checked after it: a preview
             // for the printer that was chosen when it was asked for is not
-            // this sheet's preview any more if the printer has changed.
-            guard !Task.isCancelled, askedFor == printerID else { return }
+            // this sheet's preview any more if the printer has changed. The
+            // options are half of that key now that a request outlives the
+            // change that superseded it — two previews for the same printer
+            // can be in flight, and the one for the options nobody has any
+            // more must not win by landing last.
+            guard !Task.isCancelled, mine(askedFor, askedWith) else { return }
             preview = answer
             previewError = nil
         } catch let trouble as DomovoiError {
-            guard !Task.isCancelled, askedFor == printerID else { return }
+            guard !Task.isCancelled, mine(askedFor, askedWith) else { return }
             previewError = printingFailureText(PrintingStrings.verbPreview, trouble)
         } catch {
-            guard !Task.isCancelled, askedFor == printerID else { return }
+            guard !Task.isCancelled, mine(askedFor, askedWith) else { return }
             previewError = failureText(PrintingStrings.verbPreview, .unreachable("\(error)"))
         }
-        if askedFor == printerID { previewing = false }
+        if mine(askedFor, askedWith) { previewing = false }
+    }
+
+    /// Whether an answer asked for with these keys is still the sheet's.
+    private func mine(_ askedFor: Int?, _ askedWith: PrintingOptions) -> Bool {
+        askedFor == printerID && askedWith == options
     }
 
     // MARK: - printing it

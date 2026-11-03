@@ -216,7 +216,7 @@ public final class PrintersPanelModel {
     // MARK: - one printer's switches
 
     public func setDefault(_ printer: Printer, on: Bool) {
-        change(PrintingStrings.verbSetDefault, printer.id) { [io] in
+        change(PrintingStrings.verbSetDefault, printer.id, reloadList: true) { [io] in
             try await io.setDefault(printer.id, on: on)
         }
     }
@@ -227,7 +227,7 @@ public final class PrintersPanelModel {
         let next = printer.rooms.contains(room.id)
             ? printer.rooms.filter { $0 != room.id }
             : printer.rooms + [room.id]
-        change(PrintingStrings.verbSetRooms, printer.id) { [io] in
+        change(PrintingStrings.verbSetRooms, printer.id, reloadList: true) { [io] in
             try await io.setRooms(printer.id, rooms: next)
         }
     }
@@ -409,9 +409,20 @@ public final class PrintersPanelModel {
     /// against it: a slow `PATCH` on printer 1 landing while printer 2's own
     /// answer has already arrived must not overwrite printer 2's row, which
     /// is this track's top defect class in its smallest form.
+    ///
+    /// `reloadList` is for the two writes that are **exclusive on the
+    /// server** and so change a row the answer says nothing about:
+    /// `set_default` clears `is_default` on every other printer
+    /// (`domovoi/printing/store.py:133`) and `set_rooms` moves a room off
+    /// whoever held it (`store.py:140-148`). Android re-reads the whole list
+    /// for exactly those two and for no others — `onDefault` and `onRooms`
+    /// bump `reload`, `onTwoSided`/`onColor` do not
+    /// (`PrintersPanel.kt:153-156`). Without the re-read the other printer's
+    /// card stays wrong until the minute refresh.
     private func change(
         _ action: String,
         _ printerID: Int,
+        reloadList: Bool = false,
         _ body: @escaping @Sendable () async throws -> Printer
     ) {
         guard busy == nil else { return }
@@ -425,6 +436,12 @@ public final class PrintersPanelModel {
                 // answer about another printer is not this row's.
                 guard answer.id == printerID else { return }
                 self.patched[printerID] = answer
+                // Android's `reload++`: the exclusive writes need the rows
+                // the answer did not mention.
+                if reloadList {
+                    self.refreshNext.set()
+                    self.printers.refresh()
+                }
             } catch let trouble as DomovoiError {
                 self.toast = printingFailureText(action, trouble)
             } catch {

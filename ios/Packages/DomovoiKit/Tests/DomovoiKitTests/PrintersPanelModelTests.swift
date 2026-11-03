@@ -69,6 +69,12 @@ final class PrintersPanelModelTests: XCTestCase {
 
         let twoSided = Shared<String>("null")
         let isDefault = Shared<Bool>(true)
+        /// Printer 2's own `is_default`, which is **exclusive** with printer
+        /// 1's: `store.set_default` runs
+        /// `UPDATE printers SET is_default = false WHERE is_default AND id <> :id`
+        /// (`domovoi/printing/store.py:133`). A stub that let both rows say
+        /// `true` could not catch a panel that never re-read the list.
+        let twoIsDefault = Shared<Bool>(false)
         let rooms = Shared<[String]>(["kitchen"])
         let listStatus = Shared<Int>(200)
         let discoverStatus = Shared<Int>(200)
@@ -84,7 +90,8 @@ final class PrintersPanelModelTests: XCTestCase {
             if added.current { rows.append(three()) }
             return """
             {"printers":[\(rows.joined(separator: ","))],
-             "has_printer":true,"has_scanner":true,"default_printer_id":1,
+             "has_printer":true,"has_scanner":true,
+             "default_printer_id":\(twoIsDefault.current ? 2 : 1),
              "rooms":[{"id":"kitchen","label":"Kitchen"},{"id":"study","label":"Study"}],
              "printable":{"exts":[".pdf"],"pdf_first_exts":[".docx"],"pdf_first_message":"save it as PDF"},
              "discovery":{"ran_at":"2026-11-02T09:00:00+00:00","found":2,"by_multicast":2,
@@ -114,7 +121,8 @@ final class PrintersPanelModelTests: XCTestCase {
         func two() -> String {
             """
             {"id":2,"name":"the colour one","make_and_model":"HP ENVY 6000",
-             "can_print":true,"can_scan":false,"color":true,"duplex":false,"is_default":false,
+             "can_print":true,"can_scan":false,"color":true,"duplex":false,
+             "is_default":\(twoIsDefault.current ? "true" : "false"),
              "needs_attention":"The colour one is out of magenta.",
              "choices":{"sides":["one-sided"],"color":["color","monochrome"],
                         "media":[{"id":"a4","label":"A4"},{"id":"letter","label":"Letter"}],"copies_max":99},
@@ -213,7 +221,15 @@ final class PrintersPanelModelTests: XCTestCase {
                     }
                     return .json(self.one())
 
+                // Exclusive, as the server is: making 2 the default takes
+                // it off 1, and the answer says nothing about 1 — which is
+                // exactly why the panel has to re-read the list.
                 case ("PATCH", "/api/printers/2"):
+                    if let object = try? JSONSerialization.jsonObject(with: Data(body.utf8)) as? [String: Any],
+                       let flag = object["is_default"] as? Bool {
+                        self.twoIsDefault.set(flag)
+                        if flag { self.isDefault.set(false) }
+                    }
                     return .json(self.two())
 
                 case ("POST", "/api/printers/1/identify"):
@@ -409,6 +425,33 @@ final class PrintersPanelModelTests: XCTestCase {
         XCTAssertEqual(model.rows[1].displayTitle, "the colour one")
         XCTAssertFalse(model.rows[1].canScan)
         XCTAssertNil(model.toast)
+        model.stop()
+    }
+
+    /// Making the **other** printer the default takes the badge off the
+    /// first — which only a re-read of the whole list can show.
+    ///
+    /// `is_default` is exclusive on the server (`store.py:133`) and the
+    /// `PATCH` answers with one row, so the row that changed underneath is
+    /// not in the answer at all. Android bumps `reload` for exactly this
+    /// write and for `rooms`, and for neither of the two dropdowns
+    /// (`PrintersPanel.kt:153-156`). Without the re-read both cards would
+    /// claim to be the house's default until the minute refresh.
+    func testMakingTheOtherOneTheDefaultTakesTheBadgeOffTheFirst() async {
+        let (model, house, _) = rig()
+        model.start()
+        await settleUntil({ model.rows.count == 2 }, "the list")
+        XCTAssertTrue(model.rows[0].isDefault, "the fixture's first printer should start as the default")
+
+        model.setDefault(model.rows[1], on: true)
+        await settleUntil(
+            { model.busy == nil && model.rows[1].isDefault && !model.rows[0].isDefault },
+            "the default moving to the other printer"
+        )
+        XCTAssertTrue(
+            house.asked.current.contains("/api/printers?refresh=1"),
+            "the list was never re-read, so the other card was corrected by nothing"
+        )
         model.stop()
     }
 
