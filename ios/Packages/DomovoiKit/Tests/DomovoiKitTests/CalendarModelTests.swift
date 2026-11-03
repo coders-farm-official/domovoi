@@ -131,7 +131,7 @@ final class CalendarModelTests: XCTestCase {
     private func rig(
         house: House = House(),
         server address: String? = nil
-    ) -> (CalendarModel, House, InMemoryShellStore) {
+    ) -> (CalendarModel, House, InMemoryShellStore, AppContainer) {
         house.install()
         let target = address ?? server
         let store = InMemoryShellStore(serverURL: target, token: "household-abc")
@@ -148,7 +148,7 @@ final class CalendarModelTests: XCTestCase {
             nowMs: { [nowMs] in nowMs },
             timeZone: { [chicago] in chicago }
         )
-        return (model, house, store)
+        return (model, house, store, container)
     }
 
     private func settleUntil(
@@ -188,7 +188,7 @@ final class CalendarModelTests: XCTestCase {
     /// server's own default is the first 500 by `starts_at`, and every view's
     /// window is cut client-side, so a chevron costs no round trip.
     func testTheScreenMakesOneUnparameterisedRead() async {
-        let (model, house, _) = rig()
+        let (model, house, _, _) = rig()
         await started(model)
         XCTAssertEqual(["GET /api/calendar/events"], house.seen.current)
         XCTAssertEqual(4, model.all.count)
@@ -201,22 +201,23 @@ final class CalendarModelTests: XCTestCase {
     /// A subscription to `calendar_changed` or to `calendar.changed` would
     /// never fire.
     func testThePushThatMeansReReadIsCalendarEventsChanged() async {
-        let (model, _, _) = rig()
+        let (model, _, _, container) = rig()
         await started(model)
         XCTAssertEqual(["calendar.events.changed"], Array(CalendarModel.eventTypes))
 
-        model.received(StateEvent(type: "calendar_changed", frame: "{}"))
+        container.stateEventArrived(StateEvent(type: "calendar_changed", frame: "{}"))
+        await everythingLands()
         XCTAssertEqual(1, model.events.fetches, "the raw channel name is not the frame type")
 
-        model.received(StateEvent(type: "calendar.events.changed", frame: "{}"))
-        XCTAssertEqual(2, model.events.fetches)
+        container.stateEventArrived(StateEvent(type: "calendar.events.changed", frame: "{}"))
+        await settleUntil({ model.events.fetches == 2 }, "the re-read")
     }
 
     /// **A failure after a success keeps the rows**, silently, which is
     /// ``ApiRead``'s ported behaviour and Android's (`:162`). The error state
     /// only replaces the screen while there is nothing to show.
     func testAFailedReadBlanksNothingOnceTheRowsAreThere() async {
-        let (model, house, _) = rig()
+        let (model, house, _, _) = rig()
         await started(model)
         XCTAssertNil(model.errorText)
 
@@ -233,7 +234,7 @@ final class CalendarModelTests: XCTestCase {
     func testWithoutATokenTheScreenSaysWhyRatherThanLookingEmpty() async {
         let house = House()
         house.readStatus.set(401)
-        let (model, _, _) = rig(house: house)
+        let (model, _, _, _) = rig(house: house)
         await started(model)
         XCTAssertNotNil(model.errorText)
         XCTAssertNil(model.emptyText, "an unanswered read is not an empty calendar")
@@ -245,7 +246,7 @@ final class CalendarModelTests: XCTestCase {
     func testTheTwoEmptyWordingsAreAgendasOwnAndTheRangesOwn() async {
         let house = House()
         house.rows.set([])
-        let (model, _, _) = rig(house: house)
+        let (model, _, _, _) = rig(house: house)
         await started(model)
 
         XCTAssertEqual(CalendarStrings.emptyAgendaTitle, model.emptyText?.title)
@@ -267,7 +268,7 @@ final class CalendarModelTests: XCTestCase {
     /// so the range wording is reachable in a house that has events, which is
     /// what the agenda wording would otherwise hide.
     func testSteppingToAnEmptyMonthSaysNothingInThisRange() async {
-        let (model, _, _) = rig()
+        let (model, _, _, _) = rig()
         await started(model)
         model.mode = .month
         XCTAssertNil(model.emptyText, "november has four events")
@@ -283,7 +284,7 @@ final class CalendarModelTests: XCTestCase {
     // MARK: - moving about
 
     func testTheChevronsAndTodayMoveTheAnchorPerView() async {
-        let (model, _, _) = rig()
+        let (model, _, _, _) = rig()
         await started(model)
         XCTAssertEqual("from wed, nov 4", model.rangeLabel)
 
@@ -302,7 +303,7 @@ final class CalendarModelTests: XCTestCase {
     /// A month cell's tap is the only way this port's cell reveals what is on
     /// a date, so it has to land in day view **on that date** (DECISIONS §4).
     func testAMonthCellsTapOpensThatDayInDayView() async {
-        let (model, _, _) = rig()
+        let (model, _, _, _) = rig()
         await started(model)
         model.mode = .month
         model.pickDay(CalendarDay(year: 2026, month: 11, day: 7))
@@ -315,7 +316,7 @@ final class CalendarModelTests: XCTestCase {
     /// tomorrow's is its label, and the open-ended 07:00 row is still in
     /// today's group because the floor is **midnight**, not now.
     func testTheAgendaGroupsTodayAndTomorrowSeparately() async {
-        let (model, _, _) = rig()
+        let (model, _, _, _) = rig()
         await started(model)
         XCTAssertEqual(
             [CalendarStrings.today, "thu, nov 5", "sat, nov 7"],
@@ -339,7 +340,7 @@ final class CalendarModelTests: XCTestCase {
                 lastSynced: "2026-11-04T14:15:00-06:00"
             )
         }
-        let (model, _, _) = rig(house: house)
+        let (model, _, _, _) = rig(house: house)
         await started(model)
         model.select(4)
         guard let row = model.selected else { return XCTFail("nothing selected") }
@@ -359,7 +360,7 @@ final class CalendarModelTests: XCTestCase {
     /// The POST, its body, the **201's own `id`** as the new selection, and
     /// the refresh afterwards.
     func testANewEventIsPostedAndTheReplysIdBecomesTheSelection() async {
-        let (model, house, _) = rig()
+        let (model, house, _, _) = rig()
         await started(model)
         model.openNewEvent()
         guard var draft = model.draft else { return XCTFail("no draft") }
@@ -389,7 +390,7 @@ final class CalendarModelTests: XCTestCase {
     /// A draft that fails its own validation **sends nothing** — the editor
     /// stays open with its message and the row count is untouched.
     func testADraftThatFailsValidationIsNotSentAtAll() async {
-        let (model, house, _) = rig()
+        let (model, house, _, _) = rig()
         await started(model)
         model.openNewEvent()
         guard let draft = model.draft else { return XCTFail("no draft") }
@@ -407,7 +408,7 @@ final class CalendarModelTests: XCTestCase {
     }
 
     func testASaveTheHouseRefusedSaysSoAndKeepsTheEditorOpen() async {
-        let (model, house, _) = rig()
+        let (model, house, _, _) = rig()
         await started(model)
         house.writeStatus.set(403)
         model.openNewEvent()
@@ -425,7 +426,7 @@ final class CalendarModelTests: XCTestCase {
 
     /// The PATCH goes to the row's own path and the row stays selected.
     func testAnEditPatchesTheRowAndKeepsItSelected() async {
-        let (model, house, _) = rig()
+        let (model, house, _, _) = rig()
         await started(model)
         model.select(2)
         guard let row = model.selected else { return XCTFail("nothing selected") }
@@ -459,7 +460,7 @@ final class CalendarModelTests: XCTestCase {
                 location: "the high street"
             )
         }
-        let (model, _, _) = rig(house: house)
+        let (model, _, _, _) = rig(house: house)
         await started(model)
         model.select(2)
         guard let row = model.selected, var draft = CalendarDraft(row) else {
@@ -482,7 +483,7 @@ final class CalendarModelTests: XCTestCase {
     /// selection is cleared. `delete(_:as:)` on a 204 would throw, so a
     /// delete that worked would say it failed.
     func testDeleteAsksFirstThenHandlesTheTwoOhFour() async {
-        let (model, house, _) = rig()
+        let (model, house, _, _) = rig()
         await started(model)
         model.select(3)
         guard let row = model.selected else { return XCTFail("nothing selected") }
@@ -507,7 +508,7 @@ final class CalendarModelTests: XCTestCase {
     }
 
     func testCancellingTheAlertDeletesNothing() async {
-        let (model, house, _) = rig()
+        let (model, house, _, _) = rig()
         await started(model)
         model.select(3)
         guard let row = model.selected else { return XCTFail("nothing selected") }
@@ -520,7 +521,7 @@ final class CalendarModelTests: XCTestCase {
     }
 
     func testADeleteTheHouseRefusedSaysSoAndKeepsTheSelection() async {
-        let (model, house, _) = rig()
+        let (model, house, _, _) = rig()
         await started(model)
         house.writeStatus.set(404)
         model.select(3)
@@ -605,7 +606,7 @@ final class CalendarModelTests: XCTestCase {
     /// Moving house also drops a half-written draft and a pending delete: both
     /// name a row id that belongs to the house the person has left.
     func testMovingHouseClearsTheDraftTheSelectionAndThePendingDelete() async {
-        let (model, _, store) = rig()
+        let (model, _, store, _) = rig()
         await started(model)
         model.select(2)
         guard let row = model.selected else { return XCTFail("nothing selected") }
@@ -625,14 +626,24 @@ final class CalendarModelTests: XCTestCase {
 
     // MARK: - lifecycle
 
-    /// `stop()` leaves the push registry, so a screen on its way out does not
-    /// re-read on every push for the rest of the process.
-    func testAStoppedScreenNoLongerReReadsOnAPush() async {
-        let (model, _, _) = rig()
+    /// `stop()` **leaves** the push registry, so a screen on its way out does
+    /// not re-read on every push for the rest of the process — and is not a
+    /// closure the container holds for ever.
+    ///
+    /// Fired through ``AppContainer/stateEventArrived(_:)`` and not through
+    /// `model.received(_:)`: the registry is what `stop()` leaves, so a test
+    /// that called the method by hand would be asserting that a method does
+    /// nothing when called, which is not the property.
+    func testAStoppedScreenLeavesTheFanOutAndNoLongerReReads() async {
+        let (model, _, _, container) = rig()
+        XCTAssertEqual(0, container.stateEventSinkCount, "nothing listens before the screen")
         await started(model)
+        XCTAssertEqual(1, container.stateEventSinkCount)
+
         let before = model.events.fetches
         model.stop()
-        model.received(StateEvent(type: "calendar.events.changed", frame: "{}"))
+        XCTAssertEqual(0, container.stateEventSinkCount, "and a dead screen is not a leak")
+        container.stateEventArrived(StateEvent(type: "calendar.events.changed", frame: "{}"))
         await everythingLands()
         XCTAssertEqual(
             before,
@@ -647,7 +658,7 @@ final class CalendarModelTests: XCTestCase {
     func testAnUnreadableRowOpensNoEditor() async {
         let house = House()
         house.rows.set([House.row(1, "who knows", "not a time")])
-        let (model, _, _) = rig(house: house)
+        let (model, _, _, _) = rig(house: house)
         await started(model)
         guard let row = model.all.first else { return XCTFail("no row") }
         model.openEditor(for: row)
