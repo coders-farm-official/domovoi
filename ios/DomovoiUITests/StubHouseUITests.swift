@@ -2192,6 +2192,14 @@ final class StubHouseUITests: XCTestCase {
     }
 
     /// Apple's audit over the grid.
+    ///
+    /// Three kinds of finding are classified rather than failed, and each one
+    /// is explained where it is tested below: a Dynamic Type headline a
+    /// measurement contradicts, a contrast finding the scroll view's own
+    /// bottom edge cuts in half, and — since train R004 — a `Text clipped`
+    /// prediction against a poster tile's caption, which truncates by design
+    /// and more generously than Android's (`VideosScreen.kt:293`). Everything
+    /// else is a defect to fix.
     @MainActor
     @available(iOS 17.0, *)
     func testTheVideosGridAudits() throws {
@@ -2206,6 +2214,17 @@ final class StubHouseUITests: XCTestCase {
             .max(by: { $0.frame.height < $1.frame.height })
         let bottom = page?.frame.maxY ?? 0
         XCTAssertGreaterThan(bottom, 0, "no scroll view to take a bottom edge from")
+        // The label out of a finding's `element:` clause, which is the one
+        // thing ``frame(in:)``'s neighbour does not already give. Local to
+        // this case rather than a shared helper: this is the only screen whose
+        // classification needs to go from a flagged leaf back to the tile that
+        // carries it.
+        func label(in line: String) -> String? {
+            guard let opened = line.range(of: "label='") else { return nil }
+            let rest = line[opened.upperBound...]
+            guard let closed = rest.range(of: "' frame=") else { return nil }
+            return String(rest[..<closed.lowerBound])
+        }
         let unexplained = rest.filter { line in
             // A Dynamic Type headline **with** an element, which this file
             // believed for three sessions was the signature of a real
@@ -2229,12 +2248,50 @@ final class StubHouseUITests: XCTestCase {
                box.minY < bottom, box.maxY > bottom {
                 return false
             }
+            // **`Text clipped` against a grid tile's caption**, which is the
+            // one truncation on this screen that is the design and not a
+            // defect. Train R004 raised it against `01 she said "no".mp4` at
+            // `{{202.5, 511.5}, {120.3, 14.3}}` inside a 174.7-point tile —
+            // one line, nothing truncated at `large` — and train I001 did
+            // **not** raise it against the same leaf at the same width one
+            // strip lower, so the headline is not even a stable function of
+            // the element's geometry. Three things settle it, and the third
+            // is asserted rather than argued:
+            //
+            // 1. **The font scales.** `testTheVideosGridTextGrowsAtAX5`
+            //    measures this code site at 14.33 -> 102.33 points, 7.1x.
+            //    Nothing here is stuck at a size.
+            // 2. **Two lines IS the design, and Android gives one.** The
+            //    caption is `.font(.caption).lineLimit(2).fixedSize(...)`
+            //    (`VideosView.swift:250-254`) against `maxLines = 1, overflow
+            //    = Ellipsis` on the same tile at `VideosScreen.kt:293`. 102.33
+            //    at AX5 is both lines full, so a title half again as long does
+            //    lose its tail — to an ellipsis, on a poster tile, exactly as
+            //    Android loses it at **every** type size. A port that
+            //    truncates less than the specification does is not the defect
+            //    the headline is reporting.
+            // 3. **Nothing is lost to a reader who cannot see the tile**,
+            //    which is the only thing an ellipsis could have cost. The
+            //    tile is a `Button` whose own accessibility label is the whole
+            //    title, and **that is the condition below**, not a remark:
+            //    a flagged caption no tile names is not classified here and
+            //    fails the case.
+            //
+            // Scoped that way on purpose: a `Text clipped` against anything
+            // else on this screen — a heading, the count line, a resume
+            // line, a caption whose tile does not name it — still fails.
+            if line.hasPrefix("Text clipped"), let flagged = label(in: line),
+               app.buttons[flagged].exists {
+                print("VIDEOS GRID :: clipped caption whose tile names it in full :: \(flagged)")
+                return false
+            }
             return true
         }
         XCTAssertEqual(
             [],
             unexplained,
-            "the grid has findings neither measurement nor the viewport edge explains"
+            "the grid has findings neither a measurement, the viewport edge, nor a tile's own "
+                + "full-title label explains"
         )
         // **Zero, not eight.** ``knownPushedBarFloor`` is the Settings and
         // Music figure and this screen does not produce it: every finding
@@ -2270,15 +2327,28 @@ final class StubHouseUITests: XCTestCase {
     /// skipped rather than failed.
     @MainActor
     func testTheVideosGridTextGrowsAtAX5() throws {
+        // **`caption-long` is here because of train R004's audit finding.**
+        // `Text clipped` was raised against this exact caption and nothing
+        // else on the screen, and ``testTheVideosGridAudits`` classifies it
+        // as the tile's design rather than a defect. What makes that a
+        // measurement instead of an argument is this row: at `large` it is
+        // 1.37x wider than `caption` (120.33 against 88.0 points) inside the
+        // same 174.7-point tile, so if `caption` already fills both of
+        // `lineLimit(2)`'s lines at AX5 then this one's tail is genuinely
+        // lost there — to an ellipsis, as `VideosScreen.kt:293` loses it at
+        // every size. The two heights printed side by side are what say so,
+        // and they say it in the log of every run rather than in a note.
+        let leaves = [
+            ("count", "showing 50 of 60 videos"),
+            ("heading", "Movies · 54"),
+            ("strip-heading", "recently played"),
+            ("caption", "a long one.mp4"),
+            ("caption-long", "01 she said \"no\".mp4"),
+            ("resume", "0:10 / 0:40"),
+        ]
         func heights(_ app: XCUIApplication) -> [String: CGFloat] {
             var out: [String: CGFloat] = [:]
-            for (leaf, label) in [
-                ("count", "showing 50 of 60 videos"),
-                ("heading", "Movies · 54"),
-                ("strip-heading", "recently played"),
-                ("caption", "a long one.mp4"),
-                ("resume", "0:10 / 0:40"),
-            ] {
+            for (leaf, label) in leaves {
                 let text = app.staticTexts[label].firstMatch
                 if text.exists { out[leaf] = text.frame.height }
             }
@@ -2312,7 +2382,10 @@ final class StubHouseUITests: XCTestCase {
                     seen[leaf] = height
                 }
                 if flick == 0 { evidence(app, "4A-videos-scale-\(label)") }
-                if seen.count == 5 || flick == flicks { break }
+                // `leaves.count`, never the literal it used to be: a sixth
+                // leaf added above a hard-coded five is forty flicks spent
+                // after everything had already been found.
+                if seen.count == leaves.count || flick == flicks { break }
                 phoneSourceFlick(app)
             }
             measured[label] = seen

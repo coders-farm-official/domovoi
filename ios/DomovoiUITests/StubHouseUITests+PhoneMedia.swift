@@ -98,35 +98,72 @@ extension StubHouseUITests {
     /// this file that switches sides runs at one size or the other, so the
     /// question "which shape is drawn" is asked here and nowhere else.
     ///
-    /// Neither shape is waited for with `waitForExistence`: that would spend
-    /// its whole timeout on the shape that is **not** there, which at an
-    /// ordinary size is twelve cases paying for a control they never draw.
-    /// The poll asks both and takes the first that answers.
+    /// ### One waited query over both shapes, and why round 1's poll was the
+    /// wrong instrument
+    ///
+    /// Round 1 polled `.exists` on the two shapes in turn every 200 ms, to
+    /// avoid spending a whole `waitForExistence` timeout on the shape that is
+    /// **not** drawn. That cost is avoided here too — both shapes carry this
+    /// side's own identifier, so **one** predicate query finds either in one
+    /// snapshot — and the poll then cost R004 a round for a second reason,
+    /// which is the one worth writing down:
+    ///
+    /// `XCUIElement.exists` **returns `false` when the snapshot itself
+    /// failed.** In R004's
+    /// `testPhoneMedia_TheDeviceSideHasNoAuditFindings` the run's automation
+    /// channel went bad at `t = 9.94s` — every query from there to the end of
+    /// the case logs `(retry 1)`, `(retry 2)` and costs 2.1 s, and
+    /// `app.debugDescription` came back with no tree at all — and this loop
+    /// turned twenty-five seconds of channel failure into `NO SWITCH OF
+    /// EITHER SHAPE`: a diagnosis about this unit's control for a failure that
+    /// was neither the control's nor the app's. Three other cases in the same
+    /// twelve minutes of that run named what had really happened (`Lost
+    /// connection to the application`), and the difference between them and
+    /// this one is only that they were inside a `waitForExistence`, which
+    /// **throws** rather than shrugging. It also polls once a second instead
+    /// of five times, so a case that waits through the 12-second seeded push
+    /// (``StubHouseUITests/pushDelay``) asks for thirty snapshots of the whole
+    /// hierarchy rather than three hundred.
+    ///
+    /// Both shapes are matched by **identifier**: a segment carries
+    /// `PhoneSourceSwitchPill.serverSegmentID`/`deviceSegmentID` and the
+    /// collapsed row carries `PhoneSourceSwitchPill.collapsedID`, and
+    /// `PhoneSourceCollapsedSwitch.identifier(of:)` puts the same two on the
+    /// menu's rows — which cannot be confused with these, since the menu is
+    /// shut until the row below is tapped.
     @MainActor
     func phoneSourcePickSide(_ app: XCUIApplication, _ side: PhoneSideUnderTest) -> Bool {
-        let collapsed = app.buttons[StubPhoneMedia.collapsedSwitch].firstMatch
-        let segment = app.buttons[side.segmentLabel].firstMatch
-        let deadline = Date().addingTimeInterval(30)
-        while Date() < deadline {
-            if collapsed.exists {
-                collapsed.tap()
-                guard let row = phoneSourceMenuRow(app, side) else {
-                    print("=== THE COLLAPSED SWITCH'S MENU HAS NO `\(side.words)` — tree follows ===")
-                    print(app.debugDescription)
-                    return false
-                }
-                row.tap()
-                return true
-            }
-            if segment.exists {
-                segment.tap()
-                return true
-            }
-            usleep(200_000)
+        let either = app.buttons.matching(
+            NSPredicate(
+                format: "identifier == %@ OR identifier == %@",
+                StubPhoneMedia.collapsedSwitch, side.identifier
+            )
+        ).firstMatch
+        guard either.waitForExistence(timeout: 40) else {
+            // **`app.state` needs no snapshot**, so it answers even when the
+            // channel that would print a tree cannot: `runningForeground`
+            // here means the switch really was not drawn and this unit is
+            // what the next round should read, and anything else means the
+            // run lost the app and it is not.
+            print(
+                "=== NO SWITCH OF EITHER SHAPE — app is "
+                    + "\(Self.stateName(app.state)) — tree follows ==="
+            )
+            print(app.debugDescription)
+            return false
         }
-        print("=== NO SWITCH OF EITHER SHAPE — tree follows ===")
-        print(app.debugDescription)
-        return false
+        guard either.identifier == StubPhoneMedia.collapsedSwitch else {
+            either.tap()
+            return true
+        }
+        either.tap()
+        guard let row = phoneSourceMenuRow(app, side) else {
+            print("=== THE COLLAPSED SWITCH'S MENU HAS NO `\(side.words)` — tree follows ===")
+            print(app.debugDescription)
+            return false
+        }
+        row.tap()
+        return true
     }
 
     /// One row of the open collapsed menu.
@@ -176,7 +213,14 @@ extension StubHouseUITests {
         guard phoneSourcePickSide(app, .device) else { return false }
         let landed = containing(app, row).waitForExistence(timeout: 30)
         if !landed {
-            print("=== THE DEVICE SIDE DREW NO `\(row)` — tree follows ===")
+            // The app's state beside the complaint, for the same reason
+            // ``phoneSourcePickSide(_:_:)`` prints it: a tree that comes back
+            // empty says the run lost the app, not that the side drew
+            // nothing, and R004 spent a case on that distinction.
+            print(
+                "=== THE DEVICE SIDE DREW NO `\(row)` — app is "
+                    + "\(Self.stateName(app.state)) — tree follows ==="
+            )
             print(app.debugDescription)
         }
         return landed
@@ -198,7 +242,10 @@ extension StubHouseUITests {
         guard phoneSourcePickSide(app, .device) else { return false }
         let landed = app.staticTexts[header].firstMatch.waitForExistence(timeout: 30)
         if !landed {
-            print("=== THE DEVICE SIDE DREW NO `\(header)` — tree follows ===")
+            print(
+                "=== THE DEVICE SIDE DREW NO `\(header)` — app is "
+                    + "\(Self.stateName(app.state)) — tree follows ==="
+            )
             print(app.debugDescription)
         }
         return landed
@@ -388,8 +435,8 @@ extension StubHouseUITests {
         // into the accessibility tree, which is the very defect
         // `ShownOrParked` exists to prevent. The server's segment cannot be
         // found by label: its label is the house's own name, which is why
-        // ``PhoneSideUnderTest/segmentLabel`` is an identifier for that side
-        // and a label for the other.
+        // ``PhoneSideUnderTest/identifier`` is what
+        // ``phoneSourcePickSide(_:_:)`` matches on.
         XCTAssertTrue(phoneSourcePickSide(app, .server), "the switch has no server side")
         evidence(app, "phonemedia-server-kept-its-place")
         // Back on the server's side, and still in the folder. A container
@@ -934,7 +981,15 @@ extension StubHouseUITests {
     func testPhoneMedia_TheDeviceSideHasNoAuditFindings() throws {
         phoneReset()
         let app = phoneLaunch(push: "Files")
-        XCTAssertTrue(phoneSwitchToDevice(app, waitingFor: StubPhoneMedia.phoneTrackWord))
+        // The message is not decoration. R004 failed this line as a bare
+        // `XCTAssertTrue failed`, and the helper's own print was the only
+        // thing that said the switch was never found — which it also got
+        // wrong, because the run had lost the app
+        // (``phoneSourcePickSide(_:_:)``).
+        XCTAssertTrue(
+            phoneSwitchToDevice(app, waitingFor: StubPhoneMedia.phoneTrackWord),
+            "the device side of Files never drew — the print above says whether the app was still there"
+        )
         evidence(app, "phonemedia-files-audit")
 
         let found = try auditIssues(app, "phonemedia-files")
@@ -1199,26 +1254,22 @@ enum StubPhoneMedia {
 
 /// One side of the source switch, as a case finds it.
 ///
-/// Three handles rather than one, because the switch has two shapes and the
-/// server's side has no readable label in either: an identifier for the
-/// collapsed menu's row, whatever `app.buttons[_:]` can find the pill's
-/// segment by, and the words that survive in a menu whose identifiers SwiftUI
-/// may not have carried into UIKit.
+/// Two handles rather than one, because the switch has two shapes and the
+/// server's side has no readable label in either: the identifier that the
+/// pill's segment and the collapsed menu's row both carry, and the words that
+/// survive in a menu whose identifiers SwiftUI may not have carried into
+/// UIKit.
 enum PhoneSideUnderTest {
 
     case server
     case device
 
-    /// What finds this side's segment of the two-segment pill.
-    /// `app.buttons[_:]` matches an identifier **or** a label, so the
-    /// server's side is found by its identifier — its label is the house's
-    /// own name — and the phone's by the words on it.
-    var segmentLabel: String {
-        switch self {
-        case .server: return StubPhoneMedia.serverSegment
-        case .device: return StubPhoneMedia.yourDevice
-        }
-    }
+    // `segmentLabel` — "an identifier for the server, the words for the
+    // phone", for `app.buttons[_:]`, which matches either — is gone with the
+    // poll that used it: ``StubHouseUITests/phoneSourcePickSide(_:_:)`` now
+    // matches both shapes on `identifier` alone, which every one of the four
+    // elements carries. A second way to name the same side is how two cases
+    // come to disagree about which control they found.
 
     /// The identifier this side carries in both shapes
     /// (`PhoneSourceCollapsedSwitch.identifier(of:)` is the same two).
