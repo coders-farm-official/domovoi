@@ -608,7 +608,9 @@ extension StubHouseUITests {
 
     // MARK: - accessibility
 
-    /// Apple's audit on the three levels this screen has.
+    /// Apple's audit on the three levels this screen has, plus the topic and
+    /// a second piece, which are here to say where an unattributable finding
+    /// on the piece page lives.
     ///
     /// Classified by **signature** with ``StubHouseUITests/floorAndRest(_:)``
     /// and never by a pinned total: `rest` is every finding Apple could
@@ -620,37 +622,77 @@ extension StubHouseUITests {
     ///
     /// The piece used to be opened by typing a keyword, and that audit
     /// reported anonymous `Contrast failed` — nine of them in train S009, one
-    /// left in S012 after ``ManualTopBar`` started clearing focus. None of
-    /// them was a colour.
+    /// left in S012 after ``ManualTopBar`` started clearing focus.
     ///
-    /// The two screenshots prove it. S009's `manual-audit-piece` and S012's
-    /// are **the same picture**: differenced pixel by pixel, the only region
-    /// that is not identical is the status bar clock, 53.7–89.7 points across.
-    /// Same layout, same inks, same backgrounds — and nine findings in one run
-    /// against one in the other. Nothing this app draws can account for that,
-    /// and sampled off those pixels the weakest text on the page is `ok` at
-    /// 5.05:1, against the 4.5:1 small text needs.
+    /// Eight of the nine were the keyboard standing over the page, and the
+    /// focus clear took those away. The ninth was read as a second window —
+    /// iOS keeps its full-screen keyboard host for the app's lifetime once a
+    /// field has been focused — so the piece is now opened map → topic →
+    /// node, before anything is typed, and `app.windows.count == 1` is
+    /// asserted before the audit runs.
     ///
-    /// What *does* differ is the hierarchy, and only in one way. The two
-    /// audits above run on an app with a single `Window`; this one, once a
-    /// search has raised the keyboard, runs with a **second** full-screen
-    /// window — iOS's keyboard host, which the system keeps for the app's
-    /// lifetime after the first time a field is focused, with the keyboard
-    /// itself parked at `{{0, 852}, {393, 233}}`, off the bottom of an
-    /// 852-point screen. That window is this screen's own entry in the class
-    /// ``StubHouseUITests`` already records for four of the pairing screen's
-    /// five findings and for the row the videos grid's bottom edge cuts in
-    /// half: an audit reporting a region it has no readable pixels for, and so
-    /// no element to name.
+    /// **Train I001 ran that and the finding did not move**: one window, one
+    /// anonymous `Contrast failed`, and I001's `manual-audit-piece` tree is
+    /// byte-identical to S012's apart from the keyboard window that is now
+    /// gone. So the window was not the cause, and the map route stays for a
+    /// smaller reason — it is the shorter path to the same page and it leaves
+    /// the search path free to assert the one thing that is its own, that the
+    /// keyboard is down.
     ///
-    /// So the piece is opened the way ``testManual_MapOpensATopicThenAPiece()``
-    /// opens it — map, topic, node — **before** anything has been typed. It is
-    /// the same page, drawn by the same code off the same fixture; what is
-    /// gone is a window of Apple's that this app does not draw and cannot
-    /// remove. Nothing is audited less: the strict audit still runs on the
-    /// piece, and the search path keeps the assertion that matters to it,
-    /// which is that the keyboard is down (a revert of that focus clear still
-    /// fails this case).
+    /// ### The finding that was left, and what it turned out to be
+    ///
+    /// It was never a colour. Sampled off the audit's own screenshot, every
+    /// text leaf on the piece page clears 4.5:1 — the weakest are `ok` at
+    /// 5.05:1 and `needs internet` at 5.13:1, the `fgMuted` pills are 6.66:1
+    /// and the phrase chips 18.8:1 — and a window scan of the whole page finds
+    /// no region at all where ink reads under 4.5:1 against what it is drawn
+    /// on.
+    ///
+    /// **Train R001 named the element**, which S009, S012 and I001 had all
+    /// reported as `element: nil`: the piece page's eyebrow,
+    /// `type=9 label='rooms & devices' frame=(16.0, 321.3, 94.3, 44.0)`.
+    /// Nothing about the app had changed between I001 and R001, so the
+    /// attribution is the audit being inconsistent about what it can resolve,
+    /// not a new defect — but it is the name, and it is enough.
+    ///
+    /// The ink there measures `(151, 88, 0)` on white, **5.66:1**, the same
+    /// pixel value to the unit as the three ``ManualCrumb`` buttons and
+    /// `zoom out` eleven points above it, which the same audit of the same
+    /// page leaves unnamed. What was unique to it was its **shape**: a row
+    /// profile of the screenshot puts its ink in points 353.3–362.3 of a
+    /// 44-point frame running 321.3–365.3 — three points off the bottom edge,
+    /// 32 points of blank above — because ``ManualPiecePage`` hung the text at
+    /// `alignment: .bottomLeading`, the only `.bottomLeading` in
+    /// `ios/Domovoi/`. Every crumb's ink sits near its own frame's middle.
+    /// That frame is now `alignment: .leading` like the rest of the app, which
+    /// also stops a tap in the white 25 points above the word from navigating.
+    ///
+    /// Nothing is excused to get there: the classifier is untouched, no colour
+    /// is repainted, and a `Contrast failed` naming this element again fails
+    /// this case exactly as it did.
+    ///
+    /// ### The two states that bisect it, which are kept
+    ///
+    /// R001 ran the three-state version of this case — S012's commit, not the
+    /// five-state one — so the two below have still never run. They stay: they
+    /// cost one tap each, and between them the five answers say which third of
+    /// the page a future finding is in:
+    ///
+    ///  - **`manual-audit-topic`** — the topic's cluster, one tap short of a
+    ///    piece. It draws this page's chrome and nothing else of it: a crumb
+    ///    trail with a chevron in it and the `zoom out` control, neither of
+    ///    which exists on Start here or on the map. A finding here is in the
+    ///    chrome.
+    ///  - **`manual-audit-room-piece`** — `A Raspberry Pi room`, a piece page
+    ///    of exactly the same shape as the audited one (eyebrow, title, a
+    ///    three-deep crumb trail, a live box) with different content inside
+    ///    it. A finding here *and* on the piece is in the page's own frame.
+    ///  - **`manual-audit-piece`** — the page as before. A finding only here
+    ///    is in what only it draws: the plugin rows, the phrase chips and the
+    ///    four pills.
+    ///
+    /// Nothing is audited less: all five states take the same strict
+    /// classifier, and a colour defect in any of them still fails this case.
     @MainActor
     func testManual_AuditsClean() throws {
         control("reset-fixtures", "{}", port: 6601, what: "the manual fixture's seed")
@@ -677,11 +719,61 @@ extension StubHouseUITests {
         )
         try manualAudit(app, "manual-audit-map")
 
-        // The piece, reached by tapping through the map — no field focused,
-        // so the app still has the one window the two audits above saw. See
-        // this case's doc comment for the measurement that put it here.
+        // ---- the topic, which is the piece page's chrome without its page.
+        //
+        // Audited in its own right, and as the bisect this case's doc comment
+        // describes: the crumb trail, its chevron and `zoom out` are drawn
+        // here and on the piece, and nowhere else on this screen.
         XCTAssertTrue(
-            manualOpenViaMap(app, topic: StubManual.roomsTopic, piece: StubManual.plugins),
+            manualOpenTopic(app, topic: StubManual.roomsTopic),
+            "the map never opened the topic's cluster"
+        )
+        let roomPiece = manualNode(app, StubManual.piRoom)
+        XCTAssertTrue(
+            roomPiece.waitForExistence(timeout: 15),
+            "the topic's cluster drew no nodes, so there was nothing to audit"
+        )
+        try manualAudit(app, "manual-audit-topic")
+
+        // ---- a second page of the same shape, with other content in it.
+        //
+        // `A Raspberry Pi room` and `What plugins add` are both piece pages:
+        // same eyebrow, same title, same three-deep crumb trail. What differs
+        // is what the blocks draw — one live rooms box against the plugin
+        // rows, the phrase chips and the four pills. A finding both report is
+        // in the page's frame; one only the second reports is in the content
+        // only it has.
+        roomPiece.tap()
+        XCTAssertTrue(
+            app.staticTexts[StubManual.piRoom].firstMatch.waitForExistence(timeout: 15),
+            "the map never opened the room piece's page"
+        )
+        // The room's line is one `Button` with a merged label, so the room's
+        // name is not a static text of its own — the song is the word that
+        // says the live slot answered, which is what
+        // `testManual_TheRoomsSlotNamesTheRoomAndWhatItPlays` asserts on too.
+        XCTAssertTrue(
+            containing(app, StubManual.song).waitForExistence(timeout: 15),
+            "the room piece's live slot did not draw, so there was nothing to audit"
+        )
+        try manualAudit(app, "manual-audit-room-piece")
+
+        app.buttons[StubManual.zoomOut].firstMatch.tap()
+        let node = manualNode(app, StubManual.plugins)
+        XCTAssertTrue(
+            node.waitForExistence(timeout: 15),
+            "`zoom out` did not go back to the topic's cluster"
+        )
+
+        // The piece itself — still no field focused, so the app has the one
+        // window every audit above saw.
+        //
+        // A **static text** with the piece's words is the page and nothing
+        // else: the title is a `StaticText` on the piece's page (its heading
+        // and its last crumb) and a `Button` at every level of the map.
+        node.tap()
+        XCTAssertTrue(
+            app.staticTexts[StubManual.plugins].firstMatch.waitForExistence(timeout: 15),
             "the map never opened the piece's page"
         )
         XCTAssertTrue(
@@ -691,8 +783,11 @@ extension StubHouseUITests {
         XCTAssertEqual(
             app.windows.count, 1,
             "the piece was audited with more than the app's own window in the "
-                + "hierarchy, which is the one thing that has ever made this "
-                + "screen's audit report an anonymous `Contrast failed`"
+                + "hierarchy — the keyboard host iOS keeps once a field has "
+                + "been focused, which train S009's nine findings were drawn "
+                + "under. It is not what I001's one finding was, but an audit "
+                + "of a page with a second window over it means something "
+                + "other than this page"
         )
         try manualAudit(app, "manual-audit-piece")
 
@@ -1040,19 +1135,20 @@ extension StubHouseUITests {
         return true
     }
 
-    /// Open a piece by tapping through the map: topic, then the piece's node.
+    /// Open a topic's cluster by tapping its node on the map.
     ///
-    /// ``testManual_MapOpensATopicThenAPiece()``'s path, as a helper, because
-    /// ``testManual_AuditsClean()`` needs a piece on screen with **no field
-    /// ever focused** — once one has been, iOS keeps a second, full-screen
-    /// keyboard window for the app's lifetime, and the audit reports it as an
-    /// anonymous `Contrast failed`.
+    /// ``testManual_MapOpensATopicThenAPiece()``'s path, stopped one level
+    /// short, because ``testManual_AuditsClean()`` audits the topic as well as
+    /// the piece and needs both with **no field ever focused** — once one has
+    /// been, iOS keeps a second, full-screen keyboard window for the app's
+    /// lifetime and the audit reports a region of it it cannot read.
+    ///
+    /// `zoom out` and not a node is what says the cluster is up: it is drawn
+    /// whenever a topic is in play (`ManualCrumbs`) and at no other level, so
+    /// a map that never zoomed in cannot satisfy it. Which nodes a cluster
+    /// draws is the caller's business.
     @MainActor
-    private func manualOpenViaMap(
-        _ app: XCUIApplication,
-        topic topicTitle: String,
-        piece title: String
-    ) -> Bool {
+    private func manualOpenTopic(_ app: XCUIApplication, topic topicTitle: String) -> Bool {
         guard manualMap(app) else { return false }
         let topic = manualNode(app, topicTitle)
         guard topic.waitForExistence(timeout: 15) else {
@@ -1061,18 +1157,12 @@ extension StubHouseUITests {
             return false
         }
         topic.tap()
-        let node = manualNode(app, title)
-        guard node.waitForExistence(timeout: 15) else {
-            print("=== NO CLUSTER NODE FOR \(title) — tree follows ===")
+        guard app.buttons[StubManual.zoomOut].firstMatch.waitForExistence(timeout: 15) else {
+            print("=== NO CLUSTER FOR \(topicTitle) — tree follows ===")
             print(app.debugDescription)
             return false
         }
-        node.tap()
-        // ``manualOpen(_:search:piece:)``'s own check, for the same reason:
-        // the title is a `StaticText` on the piece's page (its heading and
-        // its last crumb) and a `Button` at every level of the map, so a
-        // static text with these words is the page and nothing else.
-        return app.staticTexts[title].firstMatch.waitForExistence(timeout: 15)
+        return true
     }
 
     /// Search for a piece and open it.

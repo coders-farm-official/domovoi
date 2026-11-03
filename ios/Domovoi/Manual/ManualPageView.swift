@@ -130,13 +130,51 @@ struct ManualPiecePage: View {
     @ViewBuilder private var heading: some View {
         // The topic's name above the piece's, lower-cased and tappable — the
         // second way up, beside the crumbs.
+        //
+        // **The 44 points are centred on the word, not hung under it.** This
+        // frame was `alignment: .bottomLeading`, which pinned the 12-point ink
+        // to the bottom edge of a 44-point box and left the other 32 points
+        // empty above it. Two things were wrong with that, and they are the
+        // same fault seen from either end:
+        //
+        //  - A tap 25 points above the word, in the white between the search
+        //    field and the page, navigated to the topic. A 44-point target is
+        //    there so the control is big enough to hit, not so it reaches up
+        //    into whitespace that draws nothing (Kamron's no-misleading-
+        //    controls rule). Every other 44-point text target in this app
+        //    centres its text — ``ManualCrumb``, `HomeRoomsView:285`,
+        //    `HomeTodayView:126`, `NewsSavedFeedView:139` — and
+        //    `.bottomLeading` was the only one of its kind in `ios/Domovoi/`.
+        //  - Apple's audit named this element, and only this one, with
+        //    `Contrast failed` on train R001. It is **not** a colour: sampled
+        //    off that run's own screenshot, the ink here is exactly
+        //    `(151, 88, 0)` on white — **5.66:1** — which is the same pixel
+        //    value, to the unit, as the three ``ManualCrumb`` buttons and
+        //    `zoom out` eleven points above it, all of them `brandInk` and all
+        //    of them unnamed in the same audit of the same page. What was
+        //    unique to this element was its shape: a row profile of the
+        //    screenshot puts its ink in points 353.3–362.3 of a frame running
+        //    321.3–365.3, three points off the bottom edge with 32 points of
+        //    blank above, where every crumb's ink sits near its frame's
+        //    middle. The rig has already recorded one `Contrast failed`
+        //    against an element the videos grid's own bottom edge was cutting
+        //    in half (`StubHouseUITests.frame(in:)`), so an element whose own
+        //    frame all but clips its ink is the structure to correct — and no
+        //    colour is repainted to make a finding go away.
+        //
+        // The cost is that the eyebrow sits about eleven points further from
+        // its title (22 points rather than 11) and eighteen points nearer the
+        // search field (30 rather than 48), so it still groups with the title
+        // it belongs to. Android gives it `padding(vertical = 4.dp)` and no
+        // enlarged target at all (`ManualScreen.kt:748`); 44 points is this
+        // port's rule, and this is 44 points spent symmetrically.
         Button {
             manual.go(piece.topic)
         } label: {
             Text((doc.topic(piece.topic)?.title ?? "").lowercased())
                 .font(.caption)
                 .fixedSize(horizontal: false, vertical: true)
-                .frame(minHeight: 44, alignment: .bottomLeading)
+                .frame(minHeight: 44, alignment: .leading)
                 .contentShape(.rect)
         }
         .buttonStyle(.plain)
