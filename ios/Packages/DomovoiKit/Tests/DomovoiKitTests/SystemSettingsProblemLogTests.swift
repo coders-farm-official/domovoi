@@ -48,6 +48,60 @@ final class SystemSettingsProblemLogTests: XCTestCase {
         XCTAssertEqual(2, log.problems.count)
     }
 
+    /// Two of the **same** kind at the same millisecond — which is what a day
+    /// with three crashes in it looks like, because `atMs` is the payload's
+    /// `timeStampEnd` and every diagnostic in a payload shares it. The case
+    /// above varies the kind and so never saw this: on `(kind, atMs)` the
+    /// second crash was discarded and the card under-reported in silence.
+    ///
+    /// The second half is the property the de-duplication exists for: the
+    /// card re-absorbs the same payloads every time it opens, so absorbing
+    /// this payload twice must still leave two.
+    func testTwoOfOneKindInOnePayloadAreTwoProblemsAndAbsorbTwiceIsStillTwo() {
+        let first = SystemSettingsProblem(
+            kind: .crash, atMs: 1_000, ordinal: 0, summary: "first"
+        )
+        let second = SystemSettingsProblem(
+            kind: .crash, atMs: 1_000, ordinal: 1, summary: "second"
+        )
+        let once = SystemSettingsProblemLog().with(contentsOf: [first, second])
+        XCTAssertEqual(2, once.problems.count)
+        XCTAssertEqual(["first", "second"], once.problems.map(\.summary).sorted())
+
+        let twice = once.with(contentsOf: [first, second])
+        XCTAssertEqual(2, twice.problems.count, "re-absorbing the same payload added a problem")
+    }
+
+    /// The reader's ordinal reaches the problem, so the log can tell the two
+    /// apart at all. The facts carry no summary of their own, so the
+    /// discriminating field here is the detail.
+    func testTheOrdinalSurvivesTheFactsToProblemsMapping() {
+        let problems = systemSettingsProblems(from: [
+            SystemSettingsDiagnosticFacts(kind: .crash, atMs: 1_000, ordinal: 0, detail: "a"),
+            SystemSettingsDiagnosticFacts(kind: .crash, atMs: 1_000, ordinal: 1, detail: "b"),
+        ])
+        XCTAssertEqual([0, 1], problems.map(\.ordinal))
+        XCTAssertEqual(2, SystemSettingsProblemLog().with(contentsOf: problems).problems.count)
+    }
+
+    /// A log written before `ordinal` existed still reads. Without
+    /// ``SystemSettingsProblem/init(from:)``'s `decodeIfPresent` the
+    /// synthesised decoder throws on the missing key and
+    /// ``systemSettingsDecodeLog(_:)`` — which cannot refuse to load — hands
+    /// back an **empty** log, discarding the person's whole record on the
+    /// update that added the field.
+    func testALogWrittenBeforeTheOrdinalExistedStillReads() {
+        let old = Data(
+            """
+            {"problems":[{"kind":"crash","atMs":1000,"summary":"The app crashed"}]}
+            """.utf8
+        )
+        let log = systemSettingsDecodeLog(old)
+        XCTAssertEqual(1, log.problems.count, "the old file read as an empty log")
+        XCTAssertEqual(0, log.problems.first?.ordinal)
+        XCTAssertEqual("The app crashed", log.problems.first?.summary)
+    }
+
     func testTenAreKeptAndTheEleventhPushesTheOldestOut() {
         var log = SystemSettingsProblemLog()
         for i in 1...12 {

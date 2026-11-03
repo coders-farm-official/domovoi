@@ -107,11 +107,17 @@ public final class SystemSettingsProblemsModel {
 
     // MARK: - the trace toggle
 
-    /// A stable key for a row: a problem is identified by its kind and its
-    /// time, which is also what the log de-duplicates on, so two rows can
-    /// never share one.
+    /// A stable key for a row: a problem is identified by its kind, its time
+    /// and its ``SystemSettingsProblem/ordinal``, which is also exactly what
+    /// the log de-duplicates on — so two rows can never share one.
+    ///
+    /// The ordinal is part of the key because the first two are not enough:
+    /// every diagnostic in one MetricKit payload carries that payload's
+    /// `timeStampEnd`, so two crashes a minute apart on the same day share
+    /// `atMs`, and a key without the ordinal would expand both traces on one
+    /// tap.
     public func id(of problem: SystemSettingsProblem) -> String {
-        "\(problem.kind.rawValue)@\(problem.atMs)"
+        "\(problem.kind.rawValue)@\(problem.atMs)#\(problem.ordinal)"
     }
 
     /// Whether this row's call stack is showing. **In the model, not the

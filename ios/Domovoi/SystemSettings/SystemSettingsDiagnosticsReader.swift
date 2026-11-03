@@ -78,32 +78,35 @@ enum SystemSettingsDiagnosticsReader {
         payloads.flatMap { payload in
             let atMs = Int64(payload.timeStampEnd.timeIntervalSince1970 * 1000)
             var out: [SystemSettingsDiagnosticFacts] = []
-            for crash in payload.crashDiagnostics ?? [] {
+            for (ordinal, crash) in (payload.crashDiagnostics ?? []).enumerated() {
                 out.append(
                     SystemSettingsDiagnosticFacts(
                         kind: .crash,
                         atMs: atMs,
+                        ordinal: ordinal,
                         detail: detail(of: crash),
                         trace: trace(of: crash.callStackTree)
                     )
                 )
             }
-            for hang in payload.hangDiagnostics ?? [] {
+            for (ordinal, hang) in (payload.hangDiagnostics ?? []).enumerated() {
                 out.append(
                     SystemSettingsDiagnosticFacts(
                         kind: .hang,
                         atMs: atMs,
+                        ordinal: ordinal,
                         hangMs: Int64(hang.hangDuration.converted(to: .milliseconds).value),
                         detail: appLine(hang),
                         trace: trace(of: hang.callStackTree)
                     )
                 )
             }
-            for cpu in payload.cpuExceptionDiagnostics ?? [] {
+            for (ordinal, cpu) in (payload.cpuExceptionDiagnostics ?? []).enumerated() {
                 out.append(
                     SystemSettingsDiagnosticFacts(
                         kind: .cpu,
                         atMs: atMs,
+                        ordinal: ordinal,
                         detail: join([
                             appLine(cpu),
                             seconds("processor time", cpu.totalCPUTime),
@@ -113,11 +116,12 @@ enum SystemSettingsDiagnosticsReader {
                     )
                 )
             }
-            for disk in payload.diskWriteExceptionDiagnostics ?? [] {
+            for (ordinal, disk) in (payload.diskWriteExceptionDiagnostics ?? []).enumerated() {
                 out.append(
                     SystemSettingsDiagnosticFacts(
                         kind: .diskWrite,
                         atMs: atMs,
+                        ordinal: ordinal,
                         detail: join([
                             appLine(disk),
                             "wrote "

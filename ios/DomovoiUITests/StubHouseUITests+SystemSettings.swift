@@ -135,7 +135,12 @@ extension StubHouseUITests {
             "`default` is live with nothing saved — it has nothing to restore"
         )
 
-        app.buttons[SystemSettingsStringsUnderTest.addFiles].tap()
+        // The same wait the other case has, so a rig problem (a spare button
+        // that is not in the tree) reports as one rather than as
+        // "no matches found" on the tap.
+        let add = app.buttons[SystemSettingsStringsUnderTest.addFiles]
+        XCTAssertTrue(add.waitForExistence(timeout: 10), "no `add Files to the bar` button")
+        add.tap()
         XCTAssertTrue(
             systemSettingsBarLine(app).contains("files"),
             "the edit this case needs did not land"
@@ -759,10 +764,17 @@ enum SystemSettingsStringsUnderTest {
     static let moveHomeRight = "move Home right"
     static let takeHomeOff = "take Home off the bar"
 
-    /// A tab of ``PhoneBarView``, whose caption is the route's label
-    /// lowercased and which carries no `accessibilityLabel` of its own — so
-    /// the button answers to its caption.
-    static let filesTab = "files"
+    /// A tab of ``PhoneBarView``. Its **caption** is the route's label
+    /// lowercased (`ShellChromeViews.swift:270`), but the caption is not what
+    /// the query matches: the tab button combines its children and carries
+    /// `.accessibilityLabel(route.label)` (`ShellChromeViews.swift:304`), so
+    /// the element answers to `Files` — ``Route/label`` is the raw value
+    /// verbatim for everything but `satellites`.
+    ///
+    /// Still unambiguous on this screen: the spare button is
+    /// `add Files to the bar` and the row's controls are `move Files left` /
+    /// `take Files off the bar`, so `Files` exactly is only ever the bar tab.
+    static let filesTab = "Files"
 
     // MARK: - About (SystemSettingsStrings)
 

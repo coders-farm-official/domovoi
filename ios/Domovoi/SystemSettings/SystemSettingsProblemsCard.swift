@@ -112,9 +112,19 @@ struct SystemSettingsProblemsCard: View {
     /// accessibility size cannot hold three labels on a line and a row that
     /// scrolls sideways is a row a VoiceOver user has to discover.
     @ViewBuilder private func actions(_ problems: SystemSettingsProblemsModel) -> some View {
+        // **Rendered once, here.** `ViewThatFits` builds every candidate to
+        // measure it, so a `problems.report()` inside `buttons` ran twice per
+        // body pass — and the card redraws on every `show details` tap,
+        // because `expanded` is tracked on an `@Observable` model. With ten
+        // problems each carrying an 8 000-character call-stack tree
+        // (`SystemSettingsDiagnosticsReader.maxTraceChars`) that was ~160 KB
+        // of string building on the main actor per tap, for a `ShareLink`
+        // nobody may ever touch. The pasteboard write and the share item are
+        // the same text by definition, so one render serves both.
+        let report = problems.report()
         ViewThatFits(in: .horizontal) {
-            HStack(spacing: 8) { buttons(problems) }
-            VStack(alignment: .leading, spacing: 8) { buttons(problems) }
+            HStack(spacing: 8) { buttons(problems, report: report) }
+            VStack(alignment: .leading, spacing: 8) { buttons(problems, report: report) }
         }
         // The clear is a confirmation, as Android's is
         // (`ProblemReports.kt:106-115`): `destructive` on the yes, and the
@@ -135,9 +145,14 @@ struct SystemSettingsProblemsCard: View {
         }
     }
 
-    @ViewBuilder private func buttons(_ problems: SystemSettingsProblemsModel) -> some View {
+    /// `report` is ``SystemSettingsProblemsModel/report()`` already rendered by
+    /// the caller — see ``actions(_:)`` for why it is not rendered here.
+    @ViewBuilder private func buttons(
+        _ problems: SystemSettingsProblemsModel,
+        report: String
+    ) -> some View {
         Button(SystemSettingsStrings.copyAll) {
-            UIPasteboard.general.string = problems.report()
+            UIPasteboard.general.string = report
             // A momentary acknowledgement, which is what the shell's toast is
             // for (``ShellModel/showToast(_:)``) — and Android's own surface
             // for this one (`ProblemReports.kt:86`).
@@ -146,7 +161,7 @@ struct SystemSettingsProblemsCard: View {
         .buttonStyle(.bordered)
         .frame(minHeight: 44)
         ShareLink(
-            item: problems.report(),
+            item: report,
             subject: Text(SystemSettingsStrings.problemReportSubject)
         ) {
             Text(SystemSettingsStrings.share)
@@ -216,8 +231,31 @@ private struct SystemSettingsProblemRow: View {
         )
     }
 
-    private var header: some View {
-        HStack(spacing: 8) {
+    /// Both of this row's rows become columns at an accessibility size, the
+    /// way ``SystemSettingsBarRow`` does (`SystemSettingsLayoutPanel.swift:257-271`).
+    ///
+    /// `header` is the worst of the two: `high processor use` beside
+    /// ``systemSettingsFormatTime(_:timeZone:)``'s fixed 26 characters of
+    /// `yyyy-MM-dd HH:mm:ss +0000`, where at AX5 neither fits its share of an
+    /// iPhone's width and both wrap into tall narrow columns.
+    ///
+    /// **Unverified by the suite, and unverifiable by it.** iOS writes no
+    /// MetricKit diagnostics on a Simulator, so no run on this track can
+    /// photograph a row at all — the audit case only ever sees the empty
+    /// state, which is the same blindness the row's stroke is argued under
+    /// above. It is written the way the rule says and checked by reading.
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    @ViewBuilder private var header: some View {
+        if typeSize.isAccessibilitySize {
+            VStack(alignment: .leading, spacing: 4) { headerParts }
+        } else {
+            HStack(spacing: 8) { headerParts }
+        }
+    }
+
+    @ViewBuilder private var headerParts: some View {
+        Group {
             // The kind pill. `errInk`/`warnInk` as the text and the outline,
             // never `.red`/`.orange`: Android's `Tone.Err`/`Tone.Warn` with
             // this app's measured ink tokens
@@ -241,8 +279,20 @@ private struct SystemSettingsProblemRow: View {
         }
     }
 
-    private var rowActions: some View {
-        HStack(spacing: 4) {
+    @ViewBuilder private var rowActions: some View {
+        if typeSize.isAccessibilitySize {
+            VStack(alignment: .leading, spacing: 4) { rowActionParts }
+                .font(.footnote)
+                .foregroundStyle(Color.brandInk)
+        } else {
+            HStack(spacing: 4) { rowActionParts }
+                .font(.footnote)
+                .foregroundStyle(Color.brandInk)
+        }
+    }
+
+    @ViewBuilder private var rowActionParts: some View {
+        Group {
             if problems.hasTrace(problem) {
                 Button(
                     problems.isShowingTrace(problem)
@@ -259,7 +309,5 @@ private struct SystemSettingsProblemRow: View {
             }
             .frame(minHeight: 44)
         }
-        .font(.footnote)
-        .foregroundStyle(Color.brandInk)
     }
 }

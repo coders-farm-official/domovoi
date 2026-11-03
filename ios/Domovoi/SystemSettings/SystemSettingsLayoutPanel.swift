@@ -50,6 +50,10 @@ struct SystemSettingsLayoutPanel: View {
     /// view has one.
     @State private var layout: SystemSettingsLayoutModel?
 
+    /// Read by the spare wrap, which drops to one button a row at an
+    /// accessibility size.
+    @Environment(\.dynamicTypeSize) private var typeSize
+
     var body: some View {
         Group {
             if let layout {
@@ -198,34 +202,77 @@ struct SystemSettingsLayoutPanel: View {
             // `Grid` only for fixed columns, so this is a wrapping stack built
             // the way the platform actually wraps: one row per tab at an
             // accessibility size (where two buttons never fit a line anyway),
-            // and otherwise a `ViewThatFits`-free `LazyVGrid` with adaptive
-            // columns, which is SwiftUI's flow layout.
-            LazyVGrid(
-                columns: [GridItem(.adaptive(minimum: 120), spacing: 8, alignment: .leading)],
-                alignment: .leading,
-                spacing: 8
-            ) {
-                ForEach(layout.spare, id: \.self) { route in
-                    Button {
-                        layout.edit(.add, route)
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "plus")
-                                .imageScale(.small)
-                            Text(route.label)
-                                .fixedSize(horizontal: false, vertical: true)
+            // and two per row otherwise.
+            //
+            // ### Why this wrap is hand-rolled and **not** a `LazyVGrid`
+            //
+            // It was one, with `GridItem(.adaptive(minimum: 120))`. A lazy
+            // container does not instantiate what has not scrolled into view
+            // (NIGHT-RULES §5: "a lazy list's foot is unbuilt, not off
+            // screen"), and ``workspaceRoutes`` puts `files` **last**
+            // (`Route.swift:111-115`), so with the default bar the `files`
+            // button sat in the grid's last row — roughly 630 pt down a card
+            // taller than the viewport. Two UI cases tap it, and
+            // `scrollUntilBuilt` cannot rescue them: it scrolls
+            // `app.collectionViews.firstMatch` and a `LazyVGrid` is not
+            // backed by one. There are at most ten short buttons here and
+            // nothing worth deferring, so every one of them exists in the
+            // tree whether or not it has scrolled into view.
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(systemSettingsSpareRows(layout.spare), id: \.first) { row in
+                    HStack(alignment: .top, spacing: 8) {
+                        ForEach(row, id: \.self) { route in
+                            spareButton(layout, route)
                         }
-                        .frame(minHeight: 44)
+                        // A short last row stays left-aligned rather than
+                        // stretching its one button across the card.
+                        if row.count < systemSettingsSpareColumns { Spacer(minLength: 0) }
                     }
-                    .buttonStyle(.bordered)
-                    // Android's own `contentDescription` on the glyph
-                    // (`PhoneBarPanel.kt:131`), which is the whole button's
-                    // label here: the visible text is only the route's name,
-                    // and "Files" alone does not say what tapping it does.
-                    .accessibilityLabel(ShellStrings.addLabelToTheBar(route.label))
-                    .disabled(!layout.canAdd(route))
                 }
             }
+        }
+    }
+
+    /// One spare tab's button. Extracted only so the wrap above reads as a
+    /// layout and nothing else.
+    private func spareButton(
+        _ layout: SystemSettingsLayoutModel,
+        _ route: Route
+    ) -> some View {
+        Button {
+            layout.edit(.add, route)
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "plus")
+                    .imageScale(.small)
+                Text(route.label)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(minHeight: 44)
+        }
+        .buttonStyle(.bordered)
+        // Android's own `contentDescription` on the glyph
+        // (`PhoneBarPanel.kt:131`), which is the whole button's label here:
+        // the visible text is only the route's name, and "Files" alone does
+        // not say what tapping it does.
+        .accessibilityLabel(ShellStrings.addLabelToTheBar(route.label))
+        .disabled(!layout.canAdd(route))
+    }
+
+    /// Buttons per row of the spare wrap: one at an accessibility size, where
+    /// a single label already takes the width.
+    private var systemSettingsSpareColumns: Int {
+        typeSize.isAccessibilitySize ? 1 : 2
+    }
+
+    /// ``layout.spare`` cut into rows of ``systemSettingsSpareColumns``.
+    ///
+    /// The `id` the wrap uses is each row's first route, which is unique: the
+    /// bar cannot hold a route twice, so the spare list cannot either.
+    private func systemSettingsSpareRows(_ spare: [Route]) -> [[Route]] {
+        let width = systemSettingsSpareColumns
+        return stride(from: 0, to: spare.count, by: width).map { start in
+            Array(spare[start..<min(start + width, spare.count)])
         }
     }
 }

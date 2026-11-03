@@ -33,8 +33,11 @@ import Foundation
 ///  - **`pid` and `source`** (`ProblemLog.kt:35-41`). Both exist in the Kotlin
 ///    to reconcile the app's own crash record with Android's record of the
 ///    same death (`importingExits`). With one source there is nothing to
-///    reconcile, so de-duplication is by kind and time, and the report does
-///    not claim a process id it never had.
+///    reconcile, and the report does not claim a process id it never had.
+///    De-duplication is by kind, time and
+///    ``SystemSettingsProblem/ordinal`` — **not** by kind and time alone:
+///    that argument covers reconciling two sources and says nothing about
+///    two diagnostics inside one payload, which share a timestamp.
 ///  - **No live feed.** The OS decides when payloads arrive — after the fact,
 ///    not at the moment of the crash — which is why the card's wording
 ///    promises a record and never "now".
@@ -76,6 +79,17 @@ public struct SystemSettingsProblem: Equatable, Codable, Sendable {
     public let kind: SystemSettingsProblemKind
     /// When it happened, epoch milliseconds.
     public let atMs: Int64
+    /// Which one of its kind it was **inside the payload it arrived in**.
+    ///
+    /// Not Android's `pid` by another name, and not an ordering: it exists
+    /// because `atMs` is the payload's `timeStampEnd` and every diagnostic in
+    /// one payload therefore shares it (`SystemSettingsDiagnosticsReader`).
+    /// `crashDiagnostics` is an array precisely because a day's payload can
+    /// hold several crashes, so without this a build that crashed three times
+    /// de-duplicated down to one problem and the card under-reported in
+    /// silence. 0 for anything with one of its kind, and 0 for a log written
+    /// before this field existed.
+    public let ordinal: Int
     /// One line saying what happened.
     public let summary: String
     /// iOS's own details, when there are any.
@@ -87,15 +101,33 @@ public struct SystemSettingsProblem: Equatable, Codable, Sendable {
     public init(
         kind: SystemSettingsProblemKind,
         atMs: Int64,
+        ordinal: Int = 0,
         summary: String,
         detail: String? = nil,
         trace: String? = nil
     ) {
         self.kind = kind
         self.atMs = atMs
+        self.ordinal = ordinal
         self.summary = summary
         self.detail = detail
         self.trace = trace
+    }
+
+    /// Hand-written for one line of it: `ordinal` is **absent** from every log
+    /// this app has already written to disk, and a synthesised
+    /// `init(from:)` would throw on that key — which
+    /// ``systemSettingsDecodeLog(_:)`` turns into an empty log, silently
+    /// discarding a person's whole record on the update that added the field.
+    /// Everything else is what the compiler would have written.
+    public init(from decoder: any Decoder) throws {
+        let box = try decoder.container(keyedBy: CodingKeys.self)
+        kind = try box.decode(SystemSettingsProblemKind.self, forKey: .kind)
+        atMs = try box.decode(Int64.self, forKey: .atMs)
+        ordinal = try box.decodeIfPresent(Int.self, forKey: .ordinal) ?? 0
+        summary = try box.decode(String.self, forKey: .summary)
+        detail = try box.decodeIfPresent(String.self, forKey: .detail)
+        trace = try box.decodeIfPresent(String.self, forKey: .trace)
     }
 }
 
@@ -116,14 +148,21 @@ public struct SystemSettingsProblemLog: Equatable, Codable, Sendable {
     public static let maxFreezes = 4
 
     /// Add `problem`, newest first, trimmed. One already in the log — same
-    /// kind, same time — is not added twice (`ProblemLog.with`).
+    /// kind, same time, same place in its payload — is not added twice
+    /// (`ProblemLog.with`).
     ///
     /// The Kotlin's third de-duplication key is the process id; see this
-    /// file's heading for why there is none here.
+    /// file's heading for why there is none here. ``SystemSettingsProblem/ordinal``
+    /// is the third key instead, and it is not optional: every diagnostic in
+    /// one MetricKit payload shares that payload's `timeStampEnd`, so on
+    /// `(kind, atMs)` alone three crashes in a day collapsed into one.
+    /// Absorbing the same payload twice still changes nothing, which is the
+    /// property this method exists for.
     public func with(_ problem: SystemSettingsProblem) -> SystemSettingsProblemLog {
-        if problems.contains(where: { $0.kind == problem.kind && $0.atMs == problem.atMs }) {
-            return self
+        let isKnown = problems.contains {
+            $0.kind == problem.kind && $0.atMs == problem.atMs && $0.ordinal == problem.ordinal
         }
+        if isKnown { return self }
         return SystemSettingsProblemLog(problems: Self.trimmed(problems + [problem]))
     }
 
@@ -292,6 +331,10 @@ public struct SystemSettingsDiagnosticFacts: Equatable, Sendable {
     /// When it happened, epoch milliseconds — `timeStampEnd` of the payload
     /// the diagnostic came in.
     public let atMs: Int64
+    /// Which one of its kind it was inside that payload — the reader's loop
+    /// index. See ``SystemSettingsProblem/ordinal``: without it, two crashes
+    /// in one payload are one problem, because `atMs` is the payload's.
+    public let ordinal: Int
     /// How long the main thread was stuck, for a hang. Nil for the rest, and
     /// nil for a hang whose payload did not say.
     public let hangMs: Int64?
@@ -304,12 +347,14 @@ public struct SystemSettingsDiagnosticFacts: Equatable, Sendable {
     public init(
         kind: SystemSettingsProblemKind,
         atMs: Int64,
+        ordinal: Int = 0,
         hangMs: Int64? = nil,
         detail: String? = nil,
         trace: String? = nil
     ) {
         self.kind = kind
         self.atMs = atMs
+        self.ordinal = ordinal
         self.hangMs = hangMs
         self.detail = detail
         self.trace = trace
@@ -352,6 +397,7 @@ public func systemSettingsProblems(
         SystemSettingsProblem(
             kind: fact.kind,
             atMs: fact.atMs,
+            ordinal: fact.ordinal,
             summary: systemSettingsSummary(for: fact),
             detail: fact.detail,
             trace: fact.trace
