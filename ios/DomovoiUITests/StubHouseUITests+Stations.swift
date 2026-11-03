@@ -63,6 +63,10 @@ extension StubHouseUITests {
 
         /// The three now-playing branches, one row each.
         static let withTrack = "Favourite Kestrel 04"
+        /// Row 04's `stream_url` in the fixture (`stations.py:130`). The
+        /// detail sheet shows it as the stream line's accessibility *value*,
+        /// never as its label — see ``StationsWords/streamURLLabel``.
+        static let withTrackStream = "http://stream.example/kestrel04"
         static let trackText = "Sonora Pine"
         static let icyRefused = "Favourite Kestrel 05"
         static let neverProbed = "Favourite Kestrel 06"
@@ -140,6 +144,9 @@ extension StubHouseUITests {
         static let wjimHead = "WJIM · 97.5 FM"
         static let lansing = "Lansing, MI"
         static let noStreamURL = "no stream URL — polling can't reach this station"
+        /// What the line that *shows* a URL is called out loud
+        /// (`StationsStrings.streamURLA11y`). Its visible text is the URL.
+        static let streamURLLabel = "stream URL"
         static let resolve = "resolve"
         static let pasteURL = "paste url"
         static let foundSimulcast = "found simulcast for WJIM"
@@ -905,6 +912,24 @@ extension StubHouseUITests {
             "a known-but-not-local source did not pass through verbatim"
         )
 
+        // --- the stream line is a named value, not a bare URL
+        //
+        // Train S007's audit of this sheet reported "Label not human-readable"
+        // against `http://stream.example/kestrel04`: the element's whole
+        // label was the URL. The URL is still what is *drawn* — the value is
+        // asserted to be it exactly, so a screen that stopped showing the
+        // address and kept the word would fail here.
+        let streamLine = app.staticTexts[StationsWords.streamURLLabel]
+        XCTAssertTrue(
+            streamLine.waitForExistence(timeout: 20),
+            "the stream line is not named, so VoiceOver reads a host and a path "
+                + "with no word for what they are"
+        )
+        XCTAssertEqual(
+            streamLine.value as? String, StubStations.withTrackStream,
+            "the stream line does not carry row 04's URL as its value"
+        )
+
         // --- the interval
         let open = app.buttons[StationsWords.interval]
         XCTAssertTrue(open.waitForExistence(timeout: 20), "the sheet has no interval control")
@@ -1165,6 +1190,81 @@ extension StubHouseUITests {
         XCTAssertEqual([], stuck, "a leaf of this screen does not grow with the type size")
     }
 
+    /// The sheet's bar word grows with the type size — the measurement the
+    /// audit's fourth signature stands on.
+    ///
+    /// Train S007 audited the detail sheet for the first time and named
+    /// `hide details` — the `ToolbarItem` button at `y 80`, inside the
+    /// sheet's own navigation bar — with "Dynamic Type font sizes are
+    /// partially unsupported" / "User will not be able to change the font
+    /// size of this element". Nothing about the word distinguishes it: the
+    /// screen's bar was audited in the same run and reported nothing, and
+    /// `MusicTrackSheet` and `VideoFeedSheets` put their `close` in the bar
+    /// in exactly this shape. The sheet's bar is simply the first bar either
+    /// audit has looked inside.
+    ///
+    /// **"Partially" is the whole of the finding.** A navigation bar caps how
+    /// far its buttons grow so that the bar cannot eat the screen, so a ratio
+    /// says nothing here for the same reason it says nothing about a chip
+    /// with a 44-point floor. What is measured is the detail's claim — that
+    /// the size cannot be changed at all — and it is false if the word is
+    /// taller at `XXXL`, the largest size a bar scales through, than at `L`.
+    /// The accessibility size is taken too and **printed, not asserted**:
+    /// that is where the cap lives, and a number pinned to it would be a
+    /// pinned total under another name.
+    @MainActor
+    func testStations_TheHideDetailsWordGrows() throws {
+        /// The bar button's height with the sheet open at one type size, or
+        /// nil with the tree printed — a size that could not be measured is
+        /// a failure below, never a silence (NIGHT-RULES §5).
+        @MainActor
+        func barWordHeight(_ mode: String, _ short: String) -> CGFloat? {
+            let (app, landed) = openStations(mode)
+            XCTAssertTrue(landed, "Stations never drew at \(short)")
+            // At an accessibility size the search card alone is taller than
+            // the phone, so row 04's chevron is unbuilt until the list is
+            // flicked — unbuilt is not absent.
+            let chevron = stationsChevron(app, StubStations.withTrack)
+            if !chevron.exists { _ = scrollStationsUntil(app, chevron) }
+            guard chevron.exists else { app.terminate(); return nil }
+            chevron.tap()
+            guard app.staticTexts[StationsWords.recentDetections]
+                .waitForExistence(timeout: 25) else {
+                print("=== THE SHEET DID NOT OPEN AT \(short) — tree follows ===")
+                print(app.debugDescription)
+                app.terminate()
+                return nil
+            }
+            evidence(app, "stations-29-bar-\(short)")
+            let word = app.buttons[StationsWords.hideDetails].firstMatch
+            guard word.waitForExistence(timeout: 20) else {
+                print("=== NO BAR WORD AT \(short) — tree follows ===")
+                print(app.debugDescription)
+                app.terminate()
+                return nil
+            }
+            let height = word.frame.height
+            print("STATIONS BAR [\(short)] hide details height=\(height)")
+            app.terminate()
+            return height
+        }
+
+        let ordinary = barWordHeight(Self.ordinaryTypeSize, "L")
+        let largest = barWordHeight("UICTContentSizeCategoryXXXL", "XXXL")
+        // The cap, for the record. Nothing is asserted about it.
+        let capped = barWordHeight("UICTContentSizeCategoryAccessibilityXXXL", "AX5")
+        print("STATIONS BAR cap at AX5: " + String(describing: capped))
+
+        let small = try XCTUnwrap(ordinary, "the bar word was never measured at L")
+        let grown = try XCTUnwrap(largest, "the bar word was never measured at XXXL")
+        XCTAssertGreaterThan(
+            grown, small,
+            "hide details is no taller at XXXL than at L (\(small)), so the audit's "
+                + "Dynamic Type finding against the sheet's bar is true and the bar "
+                + "does not scale at any size"
+        )
+    }
+
     // MARK: - 12. the audit
 
     /// The signatures this screen's audit is allowed to report, each one
@@ -1209,6 +1309,10 @@ extension StubHouseUITests {
              StubStations.playedOnly, StubStations.playedAgo]
                 + StationsWords.tagPresets
         )
+
+        /// The sheet's navigation-bar button, measured by
+        /// ``testStations_TheHideDetailsWordGrows()``.
+        static let measuredBarWords: Set<String> = [StationsWords.hideDetails]
 
         static let dynamicType = "Dynamic Type font sizes are"
         static let contrast = "Contrast"
@@ -1277,6 +1381,18 @@ extension StubHouseUITests {
             if line.hasPrefix(StationsAudit.dynamicType), let label,
                StationsAudit.measuredLeaves.contains(label) {
                 print("STATIONS AUDIT [\(name)] measured to scale, see the AX5 case: \(line)")
+                continue
+            }
+            // A **button** of the sheet's navigation bar, which scales until
+            // the bar caps it. Buttons only (`type=9`): a static text of this
+            // screen that stopped scaling must still fail, and the bar holds
+            // no static text of ours — its title is the screen's own name.
+            if line.hasPrefix(StationsAudit.dynamicType), let label,
+               StationsAudit.measuredBarWords.contains(label), line.contains("type=9") {
+                print(
+                    "STATIONS AUDIT [\(name)] a bar button, measured to grow in "
+                        + "testStations_TheHideDetailsWordGrows: \(line)"
+                )
                 continue
             }
             rest.append(line)

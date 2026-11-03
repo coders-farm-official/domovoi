@@ -307,6 +307,12 @@ public enum StationsStrings {
 
     public static let streamPlaceholder = "http(s)://…"
     public static let editStreamURL = "edit stream URL"
+    /// The spoken name of the line that *shows* the URL, whose visible text
+    /// is the URL itself. iOS-only (`IOS-ONLY-STRINGS.md`): Apple's audit
+    /// reads a bare `http://…` as a label that is not human-readable, and it
+    /// is right — VoiceOver spelling a URL with no word for what it is says
+    /// nothing. The URL stays, as the element's accessibility *value*.
+    public static let streamURLA11y = "stream URL"
     public static let streamMustBeHTTP = "stream URL must start with http(s)://"
     public static let streamSaved = "stream URL saved"
     public static let streamCleared = "stream URL cleared"

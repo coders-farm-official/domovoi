@@ -276,6 +276,19 @@ struct StationsStreamEditor: View {
                         .font(.footnote)
                         .fixedSize(horizontal: false, vertical: true)
                         .multilineTextAlignment(.leading)
+                        // **Spoken as a named value, not as a bare URL.**
+                        // Train S007's audit of this sheet reported "Label
+                        // not human-readable" against
+                        // `http://stream.example/kestrel04`, and it is a
+                        // true finding: the element's whole label was the
+                        // URL, so VoiceOver read out a host and a path with
+                        // no word for what they were. The caption above
+                        // says `stream`, but a caption is a sibling leaf —
+                        // it is not part of this element and is not read
+                        // with it. Label and value rather than one combined
+                        // string, as `FileRowView` does with a file's meta.
+                        .accessibilityLabel(StationsStrings.streamURLA11y)
+                        .accessibilityValue(url)
                     Spacer(minLength: 4)
                     Button {
                         detail.beginEdit(row)
