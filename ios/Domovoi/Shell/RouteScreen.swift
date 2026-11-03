@@ -139,7 +139,11 @@ struct RouteScreen: View {
             NewsView(model: model)
         case .people:
             // slot: people
-            ScreenPlaceholder(route: route, onThisPhone: false)
+            // ``PeopleView`` says what is left out and why there is no
+            // control for any of it — the rename and the forget Android draws
+            // and a phone cannot do, and the voice enrolment this screen
+            // never had.
+            PeopleView(model: model)
         case .satellites:
             // slot: satellites
             ScreenPlaceholder(route: route, onThisPhone: false)
