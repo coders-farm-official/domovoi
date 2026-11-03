@@ -57,9 +57,6 @@ final class PersonDetailModelTests: XCTestCase {
             #"{"news_source":"npr","tts_voice":"amy","wake_volume":0.7}"#
         )
 
-        /// Every write that reached the server: method, path and body.
-        let writes = Shared<[(method: String, path: String, body: String)]>([])
-
         static let sessions = """
         [{"id":"s-aaaa1111-kitchen","room_id":"kitchen","started_at":"2026-11-02T09:50:00Z",
           "last_activity":"2026-11-02T09:52:00Z","person_id":1,"intent_count":2},
@@ -115,11 +112,15 @@ final class PersonDetailModelTests: XCTestCase {
                 return .json((try? TestIdentity.real.healthBody(challenge: challenge)) ?? "{}")
             }
             if method != "GET" {
-                let body = request.httpBody.map { String(decoding: $0, as: UTF8.self) } ?? ""
-                writes.mutate { $0.append((method, path, body)) }
                 // `204`, no body, as the two deletes answer (`people.py:552`,
                 // `:657`); the posts answer `201` with the row, which nothing
                 // reads because every write is followed by a re-read.
+                //
+                // What left is **not** recorded here: a `URLProtocol`'s
+                // dispatcher is handed the body as a stream, and
+                // ``StubURLProtocol`` has already read it into its own
+                // recorded copy by the time this runs (measured 2026-10-28,
+                // `StubURLProtocol.swift:110`). ``writes()`` reads that copy.
                 return .json("", status: 204)
             }
             func answering(_ which: String, _ rows: String) -> StubURLProtocol.Answer {
@@ -202,6 +203,24 @@ final class PersonDetailModelTests: XCTestCase {
                 parts.path == path
             else { return nil }
             return parts.query ?? ""
+        }
+    }
+
+    /// Every non-GET request that left, with its path and its bytes.
+    ///
+    /// Read from ``StubURLProtocol/recorded``, whose copy has the body stream
+    /// read back into `httpBody`. The stub's dispatcher cannot do it — the
+    /// stream is already consumed by the time it is called — which cost four
+    /// assertions that compared the right path against an empty body.
+    private func writes() -> [(method: String, path: String, body: String)] {
+        StubURLProtocol.recorded.compactMap { request in
+            let method = request.httpMethod ?? "GET"
+            guard method != "GET", let path = request.url?.path else { return nil }
+            return (
+                method,
+                path,
+                request.httpBody.map { String(decoding: $0, as: UTF8.self) } ?? ""
+            )
         }
     }
 
@@ -454,7 +473,7 @@ final class PersonDetailModelTests: XCTestCase {
     // MARK: - the six writes
 
     func testAddingAMemoryPostsItClearsTheFieldAndRereads() async {
-        let (model, house) = rig()
+        let (model, _) = rig()
         await showing(model, kamron)
 
         model.typedMemory("  allergic to shellfish  ")
@@ -462,7 +481,7 @@ final class PersonDetailModelTests: XCTestCase {
         model.saveMemory()
         await settleUntil({ model.toast != nil }, "the save")
 
-        let write = try? XCTUnwrap(house.writes.current.first)
+        let write = try? XCTUnwrap(writes().first)
         XCTAssertEqual(write?.method, "POST")
         XCTAssertEqual(write?.path, "/api/people/1/memories")
         // Trimmed, as `newBody.trim()` is (`PersonTabs.kt:88`).
@@ -479,24 +498,24 @@ final class PersonDetailModelTests: XCTestCase {
     }
 
     func testABlankMemoryIsNeverSent() async {
-        let (model, house) = rig()
+        let (model, _) = rig()
         await showing(model, kamron)
 
         model.typedMemory("   ")
         XCTAssertFalse(model.canSaveMemory)
         model.saveMemory()
         await nothingHappens()
-        XCTAssertTrue(house.writes.current.isEmpty)
+        XCTAssertTrue(writes().isEmpty)
     }
 
     func testApprovingAndRejectingArePatchesOfOneField() async {
-        let (model, house) = rig()
+        let (model, _) = rig()
         await showing(model, kamron)
         let pending = model.pendingMemories[0]
 
         model.setStatus(pending, to: .active)
         await settleUntil({ model.toast == "approved" }, "the approve")
-        var write = try? XCTUnwrap(house.writes.current.last)
+        var write = try? XCTUnwrap(writes().last)
         XCTAssertEqual(write?.method, "PATCH")
         XCTAssertEqual(write?.path, "/api/people/1/memories/2")
         XCTAssertEqual(write?.body, #"{"status":"active"}"#)
@@ -504,47 +523,47 @@ final class PersonDetailModelTests: XCTestCase {
         await settleUntil({ !model.loading }, "the re-read")
         model.setStatus(pending, to: .rejected)
         await settleUntil({ model.toast == "rejected" }, "the reject")
-        write = try? XCTUnwrap(house.writes.current.last)
+        write = try? XCTUnwrap(writes().last)
         XCTAssertEqual(write?.body, #"{"status":"rejected"}"#)
     }
 
     func testForgettingAMemoryAndAFavoriteAreDeletes() async {
-        let (model, house) = rig()
+        let (model, _) = rig()
         await showing(model, kamron)
 
         model.deleteMemory(model.activeMemories[0])
         await settleUntil({ model.toast == "deleted" }, "the memory delete")
-        XCTAssertEqual(house.writes.current.last?.method, "DELETE")
-        XCTAssertEqual(house.writes.current.last?.path, "/api/people/1/memories/1")
+        XCTAssertEqual(writes().last?.method, "DELETE")
+        XCTAssertEqual(writes().last?.path, "/api/people/1/memories/1")
 
         await settleUntil({ !model.loading }, "the re-read")
         model.setToast(nil)
         model.deleteFavorite(model.favoriteRows[2])
         await settleUntil({ model.toast == "deleted" }, "the favourite delete")
-        XCTAssertEqual(house.writes.current.last?.path, "/api/people/1/favorites/13")
+        XCTAssertEqual(writes().last?.path, "/api/people/1/favorites/13")
     }
 
     /// Both fields, and the kind lower-cased — the server upserts on
     /// `(person, kind, value)` (`people.py:633`), so `Team` and `team` would
     /// otherwise be two kinds.
     func testAFavoriteNeedsBothFieldsAndItsKindIsLowerCased() async {
-        let (model, house) = rig()
+        let (model, _) = rig()
         await showing(model, kamron)
 
         model.typedFavoriteKind("Team")
         XCTAssertFalse(model.canSaveFavorite)
         model.saveFavorite()
         await nothingHappens()
-        XCTAssertTrue(house.writes.current.isEmpty)
+        XCTAssertTrue(writes().isEmpty)
 
         model.typedFavoriteValue(" Kraken ")
         XCTAssertTrue(model.canSaveFavorite)
         model.saveFavorite()
         await settleUntil({ model.toast == "saved favorite" }, "the favourite save")
 
-        XCTAssertEqual(house.writes.current.last?.path, "/api/people/1/favorites")
+        XCTAssertEqual(writes().last?.path, "/api/people/1/favorites")
         XCTAssertEqual(
-            house.writes.current.last?.body,
+            writes().last?.body,
             #"{"kind":"team","rank":0,"value":"Kraken"}"#
         )
         XCTAssertEqual(model.newFavoriteKind, "")
