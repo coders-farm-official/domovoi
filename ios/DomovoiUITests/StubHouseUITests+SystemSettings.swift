@@ -601,7 +601,15 @@ extension StubHouseUITests {
         XCTAssertTrue(systemSettingsReach(app, group: .roomsAndDevices, section: .appLayout))
         XCTAssertNotNil(systemSettingsSettledBar(app), "the preview line never settled")
         guard #available(iOS 17.0, *) else { return }
-        let found = try auditIssues(app, "systemsettings-layout")
+        // Not `auditIssues` directly. In train I001 this screen reported six
+        // contrast findings where X006 measured three: the extra three are
+        // the shell header's, read through a notification banner, and they
+        // arrived anonymous here — so they ate the cut-edge allowance and
+        // pushed one of the cut's own findings out of it. The allowance below
+        // is unchanged; what changed is that the screen is no longer audited
+        // with something else drawn over it
+        // (``systemSettingsUncoveredAudit(_:_:)``).
+        let found = try systemSettingsUncoveredAudit(app, "systemsettings-layout")
         evidence(app, "systemsettings-layout-audited")
         let (floor, rest) = Self.floorAndRest(found)
         print("AUDIT systemsettings-layout floor=\(floor)")
@@ -671,11 +679,108 @@ extension StubHouseUITests {
             "the problem-report card had not finished reading"
         )
         guard #available(iOS 17.0, *) else { return }
-        let found = try auditIssues(app, "systemsettings-about")
+        // Not `auditIssues` directly: the three findings this case went red
+        // for in train I001 were the shell header's, read through a
+        // notification banner drawn over it. See
+        // ``systemSettingsUncoveredAudit(_:_:)`` — the measurement is there.
+        let found = try systemSettingsUncoveredAudit(app, "systemsettings-about")
         evidence(app, "systemsettings-about-audited")
         let (floor, rest) = Self.floorAndRest(found)
         print("AUDIT systemsettings-about floor=\(floor)")
         XCTAssertEqual([], rest, "About has findings the measured floor does not explain")
+    }
+
+    // MARK: - auditing a screen with nothing of SpringBoard's over it
+
+    /// SpringBoard, which is where a notification banner lives.
+    ///
+    /// A banner is **not** in the app's own tree — no `evidence()` tree in
+    /// any train has one — but it is in `evidence()`'s picture, because the
+    /// picture is of the screen. That is the whole reason this took a
+    /// screenshot to attribute.
+    @MainActor
+    var systemSettingsSpringboard: XCUIApplication {
+        XCUIApplication(bundleIdentifier: "com.apple.springboard")
+    }
+
+    /// The foreground notification banner, if one is up.
+    ///
+    /// By the identifier the Simulator gave it in train I001 —
+    /// `BannerNotification … identifier: 'NotificationShortLookView'`, in the
+    /// SpringBoard tree printed by
+    /// `testAlerts_WhenAlertsAreOnALedgerFireIsDelivered`. `.any` because the
+    /// type is SpringBoard's own and XCUITest has no case for it.
+    @MainActor
+    var systemSettingsBanner: XCUIElement {
+        systemSettingsSpringboard.descendants(matching: .any)["NotificationShortLookView"]
+    }
+
+    /// Apple's audit, taken with **nothing of SpringBoard's drawn over the
+    /// app**.
+    ///
+    /// ### What train I001 actually found
+    ///
+    /// Both audit cases in this file went red on the first full-class run,
+    /// each with exactly three `Contrast failed` more than train X006
+    /// measured on the same two screens: named on About — `unverified`,
+    /// `  live` and `127.0.0.1:6601`, all at y ≈ 69 — and anonymous on App
+    /// layout, where they overflowed the cut-edge allowance by one.
+    ///
+    /// Those three are the shell header's three texts, and the header **did
+    /// not change**: `ios/Domovoi/Shell/ShellChromeViews.swift` was last
+    /// touched on 2026-10-29, before this night's branches, and X006 audited
+    /// that identical header with **zero** contrast findings. So the ink is
+    /// not what changed — what is drawn over it is. The picture says so
+    /// (NIGHT-RULES §5): every I001 screenshot of this app, these two
+    /// screens included, has a notification banner — "Signs of tampering",
+    /// the container-guard incident the stub house serves every case —
+    /// sitting across the top of the screen, covering the header exactly.
+    /// It is a foreground banner because `AlertsTapDelegate` answers
+    /// `willPresent` with `[.banner, .sound, .list]`
+    /// (`ios/Domovoi/Alerts/AlertsAppWiring.swift:111`). Home and People,
+    /// whose audits have no cut edge at all, each report exactly three
+    /// anonymous `Contrast failed` under the same banner.
+    ///
+    /// Translucent material over text reading as a contrast finding the audit
+    /// cannot place is this track's own precedent (commit 94c04d2c, "the
+    /// bar's translucent material was the unplaceable contrast finding").
+    ///
+    /// ### What this does about it, and what it refuses to do
+    ///
+    /// It waits the banner out and audits the screen the case is about. It
+    /// does **not** allow the three findings, or the header's frames, or
+    /// anything else through the classifier: a header whose ink really failed
+    /// would still fail both cases. And it never reports a measurement taken
+    /// through a banner — a run the banner arrives during is discarded and
+    /// taken again, and two covered runs in a row return a line no caller can
+    /// classify, so the case fails as unmeasured rather than passes on
+    /// pixels that are not the app's.
+    @MainActor
+    @available(iOS 17.0, *)
+    func systemSettingsUncoveredAudit(_ app: XCUIApplication, _ name: String) throws -> [String] {
+        // Printed once, either way: if that identifier ever stops matching,
+        // this tree is the only thing that says so.
+        print("=== SPRINGBOARD at \(name) ===")
+        print(systemSettingsSpringboard.debugDescription)
+        for attempt in 1...2 {
+            if systemSettingsBanner.exists {
+                print("AUDIT \(name): a banner is up before attempt \(attempt) — waiting it out")
+                _ = systemSettingsBanner.waitForNonExistence(timeout: 20)
+                // It leaves by animating off the top edge, and the audit
+                // reads pixels: let the animation finish.
+                Thread.sleep(forTimeInterval: 1)
+            }
+            let found = try auditIssues(app, name)
+            guard systemSettingsBanner.exists else { return found }
+            print("AUDIT \(name): a banner arrived while attempt \(attempt) ran — discarded")
+            print(systemSettingsSpringboard.debugDescription)
+        }
+        return [
+            "UNMEASURED: two audits of \(name) in a row ran under a notification banner "
+                + "(SpringBoard's `NotificationShortLookView`), which covers the shell "
+                + "header — a contrast finding read through one is a measurement of the "
+                + "banner, not of this screen"
+        ]
     }
 
     // MARK: - getting about, and reading the bar
