@@ -3305,14 +3305,29 @@ final class StubHouseUITests: XCTestCase {
 
         // A match in the words rather than the title: the server sends the
         // words around it and the row shows them under the title.
+        // **`spinach`, not `frittata`.** `ChatRow.subtitle` is
+        // `match ?? snippet`, and this assertion is the only thing that holds
+        // the row to the match. It used to search `frittata` — which is in
+        // thread 11's `last_snippet` as well as in its words, so a row drawing
+        // the snippet instead of the match still contained it and the case
+        // passed. A sabotage run on 2026-11-02 swapped `row.subtitle` for
+        // `row.snippet` in the view and nothing here noticed.
+        //
+        // `spinach` is in message 103 and in no snippet, so the two fields are
+        // told apart: the matched words must be on screen and the snippet
+        // must not.
         clearField(app)
-        app.typeText("frittata")
+        app.typeText("spinach")
         let fridge = app.buttons[StubChat.fridge].firstMatch
         XCTAssertTrue(fridge.waitForExistence(timeout: 25), "a search did not match a thread's words")
         evidence(app, "82-chat-search-words")
         XCTAssertTrue(
-            containing(app, "frittata").exists,
+            containing(app, StubChat.matchedWords).exists,
             "the row does not show the words that matched"
+        )
+        XCTAssertFalse(
+            containing(app, StubChat.fridgeSnippet).exists,
+            "the row drew the thread's last words where the search's match belongs"
         )
     }
 
@@ -3415,9 +3430,11 @@ final class StubHouseUITests: XCTestCase {
     func testAReplyArrivesAWordAtATime() throws {
         let (app, landed) = openChat(fail: "slow")
         XCTAssertTrue(landed, "the thread list never answered")
+        // **Thread 11, not the garage.** Six messages overflow the screen, and
+        // a transcript that fits cannot show whether it follows anything.
         XCTAssertTrue(
-            openThread(app, StubChat.garage, waitingFor: StubChat.garageSnippet),
-            "the garage thread drew no transcript"
+            openThread(app, StubChat.fridge, waitingFor: StubChat.fridgeSnippet),
+            "the fridge thread drew no transcript"
         )
         XCTAssertTrue(say(app, "slowly now"), "the composer would not send")
 
@@ -3435,6 +3452,31 @@ final class StubHouseUITests: XCTestCase {
             "the reply did not grow: \(first.count) then \(second.count) characters"
         )
         XCTAssertTrue(second.hasPrefix(first), "the reply was rewritten rather than added to")
+
+        // **And the screen follows it down.** `ChatConversationView.tail`
+        // moves on a delta as well as on a new message, so the scroller runs
+        // while a reply grows rather than once when it starts — and nothing
+        // held it to that. A sabotage run on 2026-11-02 cut the key back to
+        // the message count, which leaves a person watching a long reply
+        // staring at the words it started with, and this case still passed
+        // because it only ever read the element's label, which is there
+        // whether or not it is on screen.
+        let window = app.windows.firstMatch.frame
+        let opening = containing(app, StubChat.secondMessage)
+        print(
+            "CHAT FOLLOW reply maxY=\(live.frame.maxY) window maxY=\(window.maxY) "
+                + "opening minY=\(opening.exists ? "\(opening.frame.minY)" : "gone")"
+        )
+        // Non-vacuous only if the transcript is taller than the screen, which
+        // is why this one is thread 11: say so rather than passing quietly.
+        if opening.exists && opening.frame.minY >= window.minY {
+            print("CHAT FOLLOW WARNING — the transcript never overflowed, so this proves nothing")
+        }
+        XCTAssertLessThanOrEqual(
+            live.frame.maxY,
+            window.maxY,
+            "the transcript did not follow the reply down the screen"
+        )
 
         // And it settles: the `done` row replaces the stream's guess, so the
         // whole reply is there and the composer is live again.
@@ -3806,6 +3848,9 @@ private enum StubChat {
     /// puts the divider in a true place.
     static let fridge = "What can I cook with what's in the fridge?"
     static let fridgeSnippet = "...so that is a frittata"
+    /// Words from thread 11's **message 103** that appear in no snippet, so a
+    /// row drawing `match` can be told from one drawing `snippet`.
+    static let matchedWords = "a bag of spinach"
     static let secondMessage = "Tell me what you have and I will work with it."
     static let thirdMessage = "Six eggs, half an onion"
 
