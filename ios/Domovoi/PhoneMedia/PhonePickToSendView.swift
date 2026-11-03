@@ -48,8 +48,11 @@ struct PhonePickToSendView: View {
             HStack(spacing: 16) {
                 if photos {
                     PhotosPicker(
+                        // `maxSelectionCount:` belongs to the MULTIPLE-selection
+                        // initialiser, which binds `[PhotosPickerItem]`; with a
+                        // single optional binding there is no count to cap, and
+                        // naming it made the compiler pick the array overload.
                         selection: $picked,
-                        maxSelectionCount: 1,
                         matching: .any(of: [.images, .videos])
                     ) {
                         Text(PhoneMediaStrings.sendHomeVerb(asUpload: true))

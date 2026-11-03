@@ -94,7 +94,10 @@ struct PhonePhotosSource: PhoneMediaReading {
             .first(where: \.isKeyWindow)?
             .rootViewController
         guard let host else { return }
-        PHPhotoLibrary.shared().presentLimitedLibraryPicker(from: host)
+        // The overload taken here is the async one (iOS 16+), which returns
+        // the identifiers the person added; nothing reads them, because the
+        // shelf is re-read from `PHAsset` when the screen comes back.
+        _ = await PHPhotoLibrary.shared().presentLimitedLibraryPicker(from: host)
     }
 
     /// **Empty while the person has not allowed it**, which is what makes the
