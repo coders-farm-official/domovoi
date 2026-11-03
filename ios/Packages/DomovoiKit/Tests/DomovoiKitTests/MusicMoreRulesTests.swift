@@ -204,9 +204,13 @@ final class MusicMoreRulesTests: XCTestCase {
 
     /// The lead is 150 ms: a line is lit **just before** its time, because
     /// words that land exactly on the beat read late.
+    ///
+    /// The boundary is **inclusive** — `t <= position + lead` — so the line at
+    /// 1,000 ms is already active at 850, not at 851. Measured, not assumed:
+    /// a first draft of this test asserted 851 and the Mac said otherwise.
     func testTheLeadLightsALineEarly() {
-        XCTAssertEqual(0, MusicLyricsMath.activeIndex(lines, positionMs: 850))
-        XCTAssertEqual(1, MusicLyricsMath.activeIndex(lines, positionMs: 851))
+        XCTAssertEqual(0, MusicLyricsMath.activeIndex(lines, positionMs: 849))
+        XCTAssertEqual(1, MusicLyricsMath.activeIndex(lines, positionMs: 850))
         XCTAssertEqual(1, MusicLyricsMath.activeIndex(lines, positionMs: 1_000))
     }
 
@@ -809,6 +813,11 @@ final class MusicMoreRulesTests: XCTestCase {
 
     /// A reading for **some other room** is ignored: it would otherwise start
     /// this room on whatever the previous one was playing.
+    ///
+    /// And the phone's own 5 s is not used either. Once the target is a room
+    /// the phone has stopped following the queue, so its position is stale —
+    /// `planFor` falls back to the top of the current track, never to a place
+    /// the phone has not been since it cast (`CastPlan.kt:100`).
     func testAReadingForAnotherRoomIsIgnored() {
         let queue = [item(1, title: "first"), item(2, title: "second")]
         let elsewhere = MusicRemoteNowPlaying(
@@ -818,7 +827,7 @@ final class MusicMoreRulesTests: XCTestCase {
             queue, index: 0, positionSec: 5, target: .room("office"), remote: elsewhere
         )
         XCTAssertEqual([1, 2], plan.trackIDs)
-        XCTAssertEqual(5, plan.startSec)
+        XCTAssertEqual(0, plan.startSec, "neither the garage's 12 s nor the phone's stale 5 s")
     }
 
     func testFollowRoomFindsTheFirstLibraryEntryWithThatTitle() {
