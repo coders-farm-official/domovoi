@@ -270,14 +270,11 @@ struct MusicFilters: View {
 
     let music: MusicModel
 
+    @Environment(\.dynamicTypeSize) private var typeSize
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            TextField(MusicStrings.searchPlaceholder, text: searchText)
-                .textFieldStyle(.roundedBorder)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .submitLabel(.search)
-                .accessibilityLabel(MusicStrings.searchPlaceholder)
+            searchField
             // A row of three controls that **wraps at an accessibility size**
             // instead of squeezing: `minimumScaleFactor` is rejected
             // throughout this app, and "favorites only" beside two menus is
@@ -310,6 +307,64 @@ struct MusicFilters: View {
     // The four bindings. Written out rather than `@Bindable`, because the
     // model is held as an optional `@State` one level up and a binding
     // through an optional is a binding to a value that can vanish.
+
+    /// The search box — **a different control at an accessibility size**.
+    ///
+    /// Apple's audit named this field on a pushed screen at AX5 for "Text of
+    /// this element may be clipped at larger Dynamic Type sizes", measured at
+    /// 361 x 73 points holding `search title, artist, album, path...`. A
+    /// search you can only see half of is the fault the server address field
+    /// in Settings was given `axis: .vertical` for
+    /// (`PhonesAndBrowsersView.swift:91`).
+    ///
+    /// It is **not** vertical at the ordinary sizes, which is the difference
+    /// from that field. A vertical field's own accessibility element is the
+    /// height of the text in it rather than the control, so it needs
+    /// `lineLimit(2...)` to clear "Hit area is too small" — and a search box
+    /// permanently two lines tall is a worse screen for everybody who never
+    /// changes their type size, to fix a clipping nobody at those sizes sees.
+    /// ``HomeAnnounceView`` already swaps its layout on
+    /// `isAccessibilitySize` for the same kind of reason.
+    ///
+    /// The accessibility variant drops `submitLabel(.search)`: a vertical
+    /// field is a multi-line one and its Return key puts in a newline, so a
+    /// key labelled `search` would say one thing and do another — the defect
+    /// found in the Chat composer and in Home's announce box on 2026-11-02.
+    /// Nothing is lost, because the list has always searched as you type;
+    /// the key was never what ran it. The newline itself is stripped as it
+    /// arrives, the way the address field strips it, so a query can never
+    /// carry one.
+    @ViewBuilder
+    private var searchField: some View {
+        if typeSize.isAccessibilitySize {
+            TextField(MusicStrings.searchPlaceholder, text: searchText, axis: .vertical)
+                .onChange(of: music.query.search) { _, new in
+                    if new.contains(where: \.isNewline) {
+                        music.query.search = new.filter { !$0.isNewline }
+                    }
+                }
+                .lineLimit(2...)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 10)
+                .background(
+                    Color(.secondarySystemBackground),
+                    in: RoundedRectangle(cornerRadius: 8)
+                )
+                .overlay {
+                    RoundedRectangle(cornerRadius: 8).strokeBorder(.quaternary)
+                }
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .accessibilityLabel(MusicStrings.searchPlaceholder)
+        } else {
+            TextField(MusicStrings.searchPlaceholder, text: searchText)
+                .textFieldStyle(.roundedBorder)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .submitLabel(.search)
+                .accessibilityLabel(MusicStrings.searchPlaceholder)
+        }
+    }
 
     private var searchText: Binding<String> {
         Binding(get: { music.query.search }, set: { music.query.search = $0 })
