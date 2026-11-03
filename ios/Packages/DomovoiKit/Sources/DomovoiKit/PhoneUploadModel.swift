@@ -284,7 +284,11 @@ public final class PhoneUploadModel {
         Task { @MainActor [weak self] in
             do {
                 let bytes = try await bytesOf(row)
-                guard let self, mine == self.epoch else { return }
+                // Read through the optional rather than unwrapping `self`:
+                // `guard let self` once per scope is all Swift allows, and
+                // the one after the POST is the one that must not be dropped.
+                // Nothing is posted to a house the person has left.
+                guard self?.epoch == mine else { return }
                 guard Int64(bytes.count) <= Self.cap else {
                     throw PhoneMediaError.tooBig(name: name, size: Int64(bytes.count))
                 }
