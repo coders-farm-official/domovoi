@@ -463,8 +463,7 @@ extension StubHouseUITests {
         // The Return key dismisses a single-line field's keyboard, which is
         // what keeps `Save` reachable: it sits under the two fields, and a
         // keyboard over it would take the tap instead.
-        app.typeText("7:5
-")
+        app.typeText("7:5" + XCUIKeyboardKey.return.rawValue)
         let save = app.buttons[RoomsStringsUnderTest.quietSave].firstMatch
         XCTAssertTrue(save.waitForExistence(timeout: 10), "no Save on the custom hours")
         evidence(app, "rooms-18-quiet-bad")
@@ -481,8 +480,7 @@ extension StubHouseUITests {
 
         from.tap()
         clearField(app)
-        app.typeText("7:05
-")
+        app.typeText("7:05" + XCUIKeyboardKey.return.rawValue)
         save.tap()
         XCTAssertTrue(
             roomsWaitFor(app, RoomsStringsUnderTest.keepsQuiet),
