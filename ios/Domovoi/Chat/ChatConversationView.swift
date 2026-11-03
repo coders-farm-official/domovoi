@@ -460,21 +460,61 @@ struct ChatConversationView: View {
             // and then answered no accessibility snapshot at all — three
             // thirty-second timeouts and "Timed out while evaluating UI
             // query" from a screen that is sitting still in the recording.
-            // The four cases that call the same `say(_:_:)` helper either
-            // stream the same reply 1.5s a piece (`chat-fail slow`), where
-            // each animation finishes before the next begins, or never get a
-            // whole reply at all (`mid-stream`, `ai-off`) — and all four
-            // pass. The discriminator is the gap between deltas, not the
-            // thread and not the length.
             //
             // A reply being written is appended continuously, so a glide per
             // word was noise as well: the content moving under a still
             // viewport is the animation. Where the transcript moves for any
             // other reason — opening a thread, a re-read — it is positioned,
             // not scrolled, so there is nothing else here that wanted one.
+            //
+            // **And with no anchor**, which is what train R001 cost. Cutting
+            // the animation did not free the two cases: they hung again, at
+            // the same line, with the same three thirty-second snapshot
+            // timeouts, and the frames of the recording are byte-identical
+            // from the moment the reply finishes (t=24s) to the moment the
+            // case gives up (t=130s) apart from the status-bar clock. A
+            // screen that is painted, still and answering no hierarchy
+            // request for a hundred seconds is a main thread that is not
+            // coming back.
+            //
+            // So the discriminator was re-read, and the one that survives
+            // round 1 is **not** the stream's speed. Six cases call
+            // `say(_:_:)`; all four that pass send into a thread the house
+            // already has, and both that hang send into a chat whose
+            // transcript starts at nothing:
+            //
+            //  | case | thread | content when the scrolling starts |
+            //  |---|---|---|
+            //  | `testAReplyArrivesAWordAtATime` | 11, six messages | over the viewport throughout |
+            //  | `testChatMore_ReplyFollowsItsOwnGrowth` | 11 | over the viewport throughout |
+            //  | `testAMidStreamFailure…` | 12, two short messages | under it throughout (two deltas) |
+            //  | `testASendRefused…` | 12 | under it (no delta at all) |
+            //  | `testANewChatIsNamedByItsFirstMessage…` | **made by the send** | **crosses, ten times in a second** |
+            //  | `testArchivingAChatAndTheArchivedView…` | **made by the send** | **crosses** |
+            //
+            // `anchor: .bottom` on a one-point view at the end of the content
+            // reads as "put the content's foot at the viewport's foot", and
+            // while the content is SHORTER than the viewport that is an
+            // offset the scroll view cannot take — it clamps, the reader
+            // keeps the target, the next delta re-lays the content out and
+            // the target is applied again. Thread 12 asks for the impossible
+            // too, and settles, because its content never changes category;
+            // thread 11 never asks for it at all. A new chat is the one that
+            // crosses from one to the other while the request is being
+            // re-applied every 0.12s, and that is the pair that hangs.
+            //
+            // `scrollTo(_:)` with no anchor is "scroll the least that makes
+            // this visible", which is a request that always has an answer: on
+            // under-filled content the foot is already visible and nothing is
+            // asked for, and once the content overflows, the least that makes
+            // a **zero-height** view at its very end visible is the bottom of
+            // the content — the same place `anchor: .bottom` put it, which is
+            // what MS001 paid for and what
+            // `testChatMore_ReplyFollowsItsOwnGrowth` measures against the
+            // keyboard's top. The foot target and the `tail` key are kept.
             .onChange(of: tail) { _, _ in
                 guard !chat.transcript.messages.isEmpty else { return }
-                scroller.scrollTo(Self.foot, anchor: .bottom)
+                scroller.scrollTo(Self.foot)
             }
         }
     }

@@ -181,12 +181,39 @@ struct AssistantPlaceSwitch<House: View>: View {
             // of a chat that is already in one, so the chip alone is drawn —
             // which is also what `PlacePicker` itself does with one choice
             // (`ChatHome.kt:741`).
-            let choices = inConversation(phone, place) ? [place] : startable
+            let conversation = inConversation(phone, place)
+            let choices = conversation ? [place] : startable
             let chips = AssistantPlacePickerView(
                 choices: choices,
                 selected: place,
                 onPick: { picked = $0 }
             )
+            // **And nothing at all over a conversation at an accessibility
+            // size**, which train R001 measured the price of. The
+            // conversation's chip is one word in a band 80 points tall at
+            // AX5, and it sits on top of a header row that is already 107 —
+            // of the 401.7 the shell leaves Chat at that size. What was left
+            // for the phone conversation's transcript was a `ScrollView`
+            // **6.7 points tall** holding 860 points of content: a chat with
+            // no room to show one message of itself.
+            //
+            // It is a label and not a control here (one choice:
+            // ``AssistantPlacePickerView`` draws a chip rather than a button,
+            // so VoiceOver is offered no action), and the thing it says —
+            // which place this conversation is in — is said by the
+            // conversation. Android puts it inside the header row rather than
+            // above it (`ChatHeader`, `ChatHome.kt:700`), so the band is this
+            // app's shape and not Android's; dropping the band where the band
+            // is what costs the screen is the faithful half of that. Below an
+            // accessibility size nothing changes: the chip is 44 points
+            // there, every train has run with it, and it is how a person on
+            // two places tells them apart at a glance. DECISIONS.md.
+            //
+            // **A conversation, not "one choice"**: a list with a single
+            // startable place keeps its chip at every size, because there the
+            // band is the only thing that says where the chats below it live
+            // — and it is what ``reachPhonePlace`` taps.
+            let bandDrawn = !(conversation && dynamicTypeSize.isAccessibilitySize)
             // **The cap is for the picker that has chips to fit**, which is
             // the one that was measured. A `ScrollView` is greedy — it takes
             // the height it is allowed whether or not its content needs it —
@@ -194,7 +221,9 @@ struct AssistantPlaceSwitch<House: View>: View {
             // transcript empty space, which is the MS003 mistake from the
             // other end. One chip is short; it keeps the layout every train
             // before this has run.
-            if let pickerCap, choices.count > 1 {
+            if !bandDrawn {
+                EmptyView()
+            } else if let pickerCap, choices.count > 1 {
                 // **Capped, and scrolling past the cap.** The two things the
                 // picker must never do are squeeze a chip and swallow the
                 // list, and the two trains before this one each caught one of
@@ -226,7 +255,9 @@ struct AssistantPlaceSwitch<House: View>: View {
             } else {
                 chips.layoutPriority(1)
             }
-            Divider()
+            // The rule above it, with the band it belongs to: a divider over
+            // nothing is a line across the top of a conversation.
+            if bandDrawn { Divider() }
             switch place {
             case .server:
                 house
