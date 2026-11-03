@@ -88,35 +88,39 @@ struct SystemSettingsLayoutPanel: View {
                 // encoding or the filter; the only thing that was ever
                 // missing is the **invalidation**.
                 //
-                // ### Why the nudge is deferred and not called straight
+                // ### Three nudges, three trains, and what they settled
                 //
-                // Two different tracked mutations, made synchronously from
-                // the button's own action, moved nothing: `model.path =
-                // model.path` on train S002 and `model.refresh()` on train
-                // S005. Both trains show the same picture — the preview line
-                // gains `files`, the bar keeps four tabs for the ten seconds
-                // the case waits.
+                // `model.path = model.path` (S002), `model.refresh()` from
+                // the button's own action (S005) and the same call deferred
+                // to a later turn of the main actor (S008) all left the same
+                // picture: the preview line gains `files`, the bar keeps four
+                // tabs. The third round stopped guessing and measured.
                 //
-                // What has always worked is the same call from a **sink**:
-                // ``ShellModel`` subscribes the server-selection and address
-                // sinks as `Task { @MainActor in self?.refresh() }`
-                // (`ShellModel.swift:258`, `:264`), and
-                // `testPickingAServerMovesTheAppWithNobodyCallingRefresh`
-                // holds that a picker write moves the whole shell. The one
-                // difference between the two is *when*: a sink's refresh
-                // lands on a later turn of the main actor, after SwiftUI has
-                // finished the update the action is inside, and a second
-                // observable mutated part-way through that update is a
-                // mutation some views have already been laid out past.
+                // The bar's **children** redraw perfectly well — every
+                // `Assistant` tree in train S008 shows the `Chat` tab
+                // carrying `Selected` after the route was pushed, and that
+                // comes from `model.barSelects(route)` **inside** the
+                // `ForEach` body (`ShellChromeViews.swift:258`). What does
+                // not redraw is `PhoneBarView`'s own body, which is where the
+                // tab **list** is read (`:257`). `ShellModel.phoneBar` is
+                // computed over a store Observation cannot see, so the only
+                // tracked properties that read registers are the ones
+                // ``ShellModel/visibility`` happens to touch — and a view
+                // SwiftUI skips re-evaluating, because its one stored field
+                // is the same object reference every time, never
+                // re-registers them. No call from here can make an untracked
+                // read tracked.
                 //
-                // So this goes where that one goes. One turn later is not
-                // perceptible, and it is the shape this app already has
-                // evidence for.
-                //
-                // The real fix is still one line in `ShellModel`, written up
-                // as the second **Needs a shared change** in this item's
-                // `DECISIONS.md`. A reviewer should fold it in and delete
-                // this closure.
+                // So this closure is kept where ``ShellModel``'s own sinks
+                // put theirs (`ShellModel.swift:258`, `:264`) and claims
+                // nothing: the edit is saved, this panel tells the truth, and
+                // the tabs follow when the shell is next drawn. The fix is
+                // one line in `ShellModel`, written up as the second
+                // **Needs a shared change** in this item's `DECISIONS.md`;
+                // a reviewer should fold it in and delete this closure.
+                // `testSystemSettings_AppLayoutAddsAndRemovesATab` prints
+                // what the bar did, so the day that line lands the evidence
+                // is already in the log.
                 afterWrite: { [model] in Task { @MainActor in model.refresh() } }
             )
         }

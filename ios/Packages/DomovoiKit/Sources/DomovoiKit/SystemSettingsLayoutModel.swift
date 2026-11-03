@@ -33,10 +33,13 @@ import Observation
 ///  - **Nothing here redraws the bottom bar.** ``ShellModel/phoneBar`` is
 ///    computed over a store Observation cannot see
 ///    (`ShellModel.swift:444`), so a write invalidates nothing and
-///    `PhoneBarView` (`ShellChromeViews.swift:257`) keeps the old tabs. The
-///    view passes ``afterWrite`` to nudge Observation through public API;
-///    the real fix is the second **Needs a shared change** in
-///    `design-notes/ios/overnight/systemsettings/DECISIONS.md`.
+///    `PhoneBarView` (`ShellChromeViews.swift:257`) keeps the old tabs until
+///    the shell is next drawn. The view passes ``afterWrite`` to nudge
+///    Observation through public API, and three trains measured that no such
+///    nudge can reach an untracked read: the real fix is the second
+///    **Needs a shared change** in
+///    `design-notes/ios/overnight/systemsettings/DECISIONS.md`, and the
+///    saved bar is correct meanwhile.
 ///  - **No toast.** Android toasts the restored bar (`PhoneBarPanel.kt:105`);
 ///    this app has no toast producer (`ShellModel.swift:23-26`), so the same
 ///    sentence is ``noteAfterDefault``, drawn under the button.
