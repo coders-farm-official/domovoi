@@ -186,6 +186,23 @@ public enum NewsStrings {
     /// `NewsDetail.kt:480` — a feed the server named nothing at all.
     public static let feedFallbackTitle = "feed"
 
+    /// **iOS-only** — what the dot beside a feed's title says, in words.
+    ///
+    /// Android draws `StatusDot(ok)` / `StatusDot(idle)` and nothing else
+    /// (`NewsDetail.kt:477`), so over there the **colour is the only thing**
+    /// that says a feed is failing: a person who cannot tell the two greens
+    /// apart, or who is listening rather than looking, is told nothing. This
+    /// app's standing rule is that a tone is never the only carrier of
+    /// meaning, and every other dot in it has a word beside it
+    /// (`HomeCardView.swift:150-155`) — this one had none, so these are it.
+    /// IOS-ONLY-STRINGS.md.
+    ///
+    /// `valid` is the server's own field name (`news.py:77`), which is why
+    /// the word is `valid` and not `working`: the re-check writes exactly
+    /// that column.
+    public static let feedValid = "valid"
+    public static let feedInvalid = "not valid"
+
     /// `NewsDetail.kt:500`.
     public static let recheckValidity = "re-check validity"
 

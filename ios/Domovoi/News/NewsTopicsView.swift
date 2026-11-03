@@ -418,12 +418,7 @@ struct NewsFeedRowView: View {
 
     private var titleLine: some View {
         HStack(spacing: 6) {
-            // `StatusDot(ok, live = true)` for a valid feed, idle otherwise
-            // (`:477`) — **still**, not pulsing: nothing in this app animates
-            // yet, which ``ToneDot/live`` already records. The dot is never
-            // the only carrier: `valid` is also what the re-check changes and
-            // the meta line names the source.
-            ToneDot(tone: feed.valid ? .ok : .idle)
+            NewsFeedStateDot(feed: feed)
             Text(feed.displayTitle)
                 .font(.caption)
                 .fixedSize(horizontal: false, vertical: true)
@@ -473,5 +468,44 @@ struct NewsFeedRowView: View {
         .accessibilityLabel(NewsStrings.removeFeed)
         .accessibilityValue(feed.displayTitle)
         .accessibilityIdentifier("news-remove-feed-\(feed.id)")
+    }
+}
+
+/// Whether a feed is valid, as a dot **with a word in it**.
+///
+/// `StatusDot(ok, live = true)` / `StatusDot(idle)` — `NewsDetail.kt:477`,
+/// with two differences, both of them decisions:
+///
+/// 1. **It is not pulsing.** Nothing in this app animates yet, and
+///    ``ToneDot/live`` already records that call.
+/// 2. **It is not hidden from VoiceOver**, which every other dot in this app
+///    is — because every other dot has a word beside it saying what it grades
+///    (`HomeCardView.swift:150-155`) and this one does not. A feed whose only
+///    sign of being broken is the hue of an 8-point circle is a tone carrying
+///    meaning on its own, which is the one thing the contrast rule here
+///    forbids. So the circle carries ``NewsStrings/feedValid`` /
+///    ``NewsStrings/feedInvalid`` as its label. Android says nothing at all.
+///
+/// The fill is ``HealthTone/inkColour`` and **not** ``HealthTone/dotColour``:
+/// the dot colours are `.green` and `.orange` at 2.22:1 and 2.20:1, which is
+/// under the 3:1 a meaningful graphic needs, and the only reason the rest of
+/// the app can keep them is that those dots are hidden and decorative. This
+/// one is an element a person is meant to read, so it takes the measured ink.
+struct NewsFeedStateDot: View {
+
+    let feed: NewsFeed
+
+    @ScaledMetric(relativeTo: .body) private var size: CGFloat = 8
+
+    var body: some View {
+        Circle()
+            .fill((feed.valid ? HealthTone.ok : HealthTone.idle).inkColour)
+            .frame(width: size, height: size)
+            // A shape has no baseline, so `firstTextBaseline` cannot lift it
+            // to the cap height of the title beside it — ``ToneDot``'s own
+            // offset, for the same reason.
+            .offset(y: -1)
+            .accessibilityLabel(feed.valid ? NewsStrings.feedValid : NewsStrings.feedInvalid)
+            .accessibilityIdentifier("news-feed-state-\(feed.id)")
     }
 }

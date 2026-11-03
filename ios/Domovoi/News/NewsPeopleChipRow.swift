@@ -81,7 +81,10 @@ struct NewsPeopleChipRow: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
             .frame(minHeight: 44)
-            .frame(maxWidth: stacked ? .infinity : nil, alignment: .leading)
+            // Explicitly `CGFloat.infinity`, because the `nil` on the other
+            // side of the ternary makes this an optional and `.infinity`
+            // alone has nothing to infer from.
+            .frame(maxWidth: stacked ? CGFloat.infinity : nil, alignment: .leading)
             .background(
                 // **Brand fill with `brandFg` text when picked**, which is
                 // the app's one measured prominent pair at 8.49:1. Android
