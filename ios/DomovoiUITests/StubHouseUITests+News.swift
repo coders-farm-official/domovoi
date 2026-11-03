@@ -767,7 +767,9 @@ extension StubHouseUITests {
 
     /// Three audits of this screen: the page as it lands, the page with the
     /// remove dialog up, and the foot of the page — a third of which is below
-    /// the fold when it lands.
+    /// the fold when it lands. **Each in its own app process**, because a
+    /// process that has walked one of these passes does not reliably survive
+    /// the next (the body says what S002, S005 and S011 each lost to that).
     ///
     /// **The first pass is the screen's, and it has to come first.** This
     /// case used to raise the dialog *before* its only audit, and
@@ -799,31 +801,44 @@ extension StubHouseUITests {
     @MainActor
     func testNews_PassesApplesAccessibilityAudit() throws {
         resetNewsHouse()
-        let (app, landed) = openNews()
-        evidence(app, "news-12-audited")
 
-        // **Nothing below here asserts until the app has been terminated.**
+        // **One audit pass per app process.**
         //
-        // `setUp` sets `continueAfterFailure = false`, so the *first* failed
-        // assertion leaves this case on the spot — and on train S005 that is
-        // exactly what happened: the page audit failed, the `app.terminate()`
-        // at the foot of this case never ran, and the very next case
-        // (``testNews_PollNowSaysWhatCameBack``, alphabetically) lost its
-        // connection to the app eight seconds into a launch, with no crash
-        // report and no hierarchy. Train S002 did the same, before there was
-        // a terminate at all: the two failures are one failure. The leftover
-        // here is not an idle app, it is the app that has just run two full
-        // `performAccessibilityAudit` passes, and a relaunch beside it is the
-        // launch that dies.
+        // Train S011 lost this case in the third pass: the foot audit ran,
+        // and partway through reading its findings' elements the app was
+        // simply gone — `Failed to resolve query: Application … is not
+        // running` at t = 48.6s, with no crash report behind it and the
+        // run's own screenshot showing a perfectly ordinary page a second
+        // earlier. Nothing in this screen's code was in the frame; what had
+        // happened to that process is that it had just walked two full
+        // `performAccessibilityAudit` passes over a 1111-point page.
         //
-        // So findings and mishaps are collected, the app is put down, and
-        // then the case says what it found. A terminate on a path an
-        // assertion can cut short is a terminate that does not happen.
+        // S002 and S005 saw the nearer end of the same thing. There, the two
+        // passes finished and it was the *next* case that died, eight
+        // seconds into its launch beside the leftover — which is the only
+        // reason this case terminates its app at all. A third pass moved the
+        // death inside the case.
+        //
+        // So each pass now gets its own launch, runs one audit, and is put
+        // down before the next one starts. Nothing is audited less: the page
+        // as it lands, the confirmation, and the foot are all still walked —
+        // each by a process that has walked nothing else.
         var findings: [String] = []
         var mishaps: [String] = []
-        if !landed { mishaps.append("News never drew a person's heading") }
 
+        // **Nothing below here asserts until every app has been terminated.**
+        // `setUp` sets `continueAfterFailure = false`, so the first failed
+        // assertion leaves this case where it stands; a terminate on a path
+        // an assertion can cut short is a terminate that does not happen.
+        // Findings and mishaps are collected, and the case speaks at the end.
+
+        // ### 1. The page, as it lands.
         do {
+            let (app, landed) = openNews()
+            defer { app.terminate() }
+            if !landed { mishaps.append("News never drew a person's heading") }
+            evidence(app, "news-12-audited")
+
             // **The page has to have settled before the first audit, or the
             // findings arrive with nothing on them.**
             //
@@ -850,8 +865,17 @@ extension StubHouseUITests {
             _ = XCTWaiter.wait(for: [settled], timeout: 3)
 
             findings += try auditNews(app, "news", "the page")
+        } catch {
+            mishaps.append("the page audit could not be run: \(error)")
+        }
 
-            // The dialog, which hides everything above it.
+        // ### 2. The remove confirmation, which hides everything above it.
+        do {
+            let (app, landed) = openNews()
+            defer { app.terminate() }
+            if !landed {
+                mishaps.append("News never drew a person's heading for the dialog pass")
+            }
             let remove = app.buttons["news-remove-topic-tech"]
             if revealNews(app, remove) {
                 remove.tap()
@@ -870,8 +894,22 @@ extension StubHouseUITests {
             } else {
                 mishaps.append("the remove control was not reachable")
             }
+        } catch {
+            mishaps.append("the dialog audit could not be run: \(error)")
+        }
 
-            // **The foot of the page, audited on screen.** The pass above
+        // ### 3. The foot of the page.
+        do {
+            let (app, landed) = openNews()
+            defer { app.terminate() }
+            if !landed {
+                mishaps.append("News never drew a person's heading for the foot pass")
+            }
+            // Same settling as the page pass, for the same reason: an audit
+            // against a half-built page attributes nothing.
+            _ = newsElement(app, "news-story-meta-301").waitForExistence(timeout: 25)
+
+            // **The foot of the page, audited on screen.** The page pass
             // covers what the viewport holds, and this screen is 1111 points
             // of content in a 677-point scroll view: every topic row, every
             // feed row and every story was below the fold and *not* audited.
@@ -885,10 +923,9 @@ extension StubHouseUITests {
             evidence(app, "news-12-audited-foot")
             findings += try auditNews(app, "news-foot", "the foot of the page")
         } catch {
-            mishaps.append("an audit could not be run: \(error)")
+            mishaps.append("the foot audit could not be run: \(error)")
         }
 
-        app.terminate()
         XCTAssertEqual([], mishaps, "the audit never reached what it was meant to look at")
         XCTAssertEqual(
             [],
@@ -979,21 +1016,37 @@ extension StubHouseUITests {
     /// element of this page where it has pixels, which is the whole reason
     /// this discount is honest.
     ///
-    /// **Narrow on purpose**: contrast only, and only outside the edges this
-    /// measures from the app at audit time. A finding against anything inside
-    /// the viewport still fails.
-    @MainActor
-    private func newsOutsideTheViewport(_ app: XCUIApplication, _ line: String) -> Bool {
+    /// **Narrow on purpose**: contrast only, and only outside the edges
+    /// ``newsPageViewport(_:)`` measured from the app at audit time. A
+    /// finding against anything inside the viewport still fails.
+    ///
+    /// The viewport arrives as a rectangle rather than as an app to ask,
+    /// because this runs while the audit's findings are being read and the
+    /// app may no longer be there to ask — train S011 ended in
+    /// `app.scrollViews` on this very line, with the case reporting the
+    /// process rather than the screen. A classifier that only reads strings
+    /// cannot fail that way, and a rectangle taken before the audit is the
+    /// more honest one: it is where the scroll view was when the audit
+    /// sampled these elements.
+    static func newsOutsideTheViewport(_ viewport: CGRect, _ line: String) -> Bool {
         guard line.hasPrefix("Contrast failed"), let box = Self.frame(in: line) else {
             return false
         }
-        // The page's scroll view is the taller of the two: the other is the
-        // people chip row, lying on its side.
-        guard let page = app.scrollViews.allElementsBoundByIndex
-            .max(by: { $0.frame.height < $1.frame.height }) else { return false }
-        let viewport = page.frame
         guard viewport.height > 0 else { return false }
         return box.maxY > viewport.maxY || box.minY < viewport.minY
+    }
+
+    /// The frame of the page's own scroll view — the taller of the two on
+    /// this screen, the other being the people chip row lying on its side.
+    ///
+    /// `.zero` when there is none, which ``newsOutsideTheViewport(_:_:)``
+    /// treats as "discount nothing": an unmeasured viewport must not excuse a
+    /// finding.
+    @MainActor
+    private func newsPageViewport(_ app: XCUIApplication) -> CGRect {
+        app.scrollViews.allElementsBoundByIndex
+            .max(by: { $0.frame.height < $1.frame.height })?
+            .frame ?? .zero
     }
 
     /// A Dynamic Type finding against a **story's meta line**, which this
@@ -1069,6 +1122,11 @@ extension StubHouseUITests {
         _ what: String,
         behindADialog: Bool = false
     ) throws -> [String] {
+        // **Measured before the audit runs, while the app is certainly
+        // there.** Reading it per finding put a live query to the app on the
+        // path that reads the audit's results; see
+        // ``newsOutsideTheViewport(_:_:)``.
+        let viewport = newsPageViewport(app)
         let split = Self.floorAndRest(try auditIssues(app, name))
         var counts: [String: Int] = [:]
         var rest: [String] = []
@@ -1077,7 +1135,7 @@ extension StubHouseUITests {
             // lands in `rest` and fails the caller.
             if Self.newsChipArtefact(found) {
                 counts["chip-row artefacts", default: 0] += 1
-            } else if newsOutsideTheViewport(app, found) {
+            } else if Self.newsOutsideTheViewport(viewport, found) {
                 counts["outside the viewport", default: 0] += 1
             } else if Self.newsScalingFalsePositive(found) {
                 counts["measured scaling false positives", default: 0] += 1
