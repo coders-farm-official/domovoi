@@ -1,0 +1,906 @@
+import XCTest
+
+/// The Stations screen, against the stub house.
+///
+/// Every case is `testStations_<What>` and every piece of evidence is
+/// `stations-…`, which is how a train hands these results back to the branch
+/// that wrote them (NIGHT-RULES §2).
+///
+/// ### Bunched on purpose
+///
+/// Kamron's standing ask for this night is that testing not pay the
+/// build-and-launch cost once per assertion. XCTest gives every case its own
+/// process, so "fewer launches" can only mean **fewer, fatter cases**: each
+/// one below drives one launch and asserts everything that launch can be
+/// asked. Where two of MAP §9's cases could share a launch without blurring
+/// what a failure means, they were merged and the merge is named in the
+/// case's comment.
+///
+/// ### The one thing to know before reading a failure here
+///
+/// **Stations is a plugin route**, gated on `capStations`
+/// (`Route.requiredCapability`), and `Capabilities.has` resolves a capability
+/// out of `plugins[].android_capabilities` (`Capabilities.swift:75-83`). The
+/// house's own `/api/capabilities` answers a flat `{"capabilities": [...]}`
+/// list iOS has no key for, so `fixtures/stations.py` **wraps that route**:
+/// it asks the house for its own answer and adds the `plugins` array built
+/// from every fixture module's `PLUGIN` dict. That is additive and steps
+/// aside the moment `stubhouse.py` grows the key itself — DECISIONS, "Needs a
+/// shared change". If every case here fails with `openStations` printing a
+/// tree that shows **Home**, the wrapper is what to look at first: the route
+/// was invisible, so the push landed nowhere.
+///
+/// ### What is not tested here, and where it is tested instead
+///
+/// **A server switch inside a round trip** — the top defect class on this
+/// track. The only way to change the address from a UI case is the app's
+/// connection sheet, which NIGHT-RULES §1 forbids on a Simulator: it starts a
+/// LAN discovery sweep across Kamron's real home network. The case exists in
+/// the package, where the round trip can be parked:
+/// `StationsModelTests.testAPlayAnsweredAfterTheHouseChangedLandsNowhere`.
+/// [[read-after-await-wrong-key]].
+///
+/// **Playing.** This branch's route slot passes `StationsNoPlayback`, so no
+/// play affordance is drawn at all and `POST /play` is never sent.
+/// ``testStations_NothingOffersToPlayAndTheScreenSaysWhy()`` asserts exactly
+/// that, including against the house's own request log — so the branch that
+/// brings the engine will see this case fail and move it, which is the point.
+extension StubHouseUITests {
+
+    // MARK: - the house, by the words on its screen
+
+    /// The stub's own seed (`fixtures/stations.py`), spelt out here rather
+    /// than imported, as every other string in this file is: a query that
+    /// silently followed a renamed constant would stop testing what it
+    /// claims to.
+    enum StubStations {
+
+        /// 23 favourites: `Favourite Kestrel 01`…`22`, then `WJIM-FM`, which
+        /// `favorited DESC, name ASC` sorts last — so it exists only once the
+        /// **second** page has been asked for.
+        static let firstFavourite = "Favourite Kestrel 01"
+        static let lastOfPageOne = "Favourite Kestrel 20"
+        static let secondPageRow = "Favourite Kestrel 22"
+
+        /// The three now-playing branches, one row each.
+        static let withTrack = "Favourite Kestrel 04"
+        static let trackText = "Sonora Pine"
+        static let icyRefused = "Favourite Kestrel 05"
+        static let neverProbed = "Favourite Kestrel 06"
+
+        /// Played, never favourited — the Recent star has something to
+        /// promote, and the favourites list must not hold it.
+        static let playedOnly = "Played Once Gull"
+
+        /// The FM row: 97.5, no `stream_url`, so `resolve` is offered.
+        static let fmRow = "WJIM-FM"
+
+        /// The catalogue. `02` collides with favourite `Kestrel 02`'s
+        /// `external_id`, so the search answers it with a real id and
+        /// `favorited: true` — a `saved` pill and no POST. `01` is a fresh
+        /// `id == 0` hit.
+        static let freshHit = "Catalogue Ibis 01"
+        static let alreadySaved = "Catalogue Ibis 02"
+        /// `http://127.0.0.1:9000/stream` — the host-local URL
+        /// `StationsRules.playable` must refuse.
+        static let hostLocalHit = "Catalogue Ibis 03"
+
+        /// Kestrel 04's four detections, one per branch of the source pill.
+        static let localDetection = "Red Fire Serpent"
+        static let icyDetection = "Quills of the Arrow"
+        static let namelessArtist = "Thirteen Palisades"
+        static let unknownSourceArtist = "Velvet Caiman"
+
+        /// The band, from this module's `PLUGIN` dict.
+        static let pluginName = "Radio Stations"
+        static let pluginBy = "by Coders Farm"
+        static let pluginBadge = "plugin"
+    }
+
+    /// The app's own words, spelt out for the same reason.
+    enum StationsWords {
+        static let title = "Stations"
+        /// **Without** Android's `· tap a station to play it`, which a build
+        /// that cannot play must not say.
+        static let subtitle = "23 favorited · 3 recent"
+        static let subtitleAfterAStar = "24 favorited · 3 recent"
+        static let subtitleAfterTwoStars = "25 favorited · 3 recent"
+        static let subtitleAfterAForget = "22 favorited · 3 recent"
+        static let playingTail = "tap a station to play it"
+        static let noPlayback =
+            "playing on this phone isn't built yet — favoriting, sampling and detections all work"
+        static let importIsAnAdminJob =
+            "importing the FCC FM list is an admin job — do it on the dashboard"
+        static let recent = "Recent"
+        static let lastThree = "last 3"
+        static let favorites = "Favorites"
+        static let noFavorites = "no favorites yet"
+        static let noFavoritesSub = "search and tap the star to start collecting"
+        static let nothingPlayed = "nothing played yet"
+        static let unreachable = "couldn't reach the server"
+        static let retry = "retry"
+        static let loadMore = "load more"
+        static let onlineScope = "online stations"
+        static let fmScope = "local fm"
+        static let queryHint = "search stations — name, callsign, network…"
+        static let search = "search"
+        static let yourFavorites = "your favorites"
+        static let oneMatch = "1 match"
+        static let noMatch = "no stations match"
+        static let saved = "saved"
+        static let favorite = "favorite"
+        static let unfavorite = "unfavorite"
+        static let openDetails = "details and detections"
+        static let hideDetails = "hide details"
+        static let noLiveMetadata = "no live metadata"
+        static let listening = "listening…"
+        static let recentDetections = "recent detections"
+        static let localPill = "local"
+        static let inLibrary = "in library"
+        static let newPill = "new"
+        static let interval = "interval"
+        static let save = "save"
+        static let cancel = "cancel"
+        static let intervalRefused = "interval must be between 30 and 86400 s"
+        static let intervalSaved = "Favourite Kestrel 04: sampling every 600s"
+        static let metaAt600 = "sampling every 600s"
+        static let metaAt180 = "sampling every 180s"
+        static let forget = "forget"
+        static let forgetTitle = "forget Favourite Kestrel 04?"
+        static let forgetBody = "Removes the station and stops sampling it."
+    }
+
+    // MARK: - getting there
+
+    /// Reset the fixtures, choose what the reads answer, and push Stations.
+    ///
+    /// **Reset first, always.** The cases share one house for the whole run
+    /// and half of them write to it, so a case that relied on the seed
+    /// without resetting would pass or fail on which case ran before it.
+    ///
+    /// **What it waits for.** The subtitle, `23 favorited · 3 recent`, which
+    /// cannot exist until `/badge` and `/recent` have both answered and been
+    /// decoded — a marker only a *completed read* can produce, which is the
+    /// lesson `houseName(in:)` carries. It is the second line of the screen,
+    /// so it is built at every type size. The two broken-house launches pass
+    /// their own marker.
+    @MainActor
+    func openStations(
+        _ mode: String = StubHouseUITests.ordinaryTypeSize,
+        empty: Bool = false,
+        fail: Bool = false,
+        waitingFor marker: String? = nil,
+        delay: Double? = nil
+    ) -> (app: XCUIApplication, landed: Bool) {
+        control("reset-fixtures", "{}", port: 6601, what: "the stations fixture")
+        if empty {
+            control("stations-empty", "{\"empty\": true}", port: 6601, what: "an empty house")
+        }
+        if fail {
+            control("stations-fail", "{\"fail\": true}", port: 6601, what: "a failing stations read")
+        }
+        let app = launch(mode: mode, push: "Stations", pushDelay: delay ?? Self.pushDelay)
+        let wanted = marker ?? StationsWords.subtitle
+        let landed = app.staticTexts[wanted].waitForExistence(timeout: 40)
+        if !landed {
+            // The tree, not a sentence about the element: when the route is
+            // invisible this shows Home, which is the whole diagnosis.
+            print("=== STATIONS DID NOT DRAW (waited for \(wanted)) — tree follows ===")
+            print(app.debugDescription)
+        }
+        return (app, landed)
+    }
+
+    /// Flick the page until an element is built, and say whether it was.
+    ///
+    /// This screen is a `ScrollView` + `LazyVStack`, not a `List`, so there is
+    /// no `collectionView` for ``scrollUntilBuilt(_:_:flicks:)`` to drive —
+    /// `app.swipeUp()` is what the Files cases use for the same shape. A
+    /// lazy list's foot is **unbuilt**, not off screen, so this is the only
+    /// way page two is ever asked for.
+    @MainActor
+    func scrollStationsUntil(_ app: XCUIApplication, _ element: XCUIElement, flicks: Int = 14) -> Bool {
+        for _ in 0..<flicks {
+            if element.exists { return true }
+            app.swipeUp()
+        }
+        if !element.exists {
+            print("=== \(flicks) FLICKS AND STILL UNBUILT — tree follows ===")
+            print(app.debugDescription)
+        }
+        return element.exists
+    }
+
+    /// A row's star, picked by **label and value**.
+    ///
+    /// `favorite` is the same word on every unfavourited row, and
+    /// `firstMatch` on it would be whichever row the tree happens to hold
+    /// first — the trap `openChatRowMenu` was written for one screen earlier.
+    /// The station's name is the control's accessibility **value**.
+    @MainActor
+    func stationsStar(_ app: XCUIApplication, _ name: String, favorited: Bool) -> XCUIElement {
+        app.buttons
+            .matching(NSPredicate(
+                format: "label == %@ AND value == %@",
+                favorited ? StationsWords.unfavorite : StationsWords.favorite,
+                name
+            ))
+            .firstMatch
+    }
+
+    /// A favourite's chevron, picked the same way.
+    @MainActor
+    func stationsChevron(_ app: XCUIApplication, _ name: String) -> XCUIElement {
+        app.buttons
+            .matching(NSPredicate(
+                format: "label == %@ AND value == %@",
+                StationsWords.openDetails, name
+            ))
+            .firstMatch
+    }
+
+    /// Everything the stub house was asked to write, from the test process.
+    ///
+    /// Open, and a GET, so this does not reuse ``control(_:_:port:what:)``
+    /// (which POSTs with a device token). The Simulator shares the Mac's
+    /// loopback, which is how the app reaches the stub, so the test process
+    /// can reach it too (``clearWatched`` says why).
+    @MainActor
+    func stationsSent(port: Int = 6601) -> [String: [Any]] {
+        let request = URLRequest(
+            url: URL(string: "http://127.0.0.1:\(port)/api/_test/stations-sent")!
+        )
+        let answered = expectation(description: "the stub listed what it was sent")
+        var body = Data()
+        URLSession.shared.dataTask(with: request) { data, _, _ in
+            body = data ?? Data()
+            answered.fulfill()
+        }.resume()
+        wait(for: [answered], timeout: 20)
+        let object = try? JSONSerialization.jsonObject(with: body)
+        return (object as? [String: [Any]]) ?? [:]
+    }
+
+    /// A control inside the detail sheet, told apart from **the keyboard's
+    /// keys**.
+    ///
+    /// The interval box opens a `numberPad`, which covers the bottom of the
+    /// sheet, and `firstMatch` takes an element behind a keyboard as happily
+    /// as one in front of it — a key *is* hittable, so `isHittable` would not
+    /// have saved it either. Bound by `keyboards.firstMatch.frame.minY`,
+    /// which is the lesson `composerSend` carries.
+    @MainActor
+    func stationsSheetButton(_ app: XCUIApplication, _ label: String) -> XCUIElement? {
+        let keyboard = app.keyboards.firstMatch
+        let top = keyboard.exists ? keyboard.frame.minY : .greatestFiniteMagnitude
+        let all = app.buttons.matching(NSPredicate(format: "label == %@", label))
+        guard all.firstMatch.waitForExistence(timeout: 20) else {
+            print("=== NO \(label) IN THE SHEET — tree follows ===")
+            print(app.debugDescription)
+            return nil
+        }
+        return all.allElementsBoundByIndex.first { $0.frame.height > 0 && $0.frame.maxY < top }
+    }
+
+    // MARK: - 1. the three cards
+
+    /// The screen draws the band, the header, Recent and the favourites.
+    ///
+    /// What this would catch: the slot still drawing `ScreenPlaceholder`; a
+    /// band built from a manifest nothing decoded; a `/badge` or `/recent`
+    /// answer that never landed; the favourites list pointed at the wrong
+    /// filter.
+    ///
+    /// **`Played Once Gull` is the discriminating row.** It is in Recent and
+    /// is *not* favourited, so it must appear exactly **once** on the screen:
+    /// a favourites list that forgot `favorited_only=true` — or a screen that
+    /// drew the same rows twice under two headings — fails here and passes
+    /// every assertion that only looked for a name.
+    @MainActor
+    func testStations_TheScreenDrawsItsThreeCards() throws {
+        let (app, landed) = openStations()
+        XCTAssertTrue(landed, "Stations never drew its subtitle")
+        XCTAssertFalse(fellBackToLocalMedia(in: app), "the shell gave up on the server")
+        evidence(app, "stations-10-three-cards")
+
+        // The plugin band — the screen says whose screen it is.
+        XCTAssertTrue(
+            app.staticTexts[StubStations.pluginName].exists,
+            "the plugin band drew no name: the manifest's `plugins` never decoded"
+        )
+        XCTAssertTrue(app.staticTexts[StubStations.pluginBy].exists, "the band lost its publisher")
+        XCTAssertTrue(app.staticTexts[StubStations.pluginBadge].exists, "the band lost its badge")
+
+        XCTAssertTrue(app.staticTexts[StationsWords.title].exists, "no title")
+        XCTAssertTrue(app.staticTexts[StationsWords.recent].exists, "no Recent card")
+        XCTAssertTrue(app.staticTexts[StationsWords.lastThree].exists, "Recent lost its count")
+        XCTAssertTrue(app.staticTexts[StationsWords.favorites].exists, "no Favorites heading")
+
+        XCTAssertTrue(
+            containing(app, StubStations.firstFavourite).exists,
+            "the favourites list drew nothing"
+        )
+        let played = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label CONTAINS %@", StubStations.playedOnly))
+        let found = played.allElementsBoundByIndex.map { "\($0.elementType.rawValue):\($0.label)" }
+        XCTAssertEqual(
+            1, found.count,
+            "\(StubStations.playedOnly) is played-but-not-favourited and must appear once, "
+                + "in Recent only — the favourites read is not filtered on "
+                + "favorited_only. Matched: \(found)"
+        )
+    }
+
+    // MARK: - 2. the three now-playing sentences
+
+    /// `now_playing`, `icy_supported == false` and `icy_supported == null` are
+    /// three different sentences, and this is the case that stops them
+    /// collapsing into one.
+    ///
+    /// **Nil is not false**: never probed is `listening…`, and a screen that
+    /// treated the two the same would tell somebody their station has no
+    /// metadata before anything had looked. Asserted per row, off the row's
+    /// own combined label, so "the words are on the screen somewhere" cannot
+    /// pass for "the words are on the right row".
+    @MainActor
+    func testStations_NowPlayingTellsItsThreeStatesApart() throws {
+        let (app, landed) = openStations()
+        XCTAssertTrue(landed, "Stations never drew its subtitle")
+
+        let withTrack = containing(app, StubStations.withTrack)
+        let refused = containing(app, StubStations.icyRefused)
+        let probing = containing(app, StubStations.neverProbed)
+        XCTAssertTrue(withTrack.exists && refused.exists && probing.exists,
+                      "the first page is missing one of rows 04, 05, 06")
+        evidence(app, "stations-11-now-playing")
+
+        XCTAssertTrue(
+            withTrack.label.contains(StubStations.trackText),
+            "row 04 does not say what is playing: \(withTrack.label)"
+        )
+        XCTAssertFalse(
+            withTrack.label.contains(StationsWords.noLiveMetadata),
+            "row 04 has a track AND says there is no live metadata: \(withTrack.label)"
+        )
+        XCTAssertTrue(
+            refused.label.contains(StationsWords.noLiveMetadata),
+            "row 05 has icy_supported == false and does not say so: \(refused.label)"
+        )
+        XCTAssertTrue(
+            probing.label.contains(StationsWords.listening),
+            "row 06 was never probed and does not say listening: \(probing.label)"
+        )
+        XCTAssertFalse(
+            probing.label.contains(StationsWords.noLiveMetadata),
+            "row 06's null icy_supported was read as false: \(probing.label)"
+        )
+        // The meta line, on the same label: the sampling interval is what the
+        // interval case later changes.
+        XCTAssertTrue(
+            withTrack.label.contains(StationsWords.metaAt180),
+            "row 04 lost its meta line: \(withTrack.label)"
+        )
+    }
+
+    // MARK: - 3. nothing offers to play
+
+    /// This build has no audio engine, so **nothing on the screen offers to
+    /// play anything** — and the screen says so rather than leaving a page of
+    /// dead rows.
+    ///
+    /// Three halves, and the third is the one that matters: the house's own
+    /// request log must hold **no `POST /play`** after the rows have been
+    /// tapped. That POST stamps a station into Recent, so a silent button's
+    /// one visible effect would be a history entry for something nobody
+    /// heard.
+    ///
+    /// When the `player` item's witness reaches the route slot this case
+    /// fails, and whoever moves it there rewrites it — that is the point of
+    /// asserting an absence with a sentence beside it.
+    @MainActor
+    func testStations_NothingOffersToPlayAndTheScreenSaysWhy() throws {
+        let (app, landed) = openStations()
+        XCTAssertTrue(landed, "Stations never drew its subtitle")
+
+        XCTAssertTrue(
+            app.staticTexts[StationsWords.noPlayback].exists,
+            "the screen draws no play control and says nothing about it, which reads "
+                + "as a screen that failed rather than one that is honest"
+        )
+        // Android's subtitle ends `· tap a station to play it`. The one
+        // instruction on the page must not be one that does nothing.
+        XCTAssertFalse(
+            containing(app, StationsWords.playingTail).exists,
+            "the subtitle still tells somebody to tap a station to play it"
+        )
+        for offer in ["play here", "play on this phone"] {
+            XCTAssertFalse(
+                app.descendants(matching: .button)
+                    .matching(NSPredicate(format: "label CONTAINS[c] %@", offer))
+                    .firstMatch.exists,
+                "something offers \"\(offer)\" and this branch has no engine behind it"
+            )
+        }
+
+        // Tap a row's body — twice, on two rows, one of them the host-local
+        // hit that even a build WITH an engine must refuse.
+        containing(app, StubStations.firstFavourite).tap()
+        containing(app, StubStations.playedOnly).tap()
+        evidence(app, "stations-12-nothing-plays")
+
+        let sent = stationsSent()
+        XCTAssertEqual(
+            0, (sent["play"] ?? []).count,
+            "the house was sent POST /play by a build that cannot play a sound: \(sent)"
+        )
+    }
+
+    // MARK: - 4. the control that would 401
+
+    /// There is no `import fcc fm` control, **and** the screen says where the
+    /// import is done.
+    ///
+    /// Both halves, because a case that only asserted the absence would pass
+    /// against a blank screen. `POST /fcc-import` sits on the radio module's
+    /// admin default (`web.py:38-40`) and this app has no admin session, so
+    /// the button would 401 from every phone every time
+    /// ([[no-misleading-controls]]). The fixture answers that 401 honestly,
+    /// and the request log is asked whether anything went looking for it.
+    @MainActor
+    func testStations_TheScreenHasNoFccImportControl() throws {
+        let (app, landed) = openStations()
+        XCTAssertTrue(landed, "Stations never drew its subtitle")
+        evidence(app, "stations-13-no-fcc-control")
+
+        let fcc = app.descendants(matching: .button)
+            .matching(NSPredicate(format: "label CONTAINS[c] %@", "fcc"))
+        XCTAssertEqual(
+            0, fcc.count,
+            "a control mentioning fcc is drawn, and every phone's tap on it is a 401"
+        )
+        XCTAssertTrue(
+            app.staticTexts[StationsWords.importIsAnAdminJob].exists,
+            "nothing says where the FCC import is done, so the absence reads as a bug"
+        )
+        XCTAssertEqual(
+            0, (stationsSent()["fcc"] ?? []).count,
+            "something asked the admin-only import route anyway"
+        )
+    }
+
+    // MARK: - 5. the list loads as you scroll
+
+    /// Page two is asked for when the foot of the list is reached, and not
+    /// before.
+    ///
+    /// 23 favourites and a page of 20, so `Favourite Kestrel 22` and
+    /// `WJIM-FM` exist **only** after the second page has landed — and a
+    /// lazy list's foot is unbuilt, not off screen, so nothing but scrolling
+    /// gets there. The first assertion is that it was *not* there to begin
+    /// with: a screen that loaded everything at once would pass the second
+    /// assertion on its own.
+    @MainActor
+    func testStations_TheFavouritesListLoadsAsYouScroll() throws {
+        let (app, landed) = openStations()
+        XCTAssertTrue(landed, "Stations never drew its subtitle")
+
+        XCTAssertFalse(
+            containing(app, StubStations.secondPageRow).exists,
+            "row 22 is on screen before anything scrolled, so the list asked for "
+                + "everything at once and the page size means nothing"
+        )
+        let reached = scrollStationsUntil(app, containing(app, StubStations.secondPageRow))
+        evidence(app, "stations-14-second-page")
+        XCTAssertTrue(reached, "the second page never loaded")
+        XCTAssertTrue(
+            containing(app, StubStations.fmRow).exists,
+            "the last favourite (\(StubStations.fmRow)) is missing from page two"
+        )
+    }
+
+    // MARK: - 6. the favourites answer before the directory does
+
+    /// What is typed peeks at the **favourites** after 220 ms, and does not
+    /// touch the directory until the search is submitted
+    /// (`StationSearch.kt:112`).
+    ///
+    /// Discriminating both ways: the favourite's own name appears without
+    /// anything being submitted, and no catalogue row — `Catalogue Ibis` is
+    /// in no favourite's name — is anywhere on the screen. A debounce that
+    /// was dropped, or an instant search that went to `/search`, fails one of
+    /// the two.
+    @MainActor
+    func testStations_SearchingFindsFavouritesBeforeTheDirectory() throws {
+        let (app, landed) = openStations()
+        XCTAssertTrue(landed, "Stations never drew its subtitle")
+
+        let field = app.textFields[StationsWords.queryHint]
+        XCTAssertTrue(field.waitForExistence(timeout: 20), "no query box")
+        field.tap()
+        app.typeText("Kestrel 04")
+
+        XCTAssertTrue(
+            app.staticTexts[StationsWords.yourFavorites].waitForExistence(timeout: 20),
+            "the favourites peek never arrived — the 220 ms debounce or its read is gone"
+        )
+        evidence(app, "stations-15-instant-favourites")
+        XCTAssertTrue(
+            app.staticTexts[StationsWords.oneMatch].exists,
+            "the peek found something other than the one favourite called Kestrel 04"
+        )
+        XCTAssertFalse(
+            containing(app, "Catalogue Ibis").exists,
+            "a catalogue row is on screen and nothing was submitted: the directory is "
+                + "being asked per keystroke"
+        )
+    }
+
+    // MARK: - 7. the star, which is the one thing that favourites
+
+    /// Two stars, two mechanisms, one launch.
+    ///
+    /// A **Recent** row's star is always a PATCH — the row is in the table
+    /// because `POST /play` put it there — and it moves the count from
+    /// `/badge`. A **search** row's star on a fresh `id == 0` hit is a POST
+    /// that saves and favourites, and **the id that POST answers has to be
+    /// kept**: the second tap is a PATCH of that id, and the bug the plugin
+    /// board opened as F-P013 is the star that never comes off because the id
+    /// was dropped. Both are here because both are "what the star does", and
+    /// one launch can ask both.
+    @MainActor
+    func testStations_TheStarIsWhatFavourites() throws {
+        let (app, landed) = openStations()
+        XCTAssertTrue(landed, "Stations never drew its subtitle")
+
+        // --- the Recent row: a PATCH, and the count moves.
+        let gullStar = stationsStar(app, StubStations.playedOnly, favorited: false)
+        XCTAssertTrue(gullStar.waitForExistence(timeout: 20), "no star on the Recent row")
+        gullStar.tap()
+        XCTAssertTrue(
+            app.staticTexts[StationsWords.subtitleAfterAStar].waitForExistence(timeout: 25),
+            "the favourites count did not move after a star in Recent"
+        )
+        evidence(app, "stations-16-recent-starred")
+
+        // --- the search row: a POST that keeps its id.
+        let field = app.textFields[StationsWords.queryHint]
+        field.tap()
+        app.typeText(StubStations.freshHit)
+        // Return runs the search: a single-line field, so `submitLabel(.search)`
+        // is honest and `onSubmit` fires (the multi-line trap does not apply).
+        app.typeText("\n")
+
+        let hit = containing(app, StubStations.freshHit)
+        XCTAssertTrue(hit.waitForExistence(timeout: 25), "the search found nothing")
+        let hitStar = stationsStar(app, StubStations.freshHit, favorited: false)
+        XCTAssertTrue(hitStar.waitForExistence(timeout: 20), "the search row has no star")
+        hitStar.tap()
+        XCTAssertTrue(
+            app.staticTexts[StationsWords.saved].waitForExistence(timeout: 25),
+            "starring a fresh hit did not mark it saved"
+        )
+        // 25, not 24: the count has to move for the POST, or the assertion
+        // after the second tap could not tell 24 from a 24 that never changed.
+        XCTAssertTrue(
+            app.staticTexts[StationsWords.subtitleAfterTwoStars].waitForExistence(timeout: 25),
+            "the count did not move when a fresh hit was saved"
+        )
+        evidence(app, "stations-17-hit-saved")
+
+        // The second tap is the one F-P013 is about.
+        let unstar = stationsStar(app, StubStations.freshHit, favorited: true)
+        XCTAssertTrue(unstar.waitForExistence(timeout: 20), "the starred row's star did not flip")
+        unstar.tap()
+        XCTAssertTrue(
+            app.staticTexts[StationsWords.subtitleAfterAStar].waitForExistence(timeout: 25),
+            "the second tap did nothing: the id the POST answered was dropped, so the "
+                + "star POSTed again instead of unfavouriting (plugin board F-P013)"
+        )
+        evidence(app, "stations-18-hit-unsaved")
+        XCTAssertFalse(
+            app.staticTexts[StationsWords.saved].exists,
+            "the row still says saved after being unfavourited"
+        )
+    }
+
+    // MARK: - 8. the detail sheet
+
+    /// The chevron opens the detail, the feed draws what the fingerprinter
+    /// matched, and the sampling interval saves — one launch, because they
+    /// are one sheet.
+    ///
+    /// The feed is the discriminating part: four detections, and each is a
+    /// different branch. `dejavu_local` becomes `local` and is `in library`;
+    /// `icy` is `new`; a null source is `—`; and **`shazam` passes through
+    /// verbatim**, because the source vocabulary is the plugin's and not this
+    /// app's — a screen that mapped unknown sources to a placeholder would
+    /// fail on that one alone.
+    ///
+    /// Then the interval: `600` saves and the row's own meta line says so
+    /// (the PATCH is applied in place, three pages from where it was typed),
+    /// and `10` is refused by the client against the server's own bounds so a
+    /// typo is a sentence rather than a 422.
+    @MainActor
+    func testStations_TheDetailSheetShowsTheFeedAndSavesTheInterval() throws {
+        let (app, landed) = openStations()
+        XCTAssertTrue(landed, "Stations never drew its subtitle")
+
+        let chevron = stationsChevron(app, StubStations.withTrack)
+        XCTAssertTrue(chevron.waitForExistence(timeout: 20), "row 04 has no chevron")
+        chevron.tap()
+        XCTAssertTrue(
+            app.staticTexts[StationsWords.recentDetections].waitForExistence(timeout: 25),
+            "the chevron did not open the detail — if the row played instead, the two "
+                + "taps have been collapsed into one"
+        )
+        evidence(app, "stations-19-detail-sheet")
+
+        XCTAssertTrue(containing(app, StubStations.localDetection).exists, "no local detection")
+        XCTAssertTrue(containing(app, StubStations.icyDetection).exists, "no icy detection")
+        XCTAssertTrue(
+            containing(app, StubStations.namelessArtist).exists,
+            "the detection with no artist is missing, so the unknown-artist branch never drew"
+        )
+        XCTAssertTrue(app.staticTexts[StationsWords.localPill].exists, "no local pill")
+        XCTAssertTrue(app.staticTexts[StationsWords.inLibrary].exists, "no in-library pill")
+        XCTAssertTrue(app.staticTexts[StationsWords.newPill].exists, "no new pill")
+        XCTAssertTrue(
+            app.staticTexts["shazam"].exists,
+            "an unknown fingerprint source did not pass through verbatim"
+        )
+        XCTAssertTrue(
+            app.staticTexts["icy"].exists,
+            "a known-but-not-local source did not pass through verbatim"
+        )
+
+        // --- the interval
+        let open = app.buttons[StationsWords.interval]
+        XCTAssertTrue(open.waitForExistence(timeout: 20), "the sheet has no interval control")
+        open.tap()
+        let box = app.textFields[StationsWords.interval]
+        XCTAssertTrue(box.waitForExistence(timeout: 20), "the interval box never opened")
+        box.tap()
+        clearField(app)
+        app.typeText("600")
+        try XCTUnwrap(stationsSheetButton(app, StationsWords.save), "no save above the keyboard").tap()
+        XCTAssertTrue(
+            containing(app, StationsWords.intervalSaved).waitForExistence(timeout: 25),
+            "nothing was said about the interval that was saved"
+        )
+        evidence(app, "stations-20-interval-600")
+
+        // Refused, and the row keeps what it had: a draft the client rejects
+        // is never sent, and the box keeps the number to correct.
+        app.buttons[StationsWords.interval].firstMatch.tap()
+        let again = app.textFields[StationsWords.interval]
+        XCTAssertTrue(again.waitForExistence(timeout: 20), "the interval box did not reopen")
+        again.tap()
+        clearField(app)
+        app.typeText("10")
+        try XCTUnwrap(stationsSheetButton(app, StationsWords.save), "no save above the keyboard").tap()
+        XCTAssertTrue(
+            containing(app, StationsWords.intervalRefused).waitForExistence(timeout: 25),
+            "10 seconds was accepted, so the 30-86400 bound is only the server's"
+        )
+        evidence(app, "stations-21-interval-refused")
+
+        app.buttons[StationsWords.hideDetails].firstMatch.tap()
+        let row = containing(app, StubStations.withTrack)
+        XCTAssertTrue(row.waitForExistence(timeout: 20), "row 04 is gone from the list")
+        XCTAssertTrue(
+            row.label.contains(StationsWords.metaAt600),
+            "the row does not show the interval that was saved: \(row.label)"
+        )
+    }
+
+    // MARK: - 9. forgetting asks first
+
+    /// `forget` is a DELETE, so it asks, and `cancel` really cancels.
+    ///
+    /// Both directions in one launch: the dialog's own words, then a cancel
+    /// that leaves the station where it was, then a confirmation that removes
+    /// it and moves the count. A destructive write with no dialog, and a
+    /// dialog whose cancel deletes anyway, are the same class of bug and this
+    /// is the only case that can see either.
+    @MainActor
+    func testStations_ForgettingAsksFirst() throws {
+        let (app, landed) = openStations()
+        XCTAssertTrue(landed, "Stations never drew its subtitle")
+
+        stationsChevron(app, StubStations.withTrack).tap()
+        let forget = app.buttons[StationsWords.forget]
+        XCTAssertTrue(forget.waitForExistence(timeout: 25), "the sheet has no forget control")
+        forget.tap()
+
+        let ask = app.alerts.firstMatch
+        XCTAssertTrue(ask.waitForExistence(timeout: 20), "forget deleted without asking")
+        evidence(app, "stations-22-forget-asks")
+        XCTAssertTrue(
+            containing(app, StationsWords.forgetTitle).exists,
+            "the dialog does not name the station it is about"
+        )
+        XCTAssertTrue(
+            containing(app, StationsWords.forgetBody).exists,
+            "the dialog does not say what forgetting does"
+        )
+        ask.buttons[StationsWords.cancel].tap()
+        XCTAssertTrue(
+            app.staticTexts[StationsWords.recentDetections].waitForExistence(timeout: 20),
+            "cancel closed the sheet as well as the dialog"
+        )
+        XCTAssertEqual(
+            0, (stationsSent()["delete"] ?? []).count,
+            "cancel sent the DELETE anyway"
+        )
+
+        app.buttons[StationsWords.forget].firstMatch.tap()
+        XCTAssertTrue(app.alerts.firstMatch.waitForExistence(timeout: 20), "the dialog did not reopen")
+        app.alerts.firstMatch.buttons[StationsWords.forget].tap()
+        XCTAssertTrue(
+            app.staticTexts[StationsWords.subtitleAfterAForget].waitForExistence(timeout: 30),
+            "the count did not drop after a station was forgotten"
+        )
+        evidence(app, "stations-23-forgotten")
+        XCTAssertFalse(
+            containing(app, StubStations.withTrack).exists,
+            "the forgotten station is still on the list"
+        )
+    }
+
+    // MARK: - 10. the empty house and the failed read
+
+    /// Two broken houses, two launches, one case: an empty house says there
+    /// is nothing, and a failed read says it **failed**.
+    ///
+    /// They are together because the bug they are both about is one bug —
+    /// telling the two apart. "no favorites yet" over a read that fell over
+    /// is the most plausible lie this screen could tell, and it is what
+    /// ``StationsModel/favoritesAreEmpty`` exists to prevent.
+    @MainActor
+    func testStations_TheEmptyAndFailedStatesSayWhich() throws {
+        // --- nothing in the house.
+        let (empty, drew) = openStations(
+            empty: true,
+            waitingFor: StationsWords.noFavorites
+        )
+        XCTAssertTrue(drew, "an empty house drew no empty state")
+        evidence(empty, "stations-24-empty-house")
+        XCTAssertTrue(
+            empty.staticTexts[StationsWords.noFavoritesSub].exists,
+            "the empty favourites state lost its second line"
+        )
+        XCTAssertTrue(
+            empty.staticTexts[StationsWords.nothingPlayed].exists,
+            "an empty Recent strip says nothing"
+        )
+        XCTAssertFalse(
+            empty.staticTexts[StationsWords.unreachable].exists,
+            "an empty house is reported as a failure"
+        )
+        empty.terminate()
+
+        // --- the read falls over.
+        let (failed, said) = openStations(
+            fail: true,
+            waitingFor: StationsWords.unreachable
+        )
+        XCTAssertTrue(said, "a 500 from the favourites read drew no error state")
+        evidence(failed, "stations-25-failed-read")
+        XCTAssertTrue(
+            failed.buttons[StationsWords.retry].exists,
+            "the error state offers no retry"
+        )
+        XCTAssertFalse(
+            failed.staticTexts[StationsWords.noFavorites].exists,
+            "a failed read is reported as a house with no favourites — the one lie this "
+                + "screen must not tell"
+        )
+    }
+
+    // MARK: - 11. Dynamic Type
+
+    /// The screen's own words grow with the type size, measured at both sizes
+    /// rather than trusted.
+    ///
+    /// A named Dynamic Type audit finding has twice been a false positive on
+    /// this track, so this compares each leaf's height at `L` against its
+    /// height at AX5 and asks for at least 1.8x. `minimumScaleFactor` is
+    /// rejected everywhere in this app, and this is what would catch it:
+    /// text that scales down to fit does not grow.
+    @MainActor
+    func testStations_TheScreenTextGrowsAtAX5() throws {
+        func heights(_ app: XCUIApplication) -> [String: CGFloat] {
+            var out: [String: CGFloat] = [:]
+            for label in [
+                StationsWords.title,
+                StationsWords.subtitle,
+                StationsWords.noPlayback,
+                StationsWords.importIsAnAdminJob,
+                StationsWords.recent,
+                StationsWords.favorites,
+                StubStations.pluginName,
+            ] {
+                let found = app.staticTexts[label]
+                if found.exists { out[label] = found.frame.height }
+            }
+            return out
+        }
+
+        var measured: [String: [String: CGFloat]] = [:]
+        for (name, mode) in [
+            ("large", Self.ordinaryTypeSize),
+            ("AX5", "UICTContentSizeCategoryAccessibilityXXXL"),
+        ] {
+            let (app, landed) = openStations(mode)
+            XCTAssertTrue(landed, "Stations never drew at \(name)")
+            usleep(1_000_000)
+            evidence(app, "stations-26-scale-\(name)")
+            measured[name] = heights(app)
+            for (leaf, height) in heights(app).sorted(by: { $0.key < $1.key }) {
+                print("STATIONS SCALE [\(name)] \(leaf) height=\(height)")
+            }
+            app.terminate()
+        }
+
+        let small = measured["large"] ?? [:]
+        let big = measured["AX5"] ?? [:]
+        var compared = 0
+        var stuck: [String] = []
+        for (leaf, height) in small.sorted(by: { $0.key < $1.key }) {
+            guard let grown = big[leaf] else { continue }
+            compared += 1
+            if grown < height * 1.8 { stuck.append("\(leaf) \(height)->\(grown)") }
+        }
+        XCTAssertEqual([], stuck, "a leaf of this screen does not grow with the type size")
+        XCTAssertGreaterThanOrEqual(
+            compared, 3,
+            "fewer than three leaves could be compared, so this proved nothing: "
+                + "\(small) / \(big)"
+        )
+    }
+
+    // MARK: - 12. the audit
+
+    /// Apple's own accessibility audit, over the screen **and** the open
+    /// detail sheet, classified by signature.
+    ///
+    /// By signature with ``floorAndRest(_:)`` and never a pinned total: the
+    /// floor is the anonymous "Dynamic Type font sizes are (partially)
+    /// unsupported" finding every pushed screen in this app reports, with no
+    /// element and a detail that ``testStations_TheScreenTextGrowsAtAX5()``
+    /// measures to be false. Anything the audit can attribute to an element
+    /// is a defect.
+    ///
+    /// The sheet is audited as well as the screen, and a finding that names a
+    /// row **behind** the sheet is the signal that the sheet is not modal —
+    /// which is how the two `Contrast failed` behind Settings' forget dialog
+    /// were found.
+    @MainActor
+    func testStations_AuditFindsNothingNew() throws {
+        guard #available(iOS 17.0, *) else {
+            throw XCTSkip("performAccessibilityAudit needs iOS 17")
+        }
+        let (app, landed) = openStations()
+        XCTAssertTrue(landed, "Stations never drew its subtitle")
+
+        let screen = Self.floorAndRest(try auditIssues(app, "stations-screen"))
+        evidence(app, "stations-27-audit-screen")
+        XCTAssertEqual(
+            [], screen.rest,
+            "the audit named an element on the Stations screen (floor: \(screen.floor))"
+        )
+
+        stationsChevron(app, StubStations.withTrack).tap()
+        XCTAssertTrue(
+            app.staticTexts[StationsWords.recentDetections].waitForExistence(timeout: 25),
+            "the detail sheet never opened, so it was not audited"
+        )
+        let sheet = Self.floorAndRest(try auditIssues(app, "stations-sheet"))
+        evidence(app, "stations-28-audit-sheet")
+        XCTAssertEqual(
+            [], sheet.rest,
+            "the audit named an element with the detail sheet open (floor: \(sheet.floor)) — "
+                + "a finding naming a row behind the sheet means the sheet is not modal"
+        )
+    }
+}

@@ -230,11 +230,26 @@ public final class StationsModel {
     ///
     /// Falls back to the loaded count when `/badge` has not answered, as
     /// Android does (`StationsScreen.kt:183`).
+    /// Android's sentence ends `· tap a station to play it`, and **this
+    /// drops that clause when nothing can play** — the one instruction on the
+    /// page must not be one that does nothing
+    /// (``StationsStrings/subtitleWithoutPlaying(favorites:recent:)``).
     public var subtitle: String {
-        StationsStrings.subtitle(
-            favorites: favoritesTotal ?? favorites.state.items.count,
-            recent: recentRows.count
-        )
+        let total = favoritesTotal ?? favorites.state.items.count
+        guard playback.canPlay else {
+            return StationsStrings.subtitleWithoutPlaying(favorites: total, recent: recentRows.count)
+        }
+        return StationsStrings.subtitle(favorites: total, recent: recentRows.count)
+    }
+
+    /// Why no row plays, or nil when they do.
+    ///
+    /// Said once, on the page, where the play controls would be. A build with
+    /// no engine draws no play affordance anywhere
+    /// (``StationsPlayback/canPlay``), and an omission with nothing said
+    /// about it reads as a screen that failed to draw.
+    public var playbackNote: String? {
+        playback.canPlay ? nil : StationsStrings.playingIsNotBuiltYet
     }
 
     /// The submit button's word (`StationSearch.kt:222`).

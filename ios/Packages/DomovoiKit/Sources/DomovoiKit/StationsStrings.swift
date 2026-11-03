@@ -23,6 +23,29 @@ public enum StationsStrings {
         "\(favorites) favorited · \(recent) recent · tap a station to play it"
     }
 
+    /// The subtitle of a build that **cannot play anything**, which is this
+    /// branch until the `player` item's witness reaches the route slot.
+    ///
+    /// **iOS-only.** Android's sentence ends `· tap a station to play it`,
+    /// and a screen whose rows do not play must not say that: it is the one
+    /// instruction on the page, and following it would do nothing. The two
+    /// counts are unchanged, and ``playingIsNotBuiltYet`` says what is
+    /// missing rather than leaving the omission to be guessed at
+    /// ([[no-misleading-controls]]).
+    public static func subtitleWithoutPlaying(favorites: Int, recent: Int) -> String {
+        "\(favorites) favorited · \(recent) recent"
+    }
+
+    /// Said once, where the play controls would be, when this build has no
+    /// audio engine (``StationsPlayback/canPlay``).
+    ///
+    /// **iOS-only**, for the same reason as ``subtitleWithoutPlaying(favorites:recent:)``:
+    /// no play affordance is drawn at all, and a page that silently lacked
+    /// one would read as a screen that had failed rather than one that is
+    /// honest about what it does. Everything else on it works.
+    public static let playingIsNotBuiltYet =
+        "playing on this phone isn't built yet — favoriting, sampling and detections all work"
+
     /// Where Android draws `import fcc fm` (`StationsScreen.kt:191`).
     ///
     /// **iOS-only.** `POST /fcc-import` carries no `@device_endpoint`, so it
@@ -34,6 +57,16 @@ public enum StationsStrings {
     /// (``FileStrings/deleteNeedsAnAdmin``).
     public static let importIsAnAdminJob =
         "importing the FCC FM list is an admin job — do it on the dashboard"
+
+    // MARK: - the plugin band (`ui/components/PluginFrame.kt`)
+
+    /// The bordered badge beside the plugin's name (`PluginFrame.kt:151`).
+    public static let pluginBadge = "plugin"
+
+    /// `"by Coders Farm"` (`PluginFrame.kt:144`). Nil-safe at the call site:
+    /// a plugin with no publisher draws no line at all rather than a bare
+    /// `by`.
+    public static func pluginBy(_ publisher: String) -> String { "by \(publisher)" }
 
     // MARK: - the search card (`StationSearch.kt:84`)
 
@@ -145,6 +178,30 @@ public enum StationsStrings {
     public static let save = "save"
     public static let cancel = "cancel"
 
+    /// A failed read's second chance — `ErrorState`'s own button
+    /// (`ui/components/Kit.kt:296`, `TextButton { Text("retry") }`), which
+    /// `StationsScreen.kt:383` draws for the favourites list. The detection
+    /// feed draws it too.
+    public static let retry = "retry"
+
+    /// `ErrorState`'s default title (`Kit.kt:285`), over the failure's own
+    /// message.
+    public static let unreachable = "couldn't reach the server"
+
+    /// What the detection feed says when a failed read carried no message
+    /// (`StationDetail.kt:325`).
+    public static let requestFailed = "request failed"
+
+    /// The foot of a list that has more.
+    ///
+    /// **iOS-only**, and the one word that replaces Android's whole paging
+    /// footer — `prev`, `page 2 / 3`, `next` — under the owner's standing
+    /// decision that these lists load as you scroll (MAP §5). Files' own
+    /// footer says the same word (``FileStrings/loadMore``), so the two paged
+    /// screens in this app do not use two different ones. Drawn as well as
+    /// the scroll trigger, because VoiceOver's reader does not scroll.
+    public static let loadMore = "load more"
+
     public static let noLiveMetadata = "no live metadata"
     public static let listening = "listening…"
 
@@ -161,6 +218,23 @@ public enum StationsStrings {
     public static func metaLine(_ station: StationsRow) -> String {
         let every = station.sampleIntervalSec.map(String.init) ?? dash
         return "\(head(station)) · sampling every \(every)s"
+    }
+
+    /// An FM result row's first line — `"WJIM · 97.5 FM"`
+    /// (`StationSearch.kt:455`). The call sign is what somebody looking for a
+    /// local station knows, so it leads; a row the import left without one
+    /// falls back to ``head(_:)`` rather than drawing a bare separator.
+    public static func fmHead(_ station: StationsRow) -> String {
+        let call = (station.callSign ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return call.isEmpty ? head(station) : "\(call) · \(head(station))"
+    }
+
+    /// `"Lansing, MI"`, the city alone, or nil (`StationSearch.kt:468`).
+    public static func market(_ station: StationsRow) -> String? {
+        let city = (station.marketCity ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let state = (station.marketState ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if city.isEmpty { return state.isEmpty ? nil : state }
+        return state.isEmpty ? city : "\(city), \(state)"
     }
 
     public static let intervalOutOfRange = "interval must be between 30 and 86400 s"

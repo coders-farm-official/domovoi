@@ -99,7 +99,11 @@ struct RouteScreen: View {
             ScreenPlaceholder(route: route, onThisPhone: false)
         case .stations:
             // slot: stations
-            ScreenPlaceholder(route: route, onThisPhone: false)
+            // ``StationsNoPlayback`` until the `player` item's witness lands:
+            // the screen then draws **no play affordance at all**, and
+            // ``StationsView`` says so on the page. This one argument is the
+            // whole of what the merge that brings phone audio changes here.
+            StationsView(model: model, playback: StationsNoPlayback())
         case .manual:
             // slot: manual
             ScreenPlaceholder(route: route, onThisPhone: false)
