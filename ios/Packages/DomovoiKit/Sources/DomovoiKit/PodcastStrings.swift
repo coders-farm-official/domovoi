@@ -60,9 +60,11 @@ public enum PodcastStrings {
 
     // MARK: - the shows grid's four states
 
-    /// What `ErrorState` falls back to when the failure carried no message
-    /// (`PodcastsScreen.kt:150`, and ``Pager``'s own default).
-    public static let requestFailed = "request failed"
+    // A `request failed` constant lived here, for the fallback when a read's
+    // failure carried no message (`PodcastsScreen.kt:150`). Nothing read it:
+    // that fallback is ``Pager``'s own (`Pager.message(of:)`), which the
+    // grid's error state shows directly. Removed rather than left as a
+    // string the screen cannot produce.
 
     /// `PodcastsScreen.kt:152`.
     public static let noShowsMatch = "no shows match"
@@ -161,6 +163,12 @@ public enum PodcastStrings {
     public static func unsubscribeFailed(_ why: String) -> String {
         "failed: \(why)"
     }
+
+    /// The `why` for a 200 whose body this app could not read as an ack
+    /// (``PodcastAck``). **iOS-only**: Android discards the response, so it
+    /// has no wording for this — IOS-ONLY-STRINGS.md. It says what is known
+    /// (the removal was not confirmed) rather than guessing at a cause.
+    public static let notConfirmed = "the server did not confirm the removal"
 
     /// Where an episode is listened to and saved from, since this app draws
     /// neither control.

@@ -47,6 +47,7 @@ struct PodcastEpisodesSheet: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
                     heading
+                    unsubscribeTrouble
                     searchField
                     list
                 }
@@ -134,6 +135,27 @@ struct PodcastEpisodesSheet: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    /// A failed unsubscribe, said **in this sheet** rather than toasted.
+    ///
+    /// The unsubscribe is the one write on this screen that fails with a
+    /// sheet in front of it — a stale card's 404 (`podcasts.py:265-269`) and
+    /// the device refusal both land here — and the shell draws a toast
+    /// behind a presented sheet (`AppShellView.swift:31-46`), so a toast
+    /// would be said where nobody can read it. The same shape
+    /// ``PodcastSubscribeSheet`` uses for its own two failures, and for the
+    /// same reason. Above the search field, so it is not pushed off by a
+    /// long list.
+    @ViewBuilder
+    private var unsubscribeTrouble: some View {
+        if let said = podcasts.unsubscribeError {
+            Text(said)
+                .font(.footnote)
+                .foregroundStyle(Color.errInk)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 

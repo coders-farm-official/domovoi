@@ -136,6 +136,18 @@ public final class PodcastsModel {
     /// exactly the case where the sheet stays up.
     public private(set) var subscribeError: String?
 
+    /// A failed unsubscribe, shown inside the **episodes** sheet.
+    ///
+    /// The same rule as the two above, for the one write that fails with a
+    /// sheet still in front of it: the DELETE's 404 (`subscription {id} not
+    /// found`, `podcasts.py:265-269`, which is what a stale card gets) and
+    /// the device refusal both land while ``PodcastEpisodesSheet`` is up, so
+    /// a toast for them would be drawn by the shell *behind* that sheet
+    /// (`AppShellView.swift:31-46`) — said, and unreadable. The success case
+    /// keeps ``toast`` because ``closeEpisodes()`` takes the sheet away
+    /// first. This was a toast until review. DECISIONS.md.
+    public private(set) var unsubscribeError: String?
+
     /// The shell's toast. Only ever set for something that lands with no
     /// sheet in front of it.
     public private(set) var toast: String?
@@ -161,6 +173,19 @@ public final class PodcastsModel {
 
     private var debounce: Task<Void, Never>?
     private var episodeDebounce: Task<Void, Never>?
+
+    /// The directory search in flight, held so closing the subscribe sheet
+    /// can cancel it.
+    ///
+    /// Android runs the search in the dialog's **own** scope and keeps its
+    /// hits in a dialog-scoped `remember` (`PodcastsSubscribe.kt:75`), so a
+    /// reply cannot land after the dialog has gone — the same file's
+    /// subscribe is app-scoped on purpose (`:90`), and that contrast is the
+    /// whole design. Without this handle a search dismissed mid-flight
+    /// repopulated ``discoveries`` behind the closed sheet, and the next
+    /// sitting opened on a list of hits above an empty field, each with a
+    /// live `add` that writes to the household.
+    private var discovery: Task<Void, Never>?
 
     /// ``AppContainer/onStateEvent(_:)``'s token, held while the screen is on
     /// screen. A ``Pager`` keys *itself* to the server address but not to the
@@ -268,6 +293,7 @@ public final class PodcastsModel {
         episodeFilter = ""
         episodeNeedle = ""
         confirmingUnsubscribe = nil
+        unsubscribeError = nil
     }
 
     /// A keystroke in the episodes field.
@@ -335,8 +361,12 @@ public final class PodcastsModel {
 
     // MARK: - subscribing
 
+    /// A sheet opened fresh is fresh: ``discoveries`` is cleared here as
+    /// well as in ``closeSubscribe()``, so a reply that slipped through
+    /// before the cancel took effect cannot furnish the new sitting.
     public func openSubscribe() {
         subscribeSheetOpen = true
+        discoveries = []
         discoveryError = nil
         subscribeError = nil
     }
@@ -345,8 +375,15 @@ public final class PodcastsModel {
     /// cancelled — it is the household's write, not this sheet's
     /// (`PodcastsSubscribe.kt:90`) — so `subscribing` is left as it is and
     /// the task below finishes on its own.
+    /// The search, by contrast, **is** cancelled — it is the dialog's, not
+    /// the household's (``discovery``) — and `discovering` goes back to
+    /// false with it, or the next sitting opens on a stuck spinner with
+    /// `search` disabled.
     public func closeSubscribe() {
         subscribeSheetOpen = false
+        discovery?.cancel()
+        discovery = nil
+        discovering = false
         discoveries = []
         discoveryError = nil
         subscribeError = nil
@@ -365,7 +402,8 @@ public final class PodcastsModel {
         discoveryError = nil
         let client = container.client
         let epoch = houseEpoch
-        Task { @MainActor [weak self] in
+        discovery?.cancel()
+        discovery = Task { @MainActor [weak self] in
             var found: [PodcastDiscovery]?
             var said: String?
             do {
@@ -386,6 +424,10 @@ public final class PodcastsModel {
             // whichever house is current, so landing them under B would offer
             // an `add` that writes somewhere the person did not search from.
             guard let self, self.stillHome(epoch) else { return }
+            // Cancelled by ``closeSubscribe()``: the sheet that asked for
+            // these hits is gone, so they belong to nobody.
+            guard !Task.isCancelled else { return }
+            self.discovery = nil
             self.discovering = false
             if let found {
                 self.discoveries = found
@@ -441,6 +483,7 @@ public final class PodcastsModel {
 
     public func confirmUnsubscribe(_ show: PodcastShow) {
         confirmingUnsubscribe = show
+        unsubscribeError = nil
     }
 
     public func cancelUnsubscribe() {
@@ -456,14 +499,29 @@ public final class PodcastsModel {
     /// if this same show is still the one open**, because the reply can land
     /// after a back gesture took the sheet away or after another show was
     /// opened (`:183-185`).
+    ///
+    /// The answer is **decoded** (``PodcastAck``) rather than discarded: this
+    /// path takes the card off the grid on the strength of a 200, and a 200
+    /// from something that is not this house's server — a captive portal, a
+    /// proxy — would otherwise remove the show and say "Unsubscribed". The
+    /// server itself never answers `deleted: false` (it 404s instead,
+    /// `podcasts.py:265-269`), so that branch is about a body this app cannot
+    /// read: it reports a failure and leaves the card where it is.
     public func unsubscribe(_ show: PodcastShow) {
         confirmingUnsubscribe = nil
+        unsubscribeError = nil
         let client = container.client
         let epoch = houseEpoch
         Task { @MainActor [weak self] in
             var said: String?
             do {
-                try await client.send(method: "DELETE", path: PodcastPath.subscription(show.id))
+                let ack = try await client.delete(
+                    PodcastPath.subscription(show.id),
+                    as: PodcastAck.self
+                )
+                if !ack.deleted {
+                    said = PodcastStrings.unsubscribeFailed(PodcastStrings.notConfirmed)
+                }
             } catch let trouble as DomovoiError {
                 said = PodcastStrings.unsubscribeFailed(trouble.message)
             } catch {
@@ -473,8 +531,11 @@ public final class PodcastsModel {
             // an unsubscribe for A would remove the card with the same id in
             // B and close B's sheet.
             guard let self, self.stillHome(epoch) else { return }
+            // Inside the sheet, not a toast: on this branch the sheet is
+            // still up (only success closes it, below) and the shell draws a
+            // toast behind it.
             guard said == nil else {
-                self.toast = said
+                self.unsubscribeError = said
                 return
             }
             self.toast = PodcastStrings.unsubscribed
@@ -643,6 +704,8 @@ public final class PodcastsModel {
         houseEpoch += 1
         debounce?.cancel()
         episodeDebounce?.cancel()
+        discovery?.cancel()
+        discovery = nil
         episodes?.stop()
         episodes = nil
         selected = nil
@@ -654,6 +717,7 @@ public final class PodcastsModel {
         discoveries = []
         discoveryError = nil
         subscribeError = nil
+        unsubscribeError = nil
         subscribeSheetOpen = false
         confirmingUnsubscribe = nil
         toast = nil
@@ -663,6 +727,8 @@ public final class PodcastsModel {
     public func stop() {
         debounce?.cancel()
         episodeDebounce?.cancel()
+        discovery?.cancel()
+        discovery = nil
         if let eventSink {
             container.removeStateEventSink(eventSink)
             self.eventSink = nil

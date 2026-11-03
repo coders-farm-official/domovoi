@@ -66,6 +66,9 @@ final class PodcastsModelTests: XCTestCase {
         let pollStatus = Shared<Int>(200)
         let subscribeStatus = Shared<Int>(200)
         let deleteStatus = Shared<Int>(200)
+        /// The 200 body. Settable so a reply this app cannot read as an ack
+        /// can be answered.
+        let deleteBody = Shared<String>(#"{"deleted":true}"#)
         let discoverStatus = Shared<Int>(200)
 
         /// `Night Shift NN`, with the one named show at index 0 — the only
@@ -158,7 +161,7 @@ final class PodcastsModelTests: XCTestCase {
                     guard self.deleteStatus.current == 200 else {
                         return .json(#"{"detail":"subscription 1 not found"}"#, status: self.deleteStatus.current)
                     }
-                    return .json(#"{"deleted":true}"#)
+                    return .json(self.deleteBody.current)
 
                 case ("GET", let path) where path.hasSuffix("/episodes"):
                     let count = narrowed ? min(1, self.episodes.current) : self.episodes.current
@@ -702,6 +705,64 @@ final class PodcastsModelTests: XCTestCase {
         XCTAssertEqual([], model.discoveries)
     }
 
+    /// A search dismissed mid-flight does not furnish the next sitting.
+    ///
+    /// Android runs the search in the dialog's **own** scope
+    /// (`PodcastsSubscribe.kt:75`), so its reply cannot land after the dialog
+    /// has gone — unlike the subscribe beside it, which is app-scoped on
+    /// purpose (`:90`). Here the search was neither cancelled nor gated until
+    /// review, so dismissing the sheet mid-flight repopulated `discoveries`
+    /// behind it: the next sitting opened on a list of hits above an empty
+    /// field, each with a live `add` that writes to the household. And
+    /// `discovering` stayed true, so `search` was disabled under a spinner
+    /// that would never stop.
+    func testClosingTheSubscribeSheetForgetsASearchStillInFlight() async {
+        let park = parkRequest(
+            to: "/api/podcasts/discover",
+            answering: {
+                .json("""
+                [{"title":"The Kitchen Table","feed_url":"https://feeds.example.com/kitchen.xml",
+                  "author":"Marisa Whitlock","artwork":null}]
+                """)
+            },
+            otherwise: { request in
+                guard let url = request.url,
+                      let parts = URLComponents(url: url, resolvingAgainstBaseURL: false)
+                else { return .json("{}", status: 404) }
+                if parts.path == "/api/health" { return Self.healthAnswer(parts) }
+                return .json("""
+                {"items":[],"total":0,"limit":50,"has_more":false,
+                 "next_cursor":null,"offset":0}
+                """)
+            }
+        )
+        let (model, _, _) = parkedRig()
+        defer { model.stop() }
+
+        model.start()
+        await settleUntil { model.shows.state.loaded }
+        model.openSubscribe()
+        model.discover("kitchen")
+        await settleUntil { park.arrived.current }
+
+        // Dismissed while the reply is still on the wire.
+        model.closeSubscribe()
+        XCTAssertFalse(model.discovering, "the spinner belongs to a sheet that is gone")
+
+        park.release.set(true)
+        XCTAssertFalse(park.ranOut.current, "the park was released, not timed out")
+        await nothingHappens()
+
+        XCTAssertEqual([], model.discoveries, "the hits belong to the sheet that asked")
+        XCTAssertFalse(model.discovering)
+        XCTAssertNil(model.discoveryError)
+
+        // And the next sitting opens on an empty list, with `search` live.
+        model.openSubscribe()
+        XCTAssertEqual([], model.discoveries)
+        XCTAssertFalse(model.discovering)
+    }
+
     /// The internet-off refusal is the server's own sentence, shown as it
     /// comes: it says which of the two failures happened.
     func testAFailedDiscoverySaysWhyInsideTheSheet() async {
@@ -785,7 +846,13 @@ final class PodcastsModelTests: XCTestCase {
         )
     }
 
-    func testAFailedUnsubscribeKeepsTheCardAndSaysSo() async {
+    /// A failed unsubscribe is said **in the sheet**, not toasted.
+    ///
+    /// The sheet stays up on this branch, and the shell draws a toast behind
+    /// a presented sheet — so a toast here is said where nobody can read it.
+    /// It was a toast until review; the assertion on `toast` being nil is
+    /// what keeps it from going back.
+    func testAFailedUnsubscribeKeepsTheCardAndSaysSoInTheSheet() async {
         let house = House()
         house.deleteStatus.set(404)
         let (model, _, _, _, _) = rig(house: house)
@@ -793,20 +860,65 @@ final class PodcastsModelTests: XCTestCase {
         await started(model)
         defer { model.stop() }
         let show = model.shows.state.items[0]
+        model.select(show)
+        await settleUntil { model.episodes?.state.loaded == true }
 
         model.unsubscribe(show)
-        await settleUntil { model.toast != nil }
+        await settleUntil { model.unsubscribeError != nil }
 
         XCTAssertTrue(
-            model.toast?.hasPrefix("failed: 404") == true,
-            "Android's own wording for this one write; got \(model.toast ?? "nothing")"
+            model.unsubscribeError?.hasPrefix("failed: 404") == true,
+            "Android's own wording for this one write; got \(model.unsubscribeError ?? "nothing")"
         )
-        XCTAssertTrue(model.toast?.contains("subscription 1 not found") == true)
+        XCTAssertTrue(model.unsubscribeError?.contains("subscription 1 not found") == true)
+        XCTAssertNil(model.toast, "a sheet is in front of the toast, so nothing goes there")
+        XCTAssertEqual(
+            show.id, model.selected?.id,
+            "the sheet stays up over a failure, which is why the sentence has to be in it"
+        )
         XCTAssertTrue(
             model.shows.state.items.contains { $0.id == show.id },
             "a write that did not happen must not take the row off the grid"
         )
         XCTAssertEqual(62, model.shows.state.total)
+
+        // Asking again clears last time's sentence, or a successful retry
+        // would be read under a stale failure.
+        model.confirmUnsubscribe(show)
+        XCTAssertNil(model.unsubscribeError)
+    }
+
+    /// A 200 whose body is not an ack is **not** a successful unsubscribe.
+    ///
+    /// The server never answers `deleted: false` — it 404s — so this is
+    /// about a 200 from something that is not this house's server. Without
+    /// the decode the card came off the grid and the person was told
+    /// "Unsubscribed" for a subscription that is still there.
+    func testAnUnreadableTwoHundredIsNotASuccessfulUnsubscribe() async {
+        let house = House()
+        house.deleteBody.set(#"{"ok":"sure"}"#)
+        let (model, _, _, _, _) = rig(house: house)
+
+        await started(model)
+        defer { model.stop() }
+        let show = model.shows.state.items[0]
+        model.select(show)
+        await settleUntil { model.episodes?.state.loaded == true }
+
+        model.unsubscribe(show)
+        await settleUntil { model.unsubscribeError != nil }
+
+        XCTAssertEqual(
+            PodcastStrings.unsubscribeFailed(PodcastStrings.notConfirmed),
+            model.unsubscribeError
+        )
+        XCTAssertNil(model.toast)
+        XCTAssertTrue(
+            model.shows.state.items.contains { $0.id == show.id },
+            "the card stays until the removal is confirmed"
+        )
+        XCTAssertEqual(62, model.shows.state.total)
+        XCTAssertEqual(show.id, model.selected?.id, "and the sheet stays open")
     }
 
     // MARK: - the answer is filed under the house that was asked

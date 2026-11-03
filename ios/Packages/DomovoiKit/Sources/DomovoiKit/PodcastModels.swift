@@ -432,9 +432,16 @@ public struct PodcastPosition: Decodable, Equatable, Sendable {
 /// `{"deleted": true}` and `{"saved": true}` — the two writes whose answer is
 /// a single flag (`podcasts.py:269, 552`).
 ///
-/// Decoded rather than ignored so that a 200 with a body this app cannot read
-/// is not reported as a successful unsubscribe. The server cannot answer
-/// `false`; a proxy in front of a house can answer something else entirely.
+/// ``PodcastsModel/unsubscribe(_:)`` decodes `deleted` rather than ignoring
+/// the body, so that a 200 this app cannot read as an ack is not reported as
+/// a successful unsubscribe and does not take the card off the grid. The
+/// server cannot answer `false`; a proxy in front of a house can answer
+/// something else entirely.
+///
+/// `saved` has **no caller**: it belongs to the position write
+/// (`podcasts.py:552`), which this screen leaves out with the rest of phone
+/// playback. It is decoded here so the one type covers both answers if that
+/// write is ever built.
 public struct PodcastAck: Decodable, Equatable, Sendable {
     public let deleted: Bool
     public let saved: Bool

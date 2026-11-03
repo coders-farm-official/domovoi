@@ -115,6 +115,7 @@ struct PodcastSubscribeSheet: View {
             placeholder: PodcastStrings.showNamePlaceholder,
             text: $query,
             button: PodcastStrings.search,
+            submit: .search,
             // Blank does nothing, as Android's `if (q.isBlank()) return`
             // does: the route types `q` with `min_length=1`
             // (`podcasts.py:390`), so a blank would be a 422 for a field the
@@ -154,6 +155,12 @@ struct PodcastSubscribeSheet: View {
             placeholder: PodcastStrings.feedURLPlaceholder,
             text: $feedURL,
             button: PodcastStrings.subscribe,
+            // **Not** `.search`: this field subscribes. Android sets
+            // `ImeAction.Search` on the discovery field only
+            // (`PodcastsSubscribe.kt:146-147`) and leaves this one's default
+            // (`:193-203`), and a Return key labelled `Search` over a button
+            // that says `subscribe` is the same lie NIGHT-RULES §3 forbids.
+            submit: .done,
             enabled: !feedURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 && !podcasts.subscribing
         ) {
@@ -168,6 +175,7 @@ struct PodcastSubscribeSheet: View {
         placeholder: String,
         text: Binding<String>,
         button: String,
+        submit: SubmitLabel,
         enabled: Bool,
         act: @escaping () -> Void
     ) -> some View {
@@ -180,12 +188,14 @@ struct PodcastSubscribeSheet: View {
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
                 // A single-line field, so the Return key can honestly say
-                // what it does — and it does the same thing as the button
-                // beside it, which is Android's `ImeAction.Search`
-                // (`PodcastsSubscribe.kt:146`). The rule against
-                // `submitLabel` is about a vertical-axis field, where Return
-                // makes a newline.
-                .submitLabel(.search)
+                // what it does — and each tab passes its own word, because
+                // the two do different things (`search` here, `subscribe` on
+                // the url tab: Android's `ImeAction.Search` is on the
+                // discovery field alone, `PodcastsSubscribe.kt:146-147`).
+                // It was hard-coded `.search` for both until review. The
+                // rule against `submitLabel` is about a vertical-axis field,
+                // where Return makes a newline.
+                .submitLabel(submit)
                 .onSubmit { if enabled { act() } }
                 .accessibilityLabel(placeholder)
                 .frame(maxWidth: .infinity)

@@ -163,6 +163,17 @@ extension StubHouseUITests {
         )
     }
 
+    /// The unsubscribe's failure mode, through the same control route.
+    /// `gone` is the 404 a stale card gets (`podcasts.py:265-269`) — the one
+    /// failure on this screen that lands while a sheet is still up.
+    @MainActor
+    func setPodcastUnsubscribe(_ mode: String) {
+        control(
+            "podcasts-mode", "{\"unsubscribe_mode\": \"\(mode)\"}",
+            port: 6601, what: "the unsubscribe to answer \(mode)"
+        )
+    }
+
     // MARK: - the grid
 
     /// The grid, with the server's own numbers.
@@ -586,10 +597,18 @@ extension StubHouseUITests {
         // must leave the field to correct.
         XCTAssertTrue(field.exists, "the sheet closed over a failure")
         // And the sentence is the server's own, not something this app made
-        // up about being offline.
+        // up about being offline. The wording asserted absent is
+        // ``failureText``'s own fallback for `.unreachable`/`.noServer` —
+        // what the sheet *would* say if the 409's detail had been dropped on
+        // the floor. (It was `request failed` here until review: that string
+        // is `Pager.message(of:)`'s fallback for an empty error description
+        // and the sheet cannot produce it, so the assertion could not fail.)
         XCTAssertFalse(
-            app.staticTexts[StubPodcasts.requestFailed].exists,
-            "the server's reason was replaced with a generic failure"
+            app.descendants(matching: .staticText)
+                .matching(NSPredicate(format: "label CONTAINS %@", StubPodcasts.genericDiscoveryFailure))
+                .firstMatch
+                .exists,
+            "the server's reason was replaced with a generic offline failure"
         )
         resetPodcastHouse()
     }
@@ -649,6 +668,57 @@ extension StubHouseUITests {
             "the card for the unsubscribed show is still on the grid"
         )
         evidence(app, "podcasts-62-unsubscribed")
+        resetPodcastHouse()
+    }
+
+    /// A failed unsubscribe is said **in the sheet**, and the card stays.
+    ///
+    /// The sheet does not close over a failure, and the shell draws a toast
+    /// *behind* a presented sheet (`AppShellView.swift:31-46`) — so this
+    /// write's failure went somewhere nobody could read until review, which
+    /// is the same failure class as a control that cannot act. The 404 is
+    /// what a stale card gets (`podcasts.py:265-269`).
+    ///
+    /// The assertion that discriminates is the pair: the server's own
+    /// sentence visible **while** the episodes list is still on screen. A
+    /// toast would satisfy neither — it is drawn under the sheet.
+    @MainActor
+    func testPodcasts_AFailedUnsubscribeIsSaidInTheSheet() throws {
+        resetPodcastHouse()
+        setPodcastUnsubscribe("gone")
+        let (app, landed) = openPodcasts()
+        XCTAssertTrue(landed, "the shows list never answered")
+        XCTAssertTrue(openTheKitchenTable(app), "the show's episodes never drew")
+
+        app.buttons[StubPodcasts.unsubscribe].firstMatch.tap()
+        let alert = app.alerts.firstMatch
+        XCTAssertTrue(
+            alert.staticTexts[StubPodcasts.unsubscribeBody].waitForExistence(timeout: 20),
+            "the destructive write asked nothing"
+        )
+        alert.buttons[StubPodcasts.unsubscribe].tap()
+
+        let said = app.descendants(matching: .staticText)
+            .matching(NSPredicate(format: "label BEGINSWITH %@", StubPodcasts.unsubscribeFailedPrefix))
+            .firstMatch
+        let shown = said.waitForExistence(timeout: 25)
+        evidence(app, "podcasts-63-unsubscribe-failed")
+        XCTAssertTrue(shown, "the failure was not said where the person is looking")
+        // In the sheet, not behind it: the episodes list is still drawn.
+        XCTAssertTrue(
+            podcastRow(app, StubPodcasts.newestEpisode, StubPodcasts.newestMeta).exists,
+            "the sheet closed over a failed write, so the sentence is not in it"
+        )
+        // And the write that did not happen took nothing off the grid.
+        app.buttons[StubPodcasts.closeSheet].firstMatch.tap()
+        XCTAssertTrue(
+            app.staticTexts[StubPodcasts.countLine].waitForExistence(timeout: 25),
+            "a write that failed changed the count line"
+        )
+        XCTAssertTrue(
+            app.buttons[StubPodcasts.kitchenTable].firstMatch.exists,
+            "a write that failed took the card off the grid"
+        )
         resetPodcastHouse()
     }
 
@@ -745,14 +815,24 @@ enum StubPodcasts {
     static let pollNow = "poll now"
     static let subscribe = "subscribe"
     static let searchShows = "search shows…"
-    static let requestFailed = "request failed"
+    /// What the sheet says when a discovery failure has **no** server reason
+    /// to show — ``failureText``'s `.unreachable`/`.noServer` wording. Seeded
+    /// here only to be asserted absent when the server *did* give a reason.
+    static let genericDiscoveryFailure = "Discovery failed (offline?)"
 
     /// Sixty-two subscriptions, fifty to a page.
     static let countLine = "showing 50 of 62 shows"
     /// After one subscribe.
     static let countLineAfterSubscribe = "showing 50 of 63 shows"
-    /// After one unsubscribe, which must bring the **total** down too.
-    static let countLineAfterUnsubscribe = "showing 50 of 61 shows"
+    /// After one unsubscribe. **49 of 61**, not 50 of 61: `Pager.remove`
+    /// filters the row out of the loaded page *and* brings the total down,
+    /// and nothing on this path re-reads page one (the stub house cannot
+    /// push `podcasts.changed`, and `unsubscribe` deliberately does not
+    /// reload). Both numbers falling by one is the discriminating fact — an
+    /// implementation that reloaded instead of removing would read
+    /// `showing 50 of 61 shows`, and one that forgot the total would read
+    /// `showing 49 of 62 shows`.
+    static let countLineAfterUnsubscribe = "showing 49 of 61 shows"
     static let oneShowCountLine = "showing 1 of 1 shows"
 
     // the shows
@@ -789,6 +869,13 @@ enum StubPodcasts {
     static let oldestEpisode = "Sourdough in a cold house"
     static let unsubscribe = "unsubscribe"
     static let cancel = "cancel"
+    /// `failed: ` — Android's own wording for this one write
+    /// (`PodcastsEpisodes.kt:209`). A prefix, because the rest is the
+    /// server's sentence and the whole thing is over 128 characters' worth of
+    /// query risk (NIGHT-RULES §5).
+    static let unsubscribeFailedPrefix = "failed: 404"
+    /// The episodes sheet toolbar close (PodcastStrings.close).
+    static let closeSheet = "close"
     static let unsubscribeBody =
         "Unsubscribe from \"The Kitchen Table\"? Downloaded episodes are removed."
     static let unsubscribedToast = "Unsubscribed"
