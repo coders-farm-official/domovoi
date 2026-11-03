@@ -473,6 +473,54 @@ final class StubHouseUITests: XCTestCase {
         let wasContinuing = continueAfterFailure
         continueAfterFailure = true
         defer { continueAfterFailure = wasContinuing }
+        // **Three attempts, because the screen is not ours alone.** See
+        // ``waitForNoNotificationBanner(_:appearIn:clearIn:)``: this app posts
+        // its own notifications, iOS draws them over whatever is in front, and
+        // Apple's audit samples pixels. An audit taken through a banner is a
+        // measurement of SpringBoard.
+        //
+        // One banner per launch is what I001 shows, and the mechanism agrees:
+        // the catch-up that posts it runs at `start()`, on a server change,
+        // and after a socket gap of ``alertsQuietGapMs`` (60s) — none of which
+        // happens twice inside an audit. So a banner that polluted one attempt
+        // is gone by the next, and three attempts is two more than the
+        // evidence says are needed.
+        //
+        // (It posts **every launch** rather than once per install because the
+        // stub's incident carries `opened_at: ctx.ago(420)`, recomputed per
+        // request, and ``alertsIncidentMark(_:)`` is `id|openedAt` — so the
+        // book that would hush it never matches. That is the fixture's to fix,
+        // `fixtures/health.py:90`; this file has to survive it either way,
+        // because a real house posts the first time too.)
+        var found: [String] = []
+        for attempt in 1...3 {
+            waitForNoNotificationBanner("\(name)/attempt-\(attempt)")
+            found = try runOneAudit(app, name)
+            guard notificationBanner() != nil else { return found }
+            print(
+                "AUDIT [\(name)] a notification banner was on screen when attempt "
+                    + "\(attempt) finished — that measurement is of the banner, not of "
+                    + "this app. Retaking it."
+            )
+        }
+        // **Never silently.** A caller asserting `rest.isEmpty` or a count
+        // fails on this line, which is the honest outcome: nothing on this
+        // screen was measured. It is deliberately not in
+        // ``knownAnonymousHeadlines``, so ``floorAndRest(_:)`` cannot swallow
+        // it.
+        return [Self.bannerPollutedAudit] + found
+    }
+
+    /// What ``auditIssues(_:_:)`` returns when every attempt was covered.
+    static let bannerPollutedAudit =
+        "UNMEASURED: a notification banner covered the app for all three audit "
+            + "attempts, so the findings beside this line are SpringBoard's, not "
+            + "this screen's | element: nil"
+
+    /// One pass of Apple's audit, with every issue it has — not the first.
+    @MainActor
+    @available(iOS 17.0, *)
+    private func runOneAudit(_ app: XCUIApplication, _ name: String) throws -> [String] {
         var found: [String] = []
         try app.performAccessibilityAudit { issue in
             // **The element is part of the record, not just the log.** The
@@ -496,6 +544,126 @@ final class StubHouseUITests: XCTestCase {
             return true
         }
         return found
+    }
+
+    // MARK: - the screen is not this app's alone
+
+    /// The notification banner on screen, if there is one.
+    ///
+    /// ### Why every audit in this file now asks
+    ///
+    /// Train I001 failed six audit cases, and the cause was in the
+    /// **screenshots**, not in any tree: a notification banner —
+    /// `Signs of tampering`, and elsewhere `Timer done · kitchen` — sitting
+    /// over the top of the app in `12-home-audited`, `70-push-root`,
+    /// `systemsettings-about-audited`, `40-token-waiting` and
+    /// `40-token-not-recognised` alike. It is the app's own: ``AlertsCenter``
+    /// catches up on every launch and ``AlertsTapDelegate`` returns `.banner`
+    /// from `willPresent`, which is Android-faithful and not a defect.
+    ///
+    /// What it does to an audit is the point. `performAccessibilityAudit`
+    /// **samples pixels**, and SpringBoard's banner is not in this app's
+    /// accessibility tree, so:
+    ///
+    ///  * text it covers is measured against the banner's material and
+    ///    reported as `Contrast failed` — named (`unverified`, `  live`,
+    ///    `127.0.0.1:6601` on About and Voices; `Domovoi asked this phone to
+    ///    wait` on the throttled house) or anonymous, depending on whether the
+    ///    audit could still resolve the element;
+    ///  * the banner's **own** glyphs are reported as
+    ///    `Potentially inaccessible text … element: nil`, which is the audit
+    ///    saying out loud that there is text here belonging to no element.
+    ///
+    /// None of that is a fact about this app, so none of it may be classified
+    /// as a finding — and none of it may be waved through either, which is why
+    /// the audit is retaken rather than filtered.
+    ///
+    /// ### How it is recognised
+    ///
+    /// `NotificationShortLookView`, read off train I001's own evidence:
+    /// `att/testAlerts_WhenAlertsAreOnALedgerFireIsDelivered/alerts-ledger-fire-delivered-tree`
+    /// has `BannerNotification … identifier: 'NotificationShortLookView'`
+    /// around leaves identified `NotificationTitle` / `NotificationBody`. An
+    /// identifier from this Simulator's own tree rather than from folklore.
+    ///
+    /// Deliberately **not** "any SpringBoard text near the top": SpringBoard's
+    /// tree holds the whole Home screen behind us, icon captions included, so
+    /// a frame test would report a banner on every call.
+    @MainActor
+    func notificationBanner() -> XCUIElement? {
+        let banner = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+            .descendants(matching: .any)
+            .matching(identifier: "NotificationShortLookView")
+            .firstMatch
+        return banner.exists ? banner : nil
+    }
+
+    /// Wait until no notification banner is on screen, and say so in the log.
+    ///
+    /// `appearIn` is the small wait for one that is **on its way**: the post
+    /// follows a round trip to the house, so a case that audits the moment
+    /// Home draws can start its audit in the gap before the banner lands.
+    /// Two seconds, measured off I001's logs — the catch-up read answers
+    /// within one.
+    ///
+    /// A banner dismisses itself in about five seconds. The swipe is the
+    /// fallback for one that outstays that, and it is sent to the banner's own
+    /// element so the gesture cannot land on the app underneath.
+    @MainActor
+    func waitForNoNotificationBanner(
+        _ name: String,
+        appearIn: TimeInterval = 2,
+        clearIn: TimeInterval = 20
+    ) {
+        var arrived = notificationBanner() != nil
+        let appearBy = Date().addingTimeInterval(appearIn)
+        while !arrived, Date() < appearBy {
+            usleep(200_000)
+            arrived = notificationBanner() != nil
+        }
+        guard arrived else { return }
+        print("BANNER [\(name)] a notification banner is over the app — waiting")
+        let swipeAfter = Date().addingTimeInterval(8)
+        let clearBy = Date().addingTimeInterval(clearIn)
+        var swiped = false
+        while Date() < clearBy {
+            guard let banner = notificationBanner() else {
+                print("BANNER [\(name)] gone")
+                return
+            }
+            if !swiped, Date() > swipeAfter, banner.frame.height > 10 {
+                print("BANNER [\(name)] it outstayed its welcome — swiping it away")
+                banner.swipeUp()
+                swiped = true
+            }
+            usleep(300_000)
+        }
+        print("BANNER [\(name)] STILL THERE after \(clearIn)s")
+    }
+
+    /// Every scroll view on screen, as one region — which on a pushed screen
+    /// is the **destination's content** and nothing else: neither
+    /// ``ShellTopBar`` above the `NavigationStack` nor ``PhoneBarView`` below
+    /// it is inside one.
+    ///
+    /// Used by the two instruments whose subject is the bars rather than
+    /// whatever screen happens to be pushed behind them. See
+    /// ``testWhichPieceOfAPushedScreenCarriesTheEight()``.
+    @MainActor
+    func contentRegion(_ app: XCUIApplication) -> CGRect? {
+        let views = app.scrollViews.allElementsBoundByAccessibilityElement
+        guard !views.isEmpty else { return nil }
+        return views.dropFirst().reduce(views[0].frame) { $0.union($1.frame) }
+    }
+
+    /// Does this finding name an element inside `region`?
+    ///
+    /// By the element's **midpoint**, so a row the region's own edge cuts in
+    /// half still counts as the region's — which is the case this file has met
+    /// twice (``frame(in:)``).
+    static func isInside(_ region: CGRect?, _ line: String) -> Bool {
+        guard let region, let frame = Self.frame(in: line) else { return false }
+        return region.contains(CGPoint(x: frame.midX, y: frame.midY))
     }
 
     /// The element frame a finding carries, as ``oneLine(_:)`` wrote it.
@@ -746,21 +914,43 @@ final class StubHouseUITests: XCTestCase {
     /// |---|---|---|
     /// | `A-phones` | the pairing screen — the known eight | **yes** |
     /// | `B-group` | title, sub, a headline, four section buttons, `all settings` | no |
-    /// | `C-no-panel` | `Printers & scanners`: title, sub, headline, sub, `not built yet`, a back button | no |
+    /// | `C-printers` | `Printers & scanners`: title, sub, headline, sub, the printers panel, a back button | yes |
     /// | `D-index` | title, sub, five group buttons | no |
     ///
     /// `C` is the one that matters. It is the **same `SettingsPlaceholder`
     /// state** as the pairing screen — `.section`, so the same headline, the
-    /// same `sub`, the same back button — with `PhonesAndBrowsersPanel`
-    /// swapped for the words `not built yet`. So:
+    /// same `sub`, the same back button — with a *different* panel in it. So:
     ///
-    ///  - `C` near eight ⇒ the findings are `SettingsPlaceholder`'s own, and
-    ///    the no-scroll hypothesis in `STUB-HOUSE-FINDINGS-01.md` is the
-    ///    live one: that `VStack` has no `ScrollView` in any state.
-    ///  - `C` near zero ⇒ they are the panel's, and the nested `ScrollView`
-    ///    is where to look rather than the missing one.
+    ///  - `C` near eight ⇒ the findings do not depend on which panel a
+    ///    section draws, and the no-scroll hypothesis in
+    ///    `STUB-HOUSE-FINDINGS-01.md` stays live: that `VStack` has no
+    ///    `ScrollView` in any state.
+    ///  - `C` near zero ⇒ they are `PhonesAndBrowsersPanel`'s own.
     ///  - `B` and `D` then say whether what is left is the title and `sub`
     ///    every state shares, or the buttons.
+    ///
+    /// ### `C` used to be a section with no panel, and there is no longer one
+    ///
+    /// It audited `Printers & scanners` **because it drew `not built yet`** —
+    /// `.section`'s shape with the panel subtracted, which is the cleanest
+    /// subtraction this screen offers. The Printing item built that section on
+    /// 2026-11-02, and with every one of ``SettingsSection/all``'s fourteen
+    /// keys now answered by a slot in ``SettingsSectionScreen``,
+    /// ``SettingsSectionNotBuilt`` has **no caller left in the app at all**:
+    /// only `SettingsSectionScreen`'s `default:` can reach it, and no key
+    /// falls through to it. There is no unbuilt section to point this step at,
+    /// and inventing one would mean a diagnostic `if` in shipping view code
+    /// (NIGHT-RULES §2's shared-file rule, and the reason this bisect walks
+    /// the app's own buttons in the first place).
+    ///
+    /// So `C` keeps its screen and loses its subtraction: the same `.section`
+    /// shape as `A`, carrying a different panel. The question it was built to
+    /// answer has in any case been answered elsewhere since —
+    /// ``testWhichPieceOfAPushedScreenCarriesTheEight()`` placed the eight at
+    /// four in ``ShellTopBar`` and four in ``PhoneBarView``, one per text leaf,
+    /// and ``testTheBarsTextGrowsOnAPushedScreen()`` measured them as false
+    /// positives — so what `C` is worth now is a fourth independent screen
+    /// behind the same chrome, which is what its one assertion rests on.
     ///
     /// **Deliberately not an equality assertion.** Three of these four counts
     /// are unknown — that is the point of running it — so this asserts only
@@ -828,18 +1018,44 @@ final class StubHouseUITests: XCTestCase {
         XCTAssertTrue(printers.waitForExistence(timeout: 10), "tapping back did not reach the group list")
         try step("B-group")
 
-        // The same `.section` shape as the pairing screen, with `not built
-        // yet` where the panel was.
+        // The same `.section` shape as the pairing screen, with the printers
+        // panel where `PhonesAndBrowsersPanel` is.
+        //
+        // **Arrival is the section's `sub`, not its label.** A SwiftUI
+        // `Button(String)` holds a `StaticText` carrying the same label — the
+        // trees in this run's evidence show it everywhere — so
+        // `staticTexts["Printers & scanners"]` is already true on the group
+        // list we are leaving, and a query that is true before the tap cannot
+        // witness the tap. ``SettingsSection/sub`` is drawn by `.section` and
+        // by nothing else.
         printers.tap()
         XCTAssertTrue(
-            app.staticTexts[ShellStringsUnderTest.notBuilt].waitForExistence(timeout: 10),
-            "Printers & scanners did not draw its placeholder"
+            app.staticTexts[ShellStringsUnderTest.printersSectionSub]
+                .waitForExistence(timeout: 10),
+            "Printers & scanners did not draw its section"
         )
-        try step("C-no-panel")
+        try step("C-printers")
 
         // Back up one and out to the index.
+        //
+        // **Scrolled to first.** On the pairing screen the back button was a
+        // few points off the foot of the viewport and a tap still reached it;
+        // under ``PrintersPanelView`` it is a screen and a half down — the
+        // panel draws a card per printer with toner, capabilities, a default
+        // switch, room chips and two buttons — and a tap on an element that is
+        // not hittable throws `Activation point invalid`, which is how three
+        // Music cases died in this same run. Existence is not reach.
         let backAgain = app.buttons[ShellStringsUnderTest.backToRooms]
         XCTAssertTrue(backAgain.waitForExistence(timeout: 10), "no back button on the printers section")
+        var flicks = 0
+        while !backAgain.isHittable, flicks < 12 {
+            app.swipeUp(velocity: .slow)
+            flicks += 1
+        }
+        XCTAssertTrue(
+            backAgain.isHittable,
+            "the printers section's back button never came into reach"
+        )
         backAgain.tap()
         let allSettings = app.buttons[ShellStringsUnderTest.allSettings]
         XCTAssertTrue(allSettings.waitForExistence(timeout: 10), "no all-settings button on the group list")
@@ -1001,7 +1217,7 @@ final class StubHouseUITests: XCTestCase {
     /// Six theories have died on this. What is known: every **pushed** screen
     /// audits 8 `Dynamic Type font sizes are partially unsupported` and every
     /// **root** audits 0; the count does not move when the content changes
-    /// completely (`A-phones`, `B-group`, `C-no-panel`, `D-index` and `music`
+    /// completely (`A-phones`, `B-group`, `C-printers`, `D-index` and `music`
     /// are all 8); it is not one-per-larger-type-size (8/8/7 against a
     /// prediction of 10/8/0); and `element` is nil on all eight, so the audit
     /// will not say which view it means.
@@ -1170,23 +1386,33 @@ final class StubHouseUITests: XCTestCase {
             // So the condition is now something only the **destination**
             // can satisfy:
             //
-            //  - the `not built yet` placeholder, which every variant draws
+            //  - the `not built yet` placeholder, which every variant drew
             //    except ``AuditStrip/content``;
             //  - or the navigation bar's `Back` button, which exists in every
             //    variant except ``AuditStrip/navBar``.
             //
-            // No variant removes both, so one of the two is always a true
+            // **The first of those is gone**, and train I001 printed what that
+            // costs: `STRIP [navBar] NEVER PUSHED`, the one variant with no
+            // `Back` button, waiting on a placeholder the destination no
+            // longer draws. Every route slot in ``RouteScreen`` was filled on
+            // 2026-11-02, so `music` is now ``MusicView`` and the words
+            // `not built yet` are nowhere in this app. The destination's own
+            // favourites switch replaces them —
+            // ``ShellStringsUnderTest/musicFavouritesSwitch``, two words
+            // nothing else in the app draws.
+            //
+            // No variant removes all three, so one of them is always a true
             // statement that the pushed screen is on screen. The settle after
-            // it is for the transition itself, which neither marker waits
-            // out.
+            // it is for the transition itself, which no marker waits out.
             let placeholder = app.descendants(matching: .staticText)
                 .matching(NSPredicate(format: "label CONTAINS %@", ShellStringsUnderTest.notBuilt))
                 .firstMatch
+            let heading = anything(app, labelled: ShellStringsUnderTest.musicFavouritesSwitch)
             let back = app.navigationBars.buttons.firstMatch
             let deadline = Date().addingTimeInterval(Self.pushDelay + 25)
             var arrived = false
             while Date() < deadline {
-                if placeholder.exists || back.exists { arrived = true; break }
+                if placeholder.exists || back.exists || heading.exists { arrived = true; break }
                 usleep(300_000)
             }
             if arrived {
@@ -1214,6 +1440,9 @@ final class StubHouseUITests: XCTestCase {
                 print("STRIP [\(variant)] WARNING — fell back to local media")
             }
             evidence(app, "80-strip-\(variant)")
+            // Read **before** the audit, while the screen is still the one
+            // the findings will be about.
+            let content = contentRegion(app)
             let found = try auditIssues(app, "strip-\(variant)")
             let dynamic = found.filter { $0.hasPrefix("Dynamic Type") }
             // **The anonymous ones are the floor; a named one is a claim
@@ -1221,9 +1450,36 @@ final class StubHouseUITests: XCTestCase {
             // this case fail for a fortnight over `favorites only`, which
             // grows perfectly well — see ``knownScalingFalsePositive``.
             let anonymous = dynamic.filter { $0.hasSuffix("| element: nil") }
+            // **A named finding inside the destination's scroll view is the
+            // destination's, not the bars'**, and this instrument's subject is
+            // the bars.
+            //
+            // Train I001 is why the line is here. ``AuditStrip/phoneBar``
+            // leaves Home by the `Files` tile, because there is no tab to tap
+            // — and the Files screen is **built** now, with rows in it: ten
+            // named Dynamic Type findings came back against `track 00.mp3`,
+            // `Singles`, `4.0 MB · 4h ago` and the rest, every one of them
+            // inside the list, none of them in a bar. The four anonymous
+            // findings this variant is measured on were unchanged (4, as
+            // `topBar` is 4 and `tap` is 8), so the algebra held and only the
+            // claim about *named* findings broke.
+            //
+            // They are reported rather than dropped: ``FileRowView`` draws
+            // `.body`, `.subheadline` and `.caption` with no fixed size
+            // anywhere, so they are very likely the same false positive as
+            // `favorites only` — but that is the Files screen's own audit case
+            // to measure at both sizes, not this one's to rule on.
             let named = dynamic.filter { !$0.hasSuffix("| element: nil") }
+            let inContent = named.filter { Self.isInside(content, $0) }
+            for line in inContent {
+                print("STRIP [\(variant)] the destination's own, not a bar's: \(line)")
+            }
             counts.append((variant, anonymous.count))
-            namedDynamic.append(contentsOf: named)
+            namedDynamic.append(contentsOf: named.filter { !Self.isInside(content, $0) })
+            // An audit this file could not take cleanly is not a count of
+            // anything; this is the only assertion in the case that a
+            // non-`Dynamic Type` line can reach.
+            namedDynamic.append(contentsOf: found.filter { $0 == Self.bannerPollutedAudit })
             print(
                 "STRIP [\(variant)] anonymous=\(anonymous.count) "
                     + "named=\(named.count) total=\(found.count)"
@@ -1574,12 +1830,34 @@ final class StubHouseUITests: XCTestCase {
             evidence(app, "41-ax5-\(variant)")
 
             if #available(iOS 17.0, *) {
+                // Read before the audit, while the screen is the one being
+                // measured.
+                let content = contentRegion(app)
                 let split = Self.floorAndRest(try auditIssues(app, "ax5-\(variant)"))
                 counts[variant] = split.floor
+                // **Scoped to the chrome, which is this case's subject.** It
+                // asserted over the whole screen, and could, while every
+                // destination it reached drew `not built yet` and nothing
+                // else. They are built screens now — `music` is ``MusicView``
+                // and the `Files` tile the `phoneBar` variant has to use is
+                // ``FilesView`` with rows in it — so a finding against a row
+                // of the destination's list is a fact about that screen, and
+                // that screen has its own audit case.
+                //
+                // An **anonymous** finding still fails here wherever it comes
+                // from: it carries no element, so it cannot be attributed to
+                // the destination, and the one this case met in train I001
+                // was a notification banner over the whole app rather than
+                // anything either screen drew (``notificationBanner()``).
+                let ours = split.rest.filter { !Self.isInside(content, $0) }
+                for line in split.rest where Self.isInside(content, line) {
+                    print("AX5STRIP [\(variant)] the destination's own, not a bar's: \(line)")
+                }
                 XCTAssertTrue(
-                    split.rest.isEmpty,
+                    ours.isEmpty,
                     "a pushed screen at AX5 with `\(variant)` stripped has findings "
-                        + "outside the floor: " + split.rest.joined(separator: " / ")
+                        + "outside the floor, in the chrome rather than in the "
+                        + "destination: " + ours.joined(separator: " / ")
                 )
             }
             app.terminate()
@@ -3993,11 +4271,37 @@ enum ShellStringsUnderTest {
 
     static let roomsGroup = "Rooms & devices"
 
-    /// A section in the same group as `Phones & browsers` with **no screen**,
-    /// which is what makes it the control.
+    /// A section in the same group as `Phones & browsers`. It was the control
+    /// because it had **no screen**; the Printing item built it on
+    /// 2026-11-02 and
+    /// ``StubHouseUITests/testWhereTheEightDynamicTypeFindingsLive()`` says
+    /// what that costs the bisect.
     static let printersSection = "Printers & scanners"
 
+    /// ``SettingsSection/sub`` for `printers`, word for word
+    /// (`SettingsSections.swift:94`). Drawn by `SettingsPlaceholder`'s
+    /// `.section` and by no other state, which is what makes it the witness
+    /// that the tap arrived.
+    static let printersSectionSub =
+        "The printers and scanners your home server prints and scans with."
+
+    /// ``SettingsSectionNotBuilt``'s words. **No section draws them any
+    /// more** — all fourteen keys have slots — so this is kept only as the
+    /// first half of an arrival check that must also work on a screen that
+    /// has been built since.
     static let notBuilt = "not built yet"
+
+    /// ``MusicStrings/favoritesOnly`` — the switch in ``MusicFilters``, and
+    /// the marker the ``AuditStrip/navBar`` variant arrives on: that variant
+    /// takes the navigation bar away, so `Back` does not exist, and the
+    /// destination no longer draws `not built yet` either.
+    ///
+    /// **Not ``MusicStrings/title``**, which would have been the obvious
+    /// choice and is wrong: Home's everything grid draws each tile with
+    /// ``Route/label``'s capitals (`HomeEverythingView.swift:104`), so
+    /// `staticTexts["Music"]` is already true on the screen we are leaving.
+    /// Nothing but the Music screen draws these two words.
+    static let musicFavouritesSwitch = "favorites only"
 
     /// The phone bar tab's accessibility label (``Route/label``), which is
     /// capitalised. The lower-cased `music` in the tree is the caption drawn
