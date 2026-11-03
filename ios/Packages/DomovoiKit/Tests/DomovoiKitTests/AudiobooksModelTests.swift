@@ -501,6 +501,20 @@ final class AudiobooksModelTests: XCTestCase {
         for _ in 0..<3_000 { await Task.yield() }
     }
 
+    /// A shorter version of ``nothingHappens()``, for a negative asserted
+    /// while a ``Waits`` gate is open.
+    ///
+    /// ``Waits/sleeper`` is bounded — it gives up after `settleYieldLimit`
+    /// yields rather than spinning for ever — and a three-thousand-yield
+    /// negative lets that bound expire, which the model then reads as the
+    /// debounce having elapsed. Two hundred yields is far more than the
+    /// debounce needs to be *missing* in (no debounce applies the needle
+    /// inside `typed` itself, with no yields at all) and far less than the
+    /// gate's own patience.
+    private func briefly() async {
+        for _ in 0..<200 { await Task.yield() }
+    }
+
     func testACoverArrivesAsItsBytes() async {
         let house = Covers()
         let store = AudiobookCoverStore(fetch: house.fetch)
@@ -790,7 +804,7 @@ final class AudiobooksModelTests: XCTestCase {
         model.typed("qu")
         model.typed("qui")
         model.typed("quill")
-        await nothingHappens()
+        await briefly()
         // Asserted as "no NARROWED read went out" rather than "one read went
         // out in total": the shell re-reads an unfiltered list of its own
         // when the identity gate pins the house, and counting every request

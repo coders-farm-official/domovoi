@@ -212,7 +212,16 @@ public final class AudiobooksModel {
         guard settled != needle else { return }
         debounce = Task { @MainActor [weak self] in
             guard let wait = self?.wait else { return }
-            try? await wait(Self.searchDebounceMs)
+            // A wait that threw does **not** apply the needle. Kotlin's
+            // `delay` throwing `CancellationException` ends the coroutine
+            // before `needle = search.trim()` is reached
+            // (`AudiobooksScreen.kt:123-126`), so a swallowed throw here
+            // would make a cancelled keystroke the one that searched.
+            do {
+                try await wait(Self.searchDebounceMs)
+            } catch {
+                return
+            }
             guard !Task.isCancelled, let self, settled != self.needle else { return }
             self.openList(sort: self.sort, needle: settled)
         }
