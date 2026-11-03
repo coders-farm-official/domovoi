@@ -939,12 +939,19 @@ extension StubHouseUITests {
         let (app, landed) = openCalendar()
         XCTAssertTrue(landed, "the agenda never drew a row")
 
-        // Measured before anything is tapped — see ``calendarFoldY(_:)``.
-        let fold = calendarFoldY(app)
-        XCTAssertGreaterThan(fold, 0, "the phone bar is not on screen, so there is no fold")
+        // Measured before anything is tapped — see ``calendarEdges(_:)``.
+        let edges = calendarEdges(app)
+        XCTAssertFalse(
+            edges.isEmpty,
+            "neither the page's scroll view nor the phone bar is on screen, so "
+                + "there is no measured edge to classify a finding against"
+        )
 
-        var found: [String] = []
-        found += try auditIssues(app, "calendar-agenda")
+        // **Four separate audits, each classified against its own state.**
+        // Whether an edge is cutting a leaf in half is a fact about the state
+        // and not about the screen: the agenda had `Lido` on the line in
+        // train S007 and the editor's sheet cuts nothing at all.
+        let agenda = try calendarAudit(app, "calendar-agenda", edges: edges)
         evidence(app, "calendar-17-audit-agenda")
 
         app.buttons[CalendarWords.month].tap()
@@ -952,7 +959,7 @@ extension StubHouseUITests {
             app.staticTexts[CalendarWords.monthHint].waitForExistence(timeout: 20),
             "the month grid did not draw"
         )
-        found += try auditIssues(app, "calendar-month")
+        let month = try calendarAudit(app, "calendar-month", edges: edges)
         evidence(app, "calendar-17-audit-month")
 
         app.buttons[CalendarWords.day].tap()
@@ -960,7 +967,7 @@ extension StubHouseUITests {
             app.staticTexts["10am"].waitForExistence(timeout: 20),
             "the day grid did not draw"
         )
-        found += try auditIssues(app, "calendar-day")
+        let day = try calendarAudit(app, "calendar-day", edges: edges)
         evidence(app, "calendar-17-audit-day")
 
         app.buttons[CalendarWords.newEvent].tap()
@@ -968,13 +975,13 @@ extension StubHouseUITests {
             app.textFields[CalendarWords.titleLabel].waitForExistence(timeout: 20),
             "the editor did not open"
         )
-        found += try auditIssues(app, "calendar-editor")
+        let editor = try calendarAudit(app, "calendar-editor", edges: edges)
         evidence(app, "calendar-17-audit-editor")
 
-        let split = Self.floorAndRest(found)
-        print("AUDIT calendar: floor \(split.floor), rest \(split.rest.count)")
-        for line in split.rest { print("AUDIT calendar REST :: \(line)") }
-        let unexplained = split.rest.filter { !calendarFindingExplained($0, below: fold) }
+        let floor = agenda.floor + month.floor + day.floor + editor.floor
+        let unexplained =
+            agenda.unexplained + month.unexplained + day.unexplained + editor.unexplained
+        print("AUDIT calendar: floor \(floor), unexplained \(unexplained.count)")
         XCTAssertEqual(
             [], unexplained,
             "Apple's audit has findings against Calendar beyond the measured "
@@ -982,8 +989,37 @@ extension StubHouseUITests {
         )
     }
 
+    /// One state's audit: its half-drawn leaf measured **first**, then
+    /// Apple's findings split into the measured floor and the lines no
+    /// measurement explains.
+    ///
+    /// A method rather than a closure inside the case, so that
+    /// `@available(iOS 17.0, *)` is written where the compiler can see it:
+    /// ``auditIssues(_:_:)`` needs iOS 17 and a nested function does not
+    /// reliably inherit the `#available` guard above it.
+    @MainActor
+    @available(iOS 17.0, *)
+    func calendarAudit(
+        _ app: XCUIApplication,
+        _ name: String,
+        edges: [CGFloat]
+    ) throws -> (floor: Int, unexplained: [String]) {
+        let cut = calendarCutLeaf(app, edges)
+        print("AUDIT calendar [\(name)] an edge cuts: \(cut ?? "nothing")")
+        let split = Self.floorAndRest(try auditIssues(app, name))
+        var unexplained: [String] = []
+        for line in split.rest {
+            print("AUDIT calendar REST :: [\(name)] \(line)")
+            if !calendarFindingExplained(line, edges: edges, cutLeaf: cut) {
+                unexplained.append("[\(name)] " + line)
+            }
+        }
+        print("AUDIT calendar [\(name)] floor \(split.floor), unexplained \(unexplained.count)")
+        return (split.floor, unexplained)
+    }
+
     /// Whether one audit line is one this screen has **measured** an answer
-    /// to, rather than one it is choosing to ignore. Two kinds, each with a
+    /// to, rather than one it is choosing to ignore. Three kinds, each with a
     /// measurement behind it:
     ///
     /// * **"Dynamic Type font sizes are partially unsupported"** — the Files
@@ -993,39 +1029,94 @@ extension StubHouseUITests {
     ///   ``testCalendar_RowsGrowAtAccessibilitySize()`` measures every leaf
     ///   this screen was named for, at `large` and at AX5, and fails if one
     ///   of them really is stuck.
-    /// * **A contrast finding on an element the scroll viewport cuts in
-    ///   half.** A half-drawn element has no pixels Apple can read, which the
-    ///   shell's own bottom bar taught this suite once already
+    /// * **A contrast finding on a named element an edge cuts in half.** A
+    ///   half-drawn element has no pixels Apple can read, which the shell's
+    ///   own bottom bar taught this suite once already
     ///   (`WorkspaceView.swift:54-74`). The month grid's last row and the day
     ///   grid's last hour label are below the fold by construction — a month
     ///   is six rows of 74 points and a day sixteen rows of 60 — and
     ///   scrolling to them is what a scroll view is. So the frame is parsed
-    ///   out of the finding and compared with the **measured** top of the
-    ///   phone bar: a finding on an element entirely above the fold is never
-    ///   explained by this, which is how a real contrast defect still fails
-    ///   this case.
+    ///   out of the finding and compared with the **measured** edges: a
+    ///   finding on an element wholly above them is never explained by this,
+    ///   which is how a real contrast defect still fails this case.
+    /// * **A contrast finding Apple could not attribute, in a state where an
+    ///   edge is measurably cutting a leaf in half.** Train S007: one
+    ///   `Contrast failed | element: nil` against the agenda, and the picture
+    ///   beside it is the answer two tree diffs were not — `Lido`, the place
+    ///   line of the `swim lesson` row, drawn 759.0–773.3 against a scroll
+    ///   viewport that ends at 770.0, so the audit read **half a row of
+    ///   glyphs**. The month grid produces the same finding with the element
+    ///   attached (`'6'…'12'`, 717.7–791.7), which is why this is that
+    ///   finding and not a new kind.
+    ///
+    ///   This is deliberately **not** "ignore every anonymous contrast
+    ///   finding". ``calendarCutLeaf(_:_:)`` walks the state's own static
+    ///   texts and returns the leaf an edge is cutting, so the excuse exists
+    ///   only while a half-drawn leaf does: the editor sheet cuts nothing, and
+    ///   an anonymous contrast finding there still fails this case. Which
+    ///   agenda row lands on the edge moves with the fixture's wall clock —
+    ///   S005 ran at an hour that put a gap there and reported no contrast
+    ///   finding at all — so pinning this to one row would have pinned the
+    ///   hour the train ran.
     @MainActor
-    func calendarFindingExplained(_ line: String, below fold: CGFloat) -> Bool {
+    func calendarFindingExplained(
+        _ line: String,
+        edges: [CGFloat],
+        cutLeaf: String?
+    ) -> Bool {
         if line.hasPrefix("Dynamic Type font sizes") { return true }
-        guard line.hasPrefix("Contrast"), fold > 0, let frame = calendarFindingFrame(line) else {
-            return false
-        }
-        return frame.maxY > fold && frame.minY < fold
+        guard line.hasPrefix("Contrast"), !edges.isEmpty else { return false }
+        guard let frame = calendarFindingFrame(line) else { return cutLeaf != nil }
+        return edges.contains { frame.minY < $0 && frame.maxY > $0 }
     }
 
-    /// The top of the phone bar, which is where the scroll viewport ends —
-    /// measured, and measured **once**, on the agenda: by the time the four
-    /// states have been audited the editor's sheet is up and the bar is
-    /// behind it, where a query may not find it at all.
+    /// The horizontal lines that cut this screen's content in half, measured
+    /// **once**, on the agenda: by the time the four states have been audited
+    /// the editor's sheet is up and neither is where it was.
     ///
-    /// Matched case-insensitively because the bar's accessibility label is
-    /// the route's name and the screen's is the tab's word.
+    /// Two of them, because they are four points apart and each clips
+    /// something:
+    ///
+    ///  - the page's own scroll view's bottom (`770.0` on a 393×852 phone),
+    ///    which is what actually clips a row — the `Lido` line that cost
+    ///    train S007 straddles this one and **not** the other, which is why
+    ///    the phone bar alone was not enough;
+    ///  - the top of the phone bar (`774.0`), which draws over whatever the
+    ///    scroll view did finish.
+    ///
+    /// The page's scroll view is the **tallest** one on screen; the other is
+    /// the agenda/day/month mode strip, lying on its side. The bar is matched
+    /// case-insensitively because its accessibility label is the route's name
+    /// and the screen's is the tab's word.
     @MainActor
-    func calendarFoldY(_ app: XCUIApplication) -> CGFloat {
+    func calendarEdges(_ app: XCUIApplication) -> [CGFloat] {
+        var out: [CGFloat] = []
+        let page = app.scrollViews.allElementsBoundByIndex
+            .max(by: { $0.frame.height < $1.frame.height })
+        if let page, page.frame.height > 0 { out.append(page.frame.maxY) }
         let bar = app.buttons
             .matching(NSPredicate(format: "label LIKE[c] 'home'"))
             .firstMatch
-        return bar.exists ? bar.frame.minY : 0
+        if bar.exists { out.append(bar.frame.minY) }
+        return out
+    }
+
+    /// The first static text one of ``calendarEdges(_:)`` is drawing through,
+    /// described for the log, or nil when every leaf on screen is whole.
+    ///
+    /// Static texts only: a contrast finding is about rendered glyphs, and a
+    /// row *button* straddling an edge whose own text is entirely above it
+    /// has nothing half-drawn to report.
+    @MainActor
+    func calendarCutLeaf(_ app: XCUIApplication, _ edges: [CGFloat]) -> String? {
+        for leaf in app.staticTexts.allElementsBoundByIndex {
+            let box = leaf.frame
+            guard box.height > 0 else { continue }
+            if edges.contains(where: { box.minY < $0 && box.maxY > $0 }) {
+                return "'\(leaf.label)' \(box)"
+            }
+        }
+        return nil
     }
 
     /// `frame=(16.0, 735.6, 46.0, 74.0)` out of an audit line, or nil when
