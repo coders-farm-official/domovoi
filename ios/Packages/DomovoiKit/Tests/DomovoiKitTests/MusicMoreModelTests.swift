@@ -1137,20 +1137,31 @@ final class MusicMoreModelTests: XCTestCase {
     /// guaranteed 404 before the fallback ran.
     func testABlankRoomIsNoRoomAndIsNotAsked() async {
         let house = House(playlists: playlistsJSON, tracks: tracksJSON)
-        // Any room read at all would answer 404 here, and the panel would
-        // fall back — so the assertion is the **count**, not the outcome.
+        // A room read would answer here, so the outcome cannot tell the two
+        // apart — the **number of requests** can. Calibrated against a nil
+        // room rather than stated as a number, because what else a container
+        // asks on its way up is not this test's business.
         let now = Shared<Int64>(0)
-        let (model, _) = panel(house, room: "   ", now: now)
-        model.offer(trackID: 12)
-        let before = StubURLProtocol.requestCount
-        model.start()
-        defer { model.stop() }
-        await settleUntil({ model.result != nil }, "the track's own read")
+
+        let (none, _) = panel(house, room: nil, now: now)
+        none.offer(trackID: 12)
+        let beforeNone = StubURLProtocol.requestCount
+        none.start()
+        defer { none.stop() }
+        await settleUntil({ none.result != nil }, "the track's own read, with no room")
+        let withoutARoom = StubURLProtocol.requestCount - beforeNone
+
+        let (blank, _) = panel(house, room: "   ", now: now)
+        blank.offer(trackID: 12)
+        let beforeBlank = StubURLProtocol.requestCount
+        blank.start()
+        defer { blank.stop() }
+        await settleUntil({ blank.result != nil }, "the track's own read, with a blank room")
         XCTAssertEqual(
-            before + 1, StubURLProtocol.requestCount,
+            withoutARoom, StubURLProtocol.requestCount - beforeBlank,
             "the blank room was asked as well as the track"
         )
-        XCTAssertFalse(model.maySetTiming)
+        XCTAssertFalse(blank.maySetTiming)
     }
 
     func testMovingHouseClearsThePanel() async {
