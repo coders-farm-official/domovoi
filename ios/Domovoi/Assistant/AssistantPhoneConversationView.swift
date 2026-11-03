@@ -32,6 +32,8 @@ struct AssistantPhoneConversationView: View {
 
     @State private var typed = ""
 
+    @Environment(\.dynamicTypeSize) private var typeSize
+
     var body: some View {
         VStack(spacing: 0) {
             titleRow
@@ -47,57 +49,99 @@ struct AssistantPhoneConversationView: View {
 
     // MARK: - the title row
 
+    /// The way back, the chat's name, and share.
+    ///
+    /// **A row of three at the ordinary sizes, a column at an accessibility
+    /// size** (NIGHT-RULES §3): at AX5 a `.headline` is 53 points and the two
+    /// glyphs either side of it are 44 points wide each, which leaves the name
+    /// about four characters of a 393-point screen. On its own line it has the
+    /// width of the screen.
     private var titleRow: some View {
-        HStack(spacing: 8) {
+        Group {
+            if typeSize.isAccessibilitySize {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 8) {
+                        backButton
+                        Spacer(minLength: 8)
+                        shareButton
+                    }
+                    title
+                }
+            } else {
+                HStack(spacing: 8) {
+                    backButton
+                    title
+                    Spacer(minLength: 8)
+                    shareButton
+                }
+            }
+        }
+        .padding(.horizontal, 12)
+    }
+
+    private var backButton: some View {
+        Button {
+            phone.close()
+        } label: {
+            Image(systemName: "chevron.left")
+                .font(.body)
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(Color.brandInk)
+        // The word the Kotlin already has for the way out of a
+        // conversation. Android's back arrow carries `"back"`
+        // (`AssistantChat.kt:844`) and a glyph with no label is
+        // unreachable by VoiceOver, so the screen's own word is used
+        // rather than a new one invented for a port.
+        .accessibilityLabel(ChatStrings.backToChats)
+    }
+
+    /// ``AssistantConversation/title`` — the name the person gave, else the
+    /// first five words, else `new chat`. Read off the conversation every time
+    /// rather than stored, so the title job naming this chat after its first
+    /// reply shows while it is open.
+    ///
+    /// **Truncated, never wrapped** (`ChatHome.kt:718-723`, `maxLines = 1,
+    /// overflow = Ellipsis`). This had `.fixedSize(horizontal: false, vertical:
+    /// true)` and no line limit, and train S008 caught what that costs: at AX5
+    /// a five-word title wrapped to **373 points** of the 401 this screen had,
+    /// the transcript's `ScrollView` was squeezed to a height of **zero**, the
+    /// one bubble spilled across the whole screen and the composer was pushed
+    /// off the bottom of it. A header is the one place in this app where
+    /// truncation is right: the name is a label, not a sentence, VoiceOver
+    /// still reads the whole of it, and the untruncated name is on the row in
+    /// the list one tap behind. Two lines at an accessibility size because
+    /// there it has a line of its own.
+    private var title: some View {
+        Text(phone.conversation?.title ?? ChatStrings.newChat)
+            .font(.headline)
+            .accessibilityAddTraits(.isHeader)
+            .lineLimit(typeSize.isAccessibilitySize ? 2 : 1)
+            .truncationMode(.tail)
+            .multilineTextAlignment(.leading)
+    }
+
+    /// Share is offered only on a chat that is **on the phone**: a new chat
+    /// with no message has no file and nothing to hand over, and a button that
+    /// silently did nothing is the control this app does not draw.
+    /// ``AssistantPhoneModel/share(_:)`` reads the file back, so the row it is
+    /// given is only an id and a title.
+    @ViewBuilder private var shareButton: some View {
+        if let open = phone.conversation, !open.messages.isEmpty {
             Button {
-                phone.close()
+                phone.share(ChatRow(id: open.id, title: open.title))
             } label: {
-                Image(systemName: "chevron.left")
+                Image(systemName: "square.and.arrow.up")
                     .font(.body)
                     .frame(minWidth: 44, minHeight: 44)
                     .contentShape(.rect)
             }
             .buttonStyle(.plain)
             .foregroundStyle(Color.brandInk)
-            // The word the Kotlin already has for the way out of a
-            // conversation. Android's back arrow carries `"back"`
-            // (`AssistantChat.kt:844`) and a glyph with no label is
-            // unreachable by VoiceOver, so the screen's own word is used
-            // rather than a new one invented for a port.
-            .accessibilityLabel(ChatStrings.backToChats)
-
-            // ``AssistantConversation/title`` — the name the person gave, else
-            // the first five words, else `new chat`. Read off the conversation
-            // every time rather than stored, so the title job naming this chat
-            // after its first reply shows while it is open.
-            Text(phone.conversation?.title ?? ChatStrings.newChat)
-                .font(.headline)
-                .accessibilityAddTraits(.isHeader)
-                .fixedSize(horizontal: false, vertical: true)
-                .multilineTextAlignment(.leading)
-
-            Spacer(minLength: 8)
-
-            // Share is offered only on a chat that is **on the phone**: a new
-            // chat with no message has no file and nothing to hand over, and a
-            // button that silently did nothing is the control this app does
-            // not draw. ``AssistantPhoneModel/share(_:)`` reads the file back,
-            // so the row it is given is only an id and a title.
-            if let open = phone.conversation, !open.messages.isEmpty {
-                Button {
-                    phone.share(ChatRow(id: open.id, title: open.title))
-                } label: {
-                    Image(systemName: "square.and.arrow.up")
-                        .font(.body)
-                        .frame(minWidth: 44, minHeight: 44)
-                        .contentShape(.rect)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(Color.brandInk)
-                .accessibilityLabel(ChatStrings.actionShare)
-            }
+            .accessibilityLabel(ChatStrings.actionShare)
         }
-        .padding(.horizontal, 12)
     }
 
     // MARK: - an empty chat
@@ -174,8 +218,17 @@ struct AssistantPhoneConversationView: View {
                 guard last >= 0 else { return }
                 withAnimation { scroller.scrollTo(last, anchor: .bottom) }
             }
+            // Named so a case can drag **this** scroll view. The shell's phone
+            // bar is a `ScrollView` too (the customisable strip along the
+            // bottom), and on train S008 a measurement that reached for
+            // `scrollViews.firstMatch` would have driven that one. It is an
+            // identifier, not a label: nothing is read out by it.
+            .accessibilityIdentifier(AssistantPhoneConversationView.transcriptId)
         }
     }
+
+    /// The transcript's accessibility identifier — see ``transcript``.
+    static let transcriptId = "assistant-transcript"
 
     private var tail: String {
         let messages = phone.transcript

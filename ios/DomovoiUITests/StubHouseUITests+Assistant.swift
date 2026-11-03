@@ -96,6 +96,26 @@ extension StubHouseUITests {
     /// the composer's `send`. That one was real — a dimmed
     /// `.borderedProminent` on a blank composer — and the control is gone,
     /// which is also what Android draws there (`AssistantChat.kt:379-390`).
+    ///
+    /// ### S008 named `try again`, and it is the eleventh
+    ///
+    /// The audit reached a conversation with a finished reply in it and raised
+    /// the same headline against the `try again` **button**, at
+    /// `(16, 380.67, 59.67, 44)`. It is a ``HomeLink`` — the same control as
+    /// `clear all`, which is already forgiven here and already measured — and
+    /// a `HomeLink`'s height at the ordinary size is its 44-point hit target
+    /// rather than its text, which is exactly the shape the audit misreads.
+    /// So it is forgiven on the same terms and on the same evidence: by
+    /// **width**, in `testAssistant_DynamicTypeHoldsAtAccessibilityXXXL`'s
+    /// `try-again` key, which fails if the words ever stop growing.
+    ///
+    /// What S008 found that was **not** forgiven: the conversation's title.
+    /// It wrapped — `.fixedSize(horizontal: false, vertical: true)` and no
+    /// line limit — and at AX5 it took 373 of the screen's 401 points, left
+    /// the transcript a `ScrollView` of height **zero** and pushed the
+    /// composer off the bottom. `AssistantPhoneConversationView.title` now
+    /// truncates, which is what Android's own header does
+    /// (`ChatHome.kt:718-723`).
     static let assistantScalingFalsePositives: [AssistantAuditExemption] = {
         let headline = "Dynamic Type font sizes are partially unsupported"
         return [
@@ -112,6 +132,8 @@ extension StubHouseUITests {
             // a conversation (S005). `arborio` is the question's bubble as
             // well as the row's title and is already above.
             AssistantUnderTest.paperBag,
+            // the conversation's `try again` (S008) — see the note below.
+            ChatStringsUnderTest.actionTryAgain,
         ].map { AssistantAuditExemption(headline: headline, label: $0) }
     }()
 
@@ -791,24 +813,117 @@ extension StubHouseUITests {
     /// looked for from the top rather than from wherever the last one left it.
     ///
     /// **Train S005 paid for this.** At AX5 the place picker wraps to two
-    /// rows and the list is left a 178-point window; one `swipeUp` in a window
-    /// that small steps over a whole cell. ``StubHouseUITests/scrollUntilBuilt(_:_:flicks:)``
-    /// only ever scrolls **down**, so once a measurement had run to the foot
-    /// of the list the `new chat` cell above it was unbuilt and unreachable,
-    /// and the case reported "new-chat was not on screen at AX5" about a
-    /// button that was drawing perfectly well.
+    /// rows and the list is left a 178-point window.
+    /// ``StubHouseUITests/scrollUntilBuilt(_:_:flicks:)`` only ever scrolls
+    /// **down**, so once a measurement had run to the foot of the list the
+    /// `new chat` cell above it was unbuilt and unreachable, and the case
+    /// reported "new-chat was not on screen at AX5" about a button that was
+    /// drawing perfectly well. S008 found the other half of that: the step
+    /// itself was a flick, which is ``assistantCreep(_:towards:)``'s note.
     ///
     /// The head is the two-place subtitle, which is in the list's own header
     /// cell — the one thing that is at the top of this list and nowhere else.
     @MainActor
-    func assistantScrollListToTop(_ app: XCUIApplication, flicks: Int = 20) {
+    func assistantScrollListToTop(_ app: XCUIApplication, steps: Int = 30) {
         let list = app.collectionViews.firstMatch
         guard list.exists else { return }
         let head = startingWith(app, AssistantUnderTest.subtitleBoth)
-        for _ in 0..<flicks {
+        for _ in 0..<steps {
             if head.exists { return }
-            list.swipeDown(velocity: .slow)
+            assistantCreep(list, towards: .top)
         }
+    }
+
+    /// Which way ``assistantCreep(_:towards:)`` moves the content.
+    enum AssistantCreepEnd { case top, foot }
+
+    /// Move a scrolling view by **half its own height, and no further**.
+    ///
+    /// ### Train S008: a flick is not a scroll
+    ///
+    /// `swipeUp(velocity: .slow)` is a flick, and a flick carries momentum
+    /// that is a multiple of the gesture, not of the view. In a window the
+    /// size of the phone list at AX5 — 178 points, under a place picker that
+    /// has wrapped to two rows — one "slow" flick threw the list from its top
+    /// straight to its foot: the log shows thirty of them, every one of them a
+    /// no-op after the first, and `new chat` reported as "not on screen at
+    /// AX5" about a cell that was drawing perfectly well in between. S005 read
+    /// that as a scroll that had gone too far *down* and added
+    /// ``assistantScrollListToTop(_:steps:)``; the list was at its top when
+    /// it happened, so that was only half the cause.
+    ///
+    /// A press, a drag and a **hold before the lift** has no momentum at all:
+    /// the content moves by the drag and stops where it is put. Half the
+    /// view's height is the step, so nothing taller than half a window can be
+    /// stepped over, and the gesture starts and ends inside the view's middle
+    /// where there is no sheet grabber or scroll indicator to catch it.
+    @MainActor
+    func assistantCreep(_ view: XCUIElement, towards end: AssistantCreepEnd) {
+        guard view.exists else { return }
+        // Dragging the content UP (finger from low to high) walks towards the
+        // foot; the other way walks back to the top.
+        let from = end == .foot ? 0.75 : 0.25
+        let to = end == .foot ? 0.25 : 0.75
+        let start = view.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: from))
+        let finish = view.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: to))
+        start.press(
+            forDuration: 0.1,
+            thenDragTo: finish,
+            withVelocity: .slow,
+            // The hold is what kills the momentum: lifting mid-drag is a
+            // flick however slowly the drag was made.
+            thenHoldForDuration: 0.4
+        )
+    }
+
+    /// Walk a scrolling view towards its foot until `element` is built.
+    ///
+    /// ``StubHouseUITests/scrollUntilBuilt(_:_:flicks:)``'s shape, with
+    /// ``assistantCreep(_:towards:)`` in place of the flick and any scrolling
+    /// view rather than `collectionViews.firstMatch` — the transcript is a
+    /// `ScrollView`. Prints the tree when it gives up, because "it was not
+    /// there" is a claim about something absent and the only useful answer is
+    /// what *is*.
+    @MainActor
+    @discardableResult
+    func assistantCreepUntilBuilt(
+        _ app: XCUIApplication,
+        _ view: XCUIElement,
+        _ element: XCUIElement,
+        steps: Int = 24
+    ) -> Bool {
+        guard view.waitForExistence(timeout: 20) else {
+            print("=== NOTHING TO SCROLL — tree follows ===")
+            print(app.debugDescription)
+            return false
+        }
+        for _ in 0..<steps {
+            if element.exists { return true }
+            assistantCreep(view, towards: .foot)
+        }
+        if !element.exists {
+            print("=== \(steps) STEPS AND STILL UNBUILT — tree follows ===")
+            print(app.debugDescription)
+        }
+        return element.exists
+    }
+
+    /// The phone's list, walked step by step.
+    @MainActor
+    @discardableResult
+    func assistantListUntilBuilt(_ app: XCUIApplication, _ element: XCUIElement) -> Bool {
+        assistantCreepUntilBuilt(app, app.collectionViews.firstMatch, element)
+    }
+
+    /// The open conversation's transcript, walked step by step.
+    ///
+    /// By **identifier** (`AssistantPhoneConversationView.transcriptId`), never
+    /// `scrollViews.firstMatch`: the shell's phone bar along the bottom is a
+    /// `ScrollView` as well, and at AX5 it is the taller of the two.
+    @MainActor
+    @discardableResult
+    func assistantTranscriptUntilBuilt(_ app: XCUIApplication, _ element: XCUIElement) -> Bool {
+        assistantCreepUntilBuilt(app, app.scrollViews["assistant-transcript"].firstMatch, element)
     }
 
     /// The height of the **shortest** static text carrying exactly this label.
@@ -833,9 +948,15 @@ extension StubHouseUITests {
         let all = app.staticTexts.matching(NSPredicate(format: "label == %@", label))
         if inList {
             assistantScrollListToTop(app)
-            guard scrollUntilBuilt(app, all.firstMatch) else { return nil }
+            guard assistantListUntilBuilt(app, all.firstMatch) else { return nil }
         } else {
-            guard all.firstMatch.waitForExistence(timeout: 20) else {
+            // **The transcript is scrolled too.** S008 reported `bubble-reply`
+            // "not on screen at AX5" from this branch, which only ever waited:
+            // one question at AX5 is taller than the window the transcript is
+            // given, so the reply under it is a `LazyVStack` row that was
+            // never built. Waiting twenty seconds for a view that is not being
+            // asked for finds nothing.
+            guard assistantTranscriptUntilBuilt(app, all.firstMatch) else {
                 print("=== NO TEXT '\(label)' — tree follows ===")
                 print(app.debugDescription)
                 return nil
@@ -885,7 +1006,7 @@ extension StubHouseUITests {
     /// ### Two more train S005 paid for
     ///
     /// **Every element is looked for from the top of the list**
-    /// (``assistantScrollListToTop(_:flicks:)``), because the scroll that
+    /// (``assistantScrollListToTop(_:steps:)``), because the scroll that
     /// reaches the hint leaves `new chat` behind it and unbuilt.
     ///
     /// **A second pass, with a chat already on the phone.** S005's audit swept
@@ -950,14 +1071,14 @@ extension StubHouseUITests {
             // `clear all` by width, for the chip's reason: it is a `HomeLink`
             // with a 44-point hit target and S005 measured it at exactly 44.
             let clear = app.buttons[AssistantUnderTest.clearAll].firstMatch
-            if scrollUntilBuilt(app, clear) { out["clear-all"] = clear.frame.width }
+            if assistantListUntilBuilt(app, clear) { out["clear-all"] = clear.frame.width }
 
             // The conversation. The row's own button carries the title as its
             // label (`AssistantPhoneRowView`), which is how every other case
             // here opens one.
             assistantScrollListToTop(app)
             let row = app.buttons[AssistantUnderTest.arborio].firstMatch
-            if scrollUntilBuilt(app, row) {
+            if assistantListUntilBuilt(app, row) {
                 row.tap()
                 for (key, label) in [
                     ("bubble-asked", AssistantUnderTest.arborio),
@@ -966,6 +1087,17 @@ extension StubHouseUITests {
                     if let height = assistantTextHeight(app, label, inList: false) {
                         out[key] = height
                     }
+                }
+                // `try again`, which the seeded chat offers because it ends in
+                // a finished reply with a question before it
+                // (``AssistantPhoneModel/canTryAgain``). By **width**, for
+                // `clear all`'s reason — it is the same `HomeLink` and its
+                // height at the ordinary size is the 44-point hit target, not
+                // the text. It is at the foot of the transcript, under both
+                // bubbles.
+                let retry = app.buttons[ChatStringsUnderTest.actionTryAgain].firstMatch
+                if assistantTranscriptUntilBuilt(app, retry) {
+                    out["try-again"] = retry.frame.width
                 }
             } else {
                 XCTFail("the seeded chat has no row to open at \(tag)")
@@ -992,7 +1124,7 @@ extension StubHouseUITests {
         let keys = [
             "chip", "subtitle", "new-chat", "no-chats-yet", "hint",
             "row-title", "row-place", "row-age", "privacy", "clear-all",
-            "bubble-asked", "bubble-reply",
+            "bubble-asked", "bubble-reply", "try-again",
         ]
         for key in keys {
             guard let small = ordinary[key] else {
