@@ -71,6 +71,9 @@ extension StubHouseUITests {
         /// promote, and the favourites list must not hold it.
         static let playedOnly = "Played Once Gull"
 
+        /// Its Recent line, from the fixture's `_played_ago`.
+        static let playedAgo = "2m ago"
+
         /// The FM favourite: 97.5, no `stream_url`, so `resolve` is offered.
         static let fmRow = "WJIM-FM"
 
@@ -124,6 +127,11 @@ extension StubHouseUITests {
         /// the whole sentence is past the 128-character query limit that
         /// throws (NIGHT-RULES §5).
         static let fmTipOpening = "Tip: leave the box blank"
+        /// The search card's tag strip (`StationsStrings.tagsLabel`,
+        /// `tagPresets`). Spelt out here for the same reason as everything
+        /// else in this enum.
+        static let tagsLabel = "tags:"
+        static let tagPresets = ["indie", "jazz", "classical", "news", "electronic", "rock"]
         static let search = "search"
         /// The submit button's word in the FM scope (`StationSearch.kt:222`).
         static let browse = "browse"
@@ -158,6 +166,8 @@ extension StubHouseUITests {
         static let metaAt600 = "sampling every 600s"
         static let metaAt180 = "sampling every 180s"
         static let forget = "forget"
+        /// The toast a completed `forget` leaves (`StationsStrings.forgot`).
+        static let forgotKestrel04 = "forgot Favourite Kestrel 04"
         static let forgetTitle = "forget Favourite Kestrel 04?"
         static let forgetBody = "Removes the station and stops sampling it."
     }
@@ -282,6 +292,30 @@ extension StubHouseUITests {
         return (object as? [String: [Any]]) ?? [:]
     }
 
+    /// Every **row** on the screen that is about this station, as its star.
+    ///
+    /// Counting leaves whose label holds a name counts a row twice: a row's
+    /// lines are combined into one element and the tree keeps the leaves
+    /// under it as well (train S004). A row has exactly one
+    /// ``StationsStarButton``, labelled `favorite` or `unfavorite` and valued
+    /// with the station's name, so this is "how many rows are about it" and
+    /// nothing else. Returned as strings so a failure message names what it
+    /// found rather than a number.
+    @MainActor
+    func stationsRows(_ app: XCUIApplication, named name: String) -> [String] {
+        // `value` is `Any?`, so it is read in Swift rather than asked for in
+        // a predicate, where a type mismatch would quietly match nothing.
+        let stars = app.buttons.matching(
+            NSPredicate(
+                format: "label == %@ OR label == %@",
+                StationsWords.favorite, StationsWords.unfavorite
+            )
+        )
+        return stars.allElementsBoundByIndex
+            .filter { ($0.value as? String) == name }
+            .map { "\($0.label) \($0.frame)" }
+    }
+
     /// A control inside the detail sheet, told apart from **the keyboard's
     /// keys**.
     ///
@@ -313,10 +347,19 @@ extension StubHouseUITests {
     /// filter.
     ///
     /// **`Played Once Gull` is the discriminating row.** It is in Recent and
-    /// is *not* favourited, so it must appear exactly **once** on the screen:
-    /// a favourites list that forgot `favorited_only=true` — or a screen that
-    /// drew the same rows twice under two headings — fails here and passes
-    /// every assertion that only looked for a name.
+    /// is *not* favourited, so it must appear in exactly **one row** on the
+    /// screen: a favourites list that forgot `favorited_only=true` — or a
+    /// screen that drew the same rows twice under two headings — fails here
+    /// and passes every assertion that only looked for a name.
+    ///
+    /// **Rows are counted by their star, not by leaves with the name on
+    /// them.** Train S004 failed this on a screen that was right: a
+    /// ``StationsRecentRow``'s two lines are one accessibility element
+    /// (`children: .combine`), and the tree holds *both* the combined
+    /// `Played Once Gull, 2m ago` **and** the `Played Once Gull` leaf under
+    /// it — two matches for one row. Every row of either list carries exactly
+    /// one ``StationsStarButton``, whose `value` is the station's name, so
+    /// counting those counts rows.
     @MainActor
     func testStations_TheScreenDrawsItsThreeCards() throws {
         let (app, landed) = openStations()
@@ -341,14 +384,17 @@ extension StubHouseUITests {
             containing(app, StubStations.firstFavourite).exists,
             "the favourites list drew nothing"
         )
-        let played = app.descendants(matching: .any)
-            .matching(NSPredicate(format: "label CONTAINS %@", StubStations.playedOnly))
-        let found = played.allElementsBoundByIndex.map { "\($0.elementType.rawValue):\($0.label)" }
+        XCTAssertTrue(
+            containing(app, StubStations.playedOnly).exists,
+            "\(StubStations.playedOnly) is not on the screen at all, so Recent is not "
+                + "drawing the station that was played and never starred"
+        )
+        let rows = stationsRows(app, named: StubStations.playedOnly)
         XCTAssertEqual(
-            1, found.count,
-            "\(StubStations.playedOnly) is played-but-not-favourited and must appear once, "
+            1, rows.count,
+            "\(StubStations.playedOnly) is played-but-not-favourited and must be one row, "
                 + "in Recent only — the favourites read is not filtered on "
-                + "favorited_only. Matched: \(found)"
+                + "favorited_only. Rows: \(rows)"
         )
     }
 
@@ -947,9 +993,20 @@ extension StubHouseUITests {
             "the count did not drop after a station was forgotten"
         )
         evidence(app, "stations-23-forgotten")
-        XCTAssertFalse(
-            containing(app, StubStations.withTrack).exists,
-            "the forgotten station is still on the list"
+        // **Its row, not its name.** Train S004 failed here against a screen
+        // that had removed the row: the one element left holding the name was
+        // the model's own toast, `forgot Favourite Kestrel 04`, and
+        // `containing` matches a label that *holds* the words. So the row is
+        // asked for as a row (``stationsRows(_:named:)``) and the toast is
+        // asserted on purpose, which is the half of this that was never
+        // checked.
+        XCTAssertTrue(
+            containing(app, StationsWords.forgotKestrel04).exists,
+            "nothing was said about the station that was forgotten"
+        )
+        XCTAssertEqual(
+            [], stationsRows(app, named: StubStations.withTrack),
+            "the forgotten station is still a row on the list"
         )
     }
 
@@ -1005,28 +1062,57 @@ extension StubHouseUITests {
 
     // MARK: - 11. Dynamic Type
 
-    /// The screen's own words grow with the type size, measured at both sizes
-    /// rather than trusted.
+    /// Every leaf Apple's audit names on this screen, and the screen's own
+    /// headings, measured at both type sizes rather than trusted.
     ///
-    /// A named Dynamic Type audit finding has twice been a false positive on
-    /// this track, so this compares each leaf's height at `L` against its
-    /// height at AX5 and asks for at least 1.8x. `minimumScaleFactor` is
-    /// rejected everywhere in this app, and this is what would catch it:
-    /// text that scales down to fit does not grow.
+    /// A named Dynamic Type audit finding has three times been a false
+    /// positive on this track, so this compares each leaf's height at `L`
+    /// against its height at AX5. `minimumScaleFactor` is rejected everywhere
+    /// in this app, and this is what would catch it: text that scales down to
+    /// fit does not grow.
+    ///
+    /// **This case is the measurement ``testStations_AuditFindsNothingNew()``
+    /// stands on.** Train S004's audit named eleven elements with "Dynamic
+    /// Type font sizes are partially unsupported" — every one of them inside
+    /// a card, and none of the identical leaves outside one. The audit case
+    /// classifies those eleven out by signature; this case is why it is
+    /// allowed to, and the day one of them stops growing is the day this
+    /// fails rather than the day the screen quietly stops scaling.
+    ///
+    /// So the labels below are those eleven verbatim, plus the headings that
+    /// were here before — and nothing is skipped: a leaf the AX5 pass cannot
+    /// find is a failure, not a silence, because a skip is how a measurement
+    /// stops measuring.
+    ///
+    /// The labels are in screen order and scrolled to in that order: at AX5
+    /// the search card alone is taller than the phone, so Recent's rows are
+    /// unbuilt until the list is flicked (NIGHT-RULES §5).
     @MainActor
     func testStations_TheScreenTextGrowsAtAX5() throws {
-        func heights(_ app: XCUIApplication) -> [String: CGFloat] {
+        // Text leaves. A ratio is meaningful for these: nothing holds them to
+        // a minimum height.
+        let above =
+            [StubStations.pluginName, StationsWords.title, StationsWords.subtitle,
+             StationsWords.noPlayback, StationsWords.importIsAnAdminJob,
+             StationsWords.tagsLabel]
+        let below =
+            [StationsWords.recent, StationsWords.lastThree,
+             StubStations.playedOnly, StubStations.playedAgo,
+             StationsWords.favorites]
+        let leaves = above + below
+        // **Screen order, because the flicks only go one way.** The chips sit
+        // between `tags:` and the Recent card; measured after `Favorites` they
+        // would have been scrolled off the top and reported missing.
+        let ordered = above + StationsWords.tagPresets + below
+
+        @MainActor
+        func heights(_ app: XCUIApplication, _ labels: [String]) -> [String: CGFloat] {
             var out: [String: CGFloat] = [:]
-            for label in [
-                StationsWords.title,
-                StationsWords.subtitle,
-                StationsWords.noPlayback,
-                StationsWords.importIsAnAdminJob,
-                StationsWords.recent,
-                StationsWords.favorites,
-                StubStations.pluginName,
-            ] {
-                let found = app.staticTexts[label]
+            for label in labels {
+                let found = anything(app, labelled: label)
+                // Unbuilt is not absent: flick to it before believing it is
+                // gone, which at AX5 is most of this list.
+                if !found.exists { _ = scrollStationsUntil(app, found) }
                 if found.exists { out[label] = found.frame.height }
             }
             return out
@@ -1041,8 +1127,9 @@ extension StubHouseUITests {
             XCTAssertTrue(landed, "Stations never drew at \(name)")
             usleep(1_000_000)
             evidence(app, "stations-26-scale-\(name)")
-            measured[name] = heights(app)
-            for (leaf, height) in heights(app).sorted(by: { $0.key < $1.key }) {
+            let found = heights(app, ordered)
+            measured[name] = found
+            for (leaf, height) in found.sorted(by: { $0.key < $1.key }) {
                 print("STATIONS SCALE [\(name)] \(leaf) height=\(height)")
             }
             app.terminate()
@@ -1050,50 +1137,194 @@ extension StubHouseUITests {
 
         let small = measured["large"] ?? [:]
         let big = measured["AX5"] ?? [:]
-        var compared = 0
         var stuck: [String] = []
-        for (leaf, height) in small.sorted(by: { $0.key < $1.key }) {
-            guard let grown = big[leaf] else { continue }
-            compared += 1
+        var missing: [String] = []
+
+        for leaf in leaves {
+            guard let height = small[leaf] else { missing.append("\(leaf) at L"); continue }
+            guard let grown = big[leaf] else { missing.append("\(leaf) at AX5"); continue }
             if grown < height * 1.8 { stuck.append("\(leaf) \(height)->\(grown)") }
         }
-        XCTAssertEqual([], stuck, "a leaf of this screen does not grow with the type size")
-        XCTAssertGreaterThanOrEqual(
-            compared, 3,
-            "fewer than three leaves could be compared, so this proved nothing: "
-                + "\(small) / \(big)"
+        // The chips are the one control here with a 44-point hit floor
+        // (rule §3), so a ratio says nothing: a chip whose word did not grow
+        // at all would still measure exactly 44. What a grown word gives is
+        // a chip taller than its floor, so that is what is asked for.
+        for chip in StationsWords.tagPresets {
+            guard let height = small[chip] else { missing.append("\(chip) at L"); continue }
+            guard let grown = big[chip] else { missing.append("\(chip) at AX5"); continue }
+            if grown <= max(height, 44) {
+                stuck.append("chip \(chip) \(height)->\(grown), its 44-point floor")
+            }
+        }
+
+        XCTAssertEqual(
+            [], missing,
+            "a leaf this screen is measured on was never found, so the comparison "
+                + "below is of something smaller than it claims"
         )
+        XCTAssertEqual([], stuck, "a leaf of this screen does not grow with the type size")
     }
 
     // MARK: - 12. the audit
 
+    /// The signatures this screen's audit is allowed to report, each one
+    /// measured somewhere else in this file or in ``StubHouseUITests``.
+    ///
+    /// **1. One anonymous `Contrast failed`.** The phone bar's.
+    /// ``testTheLocalShellPassesTheAudit()`` is the control that placed it:
+    /// the same ``ShellTopBar`` with *no* phone bar audits zero, Home audits
+    /// one and the pairing screen three, and Stations is drawn in that same
+    /// shell. It is allowed by **kind and by count**, so a second one, or one
+    /// of any other kind, still fails.
+    ///
+    /// **2. Contrast on an element that straddles the foot of the scroll
+    /// viewport.** On train S004 that was `Favourite Kestrel 01`, a plain
+    /// primary-ink row title at `y 765.5` with the `ScrollView` ending at
+    /// `770` — half of it rendered, half of it under the phone bar, and no
+    /// pixels an audit can read. The picture is what attributed it; two tree
+    /// diffs could not. The same class as four of the pairing screen's five
+    /// (``knownPushedBarFloor``'s doc: "elements the bar was drawn over or
+    /// that straddled a scroll edge"). Bounded by the viewport the app
+    /// actually drew, never by a constant.
+    ///
+    /// **3. "Dynamic Type font sizes are partially unsupported" naming one
+    /// of the eleven leaves ``testStations_TheScreenTextGrowsAtAX5()``
+    /// measures.** Every one of them is inside a card — `HomeCard`'s heading
+    /// and count, the Recent row's two lines, the search card's `tags:` and
+    /// its six chips — and every identical leaf *outside* a card (the title,
+    /// the subtitle, `importing the FCC FM list…`) is reported by nobody. A
+    /// finding that names a leaf **not** on that list is a defect, because
+    /// nothing has measured it.
+    ///
+    /// Anything else lands in `rest` and fails. That is the point of
+    /// classifying by signature: the floor cannot swallow a finding it has
+    /// not been told about, which is what a pinned total did for three
+    /// sessions (``knownPushedBarFloor``).
+    enum StationsAudit {
+
+        /// The leaves of ``testStations_TheScreenTextGrowsAtAX5()``, which is
+        /// where their growth is measured.
+        static let measuredLeaves: Set<String> = Set(
+            [StationsWords.recent, StationsWords.lastThree, StationsWords.tagsLabel,
+             StubStations.playedOnly, StubStations.playedAgo]
+                + StationsWords.tagPresets
+        )
+
+        static let dynamicType = "Dynamic Type font sizes are"
+        static let contrast = "Contrast"
+        static let contrastFailed = "Contrast failed"
+    }
+
+    /// `label='…'` out of an ``auditIssues(_:_:)`` line, or nil when the
+    /// audit named no element.
+    func stationsAuditLabel(_ finding: String) -> String? {
+        guard let open = finding.range(of: "label='") else { return nil }
+        let rest = finding[open.upperBound...]
+        guard let close = rest.range(of: "' frame=") else { return nil }
+        return String(rest[..<close.lowerBound])
+    }
+
+    /// `frame=(x, y, w, h)` out of an ``auditIssues(_:_:)`` line as its top
+    /// and bottom, or nil when there was no element to have a frame.
+    ///
+    /// Parsed rather than queried again: the audit reports the frame it
+    /// measured at the moment it measured it, and an element asked for again
+    /// after a screenshot and two attachments is not promised to be where it
+    /// was.
+    func stationsAuditBand(_ finding: String) -> (minY: CGFloat, maxY: CGFloat)? {
+        guard let open = finding.range(of: "frame=(") else { return nil }
+        let rest = finding[open.upperBound...]
+        guard let close = rest.firstIndex(of: ")") else { return nil }
+        let numbers = rest[..<close]
+            .split(separator: ",")
+            .compactMap { Double($0.trimmingCharacters(in: .whitespaces)) }
+        guard numbers.count == 4 else { return nil }
+        return (CGFloat(numbers[1]), CGFloat(numbers[1] + numbers[3]))
+    }
+
+    /// Split one audit's findings into the measured signatures above and
+    /// everything left, which the caller asserts is empty.
+    ///
+    /// `viewportFoot` is the bottom of the scroll view that was on screen
+    /// when the audit ran. `.greatestFiniteMagnitude` when there was none —
+    /// then nothing can straddle an edge and that branch allows nothing.
+    @MainActor
+    func stationsClassify(
+        _ found: [String],
+        viewportFoot: CGFloat,
+        name: String
+    ) -> [String] {
+        var rest: [String] = []
+        var anonymousContrast = 0
+        for line in found {
+            let label = stationsAuditLabel(line)
+
+            if line.hasPrefix(StationsAudit.contrastFailed), label == nil {
+                anonymousContrast += 1
+                print("STATIONS AUDIT [\(name)] phone-bar contrast #\(anonymousContrast): \(line)")
+                if anonymousContrast == 1 { continue }
+                rest.append("a second anonymous contrast finding: \(line)")
+                continue
+            }
+            if line.hasPrefix(StationsAudit.contrast), let band = stationsAuditBand(line),
+               band.maxY > viewportFoot, band.minY < viewportFoot {
+                print(
+                    "STATIONS AUDIT [\(name)] straddles the viewport foot "
+                        + "(\(band.minY)…\(band.maxY) over \(viewportFoot)): \(line)"
+                )
+                continue
+            }
+            if line.hasPrefix(StationsAudit.dynamicType), let label,
+               StationsAudit.measuredLeaves.contains(label) {
+                print("STATIONS AUDIT [\(name)] measured to scale, see the AX5 case: \(line)")
+                continue
+            }
+            rest.append(line)
+        }
+        return rest
+    }
+
     /// Apple's own accessibility audit, over the screen **and** the open
     /// detail sheet, classified by signature.
     ///
-    /// By signature with ``floorAndRest(_:)`` and never a pinned total: the
-    /// floor is the anonymous "Dynamic Type font sizes are (partially)
-    /// unsupported" finding every pushed screen in this app reports, with no
-    /// element and a detail that ``testStations_TheScreenTextGrowsAtAX5()``
-    /// measures to be false. Anything the audit can attribute to an element
-    /// is a defect.
+    /// By signature with ``floorAndRest(_:)`` and ``StationsAudit``, never a
+    /// pinned total: the floor is the anonymous "Dynamic Type font sizes are
+    /// (partially) unsupported" finding every pushed screen in this app
+    /// reports, with no element and a detail that
+    /// ``testStations_TheScreenTextGrowsAtAX5()`` measures to be false, and
+    /// the three signatures ``StationsAudit`` documents are the three this
+    /// screen has had measured. Anything else the audit can say is a defect.
     ///
     /// The sheet is audited as well as the screen, and a finding that names a
     /// row **behind** the sheet is the signal that the sheet is not modal —
     /// which is how the two `Contrast failed` behind Settings' forget dialog
-    /// were found.
+    /// were found. The sheet is its own scroll view, so the viewport foot is
+    /// read again with it open rather than reused.
     @MainActor
     func testStations_AuditFindsNothingNew() throws {
         guard #available(iOS 17.0, *) else {
             throw XCTSkip("performAccessibilityAudit needs iOS 17")
         }
+        // The foot of whatever scroll view is in front. `firstMatch` is the
+        // screen's own before the sheet opens and the sheet's after, which is
+        // why it is read twice.
+        @MainActor
+        func viewportFoot(_ app: XCUIApplication) -> CGFloat {
+            let scroller = app.scrollViews.firstMatch
+            return scroller.exists ? scroller.frame.maxY : .greatestFiniteMagnitude
+        }
+
         let (app, landed) = openStations()
         XCTAssertTrue(landed, "Stations never drew its subtitle")
 
+        let foot = viewportFoot(app)
         let screen = Self.floorAndRest(try auditIssues(app, "stations-screen"))
         evidence(app, "stations-27-audit-screen")
+        print("STATIONS AUDIT [screen] floor=\(screen.floor) viewport foot=\(foot)")
         XCTAssertEqual(
-            [], screen.rest,
-            "the audit named an element on the Stations screen (floor: \(screen.floor))"
+            [], stationsClassify(screen.rest, viewportFoot: foot, name: "screen"),
+            "the audit named something on the Stations screen that nothing has "
+                + "measured (floor: \(screen.floor), viewport foot: \(foot))"
         )
 
         stationsChevron(app, StubStations.withTrack).tap()
@@ -1101,12 +1332,15 @@ extension StubHouseUITests {
             app.staticTexts[StationsWords.recentDetections].waitForExistence(timeout: 25),
             "the detail sheet never opened, so it was not audited"
         )
+        let sheetFoot = viewportFoot(app)
         let sheet = Self.floorAndRest(try auditIssues(app, "stations-sheet"))
         evidence(app, "stations-28-audit-sheet")
+        print("STATIONS AUDIT [sheet] floor=\(sheet.floor) viewport foot=\(sheetFoot)")
         XCTAssertEqual(
-            [], sheet.rest,
-            "the audit named an element with the detail sheet open (floor: \(sheet.floor)) — "
-                + "a finding naming a row behind the sheet means the sheet is not modal"
+            [], stationsClassify(sheet.rest, viewportFoot: sheetFoot, name: "sheet"),
+            "the audit named something with the detail sheet open that nothing has "
+                + "measured (floor: \(sheet.floor)) — a finding naming a row behind the "
+                + "sheet means the sheet is not modal"
         )
     }
 }

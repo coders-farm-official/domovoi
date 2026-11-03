@@ -372,6 +372,8 @@ struct StationsIntervalEditor: View {
     @State private var draft = ""
     @State private var editing = false
 
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(StationsStrings.fieldInterval)
@@ -379,20 +381,27 @@ struct StationsIntervalEditor: View {
                 .foregroundStyle(Color.fgMuted)
                 .fixedSize(horizontal: false, vertical: true)
             if editing {
-                HStack(spacing: 6) {
-                    TextField(StationsStrings.fieldInterval, text: $draft)
-                        .textFieldStyle(.roundedBorder)
-                        .keyboardType(.numberPad)
-                        .frame(maxWidth: 120)
-                        .accessibilityLabel(StationsStrings.fieldInterval)
-                    Text(StationsStrings.seconds)
-                        .font(.subheadline)
-                        .foregroundStyle(Color.fgMuted)
-                }
-                HStack(spacing: 12) {
-                    HomeLink(StationsStrings.save) { save() }
-                        .disabled(stations.isBusy(row))
-                    HomeLink(StationsStrings.cancel) { editing = false }
+                // **The actions ride on the field's own line.**
+                //
+                // A `numberPad` has no Return key, so `save` is the only way
+                // to commit this box — and on train S004 there was no `save`
+                // to tap: the sheet is a `ScrollView`, SwiftUI's keyboard
+                // avoidance scrolls the **focused field** clear of the
+                // keyboard, and a row of buttons drawn *under* the field is
+                // exactly what the keyboard then covers. A control on the
+                // field's line is carried up with it.
+                //
+                // At an accessibility size a 120-point box and two words do
+                // not share a line (rule §3), so that branch stacks them and
+                // the keyboard toolbar below is what reaches `save` there.
+                if dynamicTypeSize.isAccessibilitySize {
+                    box
+                    actions
+                } else {
+                    HStack(spacing: 12) {
+                        box
+                        actions
+                    }
                 }
             } else {
                 HStack(alignment: .firstTextBaseline, spacing: 10) {
@@ -406,6 +415,41 @@ struct StationsIntervalEditor: View {
                     }
                 }
             }
+        }
+    }
+
+    /// The box, with the unit after it.
+    ///
+    /// The keyboard toolbar carries the same two actions and no others: a
+    /// `numberPad` offers nothing that dismisses itself, so without it an
+    /// accessibility size — where the actions stack *under* the box — would
+    /// have a keyboard over the only way out of the edit.
+    private var box: some View {
+        HStack(spacing: 6) {
+            TextField(StationsStrings.fieldInterval, text: $draft)
+                .textFieldStyle(.roundedBorder)
+                .keyboardType(.numberPad)
+                .frame(maxWidth: 120)
+                .accessibilityLabel(StationsStrings.fieldInterval)
+                .toolbar {
+                    ToolbarItemGroup(placement: .keyboard) {
+                        HomeLink(StationsStrings.save) { save() }
+                            .disabled(stations.isBusy(row))
+                        HomeLink(StationsStrings.cancel) { editing = false }
+                        Spacer()
+                    }
+                }
+            Text(StationsStrings.seconds)
+                .font(.subheadline)
+                .foregroundStyle(Color.fgMuted)
+        }
+    }
+
+    private var actions: some View {
+        HStack(spacing: 12) {
+            HomeLink(StationsStrings.save) { save() }
+                .disabled(stations.isBusy(row))
+            HomeLink(StationsStrings.cancel) { editing = false }
         }
     }
 

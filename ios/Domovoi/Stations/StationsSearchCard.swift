@@ -210,7 +210,7 @@ struct StationsSearchCard: View {
             // already uses in `Music/MusicView.swift:282`,
             // `MusicStatsView.swift:20` and `MusicRoomCards.swift:126`.
             //
-            // Six `.caption` words plus `.bordered` padding are about 390
+            // Six `.caption` words plus 12 points of padding a side are ~390
             // points against the ~326 a 390-point phone leaves inside this
             // card, so the one-row branch is refused at the ordinary size
             // already and two rows of three is what normally draws; at an
@@ -231,13 +231,35 @@ struct StationsSearchCard: View {
     /// chip refuse to be squeezed: without it the row would still "fit" by
     /// truncating every label, and `ViewThatFits` would never reach the
     /// wrapped branches.
+    ///
+    /// **Not `.buttonStyle(.bordered)`.** That style paints the label in the
+    /// `AccentColor` asset — ``Color/brand``, the amber *fill*, which is
+    /// 2.05:1 on white — over a wash of the same hue. Apple's audit said so
+    /// on train S004, six times, one per word: "Contrast is not high enough
+    /// for element unless font size is larger". The same mistake the
+    /// stylesheet already warns about (``Color/brandInk``'s doc) and the one
+    /// rule §3 states as "never the fill as text".
+    ///
+    /// So the chip is drawn the way the rest of this screen draws a control
+    /// that is not a filled button (``StationsSearchCard/scopeButton(_:_:_:)``,
+    /// ``StationsChip``): the label in the primary ink, and the brand carried
+    /// by a border, which is a graphic and may be the fill's own hue.
     @ViewBuilder private func chips(_ tags: [String]) -> some View {
         ForEach(tags, id: \.self) { tag in
-            Button(tag) { stations.tapTag(tag) }
-                .font(.caption)
-                .buttonStyle(.bordered)
-                .frame(minHeight: 44)
-                .fixedSize(horizontal: true, vertical: false)
+            Button {
+                stations.tapTag(tag)
+            } label: {
+                Text(tag)
+                    .font(.caption)
+                    .padding(.horizontal, 12)
+                    .frame(minHeight: 44)
+                    .overlay {
+                        Capsule().strokeBorder(Color.brandInk, lineWidth: 1)
+                    }
+                    .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .fixedSize(horizontal: true, vertical: false)
         }
     }
 
