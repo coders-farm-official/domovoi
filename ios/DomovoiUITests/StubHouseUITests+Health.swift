@@ -53,9 +53,13 @@ extension StubHouseUITests {
     /// `defer` never runs, while the stub process outlives every case in the
     /// run.
     ///
-    /// What it waits for is the **dashboard foot**, which is drawn in all
-    /// three branches of the screen (`ContainersScreen.kt:160`) and in none of
-    /// the shell around it. The panel is a plain `VStack` inside Settings'
+    /// What it waits for is the dashboard foot **and then a drawn branch**.
+    /// The foot is drawn in every branch (`ContainersScreen.kt:160`) and in
+    /// none of the shell around it, so it says we are on the panel — but
+    /// `.loading` draws it too, so it cannot say the reads have answered.
+    /// `landed` is therefore the branch, not the foot; every bare `.exists`
+    /// assertion in this file rests on that. The panel is a plain `VStack`
+    /// inside Settings'
     /// `ScrollView` and not a lazy list, so everything it draws exists in the
     /// tree whether or not it is on screen — no `scrollUntilBuilt` here, which
     /// is the one place this screen is easier than Chat's.
@@ -90,7 +94,21 @@ extension StubHouseUITests {
             pushDelay: Self.pushDelay
         )
         let foot = startingWith(app, HealthUnderTest.dashboardFootHead)
-        return (app, foot.waitForExistence(timeout: 40))
+        guard foot.waitForExistence(timeout: 40) else { return (app, false) }
+        // The foot alone is NOT a sentinel: `content` draws `dashboardFoot` in
+        // all four branches including `.loading` (`HealthPanelView.swift:110`),
+        // which is what `HealthPanelState.from` returns while `config.loading`
+        // is true. Waiting on the foot therefore returned the moment `.task`
+        // built the model, with all six reads still in flight, and the bare
+        // `.exists` assertions below raced them. `pushDelay` cannot cover it:
+        // `HealthPanelModel` starts its own reads when the panel appears,
+        // after the push. So wait for a branch that has read something — the
+        // Containers part card for the rows branch, the guest line for the
+        // unpaired one.
+        let drawn = paired
+            ? app.staticTexts[HealthUnderTest.partLabels[3]].waitForExistence(timeout: 30)
+            : containing(app, HealthUnderTest.pairToSee).waitForExistence(timeout: 30)
+        return (app, drawn)
     }
 
     // MARK: - the screen, drawn from the fixture's data
@@ -444,10 +462,17 @@ extension StubHouseUITests {
     @available(iOS 17.0, *)
     func testHealth_HealthPassesApplesAccessibilityAudit() throws {
         let (app, landed) = openHealth()
+        // **Before the audit, not after.** `landed` is what guarantees the
+        // audit runs against drawn content: `openHealth` waits for the
+        // Containers part card, so a panel still in `.loading` — a
+        // `ProgressView` and one paragraph, which audits clean — cannot be
+        // what Apple looked at. Asserting it first also means
+        // `continueAfterFailure = false` leaves by this assertion rather than
+        // reporting a green audit of nothing.
+        XCTAssertTrue(landed, "the panel never drew, so the audit saw Settings")
         let found = try auditIssues(app, "health-audit")
         let (floor, rest) = Self.floorAndRest(found)
         evidence(app, "health-11-audit")
-        XCTAssertTrue(landed, "the panel never drew, so the audit saw Settings")
         print("AUDIT [health] floor=\(floor) rest=\(rest.count)")
         XCTAssertTrue(
             rest.isEmpty,

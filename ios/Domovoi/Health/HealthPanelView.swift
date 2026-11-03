@@ -363,14 +363,20 @@ struct HealthPanelView: View {
     /// did nothing would otherwise say nothing. The URL is
     /// `http://<private LAN address>/#settings/health`, which Safari opens —
     /// App Transport Security binds this app's own networking, not Safari's.
+    ///
+    /// `OpenURLAction` is `@MainActor`, so the non-`@Sendable` completion
+    /// formed here inherits this view's `@MainActor` isolation and may both
+    /// capture `model` and call it directly. An earlier draft hopped through
+    /// `Task { @MainActor in … }` on the belief that the completion was
+    /// nonisolated; that belief was never compiled (`pkgtest.sh` builds
+    /// `DomovoiKit` only), and under Swift 6's `complete` concurrency
+    /// checking it was the worse of two readings — if it had been true, the
+    /// capture of `model`, not the call of `showToast`, is what crosses, and
+    /// the hop would not have saved it.
     private func openDashboard(_ url: URL) {
         openURL(url) { accepted in
             guard !accepted else { return }
-            // The completion is not isolated to the main actor, and
-            // ``ShellModel`` is. The hop is explicit rather than assumed.
-            Task { @MainActor in
-                model.showToast(HealthPanelStrings.noBrowser)
-            }
+            model.showToast(HealthPanelStrings.noBrowser)
         }
     }
 }
