@@ -239,6 +239,69 @@ extension StubHouseUITests {
         return element.exists
     }
 
+    /// The part of ``peopleSheet(_:)`` that nothing else is drawn over.
+    ///
+    /// The screen sits in a `NavigationStack`, so its scroll view's frame
+    /// *starts at the navigation bar's own top* and the content scrolls under
+    /// that bar — the scroll view says nothing about the 44 points of it a
+    /// tap can never reach. Train S011 paid for the difference: the `value`
+    /// field reported `{{16, 97.7}, {294, 34}}` against a sheet whose frame
+    /// began at 93.3, so the reveal loop called it visible, and the tap at
+    /// `y = 114.7` landed on the `NavigationBar` at `{{0, 93.3}, {393, 44}}`.
+    /// Focus stayed on `kind`, and `typeText` failed all three of its retries
+    /// with "neither element nor any descendant has keyboard focus" — a
+    /// failure that reads as a dead text field on an app that was right.
+    @MainActor
+    func peopleViewport(_ app: XCUIApplication) -> CGRect {
+        var viewport = peopleSheet(app).frame
+        for bar in app.navigationBars.allElementsBoundByIndex {
+            let frame = bar.frame
+            // Only a bar sitting ON the sheet's top edge: one that does not
+            // reach it covers nothing, and one below it is not a thing this
+            // screen has.
+            guard frame.height > 0, frame.minY <= viewport.minY, frame.maxY > viewport.minY
+            else { continue }
+            viewport = CGRect(
+                x: viewport.minX, y: frame.maxY,
+                width: viewport.width,
+                height: max(0, viewport.maxY - frame.maxY)
+            )
+        }
+        return viewport
+    }
+
+    /// Scroll the sheet by an exact number of points, with no flick momentum.
+    ///
+    /// A `swipeUp(velocity: .slow)` here moves the content by about a whole
+    /// viewport — 383 points, measured on train S011 — and the `value`
+    /// field's two reachable positions either side of one such step were
+    /// *both* outside the viewport (97.7 under the navigation bar, 480.7
+    /// under the phone bar), so a loop that can only flick oscillates between
+    /// them until it runs out of tries. A press long enough to register as a
+    /// drag rather than a flick moves the content by the drag's own distance,
+    /// which converges in one or two passes.
+    ///
+    /// `dy` is how far the **content** should move: positive brings something
+    /// above the viewport down into it.
+    @MainActor
+    func peopleNudge(_ app: XCUIApplication, _ dy: CGFloat) {
+        let viewport = peopleViewport(app)
+        guard viewport.height > 32 else { return }
+        let room = viewport.height - 16
+        let step = max(-room, min(room, dy))
+        // x = 8 is inside the scroll view and left of every field, button and
+        // row on this screen, so the drag is never taken for a control's own
+        // gesture.
+        let x = viewport.minX + 8
+        let from = step > 0 ? viewport.minY + 8 : viewport.maxY - 8
+        let origin = app.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
+        origin.withOffset(CGVector(dx: x, dy: from))
+            .press(
+                forDuration: 0.5,
+                thenDragTo: origin.withOffset(CGVector(dx: x, dy: from + step))
+            )
+    }
+
     /// Scroll until `element` is built **and inside the viewport**.
     ///
     /// `exists` is not `visible`. XCUITest reports an element's frame in the
@@ -252,29 +315,33 @@ extension StubHouseUITests {
     /// left People entirely. The failure read as "the text field vanished
     /// while typing", and the tree attached to it was a Chat screen.
     ///
-    /// Downwards first, then back up, because the overshoot case is real: the
-    /// content clamps at its ends, so this settles rather than oscillates.
+    /// The viewport is ``peopleViewport(_:)``'s: ``peopleSheet(_:)``'s frame
+    /// less the navigation bar drawn over its top (train S011), and not
+    /// `scrollViews.firstMatch`'s — the keyboard has a scroll view of its
+    /// own, and comparing a field's frame against *it* is what failed three
+    /// cases on train S008.
     ///
-    /// The viewport is ``peopleSheet(_:)``'s and not `scrollViews.firstMatch`'s
-    /// — the keyboard has a scroll view of its own, and comparing a field's
-    /// frame against *it* is what failed three cases on train S008.
+    /// Each pass moves the content by the measured shortfall rather than by a
+    /// flick, for the oscillation ``peopleNudge(_:_:)`` describes.
     @MainActor
     func peopleReveal(_ app: XCUIApplication, _ element: XCUIElement, flicks: Int = 10) -> Bool {
         guard peopleScroll(app, to: element, flicks: flicks) else { return false }
         for _ in 0..<flicks {
-            let sheet = peopleSheet(app)
-            let viewport = sheet.frame
+            let viewport = peopleViewport(app)
             let frame = element.frame
             if frame.minY >= viewport.minY && frame.maxY <= viewport.maxY { return true }
-            if frame.maxY > viewport.maxY {
-                sheet.swipeUp(velocity: .slow)
-            } else {
-                sheet.swipeDown(velocity: .slow)
-            }
+            // Eight points clear of the edge it was over, so that a rounding
+            // difference between the measurement and the drag cannot leave it
+            // straddling the edge it was just moved off.
+            let dy =
+                frame.maxY > viewport.maxY
+                ? viewport.maxY - frame.maxY - 8
+                : viewport.minY - frame.minY + 8
+            peopleNudge(app, dy)
         }
         print(
             "=== BUILT BUT NEVER INSIDE THE VIEWPORT: element \(element.frame) "
-                + "viewport \(peopleSheet(app).frame) — tree follows ==="
+                + "viewport \(peopleViewport(app)) — tree follows ==="
         )
         print(app.debugDescription)
         return false
