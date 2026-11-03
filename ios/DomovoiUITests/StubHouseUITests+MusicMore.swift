@@ -109,6 +109,45 @@ extension StubHouseUITests {
         return (app, musicMoreScroll(app, to: row))
     }
 
+    /// `isHittable`, asked only when it has an answer.
+    ///
+    /// **`isHittable` is not a total function, and train I001 is how this
+    /// item found out.** For an element whose frame lies wholly outside the
+    /// window — `playlists` at `{{522.0, 510.0}, {193.0, 58.7}}` on a
+    /// 393-point screen, which is where the horizontal strip holds it at AX5
+    /// before anyone has flicked it — XCTest cannot compute an activation
+    /// point and cannot sample one off the frame either, so the getter does
+    /// not return `false`: it **fails the test** with "Failed to determine
+    /// hittability of "playlists" Button: Activation point invalid and no
+    /// suggested hit points based on element frame". Three cases died on
+    /// that message, at the one line that merely asked the question
+    /// (``musicMoreScrollOnScreen(_:_:flicks:)``), before any tap.
+    ///
+    /// So the geometry is checked first and the getter is asked second. An
+    /// element the window does not wholly contain is not hittable by any
+    /// definition this file uses — the sideways and vertical walks exist to
+    /// move exactly that element into the window — so answering `false` from
+    /// the frame asserts nothing weaker than asking would have, and asking
+    /// is what throws.
+    ///
+    /// **Not an app defect.** ``MusicTabBar`` is a horizontal `ScrollView`
+    /// on purpose (Android's `ScrollableTabRow`), and at AX5 its four words
+    /// are 828 points wide inside a 361-point frame; a word off the right
+    /// edge of a strip that scrolls is a word a person flicks to, which is
+    /// what ``musicMoreTapTab(_:_:)`` does.
+    @MainActor
+    func musicMoreHittable(_ app: XCUIApplication, _ element: XCUIElement) -> Bool {
+        guard element.exists else { return false }
+        let box = element.frame
+        guard box.width > 0, box.height > 0 else { return false }
+        // The window's frame, with the app's own as the fallback: an element
+        // only partly inside it is one the walks still have work to do on.
+        let window = app.windows.firstMatch
+        let screen = window.exists ? window.frame : app.frame
+        guard !screen.isEmpty, screen.contains(box) else { return false }
+        return element.isHittable
+    }
+
     /// Scroll Music until `element` is built **and on screen**.
     ///
     /// ``musicMoreScroll(_:to:flicks:)`` answers "is it built", which is the
@@ -137,7 +176,10 @@ extension StubHouseUITests {
         var last = CGFloat.greatestFiniteMagnitude
         for _ in 0..<flicks {
             guard element.exists else { return }
-            if element.isHittable { return }
+            // ``musicMoreHittable(_:_:)``, never the getter: at AX5 this very
+            // line was asked about a word off the right-hand edge and failed
+            // the case rather than answering.
+            if musicMoreHittable(app, element) { return }
             let box = element.frame
             let viewport = page.frame
             guard box.height > 0, viewport.height > 0 else { return }
@@ -207,14 +249,19 @@ extension StubHouseUITests {
         // Down the page before sideways along the strip: a strip below the
         // page's foot cannot be flicked at all (S013), and the frames the
         // sideways walk measures are only meaningful once it is on screen.
-        if !tab.isHittable { musicMoreScrollOnScreen(app, tab) }
-        if !tab.isHittable, let strip = musicMoreTabStrip(app, holding: tab) {
+        //
+        // ``musicMoreHittable(_:_:)`` at every one of these four questions,
+        // never the getter: the word this walk exists to reach is, until it
+        // has been reached, exactly the word `isHittable` refuses to answer
+        // about (I001).
+        if !musicMoreHittable(app, tab) { musicMoreScrollOnScreen(app, tab) }
+        if !musicMoreHittable(app, tab), let strip = musicMoreTabStrip(app, holding: tab) {
             var last = CGFloat.greatestFiniteMagnitude
             for _ in 0..<12 {
-                if tab.isHittable { break }
+                if musicMoreHittable(app, tab) { break }
                 // A strip still off screen would throw "visible frame is
                 // empty" instead of scrolling; the tree below says why.
-                guard strip.isHittable else { break }
+                guard musicMoreHittable(app, strip) else { break }
                 // `nan` when the word is momentarily out of the snapshot: a
                 // missing measurement is not "nothing moved".
                 let left = tab.exists ? tab.frame.minX : CGFloat.nan
@@ -223,7 +270,7 @@ extension StubHouseUITests {
                 strip.swipeLeft(velocity: .slow)
             }
         }
-        guard tab.isHittable else {
+        guard musicMoreHittable(app, tab) else {
             print("=== '\(word)' TAB NOT HITTABLE AT \(tab.frame) — tree follows ===")
             print(app.debugDescription)
             return false
@@ -338,7 +385,10 @@ extension StubHouseUITests {
         guard let page = musicMorePage(app) else { return }
         let bar = startingWith(app, MusicMoreUnderTest.tabPlaylists)
         for _ in 0..<flicks {
-            if bar.exists, bar.isHittable { return }
+            // ``musicMoreHittable(_:_:)``: at AX5 this is the word that is
+            // off the right-hand edge, and the getter fails the case rather
+            // than answering (I001).
+            if musicMoreHittable(app, bar) { return }
             page.swipeDown(velocity: .slow)
         }
     }
@@ -1351,9 +1401,16 @@ extension StubHouseUITests {
     @MainActor
     func musicMoreUnexplained(_ rest: [String], in app: XCUIApplication) -> [String] {
         // The outer scroll view: the tallest on screen. The others are the
-        // tab strip, lying on its side, and the phone bar.
+        // tab strip, lying on its side, and the phone bar. Kept as the
+        // **element**, not just its frame: rule 2 needs to know what is
+        // inside it, and a rectangle cannot say.
         let page = app.scrollViews.allElementsBoundByIndex
-            .max(by: { $0.frame.height < $1.frame.height })?.frame ?? .null
+            .max(by: { $0.frame.height < $1.frame.height })
+        let pageBox = page?.frame ?? .null
+        // Read **once**, before the filter: one snapshot of the page's
+        // subtree, not one per finding.
+        let pageContent = page?.descendants(matching: .any)
+            .allElementsBoundByIndex.map(\.frame) ?? []
 
         return rest.filter { line in
             // 1. A Dynamic Type headline **with** an element. The four tab
@@ -1367,17 +1424,42 @@ extension StubHouseUITests {
             if Self.knownAnonymousHeadlines.contains(where: { line.hasPrefix($0) }) {
                 return false
             }
-            // 2. A contrast finding against an element one of the scroll
-            //    view's own edges is cutting. Half an element has no pixels
-            //    to read, which is what the audit reports. S007's single
-            //    contrast finding was `playing in parlour` at y
+            // 2. A contrast finding against an element of the page's own
+            //    content that the page's clip is cutting — or has carried
+            //    **wholly** past. Pixels the element does not have are
+            //    pixels the audit read off whatever is drawn there instead.
+            //
+            //    S007's was the cut half: `playing in parlour` at y
             //    184.3–198.7 against a content area starting at 197.3 — 1.3
             //    points of it visible — while `playing in cellar`, the same
             //    string in the same colour on the same card two rooms down
-            //    and fully on screen, passed. One row further down the
-            //    scroll and it is a different row's turn.
+            //    and fully on screen, passed.
+            //
+            //    **I001 is why "cutting" is no longer enough.** The merge
+            //    put ``PhoneSourceSwitchView``'s pinned pill above this page
+            //    (`RouteScreen.swift:74`), moving the content area's top
+            //    from about 149 to 197.3 while the scroll distance to the
+            //    playlists tab is unchanged. At the position this case
+            //    audits from, `Veldrassen Overture` sits at
+            //    `(100.0, 148.67, 140.0, 18.0)` — 30 points **above** the
+            //    clip, not across it, so `intersects` was false and the row
+            //    that used to straddle the edge now fails to be forgiven by
+            //    the rule written for it. The screen behind those pixels is
+            //    the pill, at `{{15.5, 144.8}, {362.0, 45.0}}`: the audit
+            //    measured the pill's colours and named the room card's
+            //    title. The control that says so is one card down —
+            //    `Vantersk Night Radio`, the same `Text(song.displayTitle)`
+            //    of the same `identity(_:)` in the same unstyled primary
+            //    ink (`MusicRoomCards.swift:109`), fully on screen, and
+            //    passed.
+            //
+            //    The condition is therefore "not wholly inside the page",
+            //    and the discriminator that keeps that from forgiving the
+            //    pill itself — which sits in the very same band — is
+            //    ``musicMoreIsPageContent(_:_:)``.
             if line.hasPrefix("Contrast failed"), let box = Self.frame(in: line),
-               box.intersects(page), !page.contains(box) {
+               !pageBox.isNull, !pageBox.contains(box),
+               Self.musicMoreIsPageContent(box, pageContent) {
                 return false
             }
             // 3. The phone-source segmented control, which is the PhoneMedia
@@ -1418,6 +1500,32 @@ extension StubHouseUITests {
                 return false
             }
             return true
+        }
+    }
+
+    /// Whether the element a finding names at `box` belongs to the page's
+    /// own scrolling content.
+    ///
+    /// **The discriminator geometry alone cannot give.** After the merge the
+    /// phone-source pill occupies `{{15.5, 144.8}, {362.0, 45.0}}` and a room
+    /// card's title carried off the top of the page occupies
+    /// `(100.0, 148.67, 140.0, 18.0)` — the same band, both outside the
+    /// page's clip. Forgiving a contrast finding by position would forgive
+    /// the pill too, and the pill is a drawn, visible control whose colours
+    /// are a fair thing for Apple to fail. The row that scrolled away is
+    /// still a **descendant** of the page; the pill is its sibling
+    /// (``PhoneSourceSwitchView``'s `VStack`, `PhoneSourceSwitchView.swift:80`).
+    ///
+    /// Matched **by frame, not by label**: the label is the only thing the
+    /// finding gives and it is also the thing a screen can repeat, while two
+    /// elements of one snapshot cannot share a rectangle. A third of a point
+    /// of slack, because that is the resolution the frames come back in.
+    static func musicMoreIsPageContent(_ box: CGRect, _ content: [CGRect]) -> Bool {
+        content.contains { other in
+            abs(other.minX - box.minX) < 0.5
+                && abs(other.minY - box.minY) < 0.5
+                && abs(other.width - box.width) < 0.5
+                && abs(other.height - box.height) < 0.5
         }
     }
 }
