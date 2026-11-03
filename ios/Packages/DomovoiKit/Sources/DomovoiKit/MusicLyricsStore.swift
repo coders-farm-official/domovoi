@@ -50,7 +50,15 @@ public final class MusicLyricsStore {
     /// listening session touches.
     private var order: [String] = []
 
-    private var inFlight: [String: Task<MusicLyricsResult, Never>] = [:]
+    /// The reads in flight, so two surfaces asking for one track share one
+    /// request.
+    ///
+    /// Keyed by request **number** as well as by track: `Task` is a struct, so
+    /// `===` cannot say "is this still the task I started", and removing by
+    /// key alone would let a finished read evict a newer one that had just
+    /// replaced it.
+    private var inFlight: [String: (id: Int, task: Task<MusicLyricsResult, Never>)] = [:]
+    private var nextRequestID = 0
 
     private let container: AppContainer
     private let clock: @Sendable () -> Int64
@@ -88,7 +96,7 @@ public final class MusicLyricsStore {
         // the top defect class on this track.
         let asked = key(trackID)
         if !refresh, let doc = hit(asked) { return .loaded(doc) }
-        if let existing = inFlight[asked] { return await existing.value }
+        if let existing = inFlight[asked] { return await existing.task.value }
         let client = container.client
         let job = Task { @MainActor () -> MusicLyricsResult in
             do throws(DomovoiError) {
@@ -101,9 +109,11 @@ public final class MusicLyricsStore {
                 return Self.verdict(for: trouble)
             }
         }
-        inFlight[asked] = job
+        nextRequestID += 1
+        let number = nextRequestID
+        inFlight[asked] = (id: number, task: job)
         let result = await job.value
-        if inFlight[asked] === job { inFlight.removeValue(forKey: asked) }
+        if inFlight[asked]?.id == number { inFlight.removeValue(forKey: asked) }
         if case .loaded(let doc) = result, asked == key(trackID) {
             remember(asked, doc)
         }

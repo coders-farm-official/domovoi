@@ -460,18 +460,15 @@ final class MusicMoreRulesTests: XCTestCase {
     // MARK: - the nudge store
 
     func testTheNudgeStoreWritesWhatItReadsBack() {
-        let box = Shared<String?>(nil)
-        let store = MusicLyricsNudgeStore(
-            read: { box.current },
-            write: { box.set($0) }
-        )
+        let box = SavedStateBox()
+        let store = MusicLyricsNudgeStore(place: box)
         store.later("kitchen")
         store.later("kitchen")
         XCTAssertEqual(500, store.offset("kitchen"))
         XCTAssertEqual("timing +0.5 s", store.label("kitchen"))
 
         // A second store over the same box is the next launch.
-        let reopened = MusicLyricsNudgeStore(read: { box.current }, write: { box.set($0) })
+        let reopened = MusicLyricsNudgeStore(place: box)
         XCTAssertEqual(500, reopened.offset("kitchen"))
 
         reopened.reset("kitchen")
@@ -481,15 +478,13 @@ final class MusicMoreRulesTests: XCTestCase {
     }
 
     func testTheNudgeStoreClampsAtItsCeiling() {
-        let box = Shared<String?>(nil)
-        let store = MusicLyricsNudgeStore(read: { box.current }, write: { box.set($0) })
+        let store = MusicLyricsNudgeStore(place: SavedStateBox())
         for _ in 0..<100 { store.later("kitchen") }
         XCTAssertEqual(MusicLyricsNudge.maxMs, store.offset("kitchen"))
     }
 
     func testABlankRoomIsNotStored() {
-        let box = Shared<String?>(nil)
-        let store = MusicLyricsNudgeStore(read: { box.current }, write: { box.set($0) })
+        let store = MusicLyricsNudgeStore(place: SavedStateBox())
         store.set("   ", ms: 250)
         XCTAssertTrue(store.offsets.isEmpty)
     }

@@ -948,7 +948,7 @@ final class MusicMoreModelTests: XCTestCase {
         let model = MusicRoomLyricsModel(
             room: room,
             store: MusicLyricsStore(container: container, clock: { now.current }),
-            nudges: MusicLyricsNudgeStore(read: { nil }, write: { _ in }),
+            nudges: MusicLyricsNudgeStore(place: SavedStateBox()),
             clock: { now.current },
             // The republish loop is driven by hand: a test that waited on a
             // real 100 ms would be a test about `Task.sleep`.

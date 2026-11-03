@@ -20,33 +20,32 @@ import Observation
 @Observable
 public final class MusicLyricsNudgeStore {
 
-    /// The `UserDefaults` key. Android's prefs key, so the two phones' notes
-    /// read the same.
-    public static let defaultsKey = "lyrics_room_nudge"
+    /// Where this store's bytes live.
+    ///
+    /// A key of its own under the app's prefix, as ``ChatPinBook``'s is, and
+    /// for the same reason its own doc comment gives: a tap on a nudge chip
+    /// must not rewrite the shell's blob, because a half-applied write there
+    /// is how an app comes to trust a server there is no row for.
+    public static let defaultsKey = "domovoi.music.lyricsNudge"
 
     /// Every room with an offset. A room not in here is at zero.
     public private(set) var offsets: [String: Int64]
 
-    private let read: @Sendable () -> String?
-    private let write: @Sendable (String) -> Void
+    private let place: any SavedState
 
-    /// For a test: the whole store over two closures, no `UserDefaults` at
-    /// all.
+    /// - Parameter place: ``UserDefaultsSavedState`` in the app, a
+    ///   ``SavedStateBox`` in a test. The same seam ``ChatPinBook`` uses —
+    ///   a model reaching `UserDefaults.standard` itself is both a second
+    ///   mechanism and a capture the compiler refuses in a `@Sendable`
+    ///   closure, `UserDefaults` not being `Sendable`.
     public init(
-        read: @Sendable @escaping () -> String?,
-        write: @Sendable @escaping (String) -> Void
+        place: any SavedState = UserDefaultsSavedState(
+            key: MusicLyricsNudgeStore.defaultsKey
+        )
     ) {
-        self.read = read
-        self.write = write
-        self.offsets = MusicLyricsNudge.decode(read())
-    }
-
-    /// The store the app uses.
-    public convenience init(defaults: UserDefaults = .standard) {
-        let key = Self.defaultsKey
-        self.init(
-            read: { defaults.string(forKey: key) },
-            write: { defaults.set($0, forKey: key) }
+        self.place = place
+        self.offsets = MusicLyricsNudge.decode(
+            place.read().flatMap { String(data: $0, encoding: .utf8) }
         )
     }
 
@@ -63,7 +62,7 @@ public final class MusicLyricsNudgeStore {
     public func set(_ room: String, ms: Int64) {
         guard !room.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         offsets = MusicLyricsNudge.with(offsets, room: room, ms: ms)
-        write(MusicLyricsNudge.encode(offsets))
+        place.write(Data(MusicLyricsNudge.encode(offsets).utf8))
     }
 
     /// One tap of the `+¼ s` chip.
