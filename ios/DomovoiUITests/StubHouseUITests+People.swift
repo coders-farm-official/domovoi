@@ -65,6 +65,10 @@ extension StubHouseUITests {
         static let rejectedMemory = "wants to learn the unicycle"
         static let rejectedDisclosure = "1 rejected (hidden)"
         static let noMemories = "no memories yet"
+        /// The memories header before anything is added, and after — the
+        /// line the add case waits on, because it moves only when the POST
+        /// landed *and* the re-read came back.
+        static let memoryCountsAfter = "2 active · 1 pending"
         static let addMemory = "add a memory…  e.g. allergic to peanuts"
         static let saveMemory = "save memory"
         static let saveFavorite = "save favorite"
@@ -78,6 +82,8 @@ extension StubHouseUITests {
         static let retry = "retry"
 
         static let favoriteCounts = "3 saved · 2 kinds"
+        /// After `tea`/`oolong` is added — a third kind, a fourth value.
+        static let favoriteCountsAfter = "4 saved · 3 kinds"
         static let coffee = "coffee"
         static let team = "team"
         static let mariners = "Mariners"
@@ -207,14 +213,55 @@ extension StubHouseUITests {
         return element.exists
     }
 
+    /// Scroll until `element` is built **and inside the viewport**.
+    ///
+    /// `exists` is not `visible`. XCUITest reports an element's frame in the
+    /// scroll view's *content*, un-clipped, so a field one point below the
+    /// viewport is `exists == true` with a frame that lies over whatever is
+    /// drawn under the scroll view — on this screen, the phone bar. Train
+    /// S005 paid for the difference: the `value` field reported
+    /// `{{16, 481}, {294, 34}}` while the keyboard had shrunk the viewport to
+    /// end at 468, the tap at the field's own centre-right landed on the
+    /// phone bar's `chat` button at `{{294.7, 472}, {98.3, 44}}`, and the app
+    /// left People entirely. The failure read as "the text field vanished
+    /// while typing", and the tree attached to it was a Chat screen.
+    ///
+    /// Downwards first, then back up, because the overshoot case is real: the
+    /// content clamps at its ends, so this settles rather than oscillates.
+    @MainActor
+    func peopleReveal(_ app: XCUIApplication, _ element: XCUIElement, flicks: Int = 10) -> Bool {
+        guard peopleScroll(app, to: element, flicks: flicks) else { return false }
+        let sheet = app.scrollViews.firstMatch
+        for _ in 0..<flicks {
+            let viewport = sheet.frame
+            let frame = element.frame
+            if frame.minY >= viewport.minY && frame.maxY <= viewport.maxY { return true }
+            if frame.maxY > viewport.maxY {
+                sheet.swipeUp(velocity: .slow)
+            } else {
+                sheet.swipeDown(velocity: .slow)
+            }
+        }
+        print(
+            "=== BUILT BUT NEVER INSIDE THE VIEWPORT: element \(element.frame) "
+                + "viewport \(app.scrollViews.firstMatch.frame) — tree follows ==="
+        )
+        print(app.debugDescription)
+        return false
+    }
+
     /// Type into a field, having put the caret at its end.
     ///
     /// A tap puts the caret where it lands, which is why the tap is at 0.95
     /// of the width: a tap in the middle of a pre-filled field appends in the
     /// wrong place, and three Chat cases were written twice before that was
     /// understood.
+    ///
+    /// The field is brought inside the viewport first — see
+    /// ``peopleReveal(_:_:flicks:)`` for the tap that went to the phone bar.
     @MainActor
-    func peopleType(_ field: XCUIElement, _ text: String) {
+    func peopleType(_ app: XCUIApplication, _ field: XCUIElement, _ text: String) {
+        XCTAssertTrue(peopleReveal(app, field), "the field never came into the viewport")
         field.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
         field.typeText(text)
     }
@@ -278,7 +325,7 @@ extension StubHouseUITests {
         let app = peopleLaunch()
         let field = app.textFields[PeopleUnderTest.filter]
         XCTAssertTrue(field.waitForExistence(timeout: 20), "no filter field")
-        peopleType(field, "chev")
+        peopleType(app, field, "chev")
         XCTAssertTrue(
             peopleRow(app, PeopleUnderTest.chevy).waitForExistence(timeout: 10),
             "`chev` does not match Chevy — the filter is case-sensitive, or over another field"
@@ -294,7 +341,7 @@ extension StubHouseUITests {
             "clearing the filter did not bring the household back"
         )
 
-        peopleType(field, "zzz")
+        peopleType(app, field, "zzz")
         let noMatch = app.staticTexts[PeopleUnderTest.noMatch]
         let said = noMatch.waitForExistence(timeout: 10)
         evidence(app, "people-filter-no-match")
@@ -495,7 +542,7 @@ extension StubHouseUITests {
         XCTAssertTrue(peopleTab(app, "memory"), "no memory tab")
         let field = app.textFields[PeopleUnderTest.addMemory]
         XCTAssertTrue(field.waitForExistence(timeout: 20), "no add-a-memory field")
-        peopleType(field, PeopleUnderTest.newMemory)
+        peopleType(app, field, PeopleUnderTest.newMemory)
         let save = app.buttons[PeopleUnderTest.saveMemory]
         XCTAssertTrue(save.waitForExistence(timeout: 10), "no save control beside the field")
         XCTAssertTrue(save.isEnabled, "`save` is disabled with a memory typed into the field")
@@ -505,10 +552,26 @@ extension StubHouseUITests {
         // list.
         let toast = app.staticTexts[PeopleUnderTest.savedMemory]
         let said = toast.waitForExistence(timeout: 15)
+        // **The counts line first, then the row.** The re-read landing and
+        // the row being *drawn* are two different things, and train S005
+        // proved it: the header already read `2 active · 1 pending` and the
+        // tab `memory (7)` while the row itself was still unbuilt, because
+        // the active memories are a `LazyVStack` whose foot sits below a
+        // viewport the keyboard had shrunk to 468 points. Waiting on the
+        // count says the POST and the re-read were fine; scrolling says the
+        // list drew it. Asserting only the first would have stopped testing
+        // the second.
+        let counted = app.staticTexts[PeopleUnderTest.memoryCountsAfter]
+            .waitForExistence(timeout: 20)
         let row = app.staticTexts[PeopleUnderTest.newMemory]
-        let arrived = row.waitForExistence(timeout: 20)
+        let arrived = peopleScroll(app, to: row)
         evidence(app, "people-memory-added")
-        XCTAssertTrue(arrived, "the saved memory never appeared — the POST or the re-read")
+        XCTAssertTrue(
+            counted,
+            "the memories header never reached `\(PeopleUnderTest.memoryCountsAfter)` — the "
+                + "POST or the re-read"
+        )
+        XCTAssertTrue(arrived, "the saved memory never appeared in the list")
         XCTAssertTrue(said, "nothing said the memory was saved")
         XCTAssertEqual(
             field.value as? String, PeopleUnderTest.addMemory,
@@ -598,9 +661,17 @@ extension StubHouseUITests {
             "the favourites header never read `\(PeopleUnderTest.favoriteCounts)` — the count, "
                 + "the group count, or `plural()` printing `2 kind`"
         )
+        // **The groups are a `LazyVStack` under the header, so reaching the
+        // header does not build them.** On train S005 the counts line read
+        // `3 saved · 2 kinds` at y=685 with the groups' 150 points of
+        // reserved space still empty below the fold, and this case failed
+        // with "no `team` group" against a screen whose grouping was right.
+        // Each group is scrolled to in turn.
+        let team = app.staticTexts[PeopleUnderTest.team]
+        XCTAssertTrue(peopleScroll(app, to: team), "no `team` group")
+        let coffee = app.staticTexts[PeopleUnderTest.coffee]
+        XCTAssertTrue(peopleScroll(app, to: coffee), "no `coffee` group")
         evidence(app, "people-favorites")
-        XCTAssertTrue(app.staticTexts[PeopleUnderTest.team].exists, "no `team` group")
-        XCTAssertTrue(app.staticTexts[PeopleUnderTest.coffee].exists, "no `coffee` group")
         // Each pill's control names the kind **and** the value, so a grouping
         // that flattened or mixed the two kinds shows up here rather than in
         // a frame comparison.
@@ -625,8 +696,8 @@ extension StubHouseUITests {
         XCTAssertTrue(peopleOpen(app, PeopleUnderTest.kamron), "Kamron's detail did not open")
         XCTAssertTrue(peopleTab(app, "memory"), "no memory tab")
         let kind = app.textFields[PeopleUnderTest.favoriteKind]
-        XCTAssertTrue(peopleScroll(app, to: kind), "no favourite `kind` field")
-        peopleType(kind, "tea")
+        XCTAssertTrue(peopleReveal(app, kind), "no favourite `kind` field")
+        peopleType(app, kind, "tea")
         let save = app.buttons[PeopleUnderTest.saveFavorite]
         XCTAssertTrue(save.waitForExistence(timeout: 10), "no favourite save control")
         evidence(app, "people-favorite-half-typed")
@@ -636,13 +707,23 @@ extension StubHouseUITests {
         )
         let value = app.textFields[PeopleUnderTest.favoriteValue]
         XCTAssertTrue(value.waitForExistence(timeout: 10), "no favourite `value` field")
-        peopleType(value, "oolong")
+        peopleType(app, value, "oolong")
         XCTAssertTrue(save.isEnabled, "`save` stayed disabled with both fields filled in")
         save.tap()
+        // The counts line moves only when the POST landed and the re-read
+        // came back; the pill itself is in the groups' `LazyVStack`, which
+        // needs scrolling to — the two halves this case kept confusing.
+        let counts = app.staticTexts[PeopleUnderTest.favoriteCountsAfter]
+        let counted = counts.waitForExistence(timeout: 20)
         let pill = app.staticTexts["oolong"]
-        let saved = pill.waitForExistence(timeout: 20)
+        let saved = peopleScroll(app, to: pill)
         evidence(app, "people-favorite-added")
-        XCTAssertTrue(saved, "the new favourite never appeared — the POST or the re-read")
+        XCTAssertTrue(
+            counted,
+            "the favourites header never reached "
+                + "`\(PeopleUnderTest.favoriteCountsAfter)` — the POST or the re-read"
+        )
+        XCTAssertTrue(saved, "the new favourite never appeared in its group")
     }
 
     // MARK: - sessions and conversations
@@ -697,7 +778,7 @@ extension StubHouseUITests {
         XCTAssertTrue(peopleTab(app, "conversations"), "no conversations tab")
         let field = app.textFields[PeopleUnderTest.search]
         XCTAssertTrue(field.waitForExistence(timeout: 20), "no conversation search field")
-        peopleType(field, "sourdough")
+        peopleType(app, field, "sourdough")
         let count = app.staticTexts[PeopleUnderTest.oneOfFour]
         let counted = count.waitForExistence(timeout: 15)
         evidence(app, "people-conversation-search")

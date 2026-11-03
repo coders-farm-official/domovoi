@@ -118,10 +118,11 @@ struct PersonRosterRow: View {
 /// 4.5:1, and the doc comment there has the measurements and why a dark ink
 /// on the light ones was tried first and abandoned.
 ///
-/// The bubble is `accessibilityHidden`, which is why Apple's audit reported
-/// this with **`element: nil`** and no name attached: a hidden view's
-/// unreadable text is a finding nobody can attribute. Three of them stood
-/// against this screen on train S002.
+/// Apple's audit reports a bad initial here with **`element: nil`** and no
+/// name attached, so the three that stood against this screen on train S002
+/// could be attributed only by measuring every fill. The darkening answered
+/// those three; the fourth, on train S005, was the *square* frame the merged
+/// leaf had — see the comment in ``body``.
 ///
 /// The diameter is `@ScaledMetric`, never a fixed `frame`: a 36-point circle
 /// beside text that has grown to AX5 is the mistake ``FileRowView``'s icon
@@ -141,25 +142,43 @@ struct PersonAvatarBubble: View {
     var body: some View {
         let diameter = size * scale
         let pair = personAvatarGradients[personAvatarBucket(name)]
-        Circle()
-            .fill(
-                LinearGradient(
-                    colors: [Self.colour(pair.from), Self.colour(pair.to)],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
+        // **A `ZStack`, not `Circle().overlay(Text)`.** The overlay form
+        // merges the two into one accessibility leaf whose frame is the
+        // circle's whole 36x36 **square** — and the corners of that square
+        // are the white canvas, not the fill. Apple's contrast audit reads a
+        // leaf's background out of its frame, so a white initial measured
+        // against those corners is white on white however dark the fill is
+        // made: train S002 reported three anonymous contrast findings here
+        // and S005, with every fill darkened past 4.5:1, still reported one
+        // `Contrast failed` that no colour could have fixed. Separate
+        // children give the glyph its own, glyph-sized frame, which lies
+        // entirely inside the fill.
+        //
+        // `accessibilityHidden` is kept on both — it is the right intent,
+        // and on train S005 it was observed *not* to remove the merged leaf
+        // from the tree, so the geometry above is what this relies on.
+        ZStack {
+            Circle()
+                .fill(
+                    LinearGradient(
+                        colors: [Self.colour(pair.from), Self.colour(pair.to)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
                 )
-            )
-            .frame(width: diameter, height: diameter)
-            .overlay(
-                Text(personAvatarInitial(name))
-                    .font(.footnote.weight(.semibold))
-                    // White on all five, as Android has it — the fills are
-                    // what moved, so one ink is right everywhere.
-                    .foregroundStyle(.white)
-            )
-            // Decorative: the name is beside it, and "letter K in a circle" is
-            // noise in a VoiceOver pass.
-            .accessibilityHidden(true)
+                .frame(width: diameter, height: diameter)
+                .accessibilityHidden(true)
+            Text(personAvatarInitial(name))
+                .font(.footnote.weight(.semibold))
+                // White on all five, as Android has it — the fills are
+                // what moved, so one ink is right everywhere.
+                .foregroundStyle(.white)
+                // Decorative: the name is beside it, and "letter K in a
+                // circle" is noise in a VoiceOver pass.
+                .accessibilityHidden(true)
+        }
+        .frame(width: diameter, height: diameter)
+        .accessibilityHidden(true)
     }
 
     /// A 24-bit RGB from ``personAvatarGradients`` as a `Color`. The package
