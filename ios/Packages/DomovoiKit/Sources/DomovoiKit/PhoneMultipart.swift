@@ -82,12 +82,17 @@ public enum PhoneMultipart {
     /// ``FileSaveModel/safeName(for:)``'s reasoning in the other direction.
     public static func safePartName(_ raw: String) -> String {
         let tail = raw.split(whereSeparator: { $0 == "/" || $0 == "\\" }).last.map(String.init) ?? ""
+        // Over the **unicode scalars**, not the characters: Swift reads a
+        // CRLF as ONE `Character`, equal to neither "\r" nor "\n", so a
+        // character-wise filter let every CRLF straight through — exactly the
+        // injection this function exists to stop, caught by
+        // `testANameWithANewlineCannotAddAHeader`.
         var cleaned = ""
-        for character in tail {
-            switch character {
+        for scalar in tail.unicodeScalars {
+            switch scalar {
             case "\r", "\n", "\0": continue
             case "\"": cleaned += "\\\""
-            default: cleaned.append(character)
+            default: cleaned.unicodeScalars.append(scalar)
             }
         }
         let trimmed = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -99,8 +104,12 @@ public enum PhoneMultipart {
     /// a resolver hands over and which must not be able to add a header
     /// either.
     public static func safeHeaderValue(_ raw: String) -> String {
-        let cleaned = raw.filter { $0 != "\r" && $0 != "\n" && $0 != "\0" }
-            .trimmingCharacters(in: .whitespaces)
+        // Scalars, for the reason ``safePartName(_:)`` gives.
+        var kept = String.UnicodeScalarView()
+        for scalar in raw.unicodeScalars where scalar != "\r" && scalar != "\n" && scalar != "\0" {
+            kept.append(scalar)
+        }
+        let cleaned = String(kept).trimmingCharacters(in: .whitespaces)
         return cleaned.isEmpty ? "application/octet-stream" : cleaned
     }
 }
