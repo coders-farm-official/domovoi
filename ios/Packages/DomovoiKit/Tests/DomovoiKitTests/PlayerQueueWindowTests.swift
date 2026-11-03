@@ -31,10 +31,12 @@ final class PlayerQueueWindowTests: XCTestCase {
         XCTAssertEqual(slice.items.first, 590, "previous still goes somewhere")
         XCTAssertEqual(slice.items.last, 689)
         XCTAssertEqual(slice.index, 10)
-        // Pinned by IDENTITY, not by the number above. The near-the-end case
-        // had this assertion and this one did not, so a window that slid while
-        // `index` kept counting from the old start was only caught at the foot
-        // of a list — and the sabotage slid it everywhere.
+        // Pinned by IDENTITY, not by the number above: the near-the-end case
+        // had this assertion and this one did not. Insurance rather than a
+        // closed hole — measured against `index: at - provisional`, which the
+        // foot-of-the-list case catches and this one cannot, because in the
+        // middle of a list `provisional` IS the start. It costs a line and it
+        // stops `index` from being asserted only against itself.
         XCTAssertEqual(slice.items[slice.index], 600, "the tapped row is still the one at `index`")
     }
 
