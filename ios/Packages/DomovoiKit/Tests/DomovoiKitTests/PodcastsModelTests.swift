@@ -376,12 +376,20 @@ final class PodcastsModelTests: XCTestCase {
         let before = queries(to: "/api/podcasts/subscriptions").count
 
         model.typed("Whit")
-        await nothingHappens()
 
         XCTAssertEqual("Whit", model.filter)
-        XCTAssertEqual("", model.needle, "nothing has been asked for yet")
-        XCTAssertEqual(before, queries(to: "/api/podcasts/subscriptions").count)
+        // Settle on the **wait being asked for**, never on a stretch of
+        // yields: the gated sleeper gives up after `settleYieldLimit` steps
+        // and `typed`'s `try?` swallows that, so a `nothingHappens()` here
+        // outlasts the debounce and the assertion below passes for the wrong
+        // reason. Cost one pkgtest round on 2026-11-02.
+        await settleUntil({ !waits.asked.current.isEmpty }, "the debounce")
         XCTAssertEqual([PodcastsModel.searchDebounceMs], waits.asked.current)
+        XCTAssertEqual(
+            "", model.needle,
+            "the needle is still what the cards on screen came from"
+        )
+        XCTAssertEqual(before, queries(to: "/api/podcasts/subscriptions").count)
     }
 
     /// **The search is the server's, not a local filter**, and the needle
@@ -490,9 +498,9 @@ final class PodcastsModelTests: XCTestCase {
         await settleUntil { model.episodes?.state.loaded == true }
 
         model.typedEpisode("brine")
-        await nothingHappens()
-        XCTAssertEqual("", model.episodeNeedle)
+        await settleUntil({ !waits.asked.current.isEmpty }, "the episode debounce")
         XCTAssertEqual([PodcastsModel.searchDebounceMs], waits.asked.current)
+        XCTAssertEqual("", model.episodeNeedle)
 
         waits.release()
         await settleUntil { model.episodeNeedle == "brine" }
@@ -671,7 +679,16 @@ final class PodcastsModelTests: XCTestCase {
         XCTAssertTrue(model.discovering)
         await settleUntil { !model.discovering }
 
-        XCTAssertEqual(["q=the%20kitchen%20table"], queries(to: "/api/podcasts/discover"))
+        // ``queries(to:)`` reads the query back through `URLComponents`,
+        // which un-escapes a space that is legal unescaped — so this asserts
+        // *which* parameter went, and the wire spelling is asserted off
+        // `absoluteString`.
+        XCTAssertEqual(["q=the kitchen table"], queries(to: "/api/podcasts/discover"))
+        XCTAssertTrue(
+            requests(to: "/api/podcasts/discover").first?.url?
+                .absoluteString.hasSuffix("?q=the%20kitchen%20table") == true,
+            "the term is escaped on the wire, trimmed of the spaces around it"
+        )
         XCTAssertEqual(2, model.discoveries.count)
         XCTAssertEqual("The Kitchen Table", model.discoveries.first?.displayTitle)
         XCTAssertNil(model.discoveries.last?.author, "the directory sends some hits with no artist")
