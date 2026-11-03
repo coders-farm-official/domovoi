@@ -175,10 +175,16 @@ final class AlertsEngineTests: XCTestCase {
         let rig = makeRig(reader: FakeAlertsReader())
         await rig.engine.onFires([Self.fire(id: 9, timerID: 4, summary: "heard in kitchen")])
         XCTAssertEqual(1, rig.centre.added.count)
+        XCTAssertEqual(false, rig.centre.added.last?.silent, "the first word rings")
 
         await rig.engine.onFires([Self.fire(id: 9, timerID: 4, summary: "heard in garage")])
         XCTAssertEqual(2, rig.centre.added.count, "the line under it changed")
         XCTAssertEqual("heard in garage", rig.centre.added.last?.subtitle)
+        // `setSilent(true)` (`AlertEngine.kt:113`). iOS has no
+        // `onlyAlertOnce`, so re-adding under a delivered identifier re-plays
+        // the sound: `realtime.py:953-963` pushes a frame per room a fire is
+        // heard in, and without this one timer would ring three times.
+        XCTAssertEqual(true, rig.centre.added.last?.silent, "an update must not alert again")
 
         rig.centre.dismiss("timer_fire:\(Self.keyA):4")
         await rig.engine.onFires([Self.fire(id: 9, timerID: 4, summary: "heard in garage, kitchen")])
@@ -300,6 +306,59 @@ final class AlertsEngineTests: XCTestCase {
         )
         XCTAssertEqual(900, rig.centre.added.last?.afterSeconds)
         XCTAssertEqual([1], rig.mirror.mirror().alarms.map(\.timerID))
+    }
+
+    /// A timer whose lead is eaten by the `GET /api/timers` round trip is
+    /// **not** scheduled.
+    ///
+    /// `alertsDesiredAlarms` filters on the server's clock at `received`, so a
+    /// timer 1.2s out survives it; by the time the answer lands the trigger is
+    /// in the past, and `AlertsNotifier.scheduled` turns a non-positive
+    /// interval into an **immediate** post — which would say "Timer done ·
+    /// kitchen" for a timer the server has not fired. Android's past-due alarm
+    /// fires at once too, but into `TimerAlarmReceiver.confirmDecision`
+    /// (`:51`), which can suppress it; that is not ported (DECISIONS §3).
+    ///
+    /// The clock advances inside the handler, which is the only place that can
+    /// produce it.
+    func testATimerWhoseLeadTheRoundTripAteIsNotAnnouncedEarly() async {
+        let clock = Shared<Int64>(Self.nowMs)
+        let centre = FakeAlertsCentre()
+        let mirrorStore = MemoryAlertsMirror(AlertsMirrorBook())
+        let engine = AlertsEngine(
+            reader: FakeAlertsReader(timers: {
+                // 1.5s on the wire: the lead is gone when this lands.
+                clock.set(Self.nowMs + 1_500)
+                return AlertsTimerList(
+                    serverNow: Self.nowISO,
+                    timers: [
+                        AlertsTimer(
+                            id: 1, expiresAt: Self.ago(-2), createdAt: Self.nowISO,
+                            label: "pasta", roomID: "kitchen"
+                        ),
+                        AlertsTimer(
+                            id: 2, expiresAt: Self.ago(-600), createdAt: Self.nowISO,
+                            label: "bread", roomID: "kitchen"
+                        ),
+                    ]
+                )
+            }),
+            books: MemoryAlertsBooks(),
+            mirrorStore: mirrorStore,
+            centre: centre,
+            serverKey: { Self.keyA },
+            clock: { clock.current }
+        )
+
+        XCTAssertTrue(await engine.syncMirror())
+        XCTAssertEqual(
+            ["timer_fire:\(Self.keyA):2"], centre.added.map(\.identifier),
+            "the timer 2s out is left to the live `timer_fires.changed` path"
+        )
+        XCTAssertTrue(
+            centre.log.current.delivered.isEmpty,
+            "nothing was posted at once; an immediate post here is a lie about a timer that has not fired"
+        )
     }
 
     /// With notifications off, nothing stays pending: a request the person

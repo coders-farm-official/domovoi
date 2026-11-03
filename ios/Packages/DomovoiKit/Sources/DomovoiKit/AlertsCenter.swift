@@ -39,6 +39,17 @@ import Synchronization
 /// reads.
 public let alertsQuietGapMs: Int64 = 60_000
 
+/// `TimerAlerts.SYNC_DEBOUNCE_MS` (`TimerAlerts.kt:108`, `:201`) — a burst of
+/// `timers.changed` frames costs one `GET /api/timers`, not one each.
+///
+/// Android cancels the in-flight job before the delay, so the last frame of a
+/// burst wins; this does the same with a `Task`. It matters more here than
+/// there: ``AlertsEngine`` is an actor, so a task per frame *queues* rather
+/// than collapsing, and three timers expiring together would mean three
+/// sequential full round trips each followed by a `removePending`/`add` churn
+/// over the whole mirror.
+public let alertsSyncDebounceMs: Int64 = 500
+
 /// Where a notification's tap wants to go — the port of the four intent extras
 /// (`AlertsPayloadKey`), read back as a decision rather than as a dictionary.
 public enum AlertsTapTarget: Equatable, Sendable {
@@ -107,6 +118,10 @@ public final class AlertsCenter: Sendable {
         var serverSink: Int?
         var lastFrameAtMs: Int64?
         var started = false
+
+        /// The debounced `timers.changed` sync — Android's `syncJob`
+        /// (`TimerAlerts.kt:199`), cancelled by the next frame.
+        var pendingSync: Task<Void, Never>?
     }
 
     private let state = Mutex(State())
@@ -196,17 +211,44 @@ public final class AlertsCenter: Sendable {
         catchUpEverything()
     }
 
-    /// Leave, which is for a test that has to say a sink really left.
+    /// Leave, which is for a test that has to say a sink really left — and
+    /// the sink half of ``pause()``.
     public func stop() {
         let sinks: (Int?, Int?) = state.withLock { current in
             let pair = (current.eventSink, current.serverSink)
             current.eventSink = nil
             current.serverSink = nil
             current.started = false
+            current.pendingSync?.cancel()
+            current.pendingSync = nil
             return pair
         }
         if let token = sinks.0 { container.removeStateEventSink(token) }
         if let token = sinks.1 { container.removeServerChangeSink(token) }
+    }
+
+    /// Room mode began: stop listening and **cancel every scheduled
+    /// notification** — `pauseForRoomMode` (`TimerAlerts.kt:157`), whose own
+    /// comment says why ("so a household timer set before room mode does not
+    /// ring on the room phone").
+    ///
+    /// Nothing calls this yet: ``HouseholdLock``'s flag is set by the room
+    /// mode item (I7), and ``start()``'s guard only decides whether to
+    /// subscribe at launch. This is the hook room mode has to call on the
+    /// transition, in both directions — DECISIONS §2 carries it with the
+    /// other shell hooks.
+    public func pause() {
+        stop()
+        Task { [engine] in await engine.clearMirror() }
+    }
+
+    /// Room mode ended: subscribe again and read everything from the
+    /// beginning — `resumeAfterRoomMode` (`TimerAlerts.kt:167`).
+    ///
+    /// It goes through ``start()``, so a phone that is somehow still a room
+    /// stays silent.
+    public func resume() {
+        start()
     }
 
     /// A frame arrived. The three event types are forwarded to their engine;
@@ -231,8 +273,9 @@ public final class AlertsCenter: Sendable {
             // The push carries no `server_now` (`realtime.py:901`), and the
             // mirror's trigger times are computed against the server's clock —
             // so a timer added or cancelled anywhere in the house is a reason
-            // to re-read `GET /api/timers`, not to arm from the frame.
-            Task { [engine] in await engine.syncMirror() }
+            // to re-read `GET /api/timers`, not to arm from the frame. And
+            // debounced, as Android's is: `requestSync(SYNC_DEBOUNCE_MS)`.
+            requestSync(after: alertsSyncDebounceMs)
         case AlertsPaths.helpEvent:
             guard let push = event.data(as: AlertsHelpDeliveryPush.self) else { return }
             Task { [help] in await help.onDeliveries(push.deliveries) }
@@ -255,6 +298,28 @@ public final class AlertsCenter: Sendable {
             await help.refresh()
             await incidents.refresh()
         }
+    }
+
+    /// `requestSync(delayMs)` (`TimerAlerts.kt:199`): the previous request is
+    /// cancelled, so a burst of frames reads the timers once.
+    ///
+    /// `after == 0` is the undelayed form the start and server-switch paths
+    /// use; those go through ``catchUpEverything()`` and ``serverChanged()``,
+    /// which already read the timers, so only the frame path delays.
+    private func requestSync(after: Int64) {
+        let task = Task { [engine] in
+            if after > 0 {
+                try? await Task.sleep(for: .milliseconds(after))
+                if Task.isCancelled { return }
+            }
+            await engine.syncMirror()
+        }
+        let previous: Task<Void, Never>? = state.withLock { current in
+            let was = current.pendingSync
+            current.pendingSync = task
+            return was
+        }
+        previous?.cancel()
     }
 
     private func catchUpEverything() {

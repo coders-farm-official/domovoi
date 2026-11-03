@@ -181,7 +181,14 @@ struct AlertsHintLifecycle: ViewModifier {
     @Environment(\.scenePhase) private var phase
 
     func body(content: Content) -> some View {
+        // **Hidden, not merely behind**, while the card is up — the same
+        // line `SettingsPlaceholder` carries (`RouteScreen.swift:196-203`)
+        // and for the same measured reason: `DialogCard`'s `.isModal` stops
+        // VoiceOver *navigating* out of the card, but Home's rows stay in the
+        // tree under a 35% scrim, where Apple's audit reports them as
+        // `Contrast failed` — truthfully, since they are unreadable.
         content
+            .accessibilityHidden(model.explaining)
             .task { await model.refresh() }
             .onChange(of: phase) { _, now in
                 guard now == .active else { return }

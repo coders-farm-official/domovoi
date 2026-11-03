@@ -20,6 +20,7 @@ import UserNotifications
 // | `setGroup(GROUP)` | ``AlertsRequest/threadIdentifier`` |
 // | `setPublicVersion(…)` + `VISIBILITY_PRIVATE` | nothing. iOS has one title and one body (DECISIONS §6); what is written is what a locked screen may show. |
 // | `setWhen(content.whenMs)` | **nothing, deliberately.** A delivered notification is stamped with its delivery time and `UNNotificationContent` has no field for another one, so a fire that went off forty seconds ago reads as "now". Faking it is not available, and the alternative — putting the time in the body — would spend the one line a reminder's words need. |
+// | `setSilent(silent)` + `setOnlyAlertOnce(true)` (`TimerNotifier.kt:110-111`) | ``AlertsRequest/silent``, which clears the sound and drops the interruption level to `.passive`. iOS has **no** `onlyAlertOnce`: re-adding a request under a delivered identifier re-plays its sound and re-banners, so a refresh that forgot this flag would ring the phone once per room a fire is heard in. |
 // | channel importance | one app-level authorization. `.timeSensitive` would need the `com.apple.developer.usernotifications.time-sensitive` entitlement, which means an entitlements file, which means editing `project.yml` — forbidden to this item (NIGHT-RULES §2), so the level is left at `.active`. |
 // ---------------------------------------------------------------------------
 
@@ -71,6 +72,13 @@ public struct AlertsRequest: Equatable, Sendable {
     public let threadIdentifier: String
     public let userInfo: [String: String]
 
+    /// An update to a notification already on screen, which must not alert
+    /// again — `post(…, silent = true)` (`AlertEngine.kt:113`).
+    ///
+    /// Only ``AlertsEngine``'s `refreshIfShowing` sets it. Everything that
+    /// says something new leaves it false.
+    public let silent: Bool
+
     /// Seconds from now, or nil to deliver at once.
     ///
     /// **Never zero or negative**: `UNTimeIntervalNotificationTrigger` throws
@@ -85,7 +93,8 @@ public struct AlertsRequest: Equatable, Sendable {
         body: String? = nil,
         threadIdentifier: String,
         userInfo: [String: String] = [:],
-        afterSeconds: Double? = nil
+        afterSeconds: Double? = nil,
+        silent: Bool = false
     ) {
         self.identifier = identifier
         self.title = title
@@ -94,6 +103,7 @@ public struct AlertsRequest: Equatable, Sendable {
         self.threadIdentifier = threadIdentifier
         self.userInfo = userInfo
         self.afterSeconds = afterSeconds
+        self.silent = silent
     }
 
     /// `TimerNotifier.GROUP` (`TimerNotifier.kt:45`).
@@ -107,7 +117,13 @@ public struct AlertsRequest: Equatable, Sendable {
 public enum AlertsNotifier {
 
     /// A fire the server recorded: posted now, because it already happened.
-    public static func fire(_ content: AlertsContent, serverKey: String) -> AlertsRequest {
+    ///
+    /// `silent` is the refresh path's: the same words land in the same slot,
+    /// but a later summary ("heard in kitchen, garage") must not ring the
+    /// phone a second time — `AlertEngine.kt:103` vs `:113`.
+    public static func fire(
+        _ content: AlertsContent, serverKey: String, silent: Bool = false
+    ) -> AlertsRequest {
         AlertsRequest(
             identifier: alertsTimerIdentifier(serverKey: serverKey, timerID: content.timerID),
             title: content.title,
@@ -116,7 +132,8 @@ public enum AlertsNotifier {
             threadIdentifier: AlertsRequest.timersThread,
             // A timer alert opens Home, as Android's does
             // (`TimerNotifier.kt:79`).
-            userInfo: [AlertsPayloadKey.route: "home", AlertsPayloadKey.serverKey: serverKey]
+            userInfo: [AlertsPayloadKey.route: "home", AlertsPayloadKey.serverKey: serverKey],
+            silent: silent
         )
     }
 
@@ -259,7 +276,11 @@ public final class AlertsSystemNotificationCentre: AlertsNotificationCentre, @un
         if let body = request.body { content.body = body }
         content.threadIdentifier = request.threadIdentifier
         content.userInfo = request.userInfo
-        content.sound = .default
+        // `setSilent` + `setOnlyAlertOnce` have no iOS equivalent, so a
+        // silent request is one with no sound and a passive level: it updates
+        // what is on screen without lighting it up again.
+        content.sound = request.silent ? nil : .default
+        content.interruptionLevel = request.silent ? .passive : .active
         var trigger: UNNotificationTrigger?
         if let after = request.afterSeconds, after > 0 {
             trigger = UNTimeIntervalNotificationTrigger(timeInterval: after, repeats: false)

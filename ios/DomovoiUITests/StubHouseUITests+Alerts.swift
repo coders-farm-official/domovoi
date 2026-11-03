@@ -374,6 +374,17 @@ extension StubHouseUITests {
             "`turn on` did not explain anything"
         )
         evidence(app, "alerts-explain-card")
+        // The card is the one state in which the card is auditable, and the
+        // only other `DialogCard` in the app (`RouteScreen.swift:196-203`)
+        // needed `.accessibilityHidden` on what is behind it: `.isModal`
+        // keeps VoiceOver inside the card but leaves Home's rows in the tree
+        // under a 35% scrim, where Apple reports them as `Contrast failed`
+        // — truthfully. This is the assertion that says the card carries it.
+        if #available(iOS 17.0, *) {
+            let (cardFloor, cardRest) = Self.floorAndRest(try auditIssues(app, "alerts-explain"))
+            print("alerts: explain-card audit floor=\(cardFloor) rest=\(cardRest.count)")
+            XCTAssertEqual([], cardRest, "Apple attributed these to the explain card")
+        }
         let springboard = alertsSpringboard
         XCTAssertEqual(
             0, springboard.alerts.count,

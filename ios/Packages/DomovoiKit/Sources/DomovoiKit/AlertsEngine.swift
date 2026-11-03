@@ -177,13 +177,19 @@ public actor AlertsEngine {
     /// while it is still on screen**. A dismissed one is never brought back,
     /// which is what ``AlertsNotificationCentre/deliveredIdentifiers()`` is
     /// for.
+    ///
+    /// **Silent**, as Android's is (`AlertEngine.kt:113` → `setSilent(true)`
+    /// plus `setOnlyAlertOnce(true)`, `TimerNotifier.kt:110-111`). iOS has no
+    /// `onlyAlertOnce`, so without the flag each room a fire is heard in —
+    /// `realtime.py:953-963` pushes one frame per delivery — would ring the
+    /// phone again for one timer.
     private func refreshIfShowing(_ key: String, _ content: AlertsContent) async {
         let slot = "\(key)|\(content.timerID)"
         guard lastPosted[slot] != content else { return }
         let identifier = alertsTimerIdentifier(serverKey: key, timerID: content.timerID)
         guard await centre.deliveredIdentifiers().contains(identifier) else { return }
         guard serverKey() == key else { return }
-        await centre.add(AlertsNotifier.fire(content, serverKey: key))
+        await centre.add(AlertsNotifier.fire(content, serverKey: key, silent: true))
         lastPosted[slot] = content
     }
 
@@ -343,7 +349,18 @@ public actor AlertsEngine {
         let now = clock()
         // In due-time order, because iOS keeps the 64 soonest pending requests
         // and drops the rest (``alertsMirrorMax``).
-        for alarm in change.toSchedule {
+        // A row whose lead has gone while `GET /api/timers` was in flight is
+        // **not** scheduled: `AlertsNotifier.scheduled` turns a non-positive
+        // interval into an immediate post (it has to, so
+        // `UNTimeIntervalNotificationTrigger` cannot throw), and that post
+        // would say "Timer done" for a timer the server has not fired. The
+        // live `timer_fires.changed` path announces it within the second,
+        // which is the division of labour `alertsMirrorMinLeadMs` already
+        // encodes. Android's past-due alarm fires at once too, but into
+        // `TimerAlarmReceiver.confirmDecision` (`:51`), which can answer
+        // `Reschedule` or `Suppress` — machinery deliberately not ported
+        // (DECISIONS §3), so here the post would be unconditional.
+        for alarm in change.toSchedule where alarm.triggerAtMs > now + alertsMirrorMinLeadMs {
             await centre.add(
                 AlertsNotifier.scheduled(alarm, shared: shared, serverKey: key, nowMs: now)
             )
