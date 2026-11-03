@@ -138,23 +138,63 @@ struct DocumentsEditorPill: View {
 /// bar is (about 8:1), and ``Color/brandInk`` is what every other word in
 /// this app that can be acted on is drawn in.
 ///
-/// `.buttonStyle(.plain)` at the call sites is part of the same fix: the
-/// automatic style resolves its own tint for the enabled *and* the disabled
-/// state and would put the system grey back over this.
+/// ### Why a colour alone was not enough (train S013)
+///
+/// S013 failed the same finding again, and the screenshot says why: the
+/// darkest pixel of the disabled `save` is `#ABAAA7` — **2.32:1** — while
+/// ``Color/fgMuted`` is `#58554F`. That is `fgMuted` at about **half
+/// opacity**: `.buttonStyle(.plain)` dims its own content when
+/// `isEnabled` is false, and a `foregroundStyle` inside the label is dimmed
+/// along with everything else. No colour survives that halving — even pure
+/// black at 50 % over white is 3.95:1 — so the *style* is what had to go.
+///
+/// ``DocumentsEditorBarButtonStyle`` is a custom `ButtonStyle`, and SwiftUI
+/// applies no automatic disabled appearance to one of those: the style reads
+/// `isEnabled` itself and picks the full-strength token. That is also why
+/// this label sets **no** `foregroundStyle` of its own — the style owns the
+/// colour, and a nested one here would override it and lose the distinction.
 struct DocumentsEditorBarLabel: View {
 
     let word: String
-    /// False only for `save` with nothing to save — `close` is always live.
-    let live: Bool
 
     var body: some View {
         Text(word)
-            // Named rather than inherited: a bar item under
-            // `.buttonStyle(.plain)` takes the surrounding font, and `.body`
-            // is both what the bar drew before and a style that scales.
+            // Named rather than inherited: a bar item under a custom button
+            // style takes the surrounding font, and `.body` is both what the
+            // bar drew before and a style that scales.
             .font(.body)
-            .foregroundStyle(live ? Color.brandInk : Color.fgMuted)
             .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+/// The editor bar's button style: brand ink when the word can be acted on,
+/// ``Color/fgMuted`` at **full strength** when it cannot.
+///
+/// The point of it is the second half. `.plain` and `.automatic` both halve
+/// their content's opacity for a disabled button, which took `save` to
+/// 2.32:1 in train S013; a custom style gets no such treatment, so the
+/// disabled word stays at the 7.44:1 token. Pressed feedback is the style's
+/// job too, since nothing else provides it any more.
+struct DocumentsEditorBarButtonStyle: ButtonStyle {
+
+    func makeBody(configuration: Configuration) -> some View {
+        Word(configuration: configuration)
+    }
+
+    /// A nested `View` rather than a plain `configuration.label` chain:
+    /// `@Environment` is only read inside a `View`, and `isEnabled` is the
+    /// whole reason this style exists.
+    private struct Word: View {
+
+        @Environment(\.isEnabled) private var isEnabled
+        let configuration: Configuration
+
+        var body: some View {
+            configuration.label
+                .foregroundStyle(isEnabled ? Color.brandInk : Color.fgMuted)
+                .opacity(configuration.isPressed ? 0.6 : 1)
+                .contentShape(Rectangle())
+        }
     }
 }
 

@@ -81,17 +81,17 @@ struct DocumentsSheetEditorView: View {
                 // this one carried the same defect unreported.
                 ToolbarItem(placement: .cancellationAction) {
                     Button { closeRequested() } label: {
-                        DocumentsEditorBarLabel(word: DocumentsStrings.close, live: true)
+                        DocumentsEditorBarLabel(word: DocumentsStrings.close)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(DocumentsEditorBarButtonStyle())
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     if sheet?.offersSave == true {
                         let live = sheet?.canSave ?? false
                         Button { sheet?.save() } label: {
-                            DocumentsEditorBarLabel(word: DocumentsStrings.save, live: live)
+                            DocumentsEditorBarLabel(word: DocumentsStrings.save)
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(DocumentsEditorBarButtonStyle())
                         .disabled(!live)
                     }
                 }

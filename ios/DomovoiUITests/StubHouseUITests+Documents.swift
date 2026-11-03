@@ -172,19 +172,41 @@ extension StubHouseUITests {
     /// bar is the bottom-most thing in the window — and it is, by
     /// construction.
     ///
+    /// ### The breadcrumb strip, and why width decides first (train S013)
+    ///
+    /// Smallest `minY` alone was still wrong. The breadcrumb — `library root
+    /// › Documents` — is a **horizontal** `ScrollView` *inside* the folder,
+    /// so once the folder has scrolled it sits **above** its own clipping
+    /// parent: at AX5 the tree has the folder at `{0, 523.3}` and the
+    /// breadcrumb at `{16, 286.3}`, and the smaller number is the one that
+    /// cannot be touched. XCUITest said so exactly — *"visible frame is
+    /// empty, which may happen if the element is offscreen"* — and threw,
+    /// which is what ended `TheGridGrowsAtAccessibilitySizes`.
+    ///
+    /// So a candidate must first **span the window**: the folder and the
+    /// phone bar are both full width, every inset strip inside the folder is
+    /// not. Among those two, smallest `minY` still picks the folder, since
+    /// the bar is pinned to the bottom. Position is not asked of an element
+    /// that cannot be scrolled anyway.
+    ///
     /// `nil` means the screen has no scroll view at all, which is a different
     /// thing from "it did not scroll" and the caller treats it differently.
     @MainActor
     func documentsFolderScroll(_ app: XCUIApplication) -> XCUIElement? {
+        let window = app.windows.firstMatch.frame.width
         let all = app.scrollViews
         var highest: XCUIElement?
         var highestY = CGFloat.greatestFiniteMagnitude
         for index in 0..<all.count {
             let candidate = all.element(boundBy: index)
             guard candidate.exists else { continue }
-            let top = candidate.frame.minY
-            if top < highestY {
-                highestY = top
+            let box = candidate.frame
+            // Full width to within a point: a strip inset in the folder's
+            // 16-point gutter is 32 points narrower, and the two scroll views
+            // that matter are edge to edge.
+            guard window <= 0 || box.width >= window - 1 else { continue }
+            if box.minY < highestY {
+                highestY = box.minY
                 highest = candidate
             }
         }
@@ -608,7 +630,11 @@ extension StubHouseUITests {
     ///
     /// The contrast one is **real and visible in the screenshot**: `save` was
     /// a `.disabled()` bar button, drawn in the system's light grey on a
-    /// white bar. It is fixed in the app (``DocumentsEditorBarLabel``), and
+    /// white bar. S013 failed it again after the colour was changed, and the
+    /// screenshot measured the reason — the darkest pixel of the word is
+    /// `#ABAAA7` (2.32:1), which is the `#58554F` token at half opacity,
+    /// because `.plain` dims a disabled label whatever colour it is given.
+    /// It is fixed in the app (``DocumentsEditorBarButtonStyle``), and
     /// nothing here excuses a contrast finding.
     ///
     /// The three Dynamic Type ones are the third time on this track a *named*
