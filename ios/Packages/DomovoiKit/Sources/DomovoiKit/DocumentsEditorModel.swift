@@ -57,8 +57,9 @@ public enum DocumentsEditorLoad: Equatable, Sendable {
 @Observable
 public final class DocumentsEditorModel {
 
-    /// The file open now. Not `let`: ``open(_:)`` moves this one model from
-    /// one file to the next, which is the case the epoch below is for.
+    /// The file open now, and the only one this model ever has: one model is
+    /// built per presentation of ``DocumentsTextEditorView`` and nothing
+    /// reassigns these two. See ``generation`` for what was removed and why.
     public private(set) var entry: FileEntry
 
     public private(set) var kind: DocumentsEditorKind
@@ -85,8 +86,23 @@ public final class DocumentsEditorModel {
     /// The refusal the last save came back with, in the server's own words
     /// where it had any — the 409 `empty_over_content` message especially,
     /// which is the one refusal a person can act on by typing something.
-    /// Cleared by the next edit or the next save.
-    public private(set) var saveFailure: String?
+    ///
+    /// Gone as soon as the buffer is not the one that was refused, which is
+    /// what the sentence is about: after `empty_over_content` the person
+    /// types the content back in, and a red line still saying the save would
+    /// have emptied the file describes a buffer that no longer exists. It is
+    /// **computed** rather than cleared on an edit, because ``text`` is a
+    /// plain `var` a `UITextView` writes straight into — and the
+    /// `@Observable` macro rejects a `didSet` on a tracked stored property,
+    /// so there is no observer to hang the clearing on.
+    /// ``DocumentsSheetModel/setCell(row:column:to:)`` clears its own in the
+    /// setter it does have; these two disagreed, and this comment described
+    /// the sheet's behaviour rather than this one's.
+    public var saveFailure: String? { text == refusedText ? storedSaveFailure : nil }
+
+    /// The refusal itself, and the buffer it was about.
+    private var storedSaveFailure: String?
+    private var refusedText: String?
 
     /// One line for the shell's toast: `saved`, or `save failed: …`.
     /// Android's two toasts (`DocumentsEditor.kt:283`, `:285`) in the one
@@ -100,22 +116,24 @@ public final class DocumentsEditorModel {
     private let deviceID: String?
     private let send: @Sendable (String, String, Data?) async throws -> Data
 
-    /// Which file the answer in flight belongs to.
-    ///
-    /// The defect this is here for: `open(a)`, then `open(b)` before a's read
-    /// lands, and a's text appears under b's name — one keystroke and a save
-    /// later, file b holds file a's contents. The key is captured **before**
-    /// the `await` and checked after it ([[read-after-await-wrong-key]]), and
-    /// the package test for it switches files *inside* the round trip.
-    private var epoch = 0
-
     /// How many times this model has been handed a document's text.
     ///
-    /// A read and a save can be in flight at once (Files reloads the folder,
-    /// or the person pulled the file again), and when the read wins the race
-    /// the buffer on screen is **newer** than what was sent. Calling that
-    /// newer text saved would make an unsent edit look safe, so the baseline
-    /// is left alone; the save still says `saved`, because it did save.
+    /// A read and a save can be in flight at once — the retry link calls
+    /// ``read()`` again — and when the read wins the race the buffer on
+    /// screen is **newer** than what was sent. Calling that newer text saved
+    /// would make an unsent edit look safe, so the baseline is left alone;
+    /// the save still says `saved`, because it did save.
+    ///
+    /// There was a file **epoch** beside this, with an `open(_:kind:)` that
+    /// bumped it and two package tests that drove it, and none of it could
+    /// ever run: `editing` in Files is only ever assigned with the cover
+    /// down, and `.fullScreenCover(item:)` builds a fresh view — and so a
+    /// fresh model — per presentation. A guard that cannot fire, with tests
+    /// that pin it, is worse than no guard at all: the night's negative
+    /// control could break it and nothing would fail. Removed rather than
+    /// wired up, because wiring it up would mean one model surviving across
+    /// files, which this screen does not do ([[reasoning-that-hides-a-bug]];
+    /// see `overnight/documents/DECISIONS.md`).
     private var generation = 0
 
     public init(
@@ -174,30 +192,8 @@ public final class DocumentsEditorModel {
 
     // MARK: - loading
 
-    /// Read `next` instead of what is open now: the same model, a new file.
-    ///
-    /// It bumps the epoch first, so an answer already in flight for the old
-    /// file is dropped rather than landing under the new one.
-    public func open(_ next: FileEntry, kind nextKind: DocumentsEditorKind) {
-        epoch += 1
-        entry = next
-        kind = nextKind
-        text = ""
-        loadedText = ""
-        saveFailure = nil
-        // A save still in flight for the OLD file is dropped by the epoch
-        // check, which means its completion never clears this — and a Save
-        // button stuck on `saving…` for the new file is a control that
-        // cannot do what it says. (Found by the test that moves the editor
-        // inside a PUT's round trip.)
-        saving = false
-        load = .loading
-        read()
-    }
-
     public func read() {
         load = .loading
-        let mine = epoch
         let path = kind == .markdown ? DocumentsPath.doc(rel: entry.rel) : DocumentsPath.text(rel: entry.rel)
         let shown = entry.displayTitle
         let asked = kind
@@ -205,7 +201,7 @@ public final class DocumentsEditorModel {
         Task { @MainActor [weak self] in
             do {
                 let body = try await call("GET", path, nil)
-                guard let self, mine == self.epoch else { return }
+                guard let self else { return }
                 guard let loaded = Self.body(body, for: asked) else {
                     self.load = .failed(DocumentsStrings.couldNotLoad(Self.notDomovoi))
                     return
@@ -215,7 +211,7 @@ public final class DocumentsEditorModel {
                 self.generation += 1
                 self.load = .ready
             } catch {
-                guard let self, mine == self.epoch else { return }
+                guard let self else { return }
                 self.load = Self.refusal(error, named: shown, kind: asked)
             }
         }
@@ -275,11 +271,11 @@ public final class DocumentsEditorModel {
     public func save() {
         guard canSave else { return }
         saving = true
-        saveFailure = nil
-        let mine = epoch
-        // Captured **before** the await, all three of them: the path, the
-        // bytes being sent, and the text they are. A save that lands after
-        // the model moved to another file must not mark that file saved.
+        storedSaveFailure = nil
+        refusedText = nil
+        // Captured **before** the await: the path, the bytes being sent, and
+        // the text they are. A read that lands first makes the buffer newer
+        // than what was sent, and only the sent text may become the baseline.
         let sent = text
         let base = generation
         let path = kind == .markdown ? DocumentsPath.doc(rel: entry.rel) : DocumentsPath.text(rel: entry.rel)
@@ -290,7 +286,7 @@ public final class DocumentsEditorModel {
         Task { @MainActor [weak self] in
             do {
                 _ = try await call("PUT", path, body)
-                guard let self, mine == self.epoch else { return }
+                guard let self else { return }
                 self.saving = false
                 // Only when nothing newer has been read since: see
                 // ``generation``.
@@ -298,10 +294,14 @@ public final class DocumentsEditorModel {
                 self.toast = DocumentsStrings.saved
                 self.onSaved?()
             } catch {
-                guard let self, mine == self.epoch else { return }
+                guard let self else { return }
                 self.saving = false
                 let said = Self.whySaveFailed(error)
-                self.saveFailure = said
+                // Remembered with the buffer it was about, so the sentence
+                // goes the moment that buffer is typed over. See
+                // ``saveFailure``.
+                self.storedSaveFailure = said
+                self.refusedText = sent
                 self.toast = DocumentsStrings.saveFailed(said)
             }
         }

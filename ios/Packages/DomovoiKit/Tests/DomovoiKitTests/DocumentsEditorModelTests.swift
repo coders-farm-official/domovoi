@@ -303,45 +303,20 @@ final class DocumentsEditorModelTests: XCTestCase {
         XCTAssertNil(try json(XCTUnwrap(calls.bodies.current.first))["device_id"])
     }
 
-    // MARK: - the file switching under an answer in flight
+    // MARK: - what is in flight when an answer lands
 
-    /// [[read-after-await-wrong-key]], the top defect class on this track:
-    /// the model is pointed at another file **inside** the first file's round
-    /// trip, and the first file's text must not land under the second's name.
+    /// ``DocumentsEditorModel``'s `generation`: a read that lands **inside** a
+    /// save's round trip leaves the baseline alone, because the buffer on
+    /// screen is then newer than the bytes that were sent.
     ///
-    /// The switch happens while the GET is suspended — not before it starts —
-    /// which is the only arrangement that tests the guard rather than the
-    /// ordering of two calls.
-    func testTextForTheFileThatWasOpenDoesNotLandUnderTheNewOne() async throws {
-        let calls = Calls()
-        let letTheFirstAnswerLand = Shared<Bool>(false)
-        let model = editor(entry("a.txt"), calls: calls) { _, path in
-            if path.hasSuffix("a.txt") {
-                while !letTheFirstAnswerLand.current { await Task.yield() }
-                return Data(#"{"text":"A's shopping list"}"#.utf8)
-            }
-            return Data(#"{"text":"B's shopping list"}"#.utf8)
-        }
-
-        model.read()
-        await settleUntil({ calls.lines.current.contains("GET /api/documents/text/a.txt") }, "a.txt's read")
-
-        // Inside the round trip: a's GET is suspended, and the editor moves.
-        model.open(entry("b.txt"), kind: .text)
-        letTheFirstAnswerLand.set(true)
-
-        await settleUntil({ model.load == .ready }, "b.txt's read")
-        XCTAssertEqual("B's shopping list", model.text)
-        XCTAssertEqual("b.txt", model.entry.rel)
-        XCTAssertFalse(model.dirty)
-        // And a's answer, which arrived second, changed nothing.
-        for _ in 0..<3000 { await Task.yield() }
-        XCTAssertEqual("B's shopping list", model.text)
-    }
-
-    /// The same guard on the way out: a save that lands after the editor
-    /// moved on must not mark the NEW file saved — its buffer was never sent.
-    func testASaveThatLandsAfterTheFileChangedMarksNothingSaved() async throws {
+    /// This replaces two tests that drove `open(_:kind:)` — a method with no
+    /// caller in `ios/Domovoi/`, because `.fullScreenCover(item:)` builds a
+    /// fresh model per presentation and Files only ever assigns `editing` with
+    /// the cover down. They passed against a guard that could not fire, which
+    /// is the one thing a test must not do. The epoch and `open` are gone; the
+    /// race below is the one this model really runs (the retry link calls
+    /// ``DocumentsEditorModel/read()`` again).
+    func testAReadThatLandsInsideASaveDoesNotBecomeTheSavedBaseline() async throws {
         let calls = Calls()
         let letThePutLand = Shared<Bool>(false)
         let model = editor(entry("a.txt"), calls: calls) { method, _ in
@@ -357,14 +332,51 @@ final class DocumentsEditorModelTests: XCTestCase {
         model.save()
         await settleUntil({ calls.lines.current.contains(where: { $0.hasPrefix("PUT") }) }, "the save")
 
-        model.open(entry("b.txt"), kind: .text)
+        // Read again while the PUT is suspended: the server's own text comes
+        // back, and it is newer than what is in flight.
+        model.read()
+        await settleUntil({ model.load == .ready && model.text == "A" }, "the second read")
         letThePutLand.set(true)
-        await settleUntil({ model.load == .ready && model.text == "A" }, "b.txt")
+        await settleUntil({ model.toast == DocumentsStrings.saved }, "the save's answer")
 
-        // b.txt's own text, no "saved" toast from a's save, and nothing
-        // claiming b was written.
-        XCTAssertEqual("b.txt", model.entry.rel)
-        XCTAssertNil(model.toast)
+        // The baseline is what the second read brought back, NOT the bytes the
+        // save sent — the discriminating value, because both leave the save
+        // saying `saved`.
+        XCTAssertEqual("A", model.loadedText)
+        XCTAssertFalse(model.dirty)
         XCTAssertFalse(model.saving)
+    }
+
+    // MARK: - the refusal and the buffer it was about
+
+    /// The 409 sentence goes when the buffer it was about does.
+    ///
+    /// After `empty_over_content` the person types the content back in; a red
+    /// line still saying the save would have emptied the file is then about a
+    /// buffer that no longer exists. The doc comment claimed "cleared by the
+    /// next edit" and nothing cleared it — ``DocumentsSheetModel/setCell``
+    /// did, and the two editors disagreed.
+    func testTheRefusalGoesWhenTheTextIsTypedBackIn() async throws {
+        let calls = Calls()
+        let detail = #"{"detail":{"reason":"empty_over_content","message":"Not saved: this would have replaced the document with an empty one."}}"#
+        let model = editor(entry("notes.md"), kind: .markdown, calls: calls) { method, _ in
+            if method == "GET" { return Data(##"{"markdown":"# Notes"}"##.utf8) }
+            throw refusing(409, body: detail)
+        }
+        model.read()
+        await settleUntil({ model.load == .ready }, "the markdown")
+        model.text = ""
+        model.save()
+        await settleUntil({ model.saveFailure != nil }, "the refusal")
+
+        model.text = "# Notes, again"
+        XCTAssertNil(model.saveFailure)
+        // The toast is a separate thing and is not retracted: it was true
+        // when it was drawn, and the shell has already shown it.
+        XCTAssertNotNil(model.toast)
+        // Back to the very buffer that was refused, and the sentence is true
+        // again — which is what keys it to the text rather than to a flag.
+        model.text = ""
+        XCTAssertNotNil(model.saveFailure)
     }
 }
