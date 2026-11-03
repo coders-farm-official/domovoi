@@ -305,6 +305,14 @@ public enum RoomsStrings {
     /// A turn with no handler reads `qa` (`SatHistoryTabs.kt:167`).
     public static let qa = "qa"
 
+    /// What a person said is drawn **wrapped in curly double quotes**
+    /// (`"“${c.user_text ?: ""}”"`, `SatHistoryTabs.kt:179`); what the
+    /// house answered is not. **U+201C / U+201D**, never the ASCII `"`. Home's
+    /// first-run card has the same shape in `HomeFirstRunStrings.quoted`, but
+    /// that belongs to Home's strings, so Rooms keeps its own rather than
+    /// reach across items for it.
+    public static func quoted(_ said: String) -> String { "“" + said + "”" }
+
     public static let more = "more"
     public static let less = "less"
 

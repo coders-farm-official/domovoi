@@ -133,7 +133,7 @@ struct RoomsTurnCard: View {
             if let said = turn.userText, !said.isEmpty {
                 // The quotes are Android's (`SatHistoryTabs.kt:180`): what a
                 // person said is quoted and what the house answered is not.
-                Text(HomeStatusStrings.quoted(said))
+                Text(RoomsStrings.quoted(said))
                     .font(.subheadline)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -269,7 +269,7 @@ struct RoomsConversationTurn: View {
                 Spacer(minLength: 0)
             }
             if let said = turn.userText, !said.isEmpty {
-                Text(HomeStatusStrings.quoted(said))
+                Text(RoomsStrings.quoted(said))
                     .font(.subheadline)
                     .fixedSize(horizontal: false, vertical: true)
             }
