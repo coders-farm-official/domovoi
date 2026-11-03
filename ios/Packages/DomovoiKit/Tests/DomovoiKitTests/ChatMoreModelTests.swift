@@ -676,17 +676,17 @@ final class ChatMoreModelTests: XCTestCase {
 
     // MARK: - report a message
 
-    func testAReportNamesTheQuestionAboveTheReplyAndNothingElse() async {
+    func testAReportNamesTheQuestionAboveTheReplyAndNothingElse() async throws {
         let (model, _, _) = rig()
         await open(model, 7)
-        let report = try? XCTUnwrap(model.report(for: 11, appVersion: "1.0.0"))
-        XCTAssertEqual(report??.question, "what does the lease say about pets?")
-        XCTAssertEqual(report??.spoken, true, "that question was spoken")
-        XCTAssertEqual(report??.answer, "Cats are allowed with written consent.")
-        XCTAssertEqual(report??.model, "llama3.2:latest")
+        let report = try XCTUnwrap(model.report(for: 11, appVersion: "1.0.0"))
+        XCTAssertEqual(report.question, "what does the lease say about pets?")
+        XCTAssertTrue(report.spoken, "that question was spoken")
+        XCTAssertEqual(report.answer, "Cats are allowed with written consent.")
+        XCTAssertEqual(report.model, "llama3.2:latest")
         // The reply's own stamp, not the clock: a report opened a day later
         // still says when the answer was written.
-        XCTAssertEqual(report??.answeredAt, ChatMoreModel.date("2026-11-02T18:00:00+00:00"))
+        XCTAssertEqual(report.answeredAt, ChatMoreModel.date("2026-11-02T18:00:00+00:00"))
         XCTAssertNil(model.report(for: 10, appVersion: "1.0.0"), "a question is not reportable")
         XCTAssertNil(model.report(for: 99, appVersion: "1.0.0"), "a row that is not there")
     }

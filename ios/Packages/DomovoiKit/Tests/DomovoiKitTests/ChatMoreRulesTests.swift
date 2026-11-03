@@ -1101,7 +1101,7 @@ final class ChatMoreRulesTests: XCTestCase {
         )
         // A traversal attempt comes out as a name and not a path.
         XCTAssertEqual(
-            ChatMoreDraftRules.exportName(title: "..\..\etc", version: 1, format: "docx"),
+            ChatMoreDraftRules.exportName(title: #"..\..\etc"#, version: 1, format: "docx"),
             ".. .. etc v1.docx"
         )
     }
