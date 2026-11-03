@@ -50,10 +50,13 @@ public struct ChatMoreMultipart: Sendable {
         bytes: Data
     ) {
         parts.append(Data("--\(boundary)\r\n".utf8))
-        parts.append(Data(
+        // One `String` first: `.utf8` binds to the literal it follows,
+        // so `"a" + "b".utf8` is a String plus a UTF8View and does not
+        // compile.
+        let disposition =
             "Content-Disposition: form-data; name=\"\(Self.escape(name))\"; "
-            + "filename=\"\(Self.escape(filename))\"\r\n".utf8
-        ))
+            + "filename=\"\(Self.escape(filename))\"\r\n"
+        parts.append(Data(disposition.utf8))
         parts.append(Data("Content-Type: \(mime)\r\n\r\n".utf8))
         parts.append(bytes)
         parts.append(Data("\r\n".utf8))
