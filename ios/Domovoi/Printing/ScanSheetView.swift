@@ -40,7 +40,15 @@ struct ScanSheetView: View {
     let printers: PrintersResponse
     let model: ShellModel
     /// Reload the folder behind the sheet, so the saved scan's row is there.
-    let onSaved: () -> Void
+    ///
+    /// `@MainActor` is part of the type, not decoration: the model stores this
+    /// as `@MainActor () -> Void` (``PrintingScanModel/init(in:printers:onSaved:)``),
+    /// and under Swift 6 a global-actor function type is implicitly
+    /// `@Sendable`, so handing it a plain `() -> Void` from inside `.task`
+    /// is a non-Sendable conversion the compiler rejects. Declaring it here
+    /// makes the caller's closure literal MainActor-isolated at the call
+    /// site, which it already was — `FileSheets` builds it in `body`.
+    let onSaved: @MainActor () -> Void
     let onClose: () -> Void
 
     @State private var scan: PrintingScanModel?
