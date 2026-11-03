@@ -419,6 +419,19 @@ public final class AlertsCenter: Sendable {
     /// mirror sync, because a phone that has just granted notifications has no
     /// scheduled timers yet.
     public func askForPermission() async -> AlertsPermissionState {
+        #if DEBUG
+        // **The ask boundary**, and the only reason this line is here: this
+        // method wraps the app's one
+        // `UNUserNotificationCenter.requestAuthorization`
+        // (`AlertsNotifier.swift:268`), so retiring the latch here means the
+        // hint row stops pretending this install is unasked no matter *who*
+        // asked. `AlertsHintModel`'s own `askIOS()` is only the row's ask;
+        // `testAlerts_NothingAsksForNotificationsAtLaunch` reads a row that is
+        // still there as evidence that nothing asked at launch, and an ask
+        // added in `AlertsAppWiring.start()` or an engine has to take that row
+        // away or the case is testing nothing. See ``AlertsUnaskedLatch``.
+        AlertsUnaskedLatch.retire()
+        #endif
         let state = await engine.requestAuthorization()
         if state.canPost {
             await engine.syncMirror()
