@@ -562,8 +562,20 @@ public final class PlayerModel {
         }
     }
 
-    /// One tick of the countdown without waiting — what the tests drive, since
-    /// a test that slept for the clock would take as long as the timer.
+    // MARK: - what the package tests drive by hand
+    //
+    // The three things the engine would otherwise have to wait for: a periodic
+    // time observer, an end-of-item notification, and a one-second countdown.
+    // A test that waited for the real ones would take as long as the feature.
+
+    /// One turn of the 500 ms ticker.
+    func tickForTests() { tick() }
+
+    /// The current source reached its end.
+    func itemFinishedForTests() { itemFinished() }
+
+    /// One tick of the countdown without waiting.
+    @discardableResult
     func sleepTickForTests() -> Bool {
         let step = PlayerSleepTimer.tick(remaining: sleepRemainingSec)
         sleepRemainingSec = step.remaining
@@ -908,6 +920,11 @@ public final class PlayerModel {
             partIndex = 0
             isPlaying = false
             engine.pause()
+            // The flush comes AFTER the queue change, which is the whole point
+            // of the ordering: it now finds only the phone's own songs — or
+            // nothing — so there is nothing of the old server to send the new
+            // one.
+            flushSpokenPosition()
             if plan.kept.isEmpty {
                 engine.removeAll()
                 positionSec = 0

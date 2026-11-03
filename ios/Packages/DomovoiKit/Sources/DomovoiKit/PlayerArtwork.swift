@@ -77,7 +77,7 @@ public enum PlayerArtwork {
     /// of the run because the house was restarting.
     public static func noteFailure(_ url: String, status: Int?) {
         guard status == 404 else { return }
-        misses.withLock { $0.insert(url) }
+        misses.withLock { _ = $0.insert(url) }
     }
 
     /// Forget every remembered miss (tests, and a server change).
