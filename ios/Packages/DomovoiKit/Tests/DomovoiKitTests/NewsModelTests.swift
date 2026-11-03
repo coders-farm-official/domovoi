@@ -53,10 +53,15 @@ final class NewsModelTests: XCTestCase {
         let pollReply = Shared<String>(#"{"house":1,"topics":2,"briefed":true}"#)
 
         /// Every request's path and method, in order, as the stub saw it.
+        ///
+        /// Bodies are **not** recorded here: a `URLProtocol`'s dispatcher is
+        /// handed the request with its body as a stream rather than as
+        /// `httpBody` (measured 2026-10-28, `StubURLProtocol.body(of:)`), so
+        /// reading it here saw nil for every POST that plainly had one — four
+        /// of these tests failed on exactly that. ``bodies(to:)`` reads
+        /// `StubURLProtocol.recorded`, whose copy has the stream read back
+        /// into it.
         let seen = Shared<[String]>([])
-
-        /// Every request body, by path.
-        let bodies = Shared<[(String, String)]>([])
 
         static let kamron = """
         {"id":1,"name":"Kamron","created_at":"2026-01-01T00:00:00Z",
@@ -127,9 +132,6 @@ final class NewsModelTests: XCTestCase {
 
                 if path != "/api/health" {
                     self.seen.mutate { $0.append("\(method) \(path)\(parts.query.map { "?\($0)" } ?? "")") }
-                    if let body = request.httpBody {
-                        self.bodies.mutate { $0.append((path, String(decoding: body, as: UTF8.self))) }
-                    }
                 }
 
                 // Every write and the poll, when the house is off the
@@ -217,6 +219,15 @@ final class NewsModelTests: XCTestCase {
             await Task.yield()
         }
         XCTFail("\(what) never settled in \(settleYieldLimit) yields", file: file, line: line)
+    }
+
+    /// What left the phone for `path`, in order — read off the recorded
+    /// requests rather than inside the dispatcher. See ``House/seen``.
+    private func bodies(to path: String) -> [String] {
+        StubURLProtocol.recorded.compactMap { request in
+            guard request.url?.path == path, let body = request.httpBody else { return nil }
+            return String(decoding: body, as: UTF8.self)
+        }
     }
 
     /// Every task that could have started gets its chance to run — for
@@ -463,7 +474,6 @@ final class NewsModelTests: XCTestCase {
         let (model, house) = rig()
         await started(model)
         house.seen.set([])
-        house.bodies.set([])
 
         model.detail?.toggleCategory("science")
         await settleUntil(
@@ -471,7 +481,7 @@ final class NewsModelTests: XCTestCase {
             "the category add"
         )
 
-        let body = house.bodies.current.first { $0.0 == "/api/news/people/1/topics" }?.1 ?? ""
+        let body = bodies(to: "/api/news/people/1/topics").last ?? ""
         let sent = try? JSONSerialization.jsonObject(with: Data(body.utf8)) as? [String: Any]
         XCTAssertEqual("category", sent?["kind"] as? String)
         XCTAssertEqual("science", sent?["topic"] as? String)
@@ -505,19 +515,18 @@ final class NewsModelTests: XCTestCase {
     // MARK: - the free-form field
 
     func testAddingAFreeFormTopicSendsItAndClearsTheField() async {
-        let (model, house) = rig()
+        let (model, _) = rig()
         await started(model)
         XCTAssertFalse(model.detail!.canAddTopic, "a blank field offers no button")
         model.detail?.freeformDraft = "   "
         XCTAssertFalse(model.detail!.canAddTopic, "whitespace is blank")
         model.detail?.freeformDraft = "  Trebuchets  "
         XCTAssertTrue(model.detail!.canAddTopic)
-        house.bodies.set([])
 
         model.detail?.addFreeform()
         await settleUntil({ model.detail?.freeformDraft == "" }, "the cleared field")
 
-        let body = house.bodies.current.first { $0.0 == "/api/news/people/1/topics" }?.1 ?? ""
+        let body = bodies(to: "/api/news/people/1/topics").last ?? ""
         let sent = try? JSONSerialization.jsonObject(with: Data(body.utf8)) as? [String: Any]
         XCTAssertEqual("freeform", sent?["kind"] as? String)
         XCTAssertEqual("Trebuchets", sent?["topic"] as? String, "trimmed, NewsDetail.kt:211")
@@ -685,7 +694,6 @@ final class NewsModelTests: XCTestCase {
         feeds.toggle()
         await settleUntil({ feeds.feeds != nil }, "the feeds read")
         house.seen.set([])
-        house.bodies.set([])
 
         XCTAssertFalse(feeds.canAddFeed, "a blank URL offers no add")
         feeds.draftURL = "https://example.org/rss.xml"
@@ -693,7 +701,7 @@ final class NewsModelTests: XCTestCase {
         feeds.addFeed()
         await settleUntil({ feeds.draftURL == "" }, "the cleared URL field")
         XCTAssertEqual("feed added", model.toast)
-        let body = house.bodies.current.first { $0.0 == "/api/news/topics/11/feeds" }?.1 ?? ""
+        let body = bodies(to: "/api/news/topics/11/feeds").last ?? ""
         XCTAssertTrue(body.contains("https://example.org/rss.xml"), "the body is {url}: \(body)")
 
         let invalid = (feeds.feeds ?? []).first { !$0.valid }!
@@ -809,21 +817,20 @@ final class NewsModelTests: XCTestCase {
     /// A write that sent `favorited: true` unconditionally would make the
     /// star a one-way control (`NewsDetail.kt:545`).
     func testTheStarSendsTheNegationOfTheRowsOwnFlag() async {
-        let (model, house) = rig()
+        let (model, _) = rig()
         await started(model)
         let unstarred = model.detail!.stories[0]
         XCTAssertFalse(unstarred.favorited)
         XCTAssertEqual("favorite", model.detail?.favoriteLabel(unstarred))
-        house.bodies.set([])
 
         model.detail?.toggleFavorite(unstarred)
         await settleUntil(
-            { house.bodies.current.contains { $0.0 == "/api/news/items/41/favorite" } },
+            { !self.bodies(to: "/api/news/items/41/favorite").isEmpty },
             "the favourite write"
         )
         XCTAssertEqual(
-            #"{"favorited":true}"#,
-            house.bodies.current.first { $0.0 == "/api/news/items/41/favorite" }?.1
+            [#"{"favorited":true}"#],
+            bodies(to: "/api/news/items/41/favorite")
         )
 
         model.select(2)
@@ -831,16 +838,16 @@ final class NewsModelTests: XCTestCase {
         let starred = model.detail!.stories[0]
         XCTAssertTrue(starred.favorited)
         XCTAssertEqual("unfavorite", model.detail?.favoriteLabel(starred))
-        house.bodies.set([])
 
         model.detail?.toggleFavorite(starred)
         await settleUntil(
-            { house.bodies.current.contains { $0.0 == "/api/news/items/51/favorite" } },
+            { !self.bodies(to: "/api/news/items/51/favorite").isEmpty },
             "the unfavourite write"
         )
         XCTAssertEqual(
-            #"{"favorited":false}"#,
-            house.bodies.current.first { $0.0 == "/api/news/items/51/favorite" }?.1
+            [#"{"favorited":false}"#],
+            bodies(to: "/api/news/items/51/favorite"),
+            "the negation of THAT row's flag, not an unconditional true"
         )
     }
 
