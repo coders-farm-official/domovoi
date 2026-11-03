@@ -159,6 +159,20 @@ struct AssistantPlaceSwitch<House: View>: View {
                 selected: place,
                 onPick: { picked = $0 }
             )
+            // **The picker is laid out first, and the list takes what is
+            // left.** Without this the `VStack` shares a shortage out between
+            // both halves, and train S011's AX5 picture is what that looks
+            // like: Chat is given 401 points under a header that has grown to
+            // 300, the picker needs about 310 for `runs` and two chips, and it
+            // was handed 223 — so each chip's `Text`, which is `.fixedSize`,
+            // drew its three lines straight across the chip below it and the
+            // two chips' words were unreadable on top of each other.
+            //
+            // A scrolling list is the half that can lose height without losing
+            // anything: at AX5 it is about 90 points and is still a list.
+            // Overlapping text is not a smaller version of a screen, it is a
+            // broken one.
+            .layoutPriority(1)
             Divider()
             switch place {
             case .server:

@@ -113,9 +113,12 @@ extension StubHouseUITests {
     /// It wrapped — `.fixedSize(horizontal: false, vertical: true)` and no
     /// line limit — and at AX5 it took 373 of the screen's 401 points, left
     /// the transcript a `ScrollView` of height **zero** and pushed the
-    /// composer off the bottom. `AssistantPhoneConversationView.title` now
-    /// truncates, which is what Android's own header does
-    /// (`ChatHome.kt:718-723`).
+    /// composer off the bottom. `AssistantPhoneConversationView.title` is now
+    /// bounded at two lines — S008 made it one, which Android does
+    /// (`ChatHome.kt:718-723`), and S011's audit then reported `Text clipped`
+    /// about a five-word title drawn `Mushroom risotto needs arb…`. Two lines
+    /// hold that title whole and are still 42 points of header, so neither
+    /// finding can come back. **Nothing about either was forgiven here.**
     static let assistantScalingFalsePositives: [AssistantAuditExemption] = {
         let headline = "Dynamic Type font sizes are partially unsupported"
         return [
@@ -830,7 +833,9 @@ extension StubHouseUITests {
         let head = startingWith(app, AssistantUnderTest.subtitleBoth)
         for _ in 0..<steps {
             if head.exists { return }
-            assistantCreep(list, towards: .top)
+            // Already at the top, or stuck: either way the next twenty-nine
+            // steps are three dead gestures each (``assistantCreep``).
+            if !assistantCreep(list, towards: .top) { return }
         }
     }
 
@@ -857,23 +862,60 @@ extension StubHouseUITests {
     /// view's height is the step, so nothing taller than half a window can be
     /// stepped over, and the gesture starts and ends inside the view's middle
     /// where there is no sheet grabber or scroll indicator to catch it.
+    ///
+    /// ### Train S011: a step that moves nothing is not a step
+    ///
+    /// At AX5 the phone's list is under 180 points tall and its `search chats`
+    /// cell is 95 of them, so a few steps in, the press point — the middle of
+    /// the view, three quarters down — was **inside the search field**, and
+    /// every drag after that moved the content by nothing. The log is 190
+    /// seconds of creeps with the scroll indicator stuck at 42%, `clear all`
+    /// and the chat's own row reported "not on screen at AX5" about cells that
+    /// had simply never been scrolled to, and the app was lost in the end.
+    ///
+    /// So a step is now **checked**: the content's own offset is read before
+    /// and after, and a drag that moved nothing is made again from a different
+    /// start. Three starts, each a half-height drag, and the first that moves
+    /// the content wins. Nothing here assumes what ate the gesture — only that
+    /// a view which did not move was not scrolled.
     @MainActor
-    func assistantCreep(_ view: XCUIElement, towards end: AssistantCreepEnd) {
-        guard view.exists else { return }
+    @discardableResult
+    func assistantCreep(_ view: XCUIElement, towards end: AssistantCreepEnd) -> Bool {
+        guard view.exists else { return false }
         // Dragging the content UP (finger from low to high) walks towards the
         // foot; the other way walks back to the top.
-        let from = end == .foot ? 0.75 : 0.25
-        let to = end == .foot ? 0.25 : 0.75
-        let start = view.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: from))
-        let finish = view.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: to))
-        start.press(
-            forDuration: 0.1,
-            thenDragTo: finish,
-            withVelocity: .slow,
-            // The hold is what kills the momentum: lifting mid-drag is a
-            // flick however slowly the drag was made.
-            thenHoldForDuration: 0.4
-        )
+        let starts: [CGFloat] = end == .foot ? [0.75, 0.95, 0.55] : [0.25, 0.05, 0.45]
+        let span: CGFloat = end == .foot ? -0.5 : 0.5
+        let before = assistantContentOffset(view)
+        for from in starts {
+            let start = view.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: from))
+            let finish = view.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: from + span))
+            start.press(
+                forDuration: 0.1,
+                thenDragTo: finish,
+                withVelocity: .slow,
+                // The hold is what kills the momentum: lifting mid-drag is a
+                // flick however slowly the drag was made.
+                thenHoldForDuration: 0.4
+            )
+            // Nothing to read the step against: take it at its word rather
+            // than drag three times over a view whose content cannot be seen.
+            guard let was = before else { return true }
+            if let now = assistantContentOffset(view), now != was { return true }
+        }
+        return false
+    }
+
+    /// Where a scrolling view's content sits, as the y of its own first child
+    /// — the one number that says whether a drag did anything.
+    ///
+    /// Nil where the view has no child to read, which is the "cannot be
+    /// checked" case and not a "did not move" one.
+    @MainActor
+    func assistantContentOffset(_ view: XCUIElement) -> CGFloat? {
+        let content = view.children(matching: .any).element(boundBy: 0)
+        guard content.exists else { return nil }
+        return content.frame.minY
     }
 
     /// Walk a scrolling view towards its foot until `element` is built.
@@ -899,7 +941,9 @@ extension StubHouseUITests {
         }
         for _ in 0..<steps {
             if element.exists { return true }
-            assistantCreep(view, towards: .foot)
+            // A view that would not move is at its foot: the remaining steps
+            // would be three dead gestures each (``assistantCreep``).
+            if !assistantCreep(view, towards: .foot) { break }
         }
         if !element.exists {
             print("=== \(steps) STEPS AND STILL UNBUILT — tree follows ===")
@@ -926,7 +970,70 @@ extension StubHouseUITests {
         assistantCreepUntilBuilt(app, app.scrollViews["assistant-transcript"].firstMatch, element)
     }
 
-    /// The height of the **shortest** static text carrying exactly this label.
+    /// Walk the phone's list **once**, measuring everything on the way down.
+    ///
+    /// ### Train S011: six walks is five too many
+    ///
+    /// ``assistantTextHeight(_:_:inList:)`` scrolls back to the top and walks
+    /// to the foot again for every label it is given, so one AX5 pass over six
+    /// labels was three hundred gestures and six minutes, and the app was lost
+    /// before the first verdict was printed. Every one of those labels is on
+    /// one list and the list is read in one direction: this walks it a step at
+    /// a time and writes down whatever has been built at each step.
+    ///
+    /// `texts` are measured by **height**, which is what grows on a label that
+    /// wraps; `widths` by width, for the two controls whose height at the
+    /// ordinary size is their 44-point hit target (the case's own doc comment
+    /// has the arithmetic); `heights` for the picker's chips, whose AX5
+    /// failure *is* a height — S011's picture is the house chip's three lines
+    /// drawn straight across the phone chip under it.
+    @MainActor
+    func assistantMeasureDownTheList(
+        _ app: XCUIApplication,
+        texts: [(String, String)],
+        widths: [(String, String)] = [],
+        heights: [(String, String)] = [],
+        steps: Int = 36
+    ) -> [String: CGFloat] {
+        var out: [String: CGFloat] = [:]
+        let wanted = texts.count + widths.count + heights.count
+        func collect() {
+            for (key, label) in texts where out[key] == nil {
+                if let height = assistantShortestTextHeight(app, label) { out[key] = height }
+            }
+            for (key, label) in widths where out[key] == nil {
+                let one = app.buttons[label].firstMatch
+                if one.exists { out[key] = one.frame.width }
+            }
+            for (key, label) in heights where out[key] == nil {
+                let one = app.buttons[label].firstMatch
+                if one.exists { out[key] = one.frame.height }
+            }
+        }
+        assistantScrollListToTop(app)
+        let list = app.collectionViews.firstMatch
+        guard list.waitForExistence(timeout: 20) else {
+            print("=== NO LIST TO MEASURE — tree follows ===")
+            print(app.debugDescription)
+            return out
+        }
+        for _ in 0..<steps {
+            collect()
+            if out.count == wanted { return out }
+            // A list that will not move again is at its foot, and another
+            // thirty gestures against it say nothing new.
+            if !assistantCreep(list, towards: .foot) { break }
+        }
+        collect()
+        if out.count < wanted {
+            print("=== LIST WALKED, \(wanted - out.count) UNMEASURED — tree follows ===")
+            print(app.debugDescription)
+        }
+        return out
+    }
+
+    /// The height of the **shortest** static text carrying exactly this label,
+    /// or nil where none is built.
     ///
     /// Shortest, and every match rather than `firstMatch`, because two of the
     /// labels the audit named are drawn twice on the screen they were named
@@ -935,10 +1042,35 @@ extension StubHouseUITests {
     /// measurement of whichever one the tree happened to hold first would
     /// forgive a finding against the other; the shortest growing means both
     /// grew.
+    @MainActor
+    func assistantShortestTextHeight(_ app: XCUIApplication, _ label: String) -> CGFloat? {
+        let all = app.staticTexts.matching(NSPredicate(format: "label == %@", label))
+        guard all.firstMatch.exists else { return nil }
+        var shortest: CGFloat?
+        for index in 0..<all.count {
+            let one = all.element(boundBy: index)
+            guard one.exists else { continue }
+            let height = one.frame.height
+            if let best = shortest {
+                shortest = Swift.min(best, height)
+            } else {
+                shortest = height
+            }
+        }
+        return shortest
+    }
+
+    /// ``assistantShortestTextHeight(_:_:)``, with the scrolling it takes to
+    /// build the label first.
     ///
-    /// - Parameter inList: scroll the phone's list for it. False for the
-    ///   conversation, whose transcript is a `ScrollView` and not the
-    ///   `collectionViews.firstMatch` those helpers drive.
+    /// The list's own labels are measured by
+    /// ``assistantMeasureDownTheList(_:texts:widths:heights:steps:)`` in one
+    /// walk; this is what the **conversation** uses, whose transcript is a
+    /// `ScrollView` and not the `collectionViews.firstMatch` those helpers
+    /// drive.
+    ///
+    /// - Parameter inList: scroll the phone's list for it, rather than the
+    ///   transcript.
     @MainActor
     func assistantTextHeight(
         _ app: XCUIApplication,
@@ -1016,6 +1148,22 @@ extension StubHouseUITests {
     /// row — not by typing a question at AX5 over a 178-point list with the
     /// keyboard up, which is the kind of driving that loses a cell. Nothing
     /// here asserts behaviour against seeded data: this case measures frames.
+    ///
+    /// ### Two train S011 paid for
+    ///
+    /// **One walk per screen.** Measuring label by label meant scrolling back
+    /// to the top and down again for each of six, which at AX5 was three
+    /// hundred gestures; the app was lost at 349 seconds with no verdict
+    /// printed at all. ``assistantMeasureDownTheList(_:texts:widths:heights:steps:)``
+    /// takes one step at a time and writes down whatever is built.
+    ///
+    /// **`chip-house` is measured by height**, and it is the key that fails if
+    /// S011's picture ever comes back: Chat is given 401 points at AX5, the
+    /// picker needs about 310 of them, and before `.layoutPriority(1)` the
+    /// `VStack` shared the shortage out and handed the house's chip 47 points
+    /// for three lines of text — which `.fixedSize` then drew across the chip
+    /// below it. 47 against 44 is a ratio of 1.07, so the 1.3 floor below
+    /// catches exactly that.
     @MainActor
     func testAssistant_DynamicTypeHoldsAtAccessibilityXXXL() throws {
 
@@ -1024,26 +1172,30 @@ extension StubHouseUITests {
             control("reset-fixtures", "{}", port: 6601, what: "the fixtures before \(tag)")
             let app = assistantLaunch(model: "fake", mode: mode)
             XCTAssertTrue(reachPhonePlace(app), "the phone's place never drew at \(tag)")
-            var out: [String: CGFloat] = [:]
 
-            // The picker's chip: a scaled glyph beside text, and the
-            // row-to-column swap. By width — see the doc comment.
-            let chip = assistantChip(app, AssistantUnderTest.chipPhone)
-            if chip.exists { out["chip"] = chip.frame.width }
-
-            // The sentences, by height, each of them `.fixedSize(horizontal:
+            // One walk down the list, measuring whatever each step builds.
+            //
+            // The sentences by height, each of them `.fixedSize(horizontal:
             // false, vertical: true)` so that it wraps rather than squeezes.
             // `staticTexts`, not `buttons`: the audit's findings are against
             // the leaf text (`type=48`), and `new chat`'s button shares its
             // label while carrying the same 44-point floor the chip does.
-            for (key, label) in [
-                ("subtitle", AssistantUnderTest.subtitleBoth),
-                ("new-chat", ChatStringsUnderTest.newChat),
-                ("no-chats-yet", AssistantUnderTest.noChatsYet),
-                ("hint", AssistantUnderTest.emptyHintPhone),
-            ] {
-                if let height = assistantTextHeight(app, label) { out[key] = height }
-            }
+            //
+            // The phone's chip by width and the house's by height, which is
+            // the pair S011 needed: the phone's is one line at both sizes and
+            // grows sideways, the house's wraps to three at AX5 and is the one
+            // that was squeezed to 47 points and drawn over its neighbour.
+            let out = assistantMeasureDownTheList(
+                app,
+                texts: [
+                    ("subtitle", AssistantUnderTest.subtitleBoth),
+                    ("new-chat", ChatStringsUnderTest.newChat),
+                    ("no-chats-yet", AssistantUnderTest.noChatsYet),
+                    ("hint", AssistantUnderTest.emptyHintPhone),
+                ],
+                widths: [("chip", AssistantUnderTest.chipPhone)],
+                heights: [("chip-house", AssistantUnderTest.chipServerShared)]
+            )
 
             evidence(app, "assistant-type-\(tag)")
             app.terminate()
@@ -1055,23 +1207,21 @@ extension StubHouseUITests {
             control("reset-fixtures", "{}", port: 6601, what: "the fixtures before \(tag)")
             let app = assistantLaunch(model: "fake", chats: "seed", mode: mode)
             XCTAssertTrue(reachPhonePlace(app), "the phone's place never drew at \(tag)")
-            var out: [String: CGFloat] = [:]
 
-            // The row, its caption and its age; then the footer, which is
-            // below the row and needs the scroll of its own that
-            // ``assistantTextHeight(_:_:inList:)`` makes for every key.
-            for (key, label) in [
-                ("row-title", AssistantUnderTest.arborio),
-                ("row-place", AssistantUnderTest.chipPhone),
-                ("row-age", AssistantUnderTest.justNow),
-                ("privacy", AssistantUnderTest.privacyLineOne),
-            ] {
-                if let height = assistantTextHeight(app, label) { out[key] = height }
-            }
-            // `clear all` by width, for the chip's reason: it is a `HomeLink`
+            // The row, its caption and its age, then the footer below it —
+            // one walk, in the order the list has them. `clear all` is in the
+            // same walk, by width, for the chip's reason: it is a `HomeLink`
             // with a 44-point hit target and S005 measured it at exactly 44.
-            let clear = app.buttons[AssistantUnderTest.clearAll].firstMatch
-            if assistantListUntilBuilt(app, clear) { out["clear-all"] = clear.frame.width }
+            var out = assistantMeasureDownTheList(
+                app,
+                texts: [
+                    ("row-title", AssistantUnderTest.arborio),
+                    ("row-place", AssistantUnderTest.chipPhone),
+                    ("row-age", AssistantUnderTest.justNow),
+                    ("privacy", AssistantUnderTest.privacyLineOne),
+                ],
+                widths: [("clear-all", AssistantUnderTest.clearAll)]
+            )
 
             // The conversation. The row's own button carries the title as its
             // label (`AssistantPhoneRowView`), which is how every other case
@@ -1122,7 +1272,7 @@ extension StubHouseUITests {
         continueAfterFailure = true
         defer { continueAfterFailure = wasContinuing }
         let keys = [
-            "chip", "subtitle", "new-chat", "no-chats-yet", "hint",
+            "chip", "chip-house", "subtitle", "new-chat", "no-chats-yet", "hint",
             "row-title", "row-place", "row-age", "privacy", "clear-all",
             "bubble-asked", "bubble-reply", "try-again",
         ]
@@ -1193,6 +1343,27 @@ extension StubHouseUITests {
         XCTAssertTrue(
             startingWith(app, AssistantUnderTest.paperBag).waitForExistence(timeout: 30),
             "no reply to audit a conversation around"
+        )
+
+        // **The conversation is audited with the keyboard down.**
+        //
+        // `phoneAsk` taps the composer, so what S011 audited was this screen
+        // under the system keyboard: half of that snapshot was another
+        // process's, and the finding that failed the case — `Text clipped`,
+        // with no element — is not a shape any of this screen's own labels
+        // could be given (the three findings Apple *could* attribute on it all
+        // named elements). This leaves and re-opens the chat, which is the
+        // same screen with nothing of the keyboard's on it, and it keeps the
+        // audit over our own views rather than over Apple's. The title that
+        // was genuinely clipped is fixed where it was drawn, in
+        // `AssistantPhoneConversationView.title` — not forgiven here.
+        leavePhoneChat(app)
+        let asked = app.buttons[AssistantUnderTest.arborio].firstMatch
+        XCTAssertTrue(asked.waitForExistence(timeout: 20), "the asked chat left no row")
+        asked.tap()
+        XCTAssertTrue(
+            startingWith(app, AssistantUnderTest.paperBag).waitForExistence(timeout: 20),
+            "the chat did not re-open to be audited"
         )
         try sweep("conversation")
 

@@ -103,23 +103,38 @@ struct AssistantPhoneConversationView: View {
     /// rather than stored, so the title job naming this chat after its first
     /// reply shows while it is open.
     ///
-    /// **Truncated, never wrapped** (`ChatHome.kt:718-723`, `maxLines = 1,
-    /// overflow = Ellipsis`). This had `.fixedSize(horizontal: false, vertical:
-    /// true)` and no line limit, and train S008 caught what that costs: at AX5
-    /// a five-word title wrapped to **373 points** of the 401 this screen had,
-    /// the transcript's `ScrollView` was squeezed to a height of **zero**, the
-    /// one bubble spilled across the whole screen and the composer was pushed
-    /// off the bottom of it. A header is the one place in this app where
-    /// truncation is right: the name is a label, not a sentence, VoiceOver
-    /// still reads the whole of it, and the untruncated name is on the row in
-    /// the list one tap behind. Two lines at an accessibility size because
-    /// there it has a line of its own.
+    /// **Two lines, then truncated** (`ChatHome.kt:718-723` truncates at one;
+    /// the deviation is in IOS-ONLY-STRINGS.md's sibling note in DECISIONS.md).
+    ///
+    /// This had `.fixedSize(horizontal: false, vertical: true)` and no line
+    /// limit, and train S008 caught what that costs: at AX5 a five-word title
+    /// wrapped to **373 points** of the 401 this screen had, the transcript's
+    /// `ScrollView` was squeezed to a height of **zero**, the one bubble
+    /// spilled across the whole screen and the composer was pushed off the
+    /// bottom of it. S008's answer was one line, and train S011's audit then
+    /// reported `Text clipped` against this screen: at the ordinary size a
+    /// five-word title is drawn `Mushroom risotto needs arb…` in the 239
+    /// points the row leaves it, and Apple is right that it is clipped.
+    ///
+    /// A **bounded** wrap answers both. Two lines of `.headline` is 42 points
+    /// at the ordinary size and 106 at AX5 — the height of the row either way,
+    /// nothing like the 373 that emptied the transcript — and a five-word
+    /// title fits in them whole, so the common case is no longer clipped.
+    /// Longer names still truncate, and that is still right for a header: the
+    /// name is a label, not a sentence, VoiceOver reads the whole of it from
+    /// the label, and the untruncated name is on the row in the list one tap
+    /// behind.
+    ///
+    /// `.fixedSize` is safe **because of** the line limit: the ideal height it
+    /// asks for is at most two lines, which is what makes S008's collapse
+    /// impossible to repeat.
     private var title: some View {
         Text(phone.conversation?.title ?? ChatStrings.newChat)
             .font(.headline)
             .accessibilityAddTraits(.isHeader)
-            .lineLimit(typeSize.isAccessibilitySize ? 2 : 1)
+            .lineLimit(2)
             .truncationMode(.tail)
+            .fixedSize(horizontal: false, vertical: true)
             .multilineTextAlignment(.leading)
     }
 
