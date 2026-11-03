@@ -57,27 +57,38 @@ public enum AiSettingsStrings {
 
     // MARK: - the dashboard signpost (`SettingsScreen.kt:397-452`)
 
-    /// `SettingsScreen.kt:411`.
-    public static let dashboardTitle = "On the dashboard"
-    public static let dashboardSub = "Changed on the Domovoi dashboard, not in this app."
+    // **Forwarded, not copied.** All five of these were already ported into
+    // ``ShellStrings`` with the Settings table (`:236-249`) and are already
+    // checked against the Kotlin by `ShellStringsTests`. Two copies of a
+    // user-facing sentence in one module is how one of them comes to be
+    // corrected and the other does not, so this item keeps its own names —
+    // which is what its views and UI cases read — over the one copy.
+    //
+    // ``ShellStrings/noBrowserForDashboard`` is deliberately **not**
+    // forwarded: it is the one Android sentence this port never says, because
+    // an iPhone always has Safari and a message that cannot be true is the
+    // same defect as a control that cannot work
+    // (`DECISIONS.md` §3). It stays in ``ShellStrings`` because that is where
+    // the Settings table put it and that file is not this item's to edit.
 
-    /// `SettingsScreen.kt:413-419`, the three literals as the Kotlin joins
-    /// them, with the section's own label interpolated exactly where
-    /// `${section.label}` is.
+    /// `SettingsScreen.kt:411`.
+    public static let dashboardTitle = ShellStrings.onTheDashboard
+    public static let dashboardSub = ShellStrings.onTheDashboardSub
+
+    /// `SettingsScreen.kt:413-419`, with the section's own label interpolated
+    /// exactly where `${section.label}` is.
     ///
     /// - Parameter section: ``SettingsSection/label`` — `Models`,
     ///   `Internet`, and whichever dashboard-only sections later items fill.
     public static func dashboardParagraph(section: String) -> String {
-        "\(section) is changed on the Domovoi dashboard, where the admin signs in, "
-        + "so changes are handled properly. The dashboard runs at the same address "
-        + "this app is connected to."
+        ShellStrings.changedOnTheDashboard(section: section)
     }
 
     /// `SettingsScreen.kt:434`.
-    public static let openOnTheDashboard = "Open on the dashboard"
+    public static let openOnTheDashboard = ShellStrings.openOnTheDashboard
 
     /// `SettingsScreen.kt:438`, drawn in place of the address when there is
     /// no server to open — ``AiSettingsDashboard/url(serverURL:section:)``
     /// answered nil.
-    public static let noServer = "No server connected — add one under Phones & browsers first."
+    public static let noServer = ShellStrings.noServerForDashboard
 }
