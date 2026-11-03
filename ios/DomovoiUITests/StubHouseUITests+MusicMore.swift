@@ -83,7 +83,16 @@ extension StubHouseUITests {
         // `ScrollableTabRow` in the same order, and at the ordinary size the
         // strip is 726 points down a 770-point window, which is where it has
         // always been.
-        return (app, musicMoreScroll(app, to: tab))
+        //
+        // "Landed" above is existence on purpose, and S013 is why the fix for
+        // it is **not** here. At the ordinary size the strip had drawn at
+        // `{{16.0, 865.3}, {361.0, 44.0}}`, below the foot of a page whose
+        // viewport ends at 770: built, and untouchable. Revealing it from
+        // here would scroll the page for the cases that only read the room
+        // cards above it too, and move controls they tap off the top; built
+        // is all they need. Reaching it belongs to whoever touches it —
+        // ``musicMoreTapTab(_:_:)``.
+        return (app, musicMoreReveal(app, tab))
     }
 
     /// Open Music and move to the playlists tab.
@@ -100,6 +109,54 @@ extension StubHouseUITests {
         return (app, musicMoreScroll(app, to: row))
     }
 
+    /// Scroll Music until `element` is built **and on screen**.
+    ///
+    /// ``musicMoreScroll(_:to:flicks:)`` answers "is it built", which is the
+    /// question a lazy foot asks; this one also answers "can it be touched",
+    /// which is the question S013 answered wrongly: the tab strip had drawn
+    /// 95 points below the page's viewport, and a flick on an element whose
+    /// visible frame is empty throws rather than scrolling it into view.
+    @MainActor
+    func musicMoreReveal(_ app: XCUIApplication, _ element: XCUIElement, flicks: Int = 60) -> Bool {
+        guard musicMoreScroll(app, to: element, flicks: flicks) else { return false }
+        musicMoreScrollOnScreen(app, element)
+        return element.exists
+    }
+
+    /// Flick Music's page until `element` sits inside the page's viewport.
+    ///
+    /// The viewport is ``musicMorePage(_:)``'s own frame, not the window's:
+    /// an element 95 points past the foot of the page is still inside a
+    /// 852-point screen and still untouchable. A word that is on screen
+    /// vertically but off the **right** edge — the AX5 case
+    /// ``musicMoreTapTab(_:_:)`` exists for — is left alone here, because a
+    /// vertical flick is not what moves it.
+    @MainActor
+    func musicMoreScrollOnScreen(_ app: XCUIApplication, _ element: XCUIElement, flicks: Int = 30) {
+        guard element.exists, let page = musicMorePage(app) else { return }
+        var last = CGFloat.greatestFiniteMagnitude
+        for _ in 0..<flicks {
+            guard element.exists else { return }
+            if element.isHittable { return }
+            let box = element.frame
+            let viewport = page.frame
+            guard box.height > 0, viewport.height > 0 else { return }
+            if box.maxY > viewport.maxY {
+                page.swipeUp(velocity: .slow)
+            } else if box.minY < viewport.minY {
+                page.swipeDown(velocity: .slow)
+            } else {
+                return
+            }
+            // Same stop-when-nothing-moves guard as the vertical build scroll,
+            // and `nan` for the same reason: a missing measurement is not
+            // "nothing moved".
+            let top = element.exists ? element.frame.minY : CGFloat.nan
+            if !top.isNaN, abs(top - last) < 1 { return }
+            last = top
+        }
+    }
+
     /// Open one playlist's sheet from the tab.
     @MainActor
     func openPlaylistSheet(_ app: XCUIApplication, _ name: String) -> Bool {
@@ -112,6 +169,9 @@ extension StubHouseUITests {
             print(app.debugDescription)
             return false
         }
+        // The last row of the tab can be past the page's foot for the same
+        // reason the strip was (S013): built, and untouchable.
+        musicMoreScrollOnScreen(app, row)
         row.tap()
         // The sheet's own eyebrow, not the name: the name is also on the row
         // behind the sheet, so waiting for it would not prove the sheet came
@@ -144,10 +204,17 @@ extension StubHouseUITests {
             print(app.debugDescription)
             return false
         }
+        // Down the page before sideways along the strip: a strip below the
+        // page's foot cannot be flicked at all (S013), and the frames the
+        // sideways walk measures are only meaningful once it is on screen.
+        if !tab.isHittable { musicMoreScrollOnScreen(app, tab) }
         if !tab.isHittable, let strip = musicMoreTabStrip(app, holding: tab) {
             var last = CGFloat.greatestFiniteMagnitude
             for _ in 0..<12 {
                 if tab.isHittable { break }
+                // A strip still off screen would throw "visible frame is
+                // empty" instead of scrolling; the tree below says why.
+                guard strip.isHittable else { break }
                 // `nan` when the word is momentarily out of the snapshot: a
                 // missing measurement is not "nothing moved".
                 let left = tab.exists ? tab.frame.minX : CGFloat.nan
@@ -280,7 +347,7 @@ extension StubHouseUITests {
     @MainActor
     func openTrackSheet(_ app: XCUIApplication, _ title: String) -> Bool {
         let row = containing(app, title)
-        guard musicMoreScroll(app, to: row) else { return false }
+        guard musicMoreReveal(app, row) else { return false }
         row.tap()
         return app.buttons[MusicMoreUnderTest.close].waitForExistence(timeout: 20)
     }
