@@ -701,8 +701,18 @@ final class NewsModelTests: XCTestCase {
         feeds.addFeed()
         await settleUntil({ feeds.draftURL == "" }, "the cleared URL field")
         XCTAssertEqual("feed added", model.toast)
+        // Decoded rather than matched as text: `JSONSerialization` escapes
+        // forward slashes, so the bytes on the wire are
+        // `{"url":"https:\/\/example.org\/rss.xml"}` — valid JSON the server
+        // reads as the URL, and a substring check against the unescaped form
+        // fails on it. (It did.)
         let body = bodies(to: "/api/news/topics/11/feeds").last ?? ""
-        XCTAssertTrue(body.contains("https://example.org/rss.xml"), "the body is {url}: \(body)")
+        let sent = try? JSONSerialization.jsonObject(with: Data(body.utf8)) as? [String: Any]
+        XCTAssertEqual(
+            "https://example.org/rss.xml",
+            sent?["url"] as? String,
+            "the body is {url}: \(body)"
+        )
 
         let invalid = (feeds.feeds ?? []).first { !$0.valid }!
         feeds.validate(invalid)
