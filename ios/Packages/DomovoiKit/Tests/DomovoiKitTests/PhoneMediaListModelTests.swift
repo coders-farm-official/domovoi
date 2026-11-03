@@ -183,9 +183,13 @@ final class PhoneMediaListModelTests: XCTestCase {
         let list = model(source)
         list.start()
         await settle()
-        list.typed("zarbis")
+        // A needle the FOLDER row matches, because the source's filter
+        // applies to folders too (``PhoneFolderSource/page(_:)``) — a needle
+        // matching only the file inside would leave no row to tap, which is
+        // what this case first asserted and the real source does not do.
+        list.typed("trips")
         await settle()
-        XCTAssertEqual(list.needle, "zarbis")
+        XCTAssertEqual(list.needle, "trips")
 
         guard let folder = list.rows.state.items.first(where: \.isDir) else {
             return XCTFail("the folder row is not there")
