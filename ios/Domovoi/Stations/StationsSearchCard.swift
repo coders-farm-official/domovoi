@@ -154,7 +154,16 @@ struct StationsSearchCard: View {
     private var submit: some View {
         Button(stations.submitLabel) { stations.submit() }
             .buttonStyle(.borderedProminent)
+            // Train S010 failed Apple's audit here with "Contrast failed" on
+            // this button: a prominent button draws a WHITE label, and white
+            // on `--brand` amber is 2.05:1 — the measurement in
+            // ``Color/brand``'s own doc comment, which says to use
+            // ``Color/brandFg`` for text drawn on it. Near-black on the amber
+            // is 8.49:1. Same pair as `HomeAnnounceView.swift:162` and
+            // `PairingScreenView.swift:136`; the tint alone was half the
+            // pattern.
             .tint(Color.brand)
+            .foregroundStyle(Color.brandFg)
             .disabled(stations.results.state.loading)
     }
 
