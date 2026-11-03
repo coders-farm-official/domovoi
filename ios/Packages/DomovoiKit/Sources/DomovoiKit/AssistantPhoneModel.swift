@@ -632,7 +632,7 @@ public final class AssistantPhoneModel {
 
     /// `yyyy-MM-dd HH:mm`, as the Kotlin's export stamp is
     /// (`ChatExport.kt:35`).
-    public static func shareStamp(_ ms: Int64) -> String {
+    nonisolated public static func shareStamp(_ ms: Int64) -> String {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyy-MM-dd HH:mm"

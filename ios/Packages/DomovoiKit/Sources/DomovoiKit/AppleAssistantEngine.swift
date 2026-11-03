@@ -204,8 +204,11 @@ public final class AppleAssistantEngine: AssistantEngine, @unchecked Sendable {
         ) {
             return kept
         }
+        // `instructions:` and `transcript:` are different inits (the SDK's
+        // `LanguageModelSession.init(model:tools:transcript:)`), so the system
+        // prompt goes in as the transcript's own `.instructions` entry — which
+        // is where a rebuilt session has to carry it anyway.
         let session = LanguageModelSession(
-            instructions: system,
             transcript: Self.transcript(system: system, history: history.dropLast())
         )
         let fresh = Kept(session: session, system: system, seen: history)
@@ -217,7 +220,13 @@ public final class AppleAssistantEngine: AssistantEngine, @unchecked Sendable {
     /// being asked, so a rebuilt session knows what was already said.
     static func transcript(system: String, history: some Collection<AssistantTurn>) -> Transcript {
         var entries: [Transcript.Entry] = [
-            .instructions(Transcript.Instructions(segments: [.text(Transcript.TextSegment(content: system))]))
+            // `toolDefinitions` is not defaulted in the SDK and is empty here
+            // for the reason ``AssistantEngine`` gives: M1 offers the model no
+            // tools at all, and M3 is where the phone's read tools arrive.
+            .instructions(Transcript.Instructions(
+                segments: [.text(Transcript.TextSegment(content: system))],
+                toolDefinitions: []
+            ))
         ]
         for turn in history {
             let segments: [Transcript.Segment] = [.text(Transcript.TextSegment(content: turn.text))]
