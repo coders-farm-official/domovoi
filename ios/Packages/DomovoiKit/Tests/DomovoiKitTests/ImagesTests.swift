@@ -620,6 +620,19 @@ final class ImagesTests: XCTestCase {
         XCTAssertTrue(model.cancel(running))
         await settleUntil { model.jobs.fetches > before }
         XCTAssertEqual([ImagesPaths.cancel(job: 11)], requests("POST"))
+        // **The bytes, not only the path.** A bodyless POST sets no
+        // `httpBody` and no `Content-Type` (`DomovoiClient.swift:618-622`),
+        // while Android's `api.post` substitutes `JsonObject(emptyMap())` and
+        // always sends `application/json` (`ApiClient.kt:339-353`) — so a
+        // Pydantic body on the plugin's cancel route would 422 every cancel,
+        // and the path alone could not see it (2026-11-02 review).
+        let sent = StubURLProtocol.recorded.last(where: { $0.httpMethod == "POST" })
+        XCTAssertEqual(Data("{}".utf8), sent?.httpBody, "cancel sent no body")
+        XCTAssertEqual(
+            "application/json",
+            sent?.value(forHTTPHeaderField: "Content-Type"),
+            "cancel sent a body with no content type"
+        )
         XCTAssertNil(model.toast)
         model.stop()
     }
