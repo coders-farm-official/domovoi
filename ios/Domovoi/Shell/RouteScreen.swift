@@ -407,13 +407,17 @@ struct SettingsSectionScreen: View {
             VoiceSettingsDashboardPanel(model: model, section: section)
         case "models":
             // slot: models
-            SettingsSectionNotBuilt()
+            // Dashboard-only: every Models write is admin-gated and 401s a
+            // phone (``AiSettingsDashboardPanel``).
+            AiSettingsDashboardPanel(model: model, section: section)
         case "chat":
             // slot: chat
-            SettingsSectionNotBuilt()
+            AiSettingsChatPanel(model: model)
         case "internet":
             // slot: internet
-            SettingsSectionNotBuilt()
+            // Dashboard-only, as Models is: `GET /api/config/internet` is the
+            // panel's only data and is `require_admin_read`.
+            AiSettingsDashboardPanel(model: model, section: section)
         case "voice-history":
             // slot: voice-history
             VoiceSettingsDashboardPanel(model: model, section: section)
