@@ -301,7 +301,7 @@ final class AiSettingsModelTests: XCTestCase {
         XCTAssertEqual(Note.silenced([scanned()]), model.note)
 
         // A second model over the same place is the next launch of the app.
-        let (next, _) = rig2(place: place)
+        let next = rig2(place: place)
         XCTAssertEqual(Note.silenced([scanned()]), next.note)
 
         // The last one clears the note altogether rather than leaving an
