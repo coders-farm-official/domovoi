@@ -3433,7 +3433,11 @@ final class StubHouseUITests: XCTestCase {
         // **Thread 11, not the garage.** Six messages overflow the screen, and
         // a transcript that fits cannot show whether it follows anything.
         XCTAssertTrue(
-            openThread(app, StubChat.fridge, waitingFor: StubChat.fridgeSnippet),
+            // `secondMessage`, not `fridgeSnippet`: `openThread` waits for a
+            // label that STARTS WITH these words, and the list's snippet
+            // starts with an ellipsis that no message in the transcript does.
+            // Measured the hard way — it failed on the clean branch too.
+            openThread(app, StubChat.fridge, waitingFor: StubChat.secondMessage),
             "the fridge thread drew no transcript"
         )
         XCTAssertTrue(say(app, "slowly now"), "the composer would not send")
