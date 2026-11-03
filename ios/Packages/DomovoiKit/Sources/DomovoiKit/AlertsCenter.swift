@@ -113,6 +113,14 @@ public final class AlertsCenter: Sendable {
     private let clock: @Sendable () -> Int64
     private let lock: HouseholdLock
 
+    /// The system centre, kept only so ``start()`` can empty the notification
+    /// list under the DEBUG launch argument below. Every other call into it
+    /// goes through an engine.
+    private let notifications: AlertsNotificationCentre
+
+    /// `-domovoi-alerts-forget-books`, read once at `init`. See ``start()``.
+    private let forgetAtStart: Bool
+
     private struct State {
         var eventSink: Int?
         var serverSink: Int?
@@ -153,6 +161,36 @@ public final class AlertsCenter: Sendable {
         self.container = container
         self.clock = clock
         self.lock = container.lock
+        notifications = centre
+        #if DEBUG
+        // A UI case's launch argument, the larger sibling of
+        // ``AlertsHintModel``'s `-domovoi-alerts-forget-hint`: every book is a
+        // fact about the **install**, and resetting the stub house cannot
+        // reach one. Train S012's ledger case was skipped as UNMEASURED with a
+        // young fire in the ledger and the grant already given, because
+        // `alerted` and `fires_seen` had carried over from the run before it —
+        // the engine was right to stay quiet and the case could not tell that
+        // apart from a broken engine.
+        //
+        // Synchronous and here rather than in ``start()`` so that no engine
+        // has read a book before it is cleared; the notification list is
+        // emptied in `start()`, which is where there is somewhere to `await`.
+        // `#if DEBUG` keeps it out of any build that could ship, and
+        // `ProcessInfo` rather than a stored default keeps it from outliving
+        // the process launched with it.
+        //
+        // A local and not the stored property: reading one's own property
+        // before every stored property is initialised is a use of `self`, and
+        // Swift refuses it.
+        let forget = ProcessInfo.processInfo.arguments.contains("-domovoi-alerts-forget-books")
+        forgetAtStart = forget
+        if forget {
+            books.forgetEverything()
+            mirrorStore.setMirror(AlertsMirrorBook())
+        }
+        #else
+        forgetAtStart = false
+        #endif
         engine = AlertsEngine(
             reader: reader,
             books: books,
@@ -208,6 +246,23 @@ public final class AlertsCenter: Sendable {
             current.eventSink = eventSink
             current.serverSink = serverSink
         }
+        #if DEBUG
+        if forgetAtStart {
+            // The other half of the reset: a notification delivered by the
+            // run before this one is still in Notification Centre, and a case
+            // that waits for a title would read it as this run's. Cleared
+            // **before** the catch-up, in the same task, so the two cannot
+            // race.
+            Task { [notifications] in
+                let delivered = await notifications.deliveredIdentifiers()
+                await notifications.removeDelivered(delivered)
+                let pending = await notifications.pendingIdentifiers()
+                await notifications.removePending(pending)
+                self.catchUpEverything()
+            }
+            return
+        }
+        #endif
         catchUpEverything()
     }
 

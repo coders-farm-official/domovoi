@@ -218,6 +218,8 @@ final class MemoryAlertsBooks: AlertsBookStore {
     func dismissHint() { books.mutate { $0.dismissed = true } }
 
     func forgetHint() { books.mutate { $0.dismissed = false } }
+
+    func forgetEverything() { books.set(Books()) }
 }
 
 /// ``AlertsMirrorStore`` in memory.

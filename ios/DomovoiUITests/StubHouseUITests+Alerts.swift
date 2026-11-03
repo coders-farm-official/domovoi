@@ -106,6 +106,7 @@ extension StubHouseUITests {
         mode: String = StubHouseUITests.ordinaryTypeSize,
         forgetHint: Bool = true,
         hideHint: Bool = false,
+        forgetBooks: Bool = false,
         port: Int = 6601
     ) -> XCUIApplication {
         let app = XCUIApplication()
@@ -122,6 +123,18 @@ extension StubHouseUITests {
         // drop the row outright, and that is what train S009 showed to be
         // the wrong baseline: see the case's own comment.
         if hideHint { app.launchArguments += ["-domovoi-alerts-hide-hint"] }
+        // `-domovoi-alerts-forget-books`: the alert books and the notification
+        // list, emptied before the engines read them
+        // (``AlertsCenter/init(container:…)``). Only the ledger case needs it,
+        // and it needs it because the books are a fact about the **install**:
+        // train S012 skipped that case as UNMEASURED with a young fire seeded
+        // and the grant already given, because `alerted` and `fires_seen` had
+        // survived from the run before — the engine was right to stay quiet,
+        // and the case could not tell that apart from an engine that was
+        // broken. Not the default: every other case here is about what is on
+        // screen, and a reset they do not need is a difference from the
+        // ordinary launch for nothing.
+        if forgetBooks { app.launchArguments += ["-domovoi-alerts-forget-books"] }
         app.launch()
         XCTAssertTrue(app.wait(for: .runningForeground, timeout: 30))
         return app
@@ -168,6 +181,31 @@ extension StubHouseUITests {
     static func alertsSignature(_ finding: String) -> String {
         guard let frame = finding.range(of: " frame=(") else { return finding }
         return String(finding[..<frame.lowerBound])
+    }
+
+    /// Whether Apple named an element for this finding.
+    ///
+    /// `auditIssues` writes `| element: nil` when `issue.element` is nil, and
+    /// that is not "an anonymous view": it is the audit having **no
+    /// measurement** to attach the finding to. Two runs of one screen can
+    /// report the same finding named in one and nil in the other — S012 did,
+    /// and the case's own comment carries the evidence — so the two kinds are
+    /// compared differently.
+    static func alertsIsAttributed(_ finding: String) -> Bool {
+        !finding.hasSuffix("| element: nil")
+    }
+
+    /// Findings per headline (`Contrast failed`, `Dynamic Type…`), which is
+    /// what can be compared between two audits of the same screen when the
+    /// element cannot.
+    static func alertsHeadlineCounts(_ found: [String]) -> [String: Int] {
+        var counts: [String: Int] = [:]
+        for finding in found {
+            let headline = finding.split(separator: ":", maxSplits: 1).first.map(String.init)
+                ?? finding
+            counts[headline, default: 0] += 1
+        }
+        return counts
     }
 
     /// The row, by its sentence.
@@ -436,9 +474,14 @@ extension StubHouseUITests {
             alertsHintRow(in: base).exists,
             "`-domovoi-alerts-hide-hint` left the row in the tree, so this is not a baseline"
         )
-        let baseFound = Set(try auditIssues(base, "alerts-baseline").map(Self.alertsSignature))
+        // `floorAndRest` on **both** sides, so the two audits are filtered the
+        // same way; comparing a floored list against an unfloored one would
+        // report the floor itself as something the row added.
+        let (baseFloor, baseRest) = Self.floorAndRest(try auditIssues(base, "alerts-baseline"))
+        let baseFound = Set(baseRest.filter(Self.alertsIsAttributed).map(Self.alertsSignature))
+        let baseHeads = Self.alertsHeadlineCounts(baseRest)
         evidence(base, "alerts-audit-baseline")
-        print("alerts: baseline findings=\(baseFound.count)")
+        print("alerts: baseline floor=\(baseFloor) findings=\(baseRest.count) heads=\(baseHeads)")
         base.terminate()
 
         let app = alertsLaunch()
@@ -449,10 +492,42 @@ extension StubHouseUITests {
         evidence(app, "alerts-hint-audit-large")
         let (floor, rest) = Self.floorAndRest(found)
         print("alerts: audit floor=\(floor) rest=\(rest.count)")
-        let added = Set(rest.map(Self.alertsSignature)).subtracting(baseFound)
+        // **Two halves, because Apple attributes this screen's one finding
+        // differently from run to run.** S012: the baseline's single
+        // `Contrast failed` named `type=48 label='Harvest Moon · Neil Young'
+        // frame=(32.0, 762.6, 160.3, 15.7)` — Home's now-playing line, cut in
+        // two by the scroll view's bottom edge at y≈770 — and the run *with*
+        // the row reported the same single `Contrast failed` with
+        // `element: nil`. Both screenshots show the same half-rendered words
+        // at the same point (the picture is what attributed it; two tree
+        // diffs could not). So a set subtraction over signatures has one
+        // finding in each set that cannot cancel, and reports a finding about
+        // Home's own content as the row's.
+        //
+        // What answers the question instead:
+        //
+        //  1. **Attributed findings, subtracted.** A finding Apple *named*
+        //     that the baseline did not have is the row's, whatever it names.
+        //  2. **Counts per headline.** An anonymous finding carries no
+        //     measurement at all (the `element: nil` memory file), so the only
+        //     honest thing to ask of it is whether there are now *more* of
+        //     them than the same screen had without the row. This is not a
+        //     tolerance and it is not a pinned total: it is the same screen
+        //     twice, and one extra `Contrast failed` of any kind fails it.
+        let added = Set(rest.filter(Self.alertsIsAttributed).map(Self.alertsSignature))
+            .subtracting(baseFound)
         XCTAssertEqual(
             [], added.sorted(),
-            "the alerts row added these to Home's audit (baseline was \(baseFound.count) findings)"
+            "the alerts row added these named findings to Home's audit "
+                + "(baseline named \(baseFound.count))"
+        )
+        let heads = Self.alertsHeadlineCounts(rest)
+        let grew = heads.filter { $0.value > (baseHeads[$0.key] ?? 0) }
+            .map { "\($0.key): \(baseHeads[$0.key] ?? 0) → \($0.value)" }
+            .sorted()
+        XCTAssertEqual(
+            [], grew,
+            "the alerts row added findings Apple would not name (baseline \(baseHeads))"
         )
         // The other half of the subtraction, and not a tolerance: a finding
         // that names one of the row's own words is the row's however the
@@ -590,6 +665,13 @@ extension StubHouseUITests {
     /// and the reminder's words must then be nowhere, which is what makes the
     /// body assertion a measurement rather than a coincidence.
     ///
+    /// The launch also forgets this install's alert books
+    /// (`-domovoi-alerts-forget-books`), so it really is a first run: without
+    /// that, `alerted` already holds the pasta timer from the run before and
+    /// `fires_seen` is past the seeded id, and the engine is correct to post
+    /// nothing. That is what S012 measured, and it measured the install
+    /// rather than the engine.
+    ///
     /// ### It looks in Notification Centre, not for a banner, and that is a
     /// ### platform fact rather than a preference
     ///
@@ -625,7 +707,10 @@ extension StubHouseUITests {
             port: 6601,
             what: "one young timer fire in the ledger"
         )
-        let app = alertsLaunch()
+        // `forgetBooks`: the one case whose subject is what the engine does
+        // with a fire rather than what is on screen, so the one case that has
+        // to start from an install with no history. See ``alertsLaunch``.
+        let app = alertsLaunch(forgetBooks: true)
         XCTAssertTrue(houseName(in: app).waitForExistence(timeout: 20))
         // The catch-up is a round trip and the post follows it. Nothing on
         // screen says it happened, so this is a wait rather than a
@@ -637,8 +722,24 @@ extension StubHouseUITests {
             // Home the app and pull Notification Centre down: a notification
             // delivered while the app was foreground is in the list and on no
             // banner (see this case's doc comment).
+            //
+            // **From the top edge, by a drag, and not `swipeDown()`.** A
+            // `swipeDown` on the springboard starts in the middle of the Home
+            // screen, and the middle of the Home screen is **Spotlight** —
+            // train S012's own screenshot for this case is the search field
+            // and the keyboard, with Notification Centre never opened. So the
+            // fallback that was there to rescue a missed banner had not been
+            // looking anywhere. Notification Centre is the pull from above the
+            // status bar, and on the left half: the right half is Control
+            // Centre.
             XCUIDevice.shared.press(.home)
-            springboard.swipeDown()
+            let top = springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.0))
+            top.press(
+                forDuration: 0.1,
+                thenDragTo: springboard.coordinate(
+                    withNormalizedOffset: CGVector(dx: 0.25, dy: 0.7)
+                )
+            )
             delivered = title.waitForExistence(timeout: 15)
         }
         let shot = XCTAttachment(screenshot: springboard.screenshot())
@@ -657,8 +758,10 @@ extension StubHouseUITests {
                 "UNMEASURED: no notification titled `\(Self.alertsFireTitle)`. "
                     + "`AlertsAppWiring` is what starts AlertsCenter and sets the "
                     + "`willPresent` delegate, and `DomovoiApp` is its only caller — if "
-                    + "this fires again, a merge dropped that line, or the ledger's one "
-                    + "fire aged past alertsFirstRunWindowMs before the launch."
+                    + "this fires again, a merge dropped that line, the launch argument "
+                    + "`-domovoi-alerts-forget-books` stopped reaching AlertsCenter, or "
+                    + "the ledger's one fire aged past alertsFirstRunWindowMs before the "
+                    + "launch."
             )
         }
         XCTAssertTrue(

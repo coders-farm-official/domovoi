@@ -757,6 +757,43 @@ final class AlertsRulesTests: XCTestCase {
         XCTAssertTrue(books.hintDismissed)
     }
 
+    /// ``AlertsBookStore/forgetEverything()`` — the UI cases' reset. Every
+    /// book this type writes, and not only the ones a reader thought of: a
+    /// book left behind would hush exactly the notification the case it exists
+    /// for is waiting for, which is how train S012 recorded that case as
+    /// unmeasured.
+    ///
+    /// Written against a **second** store over the same defaults with another
+    /// prefix, so the assertion is "this store's keys, and nobody else's".
+    func testForgettingEverythingLeavesNoBookAndNoNeighboursBook() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "alerts.tests.\(UUID().uuidString)"))
+        let books = AlertsDefaultsBookStore(defaults: defaults, prefix: "alerts.test.")
+        let neighbour = AlertsDefaultsBookStore(defaults: defaults, prefix: "alerts.other.")
+
+        for store in [books, neighbour] {
+            store.setAlerted(["aaaa1111|4|1"])
+            store.setFiresSeen("aaaa1111", id: 9, at: Self.nowISO)
+            store.setHelpSeen("aaaa1111", id: 7)
+            store.setIncidentsNotified("aaaa1111", ["3|1"])
+            store.setIncidentsWithdrawn("aaaa1111", ["3|1"])
+            store.dismissHint()
+        }
+
+        books.forgetEverything()
+
+        XCTAssertEqual([], books.alerted())
+        XCTAssertNil(books.firesSeen("aaaa1111"))
+        XCTAssertNil(books.firesSeenAt("aaaa1111"))
+        XCTAssertNil(books.helpSeen("aaaa1111"))
+        XCTAssertEqual([], books.incidentsNotified("aaaa1111"))
+        XCTAssertEqual([], books.incidentsWithdrawn("aaaa1111"))
+        XCTAssertFalse(books.hintDismissed)
+
+        XCTAssertEqual(["aaaa1111|4|1"], neighbour.alerted(), "another store's books stay")
+        XCTAssertEqual(9, neighbour.firesSeen("aaaa1111"))
+        XCTAssertTrue(neighbour.hintDismissed)
+    }
+
     /// The mirror's file: it round-trips, a corrupt one is an empty book
     /// rather than a throw, and the file is out of the backup.
     func testTheMirrorFileRoundTripsAndIsExcludedFromTheBackup() throws {

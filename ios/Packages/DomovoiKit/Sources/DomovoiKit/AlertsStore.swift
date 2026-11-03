@@ -78,6 +78,23 @@ public protocol AlertsBookStore: Sendable {
     /// measures one thing and reports another. ``AlertsHintModel`` reads the
     /// launch argument that calls it, under `#if DEBUG`.
     func forgetHint()
+
+    /// Forget **every** book, so the next run is this install's first.
+    ///
+    /// **Nothing in the app calls this either**, and for the same reason as
+    /// ``forgetHint()`` one size larger. Every book here is a fact about the
+    /// install, not about the house: `alerted` hushes a timer this phone has
+    /// already posted for, and `fires_seen` is where in the ledger this phone
+    /// got to. A UI case that seeds one fire and waits for the notification is
+    /// therefore measuring *the install's history* as much as the engine —
+    /// train S012 skipped `WhenAlertsAreOnALedgerFireIsDelivered` as
+    /// UNMEASURED with the ledger and the grant both right, because the books
+    /// carried over from the run before it.
+    ///
+    /// Resetting the house (`POST /api/_test/reset-fixtures`) cannot reach
+    /// these: they are on the phone. ``AlertsCenter`` reads the launch
+    /// argument that calls it, under `#if DEBUG`.
+    func forgetEverything()
 }
 
 /// The mirror's own store, separate because its contents are not ids
@@ -196,6 +213,18 @@ public final class AlertsDefaultsBookStore: AlertsBookStore, @unchecked Sendable
     public func dismissHint() { defaults.set(true, forKey: key("hint_dismissed")) }
 
     public func forgetHint() { defaults.removeObject(forKey: key("hint_dismissed")) }
+
+    /// Every key this type writes, named here rather than derived: a book
+    /// added later and not added to this list would quietly survive a reset,
+    /// and a reset that only half works is worse than none.
+    public func forgetEverything() {
+        for name in [
+            "alerted", "fires_seen", "fires_seen_at", "help_seen",
+            "incidents_notified", "incidents_withdrawn", "hint_dismissed",
+        ] {
+            defaults.removeObject(forKey: key(name))
+        }
+    }
 }
 
 // MARK: - the mirror, in a file the backup does not take
