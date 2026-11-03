@@ -472,4 +472,43 @@ final class StationsRulesTests: XCTestCase {
         XCTAssertFalse(body.contains("frequency_mhz"), "an online hit has none, and an FM row already exists")
         XCTAssertTrue(body.contains(#""external_id":"rb-1""#), "the POST is idempotent on it")
     }
+
+    // MARK: - the two wordings a build with no engine gets (views stage)
+
+    /// The subtitle drops Android's `· tap a station to play it`.
+    ///
+    /// Not a nicety: it is the **only instruction on the page**, and with no
+    /// audio engine following it does nothing — the owner's
+    /// no-misleading-controls rule in sentence form. The counts are the same
+    /// two, so the two wordings can only be told apart by the tail.
+    func testTheSubtitleWithoutPlayingKeepsTheCountsAndDropsTheInstruction() {
+        let quiet = StationsStrings.subtitleWithoutPlaying(favorites: 23, recent: 3)
+        XCTAssertEqual("23 favorited · 3 recent", quiet)
+        XCTAssertFalse(quiet.contains("tap a station"),
+                       "a screen that cannot play must not tell anybody to tap to play")
+        XCTAssertTrue(StationsStrings.subtitle(favorites: 23, recent: 3).hasPrefix(quiet),
+                      "the two wordings differ only in the tail, so a count bug shows in both")
+    }
+
+    // MARK: - the fm result row's two lines
+
+    func testTheFmRowLeadsWithItsCallSign() {
+        let wjim = StationsRow(
+            name: "WJIM-FM", source: "fm", frequencyMHz: 97.5, callSign: "WJIM",
+            marketCity: "Lansing", marketState: "MI"
+        )
+        XCTAssertEqual("WJIM · 97.5 FM", StationsStrings.fmHead(wjim))
+        XCTAssertEqual("Lansing, MI", StationsStrings.market(wjim))
+        // A row the import left without a call sign falls back to the head
+        // rather than drawing a bare separator.
+        let unnamed = StationsRow(name: "A", source: "fm", frequencyMHz: 101)
+        XCTAssertEqual("101 FM", StationsStrings.fmHead(unnamed))
+        XCTAssertNil(StationsStrings.market(unnamed))
+        XCTAssertEqual("Lansing", StationsStrings.market(
+            StationsRow(name: "A", source: "fm", marketCity: "Lansing")
+        ), "a city with no state is the city, not \"Lansing, \"")
+        XCTAssertEqual("MI", StationsStrings.market(
+            StationsRow(name: "A", source: "fm", marketState: "MI")
+        ))
+    }
 }

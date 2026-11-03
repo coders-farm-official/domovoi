@@ -993,4 +993,30 @@ final class StationsModelTests: XCTestCase {
         XCTAssertNil(model.detail)
         XCTAssertEqual(.online, model.scope)
     }
+
+    // MARK: - what a build with no engine says (views stage)
+
+    /// With no engine the header says the counts and **not** how to play.
+    ///
+    /// The view asks these two for exactly one reason: the subtitle's tail is
+    /// an instruction, and a page whose rows do not play must not carry it.
+    /// Both go back to Android's wording the moment a witness that can play
+    /// is handed in, which is the other half asserted here.
+    func testWithNoEngineTheHeaderSaysTheCountsAndNotHowToPlay() async throws {
+        let silent = StationsPlaybackSpy(canPlay: false)
+        let (quiet, _, _, _) = rig(playback: silent)
+        await started(quiet)
+
+        XCTAssertEqual("23 favorited · 3 recent", quiet.subtitle)
+        XCTAssertEqual(
+            "playing on this phone isn't built yet — favoriting, sampling and detections all work",
+            quiet.playbackNote
+        )
+
+        let (loud, _, _, _) = rig(playback: StationsPlaybackSpy(canPlay: true))
+        await started(loud)
+        XCTAssertEqual("23 favorited · 3 recent · tap a station to play it", loud.subtitle)
+        XCTAssertNil(loud.playbackNote,
+                     "a build that can play says nothing about not being able to")
+    }
 }
