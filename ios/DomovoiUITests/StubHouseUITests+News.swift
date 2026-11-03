@@ -937,6 +937,43 @@ extension StubHouseUITests {
             // looked at — which is the half of the first fix that would have
             // been asserting less. Scrolled down, they are ordinary visible
             // elements and the audit reads them properly.
+            //
+            // **Train R001 named ten elements here that this run's own
+            // pixels clear, and they are not News's.** Its foot pass
+            // reported `Contrast failed` against all nine
+            // `news-category-…` Buttons and against the `saved feed`
+            // heading. Sampled from the attachment that run took **of this
+            // very pass** (`news-12-audited-foot…png`, 3x, at the elements'
+            // own frames): the chip word is 151,88,0 on 242,242,247 —
+            // **5.07:1** — and `saved feed` is 0,0,0 on 241,241,242 —
+            // **18.60:1**. Both clear 4.5:1 for body text.
+            //
+            // The control is what settles it. Train S008's foot screenshot
+            // and R001's differ **only in the status-bar clock**
+            // (`ImageChops.difference` bounding box = x 54–89, y 23–36
+            // points, nothing else in 393 x 852), the two trees carry the
+            // same frames, and S008's audit named none of these ten. Same
+            // pixels, same geometry, opposite verdict: the colours are not
+            // the finding.
+            //
+            // What did change is the build. S008 was News alone; R001 is the
+            // integration, and in it Apple's contrast audit fails elements
+            // app-wide that no single-item train ever failed —
+            // `ShellTopBar`'s address pill `127.0.0.1:6601` is flagged in
+            // I001 and R001 and in none of S008, S011, S012, S013 or S014,
+            // on a file the merge did not touch. The one app-level
+            // difference is at the window's root:
+            // `AlertsHintLifecycle.body(content:)` puts
+            // `.accessibilityHidden(model.explaining)` on the whole app
+            // (`ios/Domovoi/Alerts/AlertsHintRowView.swift:265-266`, hooked
+            // in at `ios/Domovoi/DomovoiApp.swift:214`), and R001's chip row
+            // shows the cost of it in the tree — a synthesised `Button`
+            // layer inside every person chip that S008's tree does not have.
+            //
+            // **Nothing is classified for it here.** A classifier in this
+            // file would hide an app-wide regression behind News's own
+            // screen, and the measurement says there is nothing of News's to
+            // discount. `integration/news.md` round 2 carries the numbers.
             for _ in 0..<12 { app.swipeUp(velocity: .slow) }
             evidence(app, "news-12-audited-foot")
             findings += try auditNews(app, "news-foot", "the foot of the page")
@@ -957,7 +994,11 @@ extension StubHouseUITests {
             "Apple's audit has findings beyond the measured anonymous floor, "
                 + "the content the viewport has clipped away, the two meta "
                 + "lines measured to scale, and the page this app hides "
-                + "behind a dialog"
+                + "behind a dialog. A `Contrast failed` naming a category "
+                + "chip or `saved feed` is measured at 5.07:1 and 18.60:1 on "
+                + "this run's own screenshot and belongs to the integration "
+                + "build's app-wide sweep, not to this screen — the foot "
+                + "pass's comment names the root modifier"
         )
     }
 

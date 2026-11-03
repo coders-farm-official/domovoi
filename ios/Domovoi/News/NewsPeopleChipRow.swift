@@ -95,9 +95,16 @@ struct NewsPeopleChipRow: View {
                 picked ? Color.brand : Color(.secondarySystemBackground),
                 in: Capsule()
             )
+            // The same ring, measured the same way, as
+            // ``NewsCategoryChip``'s — 1.71:1 unpicked and 2.76:1 picked,
+            // both under the 3:1 a graphic that carries meaning needs, on a
+            // fill that is 1.01:1 against the card. `fgMuted@0.7` is 3.34:1
+            // light and 4.05:1 dark; `brandFg` on `brand` is 8.49:1 and is
+            // already this chip's text colour when it is picked. That note
+            // carries the arithmetic.
             .overlay(
                 Capsule().stroke(
-                    picked ? Color.brandInk : Color.fgMuted.opacity(0.35),
+                    picked ? Color.brandFg : Color.fgMuted.opacity(0.7),
                     lineWidth: 1
                 )
             )
