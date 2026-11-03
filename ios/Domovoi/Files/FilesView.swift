@@ -46,10 +46,15 @@ import SwiftUI
 /// whose "read-only — editing is on the dashboard" line stays true of exactly
 /// the files that reach it. See `overnight/documents/DECISIONS.md`.
 ///
-/// **Printing, scanning, and "Ask in chat"** — each needs a screen this app
-/// has not built, and the last needs Chat.
+/// **Printing and scanning are here now.** A printable row offers `Print`
+/// (``PrintSheetView``) and Documents' header offers `scan`
+/// (``ScanSheetView``) where this phone may write — both device tier, so a
+/// phone really can do them, and the row for a Word-like file gets the
+/// server's "save it as PDF first" sentence instead of a Print that would
+/// answer 415. What is still **not** built: **"Ask in chat"**, which needs
+/// Chat to take a file.
 ///
-/// So a row's menu has at most four items rather than Android's nine, and
+/// So a row's menu has at most five items rather than Android's nine, and
 /// each one is something that happens.
 struct FilesView: View {
 
