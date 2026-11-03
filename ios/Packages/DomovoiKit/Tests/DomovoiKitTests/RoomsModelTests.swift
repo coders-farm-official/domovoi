@@ -119,6 +119,16 @@ final class RoomsModelTests: XCTestCase {
             writes.current.filter { $0.path == path }.map(\.body)
         }
 
+        /// The same bodies **decoded**, for a field whose text encoding is the
+        /// serialiser's business rather than this app's (a URL's escaped
+        /// solidus, a dictionary's key order).
+        func sentJSON(to path: String) -> [[String: Any]] {
+            wrote(to: path).compactMap {
+                guard let bytes = $0.data(using: .utf8) else { return nil }
+                return (try? JSONSerialization.jsonObject(with: bytes)) as? [String: Any]
+            }
+        }
+
         func install() {
             StubURLProtocol.dispatch { [self] request in
                 guard
@@ -801,9 +811,13 @@ final class RoomsModelTests: XCTestCase {
             model.openReads?.queuedAdds.contains(10) == true,
             "nothing was queued, so the mark goes back"
         )
-        let sent = house.wrote(to: "/api/music/add-by-url").first ?? ""
-        XCTAssertTrue(sent.contains("https://example.test/4"), sent)
-        XCTAssertTrue(sent.contains("\"room_id\":\"kitchen\""), sent)
+        // Decoded rather than matched as text: `JSONSerialization` escapes a
+        // solidus (`https:\/\/example.test\/4`), which is valid JSON and not
+        // something an assertion should be pinned to.
+        let sent = house.sentJSON(to: "/api/music/add-by-url").first ?? [:]
+        XCTAssertEqual("https://example.test/4", sent["url"] as? String)
+        XCTAssertEqual("kitchen", sent["room_id"] as? String)
+        XCTAssertEqual("Episode 4", sent["title"] as? String)
     }
 
     func testAQueuedAddTakesTheServersGracefulAbsenceCopy() async {

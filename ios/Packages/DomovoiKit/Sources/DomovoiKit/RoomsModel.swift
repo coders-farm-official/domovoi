@@ -89,6 +89,9 @@ public final class RoomsModel {
     /// recently-played pill and nothing else.
     public let capabilities: ApiRead<Capabilities>
 
+    /// Whether the screen is up. See received(_:).
+    public private(set) var onScreen = false
+
     public private(set) var openRoomID: String?
     public private(set) var tab: RoomsTab = .overview
     public private(set) var toast: String?
@@ -280,6 +283,7 @@ public final class RoomsModel {
     // MARK: - lifecycle
 
     public func start() {
+        onScreen = true
         if eventSink == nil {
             eventSink = container.onStateEvent { [weak self] event in
                 Task { @MainActor in self?.received(event) }
@@ -295,6 +299,7 @@ public final class RoomsModel {
     /// reads are dropped. "A route holds nothing" (`Pagination.swift`), and
     /// coming back re-reads.
     public func stop() {
+        onScreen = false
         tickLoop?.cancel(); tickLoop = nil
         volumeDebounce?.cancel(); volumeDebounce = nil
         if let eventSink {
@@ -310,7 +315,15 @@ public final class RoomsModel {
 
     /// A push arrived. The roster filters by type itself, exactly as the web
     /// hooks do; nothing ever sends a narrower subscription.
+    ///
+    /// **Nothing happens while the screen is gone.** stop() leaves the
+    /// container's registry, so in the app no push reaches a model that is not
+    /// on screen — but the reads it holds would answer one if anything else
+    /// ever called this, and a stopped screen that re-reads the roster is a
+    /// request nobody is going to look at. MusicModel keeps the same flag
+    /// for the same reason.
     public func received(_ event: StateEvent) {
+        guard onScreen else { return }
         roster.received(event)
         openReads?.received(event)
     }
