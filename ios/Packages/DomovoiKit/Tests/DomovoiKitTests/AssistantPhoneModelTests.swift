@@ -355,8 +355,12 @@ final class AssistantPhoneModelTests: XCTestCase {
     /// The same guard, the other way round: a **rename while the model is
     /// writing** survives the reply (`withMetaOf`).
     func testARenameWhileTheModelWritesSurvivesTheReply() async {
+        // Two chunks, not one: with a single chunk the words are on screen
+        // only between the yield and the stream's own end, which is a window
+        // a five-millisecond poll can step over — the reason this case failed
+        // the first time it ran, and nothing to do with the rename.
         let (model, store) = make(FakeAssistantEngine(script: [
-            FakeAssistantEngine.Reply(chunks: [.append("an answer")], delay: .milliseconds(30)),
+            FakeAssistantEngine.Reply(chunks: [.append("an "), .append("answer")], delay: .milliseconds(60)),
         ]))
         model.load()
         model.newChat()
