@@ -58,6 +58,21 @@ extension StubHouseUITests {
     static let alertsAskTitle = "Let Domovoi tell you when a timer goes off"
     static let alertsAskConfirm = "ask iOS"
 
+    /// The four controls' **identifiers**, which are the handles, while the
+    /// words above are what the case asserts a control *says*.
+    ///
+    /// The row's dismissal answers to `not now, Timer alerts are off on this
+    /// phone` — its VoiceOver label carries the sentence it declines, on
+    /// purpose — so `buttons["not now"]` matched nothing on train S006 and
+    /// the case failed on the tap rather than on anything it meant to
+    /// measure. The row's fix link changes words with the state as well
+    /// (`turn on` → `open Settings`), so its words are a thing to assert and
+    /// not a thing to find it by.
+    static let alertsFixId = "alerts-hint-fix"
+    static let alertsNotNowId = "alerts-hint-not-now"
+    static let alertsAskCancelId = "alerts-ask-cancel"
+    static let alertsAskConfirmId = "alerts-ask-confirm"
+
     /// The two sentences Android has that this port **does not**, and must
     /// never grow (`ExactAlarms.kt:36-99`, `HomeSections.kt:404`). There is no
     /// exact-alarm grant on an iPhone, so the sentence would describe nothing
@@ -90,6 +105,7 @@ extension StubHouseUITests {
     func alertsLaunch(
         mode: String = StubHouseUITests.ordinaryTypeSize,
         forgetHint: Bool = true,
+        hideHint: Bool = false,
         port: Int = 6601
     ) -> XCUIApplication {
         let app = XCUIApplication()
@@ -99,9 +115,55 @@ extension StubHouseUITests {
             "-UIPreferredContentSizeCategoryName", mode,
         ]
         if forgetHint { app.launchArguments += ["-domovoi-alerts-forget-hint"] }
+        // The audit baseline: the same Home, drawn without the row
+        // (``AlertsHintModel/shown``, DEBUG only).
+        if hideHint { app.launchArguments += ["-domovoi-alerts-hide-hint"] }
         app.launch()
         XCTAssertTrue(app.wait(for: .runningForeground, timeout: 30))
         return app
+    }
+
+    /// Home's list is a **`ScrollView`**, not a collection view.
+    ///
+    /// ``scrollUntilBuilt(_:_:flicks:)`` waits on `app.collectionViews` and
+    /// returns `false` when there is none — which is what it did on train
+    /// S006, printing `=== NO LIST TO SCROLL ===` while `pasta` was on screen
+    /// the whole time and the case failed saying the card had lost its rows.
+    /// That helper is in a shared file this item may not edit, so this is the
+    /// same loop over the right container.
+    @MainActor
+    func alertsScrollUntilBuilt(
+        _ app: XCUIApplication, _ element: XCUIElement, flicks: Int = 20
+    ) -> Bool {
+        if element.exists { return true }
+        let list = app.scrollViews.firstMatch
+        guard list.waitForExistence(timeout: 20) else {
+            print("=== alerts: NO SCROLL VIEW — tree follows ===")
+            print(app.debugDescription)
+            return false
+        }
+        for _ in 0..<flicks {
+            if element.exists { return true }
+            list.swipeUp(velocity: .slow)
+        }
+        if !element.exists {
+            print("=== alerts: \(flicks) FLICKS AND STILL UNBUILT — tree follows ===")
+            print(app.debugDescription)
+        }
+        return element.exists
+    }
+
+    /// An audit finding with its frame cut off.
+    ///
+    /// The frame is why two audits of the same screen cannot be compared
+    /// line for line: adding one row to Home's timers card moves everything
+    /// under it by about fifty points, so a finding that is the *same*
+    /// finding reads as a different string. The headline, the detail and the
+    /// element's type and label are what identify it; where it happened to
+    /// sit is not.
+    static func alertsSignature(_ finding: String) -> String {
+        guard let frame = finding.range(of: " frame=(") else { return finding }
+        return String(finding[..<frame.lowerBound])
     }
 
     /// The row, by its sentence.
@@ -241,19 +303,24 @@ extension StubHouseUITests {
         // presence is what says the card survived the hint.
         let timer = app.staticTexts[Self.alertsFireLabel]
         XCTAssertTrue(
-            scrollUntilBuilt(app, timer),
+            alertsScrollUntilBuilt(app, timer),
             "the timers card lost its rows to the hint row"
         )
         XCTAssertLessThan(
             row.frame.minY, timer.frame.minY,
             "the hint is below the timers it is about (`HomeSections.kt:396`)"
         )
+        // By identifier, then by **what it says**: the words are the
+        // assertion. `turn on` and `open Settings` are one control in two
+        // states (``AlertsPermissionAsk/fixLabel(dismissed:)``), and this
+        // install has not been asked, so the state is the first one.
+        let fix = app.buttons[Self.alertsFixId]
         XCTAssertTrue(
-            app.buttons[Self.alertsTurnOn].exists,
+            fix.waitForExistence(timeout: 5),
             "the row says alerts are off and offers no way to turn them on"
         )
-        XCTAssertFalse(
-            app.buttons[Self.alertsOpenSettings].exists,
+        XCTAssertEqual(
+            Self.alertsTurnOn, fix.label,
             "`open Settings` belongs to `.denied` alone; this install has not been asked"
         )
     }
@@ -275,14 +342,14 @@ extension StubHouseUITests {
         XCTAssertTrue(houseName(in: app).waitForExistence(timeout: 20))
         try requireAlertsRow(app)
 
-        app.buttons[Self.alertsNotNow].firstMatch.tap()
+        app.buttons[Self.alertsNotNowId].tap()
         evidence(app, "alerts-not-now-tapped")
         XCTAssertFalse(
             alertsHintRow(in: app).waitForExistence(timeout: 5),
             "`not now` left the row on screen"
         )
         XCTAssertTrue(
-            scrollUntilBuilt(app, app.staticTexts[Self.alertsFireLabel]),
+            alertsScrollUntilBuilt(app, app.staticTexts[Self.alertsFireLabel]),
             "the whole timers card went with the row"
         )
 
@@ -305,6 +372,25 @@ extension StubHouseUITests {
     /// this track, so the row's own height at `L` and at AX5 is compared
     /// rather than inferred from a headline.
     ///
+    /// ### Three launches, because Home is audited twice and subtracted
+    ///
+    /// Train S006 failed this case on one `Contrast failed` **with no
+    /// element**: the audit saying it had no measurement to attribute, which
+    /// is neither evidence that the row is at fault nor that it is not.
+    /// Home's `needs attention` card draws unlabelled amber bullets, exactly
+    /// the kind of graphic that produces an anonymous contrast finding, and
+    /// it is on screen above the timers card in every one of this item's
+    /// screenshots.
+    ///
+    /// So the first launch draws Home **without** the row
+    /// (`-domovoi-alerts-hide-hint`) and the second with it, and what this
+    /// case asserts is that the second set is not larger — compared by
+    /// signature, because adding a row moves every frame under it by about
+    /// fifty points and a frame is not what identifies a finding. The AX5
+    /// launch has no baseline of its own (a fourth launch for one
+    /// comparison), so there the assertion is the narrower one: no finding
+    /// may name the row's own words.
+    ///
     /// What it would catch: a dot left at `frame(width: 8)`, a
     /// `minimumScaleFactor` anywhere, a row that cannot grow, and the warn
     /// dot's contrast — which is why the dot is ``Color/warnInk`` and not
@@ -315,6 +401,29 @@ extension StubHouseUITests {
             throw XCTSkip("performAccessibilityAudit needs iOS 17")
         }
         control("reset-fixtures", "{}", port: 6601, what: "the alerts fixture's seed")
+
+        // **The baseline first: the same Home, without the row.**
+        //
+        // S006 reported one finding here — `Contrast failed` with **no
+        // element** — and an unattributed finding is not evidence about this
+        // item either way. Home's `needs attention` card draws bright amber
+        // bullets with no label of their own, which is the shape of thing
+        // that produces exactly this (an unlabelled graphic has no element to
+        // name). Subtracting one audit from the other is what answers the
+        // question Apple's own output cannot, and it is strictly stronger
+        // than the empty-set assertion it replaces: *any* finding the row
+        // adds fails this, named or anonymous.
+        let base = alertsLaunch(hideHint: true)
+        XCTAssertTrue(houseName(in: base).waitForExistence(timeout: 20))
+        XCTAssertFalse(
+            alertsHintRow(in: base).exists,
+            "`-domovoi-alerts-hide-hint` did not hide the row, so this is not a baseline"
+        )
+        let baseFound = Set(try auditIssues(base, "alerts-baseline").map(Self.alertsSignature))
+        evidence(base, "alerts-audit-baseline")
+        print("alerts: baseline findings=\(baseFound.count)")
+        base.terminate()
+
         let app = alertsLaunch()
         XCTAssertTrue(houseName(in: app).waitForExistence(timeout: 20))
         try requireAlertsRow(app)
@@ -323,7 +432,21 @@ extension StubHouseUITests {
         evidence(app, "alerts-hint-audit-large")
         let (floor, rest) = Self.floorAndRest(found)
         print("alerts: audit floor=\(floor) rest=\(rest.count)")
-        XCTAssertEqual([], rest, "Apple attributed these to an element on the alerts row")
+        let added = Set(rest.map(Self.alertsSignature)).subtracting(baseFound)
+        XCTAssertEqual(
+            [], added.sorted(),
+            "the alerts row added these to Home's audit (baseline was \(baseFound.count) findings)"
+        )
+        // The other half of the subtraction, and not a tolerance: a finding
+        // that names one of the row's own words is the row's however the
+        // baseline came out.
+        XCTAssertEqual(
+            [], rest.filter {
+                $0.contains(Self.alertsOffRow) || $0.contains(Self.alertsNotNow)
+                    || $0.contains(Self.alertsTurnOn)
+            },
+            "Apple named one of the alerts row's own controls"
+        )
 
         app.terminate()
         let big = alertsLaunch(mode: "UICTContentSizeCategoryAccessibilityXXXL")
@@ -334,7 +457,13 @@ extension StubHouseUITests {
         evidence(big, "alerts-hint-audit-ax5")
         let (ax5Floor, ax5Rest) = Self.floorAndRest(bigFound)
         print("alerts: ax5 audit floor=\(ax5Floor) rest=\(ax5Rest.count)")
-        XCTAssertEqual([], ax5Rest, "Apple attributed these to an element on the alerts row at AX5")
+        XCTAssertEqual(
+            [], ax5Rest.filter {
+                $0.contains(Self.alertsOffRow) || $0.contains(Self.alertsNotNow)
+                    || $0.contains(Self.alertsTurnOn)
+            },
+            "Apple named one of the alerts row's own controls at AX5"
+        )
         print("alerts: row height L=\(ordinary) AX5=\(grown)")
         XCTAssertGreaterThan(
             grown, ordinary,
@@ -364,7 +493,7 @@ extension StubHouseUITests {
         XCTAssertTrue(houseName(in: app).waitForExistence(timeout: 20))
         try requireAlertsRow(app)
 
-        app.buttons[Self.alertsTurnOn].firstMatch.tap()
+        app.buttons[Self.alertsFixId].tap()
         let card = app.staticTexts[Self.alertsAskTitle]
         XCTAssertTrue(
             card.waitForExistence(timeout: 5),
@@ -380,7 +509,19 @@ extension StubHouseUITests {
         if #available(iOS 17.0, *) {
             let (cardFloor, cardRest) = Self.floorAndRest(try auditIssues(app, "alerts-explain"))
             print("alerts: explain-card audit floor=\(cardFloor) rest=\(cardRest.count)")
-            XCTAssertEqual([], cardRest, "Apple attributed these to the explain card")
+            // On S006 every one of these named a view **behind** the scrim —
+            // the header, the address pill, `unverified`, the four tab
+            // labels — because `content.accessibilityHidden(…).overlay { … }`
+            // hid nothing. ``AlertsHintLifecycle`` is now the `ZStack` shape
+            // ``SettingsPlaceholder`` uses. A finding naming a view outside
+            // the card is therefore still the hide, not the card, and the
+            // message says so rather than leaving the next reader to diff
+            // two trees for it (DECISIONS §15).
+            XCTAssertEqual(
+                [], cardRest,
+                "the audit named these while the card is up — anything that is not the "
+                    + "card's own text is Home behind the scrim, i.e. the hide did not take"
+            )
         }
         let springboard = alertsSpringboard
         XCTAssertEqual(
@@ -388,7 +529,12 @@ extension StubHouseUITests {
             "the system prompt came up with the sentence, which spends the one ask iOS gives"
         )
 
-        app.buttons[Self.alertsAskConfirm].firstMatch.tap()
+        let confirm = app.buttons[Self.alertsAskConfirmId]
+        XCTAssertEqual(
+            Self.alertsAskConfirm, confirm.label,
+            "the card's own button no longer says what it does"
+        )
+        confirm.tap()
         let prompt = springboard.alerts.firstMatch
         let asked = prompt.waitForExistence(timeout: 15)
         print("alerts: system prompt after `ask iOS` = \(asked)")

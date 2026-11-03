@@ -145,6 +145,17 @@ struct AlertsHintRowView: View {
         if let fix = model.fixLabel {
             Button(fix) { model.fix() }
                 .buttonStyle(.plain)
+                // **An identifier, because the label is not a handle.** This
+                // control's words change with the state (`turn on`, then
+                // `open Settings`), and the dismissal beside it carries the
+                // whole sentence in its label for VoiceOver — so a UI case
+                // that picks either of them by label is picking by something
+                // the design is free to change. Train S006 failed on exactly
+                // that: `buttons["not now"]` matched nothing, because the
+                // button answers to `not now, Timer alerts are off on this
+                // phone`. The identifier is the stable handle; the label
+                // stays what a person hears.
+                .accessibilityIdentifier("alerts-hint-fix")
                 .font(.footnote.weight(.semibold))
                 // `brandInk`, not `brand`: the app's tint is the ink because
                 // `brand` as text is 2.05:1 (`DomovoiApp.swift`). A plain
@@ -164,6 +175,9 @@ struct AlertsHintRowView: View {
             // them is the dismissal: VoiceOver gets the sentence with it, so
             // "not now" is never heard without what is being declined.
             .accessibilityLabel("\(AlertsStrings.notNow), \(model.line ?? "")")
+            // See `alerts-hint-fix` above: this label is a sentence on
+            // purpose, so the handle is the identifier.
+            .accessibilityIdentifier("alerts-hint-not-now")
     }
 }
 
@@ -194,26 +208,45 @@ struct AlertsHintLifecycle: ViewModifier {
         // VoiceOver *navigating* out of the card, but Home's rows stay in the
         // tree under a 35% scrim, where Apple's audit reports them as
         // `Contrast failed` — truthfully, since they are unreadable.
-        content
-            .accessibilityHidden(model.explaining)
-            .task { await model.refresh() }
-            .onChange(of: phase) { _, now in
-                guard now == .active else { return }
-                // A `Task` on the screen's root, which outlives every card on
-                // it — the house rule the model's own doc comment explains.
-                Task { await model.refresh() }
-            }
+        // **A `ZStack` with the hide as the outermost modifier of the content
+        // branch, not `content.accessibilityHidden(…).overlay { card }`.**
+        //
+        // The overlay form is what train S006 ran, and it measured as doing
+        // nothing: with the card up, Apple's audit still reported `Contrast
+        // failed` against `domovoi / home`, `unverified`, the address pill
+        // and all four tab labels — every one of them a view behind the 35%
+        // scrim, every one of them still in the tree
+        // (`overnight-trains/S006/Alerts/att/testAlerts_TurningOnAlertsExplainsItselfFirst/`,
+        // the tree attachment and the picture). The shape below is
+        // ``SettingsPlaceholder``'s (`RouteScreen.swift:196-206`), which is
+        // the one placement in this app where the hide was observed to take:
+        // the flag sits on the content branch with nothing composed after it.
+        //
+        // If a later train still reports those seven, the remaining
+        // difference is the level rather than the shape — this modifier is on
+        // the window's root, above the `TabView`, where ``SettingsPlaceholder``
+        // is inside a route — and the fix is then a shared one, written up in
+        // DECISIONS §15.
+        ZStack {
+            content
+                .accessibilityHidden(model.explaining)
             // The explain card is here and not at the row for the same reason
             // the read is: the row is inside a card inside a lazy grid, and a
             // dialog presented from a view that can be torn down by a scroll
             // is a dialog that can vanish mid-sentence. This also makes the
             // hook into Home **one** line, which is the other half of why
             // this modifier exists.
-            .overlay {
-                if model.explaining {
-                    AlertsPermissionCardView(model: model)
-                }
+            if model.explaining {
+                AlertsPermissionCardView(model: model)
             }
+        }
+        .task { await model.refresh() }
+        .onChange(of: phase) { _, now in
+            guard now == .active else { return }
+            // A `Task` on the screen's root, which outlives every card on
+            // it — the house rule the model's own doc comment explains.
+            Task { await model.refresh() }
+        }
     }
 }
 

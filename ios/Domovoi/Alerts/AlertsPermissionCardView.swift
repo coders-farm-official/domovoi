@@ -84,11 +84,39 @@ struct AlertsPermissionCardView: View {
         }
     }
 
+    /// **Plain text in ``Color/brandInk``, not `.bordered`** — a measurement,
+    /// not a preference.
+    ///
+    /// `.bordered` fills with its tint at about a fifth and labels in the
+    /// same tint, so `brandInk` on `brandInk`-washed white is **4.25:1**
+    /// where the ink on the card's own background is **5.65:1**. Apple's
+    /// audit on train S006 named this exact button: *"Contrast is not high
+    /// enough for element unless font size is larger"* against
+    /// `type=9 label='not now'`, which is the 4.5:1 body-text line, missed.
+    /// Computed from the token's own sRGB (`DomovoiApp.swift`) at fill
+    /// alphas 0.10–0.25: 4.92, 4.78, 4.57, 4.25.
+    ///
+    /// It is the shape iOS's own two-button alerts use — a plain cancel
+    /// beside a filled confirm — and it is what the hint row's two controls
+    /// already are, measured on the same canvas.
+    ///
+    /// ``ForgetServerCard`` and ``TrustServerCard`` have the same pair
+    /// (`ConnectionDialogView.swift:443`, `:490`) and will read the same;
+    /// they are a shared file this item may not edit, so it is in
+    /// DECISIONS §16 instead.
     private var cancel: some View {
         Button(AlertsStrings.askCancel) { model.closeExplain() }
-            .buttonStyle(.bordered)
-            .tint(Color.brandInk)
+            .buttonStyle(.plain)
+            .font(.body.weight(.semibold))
+            .foregroundStyle(Color.brandInk)
+            // The tree on S006 put this button at **34.3** points tall with
+            // `.frame(minHeight: 44)` already on it: a bordered button's own
+            // background is what the frame grew, not the hit region. The
+            // `contentShape` is what makes the 44 true, and it is on the
+            // confirm for the same reason.
             .frame(minHeight: 44)
+            .contentShape(.rect)
+            .accessibilityIdentifier("alerts-ask-cancel")
     }
 
     private var confirm: some View {
@@ -107,6 +135,8 @@ struct AlertsPermissionCardView: View {
         .tint(Color.brand)
         .foregroundStyle(Color.brandFg)
         .frame(minHeight: 44)
+        .contentShape(.rect)
+        .accessibilityIdentifier("alerts-ask-confirm")
     }
 
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize

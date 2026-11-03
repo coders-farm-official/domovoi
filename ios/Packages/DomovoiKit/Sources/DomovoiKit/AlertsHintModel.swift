@@ -136,7 +136,31 @@ public final class AlertsHintModel {
 
     /// Whether the row is drawn. ``AlertsHintRowView`` asks this and nothing
     /// else, so "is there a row" has one answer.
-    public var shown: Bool { line != nil }
+    public var shown: Bool {
+        #if DEBUG
+        if Self.hiddenForBaseline { return false }
+        #endif
+        return line != nil
+    }
+
+    #if DEBUG
+    /// `-domovoi-alerts-hide-hint`: draw Home **without** the row, so a UI
+    /// case can audit the same screen twice and subtract.
+    ///
+    /// It exists because of a measurement rather than a convenience. Apple's
+    /// audit reported one `Contrast failed` **with no element** against Home
+    /// on train S006, and an unattributed finding cannot be read as "the
+    /// alerts row is at fault" or "it is not" — the screen already carries
+    /// bright-amber bullets on its `needs attention` card, which are the kind
+    /// of unlabelled graphic that produces exactly this shape of finding.
+    /// `testAlerts_TheAlertsRowAudits` now audits Home with the row and
+    /// without it and compares the two sets by signature, which answers the
+    /// question the audit alone cannot. Reading the argument once, statically,
+    /// keeps the flag a fact about the launched process — the same reasoning
+    /// the `-domovoi-alerts-forget-hint` branch above spells out.
+    private static let hiddenForBaseline =
+        ProcessInfo.processInfo.arguments.contains("-domovoi-alerts-hide-hint")
+    #endif
 
     // MARK: - what the controls do
 
