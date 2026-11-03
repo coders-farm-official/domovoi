@@ -325,10 +325,14 @@ final class StationsModelTests: XCTestCase {
             clock: { 0 },
             configuration: StubURLProtocol.session(timeout: 1)
         )
+        // Spelt out rather than `gate?.sleeper ?? { _ in }`: the `??`
+        // erases the `@Sendable` of the closure literal, which Swift 6
+        // refuses to convert back.
+        let immediate: @Sendable (Int64) async throws -> Void = { _ in }
         let model = StationsModel(
             in: container,
             playback: playback,
-            wait: gate?.sleeper ?? { _ in },
+            wait: gate.map(\.sleeper) ?? immediate,
             clock: { 1_793_613_840_000 }
         )
         return (model, house, store, container)
