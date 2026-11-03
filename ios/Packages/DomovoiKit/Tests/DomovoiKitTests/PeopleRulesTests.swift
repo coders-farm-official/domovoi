@@ -215,12 +215,16 @@ final class PeopleRulesTests: XCTestCase {
     /// People on train S002 and could be attributed only by measuring. This
     /// is that measurement, kept where it fails in a second rather than in a
     /// Simulator run.
+    /// The floor is ``personAvatarInkTarget`` and not 4.5: a fill that clears
+    /// 4.5 on paper renders about 2% lighter, which train S008 measured at
+    /// 4.46 and 4.45 off the screenshot and Apple's audit failed. The margin
+    /// is the thing under test, so this asserts the margin.
     func testEveryAvatarFillCarriesAReadableWhiteInitial() {
         for (bucket, pair) in personAvatarGradients.enumerated() {
             for (end, rgb) in [("from", pair.from), ("to", pair.to)] {
                 let ratio = personWhiteInkContrast(rgb)
                 XCTAssertGreaterThanOrEqual(
-                    ratio, 4.5,
+                    ratio, personAvatarInkTarget,
                     "gradient \(bucket)'s \(end) end is "
                         + String(format: "%06X", rgb)
                         + ", which gives a white initial "

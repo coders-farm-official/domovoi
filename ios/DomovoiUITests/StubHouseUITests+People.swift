@@ -186,6 +186,32 @@ extension StubHouseUITests {
         return true
     }
 
+    /// The screen's own scroll view — **not the keyboard's**.
+    ///
+    /// `app.scrollViews.firstMatch` is not reliably it. With the keyboard up,
+    /// the typing-predictions bar (`SystemInputAssistantView`, its own
+    /// window) contains a `ScrollView` too, and on train S008 `firstMatch`
+    /// resolved to *that* in three cases. The log says it in as many words —
+    /// `Swipe up ScrollView at {{0.0, 516.0}, {393.0, 45.0}}`, twelve times
+    /// over — so nothing scrolled, `peopleReveal` measured the field against
+    /// a 45-point strip no field can fit inside, and three cases failed with
+    /// "the field never came into the viewport" and "the saved memory never
+    /// appeared in the list" against an app that was right.
+    ///
+    /// Told apart by height: the content scroll view is 676.7 points, or
+    /// 374.7 with the keyboard up, against the strip's 45. Resolved freshly
+    /// on every call, because the keyboard comes and goes and an index taken
+    /// before it appeared does not keep.
+    @MainActor
+    func peopleSheet(_ app: XCUIApplication) -> XCUIElement {
+        let views = app.scrollViews
+        let heights = views.allElementsBoundByIndex.map { $0.frame.height }
+        guard let tallest = heights.enumerated().max(by: { $0.element < $1.element }),
+            tallest.element > 120
+        else { return views.firstMatch }
+        return views.element(boundBy: tallest.offset)
+    }
+
     /// Flick the screen slowly until `element` is built.
     ///
     /// ``scrollUntilBuilt(_:_:flicks:)`` waits for a `collectionView` and
@@ -196,15 +222,15 @@ extension StubHouseUITests {
     @MainActor
     func peopleScroll(_ app: XCUIApplication, to element: XCUIElement, flicks: Int = 12) -> Bool {
         if element.exists { return true }
-        let sheet = app.scrollViews.firstMatch
-        guard sheet.waitForExistence(timeout: 20) else {
+        guard app.scrollViews.firstMatch.waitForExistence(timeout: 20) else {
             print("=== NOTHING TO SCROLL — tree follows ===")
             print(app.debugDescription)
             return false
         }
         for _ in 0..<flicks {
             if element.exists { return true }
-            sheet.swipeUp(velocity: .slow)
+            // Re-resolved per flick, never bound once: see ``peopleSheet(_:)``.
+            peopleSheet(app).swipeUp(velocity: .slow)
         }
         if !element.exists {
             print("=== \(flicks) FLICKS AND STILL UNBUILT — tree follows ===")
@@ -228,11 +254,15 @@ extension StubHouseUITests {
     ///
     /// Downwards first, then back up, because the overshoot case is real: the
     /// content clamps at its ends, so this settles rather than oscillates.
+    ///
+    /// The viewport is ``peopleSheet(_:)``'s and not `scrollViews.firstMatch`'s
+    /// — the keyboard has a scroll view of its own, and comparing a field's
+    /// frame against *it* is what failed three cases on train S008.
     @MainActor
     func peopleReveal(_ app: XCUIApplication, _ element: XCUIElement, flicks: Int = 10) -> Bool {
         guard peopleScroll(app, to: element, flicks: flicks) else { return false }
-        let sheet = app.scrollViews.firstMatch
         for _ in 0..<flicks {
+            let sheet = peopleSheet(app)
             let viewport = sheet.frame
             let frame = element.frame
             if frame.minY >= viewport.minY && frame.maxY <= viewport.maxY { return true }
@@ -244,7 +274,7 @@ extension StubHouseUITests {
         }
         print(
             "=== BUILT BUT NEVER INSIDE THE VIEWPORT: element \(element.frame) "
-                + "viewport \(app.scrollViews.firstMatch.frame) — tree follows ==="
+                + "viewport \(peopleSheet(app).frame) — tree follows ==="
         )
         print(app.debugDescription)
         return false

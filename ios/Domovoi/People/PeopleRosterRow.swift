@@ -115,8 +115,10 @@ struct PersonRosterRow: View {
 /// **The five fills are darkened.** Android draws a white initial on all
 /// five, and on three of them that is between 2:1 and 3.3:1 — unreadable.
 /// ``personAvatarGradients`` darkens each hue until white over it clears
-/// 4.5:1, and the doc comment there has the measurements and why a dark ink
-/// on the light ones was tried first and abandoned.
+/// ``personAvatarInkTarget``, and the doc comment there has the measurements,
+/// why a dark ink on the light ones was tried first and abandoned, and why
+/// that target is 5.0 rather than the 4.5 the guideline asks for — a fill
+/// that clears 4.5 in hex renders about 2% lighter than it reads.
 ///
 /// Apple's audit reports a bad initial here with **`element: nil`** and no
 /// name attached, so the three that stood against this screen on train S002
@@ -153,6 +155,13 @@ struct PersonAvatarBubble: View {
         // `Contrast failed` that no colour could have fixed. Separate
         // children give the glyph its own, glyph-sized frame, which lies
         // entirely inside the fill.
+        //
+        // Splitting the leaf left the glyph measured against the fill it
+        // actually sits on, which is the right measurement — and train S008
+        // then failed *two* avatars where S005 failed one, because the right
+        // measurement was of a palette sitting a hundredth over the line.
+        // That was the colour, not this geometry: see
+        // ``personAvatarInkTarget``.
         //
         // `accessibilityHidden` is kept on both — it is the right intent,
         // and on train S005 it was observed *not* to remove the merged leaf

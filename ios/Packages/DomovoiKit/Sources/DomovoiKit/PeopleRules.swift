@@ -212,7 +212,8 @@ public let personAvatarSourceGradients: [(from: UInt32, to: UInt32)] = [
 ]
 
 /// The five gradients **as drawn**: Android's hues, each end darkened until
-/// white text over it clears 4.5:1.
+/// white text over it clears ``personAvatarInkTarget`` — 5.0 on paper, which
+/// is what 4.5:1 on a screen costs.
 ///
 /// ### Why this is not Android's palette
 ///
@@ -232,16 +233,40 @@ public let personAvatarSourceGradients: [(from: UInt32, to: UInt32)] = [
 /// works at both ends, and a palette with two rules in it is a palette whose
 /// next colour will get the wrong one. Darkening the fill leaves all five
 /// with one rule — white, everywhere, as Android has it — and a hue a
-/// household would still recognise: `#F2A618` becomes `#9E6D10`, `#E4657C`
-/// becomes `#BE5468`, and the two darkest ends do not move at all.
+/// household would still recognise: `#F2A618` becomes `#95660F`, `#E4657C`
+/// becomes `#B24F61`, and the two darkest ends do not move at all.
 ///
 /// Nothing depends on these agreeing with Android's; the bucket already does
 /// not (``personAvatarBucket(_:)``). Recorded in
 /// `overnight/people/DECISIONS.md`.
 public let personAvatarGradients: [(from: UInt32, to: UInt32)] =
     personAvatarSourceGradients.map {
-        (from: personDarkenedForWhiteInk($0.from), to: personDarkenedForWhiteInk($0.to))
+        (
+            from: personDarkenedForWhiteInk($0.from, target: personAvatarInkTarget),
+            to: personDarkenedForWhiteInk($0.to, target: personAvatarInkTarget)
+        )
     }
+
+/// What a fill must clear **on paper** so that it clears 4.5:1 **on screen**.
+///
+/// Darkening to a bare 4.5 was not enough, and train S008 measured why. Two
+/// of the four avatars on the roster came back `Contrast failed`, anonymously
+/// as ever — and sampling the screenshot named them: the green's lightest
+/// visible fill rendered at **4.46:1** and the amber's at **4.45:1**, against
+/// the 4.55 and 4.52 these very numbers say they are. The two crimson
+/// avatars, whose circles clip the gradient's light corner away, rendered
+/// 4.67 and were not flagged. So the finding tracked the rendered pixel, not
+/// the hex: a colour declared in sRGB and composited for a wide-gamut
+/// display lands about 2% lighter than its own arithmetic, and a palette
+/// sitting a hundredth over the line lands under it.
+///
+/// 5.0 puts every end at 4.9 or better once drawn — half a stop of headroom
+/// for a rendering difference measured at a fiftieth — and leaves the five
+/// hues recognisable (`#F2A618` becomes `#95660F`, `#54BF5C` becomes
+/// `#377D3C`). It is **not** `personDarkenedForWhiteInk`'s default: 4.5 is
+/// what the accessibility guideline says, and this margin is a fact about
+/// one screen's drawing, so it belongs at the call site that drew it.
+public let personAvatarInkTarget: Double = 5.0
 
 /// A colour's relative luminance, WCAG 2.1's formula over sRGB.
 public func personLuminance(_ rgb: UInt32) -> Double {
