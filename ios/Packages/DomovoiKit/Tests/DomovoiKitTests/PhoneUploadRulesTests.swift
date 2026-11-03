@@ -173,7 +173,18 @@ final class PhoneUploadRulesTests: XCTestCase {
     }
 
     func testAFileAsksWhereUnlessEveryLibraryIsReadOnly() {
-        XCTAssertEqual(phoneUploadTarget(.file, PhoneServerWriteStatus(libraries: nil)), .pick)
+        // The list could not be read: `.pick` would mean "the default home
+        // library for this kind" over an EMPTY list, which is nil — a fully
+        // enabled Upload button whose tap did nothing. Refused, named, as the
+        // `.video` branch answers.
+        XCTAssertEqual(
+            phoneUploadTarget(.file, PhoneServerWriteStatus(libraries: nil, error: "500: boom")),
+            .refused(reason: "couldn't read the server's libraries (500: boom)", blocked: false)
+        )
+        XCTAssertEqual(
+            phoneUploadTarget(.file, PhoneServerWriteStatus(libraries: nil)),
+            .refused(reason: "couldn't read the server's libraries", blocked: false)
+        )
         XCTAssertEqual(
             phoneUploadTarget(.file, PhoneServerWriteStatus(libraries: [library("core:other", "Other")])),
             .pick

@@ -50,7 +50,7 @@ struct PhoneMediaRowView: View {
                     .buttonStyle(.plain)
                     .accessibilityLabel(item.name)
                     .accessibilityValue(meta)
-                    .accessibilityHint(item.isDir ? FileStrings.folder : VideoStrings.play)
+                    .accessibilityHint(Self.hint(item))
             } else {
                 face.accessibilityElement(children: .combine)
             }
@@ -105,6 +105,22 @@ struct PhoneMediaRowView: View {
             } else {
                 PhoneUploadTooBigNote(size: item.sizeBytes)
             }
+        }
+    }
+
+    /// What tapping this row does, said to VoiceOver.
+    ///
+    /// **It follows the row's kind, not `isDir`.** The device side of Files
+    /// taps three kinds (``PhoneDeviceFilesView/tap(_:_:)``: a folder, a
+    /// picture and a video), so the two-way `isDir ? folder : play` announced
+    /// "play" on a photograph. Anything else has no tap and therefore no
+    /// hint, which is why the last case is the folder's rather than a
+    /// fallback that could lie.
+    static func hint(_ item: PhoneMediaItem) -> String {
+        switch item.kind {
+        case .video: return VideoStrings.play
+        case .image: return PhoneMediaStrings.lookAtThePicture
+        default: return FileStrings.folder
         }
     }
 

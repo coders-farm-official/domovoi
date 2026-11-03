@@ -245,13 +245,6 @@ public final class PhoneUploadModel {
         }
     }
 
-    /// Send `item` to `dest`, or to wherever ``destination(for:)`` says.
-    ///
-    /// `DeviceUpload.kt:253`, with its order kept: the gate first, then the
-    /// second-tap refusal, then the "uploading…" toast, and only then the
-    /// request. A second tap **does not** start a second upload — it says so
-    /// (`DeviceUpload.kt:257`), which is the difference between one file
-    /// posted and two.
     /// Send something the person picked, whose bytes are already in hand.
     ///
     /// The one upload in this item that is **not** a row: PHPicker and the
@@ -279,9 +272,32 @@ public final class PhoneUploadModel {
         upload(item)
     }
 
+    /// Send `item` to `dest`, or to wherever ``destination(for:)`` says.
+    ///
+    /// `DeviceUpload.kt:253`, with its order kept: the gate first, then the
+    /// second-tap refusal, then the "uploading…" toast, and only then the
+    /// request. A second tap **does not** start a second upload — it says so
+    /// (`DeviceUpload.kt:257`), which is the difference between one file
+    /// posted and two.
+    ///
+    /// **Every path out of here either starts an upload or says something**,
+    /// and every one of them lets go of a picked file's bytes: a silent
+    /// return left a tap that did nothing (the owner's no-misleading-controls
+    /// rule) and held a 50 MiB video for the life of the screen.
     public func upload(_ item: PhoneMediaItem, to dest: PhoneUploadDest? = nil) {
-        guard gate() else { return }
-        guard let to = dest ?? destination(for: item) else { return }
+        guard gate() else {
+            picked.removeValue(forKey: item.id)
+            return
+        }
+        guard let to = dest ?? destination(for: item) else {
+            // Reachable: `.pick` with no readable library list. The rules now
+            // refuse that case before the button is drawn
+            // (``phoneUploadTarget(_:_:)``), so this is the floor under it
+            // rather than the path — and it names the reason either way.
+            picked.removeValue(forKey: item.id)
+            toast = PhoneMediaStrings.couldNotReadLibraries(status.data?.error)
+            return
+        }
         let key = PhoneUploadKey.of(item, kind)
         if let size = item.sizeBytes, size > Self.cap {
             // No control is drawn on such a ROW, so this is a floor — but it
@@ -294,6 +310,12 @@ public final class PhoneUploadModel {
             return
         }
         guard !running.contains(key) else {
+            // The running upload captured its own bytes before its `await`,
+            // so this copy is nobody's and must not be held: the key is the
+            // row's ORIGIN, which for a pick is `/picked/<name>` with no
+            // size in it, so a second pick of a same-named file of a
+            // different size lands here under an id of its own.
+            picked.removeValue(forKey: item.id)
             toast = PhoneMediaStrings.alreadyUploading(item.name)
             return
         }

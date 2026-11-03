@@ -41,9 +41,29 @@ public enum PhoneMediaKind: String, Codable, Equatable, Sendable, CaseIterable {
     case docOffice = "doc-office"
     case other
 
-    /// What a name on this phone is, by the same rules the server classifies
-    /// by.
+    /// What a name on this phone is — the server's rules, with **video
+    /// before audio**.
+    ///
+    /// ``FileKinds/kind(of:isDir:)`` checks audio first because that is the
+    /// order `files.py`'s `_entry_kind` has, and `mp4` is in both sets
+    /// (`FileKinds.swift:104` says so outright). That order is right for a
+    /// *library listing*, where the server's answer is the one the row must
+    /// agree with. It is wrong here, because the thing this answer is read
+    /// by is a page **narrowed by kind**: `PhoneDevicePage.kinds(of: .videos)`
+    /// is `[.video]` and `kinds(of: .music)` is `[.audio]`, so an `mp4`
+    /// classified as audio is filtered out of the device side of Videos and
+    /// listed as a track on the device side of Music — with an Upload control
+    /// that posts it into MUSIC_DIR. `mp4` is what a phone camera and nearly
+    /// every download writes, so that is the common case.
+    ///
+    /// ``phoneDefaultHomeLibrary(_:_:)`` already carries the same rule for
+    /// the same reason (`PhoneUploadRules.swift:134`); this is it in the one
+    /// other place a phone name is classified.
     public init(fileName: String, isDir: Bool) {
+        if !isDir, FileKinds.video.contains(FileKinds.ext(of: fileName)) {
+            self = .video
+            return
+        }
         self = PhoneMediaKind(rawValue: FileKinds.kind(of: fileName, isDir: isDir)) ?? (isDir ? .folder : .other)
     }
 

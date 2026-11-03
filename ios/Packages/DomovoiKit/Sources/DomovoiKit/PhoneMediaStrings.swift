@@ -223,4 +223,33 @@ public enum PhoneMediaStrings {
     public static func sendHomeVerb(asUpload: Bool) -> String {
         asUpload ? "upload" : "send"
     }
+
+    // MARK: - the two doors that need no permission (iOS-only)
+
+    /// The PhotosUI door. **iOS-only**: Android has no such control, because
+    /// there "upload" is a button on a row of a list it read with a media
+    /// permission (`LocalMediaScreens.kt:204`), so picking and uploading are
+    /// one gesture. IOS-ONLY-STRINGS records both of these.
+    public static let pickAPhoto = "upload a photo"
+
+    /// The document-picker door. **Not**
+    /// ``openInAnotherApp``, which is Android's label for the open-with
+    /// action on a file you are already looking at (`PhoneFileSource.kt:81`)
+    /// — the opposite direction from this one.
+    public static let pickAFile = "upload a file"
+
+    /// What the person is looking at while the picker's bytes come across.
+    /// Deliberately not ``uploadingTo(_:_:)``: nothing has been sent yet, and
+    /// the destination is not known until the uploader's rules have answered,
+    /// so a "to photos…" here told people their file was going to the phone's
+    /// own photo library.
+    public static func readingFromThisPhone(_ name: String) -> String {
+        "reading \"\(name)\" from this phone…"
+    }
+
+    /// A picture row's VoiceOver hint. **iOS-only**: Android's row has no
+    /// hint, and the three tap targets on the device side of Files
+    /// (`folder`, `image`, `video`) each need their own word — one hint for
+    /// all of them said "play" on a photograph.
+    public static let lookAtThePicture = "look at the picture"
 }

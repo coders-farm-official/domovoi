@@ -8,6 +8,10 @@ import SwiftUI
 /// been worse than no row. The buttons work now, so they are here, and the
 /// paragraph that promised them is gone rather than left to rot.
 ///
+/// Each card carries its cover and the line of lyric the room is on, both
+/// only when the room is on a **library track**: a stream has no `track_id`,
+/// so neither has anything to read.
+///
 /// ### One card per room, not a grid
 ///
 /// Android lays these out one column on a phone and two on a wider screen
@@ -18,6 +22,15 @@ struct MusicNowPlayingStrip: View {
 
     let music: MusicModel
 
+    /// The screen's one cover store.
+    let covers: MusicCoverStore
+
+    /// The lyrics model for a room, **looked up** rather than built: the
+    /// dictionary is ``MusicView``'s `@State` and a model made inside a body
+    /// is a fresh one every redraw. Nil for a room whose model has not been
+    /// synced yet, and for a house with no lyrics store.
+    let lyrics: (NowPlayingRoom) -> MusicRoomLyricsModel?
+
     var body: some View {
         // Nothing at all while no room has answered: a card saying "nothing
         // playing" over a house whose satellites simply have not been read
@@ -27,7 +40,12 @@ struct MusicNowPlayingStrip: View {
         if !music.rooms.isEmpty {
             VStack(alignment: .leading, spacing: 12) {
                 ForEach(music.rooms, id: \.roomID) { room in
-                    MusicRoomCard(music: music, room: room)
+                    MusicRoomCard(
+                        music: music,
+                        room: room,
+                        covers: covers,
+                        lyrics: lyrics(room)
+                    )
                 }
             }
         }
@@ -39,6 +57,10 @@ struct MusicRoomCard: View {
 
     let music: MusicModel
     let room: NowPlayingRoom
+    let covers: MusicCoverStore
+
+    /// This room's lyrics, or nil.
+    let lyrics: MusicRoomLyricsModel?
 
     private var isLive: Bool { room.isPlaying }
     private var hasSong: Bool { room.song != nil && (room.isPlaying || room.isPaused) }
@@ -47,7 +69,23 @@ struct MusicRoomCard: View {
         HomeCard(title: room.roomID) {
             if hasSong, let song = room.song {
                 VStack(alignment: .leading, spacing: 10) {
-                    identity(song)
+                    HStack(alignment: .top, spacing: 12) {
+                        // **Only for a library track.** A room playing a
+                        // stream has no `track_id` (`schemas.py:252`), so
+                        // there is nothing to ask the cover route for and
+                        // nothing is drawn — not a placeholder, which would
+                        // claim the song has no art rather than that this
+                        // app cannot know.
+                        if let trackID = room.trackID {
+                            MusicCoverView(trackID: trackID, size: 56, corner: 8, covers: covers)
+                        }
+                        identity(song)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    // The one line of lyric this room is on, timed lyrics
+                    // only (`LyricsPanel.kt:701`). Nothing for a stream, and
+                    // nothing when the house refuses the read.
+                    if let lyrics { MusicRoomLyricLine(lyrics: lyrics) }
                     progress(song)
                     transport
                 }
