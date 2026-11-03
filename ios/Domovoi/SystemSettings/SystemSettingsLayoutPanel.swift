@@ -77,22 +77,41 @@ struct SystemSettingsLayoutPanel: View {
                 // (it reads our own model) and ``PhoneBarView``
                 // (`ShellChromeViews.swift:257`) keeps drawing the old tabs.
                 //
-                // `model.path = model.path` writes the tracked `navigation`
-                // struct through public API (`ShellModel.swift:498`,
-                // `ShellNavigation.swift:72`) without changing where anyone
-                // is, which is enough for Observation to invalidate every
-                // view that reads it — the bar among them, through
-                // ``ShellModel/barSelects(_:)``.
+                // ### The nudge has to be one the **bar's own body** reads
                 //
-                // **Not `model.refresh()`**: that wakes the socket, re-sends
-                // the device register and fans out the server-changed
-                // registry (`ShellModel.swift:820-832`) for a tab reorder.
+                // This was `model.path = model.path`, which writes the
+                // tracked `navigation` struct through public API, and train
+                // S002 measured it doing nothing: the preview line gained
+                // `files`, the bottom bar stayed at four tabs
+                // (`testSystemSettings_AppLayoutAddsAndRemovesATab`, and the
+                // tree attached to it has the bar with `Home Music Videos
+                // Chat` and no `Files`).
                 //
-                // The real fix is one line in `ShellModel`, written up as the
-                // second **Needs a shared change** in this item's
+                // The reason is where the reads are. `PhoneBarView.body`
+                // reads `model.phoneBar` and nothing else of the model;
+                // `model.barSelects(route)` — the one call that touches
+                // `navigation` — is inside the `ForEach` *content* closure,
+                // which SwiftUI runs outside the body's observation scope.
+                // So writing `navigation` invalidates a view that never
+                // registered for it.
+                //
+                // What that body **does** reach, through
+                // ``ShellModel/visibility`` → ``ShellModel/isPaired`` and
+                // ``ShellModel/sharedScreenAnswer``, is ``ShellModel/inputs``
+                // — and ``ShellModel/refresh()`` is the only public write of
+                // it. Its own doc calls it "where every one of those changes
+                // is already noticed". The cost is real and accepted: a bar
+                // edit re-keys the address-keyed reads
+                // (`ShellModel.swift:820-832`). The two socket calls are
+                // no-ops while the address has not changed and the socket is
+                // not parked, and nothing in `refresh()` sends a device
+                // register.
+                //
+                // The real fix is still one line in `ShellModel`, written up
+                // as the second **Needs a shared change** in this item's
                 // `DECISIONS.md`. A reviewer should fold it in and delete
                 // this closure.
-                afterWrite: { [model] in model.path = model.path }
+                afterWrite: { [model] in model.refresh() }
             )
         }
         // A paired install is treated as **shared** until the server answers
@@ -169,7 +188,22 @@ struct SystemSettingsLayoutPanel: View {
             }
             .frame(minHeight: 44)
             .fixedSize(horizontal: false, vertical: true)
+            .contentShape(Rectangle())
         }
+        // ``SystemSettingsLayoutButtonStyle`` and not the platform's dimming.
+        // Apple's audit named this one element on train S002 — "Contrast
+        // failed", `label='  default'` — and it is the **disabled** state that
+        // fails: a fresh install has saved no bar, so the button is drawn
+        // disabled on arrival and the platform renders it at a fraction of
+        // its colour, on a card that is nearly the same grey.
+        //
+        // It is not drawn conditionally instead, although Kamron's
+        // no-misleading-controls rule would allow it: a `default` that
+        // appears the moment the first edit lands would be a control arriving
+        // under the person's finger, and Android draws it disabled
+        // (`PhoneBarPanel.kt:100`). What is wrong is the colour, not the
+        // control, so the colour is what changed.
+        .buttonStyle(SystemSettingsLayoutButtonStyle())
         .disabled(!layout.hasSaved)
         .padding(.top, 2)
         if let note = layout.noteAfterDefault {
@@ -320,14 +354,25 @@ private struct SystemSettingsBarRow: View {
 
     private var name: some View {
         HStack(spacing: 0) {
-            // `.secondary` and not ``Color/fgMuted``: Android uses `fgFaint`
-            // for the index and this target has no such token
-            // (`DomovoiApp.swift:264-360`), so the system's own second-level
-            // foreground stands in — it is the one the platform guarantees
-            // against whatever canvas it is drawn on.
+            // ``Color/fgMuted``, not `.secondary`.
+            //
+            // This was `.secondary`, on the argument that the platform's own
+            // second-level foreground is guaranteed against whatever canvas
+            // it is drawn on. It is not: `secondaryLabel` is 60% black, which
+            // measures about 4.0:1 on this card and fails Apple's audit for
+            // text this small. Train S002 reported four anonymous "Contrast
+            // nearly passed — not high enough unless font size is larger",
+            // one per index in the bar, and a fifth for ``ShellStrings/alwaysFirst``
+            // in the same colour.
+            //
+            // `fgMuted` is the token for exactly this role and it is measured
+            // on this very card: the preview line below is `fgMuted` at
+            // `.caption` on the same background and the audit passes it.
+            // Android's `fgFaint` has no iOS token, and this is the closest
+            // one that a person can actually read.
             Text("\(index + 1)")
                 .font(.caption.monospaced())
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Color.fgMuted)
                 .frame(minWidth: indexWidth, alignment: .leading)
             Image(systemName: route.systemImage)
                 .foregroundStyle(Color.fgMuted)
@@ -344,9 +389,12 @@ private struct SystemSettingsBarRow: View {
 
     @ViewBuilder private var controls: some View {
         if route == .home {
+            // ``Color/fgMuted`` for the same measured reason as the index
+            // above: `.secondary` is 60% black and the audit fails it at this
+            // size on this card.
             Text(ShellStrings.alwaysFirst)
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Color.fgMuted)
                 .fixedSize(horizontal: false, vertical: true)
         } else if layout.canEdit {
             HStack(spacing: 0) {
@@ -381,11 +429,57 @@ private struct SystemSettingsBarRow: View {
     ) -> some View {
         Button(action: act) {
             Image(systemName: symbol)
+                // **The frame is the space; `contentShape` is the target.**
+                // Without it SwiftUI hit-tests and reports the drawn glyph
+                // only: train S002 measured these buttons at
+                // `{{247.7, 456.3}, {8.3, 14.7}}` and `{{334.3, 457.0},
+                // {13.3, 13.3}}`, and Apple's audit returned exactly seven
+                // "Hit area is too small" — one per *enabled* control on the
+                // bar's three movable rows. The 44-point frame was already
+                // there and already laid out; nothing but the shape was
+                // missing. Identical defect, found the same way, as
+                // `PhoneBarView`'s own tabs and the header's live dot.
                 .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
-        .foregroundStyle(enabled ? Color.brandInk : Color.fgMuted)
+        .buttonStyle(SystemSettingsLayoutButtonStyle())
         .disabled(!enabled)
         .accessibilityLabel(label)
+    }
+}
+
+/// A button that draws its **own** disabled state instead of letting the
+/// platform dim it.
+///
+/// `.buttonStyle(.plain)` plus `.foregroundStyle(enabled ? ... : ...)` was
+/// what this panel had, and the colour at the call site is not what reaches
+/// the screen: the platform's styles fade a disabled control, so a label
+/// already muted for the disabled case came out fainter still, on a card that
+/// is nearly the same grey. Apple's audit failed the `default` button's label
+/// for it (train S002).
+///
+/// A custom `ButtonStyle` owns its rendering completely, so the two states are
+/// two tokens that were both measured on this card — ``Color/brandInk`` live,
+/// ``Color/fgMuted`` disabled — and `.disabled(_:)` still carries the trait a
+/// screen reader and a UI case read.
+///
+/// `isEnabled` is read by a nested view and not in `makeBody`, because a
+/// `ButtonStyle` is not a `View` and has no environment of its own.
+private struct SystemSettingsLayoutButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        SystemSettingsLayoutButtonLabel(configuration: configuration)
+    }
+}
+
+private struct SystemSettingsLayoutButtonLabel: View {
+
+    let configuration: ButtonStyleConfiguration
+
+    @Environment(\.isEnabled) private var isEnabled
+
+    var body: some View {
+        configuration.label
+            .foregroundStyle(isEnabled ? Color.brandInk : Color.fgMuted)
+            .opacity(configuration.isPressed ? 0.55 : 1)
     }
 }
