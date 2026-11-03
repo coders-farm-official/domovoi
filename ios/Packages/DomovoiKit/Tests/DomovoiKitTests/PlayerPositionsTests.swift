@@ -94,7 +94,7 @@ final class PlayerPositionsTests: XCTestCase {
     }
 
     func testAnUnmeasurablePositionIsSentAsZeroRatherThanNonsense() throws {
-        for value in [Double.nan, -5, -.infinity] {
+        for value in [Double.nan, -5, -Double.infinity] {
             let body = try fields(PlayerServerPositions.saveBody(
                 deviceID: "p", personID: nil, positionSec: value, speed: 1
             ))
