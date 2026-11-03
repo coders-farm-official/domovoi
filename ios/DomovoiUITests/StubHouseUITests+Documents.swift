@@ -53,7 +53,14 @@ extension StubHouseUITests {
         // exactly as a row is. A folder that really never answered still
         // fails, one flick-budget later.
         if !landed, big {
-            _ = documentsScrollTo(app, app.buttons["choose library"].firstMatch, big: true)
+            // Its own failure, not `pickLibrary`'s: train S011 reported "the
+            // library picker never opened" for a picker that was never
+            // scrolled to, and the sentence sent two cases' diagnosis to the
+            // menu instead of to the scroll.
+            guard documentsScrollTo(app, app.buttons["choose library"].firstMatch, big: true) else {
+                XCTFail("the library picker never built — the folder did not scroll")
+                return nil
+            }
         } else if !landed {
             XCTFail("the folder never answered")
             return nil
@@ -104,6 +111,28 @@ extension StubHouseUITests {
     /// At AX5 the list scrolls inside a 178-point window past a 383-point
     /// header, so it gets the slow swipe (a fast one steps over rows) and a
     /// much longer budget.
+    ///
+    /// ### And it is not `scrollViews.firstMatch`
+    ///
+    /// Train S011 ran all forty flicks and the folder's scroll bar still read
+    /// `value: 0%`. The log says where they went:
+    ///
+    /// ```
+    /// t = 101.22s  Swipe up ScrollView (First Match)
+    /// t = 101.72s  Swipe up ScrollView at {{0.0, 706.0}, {393.0, 146.0}}
+    /// ```
+    ///
+    /// `{0, 706}` is the **phone bar** — home · music · videos · chat is a
+    /// horizontal `ScrollView`, and `firstMatch` resolved to it, not to the
+    /// folder at `{0, 523}`. Forty vertical swipes on a horizontal strip
+    /// scroll nothing, so the picker stayed unbuilt and two cases failed one
+    /// sentence later with "the library picker never opened".
+    ///
+    /// The folder is told apart by position rather than by index: the phone
+    /// bar is pinned to the window's bottom, so the content scroll view is
+    /// always the one with the smaller `minY`. Tree order does not decide it
+    /// — the folder comes first in the printed tree and `firstMatch` took the
+    /// bar anyway.
     @MainActor
     func documentsScrollTo(
         _ app: XCUIApplication,
@@ -112,11 +141,15 @@ extension StubHouseUITests {
         big: Bool = false
     ) -> Bool {
         let budget = big ? 40 : flicks
-        let folder = app.scrollViews.firstMatch
         for _ in 0..<budget where !element.exists {
-            if !folder.exists {
+            // Re-resolved each flick: the bar and the folder are both built
+            // from the first frame, but a query held across a swipe goes
+            // stale on this screen often enough to be worth the lookup.
+            guard let folder = documentsFolderScroll(app) else {
                 app.swipeUp()
-            } else if big {
+                continue
+            }
+            if big {
                 folder.swipeUp(velocity: .slow)
             } else {
                 folder.swipeUp()
@@ -127,6 +160,35 @@ extension StubHouseUITests {
             print(app.debugDescription)
         }
         return element.exists
+    }
+
+    /// The folder's own scroll view — the upper of the screen's two.
+    ///
+    /// Files' content scrolls in one `ScrollView` and the phone bar's
+    /// home · music · videos · chat strip is another, pinned to the window's
+    /// bottom; `scrollViews.firstMatch` took the bar (see
+    /// ``documentsScrollTo(_:_:flicks:big:)``). Smallest `minY` wins, which
+    /// stays right however many scroll views the screen grows, as long as the
+    /// bar is the bottom-most thing in the window — and it is, by
+    /// construction.
+    ///
+    /// `nil` means the screen has no scroll view at all, which is a different
+    /// thing from "it did not scroll" and the caller treats it differently.
+    @MainActor
+    func documentsFolderScroll(_ app: XCUIApplication) -> XCUIElement? {
+        let all = app.scrollViews
+        var highest: XCUIElement?
+        var highestY = CGFloat.greatestFiniteMagnitude
+        for index in 0..<all.count {
+            let candidate = all.element(boundBy: index)
+            guard candidate.exists else { continue }
+            let top = candidate.frame.minY
+            if top < highestY {
+                highestY = top
+                highest = candidate
+            }
+        }
+        return highest
     }
 
     /// Open one Documents row, scrolling to it first.
