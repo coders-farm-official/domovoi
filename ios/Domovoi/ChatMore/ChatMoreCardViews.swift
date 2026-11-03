@@ -104,7 +104,8 @@ struct ChatMoreLookupCardView: View {
 ///  1. **The options are live only on the thread's last row**
 ///     (`ChatScreen.kt:1008`), because the server 409s a pick on anything
 ///     else (`stale`, `chat.py:1132`). ``ChatMoreModel/headsUpAnswerable(_:isLastRow:)``
-///     is the gate, and an older card draws its text and no buttons.
+///     is the gate, and an older card draws its text and its never button
+///     without options.
 ///  2. **`choose_another` is not offered.** The option re-opens the picture
 ///     picker, and there is no picker in this app, so the server offers
 ///     something this phone cannot carry out —
@@ -141,8 +142,16 @@ struct ChatMoreHeadsUpCardView: View {
                     .font(.caption)
                     .foregroundStyle(Color.brandInk)
                     .fixedSize(horizontal: false, vertical: true)
-            } else if more.headsUpAnswerable(message, isLastRow: isLastRow) {
-                options
+            } else {
+                // **The options are gated, the never button is not.** The
+                // server 409s a pick on anything but the last row (`stale`,
+                // `chat.py:1132`), so the options go; silencing a kind is
+                // purely this phone's and always works, which is why Android
+                // draws it live beside disabled options (`ChatScreen.kt`,
+                // `HeadsUpCard(..., onNever = ...)` — passed unconditionally).
+                if more.headsUpAnswerable(message, isLastRow: isLastRow) {
+                    options
+                }
                 never
             }
         }
@@ -177,8 +186,16 @@ struct ChatMoreHeadsUpCardView: View {
                 .font(.caption2)
                 .foregroundStyle(Color.fgMuted)
                 .fixedSize(horizontal: false, vertical: true)
-        } else if let label = card.neverLabel, !label.isEmpty {
-            Button(label) { more.silenceHeadsUp(kind: card.kind) }
+        } else {
+            // ``ChatMoreHeadsUp/neverText`` and not `neverLabel`: the
+            // server's value is `t.get("never_label")` off the weak-spots
+            // table (`doc_qa/headsup.py:403`), i.e. nil for any table that
+            // does not declare one, and both other clients fall back —
+            // `never_label ?: NEVER_WARN` (`ChatDocsApi.kt:100`), and
+            // `card.never_label || "don't warn me about this again"`
+            // (`chat_documents.jsx:329`). Unwrapping the raw field left those
+            // kinds with no way to be silenced at all.
+            Button(card.neverText) { more.silenceHeadsUp(kind: card.kind) }
                 .buttonStyle(.plain)
                 .font(.caption)
                 .foregroundStyle(Color.fgMuted)

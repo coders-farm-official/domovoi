@@ -103,7 +103,12 @@ struct ChatMoreTalkView: View {
                     // (``ChatMoreVoiceRules/atCap(seconds:)``).
                     send()
                 }
-                if more.talkPhase == .speaking, !talker.speaking {
+                // `talker.started` and not `.speaking` alone: the WAV is
+                // started from the `onChange` below, and a tick that resumes
+                // between the model's write and SwiftUI's update would
+                // otherwise finish a reply that had not begun —
+                // ``ChatMoreTalker/started`` says what that cost.
+                if more.talkPhase == .speaking, talker.started, !talker.speaking {
                     more.finishedSpeaking()
                 }
                 try? await Task.sleep(for: .milliseconds(100))

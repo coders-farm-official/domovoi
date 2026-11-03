@@ -209,7 +209,8 @@ final class ChatMoreModelTests: XCTestCase {
 
     private func rig(
         house: House = House(),
-        headsUp: ChatMoreHeadsUpStore = ChatMoreHeadsUpStore(place: SavedStateBox())
+        headsUp: ChatMoreHeadsUpStore = ChatMoreHeadsUpStore(place: SavedStateBox()),
+        deviceID: String? = "ios-1"
     ) -> (ChatMoreModel, House, Shared<Int>) {
         house.install()
         let store = InMemoryShellStore(serverURL: server, token: "household-abc")
@@ -224,7 +225,7 @@ final class ChatMoreModelTests: XCTestCase {
         let reopened = Shared<Int>(0)
         let model = ChatMoreModel(
             in: container,
-            deviceID: "ios-1",
+            deviceID: deviceID,
             headsUp: headsUp,
             now: { Date(timeIntervalSince1970: 1_762_110_000) },
             reopen: { reopened.mutate { $0 += 1 } }
@@ -694,5 +695,91 @@ final class ChatMoreModelTests: XCTestCase {
         XCTAssertEqual(report.answeredAt, ChatMoreModel.date("2026-11-02T18:00:00+00:00"))
         XCTAssertNil(model.report(for: 10, appVersion: "1.0.0"), "a question is not reportable")
         XCTAssertNil(model.report(for: 99, appVersion: "1.0.0"), "a row that is not there")
+    }
+
+    /// The mirror SwiftUI tracks, which is what redraws the card
+    /// (``ChatMoreModel/silencedKinds``). The store behind it is a `Mutex`
+    /// nothing observes, so a tap used to change state no view was watching.
+    func testSilencingAKindShowsUpOnTheModelAndNotOnlyInTheStore() async {
+        let saved = SavedStateBox()
+        let (model, _, _) = rig(headsUp: ChatMoreHeadsUpStore(place: saved))
+        await open(model, 7)
+        XCTAssertFalse(model.silencedKinds.contains("scanned"))
+
+        model.silenceHeadsUp(kind: "scanned")
+        XCTAssertTrue(model.silencedKinds.contains("scanned"), "the observable mirror")
+        XCTAssertTrue(model.headsUpSilenced(kind: "scanned"))
+
+        // And a model built afterwards starts with what was saved, rather
+        // than waiting for a first tap to notice it.
+        let (again, _, _) = rig(headsUp: ChatMoreHeadsUpStore(place: saved))
+        XCTAssertTrue(again.silencedKinds.contains("scanned"))
+        XCTAssertTrue(again.headsUpSilenced(kind: "scanned"))
+    }
+
+    /// The thread's own internet flag is served **only** on the list row, so a
+    /// conversation opened before the list landed knows nothing — and a chip
+    /// that read "internet off" there would state the one fact it exists for,
+    /// wrongly.
+    func testTheChipWaitsForTheThreadsOwnFlagRatherThanGuessingItOff() async {
+        let (model, _, _) = rig()
+        model.open(thread: 7)
+        await settleUntil({ model.internet != nil }, "the household's answer")
+        await everythingLands()
+        XCTAssertFalse(model.internetAllowedKnown)
+        XCTAssertNil(model.internetChip, "the household answered; this thread has not been read")
+
+        model.seedInternetAllowed(true)
+        XCTAssertTrue(model.internetAllowedKnown)
+        XCTAssertEqual(model.internetChip?.label, "internet on for this chat")
+        XCTAssertEqual(model.internetChip?.on, true)
+
+        // A list row that lands late never overwrites a flag already known —
+        // otherwise a row fetched before a tap would flip the chip back.
+        model.seedInternetAllowed(false)
+        XCTAssertEqual(model.internetChip?.on, true, "a stale row does not undo a known flag")
+    }
+
+    /// Under `never` the words are the household's whatever the thread says,
+    /// so the chip is drawn even with the flag unread.
+    func testTheChipIsStillDrawnWithoutTheFlagWhereTheFlagCannotMatter() async {
+        let (model, house, _) = rig()
+        house.internet.set(#"{"internet":"never","always_allow":false}"#)
+        model.open(thread: 7)
+        await settleUntil({ model.internetChip != nil }, "the chip")
+        XCTAssertFalse(model.internetAllowedKnown)
+        XCTAssertEqual(model.internetChip?.label, "internet off")
+        XCTAssertFalse(model.internetChipTappable)
+    }
+
+    /// `phone_id` is required by the route (`chat.py:2437`): without one the
+    /// turn is refused here rather than posted as a form the server 422s with
+    /// a `detail` no sentence can be read out of.
+    func testATurnIsNotTakenAtAllWithoutADeviceID() async {
+        let (model, house, _) = rig(deviceID: nil)
+        await open(model, 7)
+        XCTAssertFalse(model.micOffered(typed: ""), "and the mic is not offered")
+        XCTAssertFalse(model.talk(pcm: Self.clip))
+        XCTAssertEqual(model.talkPhase, .idle)
+        await everythingLands()
+        XCTAssertTrue(
+            house.seen.current.allSatisfy { !$0.hasSuffix("/voice") },
+            "nothing was posted"
+        )
+    }
+
+    func testEveryTurnCarriesThePhoneIDTheRouteRequires() async throws {
+        let (model, _, _) = rig()
+        await open(model, 7)
+        XCTAssertTrue(model.micOffered(typed: ""))
+        XCTAssertTrue(model.talk(pcm: Self.clip))
+        await settleUntil({ !model.answering }, "the turn")
+        let request = try XCTUnwrap(
+            StubURLProtocol.recorded.last { $0.url?.path == "/api/chat/threads/7/voice" },
+            "no voice post was made"
+        )
+        let form = String(decoding: try XCTUnwrap(request.httpBody), as: UTF8.self)
+        XCTAssertTrue(form.contains("name=\"phone_id\""), "the required field")
+        XCTAssertTrue(form.contains("ios-1"))
     }
 }

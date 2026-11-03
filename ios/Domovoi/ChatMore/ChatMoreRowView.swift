@@ -261,7 +261,15 @@ struct ChatMoreRowBottom: View {
     var body: some View {
         if let more, let id = message.id {
             VStack(alignment: .leading, spacing: 6) {
-                if let doc = extras?.doc,
+                // **Not under a heads-up card.** `DocPlan.doc_json` puts the
+                // checked document's own notes on a heads-up reply as well
+                // (`chat_documents.py:521-525`), so for the note kinds
+                // (`scanned`, `blurry`, `handwriting`) this restated in
+                // `warnInk` what the card above had just said. Android gates
+                // it the same way: `if (!m.pending && m.doc?.mode !=
+                // "heads_up")` (`ChatScreen.kt`, the reply branch of
+                // `MessageBubble`).
+                if let doc = extras?.doc, doc.mode != "heads_up",
                    ChatMoreSourceRules.hasAnything(notes: doc.notes, sources: doc.sources) {
                     ChatMoreReplyDocsView(doc: doc, open: actions.source)
                 }

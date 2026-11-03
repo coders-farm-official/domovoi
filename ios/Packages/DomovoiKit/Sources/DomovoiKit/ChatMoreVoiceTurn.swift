@@ -385,7 +385,8 @@ public enum ChatMoreVoiceTurn {
     ///
     /// `speak` is never sent as false: see ``ChatMoreVoiceReply/playback``.
     /// `thread_id` is **not** in the form — the server adds it from the path
-    /// (`chat.py:2456`).
+    /// (`chat.py:2456`); `phone_id` **is** required by it, so it is a plain
+    /// `String` here and the caller does not offer the turn without one.
     ///
     /// Throws a ``ChatMoreVoiceRefusal`` for a refusal the server worded, and
     /// the ``DomovoiError`` itself for anything else (a 401, a held identity,
@@ -395,12 +396,18 @@ public enum ChatMoreVoiceTurn {
         using client: DomovoiClient,
         thread: Int64,
         pcm: Data,
-        phoneID: String?,
+        phoneID: String,
         player: String? = nil
     ) async throws -> ChatMoreVoiceReply {
         var form = ChatMoreMultipart()
         form.add(name: "audio", filename: "turn.pcm", bytes: pcm)
-        if let phoneID, !phoneID.isEmpty { form.add(name: "phone_id", value: phoneID) }
+        // **Not optional.** `phone_id: str = Form(..., max_length=64)`
+        // (`chat.py:2437`) is required, and a form without it came back 422
+        // with FastAPI's validation *array* as `detail` — which
+        // ``ChatMoreVoiceRefusal/of(status:body:)`` cannot word, so a
+        // recording was taken and thrown away under a generic sentence. The
+        // caller refuses the turn instead (``ChatMoreModel/talk(pcm:interrupted:)``).
+        form.add(name: "phone_id", value: phoneID)
         // The phone's own player state, which this app does not report: the
         // player is the Music item's, and "what's playing" answered about a
         // player this file cannot see would be an invented answer.

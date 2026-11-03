@@ -174,6 +174,21 @@ final class ChatMoreTalker {
     /// Whether the reply is still being spoken.
     var speaking: Bool { player?.isPlaying == true }
 
+    /// Whether a reply has been handed to the player at all.
+    ///
+    /// The talk screen's tick reads `.speaking && !speaking` as "the reply
+    /// finished", but the WAV is started from an `onChange` of
+    /// ``ChatMoreModel/replyAudio`` — and the model sets `replyAudio` and
+    /// `talkPhase` together, so the tick's `Task.sleep` continuation and
+    /// SwiftUI's view update are both main-actor work with no ordering
+    /// between them. A tick that resumed in that window saw `.speaking` with
+    /// nothing playing yet and called ``ChatMoreModel/finishedSpeaking()``,
+    /// which puts `replyAudio` back to nil — so the `onChange` never fired
+    /// and the house's spoken reply was dropped, about one frame in every
+    /// 100 ms. This flag is the tick's proof that there is something to be
+    /// finished.
+    private(set) var started = false
+
     // MARK: - permission
 
     /// Whether this phone may use its microphone, asking once if nobody has
@@ -326,6 +341,7 @@ final class ChatMoreTalker {
             made.prepareToPlay()
             guard made.play() else { return false }
             player = made
+            started = true
             return true
         } catch {
             // Said nowhere: a reply whose audio will not decode has its words
@@ -340,6 +356,7 @@ final class ChatMoreTalker {
     func stopPlaying() {
         player?.stop()
         player = nil
+        started = false
     }
 
     /// Give the session back when the talk screen closes, so whatever was

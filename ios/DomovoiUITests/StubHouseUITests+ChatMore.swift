@@ -738,6 +738,51 @@ extension StubHouseUITests {
         )
     }
 
+    /// **The extras of a reply, without closing the thread and reopening it.**
+    ///
+    /// The one shape no other case here covers: a card the *send* minted. The
+    /// server mints a `lookup_permission` on the stream (`chat.py:1862`) and
+    /// serves it back only as `stats.lookup_card` on the kept row, so the
+    /// extras read has to happen after the stream finished. The screen used to
+    /// re-read on `transcript.messages.count`, which changes exactly once per
+    /// send -- at `ChatTranscript.beginSend`, **before** the POST goes out --
+    /// so the only read a send caused saw the thread as it was before the
+    /// question was stored, and nothing a reply carried was ever fetched.
+    /// Every case above opens a thread whose extras are already seeded, which
+    /// is why none of them could fail on it.
+    ///
+    /// The fixture's card asks about "the mowing rota at Fernbrook", words no
+    /// seeded row of any thread holds, so the card on screen can only have
+    /// come from the read that followed this send.
+    @MainActor
+    func testChatMore_ACardOnANewReplyArrivesWithoutReopeningTheThread() throws {
+        guard let app = openChatMore(
+            search: "tenancy pack",
+            title: StubChatMore.pack,
+            waitingFor: StubChatMore.packAsked
+        ) else { return }
+        // After the launch's reset, and before the send it changes.
+        chatMoreControl("{\"card_after_send\":true}")
+        XCTAssertTrue(say(app, "and the mowing rota?"), "the composer would not send")
+
+        let asked = exactly(app, StubChatMore.sentCardQueryQuoted)
+        let arrived = asked.waitForExistence(timeout: 60)
+        evidence(app, "chatmore-26-card-on-a-new-reply")
+        XCTAssertTrue(
+            arrived,
+            "the card the reply minted never reached the screen -- the extras were "
+            + "not read again after the stream"
+        )
+        XCTAssertTrue(
+            exactly(app, ChatMoreStringsUnderTest.mayILookThisUp).exists,
+            "the card arrived without its title"
+        )
+        XCTAssertTrue(
+            app.buttons[ChatMoreStringsUnderTest.allowOnce].firstMatch.exists,
+            "the card arrived with no way to answer it"
+        )
+    }
+
     /// Allow in this chat: the answer arrives and the thread's own chip turns
     /// on.
     ///
@@ -1450,6 +1495,11 @@ enum StubChatMore {
     static let jobSettledLine = "reading part 6 of 11"
     static let jobLinePrefix = "reading part"
     static let carryOnPrefix = "carry on ("
+
+    /// The query the card minted **on a send** asks about, and the quoted
+    /// form the card draws for a search. In no seeded row of any thread.
+    static let sentCardQuery = "the mowing rota at Fernbrook"
+    static let sentCardQueryQuoted = "\u{201C}the mowing rota at Fernbrook\u{201D}"
 
     // Threads 21, 22, 23: the lookup card.
     static let lisbon = "The weather in Lisbon"

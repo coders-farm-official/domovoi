@@ -88,10 +88,32 @@ struct ChatConversationView: View {
         // A thread opened from this screen (a new chat's first send makes
         // one) or from the list.
         .onChange(of: chat.openThread) { _, _ in openExtras() }
-        // A send, a retry or a `chat.changed` moved the transcript, so the
-        // extras -- which are a **second read of the same route** -- have to
-        // follow it. ``ChatMoreDetail`` says at length why there are two.
+        // A reopen, a pagination or a `chat.changed` moved the transcript, so
+        // the extras -- which are a **second read of the same route** -- have
+        // to follow it. ``ChatMoreDetail`` says at length why there are two.
         .onChange(of: chat.transcript.messages.count) { _, _ in more?.refresh() }
+        // **And the end of a stream, which the count cannot see.** The count
+        // changes exactly once per send, at `ChatTranscript.beginSend`, which
+        // appends the user row and the pending reply *before* the POST goes
+        // out: `apply("done")` then mutates `messages[index]` in place and
+        // `ChatModel.endStream()` only refreshes the lists. So the only
+        // re-read a send used to cause saw the thread as it was *before* the
+        // question was stored, and nothing a reply carries -- a mid-answer
+        // `lookup_permission` card (minted on the stream, `chat.py:1862`, and
+        // only ever read back from `stats.lookup_card`), a draft card, source
+        // chips, document notes, a long-document job the send started -- was
+        // ever fetched until the thread was closed and reopened.
+        //
+        // `sending` goes false on the far edge of every send, including one
+        // that failed and still wrote a row, which is why it and not
+        // `messages.last?.id` is the thing watched.
+        .onChange(of: chat.sending) { _, now in
+            if !now { more?.refresh() }
+        }
+        // Either list landing can be the first sight of this thread's own
+        // internet flag (``seedInternet()``).
+        .onChange(of: chat.threads.data?.threads.count) { _, _ in seedInternet() }
+        .onChange(of: chat.archivedThreads.data?.threads.count) { _, _ in seedInternet() }
         .onChange(of: model.inputs.serverURL) { _, _ in
             more?.serverChanged()
             draft?.serverChanged()
@@ -124,17 +146,38 @@ struct ChatConversationView: View {
     /// Point ``ChatMoreModel`` at the thread this screen has open.
     ///
     /// `internetAllowed` comes off the list's own row
-    /// (``ChatThread/internetAllowed``) rather than from a third read of a
-    /// thread the screen already has.
+    /// (``ChatThread/internetAllowed``), which is the only place the server
+    /// serves it: `GET /threads/{id}/messages` returns `{messages, jobs}`
+    /// (`chat.py:634`) and there is no `GET /threads/{id}` to ask.
+    ///
+    /// **Nil, not `false`, when the row is not in hand.** A conversation can
+    /// be reached before the list has loaded — `takePendingChatThread()`
+    /// (``ChatView``) races it, and the archived list is only fetched when the
+    /// archived view is opened — and a chip reading "internet off" for a chat
+    /// the server has on states the one fact it exists to state, wrongly.
+    /// ``ChatMoreModel/internetAllowedKnown`` keeps it blank instead, and
+    /// ``ChatMoreModel/seedInternetAllowed(_:)`` fills it in below.
     private func openExtras() {
         guard let id = chat.openThread else {
             more?.close()
             return
         }
-        let allowed = chat.threads.data?.threads.first { $0.id == id }?.internetAllowed
+        more?.open(thread: id, internetAllowed: threadInternet(id))
+    }
+
+    private func threadInternet(_ id: Int64) -> Bool? {
+        chat.threads.data?.threads.first { $0.id == id }?.internetAllowed
             ?? chat.archivedThreads.data?.threads.first { $0.id == id }?.internetAllowed
-            ?? false
-        more?.open(thread: id, internetAllowed: allowed)
+    }
+
+    /// The list landed after the conversation opened: fill the flag in.
+    ///
+    /// ``ChatMoreModel/seedInternetAllowed(_:)`` only fills a gap, so a row
+    /// that arrives stale after the chip or a lookup decision changed the flag
+    /// cannot flip it back.
+    private func seedInternet() {
+        guard let id = chat.openThread, let allowed = threadInternet(id) else { return }
+        more?.seedInternetAllowed(allowed)
     }
 
     @ViewBuilder

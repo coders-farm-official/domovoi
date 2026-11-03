@@ -59,6 +59,18 @@ public final class ChatMoreModel {
     /// This phone's heads-up switch, which no route stores.
     public let headsUp: ChatMoreHeadsUpStore
 
+    /// The kinds this phone has silenced, **mirrored here so SwiftUI tracks
+    /// them**.
+    ///
+    /// ``ChatMoreHeadsUpStore`` is a `Mutex` behind `@unchecked Sendable` and
+    /// is read off the main actor by ``ChatPath/headsUpBody(messageID:option:prefs:)``'s
+    /// caller, so it cannot be `@Observable` itself. Without this mirror a tap
+    /// on "don't warn me about this again" wrote state no view was observing:
+    /// the button stayed on screen and ``ChatMoreStrings/silenced(_:)`` never
+    /// appeared, since a `Button`'s own press re-evaluates its style's body
+    /// and not its parent's.
+    public private(set) var silencedKinds: Set<String> = []
+
     /// The thread open, or nil.
     public private(set) var thread: Int64?
 
@@ -71,6 +83,21 @@ public final class ChatMoreModel {
     /// (``ChatThread/internetAllowed``) and as a decision or the chip changes
     /// it.
     public private(set) var internetAllowed = false
+
+    /// Whether that flag is a **read fact** rather than a default.
+    ///
+    /// The list row is the only place it is served: `GET /threads/{id}/messages`
+    /// returns `{messages, jobs}` (`chat.py:634`) and there is **no**
+    /// `GET /threads/{id}` at all (only PATCH and DELETE, `chat.py:315`,
+    /// `:351`), so a conversation reached before its list row is in hand —
+    /// `takePendingChatThread()` races the list load, and the archived list is
+    /// only fetched when the archived view is opened — has nothing to read.
+    /// Rather than render "internet off" for a thread the server has
+    /// `internet_allowed = true` on, which is the one fact the chip exists to
+    /// state, the chip draws nothing until this is true
+    /// ([[no-misleading-controls]]) and ``seedInternetAllowed(_:)`` fills it
+    /// in when the list lands.
+    public private(set) var internetAllowedKnown = false
 
     /// A card answer or a spoken turn is on its way out. The cards read it;
     /// the composer cannot (see above).
@@ -138,6 +165,7 @@ public final class ChatMoreModel {
         self.container = container
         self.deviceID = deviceID
         self.headsUp = headsUp
+        self.silencedKinds = headsUp.prefs.skip
         self.pictures = pictures ?? ChatMorePictureStore(in: container)
         self.now = now
         self.reopen = reopen
@@ -150,12 +178,13 @@ public final class ChatMoreModel {
     ///
     /// - Parameter internetAllowed: the thread's own flag, which the list row
     ///   already carries (``ChatThread/internetAllowed``) — read from there
-    ///   rather than asked for again, since `GET /threads/{id}` would be a
-    ///   third read of a thing the screen already has.
-    public func open(thread id: Int64, internetAllowed: Bool = false) {
+    ///   because there is no route that serves it on its own. **Nil when the
+    ///   row is not in hand yet**: see ``internetAllowedKnown``.
+    public func open(thread id: Int64, internetAllowed: Bool? = nil) {
         epoch += 1
         thread = id
-        self.internetAllowed = internetAllowed
+        self.internetAllowed = internetAllowed ?? false
+        self.internetAllowedKnown = internetAllowed != nil
         detail = ChatMoreDetail()
         answeredCards = [:]
         headsUpPicks = [:]
@@ -173,6 +202,18 @@ public final class ChatMoreModel {
         cancelFollows()
         load()
         loadInternet()
+    }
+
+    /// The thread's own internet flag, now that its list row has arrived.
+    ///
+    /// Only fills a gap: a flag already read, or one a decision or the chip
+    /// has changed since, is never overwritten — a list that lands a moment
+    /// after "in this chat" was tapped still carries the row as it was before
+    /// the PATCH, and the chip must not flip back.
+    public func seedInternetAllowed(_ allowed: Bool) {
+        guard thread != nil, !internetAllowedKnown else { return }
+        internetAllowed = allowed
+        internetAllowedKnown = true
     }
 
     /// The conversation closed: nothing in flight may write anything.
@@ -320,7 +361,10 @@ public final class ChatMoreModel {
             // "Allow in this chat" also sets the thread's own flag on the
             // server (`chat.py:2126`), so the chip follows the decision
             // without a read of its own (`ChatScreen.kt:918`).
-            if allowsChat { self.internetAllowed = true }
+            if allowsChat {
+                self.internetAllowed = true
+                self.internetAllowedKnown = true
+            }
         }
         return true
     }
@@ -360,10 +404,13 @@ public final class ChatMoreModel {
     /// "don't warn me about this again": the kind is silenced on this phone,
     /// and the **next** pick carries it (`ChatDocsApi.kt:105`).
     public func silenceHeadsUp(kind: String) {
-        headsUp.silence(kind)
+        silencedKinds = headsUp.silence(kind).skip
     }
 
-    public func headsUpSilenced(kind: String) -> Bool { headsUp.silenced(kind) }
+    /// Read from the observable mirror, so a card redraws when it is tapped.
+    public func headsUpSilenced(kind: String) -> Bool {
+        headsUp.prefs.off || silencedKinds.contains(kind)
+    }
 
     /// One streamed round trip: open it, gather the words, then re-read the
     /// thread — which is what makes the kept row, and not the streamed text,
@@ -414,6 +461,15 @@ public final class ChatMoreModel {
     /// nothing rather than guessing (`ChatScreen.kt:1275`).
     public var internetChip: (label: String, on: Bool)? {
         guard let internet else { return nil }
+        // The thread's own flag is only *read* from the list row, so until it
+        // has arrived the chip is drawn only where it does not depend on it:
+        // under `never` and under the household's "always allow" the words are
+        // the policy's whatever the thread says (``ChatMoreInternetChip/words(policy:alwaysAllow:chatAllowed:)``).
+        // Anywhere else an unknown flag would read "internet off" for a chat
+        // the server may well have on.
+        guard internetAllowedKnown || internet.internet == "never" || internet.alwaysAllow else {
+            return nil
+        }
         return ChatMoreInternetChip.words(
             policy: internet.internet,
             alwaysAllow: internet.alwaysAllow,
@@ -454,6 +510,7 @@ public final class ChatMoreModel {
                 try await client.send(method: "PATCH", path: ChatPath.thread(id), body: body)
                 guard self.stillHere(asked) else { return }
                 self.internetAllowed = allowed
+                self.internetAllowedKnown = true
             } catch {
                 guard self.stillHere(asked) else { return }
                 self.toast = failureText(ChatMoreStrings.verbChangeIt, error)
@@ -579,8 +636,16 @@ public final class ChatMoreModel {
     // MARK: - a spoken turn
 
     /// Whether the mic is offered in place of send (`ChatScreen.kt:1157`).
+    ///
+    /// And only with a device id: `phone_id` is required by
+    /// `POST /threads/{id}/voice` (`chat.py:2437`), so without one the turn
+    /// cannot be addressed and the button would take a recording it could
+    /// only throw away. `deviceSelf` is always wired in the shipping app
+    /// (`DomovoiApp.swift:144`), which is why this is a guard and not a
+    /// screenful of explanation.
     public func micOffered(typed: String) -> Bool {
-        ChatMoreVoiceRules.micOffered(typed: typed)
+        guard let who = deviceID, !who.isEmpty else { return false }
+        return ChatMoreVoiceRules.micOffered(typed: typed)
     }
 
     /// What the talk screen says under its button.
@@ -626,6 +691,11 @@ public final class ChatMoreModel {
     @discardableResult
     public func talk(pcm: Data, interrupted: Bool = false) -> Bool {
         guard let threadID = thread else { return false }
+        // `phone_id` is required by the route (`chat.py:2437`), so a turn with
+        // no device id to put in it is refused here rather than posted as a
+        // malformed form — and ``micOffered(typed:)`` leaves the mic out, so
+        // nobody records one in the first place ([[no-misleading-controls]]).
+        guard let who = deviceID, !who.isEmpty else { return false }
         let recorded = ChatMoreVoiceRules.recorded(
             seconds: ChatMoreVoiceRules.seconds(ofPCM: pcm.count),
             interrupted: interrupted
@@ -642,7 +712,6 @@ public final class ChatMoreModel {
         replyAudio = nil
         let asked = epoch
         let client = container.client
-        let who = deviceID
         stream = Task { @MainActor [weak self] in
             guard let self else { return }
             let reply: ChatMoreVoiceReply
