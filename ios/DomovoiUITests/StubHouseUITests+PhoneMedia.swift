@@ -109,6 +109,34 @@ extension StubHouseUITests {
         return landed
     }
 
+    /// Tap `your device` and wait for the phone page's **header**.
+    ///
+    /// The looser sibling of ``phoneSwitchToDevice(_:waitingFor:)``, for the
+    /// one case that must carry on before a row has been built: at AX5 the
+    /// device list's rows are all below the fold and unbuilt, so a case that
+    /// scrolls to find them cannot first wait for one. Everything else here
+    /// keeps the stricter gate — a case that asserted against a side whose
+    /// first page had not landed is exactly what that one was written for.
+    ///
+    /// The header is not proof the rows arrived, which is why this is not
+    /// the default: it is proof the **device page** is what the switch drew.
+    @MainActor
+    func phoneSwitchToDeviceHeader(_ app: XCUIApplication, waitingFor header: String) -> Bool {
+        let segment = app.buttons[StubPhoneMedia.yourDevice].firstMatch
+        guard segment.waitForExistence(timeout: 30) else {
+            print("=== NO `your device` SEGMENT — tree follows ===")
+            print(app.debugDescription)
+            return false
+        }
+        segment.tap()
+        let landed = app.staticTexts[header].firstMatch.waitForExistence(timeout: 30)
+        if !landed {
+            print("=== THE DEVICE SIDE DREW NO `\(header)` — tree follows ===")
+            print(app.debugDescription)
+        }
+        return landed
+    }
+
     /// Every **button** whose label is exactly `upload`: the row controls,
     /// and nothing else.
     ///
@@ -684,22 +712,78 @@ extension StubHouseUITests {
     /// library's foot is unbuilt at AX5; the case fails instead if fewer than
     /// two leaves could be compared, so it can never pass by measuring
     /// nothing.
+    ///
+    /// ### Why it no longer waits for a row, and no longer swipes the app
+    ///
+    /// Train S009 failed this case at AX5 with "the device side never drew",
+    /// and the tree it printed said the opposite: `phone-source-device` was
+    /// `Selected`, the device header and both upload doors were drawn, and
+    /// the device list's content was 2995 points of unbuilt rows. Two
+    /// mistakes of this case, both about AX5 and neither about the app:
+    ///
+    /// 1. ``phoneSwitchToDevice(_:waitingFor:)`` gates on a **row**, which
+    ///    is right for every other case here and wrong for this one — the
+    ///    thing this case then scrolls to find cannot be the thing it waits
+    ///    for. It gates on the device header instead, which is the first
+    ///    line of the device page at any type size.
+    /// 2. `app.swipeUp()` swipes the centre of the window. At AX5 the stub
+    ///    launch chrome takes the top 300 points and the switch becomes a
+    ///    column, so the window's centre lands **on the switch** and the
+    ///    list never moved. The swipe goes to the device page's own
+    ///    `ScrollView`, picked by the header it contains (the server side's
+    ///    `ScrollView` is still in the tree at the same frame, holding its
+    ///    place across the switch, so `.firstMatch` alone would take either).
+    ///
+    /// Each leaf's height is recorded the **first flick it is built on** and
+    /// never overwritten, rather than reading all six once at the end. At
+    /// AX5 the viewport is a little over one row tall, so no single scroll
+    /// position holds two leaves; measuring as they appear is what makes the
+    /// comparison possible at all, and it measures four more leaves at
+    /// `large` than the single read did.
     @MainActor
     func testPhoneMedia_TheDeviceSideTextGrowsAtAX5() throws {
-        func heights(_ app: XCUIApplication) -> [String: CGFloat] {
+        let leaves = [
+            ("row-title", "label == 'quenlo lullaby.mp3'"),
+            ("row-meta", "label BEGINSWITH '3.0 MB · '"),
+            ("row-duration", "label == '3:34'"),
+            ("folder-name", "label == 'Trips'"),
+            ("count", "label BEGINSWITH 'showing 5 of'"),
+            ("too-big", "label BEGINSWITH 'too big to upload from a phone'"),
+        ]
+
+        /// Flick the device list to its foot, taking each leaf's height the
+        /// first time it exists.
+        ///
+        /// The drag is two **coordinates**, not `list.swipeUp()`, and they
+        /// are worked out once from the list's frame before the first flick.
+        /// An `XCUIElement` is re-resolved on every use, and the only handle
+        /// on this `ScrollView` is the header it contains — a header that is
+        /// in a `LazyVStack` and unbuilds the moment it scrolls off, so the
+        /// second flick would have had nothing to send a swipe to.
+        func heights(_ app: XCUIApplication, _ frame: CGRect) -> [String: CGFloat] {
+            let origin = app.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
+            let from = origin.withOffset(
+                CGVector(dx: frame.midX, dy: frame.maxY - 16)
+            )
+            let to = origin.withOffset(
+                CGVector(dx: frame.midX, dy: frame.minY + 16)
+            )
             var out: [String: CGFloat] = [:]
-            for (leaf, predicate) in [
-                ("row-title", "label == 'quenlo lullaby.mp3'"),
-                ("row-meta", "label BEGINSWITH '3.0 MB · '"),
-                ("row-duration", "label == '3:34'"),
-                ("folder-name", "label == 'Trips'"),
-                ("count", "label BEGINSWITH 'showing 5 of'"),
-                ("too-big", "label BEGINSWITH 'too big to upload from a phone'"),
-            ] {
-                let found = app.staticTexts
-                    .matching(NSPredicate(format: predicate))
-                    .firstMatch
-                if found.exists { out[leaf] = found.frame.height }
+            // A press-then-drag, not a flick: a flick's momentum carries it
+            // over rows, and at AX5 a row stepped over is a leaf that was
+            // never built and so never measured. It also moves only the drag
+            // distance, hence a count this high — at AX5 the viewport is
+            // under 180 points and the device list's content is 2995.
+            let flicks = 24
+            for flick in 0...flicks {
+                for (leaf, predicate) in leaves where out[leaf] == nil {
+                    let found = app.staticTexts
+                        .matching(NSPredicate(format: predicate))
+                        .firstMatch
+                    if found.exists { out[leaf] = found.frame.height }
+                }
+                if out.count == leaves.count { break }
+                if flick < flicks { from.press(forDuration: 0.1, thenDragTo: to) }
             }
             return out
         }
@@ -712,22 +796,20 @@ extension StubHouseUITests {
         ] {
             let app = phoneLaunch(push: "Files", mode: mode)
             XCTAssertTrue(
-                phoneSwitchToDevice(app, waitingFor: StubPhoneMedia.phoneTrackWord),
+                phoneSwitchToDeviceHeader(app, waitingFor: StubPhoneMedia.phoneFilesSubtitle),
                 "the device side never drew at \(label)"
             )
-            // At AX5 the header, the switch (a column there), the two add
-            // doors and the filter fill the window, so the rows below the
-            // first are not merely off screen but unbuilt. A plain `swipeUp`
-            // steps over rows, which is fine here: nothing is being tapped,
-            // only measured once it exists.
-            for _ in 0..<6 where !app.staticTexts
-                .matching(NSPredicate(format: "label == 'quenlo lullaby.mp3'"))
-                .firstMatch.exists {
-                app.swipeUp()
-            }
-            usleep(1_000_000)
+            let list = app.scrollViews
+                .containing(
+                    NSPredicate(format: "label == %@", StubPhoneMedia.phoneFilesSubtitle)
+                )
+                .firstMatch
+            XCTAssertTrue(
+                list.waitForExistence(timeout: 15),
+                "the device page's list is not a scroll view at \(label)"
+            )
+            let here = heights(app, list.frame)
             evidence(app, "phonemedia-scale-\(label)")
-            let here = heights(app)
             measured[label] = here
             for (leaf, height) in here.sorted(by: { $0.key < $1.key }) {
                 print("PHONEMEDIA SCALE [\(label)] \(leaf) height=\(height)")
@@ -828,6 +910,10 @@ enum StubPhoneMedia {
     /// `/api/files/browse` returns as `blocked_reason` and what the button
     /// reads out as its value.
     static let blockedReason = "\"a simulator\" is blocked from changing files by an admin"
+    /// `PhoneMediaStrings.phoneFilesSubtitle` — the device page's own second
+    /// line, and the first thing on it that is drawn at every type size.
+    /// Spelt out here, like every other string this file matches on.
+    static let phoneFilesSubtitle = "on this phone — folders you add, and your photos"
     static let noMusicOnDevice = "no music on this device"
     static let downloadsLandHere = "downloads from a domovoi land in Downloads/Domovoi"
     static let noLongerReadable = "no longer readable"
