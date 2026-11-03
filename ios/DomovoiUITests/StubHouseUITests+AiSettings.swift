@@ -251,6 +251,27 @@ extension StubHouseUITests {
         toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
     }
 
+    /// A `staticText` matched on its **whole** label, through a predicate.
+    ///
+    /// `app.staticTexts[label]` cannot be used for the dashboard paragraph.
+    /// XCTest refuses a string identifier longer than 128 characters —
+    /// `NSInternalInconsistencyException: Invalid query - string identifier
+    /// '…' exceeds maximum length of 128 characters` — and that sentence is
+    /// 166 of them, so the subscript **threw** rather than answering false:
+    /// round 1 lost both halves of
+    /// ``testAiSettings_ModelsAndInternetSendYouToTheDashboardAddress()`` to
+    /// it while the app was drawing the paragraph correctly (the train's
+    /// `aisettings-models` tree has it, verbatim, at `0x102635cc0`).
+    ///
+    /// Still an **equality** on the full label, and deliberately not a
+    /// `CONTAINS`: the negative half of that case asserts the Internet card
+    /// does *not* carry the Models sentence, and a loosened match would be a
+    /// case that passes because it asked less.
+    @MainActor
+    fileprivate func aiSettingsExactText(_ app: XCUIApplication, _ label: String) -> XCUIElement {
+        app.staticTexts.matching(NSPredicate(format: "label == %@", label)).firstMatch
+    }
+
     // MARK: - the Chat panel
 
     /// The panel draws, the switch is the state, and the off-note belongs to
@@ -531,7 +552,7 @@ extension StubHouseUITests {
         )
         evidence(app, "aisettings-models")
         XCTAssertTrue(
-            app.staticTexts[AiSettingsUnderTest.paragraph("Models")].exists,
+            aiSettingsExactText(app, AiSettingsUnderTest.paragraph("Models")).exists,
             "the Models card's paragraph does not name Models"
         )
         // The address, as text. The exact characters, because this is a thing
@@ -578,7 +599,7 @@ extension StubHouseUITests {
         )
         evidence(app, "aisettings-internet")
         XCTAssertTrue(
-            app.staticTexts[AiSettingsUnderTest.paragraph("Internet")].exists,
+            aiSettingsExactText(app, AiSettingsUnderTest.paragraph("Internet")).exists,
             "the Internet card's paragraph does not name Internet"
         )
         XCTAssertTrue(
@@ -593,7 +614,7 @@ extension StubHouseUITests {
                 + "wrong section"
         )
         XCTAssertFalse(
-            app.staticTexts[AiSettingsUnderTest.paragraph("Models")].exists,
+            aiSettingsExactText(app, AiSettingsUnderTest.paragraph("Models")).exists,
             "the Internet card's paragraph names Models"
         )
     }

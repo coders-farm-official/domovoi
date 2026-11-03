@@ -137,7 +137,16 @@ struct AiSettingsChatPanel: View {
         // the row that holds the button, so a row owning its own write is the
         // exact shape the standing rule forbids.
         let button = Button(AiSettingsStrings.warnAgain) { ai.warnAgain(kind.key) }
-            .buttonStyle(.bordered)
+            // **Outlined, not filled** — `OutlinedButton` (`:71`), and this
+            // is the half of that word the first pass dropped. `.bordered`
+            // fills the chip with the tint at about 0.18, which puts
+            // `brandInk` on `(231, 221, 208)` rather than on the card: the
+            // train measured that pair at **4.06:1** and Apple's audit
+            // returned two "Contrast nearly passed", one per row. The same
+            // ink on the card's own grey is **5.19:1**. A stroke and a clear
+            // background is both the faithful control and the one that
+            // passes, so the fix is the style, not the colour.
+            .buttonStyle(AiSettingsOutlinedButtonStyle())
             .frame(minHeight: 44)
             // **An identifier, not a label.** Every row's button reads
             // `warn again` — Android's wording (`:71`), and not mine to
@@ -164,5 +173,45 @@ struct AiSettingsChatPanel: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+}
+
+/// Android's `OutlinedButton` on this phone: a stroke, a clear background,
+/// and the label in ``Color/brandInk``.
+///
+/// SwiftUI has no outlined button style — `.bordered` is a *filled* chip —
+/// and the fill is not cosmetic here: it is the surface the label's contrast
+/// is measured against. See ``AiSettingsChatPanel/silencedRow(_:_:)`` for the
+/// two measurements.
+///
+/// The name carries the item's prefix because this module takes twenty
+/// branches tonight and `OutlinedButtonStyle` is a name three of them would
+/// reach for.
+struct AiSettingsOutlinedButtonStyle: ButtonStyle {
+
+    /// `8` to sit inside ``PanelCard``'s 12, the way a Material outlined
+    /// button sits inside its card.
+    private let corner: CGFloat = 8
+
+    func makeBody(configuration: Configuration) -> some View {
+        let shape = RoundedRectangle(cornerRadius: corner, style: .continuous)
+        return configuration.label
+            .font(.subheadline)
+            .foregroundStyle(Color.brandInk)
+            // The label wraps rather than shrinking — the standing rule — so
+            // a long word at an accessibility size grows the button.
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 7)
+            // The outline is decoration beside its own text and is drawn at
+            // half strength the way Material's is; the label is what a person
+            // reads and it is at full ink.
+            .background { shape.strokeBorder(Color.brandInk.opacity(0.5), lineWidth: 1) }
+            // Pressed feedback without a fill: the whole control dims, which
+            // keeps the label's contrast a function of one surface only.
+            .opacity(configuration.isPressed ? 0.55 : 1)
+            // Without this the gap between the stroke and the words is not
+            // part of the button, and a 44-point target would be a lie.
+            .contentShape(shape)
     }
 }
