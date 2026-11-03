@@ -160,6 +160,29 @@ struct MusicPlaylistBadge: View {
             // Decorative: the name is right beside it and the emoji is read
             // out by its own Unicode name otherwise, which for a road sign
             // is "motorway" and says nothing about the playlist.
+            //
+            // **`children: .ignore` as well as hidden, and train S010 is
+            // why.** `accessibilityHidden` kept the glyph out of the merged
+            // label — the sheet header read `Longwater Drive, songs for the
+            // Vantersk road`, with no motorway in it — but every one of this
+            // badge's three call sites merges it into a row
+            // (`.accessibilityElement(children: .combine)` here and in
+            // ``MusicPlaylistSheet/identity``, a `Button`'s own merge in
+            // ``MusicAddToPlaylistSheet``), and a merge collects the
+            // descendants back into the hierarchy. So `Text(emoji)` stayed
+            // an element Apple's audit could read, and it read two things
+            // off it: `Text clipped` (a `Text` inside a `frame(width:
+            // height:)` — the box and the font both scale with
+            // `@ScaledMetric`, so nothing is actually clipped, but the
+            // audit has only the fixed frame to look at) and `Contrast
+            // failed`, which no emoji can pass: its pixels are its own
+            // colours and are not ours to change. A badge whose mark is the
+            // `music.note.list` glyph or a bare `cover_color` rectangle
+            // raised neither, which is what named the `Text` as the cause.
+            // `children: .ignore` makes the badge one leaf with nothing
+            // under it, so the merge has nothing to collect and the audit
+            // has no text here to measure.
+            .accessibilityElement(children: .ignore)
             .accessibilityHidden(true)
     }
 

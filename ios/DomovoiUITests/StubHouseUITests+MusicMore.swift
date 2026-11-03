@@ -69,10 +69,15 @@ extension StubHouseUITests {
         // said "the playlists tab never drew a row", which reads as a screen
         // that did not answer; the tree beside it said otherwise. At
         // AX5 the three room cards above the strip are 1520 points tall
-        // against a 400-point content area, so the strip is not off screen —
-        // it is *unbuilt*, the lazy foot of a `LazyVStack` nobody has
-        // scrolled to. Scrolling to it is what a person does, so the case
-        // does it too, rather than the screen being called broken.
+        // against a 178-point content area — the shell's crumb, the server
+        // button and the phone-source switch take 523 of the 852 — so the
+        // strip is not off screen, it is *unbuilt*, the lazy foot of a
+        // `LazyVStack` nobody has scrolled to. Scrolling to it is what a
+        // person does, so the case does it too, rather than the screen being
+        // called broken. S010 then failed here a second time, for a
+        // different reason: the flicks were landing on the wrong scroll view
+        // (``musicMorePage(_:)``) and there were a third as many as the
+        // distance needs.
         //
         // Not an app defect: Android stacks `NowPlayingCards` above
         // `ScrollableTabRow` in the same order, and at the ordinary size the
@@ -114,6 +119,37 @@ extension StubHouseUITests {
         return app.buttons[MusicMoreUnderTest.close].waitForExistence(timeout: 20)
     }
 
+    /// Music's own page scroll view — the one a flick should move.
+    ///
+    /// **Not `app.scrollViews.firstMatch`, and train S010 is why.** Music's
+    /// screen has three scroll views, and at an accessibility size the one
+    /// the query returned first was the **phone bar** — `home · music ·
+    /// videos · chat` goes scrollable sideways once its words are 48 points
+    /// tall. Twelve flicks landed on `ScrollView at {{0, 706}, {393, 146}}`,
+    /// which is that bar, while the page sat at `{{0, 523.3}, {393, 178.7}}`
+    /// and never moved; the case then reported the strip as never drawn. The
+    /// page is the one that scrolls **vertically**: its content is 3652
+    /// points inside a 178-point viewport, where the bar's content is
+    /// shorter than its own frame and the tab strip's is exactly as tall as
+    /// its own. So pick by overflow, not by order.
+    @MainActor
+    func musicMorePage(_ app: XCUIApplication) -> XCUIElement? {
+        guard app.scrollViews.firstMatch.waitForExistence(timeout: 20) else { return nil }
+        return app.scrollViews.allElementsBoundByIndex
+            .map { ($0, musicMoreOverflow($0)) }
+            .filter { $0.1 > 1 }
+            .max(by: { $0.1 < $1.1 })?
+            .0
+    }
+
+    /// How much taller a scroll view's content is than the scroll view.
+    @MainActor
+    func musicMoreOverflow(_ page: XCUIElement) -> CGFloat {
+        let content = page.children(matching: .other).firstMatch
+        guard content.exists else { return 0 }
+        return content.frame.height - page.frame.height
+    }
+
     /// Scroll Music until `element` is built.
     ///
     /// **Not `scrollUntilBuilt`**: that one scrolls
@@ -125,31 +161,51 @@ extension StubHouseUITests {
     /// `.slow`, for the reason the Chat pass wrote down: a plain `swipeUp()`
     /// steps over rows, and a lazy list's foot is unbuilt rather than merely
     /// off screen.
+    ///
+    /// **Sixty flicks, not twelve, and a stop when nothing moves.** At AX5
+    /// the three room cards above the strip are 1520 points tall and the
+    /// whole page is 3652 inside a 178-point viewport, so a slow flick —
+    /// momentum proportional to that short viewport — is worth under a
+    /// hundred points and the foot is thirty-five flicks away. The budget is
+    /// the distance, and the `minY` check is what keeps a case that is
+    /// *already* at the foot from paying for it: the moment a flick moves
+    /// the content less than a point, the content is as far up as it goes
+    /// and another fifty-nine would change nothing.
     @MainActor
-    func musicMoreScroll(_ app: XCUIApplication, to element: XCUIElement, flicks: Int = 12) -> Bool {
+    func musicMoreScroll(_ app: XCUIApplication, to element: XCUIElement, flicks: Int = 60) -> Bool {
         if element.exists { return true }
-        let page = app.scrollViews.firstMatch
-        guard page.waitForExistence(timeout: 20) else {
-            print("=== NO SCROLL VIEW ON MUSIC — tree follows ===")
+        guard let page = musicMorePage(app) else {
+            print("=== NO SCROLLING SCROLL VIEW ON MUSIC — tree follows ===")
             print(app.debugDescription)
             return element.exists
         }
+        let content = page.children(matching: .other).firstMatch
+        var last = CGFloat.greatestFiniteMagnitude
         for _ in 0..<flicks {
             if element.exists { return true }
+            // `nan` when the content element is momentarily not in the
+            // snapshot: a missing measurement is not "nothing moved", so it
+            // keeps flicking rather than deciding it is at the foot.
+            let top = content.exists ? content.frame.minY : CGFloat.nan
+            if !top.isNaN, abs(top - last) < 1 { break }
+            last = top
             page.swipeUp(velocity: .slow)
         }
         if !element.exists {
-            print("=== \(flicks) FLICKS AND STILL UNBUILT — tree follows ===")
+            print("=== SCROLLED TO THE FOOT AND STILL UNBUILT — tree follows ===")
             print(app.debugDescription)
         }
         return element.exists
     }
 
     /// Back to the top, so the tab bar is reachable again after a scroll.
+    ///
+    /// ``musicMorePage(_:)``, for the reason written there: the first scroll
+    /// view on this screen can be the phone bar, and swiping that one moves
+    /// nothing.
     @MainActor
     func musicMoreScrollTop(_ app: XCUIApplication, flicks: Int = 12) {
-        let page = app.scrollViews.firstMatch
-        guard page.exists else { return }
+        guard let page = musicMorePage(app) else { return }
         let bar = startingWith(app, MusicMoreUnderTest.tabPlaylists)
         for _ in 0..<flicks {
             if bar.exists, bar.isHittable { return }
@@ -267,6 +323,47 @@ extension StubHouseUITests {
         XCTAssertTrue(
             containing(app, MusicMoreUnderTest.derivedFromFavorites).exists,
             "the virtual playlist does not say where it comes from"
+        )
+    }
+
+    /// The badge's glyph is **not an element** — the fix train S010's audit
+    /// asked for.
+    ///
+    /// The audit read `Text clipped` and `Contrast failed` off the motorway
+    /// emoji on Longwater Drive's badge, in the sheet header and on the row
+    /// alike: ``MusicPlaylistBadge`` marked itself hidden, but all three of
+    /// its call sites merge it into a row and a merge collects the
+    /// descendants back. Neither finding has an answer in the drawing — the
+    /// box and the font scale together, and an emoji's own colours are not
+    /// ours to contrast — so the answer is that a decorative mark is not in
+    /// the tree at all (`children: .ignore`).
+    ///
+    /// Asserted on the glyph **and** on the row that carries it: an app that
+    /// failed to draw the playlists tab at all would satisfy the absence,
+    /// and that is the one way this case could pass while saying nothing.
+    @MainActor
+    func testMusicMore_ThePlaylistEmojiIsNotAnElement() throws {
+        musicMoreReset()
+        let (app, landed) = openPlaylistsTab()
+        XCTAssertTrue(landed, "the playlists tab never drew a row")
+        XCTAssertTrue(
+            containing(app, MusicMoreUnderTest.longwater).exists,
+            "the playlist whose badge carries the emoji is not on the tab"
+        )
+        evidence(app, "musicmore-10B-badge-decorative")
+
+        XCTAssertEqual(
+            0, countContaining(app, MusicMoreUnderTest.playlistEmoji),
+            "the decorative badge glyph is an accessibility element again, "
+                + "so Apple's audit can read a clipped-text and a contrast "
+                + "failure off it (train S010)"
+        )
+
+        // And in the sheet header, which is where the audit found it.
+        XCTAssertTrue(openPlaylistSheet(app, MusicMoreUnderTest.longwater), "the sheet never opened")
+        XCTAssertEqual(
+            0, countContaining(app, MusicMoreUnderTest.playlistEmoji),
+            "the sheet header's badge glyph is an accessibility element again"
         )
     }
 
@@ -1159,6 +1256,9 @@ enum MusicMoreUnderTest {
     static let favorites = "Favorites"
     static let longwater = "Longwater Drive"
     static let longwaterNote = "songs for the Vantersk road"
+    /// Longwater Drive's `cover_emoji` (`fixtures/musicmore.py:269`) — the
+    /// one glyph on this screen that must never be an element of its own.
+    static let playlistEmoji = "\u{1F6E3}"
     static let quietHours = "Quiet Hours"
     static let derivedFromFavorites = "derived from your favorites"
     /// Longwater Drive's count — the line it must **not** show, because it
