@@ -137,8 +137,14 @@ final class PlayerMicArbiterTests: XCTestCase {
         )
 
         let activations = h.session.activations.count
+        // Settled on the COUNT, not on `categories.last == .spoken`: that was
+        // already true from `play()`, so the case read the session before the
+        // release's task had run and passed against the broken code (measured
+        // on the negative control, 2026-11-02).
+        let categories = h.session.categories.count
         lease?.release()
-        await h.settle(until: { h.session.categories.last == .spoken }, "the category coming back")
+        await h.settle(until: { h.session.categories.count > categories }, "the category coming back")
+        XCTAssertEqual(h.session.categories.last, .spoken)
         XCTAssertFalse(
             h.model.isPlaying,
             "the session comes back; playback does not — starting the podcast up as the call ends is nobody's ask"
