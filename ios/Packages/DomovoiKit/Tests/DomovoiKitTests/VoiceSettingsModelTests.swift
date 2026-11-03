@@ -2,6 +2,16 @@ import Foundation
 import XCTest
 @testable import DomovoiKit
 
+/// The three real `model_ref`s, at file scope rather than on the test class:
+/// the stub's dispatcher and `parkRequest`'s closures are `@Sendable` and
+/// nonisolated, and a `static let` on a `@MainActor` class cannot be read
+/// from either.
+private enum VoiceIDs {
+    static let norman = "en_US-norman-medium"
+    static let kristin = "en_US-kristin-medium"
+    static let ljspeech = "en_US-ljspeech-medium"
+}
+
 /// The Voices section's model against a server that is not a server: what it
 /// asks for, which voice it will offer to play, and what it does with an
 /// answer that arrived for a question nobody is asking any more.
@@ -67,9 +77,6 @@ final class VoiceSettingsModelTests: XCTestCase {
         }
     }
 
-    private static let norman = "en_US-norman-medium"
-    private static let kristin = "en_US-kristin-medium"
-    private static let ljspeech = "en_US-ljspeech-medium"
 
     /// The house's `/api/voice*`. One voice of each sample source, exactly as
     /// the server's own map can be: `"voice"`, `"clip"`, `null` — so "a
@@ -77,12 +84,12 @@ final class VoiceSettingsModelTests: XCTestCase {
     /// different answers.
     private final class House: Sendable {
         /// `server_voice`, which may be an id outside the three.
-        let serverVoice = Shared<String>(VoiceSettingsModelTests.kristin)
+        let serverVoice = Shared<String>(VoiceIDs.kristin)
         /// Which voices the server says it can really speak.
         let sources = Shared<[String: String?]>([
-            VoiceSettingsModelTests.norman: "voice",
-            VoiceSettingsModelTests.kristin: "clip",
-            VoiceSettingsModelTests.ljspeech: nil,
+            VoiceIDs.norman: "voice",
+            VoiceIDs.kristin: "clip",
+            VoiceIDs.ljspeech: nil,
         ])
         let infoStatus = Shared<Int>(200)
         let samplesStatus = Shared<Int>(200)
@@ -96,11 +103,11 @@ final class VoiceSettingsModelTests: XCTestCase {
         private func infoBody() -> String {
             """
             {"voices": [
-               {"id": "\(VoiceSettingsModelTests.norman)", "name": "Norman", "sex": "male",
+               {"id": "\(VoiceIDs.norman)", "name": "Norman", "sex": "male",
                 "sample_rate": 22050, "size_bytes": 63531379, "sha256": "b97394aa"},
-               {"id": "\(VoiceSettingsModelTests.kristin)", "name": "Kristin", "sex": "female",
+               {"id": "\(VoiceIDs.kristin)", "name": "Kristin", "sex": "female",
                 "sample_rate": 22050, "size_bytes": 63531379, "sha256": "c21180ff"},
-               {"id": "\(VoiceSettingsModelTests.ljspeech)", "name": "Linda", "sex": "female",
+               {"id": "\(VoiceIDs.ljspeech)", "name": "Linda", "sex": "female",
                 "sample_rate": 22050, "size_bytes": 63531379, "sha256": "d44021ab"}],
              "server_voice": "\(serverVoice.current)",
              "pronunciations": [{"word": "Caoimhe", "say_like": "kee-va"}],
@@ -210,7 +217,7 @@ final class VoiceSettingsModelTests: XCTestCase {
         XCTAssertEqual(VoiceSettingsNaming.houseVoiceLabel(info!), "Kristin (female)")
         // The seeded word, which appears nowhere in the built-in wording.
         XCTAssertEqual(info?.entries.map(\.word), ["Caoimhe"])
-        XCTAssertEqual(model.samples.data?.source(of: Self.norman), .voice)
+        XCTAssertEqual(model.samples.data?.source(of: VoiceIDs.norman), .voice)
     }
 
     /// The samples read failing must not blank the voice list: the list is
@@ -224,7 +231,7 @@ final class VoiceSettingsModelTests: XCTestCase {
         XCTAssertEqual(model.info.data?.voices.count, 3)
         XCTAssertNil(model.samples.data)
         // And no button anywhere, which is the safe side of the rule.
-        for id in [Self.norman, Self.kristin, Self.ljspeech] {
+        for id in [VoiceIDs.norman, VoiceIDs.kristin, VoiceIDs.ljspeech] {
             XCTAssertFalse(model.canPlay(id), "\(id) should have no button")
         }
     }
@@ -253,11 +260,11 @@ final class VoiceSettingsModelTests: XCTestCase {
         let (model, house, _, _, _) = rig()
         house.install()
         await loaded(model)
-        XCTAssertTrue(model.canPlay(Self.norman))
-        XCTAssertFalse(model.canPlay(Self.kristin))
-        XCTAssertFalse(model.canPlay(Self.ljspeech))
-        XCTAssertEqual(model.whyNoSample(Self.norman), nil)
-        XCTAssertEqual(model.whyNoSample(Self.kristin), VoiceSettingsStrings.noSampleToPlay)
+        XCTAssertTrue(model.canPlay(VoiceIDs.norman))
+        XCTAssertFalse(model.canPlay(VoiceIDs.kristin))
+        XCTAssertFalse(model.canPlay(VoiceIDs.ljspeech))
+        XCTAssertEqual(model.whyNoSample(VoiceIDs.norman), nil)
+        XCTAssertEqual(model.whyNoSample(VoiceIDs.kristin), VoiceSettingsStrings.noSampleToPlay)
     }
 
     /// The sample route 404s for anything outside `PIPER_PINS`
@@ -278,8 +285,8 @@ final class VoiceSettingsModelTests: XCTestCase {
     func testNothingIsOfferedBeforeTheSamplesReadAnswers() {
         let (model, house, _, _, _) = rig()
         house.install()
-        XCTAssertFalse(model.canPlay(Self.norman))
-        XCTAssertNil(model.whyNoSample(Self.norman))
+        XCTAssertFalse(model.canPlay(VoiceIDs.norman))
+        XCTAssertNil(model.whyNoSample(VoiceIDs.norman))
     }
 
     /// A tap that could not work must not become a request. A guard the view
@@ -289,7 +296,7 @@ final class VoiceSettingsModelTests: XCTestCase {
         let (model, house, ears, _, _) = rig()
         house.install()
         await loaded(model)
-        model.tappedSample(Self.kristin)
+        model.tappedSample(VoiceIDs.kristin)
         for _ in 0..<200 { await Task.yield() }
         XCTAssertEqual(model.sampleFetches, 0)
         XCTAssertEqual(ears.played.count, 0)
@@ -303,16 +310,16 @@ final class VoiceSettingsModelTests: XCTestCase {
         let (model, house, ears, _, _) = rig()
         house.install()
         await loaded(model)
-        model.tappedSample(Self.norman)
+        model.tappedSample(VoiceIDs.norman)
         await settleUntil({ model.playingVoiceID != nil }, "the sample")
-        XCTAssertEqual(model.lastSamplePath, "/api/voice/sample/\(Self.norman)")
+        XCTAssertEqual(model.lastSamplePath, "/api/voice/sample/\(VoiceIDs.norman)")
         XCTAssertEqual(model.sampleFetches, 1)
-        XCTAssertEqual(model.playingVoiceID, Self.norman)
+        XCTAssertEqual(model.playingVoiceID, VoiceIDs.norman)
         XCTAssertNil(model.fetchingSampleID)
         XCTAssertNil(model.sampleError)
         // The bytes name their own voice: this is the assertion a button
         // wired to the wrong row fails.
-        XCTAssertEqual(ears.playedText, ["WAV:\(Self.norman)"])
+        XCTAssertEqual(ears.playedText, ["WAV:\(VoiceIDs.norman)"])
     }
 
     /// One button, two labels (`VoicePanel.kt:210`): a tap on the row that is
@@ -321,9 +328,9 @@ final class VoiceSettingsModelTests: XCTestCase {
         let (model, house, ears, _, _) = rig()
         house.install()
         await loaded(model)
-        model.tappedSample(Self.norman)
+        model.tappedSample(VoiceIDs.norman)
         await settleUntil({ model.playingVoiceID != nil }, "the sample")
-        model.tappedSample(Self.norman)
+        model.tappedSample(VoiceIDs.norman)
         XCTAssertNil(model.playingVoiceID)
         XCTAssertGreaterThan(ears.stops, 0)
         XCTAssertEqual(model.sampleFetches, 1, "stopping must not ask for it again")
@@ -335,7 +342,7 @@ final class VoiceSettingsModelTests: XCTestCase {
         let (model, house, ears, _, _) = rig()
         house.install()
         await loaded(model)
-        model.tappedSample(Self.norman)
+        model.tappedSample(VoiceIDs.norman)
         await settleUntil({ model.playingVoiceID != nil }, "the sample")
         ears.finished()
         XCTAssertNil(model.playingVoiceID)
@@ -348,7 +355,7 @@ final class VoiceSettingsModelTests: XCTestCase {
         house.install()
         await loaded(model)
         house.sampleStatus.set(409)
-        model.tappedSample(Self.norman)
+        model.tappedSample(VoiceIDs.norman)
         await settleUntil({ model.sampleError != nil }, "the failure")
         XCTAssertNil(model.playingVoiceID)
         XCTAssertNil(model.fetchingSampleID)
@@ -362,7 +369,7 @@ final class VoiceSettingsModelTests: XCTestCase {
         house.install()
         await loaded(model)
         ears.refuse = DomovoiError.notPermitted("that is not audio this phone plays")
-        model.tappedSample(Self.norman)
+        model.tappedSample(VoiceIDs.norman)
         await settleUntil({ model.sampleError != nil }, "the failure")
         XCTAssertNil(model.playingVoiceID)
         XCTAssertEqual(
@@ -388,13 +395,13 @@ final class VoiceSettingsModelTests: XCTestCase {
         await loaded(model)
 
         let park = parkRequest(
-            to: "/api/voice/sample/\(Self.norman)",
-            answering: { StubURLProtocol.Answer(body: House.wav(VoiceSettingsModelTests.norman)) },
+            to: "/api/voice/sample/\(VoiceIDs.norman)",
+            answering: { StubURLProtocol.Answer(body: House.wav(VoiceIDs.norman)) },
             otherwise: { house.answer($0) }
         )
-        model.tappedSample(Self.norman)
+        model.tappedSample(VoiceIDs.norman)
         await settle(for: park.arrived, what: "the sample request")
-        XCTAssertEqual(model.fetchingSampleID, Self.norman)
+        XCTAssertEqual(model.fetchingSampleID, VoiceIDs.norman)
 
         // Inside the round trip.
         XCTAssertTrue(store.setServerURL(serverB))
@@ -415,32 +422,32 @@ final class VoiceSettingsModelTests: XCTestCase {
     func testTheFirstTapsBytesDoNotPlayUnderTheSecondTapsRow() async {
         let house = House()
         // Two playable voices, so there are two buttons to tap.
-        house.sources.mutate { $0[VoiceSettingsModelTests.ljspeech] = "voice" }
+        house.sources.mutate { $0[VoiceIDs.ljspeech] = "voice" }
         let (model, _, ears, _, _) = rig(house: house)
         house.install()
         await loaded(model)
 
         let park = parkRequest(
-            to: "/api/voice/sample/\(Self.norman)",
-            answering: { StubURLProtocol.Answer(body: House.wav(VoiceSettingsModelTests.norman)) },
+            to: "/api/voice/sample/\(VoiceIDs.norman)",
+            answering: { StubURLProtocol.Answer(body: House.wav(VoiceIDs.norman)) },
             otherwise: { house.answer($0) }
         )
-        model.tappedSample(Self.norman)
+        model.tappedSample(VoiceIDs.norman)
         await settle(for: park.arrived, what: "Norman's sample request")
 
         // The second tap, while the first is parked. It cancels the first
         // task, so Norman's answer may never be delivered at all — and if it
         // is, ``claim`` files it as superseded. Either way Linda plays and
         // Norman does not.
-        model.tappedSample(Self.ljspeech)
+        model.tappedSample(VoiceIDs.ljspeech)
         park.release.set(true)
         await settleUntil({ model.playingVoiceID != nil }, "Linda's sample")
 
         XCTAssertFalse(park.ranOut.current, "the park outlasted the request: this test proved nothing")
-        XCTAssertEqual(model.playingVoiceID, Self.ljspeech)
-        XCTAssertEqual(ears.playedText, ["WAV:\(Self.ljspeech)"])
+        XCTAssertEqual(model.playingVoiceID, VoiceIDs.ljspeech)
+        XCTAssertEqual(ears.playedText, ["WAV:\(VoiceIDs.ljspeech)"])
         XCTAssertFalse(
-            ears.playedText.contains("WAV:\(Self.norman)"),
+            ears.playedText.contains("WAV:\(VoiceIDs.norman)"),
             "Norman's sample played under Linda's button"
         )
     }
@@ -451,7 +458,7 @@ final class VoiceSettingsModelTests: XCTestCase {
         let (model, house, ears, store, container) = rig()
         house.install()
         await loaded(model)
-        model.tappedSample(Self.norman)
+        model.tappedSample(VoiceIDs.norman)
         await settleUntil({ model.playingVoiceID != nil }, "the sample")
         XCTAssertTrue(store.setServerURL(serverB))
         // What the shell does after a switch (``ShellModel/refresh()``), and
