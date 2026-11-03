@@ -689,8 +689,18 @@ extension StubHouseUITests {
         XCTAssertTrue(landed, "the audiobooks list never answered")
         XCTAssertTrue(openBook(app, StubAudiobooks.tehanu), "Tehanu's page never drew")
 
+        // **Waited for, not read the instant the page draws.** The back
+        // control is the page's head and exists as soon as the push lands;
+        // the start control is drawn from `canPlay`, which is false until
+        // `AudiobookDetailModel.read` has the book (`AudiobookDetailView.swift:186`).
+        // Train S007 asked 50 ms after the head appeared and reported "a
+        // fresh book's button does not say `play`" against a page that had
+        // not been told what the book was yet.
         let play = app.buttons[StubAudiobooks.play].firstMatch
-        XCTAssertTrue(play.exists, "a fresh book's button does not say `play`")
+        XCTAssertTrue(
+            play.waitForExistence(timeout: 25),
+            "a fresh book's button does not say `play`"
+        )
         XCTAssertFalse(
             app.buttons[StubAudiobooks.resume].exists,
             "a book nobody has started says `resume`"
@@ -906,9 +916,39 @@ extension StubHouseUITests {
     ///
     /// What is left allowed is the one class `testTheFilesListAudits` settled:
     /// a **named** `Dynamic Type font sizes …`, whose leaves
-    /// ``testAudiobooks_TheLibraryTextGrowsAtAX5()`` measures. Everything
-    /// else, the seven anonymous `Potentially inaccessible text` included,
-    /// fails here.
+    /// ``testAudiobooks_TheLibraryTextGrowsAtAX5()`` measures.
+    ///
+    /// ### And the one class that hiding the page behind the question created
+    ///
+    /// Train S007 answered with **seven** anonymous
+    /// `Potentially inaccessible text` — "this element appears to display
+    /// text that should be represented using the accessibility API". They are
+    /// the page itself: `audiobooks-61-book-page-audit.png` shows exactly
+    /// seven of Dune's chapter rows legible below the card, and the tree
+    /// taken with them shows the page's scroll view holding **no** elements
+    /// at all. That is `.accessibilityHidden(true)` doing precisely what it
+    /// was added to do, and the audit is reading the screenshot: text is
+    /// drawn, no element covers it, so it reports one finding per run of
+    /// words it can see.
+    ///
+    /// Both halves cannot be satisfied at once by this screen. The page
+    /// behind a question is either in the tree — and then Apple measures its
+    /// contrast through the 35% scrim and reports three `Contrast failed`,
+    /// which S004 did and which were true — or it is out of the tree, and
+    /// Apple reports it as text with no element. The first set names elements
+    /// a person can still reach by VoiceOver while a question is up; the
+    /// second names text nobody is being offered. The first is the defect.
+    ///
+    /// So this signature is a floor **in this state only**, and it is pinned
+    /// the way ``knownScalingFalsePositive`` is: by its wording, with an
+    /// element of `nil`, and never by a total. One of these that *names* an
+    /// element is a real one and fails. The discriminator is the second audit
+    /// below: the same page with the question **dismissed** must report none
+    /// of them, which is what proves they come from the modal hide and not
+    /// from a view of this screen's own that draws words without exposing
+    /// them. DECISIONS §21.
+    ///
+    /// Everything else fails here.
     @MainActor
     @available(iOS 17.0, *)
     func testAudiobooks_ABookPagePassesApplesAudit() throws {
@@ -927,12 +967,59 @@ extension StubHouseUITests {
         for line in split.rest { print("AUDIOBOOKS AUDIT REST :: \(line)") }
 
         let measured = split.rest.filter { $0.hasPrefix("Dynamic Type font sizes") }
-        let unexplained = split.rest.filter { !measured.contains($0) }
+        let hiddenPage = split.rest.filter(Self.audiobooksAnonymousInaccessibleText)
+        let unexplained = split.rest.filter {
+            !measured.contains($0) && !hiddenPage.contains($0)
+        }
         XCTAssertEqual(
             [], unexplained,
             "a book's page with the question up has \(unexplained.count) "
                 + "findings of its own:\n" + unexplained.joined(separator: "\n")
         )
+
+        // **The discriminator.** The page hidden behind the question is the
+        // only thing those findings may be. Answer `not now` and the page is
+        // content again, in the tree, with no scrim over it — and the same
+        // audit must report none of them. One here is a view of this
+        // screen's own drawing words it never exposes, which is a real
+        // defect and what this half is for.
+        let notNow = app.buttons[StubAudiobooks.notNow].firstMatch
+        XCTAssertTrue(notNow.waitForExistence(timeout: 25), "the question has no way out")
+        notNow.tap()
+        // The page back **in the tree** is the signal, and it is the same
+        // fact this half turns on: `dunePlace` is drawn by the page, so it
+        // cannot be found while the page is hidden behind the question.
+        XCTAssertTrue(
+            app.staticTexts[StubAudiobooks.dunePlace].waitForExistence(timeout: 25),
+            "`not now` left the question up, so the page was never audited uncovered"
+        )
+        XCTAssertFalse(app.buttons[StubAudiobooks.startOver].exists, "the question is still up")
+        let uncovered = try auditIssues(app, "audiobooks-book-page-answered")
+        evidence(app, "audiobooks-62-book-page-audit-answered")
+        let afterSplit = Self.floorAndRest(uncovered)
+        for line in afterSplit.rest { print("AUDIOBOOKS AUDIT REST (ANSWERED) :: \(line)") }
+        XCTAssertEqual(
+            [], afterSplit.rest.filter(Self.audiobooksAnonymousInaccessibleText),
+            "the page draws text it does not expose even with no question over it"
+        )
+        XCTAssertEqual(
+            [],
+            afterSplit.rest.filter { !$0.hasPrefix("Dynamic Type font sizes") },
+            "a book's page with nothing over it has an audit finding of its own:\n"
+                + afterSplit.rest.joined(separator: "\n")
+        )
+    }
+
+    /// `Potentially inaccessible text` with no element — the shape the audit
+    /// takes when it has read words off the screenshot and found no
+    /// accessibility element covering them.
+    ///
+    /// Matched by wording **and** by `element: nil`, so one Apple can
+    /// attribute still lands in `rest` and fails its caller, exactly as
+    /// ``StubHouseUITests/floorAndRest(_:)`` treats the two Dynamic Type
+    /// headlines.
+    static func audiobooksAnonymousInaccessibleText(_ line: String) -> Bool {
+        line.hasPrefix("Potentially inaccessible text") && line.hasSuffix("| element: nil")
     }
 
     /// Every named leaf grows at AX5, and the sort chips become a column.
@@ -1036,9 +1123,32 @@ extension StubHouseUITests {
     /// case below. `StubHouseUITests.swift` is a shared file this item may
     /// not edit (NIGHT-RULES §2), so the same gesture is spelt here against
     /// the right element. DECISIONS, "Needs a shared change".
+    ///
+    /// ### Why this is not `app.scrollViews.firstMatch`
+    ///
+    /// **At an accessibility type size the tab bar is itself a `ScrollView`.**
+    /// That is what killed `testAudiobooks_TheLibraryTextGrowsAtAX5` on train
+    /// S007: the tree at `AccessibilityXXXL` holds the library's scroll view
+    /// at `{{0, 352.3}, {393, 349.7}}` **and** a second one at
+    /// `{{0, 706}, {393, 146}}` carrying `home`, `music`, `videos`, `chat` —
+    /// the phone bar, which scrolls horizontally once its four labels no
+    /// longer fit. `firstMatch` took the bar, and the log is thirty
+    /// `Swipe up ScrollView at {{0.0, 706.0}, {393.0, 146.0}}` against a bar
+    /// that cannot scroll vertically while the library sat at 0%.
+    ///
+    /// The bar is told apart by what it carries rather than by its frame or
+    /// its index: a scroll view holding both the `Home` and the `Chat` tab
+    /// buttons is the bar. No audiobook row is labelled either word. At the
+    /// ordinary sizes the bar is not a scroll view at all, so this returns
+    /// exactly what `firstMatch` returned before.
     @MainActor
     func audiobooksList(_ app: XCUIApplication) -> XCUIElement {
-        app.scrollViews.firstMatch
+        for candidate in app.scrollViews.allElementsBoundByIndex {
+            guard candidate.exists else { continue }
+            let isPhoneBar = candidate.buttons["Home"].exists && candidate.buttons["Chat"].exists
+            if !isPhoneBar { return candidate }
+        }
+        return app.scrollViews.firstMatch
     }
 
     /// Scroll until `element` is **built**, and say whether it was.
