@@ -75,20 +75,26 @@ public final class AiSettingsModel {
     public private(set) var prefs: AiSettingsHeadsUpPrefs
 
     /// - Parameters:
-    ///   - book: where the answer rests. The default is this phone's
-    ///     `UserDefaults` blob.
+    ///   - book: where the answer rests. The default is the process's one
+    ///     book over this phone's `UserDefaults` blob
+    ///     (``AiSettingsHeadsUpBook/shared``) — one instance, so its lock
+    ///     covers this panel's writes and the Chat screen's alike.
     ///   - arguments: the process arguments, read **only** in a DEBUG build
     ///     and only for ``AiSettingsHeadsUpSeed``'s flag. A UI case needs a
     ///     known switch and a known silenced list, and there is no route and
     ///     no stub-house control that could put one there: the state never
     ///     reaches the house (`DECISIONS.md` §6).
     public init(
-        book: AiSettingsHeadsUpBook = AiSettingsHeadsUpBook(),
+        book: AiSettingsHeadsUpBook = .shared,
         arguments: [String] = ProcessInfo.processInfo.arguments
     ) {
         self.book = book
         #if DEBUG
-        if let seed = AiSettingsHeadsUpSeed.parse(arguments) { book.replace(seed) }
+        // `seedOnce`, not `replace`: this model is rebuilt every time the
+        // Chat section is entered, and a seed applied on each construction
+        // would quietly undo whatever the person changed before leaving —
+        // see ``AiSettingsHeadsUpBook/seedOnce(_:)``.
+        if let seed = AiSettingsHeadsUpSeed.parse(arguments) { book.seedOnce(seed) }
         #endif
         prefs = book.prefs
     }

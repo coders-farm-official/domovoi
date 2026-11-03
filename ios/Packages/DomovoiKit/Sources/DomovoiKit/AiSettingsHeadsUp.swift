@@ -88,16 +88,32 @@ public enum AiSettingsHeadsUpKinds {
 /// ``ChatPinBook`` — the same seam, the same shape — reads once in `init` and
 /// answers from memory, which is right for pins because one model owns them.
 /// This state has **two** readers: the Settings panel writes it and a live
-/// `ChatModel` sends it with the next message. `AppContainer` is on this
-/// night's do-not-edit list, so there is no singleton to hang a shared
-/// instance off; two caching instances would diverge silently, and the stale
-/// one would be the one talking to the server. One `UserDefaults` read per
-/// access is cheaper than that bug, and a switch row can afford it.
+/// `ChatModel` sends it with the next message. Two *caching* instances would
+/// diverge silently, and the stale one would be the one talking to the
+/// server. One `UserDefaults` read per access is cheaper than that bug, and a
+/// switch row can afford it.
+///
+/// ### One instance per process, even so — ``shared``
+///
+/// `AppContainer` is on this night's do-not-edit list, so the singleton is a
+/// `static let` on this type rather than a property there. Reading the place
+/// every time already makes two instances agree on *values*; what it cannot
+/// make them agree on is the **read-modify-write** below, because each
+/// instance owns its own lock. The ChatMore item wires `neverWarn` in from
+/// its own screen, and the moment either writer is off the main actor two
+/// instances would drop a kind. So the default everywhere is one instance,
+/// and ``gate`` then covers every writer in the process. Tests still inject
+/// their own book over a `SavedStateBox`.
 ///
 /// `Sendable` without `@unchecked`, unlike ``ChatPinBook``: there is no
 /// stored mutable state here to be unchecked about — the place **is** the
-/// state. The lock below is not protecting a property; see its own comment.
+/// state. The locks below are not protecting a property; see their comments.
 public final class AiSettingsHeadsUpBook: Sendable {
+
+    /// The process's one book over this phone's `UserDefaults` key. The
+    /// default of ``AiSettingsModel/init(book:arguments:)``; see the "One
+    /// instance per process" note above for why there is a singleton at all.
+    public static let shared = AiSettingsHeadsUpBook()
 
     /// The saved shape: one blob, one key.
     ///
@@ -128,7 +144,18 @@ public final class AiSettingsHeadsUpBook: Sendable {
     /// that is not atomic in a store keeping nothing in memory: two
     /// `warnAgain`s racing could otherwise both read the same set, and the
     /// second write would put the first kind back.
+    ///
+    /// It protects **one instance**, which is why the default book is
+    /// ``shared`` — a second instance over the same key would have a second
+    /// lock and the two would not serialise against each other at all.
     private let gate = Mutex(0)
+
+    /// Whether the DEBUG launch seed has already been applied to this
+    /// instance — see ``seedOnce(_:)``. A second lock and not ``gate``'s
+    /// value: they answer different questions, and the claim is released
+    /// before the write that takes ``gate``, so neither is ever held inside
+    /// the other.
+    private let seeded = Mutex(false)
 
     private let place: any SavedState
 
@@ -189,11 +216,34 @@ public final class AiSettingsHeadsUpBook: Sendable {
     }
 
     /// The whole answer at once. Internal, with its two callers named:
-    /// ``AiSettingsModel``'s DEBUG launch seed (``AiSettingsHeadsUpSeed``)
-    /// and the package tests. No view writes this, which is why it is not
-    /// public.
+    /// ``seedOnce(_:)`` and the package tests. No view writes this, which is
+    /// why it is not public.
     func replace(_ prefs: AiSettingsHeadsUpPrefs) {
         gate.withLock { _ in save(prefs) }
+    }
+
+    /// Apply the DEBUG launch seed, **at most once for this instance**.
+    ///
+    /// ``AiSettingsModel`` is built fresh in `AiSettingsChatPanel`'s `.task`
+    /// every time the Chat section is entered — `SettingsPlaceholder` swaps
+    /// the subtree rather than pushing, so the `@State` dies when the place
+    /// leaves `.section(chat)`. A plain `replace` in `init` therefore
+    /// overwrote the person's changes each time they came back, and a case
+    /// that visits the section twice would have been asserting against the
+    /// seed instead of against what the store kept — the seed masking the
+    /// exact persistence bug those cases exist to catch.
+    ///
+    /// Once per *instance* rather than once per process, so the package tests
+    /// keep one seeded book each and stay order-independent; for the app the
+    /// two are the same thing, because the book is ``shared``.
+    func seedOnce(_ prefs: AiSettingsHeadsUpPrefs) {
+        let mine = seeded.withLock { done -> Bool in
+            if done { return false }
+            done = true
+            return true
+        }
+        guard mine else { return }
+        replace(prefs)
     }
 
     private func change(
@@ -248,7 +298,8 @@ public extension UserDefaultsSavedState {
 ///
 /// Parsed here, in the package, so the grammar is tested without a Simulator;
 /// applied in ``AiSettingsModel`` under `#if DEBUG` only, so no shipping
-/// build reads it.
+/// build reads it, and through ``AiSettingsHeadsUpBook/seedOnce(_:)`` so that
+/// re-entering the section does not re-seed over what the person changed.
 public enum AiSettingsHeadsUpSeed {
 
     public static let flag = "-domovoi-aisettings-headsup"

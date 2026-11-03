@@ -75,6 +75,17 @@ struct AiSettingsDashboardPanel: View {
         AiSettingsDashboard.url(serverURL: model.inputs.serverURL, section: section.dashboard)
     }
 
+    /// The same address as something `openURL` can be handed.
+    ///
+    /// **Both branches of the card key on this one value**, not one on the
+    /// address and one on the URL. Keyed separately, an address `URL(string:)`
+    /// refuses would draw `no server connected` and then print that very
+    /// address under it — two sentences contradicting each other, which is the
+    /// no-misleading-controls rule with the control left in.
+    private var dashboardURL: URL? {
+        address.flatMap(URL.init(string:))
+    }
+
     var body: some View {
         PanelCard(
             title: AiSettingsStrings.dashboardTitle,
@@ -84,12 +95,12 @@ struct AiSettingsDashboardPanel: View {
                 .font(.subheadline)
                 .fixedSize(horizontal: false, vertical: true)
 
-            if let address, let url = URL(string: address) {
+            if let dashboardURL {
                 Button {
                     // The completion is **ignored**, and that is the whole of
                     // Android's failure branch left out — see the type's doc
                     // comment and DECISIONS §3.
-                    openURL(url)
+                    openURL(dashboardURL)
                 } label: {
                     Label {
                         Text(AiSettingsStrings.openOnTheDashboard)
@@ -113,7 +124,12 @@ struct AiSettingsDashboardPanel: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            if let address {
+            // `dashboardURL`, not `address`, so the line that prints the
+            // address cannot outlive the button that opens it — see
+            // ``dashboardURL``. The text itself is still `address`: the
+            // characters a person compares are the ones built from the server
+            // URL, not whatever `URL` would re-serialise them as.
+            if dashboardURL != nil, let address {
                 // Android draws this in its second grey (`fgFaint`,
                 // `SettingsScreen.kt:441-447`). **There is no `fgFaint` on
                 // iOS** — `DomovoiApp.swift` defines `fgMuted`, `brand`,

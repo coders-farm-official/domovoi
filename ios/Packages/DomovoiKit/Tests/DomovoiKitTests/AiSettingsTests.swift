@@ -358,5 +358,30 @@ final class AiSettingsModelTests: XCTestCase {
         XCTAssertEqual(Note.silenced([calc(), scanned()]), seeded.note)
         XCTAssertEqual(["calc", "scanned"], book.prefs.skip, "the seed went to the store, not to the model")
     }
+
+    /// The seed is applied **once per book**, not once per model.
+    ///
+    /// `AiSettingsChatPanel` builds a fresh ``AiSettingsModel`` in its
+    /// `.task` each time the Chat section is entered, so a seed applied in
+    /// every `init` would undo whatever the person changed before they left —
+    /// and a UI case that visits the section twice would be asserting against
+    /// the seed rather than against what the store kept, hiding the exact
+    /// persistence bug it was written for.
+    func testTheSeedDoesNotComeBackWhenTheSectionIsReentered() {
+        let book = AiSettingsHeadsUpBook(place: SavedStateBox())
+        let arguments = ["/app", AiSettingsHeadsUpSeed.flag, "off:calc,scanned"]
+        let first = AiSettingsModel(book: book, arguments: arguments)
+        first.setOn(true)
+        first.warnAgain("calc")
+
+        // The section is left and re-entered: same book, same launch
+        // arguments, a new model.
+        let again = AiSettingsModel(book: book, arguments: arguments)
+        XCTAssertTrue(again.isOn, "re-entering the section put the seed's `off` back")
+        XCTAssertEqual(
+            Note.silenced([scanned()]), again.note,
+            "re-entering the section put the seed's silenced kinds back"
+        )
+    }
     #endif
 }

@@ -121,8 +121,14 @@ extension StubHouseUITests {
     /// - Parameter seed: ``AiSettingsHeadsUpSeed``'s grammar —
     ///   `"on"`, `"off"`, `"off:calc,scanned"`. Passing nil leaves the phone's
     ///   own answer alone, which no case here wants.
+    ///
+    /// `fileprivate`, like every helper in this file and like
+    /// `StubHouseUITests+VoiceSettings.swift`'s: twenty overnight branches add
+    /// files to one test target, and an internal member of the shared class
+    /// that another branch also names is an `invalid redeclaration` that drops
+    /// a whole branch from a train (NIGHT-RULES §2).
     @MainActor
-    func aiSettingsLaunch(seed: String, mode: String = StubHouseUITests.ordinaryTypeSize) -> XCUIApplication {
+    fileprivate func aiSettingsLaunch(seed: String, mode: String = StubHouseUITests.ordinaryTypeSize) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = [
             "-domovoi-server", "127.0.0.1:6601",
@@ -154,14 +160,31 @@ extension StubHouseUITests {
     /// The alternative — `launch(strip: "phoneBar")` — would take the bar
     /// away and make the query unambiguous, but then no case here would ever
     /// have audited or photographed the screen a person actually sees.
+    ///
+    /// ### The wait between the two taps, and why it is not the section's own
+    ///
+    /// ``aiSettingsTapTopmostButton(_:_:orFail:timeout:)`` waits for its label
+    /// to exist before resolving the matches. For `Chat` that wait is
+    /// **satisfied by the wrong element**: the phone bar's Chat tab exists from
+    /// launch, so the wait returns immediately and the snapshot
+    /// `allElementsBoundByIndex` resolves against can still predate the group
+    /// list — one match, the tab, tapped, and the case lands on the Chat
+    /// conversation and then fails naming the panel. So the group list is
+    /// waited for by a marker **only it draws**: `all settings`
+    /// (`RouteScreen.swift:276`, the `.group` case alone). Four of the six
+    /// cases here go through `Chat`.
     @MainActor
-    func reachAiSettingsSection(_ app: XCUIApplication, group: String, section: String) -> Bool {
-        guard tapTopmostButton(
+    fileprivate func reachAiSettingsSection(_ app: XCUIApplication, group: String, section: String) -> Bool {
+        guard aiSettingsTapTopmostButton(
             app, group,
             orFail: "Settings never drew the \(group) group row — it may not have been pushed",
             timeout: 30
         ) else { return false }
-        return tapTopmostButton(
+        guard app.buttons[ShellStringsUnderTest.allSettings].waitForExistence(timeout: 15) else {
+            XCTFail("the \(group) group list never drew — no `all settings` button after the group tap")
+            return false
+        }
+        return aiSettingsTapTopmostButton(
             app, section, orFail: "the \(group) group list has no \(section) row"
         )
     }
@@ -174,9 +197,14 @@ extension StubHouseUITests {
     /// the screen has drawn answers "none", and the fallback would then be
     /// the bare subscript — which raises "multiple matching elements" at the
     /// tap, on exactly the ambiguous label this helper exists for.
+    ///
+    /// Named for the item and `fileprivate` even so: the ambiguous-label trap
+    /// is universal tonight, so `tapTopmostButton` is a name another branch
+    /// would plausibly take on the same shared class — see
+    /// ``aiSettingsLaunch(seed:mode:)``.
     @discardableResult
     @MainActor
-    func tapTopmostButton(
+    fileprivate func aiSettingsTapTopmostButton(
         _ app: XCUIApplication, _ label: String, orFail why: String, timeout: TimeInterval = 15
     ) -> Bool {
         // `firstMatch`, not the subscript, for the existence check: a
@@ -187,13 +215,13 @@ extension StubHouseUITests {
             XCTFail(why)
             return false
         }
-        topmostButton(app, label).tap()
+        aiSettingsTopmostButton(app, label).tap()
         return true
     }
 
     /// The highest match on screen for a button label, resolved now.
     @MainActor
-    func topmostButton(_ app: XCUIApplication, _ label: String) -> XCUIElement {
+    fileprivate func aiSettingsTopmostButton(_ app: XCUIApplication, _ label: String) -> XCUIElement {
         let matches = app.buttons.matching(identifier: label).allElementsBoundByIndex
         guard matches.count > 1 else { return app.buttons.matching(identifier: label).firstMatch }
         return matches.min { $0.frame.minY < $1.frame.minY }
@@ -203,7 +231,7 @@ extension StubHouseUITests {
     /// The switch, by the word it is showing. ``AiSettingsModel/switchWord``
     /// is the state, so this existing at all is the assertion.
     @MainActor
-    func aiSettingsSwitch(_ app: XCUIApplication, reading word: String) -> XCUIElement {
+    fileprivate func aiSettingsSwitch(_ app: XCUIApplication, reading word: String) -> XCUIElement {
         app.switches[word]
     }
 
@@ -214,7 +242,7 @@ extension StubHouseUITests {
     /// centre is empty space between the label and the control. The same
     /// normalised-offset trick the text fields in this file use.
     @MainActor
-    func flipAiSettingsSwitch(_ app: XCUIApplication, reading word: String) {
+    fileprivate func flipAiSettingsSwitch(_ app: XCUIApplication, reading word: String) {
         // Not named `control`: this class already has a ``control(_:_:port:what:)``
         // for the house's test routes, and one shadowing the other in a
         // helper about a switch is a reading trap for no gain.
@@ -468,10 +496,17 @@ extension StubHouseUITests {
     /// the other section's panel is invisible until the two are compared in
     /// one run.
     ///
-    /// The address asserted is **the launch's own** `-domovoi-server` value,
-    /// so this also catches a card reading a stored address rather than the
-    /// one the app is talking to — the stored-vs-displayed trap this track
-    /// has already paid for.
+    /// The address asserted is the launch's own `-domovoi-server` value, and
+    /// that is **all** it is: `-domovoi-server` installs an
+    /// `InMemoryShellStore(serverURL:token:)` (`DomovoiApp.swift:111`), so the
+    /// stored copy and the one the app is talking to are the same string for
+    /// the whole case. It therefore does **not** catch the stored-vs-displayed
+    /// trap, and no claim that it does is made here — swapping the panel to
+    /// read the stored copy would not change a character this case asserts.
+    /// Catching that would need a second seeded server switched to mid-case
+    /// (`ShellStringsUnderTest.pillLabel`), which is one for the soak, not for
+    /// tonight. What this case does have is the Models-vs-Internet
+    /// discrimination below.
     ///
     /// `internet` is in **Privacy**, not Chat & AI, so the walk crosses two
     /// groups (`SettingsSections.swift`: `.chatAndAi` and `.privacy`).
@@ -518,7 +553,7 @@ extension StubHouseUITests {
         // navigation rather than a relaunch, so the two cards are compared in
         // one process with one stored address.
         XCTAssertTrue(
-            tapTopmostButton(
+            aiSettingsTapTopmostButton(
                 app, "back to \(AiSettingsUnderTest.chatAndAiGroup)",
                 orFail: "no back button on the Models section"
             )
