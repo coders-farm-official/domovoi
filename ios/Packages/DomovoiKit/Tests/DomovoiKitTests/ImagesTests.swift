@@ -1,0 +1,754 @@
+import XCTest
+@testable import DomovoiKit
+
+/// The Images screen's data layer: what decodes, what the rules say at their
+/// boundaries, what a tap sends, what it refuses to send, and where an answer
+/// lands when the house changed while it was in flight.
+///
+/// The Image Generation plugin is **not in this repository** — it mounts its
+/// own router under `/api/plugins/imagegen` (`plugin_host.py:531`) and
+/// `docs/API_REFERENCE.md:1625-1630` gives no table for it — so every shape
+/// below is Android's `ImagesScreen.kt:76-125`, transcribed, and these tests
+/// are the only specification either platform has for them: `ImagesScreen.kt`
+/// is a composable and Android's JVM suite is unit-only, so nothing over
+/// there tests the lane filter, the two wrapper keys or the meta line's
+/// "both or neither".
+@MainActor
+final class ImagesTests: XCTestCase {
+
+    private let server = "http://10.0.0.42:6369"
+
+    override func setUp() {
+        super.setUp()
+        StubURLProtocol.reset()
+    }
+
+    override func tearDown() {
+        StubURLProtocol.reset()
+        super.tearDown()
+    }
+
+    // MARK: - the server's JSON, as the plugin sends it
+
+    /// Three models, one of them not installed — the answer `…/models` gives.
+    private let modelsJSON = """
+    {"installed":true,"engine_online":true,"models":[
+    {"id":"sdxl-turbo","label":"SDXL Turbo","installed":true,"recommended":true},
+    {"id":"sd15","label":"Stable Diffusion 1.5","installed":true,"recommended":false},
+    {"id":"flux-dev","label":"FLUX.1 dev","installed":false,"recommended":false}]}
+    """
+
+    /// A running job, a failed one and a completed one. The completed one is
+    /// the row that discriminates: it must not reach the lane.
+    private let jobsJSON = """
+    {"jobs":[
+    {"id":11,"kind":"txt2img","model":"sdxl-turbo","prompt":"a lighthouse in fog",
+     "status":"running","pct":42,"status_text":"sampling step 7 of 20"},
+    {"id":12,"kind":"txt2img","model":"sdxl-turbo","prompt":"a brass orrery",
+     "status":"failed","error":"the engine ran out of memory"},
+    {"id":13,"kind":"txt2img","model":"sd15","prompt":"a quiet harbour",
+     "status":"completed","result":{"images":["harbour-1.png"]}}]}
+    """
+
+    /// One row with four images and full params, one with a width and no
+    /// height — the branch at `ImagesScreen.kt:387`.
+    private let historyJSON = """
+    {"history":[
+    {"id":9,"kind":"txt2img","model":"sdxl-turbo","prompt":"an orchard at dusk",
+     "params":{"width":1024,"height":1024,"steps":28,"seed":773451},
+     "status":"completed","completed_at":"2026-11-02T01:02:03Z",
+     "result":{"images":["orchard-1.png","orchard-2.png","orchard-3.png","orchard-4.png"]}},
+    {"id":8,"kind":"txt2img","model":"sd15","prompt":"a tram in the rain",
+     "params":{"width":512},"status":"completed","result":{"images":[]}}]}
+    """
+
+    private func decode<T: Decodable>(_ type: T.Type, _ json: String) throws -> T {
+        try JSONDecoder().decode(type, from: Data(json.utf8))
+    }
+
+    func testTheModelsAnswerDecodesEveryField() throws {
+        let state = try decode(ImagesGenState.self, modelsJSON)
+        XCTAssertTrue(state.installed)
+        XCTAssertTrue(state.engineOnline)
+        XCTAssertTrue(state.ready)
+        XCTAssertEqual(3, state.models.count)
+        XCTAssertEqual(["sdxl-turbo", "sd15"], state.installedModels.map(\.id))
+        XCTAssertEqual("SDXL Turbo  ·  recommended", state.installedModels[0].menuLabel)
+        XCTAssertEqual("Stable Diffusion 1.5", state.installedModels[1].menuLabel)
+    }
+
+    func testAJobDecodesEveryFieldIncludingTheOnesNothingDraws() throws {
+        let jobs = try decode(ImagesJobList.self, jobsJSON).jobs
+        let running = jobs[0]
+        XCTAssertEqual(11, running.id)
+        // Decoded and deliberately never drawn (DECISIONS §3.1.5).
+        XCTAssertEqual("txt2img", running.kind)
+        XCTAssertEqual("sdxl-turbo", running.model)
+        XCTAssertEqual("a lighthouse in fog", running.prompt)
+        XCTAssertEqual(.running, running.status)
+        XCTAssertEqual(42, running.pct)
+        XCTAssertEqual("sampling step 7 of 20", running.statusText)
+        XCTAssertEqual("sampling step 7 of 20 · 42%", running.progressLine)
+        XCTAssertNil(running.error)
+        XCTAssertEqual("the engine ran out of memory", jobs[1].error)
+        XCTAssertEqual("2026-11-02T01:02:03Z", try decode(ImagesHistoryList.self, historyJSON).history[0].completedAt)
+    }
+
+    /// `JobList` and `HistoryList` are two wrappers with two **different**
+    /// keys over one row type (`ImagesScreen.kt:120`, `:123`). Reading one
+    /// with the other's key decodes to an empty list — which on screen looks
+    /// exactly like "nothing has happened yet", the trap
+    /// `fixtures/README.md` records from Home's four reads.
+    func testHistoryAndTheJobListAreReadFromTheirOwnKeys() throws {
+        XCTAssertEqual(3, try decode(ImagesJobList.self, jobsJSON).jobs.count)
+        XCTAssertEqual(2, try decode(ImagesHistoryList.self, historyJSON).history.count)
+        // The cross-reads: each wrapper over the other's body sees nothing,
+        // and neither throws — which is why the bug is silent.
+        XCTAssertTrue(try decode(ImagesHistoryList.self, jobsJSON).history.isEmpty)
+        XCTAssertTrue(try decode(ImagesJobList.self, historyJSON).jobs.isEmpty)
+        // Nor is either one a bare array.
+        XCTAssertNil(try? decode([ImagesJob].self, jobsJSON))
+    }
+
+    /// Kotlin's `coerceInputValues` plus `data class` defaults, which is what
+    /// the hand-written `decodeIfPresent ?? default` is for: an explicit
+    /// `null` in a field Kotlin declares non-null must not throw.
+    func testAnExplicitNullInEveryNonNullFieldDecodesToItsDefault() throws {
+        let job = try decode(ImagesJob.self, """
+        {"id":null,"kind":null,"model":null,"prompt":null,"params":null,
+         "status":null,"pct":null,"status_text":null,"error":null,
+         "result":null,"completed_at":null}
+        """)
+        XCTAssertEqual(0, job.id)
+        XCTAssertEqual("", job.kind)
+        XCTAssertEqual("", job.model)
+        XCTAssertEqual("", job.statusWord)
+        XCTAssertEqual(.other(""), job.status)
+        XCTAssertNil(job.prompt)
+        XCTAssertNil(job.params)
+        XCTAssertTrue(job.imageNames.isEmpty)
+
+        let state = try decode(ImagesGenState.self, #"{"installed":null,"engine_online":null,"models":null}"#)
+        XCTAssertFalse(state.ready)
+        XCTAssertTrue(state.models.isEmpty)
+
+        let params = try decode(ImagesJobParams.self, #"{"width":null,"height":null,"steps":null,"seed":null}"#)
+        XCTAssertNil(params.width)
+        XCTAssertNil(params.seed)
+
+        XCTAssertTrue(try decode(ImagesJobResult.self, #"{"images":null}"#).images.isEmpty)
+        XCTAssertTrue(try decode(ImagesJobList.self, #"{"jobs":null}"#).jobs.isEmpty)
+        XCTAssertTrue(try decode(ImagesHistoryList.self, #"{"history":null}"#).history.isEmpty)
+    }
+
+    func testAnEmptyObjectDecodesToEveryDefault() throws {
+        let job = try decode(ImagesJob.self, "{}")
+        XCTAssertEqual(ImagesJob(), job)
+        XCTAssertEqual("", job.laneTitle)
+        XCTAssertEqual(ImagesStrings.working, job.progressLine)
+        XCTAssertEqual(ImagesGenState(), try decode(ImagesGenState.self, "{}"))
+        XCTAssertEqual(ImagesJobParams(), try decode(ImagesJobParams.self, "{}"))
+        XCTAssertEqual(ImagesJobList(), try decode(ImagesJobList.self, "{}"))
+        XCTAssertEqual(ImagesHistoryList(), try decode(ImagesHistoryList.self, "{}"))
+    }
+
+    /// A seed is a Kotlin `Long` (`ImagesScreen.kt:116`), so a value past
+    /// 2^31 must survive the decode rather than overflow.
+    func testASeedBeyondThirtyTwoBitsSurvives() throws {
+        let params = try decode(ImagesJobParams.self, #"{"seed":9007199254740991}"#)
+        XCTAssertEqual(9_007_199_254_740_991, params.seed)
+        let job = try decode(ImagesJob.self, #"{"id":4611686018427387903}"#)
+        XCTAssertEqual(4_611_686_018_427_387_903, job.id)
+    }
+
+    // MARK: - the status words, and the two predicates
+
+    /// `status` is an open string: Android compares it to four literals and
+    /// lets everything else fall through (`:180-183`, `:329`, `:335-338`).
+    /// The pill draws the raw word (`:334`), so an unheard-of status must
+    /// render **its own word**.
+    func testAnUnknownStatusKeepsItsWordAndIsNeitherActiveNorInTheLane() {
+        let queued = ImagesJobStatus("queued-behind-another-house")
+        XCTAssertEqual("queued-behind-another-house", queued.word)
+        XCTAssertFalse(queued.isActive)
+        XCTAssertFalse(queued.inLane)
+        XCTAssertFalse(queued.isFailure)
+    }
+
+    func testTheLanePredicatesMatchAndroidsForEveryWord() {
+        let table: [(String, active: Bool, lane: Bool)] = [
+            ("pending", true, true),
+            ("running", true, true),
+            ("failed", false, true),
+            ("completed", false, false),
+            ("cancelled", false, false),
+        ]
+        for (word, active, lane) in table {
+            let status = ImagesJobStatus(word)
+            XCTAssertEqual(word, status.word)
+            XCTAssertEqual(active, status.isActive, "isActive for \(word)")
+            XCTAssertEqual(lane, status.inLane, "inLane for \(word)")
+        }
+    }
+
+    // MARK: - the history card's two rules
+
+    /// `:385-390`. The size is drawn **only when both** width and height are
+    /// present (`:387`); `model` is a non-null Kotlin string and stays in the
+    /// join even when it is empty.
+    func testTheMetaLineNeedsBothWidthAndHeight() throws {
+        let rows = try decode(ImagesHistoryList.self, historyJSON).history
+        XCTAssertEqual("sdxl-turbo · 1024 × 1024 · 28 steps · seed 773451", rows[0].metaLine)
+        // A width and no height: no `×` anywhere, and no half-size either.
+        XCTAssertEqual("sd15", rows[1].metaLine)
+        XCTAssertFalse(rows[1].metaLine.contains("×"))
+        XCTAssertFalse(rows[1].metaLine.contains("512"))
+
+        // Height alone is just as refused, and steps and seed still show.
+        let heightOnly = ImagesJob(
+            model: "sd15",
+            params: ImagesJobParams(height: 768, steps: 12, seed: 7)
+        )
+        XCTAssertEqual("sd15 · 12 steps · seed 7", heightOnly.metaLine)
+
+        // No params at all.
+        XCTAssertEqual("sd15", ImagesJob(model: "sd15").metaLine)
+    }
+
+    /// `names.take(3)` (`:398`). The fourth image is not drawn and not
+    /// counted on the card — but the **confirmation counts every one of
+    /// them** (`:275`), which is the pair this test exists to keep together.
+    func testAHistoryCardDrawsThreeTilesOfFourAndTheDialogCountsFour() throws {
+        let row = try decode(ImagesHistoryList.self, historyJSON).history[0]
+        XCTAssertEqual(4, row.imageNames.count)
+        XCTAssertEqual(["orchard-1.png", "orchard-2.png", "orchard-3.png"], row.tileNames)
+        XCTAssertFalse(row.tileNames.contains("orchard-4.png"))
+        XCTAssertEqual(
+            "Delete this generation and its 4 images? This can't be undone.",
+            ImagesStrings.deleteBody(images: row.imageNames.count)
+        )
+    }
+
+    /// `:273`'s plural, at the three counts that matter: none, Kotlin's one
+    /// special case, and several.
+    func testTheConfirmationPluralises() {
+        XCTAssertEqual(
+            "Delete this generation and its 0 images? This can't be undone.",
+            ImagesStrings.deleteBody(images: 0)
+        )
+        XCTAssertEqual(
+            "Delete this generation and its 1 image? This can't be undone.",
+            ImagesStrings.deleteBody(images: 1)
+        )
+        XCTAssertEqual(
+            "Delete this generation and its 2 images? This can't be undone.",
+            ImagesStrings.deleteBody(images: 2)
+        )
+    }
+
+    // MARK: - the paths
+
+    /// `Uri.encode` with no allowed set escapes `/` too (`:125`), so the name
+    /// is one opaque path segment. ``FilePath/escPath(_:)`` deliberately lets
+    /// `/` through and must **not** be what this uses: that way round is a
+    /// quiet traversal in one direction and a quiet 404 in the other.
+    func testTheFilePathEscapesEverySeparatorInAName() {
+        XCTAssertEqual("/api/plugins/imagegen/file/orchard-1.png", ImagesPaths.file("orchard-1.png"))
+        XCTAssertEqual("/api/plugins/imagegen/file/a%20cat.png", ImagesPaths.file("a cat.png"))
+        XCTAssertEqual("/api/plugins/imagegen/file/sub%2Fdir%2Fx.png", ImagesPaths.file("sub/dir/x.png"))
+        XCTAssertEqual("/api/plugins/imagegen/file/..%2F..%2Fetc%2Fpasswd", ImagesPaths.file("../../etc/passwd"))
+        XCTAssertEqual("/api/plugins/imagegen/file/x%23y%3Fz%26w.png", ImagesPaths.file("x#y?z&w.png"))
+        // The trap in one line: `escPath` would leave the separators alone.
+        XCTAssertTrue(FilePath.escPath("sub/dir/x.png").contains("/"))
+        XCTAssertFalse(ImagesPaths.file("sub/dir/x.png").dropFirst("/api/plugins/imagegen/file/".count).contains("/"))
+    }
+
+    func testTheSevenRoutesAreTheSevenAndroidCalls() {
+        XCTAssertEqual("/api/plugins/imagegen/models", ImagesPaths.models)
+        XCTAssertEqual("/api/plugins/imagegen/jobs", ImagesPaths.jobs)
+        XCTAssertEqual("/api/plugins/imagegen/history", ImagesPaths.history)
+        XCTAssertEqual("/api/plugins/imagegen/generate", ImagesPaths.generate)
+        XCTAssertEqual("/api/plugins/imagegen/jobs/11/cancel", ImagesPaths.cancel(job: 11))
+        XCTAssertEqual("/api/plugins/imagegen/history/9", ImagesPaths.deleteHistory(job: 9))
+        XCTAssertEqual(["imagegen.jobs.changed"], ImagesPaths.events)
+    }
+
+    /// Exactly two keys, the prompt trimmed (`:164`), and a prompt with a
+    /// quotation mark and a newline in it still makes valid JSON — which is
+    /// why the body goes through an encoder and not through interpolation.
+    func testTheGenerateBodyIsTwoKeysAndTheTrimmedPrompt() throws {
+        let body = ImagesPaths.generateBody(model: "sdxl-turbo", prompt: "  a \"brass\" orrery\n  ")
+        let fields = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        XCTAssertEqual(["model", "prompt"], fields.keys.sorted())
+        XCTAssertEqual("sdxl-turbo", fields["model"] as? String)
+        XCTAssertEqual("a \"brass\" orrery", fields["prompt"] as? String)
+    }
+
+    // MARK: - the rules the button and the picker read
+
+    /// `:231`'s four conjuncts, one at a time — which is the only way to
+    /// catch one of them having been dropped.
+    func testGenerateIsOffForEachMissingThing() {
+        let ready = ImagesGenState(
+            installed: true,
+            engineOnline: true,
+            models: [ImagesGenModel(id: "sdxl-turbo", label: "SDXL Turbo", installed: true)]
+        )
+        let active = ready.activeModel(chosen: nil)
+        XCTAssertNotNil(active)
+
+        XCTAssertTrue(ImagesModel.canGenerate(state: ready, active: active, prompt: "a cat", busy: false))
+
+        // No read at all.
+        XCTAssertFalse(ImagesModel.canGenerate(state: nil, active: active, prompt: "a cat", busy: false))
+        // Not installed.
+        XCTAssertFalse(ImagesModel.canGenerate(
+            state: ImagesGenState(installed: false, engineOnline: true, models: ready.models),
+            active: active, prompt: "a cat", busy: false
+        ))
+        // Engine offline.
+        XCTAssertFalse(ImagesModel.canGenerate(
+            state: ImagesGenState(installed: true, engineOnline: false, models: ready.models),
+            active: active, prompt: "a cat", busy: false
+        ))
+        // No model.
+        XCTAssertFalse(ImagesModel.canGenerate(state: ready, active: nil, prompt: "a cat", busy: false))
+        // Empty prompt, and a blank one: Kotlin's `isNotBlank`, so three
+        // spaces and a newline enable nothing.
+        XCTAssertFalse(ImagesModel.canGenerate(state: ready, active: active, prompt: "", busy: false))
+        XCTAssertFalse(ImagesModel.canGenerate(state: ready, active: active, prompt: "   \n ", busy: false))
+        // Already generating.
+        XCTAssertFalse(ImagesModel.canGenerate(state: ready, active: active, prompt: "a cat", busy: true))
+    }
+
+    /// `:148`, `:153` and `:307-308`: only installed models are offered, the
+    /// active one falls back to the first installed, and a chosen model the
+    /// engine has since dropped does not leave the picker pointing at
+    /// nothing.
+    func testThePickerOffersOnlyInstalledModelsAndFallsBack() throws {
+        let state = try decode(ImagesGenState.self, modelsJSON)
+        XCTAssertEqual(["SDXL Turbo", "Stable Diffusion 1.5"], state.installedModels.map(\.label))
+        XCTAssertFalse(state.installedModels.contains { $0.label == "FLUX.1 dev" })
+
+        XCTAssertEqual("sdxl-turbo", state.activeModel(chosen: nil)?.id)
+        XCTAssertEqual("SDXL Turbo", state.pickerLabel(chosen: nil))
+        XCTAssertEqual("sd15", state.activeModel(chosen: "sd15")?.id)
+        // An uninstalled id is not choosable: it falls back to the first
+        // installed one rather than to a model that cannot generate.
+        XCTAssertEqual("sdxl-turbo", state.activeModel(chosen: "flux-dev")?.id)
+
+        let none = ImagesGenState(installed: true, engineOnline: true, models: [
+            ImagesGenModel(id: "flux-dev", label: "FLUX.1 dev", installed: false),
+        ])
+        XCTAssertNil(none.activeModel(chosen: nil))
+        XCTAssertEqual(ImagesStrings.noModelsInstalled, none.pickerLabel(chosen: nil))
+    }
+
+    /// `:190-212`, in Android's own `when` order — and the order **is** the
+    /// behaviour: "no data and loading" before "no data", or a screen that is
+    /// still reading announces that the plugin did not answer.
+    func testTheEngineLineFollowsAndroidsOrder() {
+        XCTAssertEqual(.loading, ImagesEngineLine.of(nil, loading: true, error: nil))
+
+        XCTAssertEqual(
+            .unavailable(detail: "connection refused"),
+            ImagesEngineLine.of(nil, loading: false, error: "connection refused")
+        )
+        XCTAssertEqual(
+            .unavailable(detail: ImagesStrings.unavailableSub),
+            ImagesEngineLine.of(nil, loading: false, error: nil)
+        )
+        // A read that failed *and* has a message is still "unavailable", not
+        // "loading": `loading` is only true while there has never been a
+        // value (`ApiRead.swift:57`).
+        XCTAssertEqual(
+            .notInstalled,
+            ImagesEngineLine.of(ImagesGenState(installed: false, engineOnline: true), loading: false, error: "stale")
+        )
+        XCTAssertEqual(
+            .offline,
+            ImagesEngineLine.of(ImagesGenState(installed: true, engineOnline: false), loading: false, error: nil)
+        )
+        XCTAssertEqual(
+            .running,
+            ImagesEngineLine.of(ImagesGenState(installed: true, engineOnline: true), loading: false, error: nil)
+        )
+
+        XCTAssertNil(ImagesEngineLine.running.title)
+        XCTAssertNil(ImagesEngineLine.loading.sub)
+        XCTAssertEqual(ImagesStrings.notInstalledTitle, ImagesEngineLine.notInstalled.title)
+        XCTAssertEqual(ImagesStrings.notInstalledSub, ImagesEngineLine.notInstalled.sub)
+        XCTAssertEqual(ImagesStrings.offlineSub, ImagesEngineLine.offline.sub)
+        XCTAssertEqual("boom", ImagesEngineLine.unavailable(detail: "boom").sub)
+    }
+
+    /// `PluginFrame.kt:124`, `:144`, `:170-181`: a blank name falls back to
+    /// the slug, a blank publisher draws no "by", and no plugin at all means
+    /// no band (`:98-101` renders the content bare).
+    func testTheBandNamesThePluginOrFallsBackToItsSlug() {
+        let full = CapabilityPlugin(
+            slug: "imagegen",
+            version: "1.4.0",
+            name: "Image Generation",
+            publisher: "Coders Farm",
+            appCapabilities: ["imagegen"]
+        )
+        let band = ImagesBand.of(full)
+        XCTAssertEqual("Image Generation", band?.name)
+        XCTAssertEqual("by Coders Farm", band?.publisherLine)
+        XCTAssertEqual("/#plugins/imagegen", band?.managePath)
+        XCTAssertEqual(
+            "manage Image Generation on the dashboard's Plugins page",
+            band?.manageLabel
+        )
+
+        let bare = ImagesBand.of(CapabilityPlugin(slug: "imagegen", name: "  ", publisher: " "))
+        XCTAssertEqual("imagegen", bare?.name)
+        XCTAssertNil(bare?.publisherLine)
+
+        XCTAssertNil(ImagesBand.of(nil))
+    }
+
+    // MARK: - the model against a server that is not a server
+
+    /// Every route this screen asks for, answered from the three bodies
+    /// above, with the writes recorded.
+    private final class House: Sendable {
+        let models: Shared<String>
+        let jobs: Shared<String>
+        let history: Shared<String>
+
+        /// 200 unless a test wants a write to fail.
+        let writeStatus = Shared<Int>(200)
+
+        init(models: String, jobs: String, history: String) {
+            self.models = Shared(models)
+            self.jobs = Shared(jobs)
+            self.history = Shared(history)
+        }
+
+        func install() {
+            // Bound before the dispatcher rather than captured through
+            // `self`, which is what `MusicModelTests.House` does and for the
+            // same reason: the closure is `@Sendable` and these four are the
+            // only things in it that change.
+            let (models, jobs, history) = (self.models, self.jobs, self.history)
+            let writeStatus = self.writeStatus
+            StubURLProtocol.dispatch { request in
+                guard let path = request.url?.path else { return .json("{}", status: 404) }
+                switch path {
+                case "/api/health":
+                    // The identity gate's probe: a trusted server proves
+                    // itself before any read goes out, and a house that did
+                    // not answer this would refuse every read below and every
+                    // assertion over it would be about nothing.
+                    let challenge = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?
+                        .queryItems?.first { $0.name == "challenge" }?.value
+                    return .json((try? TestIdentity.real.healthBody(challenge: challenge)) ?? "{}")
+                case ImagesPaths.models: return .json(models.current)
+                case ImagesPaths.jobs: return .json(jobs.current)
+                case ImagesPaths.history: return .json(history.current)
+                default:
+                    guard writeStatus.current == 200 else {
+                        return .json(#"{"detail":"the engine is busy"}"#, status: writeStatus.current)
+                    }
+                    return .json("{}")
+                }
+            }
+        }
+    }
+
+    private func rig(
+        models: String? = nil,
+        jobs: String? = nil,
+        history: String? = nil
+    ) -> (ImagesModel, AppContainer, InMemoryShellStore, House) {
+        let house = House(
+            models: models ?? modelsJSON,
+            jobs: jobs ?? jobsJSON,
+            history: history ?? historyJSON
+        )
+        house.install()
+        let store = InMemoryShellStore(serverURL: server, token: "household-abc")
+        // Trusted **with its pin**, which is what a paired phone holds: an
+        // address trusted with no pin makes the gate probe and refuse until
+        // it is satisfied, and `setServerURL` refuses an address that is not
+        // trusted at all — so both halves are needed to move house in a test.
+        store.trustServer(server, identity: TestIdentity.real.pin)
+        let container = AppContainer(
+            store: store,
+            vault: TokenVault(items: InMemoryKeychain()),
+            lock: HouseholdLock(),
+            clock: { 0 },
+            configuration: StubURLProtocol.session(timeout: 1)
+        )
+        return (ImagesModel(in: container), container, store, house)
+    }
+
+    private func settleUntil(
+        _ done: @MainActor () -> Bool,
+        _ what: String = "the model",
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async {
+        for _ in 0..<settleYieldLimit {
+            if done() { return }
+            await Task.yield()
+        }
+        XCTFail("\(what) never settled in \(settleYieldLimit) yields", file: file, line: line)
+    }
+
+    private func requests(_ method: String) -> [String] {
+        StubURLProtocol.recorded
+            .filter { $0.httpMethod == method }
+            .compactMap { $0.url?.path }
+    }
+
+    func testStartReadsAllThreeAndSortsTheLaneFromHistory() async {
+        let (model, _, _, _) = rig()
+        model.start()
+        await settleUntil { model.state.data != nil && model.jobs.data != nil && model.history.data != nil }
+
+        XCTAssertEqual(.running, model.engineLine)
+        XCTAssertTrue(model.ready)
+
+        // The lane holds the running and the failed job; the completed one
+        // belongs to history and must not be in it (`:180-183`).
+        XCTAssertEqual([11, 12], model.laneJobs.map(\.id))
+        XCTAssertFalse(model.laneJobs.contains { $0.prompt == "a quiet harbour" })
+        XCTAssertEqual([9, 8], model.historyJobs.map(\.id))
+
+        // As a set: the three reads are started in order and answered
+        // concurrently, so the order they are *recorded* in is the session's
+        // business, and asserting it would be asserting about `URLSession`.
+        XCTAssertEqual(
+            Set([ImagesPaths.models, ImagesPaths.jobs, ImagesPaths.history]),
+            Set(requests("GET").filter { $0.hasPrefix(ImagesPaths.root) })
+        )
+        model.stop()
+    }
+
+    /// One push, three reads — all three listen for the same single type
+    /// (`:138`, `:141`, `:144`), and nothing else re-reads anything.
+    func testOnePushRereadsAllThreeAndAnotherTypeRereadsNothing() async {
+        let (model, _, _, _) = rig()
+        model.start()
+        await settleUntil { model.history.data != nil }
+        let before = (model.state.fetches, model.jobs.fetches, model.history.fetches)
+
+        model.received(StateEvent(type: "music.now_playing.changed", frame: "{}"))
+        XCTAssertEqual(before.0, model.state.fetches)
+        XCTAssertEqual(before.1, model.jobs.fetches)
+        XCTAssertEqual(before.2, model.history.fetches)
+
+        model.received(StateEvent(type: "imagegen.jobs.changed", frame: "{}"))
+        XCTAssertEqual(before.0 + 1, model.state.fetches)
+        XCTAssertEqual(before.1 + 1, model.jobs.fetches)
+        XCTAssertEqual(before.2 + 1, model.history.fetches)
+        model.stop()
+    }
+
+    func testGeneratePostsTheModelAndThePromptAndRereadsTheLane() async throws {
+        let (model, _, _, _) = rig()
+        model.start()
+        await settleUntil { model.state.data != nil && model.jobs.data != nil }
+
+        // Nothing typed: refused, and nothing leaves the phone.
+        XCTAssertFalse(model.canGenerate)
+        XCTAssertFalse(model.generate())
+        XCTAssertTrue(requests("POST").isEmpty)
+
+        model.prompt = "  a lighthouse in fog  "
+        XCTAssertTrue(model.canGenerate)
+        let jobsReadsBefore = model.jobs.fetches
+        XCTAssertTrue(model.generate())
+        XCTAssertTrue(model.busy, "the button is off while the POST is in flight")
+
+        await settleUntil { !model.busy }
+        XCTAssertEqual([ImagesPaths.generate], requests("POST"))
+        // The recorded copy carries the bytes: a `URLProtocol` is handed the
+        // body as a stream and `StubURLProtocol` reads it back into
+        // `httpBody` for exactly this assertion (`StubURLProtocol.swift:109-128`).
+        let sent = StubURLProtocol.recorded.first { $0.url?.path == ImagesPaths.generate }
+        let bytes = try XCTUnwrap(sent?.httpBody)
+        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+        XCTAssertEqual(["model", "prompt"], body.keys.sorted(), "exactly two keys (`:162-165`)")
+        XCTAssertEqual("sdxl-turbo", body["model"] as? String)
+        XCTAssertEqual("a lighthouse in fog", body["prompt"] as? String, "trimmed, as `:164` trims it")
+
+        await settleUntil { model.jobs.fetches > jobsReadsBefore }
+        // The prompt is **not** cleared (`:156-170` clears nothing), so a
+        // second go at one word different is one word of typing.
+        XCTAssertEqual("  a lighthouse in fog  ", model.prompt)
+        XCTAssertNil(model.toast)
+        model.stop()
+    }
+
+    func testAGenerateThatFailsSaysTheServersOwnWordsAndFreesTheButton() async throws {
+        let (model, _, _, house) = rig()
+        model.start()
+        await settleUntil { model.state.data != nil }
+        house.writeStatus.set(503)
+
+        model.prompt = "a brass orrery"
+        XCTAssertTrue(model.generate())
+        await settleUntil { model.toast != nil }
+        XCTAssertFalse(model.busy, "a failed generate must not leave the button off for good")
+        // The server's own sentence, through ``DomovoiError/message`` — by
+        // containment, as every other write test in this suite asserts it,
+        // because the client may wrap what the house said.
+        let said = try XCTUnwrap(model.takeToast())
+        XCTAssertTrue(said.contains("the engine is busy"), said)
+        XCTAssertNil(model.toast, "and the shell takes it once")
+        model.stop()
+    }
+
+    func testCancelIsRefusedForAJobThatIsNotStillHappening() async {
+        let (model, _, _, _) = rig()
+        model.start()
+        await settleUntil { model.jobs.data != nil }
+
+        let running = model.laneJobs.first { $0.id == 11 }!
+        let failed = model.laneJobs.first { $0.id == 12 }!
+        let completed = model.historyJobs[0]
+
+        XCTAssertFalse(model.cancel(failed), "a failed job has no cancel button (`:347`)")
+        XCTAssertFalse(model.cancel(completed))
+        XCTAssertTrue(requests("POST").isEmpty)
+
+        let before = model.jobs.fetches
+        XCTAssertTrue(model.cancel(running))
+        await settleUntil { model.jobs.fetches > before }
+        XCTAssertEqual([ImagesPaths.cancel(job: 11)], requests("POST"))
+        XCTAssertNil(model.toast)
+        model.stop()
+    }
+
+    func testDeletingAHistoryRowAsksFirstThenToastsAndRereads() async {
+        let (model, _, _, _) = rig()
+        model.start()
+        await settleUntil { model.history.data != nil }
+
+        XCTAssertNil(model.deleteBody)
+        model.confirmingDelete = model.historyJobs[0]
+        XCTAssertEqual(
+            "Delete this generation and its 4 images? This can't be undone.",
+            model.deleteBody
+        )
+        // The ask alone sends nothing: a destructive write happens on the
+        // confirmation and nowhere else.
+        XCTAssertTrue(requests("DELETE").isEmpty)
+
+        let before = model.history.fetches
+        model.confirmDelete()
+        XCTAssertNil(model.confirmingDelete)
+        await settleUntil { model.toast != nil }
+        XCTAssertEqual(ImagesStrings.deleted, model.toast)
+        XCTAssertEqual([ImagesPaths.deleteHistory(job: 9)], requests("DELETE"))
+        await settleUntil { model.history.fetches > before }
+        model.stop()
+    }
+
+    func testADeleteThatFailsSaysSoAndKeepsTheRow() async throws {
+        let (model, _, _, house) = rig()
+        model.start()
+        await settleUntil { model.history.data != nil }
+        house.writeStatus.set(500)
+
+        model.confirmingDelete = model.historyJobs[0]
+        model.confirmDelete()
+        await settleUntil { model.toast != nil }
+        let said = try XCTUnwrap(model.toast)
+        XCTAssertTrue(said.hasPrefix("delete failed: "), said)
+        XCTAssertTrue(said.contains("the engine is busy"), said)
+        XCTAssertEqual([9, 8], model.historyJobs.map(\.id), "the row is still there")
+        model.stop()
+    }
+
+    /// **The switch happens inside the round trip, which is the only place it
+    /// means anything.** `[[read-after-await-wrong-key]]`: the top defect
+    /// class on this track, four instances already. House A's generate must
+    /// not toast under house B's name, must not clear B's `busy`, and must
+    /// not re-read B's lane as if something there had changed — a job id is
+    /// the plugin's, and two houses can both have a job 7.
+    func testAServerSwitchMidGenerateLandsNowhere() async {
+        let house = House(models: modelsJSON, jobs: jobsJSON, history: historyJSON)
+        let park = parkRequest(
+            to: ImagesPaths.generate,
+            answering: { .json(#"{"detail":"house A refused it"}"#, status: 500) },
+            otherwise: { request in
+                guard let path = request.url?.path else { return .json("{}", status: 404) }
+                switch path {
+                case "/api/health":
+                    let challenge = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?
+                        .queryItems?.first { $0.name == "challenge" }?.value
+                    return .json((try? TestIdentity.real.healthBody(challenge: challenge)) ?? "{}")
+                case ImagesPaths.models: return .json(house.models.current)
+                case ImagesPaths.jobs: return .json(house.jobs.current)
+                case ImagesPaths.history: return .json(house.history.current)
+                default: return .json("{}")
+                }
+            }
+        )
+        let store = InMemoryShellStore(serverURL: server, token: "household-abc")
+        store.trustServer(server, identity: TestIdentity.real.pin)
+        store.upsertKnownServer(url: server, name: nil)
+        let container = AppContainer(
+            store: store,
+            vault: TokenVault(items: InMemoryKeychain()),
+            lock: HouseholdLock(),
+            clock: { 0 },
+            configuration: StubURLProtocol.session(timeout: 1)
+        )
+        let model = ImagesModel(in: container)
+        model.start()
+        await settleUntil { model.state.data != nil }
+
+        model.prompt = "a lighthouse in fog"
+        XCTAssertTrue(model.generate())
+        await settleUntil { park.arrived.current }
+        XCTAssertTrue(model.busy)
+
+        // The person switches houses while the generate is in flight.
+        let next = "http://10.0.0.77:6369"
+        store.trustServer(next, identity: TestIdentity.real.pin)
+        store.upsertKnownServer(url: next, name: nil)
+        XCTAssertTrue(store.setServerURL(next))
+        store.setToken("household-xyz", for: next)
+        container.serverAddressChanged()
+        model.serverChanged()
+        XCTAssertFalse(model.busy, "the move cleared it; the old house's answer must not touch it")
+        let readsUnderB = model.jobs.fetches
+
+        park.release.set(true)
+        await settleUntil { StubURLProtocol.recorded.contains { $0.url?.path == ImagesPaths.generate } }
+        // Give the continuation every chance to do the wrong thing.
+        for _ in 0..<200 { await Task.yield() }
+
+        XCTAssertFalse(park.ranOut.current, "the answer landed; it did not time out")
+        XCTAssertNil(model.toast, "house A's failure must not be said under house B's name")
+        XCTAssertEqual(readsUnderB, model.jobs.fetches, "house A's answer must not re-read house B's lane")
+        model.stop()
+    }
+
+    func testMovingHouseDropsTheModelChoiceAndKeepsTheTyping() async {
+        let (model, container, store, _) = rig()
+        model.start()
+        await settleUntil { model.state.data != nil }
+        model.prompt = "a long paragraph of a prompt"
+        model.chosenModelID = "sd15"
+        model.confirmingDelete = model.historyJobs.first
+
+        let next = "http://10.0.0.77:6369"
+        store.trustServer(next, identity: TestIdentity.real.pin)
+        store.upsertKnownServer(url: next, name: nil)
+        XCTAssertTrue(store.setServerURL(next))
+        container.serverAddressChanged()
+        model.serverChanged()
+
+        XCTAssertEqual("a long paragraph of a prompt", model.prompt, "the person's own typing survives")
+        XCTAssertNil(model.chosenModelID, "a model id is the other engine's")
+        XCTAssertNil(model.confirmingDelete, "and so is the row a dialog was asking about")
+        model.stop()
+    }
+}
