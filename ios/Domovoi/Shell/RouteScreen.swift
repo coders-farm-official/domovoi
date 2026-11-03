@@ -105,7 +105,7 @@ struct RouteScreen: View {
             ScreenPlaceholder(route: route, onThisPhone: false)
         case .containers:
             // slot: containers
-            ScreenPlaceholder(route: route, onThisPhone: false)
+            HealthRouteScreen(model: model)
         }
     }
 }
@@ -352,7 +352,7 @@ struct SettingsSectionScreen: View {
             SettingsSectionNotBuilt()
         case "health":
             // slot: health
-            SettingsSectionNotBuilt()
+            HealthPanelView(model: model)
         case "advanced":
             // slot: advanced
             SettingsSectionNotBuilt()

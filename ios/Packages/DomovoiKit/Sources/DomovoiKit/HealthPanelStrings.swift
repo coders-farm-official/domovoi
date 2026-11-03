@@ -87,6 +87,15 @@ public enum HealthPanelStrings {
     /// (Android's `colors.err`).
     public static let pausesRiskyChanges = "pauses risky changes"
 
+    /// `:337` — the bullet in front of each of ``HealthFreezeList/lines``,
+    /// a `Text` of its own so the line beside it wraps under itself.
+    ///
+    /// **Not pinned against the Kotlin** for ``idPrefix``'s reason: it is one
+    /// character, and a containment test for `·` would pass against half the
+    /// strings in this file. It is **U+00B7**, the same middle dot every
+    /// separator here uses.
+    public static let freezeBullet = "·"
+
     // MARK: - the Containers part's own lines (`:266-275`)
 
     /// `:266`. Monospaced, like the meta line.
