@@ -246,24 +246,28 @@ public final class VoiceSettingsModel {
         // request at.
         let asked = container.store.serverURL
         inFlight = Task { @MainActor [weak self] in
-            // A `Result` rather than two `catch` arms: `raw` is typed
-            // `throws(DomovoiError)`, so one `catch` is the whole story, and
-            // the cancellation check belongs after the await in both arms —
-            // a cancelled request's failure is not a failure to report.
-            let outcome: Result<Data, DomovoiError>
+            // A `Result` of bytes-or-**message** rather than two `catch`
+            // arms, for two reasons: the cancellation check belongs after the
+            // await on both paths (a cancelled request's failure is not a
+            // failure to report), and the failure is only ever used as a
+            // sentence, so carrying `any Error` across the hop would be
+            // carrying something nothing reads.
+            let outcome: Result<Data, String>
             do {
                 outcome = .success(
                     try await client.raw(method: "GET", path: path, timeout: Self.sampleTimeout)
                 )
+            } catch let trouble as DomovoiError {
+                outcome = .failure(trouble.message)
             } catch {
-                outcome = .failure(error)
+                outcome = .failure("\(error)")
             }
             guard !Task.isCancelled else { return }
             switch outcome {
             case .success(let bytes):
                 self?.sampleArrived(bytes, for: id, from: asked)
-            case .failure(let trouble):
-                self?.sampleFailed(trouble.message, for: id, from: asked)
+            case .failure(let reason):
+                self?.sampleFailed(reason, for: id, from: asked)
             }
         }
     }
