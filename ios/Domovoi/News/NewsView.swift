@@ -269,14 +269,46 @@ struct NewsRemoveTopicCard: View {
                 .foregroundStyle(Color.fgMuted)
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityIdentifier("news-remove-ask")
-            HStack {
+            HStack(spacing: 8) {
                 Spacer()
+                // **A plain text button, which is also what Android draws.**
+                // `ConfirmDialog`'s dismiss is a `TextButton` with `fgMuted`
+                // on the dialog's own container (`ui/components/Dialogs.kt:41`),
+                // and this was the app's `.bordered` + `.tint(brandInk)`
+                // instead — which Apple's audit failed on train S008 with
+                // "Contrast is not high enough for element unless font size
+                // is larger", naming `news-remove-cancel`.
+                //
+                // It was right, and the arithmetic is the modifier's: a
+                // `.bordered` button fills with its tint at about 20% and
+                // draws the label in the tint itself, so `brandInk`'s
+                // measured **5.65:1 on white** becomes `brandInk` on
+                // `brandInk`-washed white — **4.31:1**, which is under the
+                // 4.5:1 body text needs and exactly the "nearly passed" band.
+                // On the card's own `.background` (``DialogCard``), `fgMuted`
+                // is the token measured for this canvas: **7.44:1** light and
+                // **7.88:1** dark. A fixed dark label on the tinted fill
+                // would have passed in light mode and failed in dark.
+                //
+                // The 44-point floor is explicit because `.borderless` has
+                // none: this button measured 34.3 points tall with the
+                // bordered style.
                 Button(NewsStrings.cancel, action: onCancel)
-                    .buttonStyle(.bordered)
-                    .tint(Color.brandInk)
+                    .buttonStyle(.borderless)
+                    // Both, deliberately: `.borderless` draws its label in
+                    // the **tint**, and `.foregroundStyle` is what every
+                    // other label on this card is set with. Either alone
+                    // leaves the colour depending on which one that style
+                    // happens to read.
+                    .tint(Color.fgMuted)
+                    .foregroundStyle(Color.fgMuted)
+                    .padding(.horizontal, 12)
+                    .frame(minHeight: 44)
+                    .contentShape(.rect)
                     .accessibilityIdentifier("news-remove-cancel")
                 Button(NewsStrings.remove, role: .destructive, action: onConfirm)
                     .buttonStyle(.borderedProminent)
+                    .frame(minHeight: 44)
                     .accessibilityIdentifier("news-remove-confirm")
             }
         }

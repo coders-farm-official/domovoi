@@ -784,7 +784,7 @@ extension StubHouseUITests {
     /// mean the page is no longer hidden — the gap that cost this app two
     /// `Contrast failed` on Settings.
     ///
-    /// The foot pass is what makes ``newsBelowTheFold(_:_:)`` honest. The
+    /// The foot pass is what makes ``newsOutsideTheViewport(_:_:)`` honest. The
     /// audit reports contrast against content the scroll view has clipped
     /// away, where there are no pixels to read; discounting those findings
     /// and stopping there would leave two thirds of this page audited by
@@ -824,6 +824,31 @@ extension StubHouseUITests {
         if !landed { mishaps.append("News never drew a person's heading") }
 
         do {
+            // **The page has to have settled before the first audit, or the
+            // findings arrive with nothing on them.**
+            //
+            // Train S008's page pass reported six `Contrast failed` and
+            // `issue.element` was `nil` on every one — not one `Find the …`
+            // in the log, so the audit itself had nothing to attribute them
+            // to. They are the same six S005 named: the five chip leaves
+            // ``newsChipArtefact(_:)`` explains and the clipped
+            // `news-topic-word-tech` ``newsOutsideTheViewport(_:_:)`` does.
+            // Unattributed they are six unknowns, and every classifier in
+            // this file reads the element.
+            //
+            // The difference between the two runs is three seconds: S005's
+            // page pass ran at t = 18.5s and resolved every element, S008's
+            // at t = 15.4s and resolved none. The dialog and foot passes get
+            // that settling for free from their own taps and swipes, and
+            // both of them did attribute findings in the same run. This is
+            // the page pass being given the same thing on purpose — the foot
+            // of a 1111-point page existing, the category grid built, and a
+            // beat after them.
+            _ = newsElement(app, "news-story-meta-301").waitForExistence(timeout: 25)
+            _ = app.buttons["news-category-entertainment"].waitForExistence(timeout: 10)
+            let settled = XCTestExpectation(description: "the page settled before the audit")
+            _ = XCTWaiter.wait(for: [settled], timeout: 3)
+
             findings += try auditNews(app, "news", "the page")
 
             // The dialog, which hides everything above it.
@@ -832,7 +857,12 @@ extension StubHouseUITests {
                 remove.tap()
                 if newsElement(app, "news-remove-ask").waitForExistence(timeout: 10) {
                     evidence(app, "news-12-audited-dialog")
-                    findings += try auditNews(app, "news-dialog", "the remove confirmation")
+                    findings += try auditNews(
+                        app,
+                        "news-dialog",
+                        "the remove confirmation",
+                        behindADialog: true
+                    )
                     app.buttons["news-remove-cancel"].tap()
                 } else {
                     mishaps.append("the remove confirmation never came up")
@@ -845,7 +875,7 @@ extension StubHouseUITests {
             // covers what the viewport holds, and this screen is 1111 points
             // of content in a 677-point scroll view: every topic row, every
             // feed row and every story was below the fold and *not* audited.
-            // ``newsBelowTheFold(_:_:)`` discounts the contrast findings the
+            // ``newsOutsideTheViewport(_:_:)`` discounts the contrast findings the
             // audit reports against that clipped-away content, so without
             // this second pass those elements would be discounted and never
             // looked at — which is the half of the first fix that would have
@@ -864,8 +894,9 @@ extension StubHouseUITests {
             [],
             findings,
             "Apple's audit has findings beyond the measured anonymous floor, "
-                + "the chip row's classified artefact and the content the "
-                + "viewport has clipped away"
+                + "the chip row's classified artefact, the content the "
+                + "viewport has clipped away, the two meta lines measured to "
+                + "scale, and the page this app hides behind a dialog"
         )
     }
 
@@ -910,7 +941,7 @@ extension StubHouseUITests {
     }
 
     /// A `Contrast failed` against an element the page's own scroll view has
-    /// **clipped away**.
+    /// **clipped away** — past its bottom edge or above its top one.
     ///
     /// Train S005 reported one: `id='news-topic-word-tech' label='tech'
     /// frame=(158.3, 790.7, 30.3, 18.0)`, against a page scroll view of
@@ -929,11 +960,30 @@ extension StubHouseUITests {
     /// scrolls to the foot and audits these very rows on screen rather than
     /// taking that on trust.
     ///
-    /// **Narrow on purpose**: contrast only, and only past the bottom edge
-    /// this measures from the app at audit time. A finding against anything
-    /// inside the viewport still fails.
+    /// ### The top edge is the same edge
+    ///
+    /// Train S008 reported the mirror image from the **foot** pass:
+    /// `label='Categories give broad coverage; free-form covers the niche.'
+    /// frame=(32, 87.3, 305.3, 33.7)`, against the same scroll view at
+    /// `{{0, 93.3}, {393, 676.7}}`. The run's own tree puts that sentence at
+    /// y = 47 with the content offset by -341.7, and the screenshot beside it
+    /// shows what is actually drawn in that band: the navigation bar's
+    /// `Back`, with the topics card's heading nowhere on screen. Scrolled to
+    /// the foot, the top third of this page has frames above the viewport in
+    /// exactly the way the bottom third had frames below it when the page
+    /// landed.
+    ///
+    /// The page pass audits that sentence **on screen** — it is at y = 526 in
+    /// the first tree, fully inside the viewport, and the audit reported
+    /// nothing against it there. So the two passes between them read every
+    /// element of this page where it has pixels, which is the whole reason
+    /// this discount is honest.
+    ///
+    /// **Narrow on purpose**: contrast only, and only outside the edges this
+    /// measures from the app at audit time. A finding against anything inside
+    /// the viewport still fails.
     @MainActor
-    private func newsBelowTheFold(_ app: XCUIApplication, _ line: String) -> Bool {
+    private func newsOutsideTheViewport(_ app: XCUIApplication, _ line: String) -> Bool {
         guard line.hasPrefix("Contrast failed"), let box = Self.frame(in: line) else {
             return false
         }
@@ -941,8 +991,68 @@ extension StubHouseUITests {
         // people chip row, lying on its side.
         guard let page = app.scrollViews.allElementsBoundByIndex
             .max(by: { $0.frame.height < $1.frame.height }) else { return false }
-        let bottom = page.frame.maxY
-        return bottom > 0 && box.maxY > bottom
+        let viewport = page.frame
+        guard viewport.height > 0 else { return false }
+        return box.maxY > viewport.maxY || box.minY < viewport.minY
+    }
+
+    /// A Dynamic Type finding against a **story's meta line**, which this
+    /// run's own measurement contradicts.
+    ///
+    /// Train S008's foot pass named two: `news-story-meta-302` and
+    /// `news-story-meta-301`, "User will not be able to change the font size
+    /// of this element". ``testNews_AtTheLargestTypeSize`` measures
+    /// `news-story-meta-301` in the same run, at both sizes:
+    ///
+    ///     ordinary   13.33 points tall
+    ///     AX5       240.00 points tall
+    ///
+    /// Eighteen times the height is not a font that cannot change — the line
+    /// goes from one row to six wrapped ones because every glyph in it grew.
+    /// The modifier the audit is reacting to is `.caption2.monospaced()`
+    /// (`NewsSavedFeedView.swift:98`), a text style with a design applied;
+    /// `news-topic-count-tech` beside it is `.caption.monospaced()` and was
+    /// not named, which is the audit's heuristic about very small type and
+    /// not a difference in how the two scale.
+    ///
+    /// This is the third named Dynamic Type false positive on this track
+    /// (``knownScalingFalsePositive`` is the first), and it is pinned by its
+    /// **identifier** rather than taken out of the count: a named Dynamic
+    /// Type finding against any other element on this screen — a real one —
+    /// still fails the case, and the measurement that justifies this one is a
+    /// live assertion in the case next door rather than a sentence in a
+    /// comment.
+    static func newsScalingFalsePositive(_ line: String) -> Bool {
+        line.hasPrefix("Dynamic Type font sizes are")
+            && line.contains("id='news-story-meta-")
+    }
+
+    /// `Potentially inaccessible text` with no element, in the **dialog**
+    /// pass: the page ``NewsView`` has deliberately taken out of the
+    /// accessibility tree, still drawn under the scrim.
+    ///
+    /// Train S008 reported seven, all anonymous, and only from the pass with
+    /// the confirmation up. The sentence Apple prints is "This element
+    /// appears to display text that should be represented using the
+    /// accessibility API", which is a description of what
+    /// `.accessibilityHidden(removalAsked != nil)` does on purpose:
+    /// ``DialogCard``'s scrim is `Color.black.opacity(0.35)` and the run's
+    /// screenshot shows `saved feed`, both story titles, both summaries, both
+    /// meta lines and the topics sentence perfectly legible behind it — text
+    /// with pixels and no accessibility element, which is the finding.
+    ///
+    /// The alternative was ``SettingsPlaceholder``'s, and it is worse: with
+    /// `.isModal` alone the page stays *in* the tree and Apple's audit
+    /// reports contrast against text nobody can read, which is the gap that
+    /// cost this app two `Contrast failed` on Settings. Every dialog in this
+    /// app has the same shape, so the fix belongs to ``DialogCard`` rather
+    /// than to News — DECISIONS.md, "Needs a shared change".
+    ///
+    /// **Narrow on purpose**: this headline only, no element only, and only
+    /// in the pass that has a dialog up. The same finding on the page pass,
+    /// or one that names an element, still fails.
+    static func newsHiddenPageText(_ line: String) -> Bool {
+        line.hasPrefix("Potentially inaccessible text") && line.hasSuffix("| element: nil")
     }
 
     /// One audit, classified by signature; the findings it cannot explain are
@@ -956,16 +1066,32 @@ extension StubHouseUITests {
     private func auditNews(
         _ app: XCUIApplication,
         _ name: String,
-        _ what: String
+        _ what: String,
+        behindADialog: Bool = false
     ) throws -> [String] {
         let split = Self.floorAndRest(try auditIssues(app, name))
-        let chips = split.rest.filter { Self.newsChipArtefact($0) }
-        let rest = split.rest
-            .filter { !Self.newsChipArtefact($0) }
-            .filter { !newsBelowTheFold(app, $0) }
-        print("NEWS AUDIT [\(what)] floor=\(split.floor) rest=\(rest.count) "
-            + "chip-row artefacts=\(chips.count) "
-            + "below the fold=\(split.rest.count - chips.count - rest.count)")
+        var counts: [String: Int] = [:]
+        var rest: [String] = []
+        for found in split.rest {
+            // In this order, and each one narrow: a line no classifier claims
+            // lands in `rest` and fails the caller.
+            if Self.newsChipArtefact(found) {
+                counts["chip-row artefacts", default: 0] += 1
+            } else if newsOutsideTheViewport(app, found) {
+                counts["outside the viewport", default: 0] += 1
+            } else if Self.newsScalingFalsePositive(found) {
+                counts["measured scaling false positives", default: 0] += 1
+            } else if behindADialog, Self.newsHiddenPageText(found) {
+                counts["the hidden page's text", default: 0] += 1
+            } else {
+                rest.append(found)
+            }
+        }
+        let classified = counts
+            .sorted { $0.key < $1.key }
+            .map { "\($0.key)=\($0.value)" }
+            .joined(separator: " ")
+        print("NEWS AUDIT [\(what)] floor=\(split.floor) rest=\(rest.count) \(classified)")
         for found in split.rest { print("NEWS AUDIT   \(found)") }
         return rest.map { "[\(what)] \($0)" }
     }
