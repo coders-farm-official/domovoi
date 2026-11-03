@@ -118,6 +118,10 @@ final class PrintingSheetModelTests: XCTestCase {
         let scanState = Shared<String>("scanning")
         let scanPages = Shared<Int>(0)
         let documentsBlocked = Shared<Bool>(false)
+        /// The household's limits refuse this job in advance: the preview
+        /// comes back with `over_limit` set, which is the one thing that
+        /// disables Print.
+        let refuseInAdvance = Shared<Bool>(false)
         let asked = Shared<[String]>([])
         /// Held previews: printer 1's first answer waits until this is set.
         let holdPrinterOne = Shared<Bool>(false)
@@ -133,7 +137,7 @@ final class PrintingSheetModelTests: XCTestCase {
         }
 
         func preview(printerID: Int, copies: Int) -> String {
-            let overLimit = printerID == 1 && copies > 20
+            let overLimit = refuseInAdvance.current
             return """
             {"printer_id":\(printerID),
              "printer_name":\(printerID == 1 ? "\"office printer\"" : "\"the colour one\""),
@@ -416,25 +420,18 @@ final class PrintingSheetModelTests: XCTestCase {
     /// `over_limit` is a refusal the household's limits have already decided,
     /// so Print is **not pressable** rather than pressed and refused.
     func testOverTheLimitRefusesBeforeAnythingIsSent() async {
-        // A printer that takes 99 copies in a house whose limit is 20: the
-        // preview is the only thing that knows, which is the point.
-        let twentyOne = PrintersResponse(
-            printers: [Printer(id: 1, name: "office printer", canPrint: true,
-                               choices: PrintingChoices(copiesMax: 99))],
-            hasPrinter: true,
-            defaultPrinterID: 1
-        )
-        let (model, server, clock) = printRig(Server(), printers: twentyOne)
+        let (model, server, clock) = printRig()
         model.start()
         await settleUntil({ model.preview != nil }, "the first preview")
         XCTAssertTrue(model.canPrint)
 
-        for _ in 0..<21 { model.moreCopies() }
-        XCTAssertEqual(model.copies, 22)
-        // One preview survives the twenty-one changes (each cancels the one
-        // before it); the permits are generous because the cancelled ones die
-        // through the same gate.
-        clock.tick(40)
+        // The household's limits refuse what is on screen. Only the preview
+        // knows — the sheet's own pickers cannot be driven past
+        // `copies_max`, so a refusal in advance is about pages and sheets
+        // rather than about a number this app could have clamped.
+        server.refuseInAdvance.set(true)
+        model.typedPages("1-3")
+        clock.tick()
         await settleUntil({ model.preview?.overLimit != nil }, "the refusal in advance")
         XCTAssertEqual(model.preview?.overLimit, "That's more copies than this house allows (20).")
         XCTAssertFalse(model.canPrint)
@@ -447,6 +444,28 @@ final class PrintingSheetModelTests: XCTestCase {
             before,
             "a job went out for a preview the server had already refused"
         )
+        model.stop()
+    }
+
+    /// The copies picker cannot be driven past what the **preview** says the
+    /// household allows, even when the printer itself takes more: the
+    /// preview's `choices` are the authority (`PrintSheet.kt:151`).
+    func testCopiesAreCappedByThePreviewAndNotByThePrinter() async {
+        let generous = PrintersResponse(
+            printers: [Printer(id: 1, name: "office printer", canPrint: true,
+                               choices: PrintingChoices(copiesMax: 99))],
+            hasPrinter: true,
+            defaultPrinterID: 1
+        )
+        let (model, _, clock) = printRig(Server(), printers: generous)
+        XCTAssertEqual(model.copiesMax, 99, "before the preview, the printer's own ceiling")
+        model.start()
+        await settleUntil({ model.preview != nil }, "the preview")
+        XCTAssertEqual(model.copiesMax, 20, "the household's, once the preview has spoken")
+
+        for _ in 0..<30 { model.moreCopies() }
+        clock.tick(60)
+        XCTAssertEqual(model.copies, 20)
         model.stop()
     }
 
