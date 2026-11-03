@@ -33,6 +33,18 @@ struct ChatConversationView: View {
     @State private var draft: ChatMoreDraftModel?
     @State private var sheet: ChatMoreSheet?
 
+    /// Read for one decision: the header's title is bounded only at an
+    /// accessibility size (``chatMoreTitleLines``).
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    /// How many lines the header's title may take: two at an accessibility
+    /// size, and as many as it wants below one. Spelt as a property and not
+    /// written into the `.lineLimit` call, because `nil` in a ternary there
+    /// has to pick between `lineLimit`'s overloads.
+    private var chatMoreTitleLines: Int? {
+        dynamicTypeSize.isAccessibilitySize ? 2 : nil
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             titleRow
@@ -245,26 +257,31 @@ struct ChatConversationView: View {
             // and a rename on another device shows while this is open. A
             // stored string could do neither.
             //
-            // **At most two lines.** Android's conversation header is one
-            // line with an ellipsis (`maxLines = 1`, `ChatHome.kt:722`); this
-            // was unbounded, and a title is as long as a person's first
-            // question. "The lease and the boiler at Fernbrook" wrapped to
-            // **311 points** at AccessibilityXXXL, and the title, the chip
-            // and the composer then left the transcript a viewport of
-            // exactly zero: the thread drew no messages at all and the case
-            // that opened it reported a screen with no transcript to scroll
-            // (`testChatMore_TheConversationsTextGrowsWithTheTypeSize`,
-            // train MS003).
+            // **At most two lines, and only at an accessibility size.** The
+            // round that bounded it at every size was wrong about Apple's
+            // audit. A flat
+            // `.lineLimit(2)` was reasoned safe because two lines hold a
+            // title like that one whole at `large` — which is true, and not
+            // what the audit asks. `Text clipped` is a **prediction**: it
+            // re-measures the element at a larger content size against the
+            // frame it has now, so a two-line cap is a finding at `large`
+            // even on a title that fits in one line there, and it named both
+            // threads' titles (train MS004: 'The weather in Lisbon', one
+            // line of 20.3 points, flagged).
             //
-            // Two and not Android's one, because two lines still hold a
-            // title like that one whole at `large` — where Apple's audit
-            // runs, and a line it has to truncate there is a finding — while
-            // bounding the header at an accessibility size, which is the
-            // thing that was broken. DECISIONS.md.
+            // So the cap goes where the breakage actually was. At an
+            // accessibility size a title is as long as a person's first
+            // question and wrapped to **311 points**, leaving the
+            // transcript a viewport of exactly zero (train MS003); below
+            // that it is a line or two and costs the transcript nothing, so
+            // it wraps whole and no text is ever dropped at the sizes most
+            // people read at. Android truncates at one line at every size
+            // (`maxLines = 1`, `ChatHome.kt:722`), so the bound itself is
+            // the faithful behaviour and this only delays it. DECISIONS.md.
             Text(chat.openTitle)
                 .font(.headline)
                 .accessibilityAddTraits(.isHeader)
-                .lineLimit(2)
+                .lineLimit(chatMoreTitleLines)
                 .truncationMode(.tail)
                 .fixedSize(horizontal: false, vertical: true)
                 .multilineTextAlignment(.leading)

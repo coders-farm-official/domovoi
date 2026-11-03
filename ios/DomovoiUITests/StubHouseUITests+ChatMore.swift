@@ -877,7 +877,20 @@ extension StubHouseUITests {
     /// editor.
     @MainActor
     func testChatMore_AHandEditSavesAsTheNextVersionAndA409SaysSo() throws {
-        guard let app = openChatMore(
+        // **A phone that has not seen draft 43's v2 either**, for the same
+        // reason the changes case needs one — and this case is the one that
+        // *writes* v2, so it marks it seen every time it runs. The fixture
+        // reset puts the draft back to a single version; `UserDefaults` is
+        // the phone's and survives, so on the second run the v2 this case
+        // had just written was already "seen" and the canvas opened it with
+        // the changes switch **off** — right for a phone that had seen it,
+        // and the switch this case then tapped turned on instead of off
+        // (train MS004: the tree at `chatmore-15-draft-saved` has
+        // `value: 0` before the tap). A server never reuses a version
+        // number, so only a case with a resettable house can get here;
+        // ``openChatMoreForgettingDrafts(search:title:waitingFor:)`` says
+        // how the store is emptied.
+        guard let app = openChatMoreForgettingDrafts(
             search: "Four letters",
             title: StubChatMore.letters,
             waitingFor: StubChatMore.lettersLast
