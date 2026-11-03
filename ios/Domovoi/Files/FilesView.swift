@@ -31,9 +31,20 @@ import SwiftUI
 /// owner's standing rule that a control which cannot do what it says is not
 /// drawn ([[no-misleading-controls]]).
 ///
-/// **The three editors and "+ New".** Writing a document is the dashboard's
-/// job. The reader here says `read-only` on its own face rather than looking
-/// like an editor that silently fails to save.
+/// **The editors and "+ New" are here now.** This comment used to say
+/// writing a document was the dashboard's job; Android has the editors, the
+/// save routes are **device** tier and not admin (`files.py:523`), so a phone
+/// really can write — the old note was about a batch that had not built them,
+/// not about a refusal. Tapping a `.txt`, a `.md`, a `.csv` or an `.xlsx` in
+/// Documents opens an editor (``DocumentsEditorCover``), and the header
+/// offers `+ New` there. What is still **not** built: the
+/// formatted-document/Word editor, which is the dashboard's own page in a
+/// WebView, and with it pictures-in-a-document, co-editing and the
+/// print/share-as-Word downloads; `+ New → Document`, which would make an
+/// `.html` with nowhere to open; and the Documents upload, bulk zip and
+/// delete. A `.html` or `.docx` row therefore still opens the **reader**,
+/// whose "read-only — editing is on the dashboard" line stays true of exactly
+/// the files that reach it. See `overnight/documents/DECISIONS.md`.
 ///
 /// **Printing, scanning, and "Ask in chat"** — each needs a screen this app
 /// has not built, and the last needs Chat.
@@ -45,6 +56,16 @@ struct FilesView: View {
     let model: ShellModel
 
     @State private var files: FilesModel?
+
+    /// Which document editor is open over the list, if any. A
+    /// `.fullScreenCover` and **not** a sixth ``FileSheet`` case — see
+    /// ``DocumentsEditorCover``.
+    @State private var editing: DocumentsEditorCover?
+
+    /// `+ New`'s state: the kind being named, the name, and the refusal that
+    /// keeps the card open. Built in the same `.task` as ``files``, because
+    /// it needs the container too.
+    @State private var newDoc: DocumentsNewModel?
 
     /// `onAppear`/`onDisappear`, for ``HomeView``'s reason: this screen is
     /// inside the workspace's `NavigationStack`, so a pushed destination
@@ -59,6 +80,9 @@ struct FilesView: View {
                     libraryPicker(files)
                     if files.blocked {
                         blockedCard(files)
+                    }
+                    if let newDoc {
+                        DocumentsNewPrompt(new: newDoc, inSubfolder: !files.path.isEmpty)
                     }
                     trail(files)
                     filterField(files)
@@ -75,6 +99,9 @@ struct FilesView: View {
             // before the view has one.
             if files == nil {
                 files = FilesModel(in: model.container, deviceID: model.deviceID)
+            }
+            if newDoc == nil {
+                newDoc = DocumentsNewModel(deviceID: model.deviceID, in: model.container)
             }
             files?.start()
         }
@@ -112,6 +139,29 @@ struct FilesView: View {
             if let files {
                 FileSheetView(which: which, files: files, model: model)
             }
+        }
+        // A **cover**, not a sixth `.sheet` case: a different modifier, so
+        // the five-case sheet above is untouched (two `.sheet`s on one view
+        // are the trap this screen already documents), and an editor wants
+        // the whole window because the keyboard takes half of it.
+        .fullScreenCover(item: $editing) { open in
+            if let files {
+                DocumentsEditorCoverView(
+                    open: open, files: files, model: model, onClose: { editing = nil }
+                )
+            }
+        }
+        // A file `+ New` just made opens **exactly as tapping its row
+        // would** — Android's `pager.reload(); onEntryPrimary(row.asEntry())`
+        // (`FilesScreen.kt:862-867`). One routing table, so a new
+        // spreadsheet lands in the grid editor because that is what a
+        // `.xlsx` row does, and a `notes.md` typed into Text file lands in
+        // the markdown editor.
+        .onChange(of: newDoc?.created) { _, made in
+            guard let made, let files else { return }
+            files.entries.reload(fresh: true)
+            editing = DocumentsEditorCover(for: made, in: files.selectedID)
+            newDoc?.opened()
         }
     }
 
@@ -179,6 +229,14 @@ struct FilesView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 8)
+            // `+ New`, in Documents only and only where this phone may
+            // write. Its own control beside the `•••` rather than an item
+            // inside it, as Android has it (`FilesScreen.kt:556`): making a
+            // file is not the same kind of thing as re-walking a folder.
+            if let files, let newDoc,
+               files.selectedID == FileLibrary.documents, files.canWrite {
+                DocumentsNewMenu(new: newDoc)
+            }
             if let files {
                 // A word, not Android's circular-arrow icon: an arrow in a
                 // header could mean reload, undo or sync, and this one
@@ -355,7 +413,9 @@ struct FilesView: View {
             }
         }
         ForEach(Array(files.entries.state.items.enumerated()), id: \.element.rel) { index, entry in
-            FileRowView(entry: entry, files: files)
+            FileRowView(entry: entry, files: files, onEdit: { opened in
+                editing = DocumentsEditorCover(for: opened, in: files.selectedID)
+            })
                 .onAppear {
                     // The guarded question, never a bare "the last row
                     // appeared" (``Paging/nearEnd(totalItems:lastVisible:threshold:)``).
