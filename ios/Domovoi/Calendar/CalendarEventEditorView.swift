@@ -29,6 +29,39 @@ enum CalendarPickerField: Hashable {
 /// a button expands Apple's own picker underneath it instead, one at a time,
 /// which is the same two taps and nothing to dismiss.
 ///
+/// ### The title and the location wrap
+///
+/// Apple's audit failed the **title** field with "Text of this element may be
+/// clipped at larger Dynamic Type sizes" in trains S002 and S005. S002's
+/// answer was to take `.textFieldStyle(.roundedBorder)` off it — the control
+/// that style builds measured 361 x 34 whatever the type size was — and the
+/// finding came back against the same element at 361 x 42. So the height was
+/// never what the audit was measuring.
+///
+/// What it measures is the **text against the element's width**, and the
+/// discriminator is in the same sheet: `location` is the same field, the same
+/// box, the same 361 x 42, and it is *not* named. Its placeholder is the one
+/// word `optional`; the title's is `e.g. dinner with mom`, which at an
+/// accessibility size does not fit 361 points of one unwrapping line. A
+/// single-line `TextField` scrolls its text sideways instead of wrapping it,
+/// so at AX5 a long title shows its first few words and the rest is off the
+/// side of a box with no scrollbar — and `minimumScaleFactor` is rejected
+/// everywhere on this track for making text smaller for the person who asked
+/// for bigger.
+///
+/// This is the same finding, on the same shape, that the Settings server
+/// address field answered on 2026-10-30 (`PhonesAndBrowsersView.swift:76-120`),
+/// and this takes its recipe exactly: `axis: .vertical`, `.lineLimit(2...)`
+/// so the field's own accessibility element is two lines tall rather than the
+/// 18 points one line of a vertical field reports, the border drawn by
+/// ``SwiftUI/View/calendarFieldBox()`` rather than by a field style, and
+/// newlines stripped in the setter.
+///
+/// **Android keeps `singleLine = true` here** (`:214`, `:247`). It is kept
+/// faithful in what it stores — a title can still hold no newline — and not
+/// in what it clips, because Compose's single line is a platform default and
+/// not a decision about this form.
+///
 /// ### The note has no `submitLabel` and no `onSubmit`
 ///
 /// It is a `TextField(axis: .vertical)` so the box grows with the type size
@@ -111,6 +144,8 @@ struct CalendarEventEditorView: View {
                 .font(.caption)
                 .foregroundStyle(Color.fgMuted)
                 .fixedSize(horizontal: false, vertical: true)
+            // **`axis: .vertical` with two lines of room** — see this file's
+            // doc comment, under "The title and the location wrap".
             TextField(
                 CalendarStrings.titlePlaceholder,
                 text: Binding(
@@ -118,11 +153,25 @@ struct CalendarEventEditorView: View {
                     // `onValueChange = { title = it; titleErr = null }`
                     // (`:208`): the message goes the moment it is being
                     // answered, not when the button is pressed again.
-                    set: { draft.title = $0; titleError = nil }
-                )
+                    //
+                    // Newlines are stripped as they arrive, not at save
+                    // time: Android's field is `singleLine = true`
+                    // (`:214`) so a title there can never hold one, and a
+                    // person whose typing is silently altered later would
+                    // see the house rename their event. Stripping here
+                    // means the Return key of a wrapping field simply does
+                    // nothing, which is why there is no `submitLabel` on it
+                    // (NIGHT-RULES §3 — a key labelled `done` that makes a
+                    // newline is a key that lies).
+                    set: { typed in
+                        draft.title = typed.filter { !$0.isNewline }
+                        titleError = nil
+                    }
+                ),
+                axis: .vertical
             )
+            .lineLimit(2...)
             .calendarFieldBox()
-            .submitLabel(.done)
             .accessibilityLabel(CalendarStrings.titleLabel)
             if let titleError {
                 Text(titleError)
@@ -140,12 +189,23 @@ struct CalendarEventEditorView: View {
                 .font(.caption)
                 .foregroundStyle(Color.fgMuted)
                 .fixedSize(horizontal: false, vertical: true)
+            // The same shape as the title for the same reason
+            // (this file's doc comment): Apple named only the title, because
+            // this field's placeholder is the one word `optional` and short
+            // text is not clipped text — but a typed location
+            // (`Bartholomew's pottery studio, 42 Mill Road`) is longer than
+            // either, and the audit would have nothing to measure until
+            // somebody typed one.
             TextField(
                 CalendarStrings.optional,
-                text: Binding(get: { draft.location }, set: { draft.location = $0 })
+                text: Binding(
+                    get: { draft.location },
+                    set: { typed in draft.location = typed.filter { !$0.isNewline } }
+                ),
+                axis: .vertical
             )
+            .lineLimit(2...)
             .calendarFieldBox()
-            .submitLabel(.done)
             .accessibilityLabel(CalendarStrings.locationLabel)
         }
     }
@@ -345,6 +405,16 @@ extension View {
     /// has no fixed box in it, so the control grows with the text instead of
     /// cropping it, which is the same shape
     /// ``PhonesAndBrowsersView`` settled on for the same reason.
+    ///
+    /// **Taking the style off was necessary and not sufficient.** S005 named
+    /// the same element again at 361 x 42, which is what sent the two
+    /// single-line fields to `axis: .vertical` — see
+    /// ``CalendarEventEditorView``, "The title and the location wrap". This
+    /// box is what draws their border now that no field style can: with
+    /// `.roundedBorder` on a vertical field the control is 18 points tall and
+    /// Apple fails it for hit area instead, which the server address field
+    /// measured from both sides of the modifier
+    /// (`PhonesAndBrowsersView.swift:99-115`).
     ///
     /// Named for the screen, not for the shape (NIGHT-RULES §2): twenty
     /// branches are adding to this module tonight and `fieldBox()` is a name

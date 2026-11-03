@@ -487,7 +487,15 @@ extension StubHouseUITests {
         XCTAssertTrue(field.waitForExistence(timeout: 15), "the editor did not open")
         // The caret goes where the tap lands, so it is put at the far right
         // and the field emptied from there.
-        field.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
+        //
+        // `dy: 0.25` and not the middle: the title field wraps now
+        // (`CalendarEventEditorView.swift`, "The title and the location
+        // wrap"), so its element is two lines tall with the text on the
+        // first, and a vertical field hangs a horizontal scroll indicator
+        // across its lower part — the note field's tree shows one over the
+        // bottom 30 of its 64 points. A quarter of the way down is the line
+        // the words are actually on.
+        field.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.25)).tap()
         clearField(app)
         app.typeText(StubCalendar.renamed)
         app.buttons[CalendarWords.save].tap()
