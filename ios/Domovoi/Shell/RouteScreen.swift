@@ -102,7 +102,9 @@ struct RouteScreen: View {
             ScreenPlaceholder(route: route, onThisPhone: false)
         case .manual:
             // slot: manual
-            ScreenPlaceholder(route: route, onThisPhone: false)
+            // ``ManualView`` says what is left out and why — both omissions
+            // are ornament, because nothing on this screen writes.
+            ManualView(model: model)
         case .containers:
             // slot: containers
             ScreenPlaceholder(route: route, onThisPhone: false)
