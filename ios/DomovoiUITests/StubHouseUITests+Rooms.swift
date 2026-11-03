@@ -182,6 +182,28 @@ extension StubHouseUITests {
     /// content by the number of points asked for and converges in one or two
     /// steps from either side. The flicks stay as a fallback — if the drag
     /// gesture is not recognised at all, nothing else would move the strip.
+    /// ### Why containment is measured on the scroll axis alone
+    ///
+    /// Train S008's one failure, and the third time this helper's *predicate*
+    /// rather than its gesture was the bug. `CGRect.contains(_:)` asks about
+    /// both axes, and a tab inside ``RoomsTabStrip`` is **exactly as tall as
+    /// the strip** — the strip's height *is* one tab's height. The two are
+    /// then equal to within whatever sub-point difference SwiftUI's layout
+    /// rounding leaves between a clip and its content, and at AX5 that
+    /// difference fell the wrong way: `timers` sat at x 29.7–183.0 in a strip
+    /// spanning 16.0–377.0, horizontally inside by a wide margin, and
+    /// `contains` still said no because its bottom edge was a fraction below
+    /// the strip's. ``roomsShortfall`` (which looks at x only) therefore
+    /// returned 0, no drag was made, the loop spun ten times moving nothing,
+    /// and the flick fallback oscillated past the tab ten more times. The tree
+    /// printed at the failure showed `timers` plainly in the strip — the
+    /// reason two readings of it found nothing wrong.
+    ///
+    /// Containment across the scroll axis is also the only part that bears on
+    /// tappability: a control clipped off the side cannot be touched, while
+    /// one whose own height matches its clip's is as visible as it will ever
+    /// be. So this compares the axis being scrolled, with a half-point
+    /// tolerance for the same rounding.
     @MainActor
     func roomsBring(
         _ element: XCUIElement,
@@ -192,26 +214,40 @@ extension StubHouseUITests {
         for _ in 0..<flicks {
             let seat = view.frame
             let it = element.frame
-            if seat.contains(it) { return true }
+            if roomsInside(it, seat, vertical: vertical) { return true }
             if vertical {
                 if it.midY > seat.midY { view.swipeUp(velocity: .slow) } else { view.swipeDown(velocity: .slow) }
             } else if !roomsDrag(view, by: roomsShortfall(it, in: seat)) {
                 break
             }
         }
-        if view.frame.contains(element.frame) { return true }
+        if roomsInside(element.frame, view.frame, vertical: vertical) { return true }
         // Fallback: the old flicks, in case the drag gesture moved nothing.
         for _ in 0..<flicks {
             let seat = view.frame
             let it = element.frame
-            if seat.contains(it) { return true }
+            if roomsInside(it, seat, vertical: vertical) { return true }
             if vertical {
                 if it.midY > seat.midY { view.swipeUp(velocity: .slow) } else { view.swipeDown(velocity: .slow) }
             } else {
                 if it.midX > seat.midX { view.swipeLeft() } else { view.swipeRight() }
             }
         }
-        return view.frame.contains(element.frame)
+        return roomsInside(element.frame, view.frame, vertical: vertical)
+    }
+
+    /// Whether `it` is wholly inside `seat` **along the axis being scrolled**.
+    ///
+    /// The tolerance absorbs SwiftUI's layout rounding between a clip and its
+    /// content; see ``roomsBring(_:into:vertical:flicks:)`` for the AX5
+    /// failure that paid for it. It is half a point — far smaller than any
+    /// real clipping, which is tens of points — so a control genuinely cut off
+    /// is still reported as outside.
+    func roomsInside(_ it: CGRect, _ seat: CGRect, vertical: Bool) -> Bool {
+        let slack: CGFloat = 0.5
+        return vertical
+            ? (it.minY >= seat.minY - slack && it.maxY <= seat.maxY + slack)
+            : (it.minX >= seat.minX - slack && it.maxX <= seat.maxX + slack)
     }
 
     /// How far, in points, a strip's content must move for `it` to sit wholly
@@ -234,9 +270,14 @@ extension StubHouseUITests {
     /// The whole gesture has to stay inside the strip — a touch that leaves it
     /// is a touch on something else — so one drag travels at most 80% of the
     /// strip's width and ``roomsBring``'s loop does the rest.
+    ///
+    /// A shortfall of zero means **no drag was attempted**, so it answers
+    /// false: ``roomsBring`` has already asked whether the element is inside,
+    /// and spinning its loop over a gesture that moves nothing is how train
+    /// S008 burned ten iterations before reaching the flick fallback.
     @MainActor
     func roomsDrag(_ view: XCUIElement, by dx: CGFloat) -> Bool {
-        guard dx != 0 else { return true }
+        guard dx != 0 else { return false }
         let width = view.frame.width
         guard width > 40 else { return false }
         let travel = max(-width * 0.8, min(width * 0.8, dx))
