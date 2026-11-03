@@ -48,6 +48,19 @@ public enum ManualStrings {
     /// (`ManualScreen.kt:962`).
     public static let pluginDisabled = "disabled"
 
+    /// A plugin row's version number, **spoken**.
+    ///
+    /// iOS-only, and the one sentence in this enum Android has no line for:
+    /// `ManualScreen.kt:956` draws the version as bare text and Compose's
+    /// audit has no counterpart to Apple's "Label not human-readable", which
+    /// train S009 reported against `0.4.1`. VoiceOver reading "zero point
+    /// four point one" beside a plugin's name says nothing about what the
+    /// number is; the screen still *shows* the bare version, as Android does.
+    /// Recorded in `design-notes/ios/overnight/manual/IOS-ONLY-STRINGS.md`.
+    public static func pluginVersion(_ version: String) -> String {
+        "version \(version)"
+    }
+
     /// `"${label("next")}: ${title}"` (`ManualScreen.kt:769`).
     public static func next(_ label: String, piece title: String) -> String {
         "\(label): \(title)"

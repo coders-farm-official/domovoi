@@ -649,6 +649,31 @@ extension StubHouseUITests {
             app.staticTexts[StubManual.timeHandler].firstMatch.waitForExistence(timeout: 15),
             "the live slots did not draw, so there was nothing to audit"
         )
+        // **The keyboard has to be gone before this screen is audited, and
+        // that is the app's job, not a tidy-up here.**
+        //
+        // The two audits above run after a pill tap, with no keyboard. This
+        // one runs after a search, and in train S009 the keyboard was still
+        // standing over the piece the search had just opened: the audit
+        // reported nine anonymous `Contrast failed`, and all nine are
+        // elements whose `minY` is at or below the keyboard's top of 561 —
+        // text with no pixels an audit can read. Android clears focus on the
+        // same tap (`ManualScreen.kt:409`), and ``ManualTopBar`` now does
+        // too, so this asserts the keyboard is down rather than dismissing it
+        // and auditing something the app would never show.
+        //
+        // ``XCTWaiter`` and not `wait(for:timeout:)`: this file's `setUp`
+        // sets `continueAfterFailure = false`, and the built-in wait records
+        // its own failure, which would end the case before the line that
+        // says what went wrong.
+        let keyboard = app.keyboards.firstMatch
+        let gone = expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: keyboard)
+        let settled = XCTWaiter().wait(for: [gone], timeout: 10)
+        XCTAssertEqual(
+            settled, .completed,
+            "opening a piece from the search field left the keyboard up, over "
+                + "the piece it had just opened: \(keyboard.frame)"
+        )
         try manualAudit(app, "manual-audit-piece")
     }
 

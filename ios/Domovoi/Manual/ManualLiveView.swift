@@ -239,6 +239,11 @@ struct ManualPluginsBox: View {
                 .font(.system(.caption, design: .monospaced))
                 .foregroundStyle(Color.fgMuted)
                 .fixedSize(horizontal: false, vertical: true)
+                // Shown as Android shows it (`:956`), **said** differently:
+                // Apple's audit calls a bare `0.4.1` a label that is not
+                // human-readable, and it is right about what VoiceOver makes
+                // of it next to a plugin's name.
+                .accessibilityLabel(ManualStrings.pluginVersion(version))
         }
         // `disabled` when it is installed and switched off, else the server's
         // own word for its state (`:962`).

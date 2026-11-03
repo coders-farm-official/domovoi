@@ -353,6 +353,23 @@ struct ManualTopBar: View {
 
     @Environment(\.dynamicTypeSize) private var typeSize
 
+    /// Whether the search field holds the keyboard.
+    ///
+    /// Android clears focus on both ways out of the search box
+    /// (`ManualScreen.kt:386` for the Search key, `:409` for a tapped
+    /// result) and the port had kept only the `query = ""` half of those two
+    /// lines. The keyboard is 233 of this screen's 852 points, so opening a
+    /// piece from a search left it standing over the piece that had just
+    /// been opened — which is also how train S009's audit came to report
+    /// **nine** anonymous `Contrast failed` against this screen. Every one of
+    /// the nine is an element whose `minY` was at or below the keyboard's top
+    /// (561) in that run: text drawn under a keyboard has no pixels an audit
+    /// can read, the same cause ``StubHouseUITests`` records for four of the
+    /// pairing screen's five. The colours were never in question — sampled
+    /// off the audit's own screenshot, the weakest text on that page is `ok`
+    /// at 5.05:1 and every chip and pill is 6.66:1 or better.
+    @FocusState private var searchFocused: Bool
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if let doc = manual.doc {
@@ -423,6 +440,7 @@ struct ManualTopBar: View {
                 .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(.quaternary) }
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
+                .focused($searchFocused)
                 .accessibilityLabel(placeholder)
                 .onChange(of: manual.query) { _, typed in
                     if typed.contains(where: \.isNewline) {
@@ -435,7 +453,13 @@ struct ManualTopBar: View {
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .submitLabel(.search)
-                .onSubmit { manual.openFirstResult() }
+                .focused($searchFocused)
+                // `:386`: the Search key opens the first result, clears the
+                // query **and** clears focus. All three, not the first two.
+                .onSubmit {
+                    manual.openFirstResult()
+                    searchFocused = false
+                }
                 .accessibilityLabel(placeholder)
         }
     }
@@ -477,6 +501,10 @@ struct ManualTopBar: View {
                 if at > 0 { Divider() }
                 Button {
                     manual.open(result: piece)
+                    // `:409`: `go(p.id); query = ""; focus.clearFocus()`. The
+                    // keyboard covers the bottom 233 points, which is most of
+                    // the piece this tap just opened.
+                    searchFocused = false
                 } label: {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(piece.title)
