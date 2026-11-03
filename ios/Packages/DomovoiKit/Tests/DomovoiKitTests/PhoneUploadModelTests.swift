@@ -539,7 +539,14 @@ final class PhoneUploadModelTests: XCTestCase {
             "the picker's own bytes are what goes up: \(posts.lastBody)"
         )
         XCTAssertFalse(posts.lastBody.contains("from the row"))
-        XCTAssertEqual(model.toast, "uploaded \"quenlo lullaby.mp3\" to Music")
+        // The toast is written when the POST *returns*, after `posts` has
+        // recorded it, so reading it straight away raced the answer (one run
+        // in three on the Mac, 2026-11-03). Waiting for the finished wording
+        // still fails if the upload never says it finished.
+        await settle(
+            { model.toast == "uploaded \"quenlo lullaby.mp3\" to Music" },
+            "the finished toast (last seen: \(model.toast ?? "nil"))"
+        )
     }
 
     /// A picked file over the ceiling: the refusal is a **toast**, because
