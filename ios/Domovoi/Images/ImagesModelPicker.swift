@@ -52,10 +52,13 @@ struct ImagesComposer: View {
     /// measures **1.72:1** against the field's white interior on the audit's
     /// own screenshot (train S004) — under Apple's 4.5:1 and under every
     /// other piece of text on this screen, the lowest of which is 5.07:1.
-    /// That is what Apple's audit reports as the screen's one
-    /// `Contrast failed`, and it arrives with `element: nil` because a
-    /// placeholder is not an accessibility element of its own, so nothing in
-    /// the tree can be named for it. There is no API to recolour it, so the
+    /// **This was not the audit's `Contrast failed`.** It was offered as the
+    /// explanation for it, this overlay replaced the placeholder, and the
+    /// finding came back unchanged on the next train — the culprit was the
+    /// disabled `generate` button at 1.47:1 (``ImagesGenerateButtonStyle``).
+    /// The overlay stays because the measurement that justifies it stands on
+    /// its own: 1.72:1 is text nobody can read, whether or not an audit that
+    /// cannot name a placeholder ever reports it. There is no API to recolour it, so the
     /// hint is an overlay in ``Color/fgMuted`` — 7.43:1 on white, the token
     /// every other muted line on this screen already uses. Android's
     /// `OutlinedTextField` placeholder is `onSurfaceVariant`, a proper muted
@@ -105,6 +108,9 @@ struct ImagesComposer: View {
     /// `enabled = ready && active != null && prompt.isNotBlank() && !busy`
     /// (`:231`), all four conjuncts, in ``ImagesModel/canGenerate`` so that
     /// each can be tested without a view.
+    ///
+    /// **Not `.borderedProminent`**, for the disabled state it draws — see
+    /// ``ImagesGenerateButtonStyle``.
     private var generate: some View {
         Button {
             images.generate()
@@ -112,9 +118,88 @@ struct ImagesComposer: View {
             Label(ImagesStrings.generate, systemImage: "wand.and.stars")
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .buttonStyle(.borderedProminent)
-        .frame(minHeight: 44)
+        .buttonStyle(ImagesGenerateButtonStyle())
         .disabled(!images.canGenerate)
+    }
+}
+
+/// `generate`'s look, drawn here rather than left to `.borderedProminent`.
+///
+/// **The screen's one `Contrast failed`.** Apple's audit reported a contrast
+/// failure with `element: nil` on every train, and two rounds blamed the
+/// prompt field's placeholder for it. The placeholder was recoloured
+/// (``ImagesComposer/prompt``) and the finding did not move, so this time the
+/// audit's own screenshot was sampled rather than reasoned about
+/// (`overnight-trains/S006/Images/att/…/images-audited*.png`,
+/// [[audit-reports-one-issue]]: when a finding will not attribute itself,
+/// look at the picture). Every piece of text on that screen measures 5.4:1 or
+/// better except one:
+///
+///     generate, disabled   rgb(194,194,197) on rgb(233,233,235)   1.47:1
+///
+/// That is `.borderedProminent`'s own disabled rendering — it dims the fill
+/// and the label towards each other, and at the audit's moment the prompt is
+/// empty, so the button is always disabled when the audit runs. It arrives
+/// anonymous because the dimming is applied by the style to content the
+/// button's accessibility element does not describe, which is exactly why two
+/// rounds of reading the tree could not find it.
+///
+/// So the two states are drawn, not inherited:
+///
+/// * enabled — ``Color/brand`` with ``Color/brandFg``, **8.49:1**, the pair
+///   the app's other six prominent buttons name explicitly
+///   (`ConnectionDialogView.swift:259-262`) because the app's tint is
+///   ``Color/brandInk`` and near-black on the ink is 3.08:1.
+/// * disabled — ``Color/fgMuted`` on `secondarySystemBackground`, **6.58:1**
+///   measured on that same screenshot (it is the colour of the
+///   `sampling step 7 of 20 · 42%` line, which the audit passes). Still
+///   plainly off: a flat grey card instead of amber, not a dimmed amber one.
+///
+/// The button keeps `.disabled`, so `isEnabled` still reports the four
+/// conjuncts of ``ImagesModel/canGenerate`` and
+/// `testImages_GenerateIsOffWithoutAPromptAndOnWithOne` still means what it
+/// says. A control that is off is drawn off — it is a control that *lies*
+/// about what it can do that this app does not draw ([[no-misleading-controls]]).
+///
+/// `@Environment` is read in a nested `View` rather than on the style itself:
+/// a `ButtonStyle` is not a `View`, so an `@Environment` property on it is
+/// not kept up to date and would latch the state the button first had.
+struct ImagesGenerateButtonStyle: ButtonStyle {
+
+    func makeBody(configuration: Configuration) -> some View {
+        ImagesGenerateButtonFace(configuration: configuration)
+    }
+}
+
+/// ``ImagesGenerateButtonStyle``'s body, which is a `View` so that it can read
+/// `isEnabled`.
+private struct ImagesGenerateButtonFace: View {
+
+    let configuration: ButtonStyleConfiguration
+
+    @Environment(\.isEnabled) private var isEnabled
+
+    var body: some View {
+        configuration.label
+            .font(.body.weight(.semibold))
+            .foregroundStyle(isEnabled ? Color.brandFg : Color.fgMuted)
+            .padding(.horizontal, 14)
+            .frame(minHeight: 44)
+            .background(
+                // Opaque, not a material, for ``ImagesModelPicker``'s reason:
+                // a contrast check cannot read a colour that is whatever
+                // happens to be behind it.
+                isEnabled ? Color.brand : Color(.secondarySystemBackground),
+                in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+            )
+            // The picker beside it carries the same edge; without it the
+            // disabled fill is nearly the canvas and the button has no shape.
+            .overlay {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(Color(.separator), lineWidth: isEnabled ? 0 : 1)
+            }
+            .contentShape(.rect)
+            .opacity(configuration.isPressed ? 0.7 : 1)
     }
 }
 

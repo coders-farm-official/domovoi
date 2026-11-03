@@ -1050,11 +1050,24 @@ extension StubHouseUITests {
             let sizes = heights(app)
             measured[label] = sizes
             evidence(app, "images-ax5-\(label)")
+            // **Back to the top before hunting the tile.** `heights` walks to
+            // the foot of the page, and the tile this measures is not at the
+            // foot: `kingfisher 01.png` is on history card 21 and the fixture
+            // puts card 22 — `robot-01.png`, one tile — below it
+            // (`fixtures/images.py:203,238`). The scroller only ever goes
+            // down, so at AX5, where the page is 2810 points seen through a
+            // 102-point window, the walk ended on the robot card and
+            // `imagesScrollUntilBuilt` then flicked sixty times against the
+            // bottom of a page it was already at. Train S006 read
+            // `the tile never built at AX5` and the evidence tree says
+            // otherwise — a tile was on screen the whole time, the wrong one.
+            // At `large` the same walk ends with the kingfisher tiles still in
+            // the window, which is why this only ever failed at AX5.
+            imagesScrollToTop(app, flicks: 60)
             let tile = imagesTile(app, showing: StubImages.tileOne)
-            // Sixty for the same reason the walk takes sixty: at AX5 the tile
-            // is at the foot of 1626 points seen through a 102-point window.
-            // `heights` has already walked most of the way down, so this is
-            // the rest of it.
+            // Sixty for the same reason the walk takes sixty: at AX5 the page
+            // is 2810 points seen through a 102-point window, and this starts
+            // again from the top.
             if imagesScrollUntilBuilt(app, tile, flicks: 60) {
                 tileSides[label] = tile.frame.width
             }
@@ -1110,6 +1123,16 @@ extension StubHouseUITests {
     /// measured against the **white** canvas; an unlabelled icon button
     /// (cancel, delete); and a tile with no label. Never a pinned total — a
     /// count passes for the wrong reason the moment a row is added.
+    ///
+    /// **It found one, and it took the screenshot to name it.** Trains S004–
+    /// S006 reported a `Contrast failed` with `element: nil`, which no tree
+    /// dump could attribute; sampling the audit's own PNG put every text on
+    /// the screen at 5.4:1 or better except the **disabled** `generate`
+    /// button at 1.47:1 — `.borderedProminent` dims its fill and its label
+    /// towards each other, and the prompt is empty while this case runs, so
+    /// the button is disabled every time. ``ImagesGenerateButtonStyle`` draws
+    /// both states itself now. [[audit-reports-one-issue]]: when a finding
+    /// will not attribute itself, look at the picture.
     @MainActor
     @available(iOS 17.0, *)
     func testImages_PassesApplesAccessibilityAudit() throws {
