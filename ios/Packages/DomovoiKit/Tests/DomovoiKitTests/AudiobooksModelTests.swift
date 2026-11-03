@@ -791,7 +791,18 @@ final class AudiobooksModelTests: XCTestCase {
         model.typed("qui")
         model.typed("quill")
         await nothingHappens()
-        XCTAssertEqual(1, queries(to: "/api/audiobooks").count, "nothing goes out while the typing settles")
+        // Asserted as "no NARROWED read went out" rather than "one read went
+        // out in total": the shell re-reads an unfiltered list of its own
+        // when the identity gate pins the house, and counting every request
+        // to the path made this case about that instead of about the
+        // debounce. Three keystrokes with no debounce would put three `q=`
+        // reads here, so the assertion still fails if the feature is gone.
+        XCTAssertEqual("", model.needle, "the needle does not move while the typing settles")
+        XCTAssertEqual(
+            [],
+            queries(to: "/api/audiobooks").filter { $0.contains("q=") },
+            "nothing narrowed goes out while the typing settles"
+        )
 
         waits.release()
         await settleUntil({ model.needle == "quill" }, "the needle")
