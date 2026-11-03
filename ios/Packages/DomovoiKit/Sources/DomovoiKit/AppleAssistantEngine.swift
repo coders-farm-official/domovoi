@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 /// One piece of a reply as it arrives.
 ///
@@ -120,24 +121,49 @@ public final class AppleAssistantEngine: AssistantEngine, @unchecked Sendable {
 
     /// The session, with the history it was built for and the prompt it was
     /// built with — ``assistantCanContinue(seenSystem:seen:system:history:)``'s
-    /// three inputs.
-    private final class Kept {
+    /// three inputs — and whether it is still usable.
+    ///
+    /// **A class with a lock, and the stream captures only this.** The stream's
+    /// build closure is a `sending` closure, so capturing the engine itself
+    /// inside it is a data race the compiler refuses (and is right to: the
+    /// engine's own `kept` is touched from the model's actor). So the reply
+    /// task is handed this box and nothing else, and the one thing it has to
+    /// tell the engine — "this session is spent" — it says by marking the box.
+    private final class Kept: @unchecked Sendable {
         let session: LanguageModelSession
         let system: String
-        var seen: [AssistantTurn]
+
+        private struct Inner: Sendable {
+            var seen: [AssistantTurn]
+            var broken = false
+        }
+
+        private let inner: Mutex<Inner>
 
         init(session: LanguageModelSession, system: String, seen: [AssistantTurn]) {
             self.session = session
             self.system = system
-            self.seen = seen
+            self.inner = Mutex(Inner(seen: seen))
         }
+
+        var seen: [AssistantTurn] { inner.withLock { $0.seen } }
+        var isBroken: Bool { inner.withLock { $0.broken } }
+
+        /// The turn finished: the session now holds the question and the reply
+        /// it wrote, which is what the next `canContinue` compares against.
+        func finished(_ history: [AssistantTurn], wrote: String) {
+            inner.withLock { $0.seen = history + [AssistantTurn(fromUser: false, text: wrote)] }
+        }
+
+        /// Spent — a failure, or a stop — so the next turn builds a fresh one.
+        /// Apple's transcript is left holding half an answer either way, and
+        /// the history the app kept (with its `stopped` mark) is the truth.
+        func spend() { inner.withLock { $0.broken = true } }
     }
 
-    /// Reached only from the model, which is `@MainActor`; `@unchecked
-    /// Sendable` is for the stream's own task, which touches nothing here
-    /// after it starts.
+    /// Reached from the model, which is `@MainActor`, and from nowhere else:
+    /// the reply task is given a ``Kept``, never this.
     private var kept: Kept?
-    private var running: Task<Void, Never>?
 
     public init() {}
 
@@ -155,27 +181,34 @@ public final class AppleAssistantEngine: AssistantEngine, @unchecked Sendable {
                             continuation.yield(chunk)
                         }
                     }
-                    kept.seen = history + [AssistantTurn(fromUser: false, text: deltas.shown)]
+                    if Task.isCancelled {
+                        // A stop: Apple's transcript holds half a reply, and
+                        // the app's copy of it is the one with the mark on it.
+                        kept.spend()
+                    } else {
+                        kept.finished(history, wrote: deltas.shown)
+                    }
                     continuation.finish()
                 } catch {
                     // The session is no longer the one `canContinue` thinks it
-                    // is: throw it away rather than carry a half turn.
-                    self.kept = nil
+                    // is: spend it rather than carry a half turn.
+                    kept.spend()
                     continuation.finish(throwing: Self.failure(error))
                 }
             }
-            running = task
             continuation.onTermination = { _ in task.cancel() }
         }
     }
 
+    /// There is no task handle here on purpose: the model owns the task that
+    /// consumes the stream and cancels it (``AssistantPhoneModel/stop()``),
+    /// which terminates the stream and cancels the reply through
+    /// `onTermination`. A second handle would be a second half-mechanism, and
+    /// ``ChatModel/houseEpoch`` says at length why two of those are worse than
+    /// one that holds. What this does is the part only the engine can: the
+    /// session is spent.
     public func cancel() {
-        running?.cancel()
-        running = nil
-        // A cancelled reply leaves Apple's transcript holding half an answer,
-        // so the next turn builds a fresh session from the history the model
-        // kept — which is the one with the `stopped` mark on it.
-        kept = nil
+        kept?.spend()
     }
 
     public func title(system: String, prompt: String, maxTokens: Int) async throws -> String? {
@@ -196,7 +229,7 @@ public final class AppleAssistantEngine: AssistantEngine, @unchecked Sendable {
     }
 
     private func session(system: String, history: [AssistantTurn]) -> Kept {
-        if let kept, assistantCanContinue(
+        if let kept, !kept.isBroken, assistantCanContinue(
             seenSystem: kept.system,
             seen: kept.seen,
             system: system,
