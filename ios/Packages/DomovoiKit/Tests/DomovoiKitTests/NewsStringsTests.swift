@@ -311,12 +311,16 @@ final class NewsStringsTests: XCTestCase {
 
     // MARK: - the iOS-only sentences
 
-    /// The three sentences this port adds — and the assertion that they are
+    /// The sentences this port adds — and the assertion that they are
     /// **not** in the Kotlin, so that one of them quietly becoming a
     /// transcription of an Android string would fail here rather than pass
     /// everywhere.
     func testTheIOSOnlySentencesAreNotInTheKotlin() {
-        for ours in [NewsStrings.feedsUnread, NewsStrings.verbLoadFeeds] {
+        for ours in [
+            NewsStrings.feedsUnread,
+            NewsStrings.verbLoadFeeds,
+            NewsStrings.freeformPlaceholderShort,
+        ] {
             XCTAssertFalse(
                 Self.source.contains(ours),
                 "\(debugged(ours)) is in the Kotlin after all — it is not iOS-only"
@@ -327,5 +331,33 @@ final class NewsStringsTests: XCTestCase {
         // label, not the words. Asserted as the same sentence on purpose: a
         // reader hearing one thing and seeing another is the bug.
         XCTAssertEqual(NewsStrings.personChip("Chevy"), NewsStrings.personsNews("Chevy"))
+    }
+
+    /// The short hint is short **and still carries the example**.
+    ///
+    /// Android's sentence did not fit the field and Apple's audit reported it
+    /// clipped (train S005), so the visible hint is a shortened one. Both
+    /// halves of that are worth pinning: a hint that grew back past the width
+    /// would be clipped again, and a hint that lost `Formula 1` would be a
+    /// hint with nothing in it — which is exactly what the clipping did.
+    func testTheShortFreeformHintFitsAndKeepsItsExample() {
+        XCTAssertLessThan(
+            NewsStrings.freeformPlaceholderShort.count,
+            NewsStrings.freeformPlaceholder.count,
+            "the short hint is not shorter than the sentence it replaces"
+        )
+        XCTAssertLessThanOrEqual(
+            NewsStrings.freeformPlaceholderShort.count,
+            32,
+            "the hint is back past the width the field measured as clipped"
+        )
+        XCTAssertTrue(
+            NewsStrings.freeformPlaceholderShort.contains("Formula 1"),
+            "the short hint dropped the example, which is the part worth having"
+        )
+        XCTAssertTrue(
+            NewsStrings.freeformPlaceholderShort.contains("free-form"),
+            "the short hint no longer says which of the two kinds it adds"
+        )
     }
 }

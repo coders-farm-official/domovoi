@@ -121,12 +121,25 @@ struct NewsTopicsCardView: View {
     /// cannot do what it says is not drawn here (Kamron's rule). Appearing
     /// with the first character is also what gives the field its full width
     /// back: the same run reported the placeholder clipped at 225 points
-    /// beside the button, and it is not clipped at 329 without it.
-    /// DECISIONS.md.
+    /// beside the button. **329 points was not enough either** — train S005
+    /// reported `Text clipped` against the full-width field, and that is what
+    /// shortened the placeholder itself (the field below). The button still
+    /// appears only once there is something to add, for the contrast reason
+    /// above. DECISIONS.md.
     private var freeform: some View {
         HStack(spacing: 8) {
             TextField(
-                NewsStrings.freeformPlaceholder,
+                // **Short on screen, whole to a reader.** Android's sentence
+                // is 39 characters and does not fit this field at the
+                // ordinary type size: train S005's audit reported
+                // `Text clipped` against it at its full 329-point width, and
+                // the run's screenshot shows the placeholder cut off inside
+                // `Formula 1` — the example is the part that was lost.
+                // ``NewsStrings/freeformPlaceholderShort`` keeps the example
+                // and drops the words the `add topic` button beside it
+                // already says; the label below is still Android's whole
+                // sentence. DECISIONS.md, "The hint did not fit the field".
+                NewsStrings.freeformPlaceholderShort,
                 text: Binding(
                     get: { detail.freeformDraft },
                     set: { detail.freeformDraft = $0 }

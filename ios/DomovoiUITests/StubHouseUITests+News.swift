@@ -312,7 +312,9 @@ extension StubHouseUITests {
         // The field is cleared on success only (`NewsDetail.kt:225`).
         XCTAssertEqual(
             app.textFields["news-freeform"].value as? String ?? "",
-            NewsStringsUnderTest.freeformPlaceholder,
+            // The **visible** hint: an empty `TextField` reports its
+            // placeholder as its value, and the placeholder is the short one.
+            NewsStringsUnderTest.freeformPlaceholderShort,
             "the field kept what was typed after a successful add"
         )
 
@@ -763,10 +765,11 @@ extension StubHouseUITests {
 
     // MARK: - 12. Apple's audit
 
-    /// Two audits of this screen: the page on its own, then the page with the
-    /// remove dialog up.
+    /// Three audits of this screen: the page as it lands, the page with the
+    /// remove dialog up, and the foot of the page — a third of which is below
+    /// the fold when it lands.
     ///
-    /// **Both passes are needed, and the first one is the screen's.** This
+    /// **The first pass is the screen's, and it has to come first.** This
     /// case used to raise the dialog *before* its only audit, and
     /// ``NewsView`` applies `.accessibilityHidden(removalAsked != nil)` to
     /// the whole page — which does not de-prioritise the page, it deletes it
@@ -776,10 +779,17 @@ extension StubHouseUITests {
     /// button or briefing. It passed against a screen it never looked at, and
     /// would have passed against a sabotaged colour.
     ///
-    /// The second pass is still worth running: it covers the dialog's own
+    /// The dialog pass is still worth running: it covers the dialog's own
     /// card, and a finding naming an element *behind* the confirmation would
     /// mean the page is no longer hidden — the gap that cost this app two
     /// `Contrast failed` on Settings.
+    ///
+    /// The foot pass is what makes ``newsBelowTheFold(_:_:)`` honest. The
+    /// audit reports contrast against content the scroll view has clipped
+    /// away, where there are no pixels to read; discounting those findings
+    /// and stopping there would leave two thirds of this page audited by
+    /// nobody. Scrolled to the foot, the same rows are on screen and are read
+    /// properly.
     ///
     /// Everything the audit can attribute is a defect to fix; anonymous
     /// Dynamic Type findings are the measured platform floor
@@ -790,32 +800,73 @@ extension StubHouseUITests {
     func testNews_PassesApplesAccessibilityAudit() throws {
         resetNewsHouse()
         let (app, landed) = openNews()
-        XCTAssertTrue(landed, "News never drew a person's heading")
         evidence(app, "news-12-audited")
 
-        try auditNews(app, "news", "the page")
+        // **Nothing below here asserts until the app has been terminated.**
+        //
+        // `setUp` sets `continueAfterFailure = false`, so the *first* failed
+        // assertion leaves this case on the spot — and on train S005 that is
+        // exactly what happened: the page audit failed, the `app.terminate()`
+        // at the foot of this case never ran, and the very next case
+        // (``testNews_PollNowSaysWhatCameBack``, alphabetically) lost its
+        // connection to the app eight seconds into a launch, with no crash
+        // report and no hierarchy. Train S002 did the same, before there was
+        // a terminate at all: the two failures are one failure. The leftover
+        // here is not an idle app, it is the app that has just run two full
+        // `performAccessibilityAudit` passes, and a relaunch beside it is the
+        // launch that dies.
+        //
+        // So findings and mishaps are collected, the app is put down, and
+        // then the case says what it found. A terminate on a path an
+        // assertion can cut short is a terminate that does not happen.
+        var findings: [String] = []
+        var mishaps: [String] = []
+        if !landed { mishaps.append("News never drew a person's heading") }
 
-        // Now the dialog, which hides everything above.
-        let remove = app.buttons["news-remove-topic-tech"]
-        guard revealNews(app, remove) else {
-            print("NEWS AUDIT: the remove control was not reachable — the dialog was not audited")
-            return
+        do {
+            findings += try auditNews(app, "news", "the page")
+
+            // The dialog, which hides everything above it.
+            let remove = app.buttons["news-remove-topic-tech"]
+            if revealNews(app, remove) {
+                remove.tap()
+                if newsElement(app, "news-remove-ask").waitForExistence(timeout: 10) {
+                    evidence(app, "news-12-audited-dialog")
+                    findings += try auditNews(app, "news-dialog", "the remove confirmation")
+                    app.buttons["news-remove-cancel"].tap()
+                } else {
+                    mishaps.append("the remove confirmation never came up")
+                }
+            } else {
+                mishaps.append("the remove control was not reachable")
+            }
+
+            // **The foot of the page, audited on screen.** The pass above
+            // covers what the viewport holds, and this screen is 1111 points
+            // of content in a 677-point scroll view: every topic row, every
+            // feed row and every story was below the fold and *not* audited.
+            // ``newsBelowTheFold(_:_:)`` discounts the contrast findings the
+            // audit reports against that clipped-away content, so without
+            // this second pass those elements would be discounted and never
+            // looked at — which is the half of the first fix that would have
+            // been asserting less. Scrolled down, they are ordinary visible
+            // elements and the audit reads them properly.
+            for _ in 0..<12 { app.swipeUp(velocity: .slow) }
+            evidence(app, "news-12-audited-foot")
+            findings += try auditNews(app, "news-foot", "the foot of the page")
+        } catch {
+            mishaps.append("an audit could not be run: \(error)")
         }
-        remove.tap()
-        XCTAssertTrue(
-            newsElement(app, "news-remove-ask").waitForExistence(timeout: 10),
-            "the remove confirmation never came up"
-        )
-        evidence(app, "news-12-audited-dialog")
-        try auditNews(app, "news-dialog", "the remove confirmation")
 
-        // **Left running with a dialog up, the next launch died.** Train
-        // S002's very next case lost its connection to the app before it drew
-        // anything ("Couldn't communicate with a helper application"), with
-        // no crash report and no hierarchy. Terminating the way
-        // ``testNews_AtTheLargestTypeSize`` does hands the next case a clean
-        // start, which is cheap whether or not the dialog was the cause.
         app.terminate()
+        XCTAssertEqual([], mishaps, "the audit never reached what it was meant to look at")
+        XCTAssertEqual(
+            [],
+            findings,
+            "Apple's audit has findings beyond the measured anonymous floor, "
+                + "the chip row's classified artefact and the content the "
+                + "viewport has clipped away"
+        )
     }
 
     /// A `Contrast failed` against one of the **person chips' own leaves**,
@@ -858,28 +909,65 @@ extension StubHouseUITests {
         return leaves.contains { line.contains("label='\($0)'") }
     }
 
-    /// One audit, classified by signature and asserted on the rest.
+    /// A `Contrast failed` against an element the page's own scroll view has
+    /// **clipped away**.
+    ///
+    /// Train S005 reported one: `id='news-topic-word-tech' label='tech'
+    /// frame=(158.3, 790.7, 30.3, 18.0)`, against a page scroll view of
+    /// `{{0, 93.3}, {393, 676.7}}` — bottom edge at 770. The word is twenty
+    /// points *past* that edge, in the band the phone bar occupies, and the
+    /// run's own screenshot shows the topic rows are not on screen at all:
+    /// the last thing drawn is the free-form field at 731.7. The content is
+    /// 1111.7 points tall in a 676.7-point viewport, so a third of this page
+    /// is in the hierarchy with frames nothing draws into.
+    ///
+    /// An element with no pixels has no contrast to read, which is what the
+    /// audit is reporting — the same shape ``testTheVideosGridAudits``
+    /// classifies for a row the edge cuts in *half*, one step further out.
+    /// `Color.primary` on `secondarySystemBackground` is over 15:1 where it
+    /// is actually drawn, and ``testNews_PassesApplesAccessibilityAudit``
+    /// scrolls to the foot and audits these very rows on screen rather than
+    /// taking that on trust.
+    ///
+    /// **Narrow on purpose**: contrast only, and only past the bottom edge
+    /// this measures from the app at audit time. A finding against anything
+    /// inside the viewport still fails.
+    @MainActor
+    private func newsBelowTheFold(_ app: XCUIApplication, _ line: String) -> Bool {
+        guard line.hasPrefix("Contrast failed"), let box = Self.frame(in: line) else {
+            return false
+        }
+        // The page's scroll view is the taller of the two: the other is the
+        // people chip row, lying on its side.
+        guard let page = app.scrollViews.allElementsBoundByIndex
+            .max(by: { $0.frame.height < $1.frame.height }) else { return false }
+        let bottom = page.frame.maxY
+        return bottom > 0 && box.maxY > bottom
+    }
+
+    /// One audit, classified by signature; the findings it cannot explain are
+    /// **returned** rather than asserted.
+    ///
+    /// Returned because of what an assertion here does to the case that calls
+    /// it: `continueAfterFailure = false` means the first failure ends the
+    /// case where it stands, and the caller has an app to put down first.
+    /// Train S005 lost the *next* case to exactly that.
     @MainActor
     private func auditNews(
         _ app: XCUIApplication,
         _ name: String,
-        _ what: String,
-        file: StaticString = #filePath,
-        line: UInt = #line
-    ) throws {
+        _ what: String
+    ) throws -> [String] {
         let split = Self.floorAndRest(try auditIssues(app, name))
-        let rest = split.rest.filter { !Self.newsChipArtefact($0) }
+        let chips = split.rest.filter { Self.newsChipArtefact($0) }
+        let rest = split.rest
+            .filter { !Self.newsChipArtefact($0) }
+            .filter { !newsBelowTheFold(app, $0) }
         print("NEWS AUDIT [\(what)] floor=\(split.floor) rest=\(rest.count) "
-            + "chip-row artefacts=\(split.rest.count - rest.count)")
+            + "chip-row artefacts=\(chips.count) "
+            + "below the fold=\(split.rest.count - chips.count - rest.count)")
         for found in split.rest { print("NEWS AUDIT   \(found)") }
-        XCTAssertTrue(
-            rest.isEmpty,
-            "Apple's audit has findings against \(what) beyond the measured "
-                + "anonymous floor and the chip row's classified artefact: "
-                + rest.joined(separator: " / "),
-            file: file,
-            line: line
-        )
+        return rest.map { "[\(what)] \($0)" }
     }
 
     // MARK: - 13. the largest type size
@@ -1035,9 +1123,16 @@ enum NewsStringsUnderTest {
     /// ``NewsStrings/feedAdded``.
     static let feedAdded = "feed added"
 
-    /// ``NewsStrings/freeformPlaceholder`` — which is also what an empty
-    /// `TextField` reports as its `value`. The ellipsis is U+2026.
+    /// ``NewsStrings/freeformPlaceholder`` — Android's whole sentence, which
+    /// is now the field's **accessibility label** rather than its visible
+    /// hint. The ellipsis is U+2026.
     static let freeformPlaceholder = "add a free-form topic (e.g. Formula 1)…"
+
+    /// ``NewsStrings/freeformPlaceholderShort`` — the visible hint, and so
+    /// what an empty `TextField` reports as its `value`. **iOS-only**:
+    /// Android's sentence did not fit the field and Apple's audit reported it
+    /// clipped (train S005). IOS-ONLY-STRINGS.md §6.
+    static let freeformPlaceholderShort = "free-form topic, e.g. Formula 1"
 
     /// The kind pill's word for a free-form topic (`news.py:154`).
     static let freeformKind = "freeform"

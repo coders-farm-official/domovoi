@@ -116,7 +116,26 @@ public enum NewsStrings {
     public static let topicsSub = "Categories give broad coverage; free-form covers the niche."
 
     /// `NewsDetail.kt:261`. The ellipsis is U+2026.
+    ///
+    /// Kept as the field's **accessibility label**, so a reader still hears
+    /// Android's whole sentence, and shortened on screen — see
+    /// ``freeformPlaceholderShort``.
     public static let freeformPlaceholder = "add a free-form topic (e.g. Formula 1)…"
+
+    /// iOS-only: the same hint, short enough to be *read* in the field.
+    ///
+    /// Thirty-nine characters do not fit a 329-point single-line field at the
+    /// ordinary type size, and Apple's audit measured the consequence on
+    /// train S005: `Text clipped | id='news-freeform'`, with the Simulator's
+    /// own screenshot showing the placeholder cut off mid-`Formula 1`. A hint
+    /// whose example is the part that gets cut is a hint with nothing in it.
+    ///
+    /// So the example stays and the words around it go: Android's `free-form`
+    /// (the one word that says which of the two kinds this field adds) and
+    /// its `Formula 1`, with `add a` dropped — the `add topic` button beside
+    /// it already says the verb. The full sentence is still what a reader
+    /// hears. `IOS-ONLY-STRINGS.md` §6.
+    public static let freeformPlaceholderShort = "free-form topic, e.g. Formula 1"
 
     /// `NewsDetail.kt:269`.
     public static let addTopic = "add topic"
