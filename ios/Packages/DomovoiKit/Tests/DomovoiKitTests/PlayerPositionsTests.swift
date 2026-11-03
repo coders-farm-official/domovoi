@@ -270,6 +270,63 @@ final class PlayerPositionsTests: XCTestCase {
         XCTAssertEqual(body?["person_id"] as? Int, 7, "the server keys the row by (device, person)")
     }
 
+    /// **The read-after-await case, on the WRITE side.**
+    ///
+    /// `flushSpokenPosition` captures the server before it schedules the save
+    /// (`PlayerModel.swift:1000`) and drops the POST if the house changed
+    /// while it was queued. **Nothing asserted that**: the capture could be
+    /// deleted and this suite stayed green. It is the same defect class as the
+    /// read above and worse here — a bad read starts a book at the wrong
+    /// place for one session, whereas a bad write puts the FIRST house's
+    /// place into the SECOND house's row, where it outlives the run.
+    ///
+    /// The switch is inside the round trip by construction rather than by a
+    /// parked request: `pause()` captures the server and schedules the save,
+    /// and the `serverChanged` below runs in the same synchronous main-actor
+    /// block, before the task body can run. So the save is provably queued and
+    /// provably not yet sent.
+    func testAPlaceQueuedBeforeTheHouseChangedIsNotSentToTheNewOne() async {
+        let h = PlayerHarness()
+        h.model.serverChanged(to: PlayerServerScope(address: "http://10.0.0.42:6369", fingerprint: "AA"))
+        h.model.play([PlayerSeed.episode])
+        h.engine.currentTimeSec = 300
+        h.model.tickForTests()
+
+        h.model.pause()
+        h.model.serverChanged(to: PlayerServerScope(address: "http://10.0.0.99:6369", fingerprint: "BB"))
+
+        for _ in 0..<200 { await Task.yield() }
+        XCTAssertFalse(
+            PlayerHouse.methods(for: "/api/podcasts/positions/9").contains("POST"),
+            "300 s is the FIRST house's place for episode 9, and it was written into the "
+            + "second house's row for its own episode 9"
+        )
+    }
+
+    func testAPlaceQueuedBeforeAReconnectIsStillSent() async {
+        // The negative half. Without it the case above would also pass for a
+        // `pause()` that saved nothing at all, or for a model that dropped
+        // every queued save — which is the shape of a case that was never
+        // testing anything.
+        let h = PlayerHarness()
+        h.model.serverChanged(to: PlayerServerScope(address: "http://10.0.0.42:6369", fingerprint: "AA"))
+        h.model.play([PlayerSeed.episode])
+        h.engine.currentTimeSec = 300
+        h.model.tickForTests()
+
+        h.model.pause()
+        h.model.serverChanged(to: PlayerServerScope(address: "http://192.168.0.9:6369", fingerprint: "AA"))
+
+        await h.settle(
+            until: { PlayerHouse.methods(for: "/api/podcasts/positions/9").contains("POST") },
+            "the place being flushed to the same house at its new address"
+        )
+        XCTAssertEqual(
+            PlayerHouse.bodies(for: "/api/podcasts/positions/9").last?["position_sec"] as? Int, 300,
+            "the same house, found at a new address: nothing is dropped for that"
+        )
+    }
+
     func testPausingASongFlushesNothing() async {
         let h = PlayerHarness()
         h.model.play([PlayerSeed.transmission])

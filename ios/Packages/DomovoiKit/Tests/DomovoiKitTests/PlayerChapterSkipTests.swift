@@ -104,6 +104,32 @@ final class PlayerChapterSkipTests: XCTestCase {
         )
     }
 
+    /// `previous` sorts the chapters too.
+    ///
+    /// `next` has had ``testChaptersOutOfOrderAreSortedBeforeAnythingIsDecided``
+    /// since the port; `previous` had nothing of the kind, so a `.sorted()`
+    /// dropped from `previous` alone broke nothing in this suite. Unsorted,
+    /// `at()` scans [250, 0, 100] and answers the LAST index at or under the
+    /// position, which is the 100 — so the book's own start reads as its last
+    /// chapter.
+    func testPreviousSortsTheChaptersToo() {
+        let jumbled = [
+            PlayerChapter(title: "Coming Home", startSec: 250),
+            PlayerChapter(title: "Setting Out", startSec: 0),
+            PlayerChapter(title: "The Long Road", startSec: 100),
+        ]
+        XCTAssertEqual(
+            PlayerChapterSkip.previous(chapters: jumbled, positionSec: 0.5, hasPreviousItem: true),
+            .previousItem,
+            "half a second into the book: out of it — unsorted this is a jump to the last chapter"
+        )
+        XCTAssertEqual(
+            PlayerChapterSkip.previous(chapters: jumbled, positionSec: 260, hasPreviousItem: true),
+            .seek(250),
+            "10 s into the last chapter: back to ITS start — unsorted this restarts The Long Road"
+        )
+    }
+
     // MARK: - canNext, which every next button reads
 
     func testCanNextIsAlwaysTrueWhileCasting() {

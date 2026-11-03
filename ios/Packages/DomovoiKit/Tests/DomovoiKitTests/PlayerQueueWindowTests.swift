@@ -15,6 +15,7 @@ final class PlayerQueueWindowTests: XCTestCase {
         XCTAssertEqual(slice.items.count, 30)
         XCTAssertEqual(slice.index, 7)
         XCTAssertEqual(slice.items.first, 0)
+        XCTAssertEqual(slice.items[slice.index], 7, "the tapped row is the one at `index`")
     }
 
     func testAnEmptyListAnswersIndexZeroRatherThanMinusOne() {
@@ -30,6 +31,11 @@ final class PlayerQueueWindowTests: XCTestCase {
         XCTAssertEqual(slice.items.first, 590, "previous still goes somewhere")
         XCTAssertEqual(slice.items.last, 689)
         XCTAssertEqual(slice.index, 10)
+        // Pinned by IDENTITY, not by the number above. The near-the-end case
+        // had this assertion and this one did not, so a window that slid while
+        // `index` kept counting from the old start was only caught at the foot
+        // of a list — and the sabotage slid it everywhere.
+        XCTAssertEqual(slice.items[slice.index], 600, "the tapped row is still the one at `index`")
     }
 
     func testNearTheEndTheWindowFillsFromBefore() {

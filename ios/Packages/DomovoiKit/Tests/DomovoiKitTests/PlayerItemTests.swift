@@ -111,6 +111,56 @@ final class PlayerItemTests: XCTestCase {
         XCTAssertNil(PlayerArtwork.model(coverPath: "  ", absolute: absolute))
     }
 
+    // MARK: - the memo through the model
+
+    /// A different house forgets the misses; the same house at a new address
+    /// does not.
+    ///
+    /// `PlayerModel.dropServerMedia` calls ``PlayerArtwork/forgetMisses()``
+    /// (`PlayerModel.swift:1055`) and **nothing asserted it**: that line could
+    /// be deleted and this whole suite stayed green, which is the
+    /// seam-with-no-caller shape this track has been bitten by before. It
+    /// matters because the memo is keyed by ABSOLUTE url and two houses both
+    /// have a track 11 — so the first house's 404 would keep the second
+    /// house's real cover behind the placeholder for the rest of the run.
+    ///
+    /// Both halves are here on purpose. Forgetting on every reconnect is the
+    /// opposite bug and just as invisible: every missing cover in the library
+    /// re-asked each time the shell found the house at a new address.
+    @MainActor
+    func testAHouseChangeForgetsTheMissesAndAReconnectDoesNot() {
+        StubURLProtocol.reset()
+        PlayerHouse().install()
+        defer { StubURLProtocol.reset() }
+        let url = "http://10.0.0.42:6369/api/music/library/11/cover"
+
+        let reconnected = PlayerHarness()
+        reconnected.model.serverChanged(
+            to: PlayerServerScope(address: "http://10.0.0.42:6369", fingerprint: "AA")
+        )
+        PlayerArtwork.noteFailure(url, status: 404)
+        XCTAssertTrue(PlayerArtwork.isMissing(url))
+        reconnected.model.serverChanged(
+            to: PlayerServerScope(address: "http://192.168.0.9:6369", fingerprint: "AA")
+        )
+        XCTAssertTrue(
+            PlayerArtwork.isMissing(url),
+            "the same house at a new address still has no cover for track 11"
+        )
+
+        let moved = PlayerHarness()
+        moved.model.serverChanged(
+            to: PlayerServerScope(address: "http://10.0.0.42:6369", fingerprint: "AA")
+        )
+        moved.model.serverChanged(
+            to: PlayerServerScope(address: "http://10.0.0.99:6369", fingerprint: "BB")
+        )
+        XCTAssertFalse(
+            PlayerArtwork.isMissing(url),
+            "a different house's track 11 is a different track, and its cover was never asked for"
+        )
+    }
+
     func testOnlyA404IsRememberedAsAMissingCover() {
         let url = "http://10.0.0.42:6369/api/music/library/9404/cover"
         XCTAssertFalse(PlayerArtwork.isMissing(url))
