@@ -424,6 +424,21 @@ public final class ManualModel {
     private var loadTask: Task<Void, Never>?
     private var serverSink: Int?
 
+    /// The address the current load was **asked for**, nil before the first.
+    ///
+    /// ``ApiRead/serverChanged()``'s `lastBase`, applied to the document: the
+    /// registry this model joined is shouted at on every redraw — on every
+    /// foreground return, on every token-health change, and once a second for
+    /// as long as the token-trouble countdown runs — so an event there is not
+    /// "the server moved". Set when the request goes **out**, not when it
+    /// lands (``ApiRead``'s `lastBase = address` before the fetch), so that a
+    /// first load still in flight is not restarted by every shout, while a
+    /// real switch during one is. Android keys on the *value*
+    /// (`remember(server)` + `LaunchedEffect(server, tick)`,
+    /// `ManualScreen.kt:191`), where an unchanged address is a no-op; without
+    /// this, a countdown blanked the manual to its loading state every second.
+    private var loadedServer: String?
+
     public init(
         in container: AppContainer,
         visibility: @MainActor @escaping () -> RouteVisibility,
@@ -461,6 +476,20 @@ public final class ManualModel {
         // caller at all.
         rooms.onValue = { [weak self] in self?.readRoomHeard() }
 
+        // Last, because it captures `self`.
+        joinServerKey()
+    }
+
+    /// Join ``AppContainer/onServerChange(_:)``, once, if not on it already.
+    ///
+    /// Called from ``start()`` as well as from `init`, because ``stop()``
+    /// takes this model off the registry and SwiftUI does not promise that
+    /// `@State` dies on every disappearance — a tab switch may keep the
+    /// model, and one that is off the registry draws the previous server's
+    /// document while the live slots re-key to the new house. This is
+    /// ``ApiRead``'s `joinTheServerKey()`, which the six reads already have.
+    private func joinServerKey() {
+        guard serverSink == nil else { return }
         serverSink = container.onServerChange { [weak self] in
             Task { @MainActor in self?.serverChanged() }
         }
@@ -469,6 +498,7 @@ public final class ManualModel {
     /// Read the manual and everything the slots need. Idempotent: the view
     /// calls it on appear.
     public func start() {
+        joinServerKey()
         if load == nil { reload() }
         refreshLive()
     }
@@ -478,6 +508,7 @@ public final class ManualModel {
     public func reload() {
         loadTask?.cancel()
         load = nil
+        loadedServer = ManualStore.normalise(container.store.serverURL)
         loadTask = Task { @MainActor [weak self] in
             await self?.runLoad()
         }
@@ -510,7 +541,12 @@ public final class ManualModel {
     /// is ported as it stands — a document that has no such piece any more
     /// falls to the map, which is what the Kotlin's `doc.piece(...) == null`
     /// branch does.
+    /// This is the **value** test, not the event: the registry is shouted at
+    /// on every redraw (see ``loadedServer``), so a sink that reloaded
+    /// unconditionally blanked the page to its loading state every second
+    /// while the token-trouble countdown ran.
     private func serverChanged() {
+        guard loadedServer != ManualStore.normalise(container.store.serverURL) else { return }
         reload()
         // The reads key themselves (``ApiRead/serverChanged()``); the
         // sessions read has no key of its own, so its answer is dropped by

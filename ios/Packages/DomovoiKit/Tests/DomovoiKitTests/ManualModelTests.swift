@@ -620,4 +620,124 @@ final class ManualModelTests: XCTestCase {
         )
         model.stop()
     }
+
+    // MARK: - the server key is a value, not an event
+
+    /// ``AppContainer/serverAddressChanged()`` is fired by
+    /// ``ShellModel/refresh()`` on every foreground return, on every
+    /// token-health change, and **once a second** while the token-trouble
+    /// countdown runs. A sink that reloaded on the event rather than on the
+    /// address blanked this page to its loading state each time, so the
+    /// shouting is reproduced here: the document must stay on screen and the
+    /// manual must be fetched once.
+    func testAShoutWithTheSameAddressNeitherBlanksNorRefetches() async {
+        let fetches = Shared<Int>(0)
+        StubURLProtocol.dispatch { request in
+            guard let parts = request.url.flatMap({
+                URLComponents(url: $0, resolvingAgainstBaseURL: false)
+            }) else { return .json("{}") }
+            if parts.path == "/api/health" {
+                let challenge = (parts.queryItems ?? []).first { $0.name == "challenge" }?.value
+                return .json((try? TestIdentity.real.healthBody(challenge: challenge)) ?? "{}")
+            }
+            guard parts.path == manualPath else { return .json("{}") }
+            fetches.mutate { $0 += 1 }
+            return .json(manualSeededDocument)
+        }
+        let (model, container, _) = keyedRig()
+
+        model.start()
+        await settleUntil({ model.doc != nil }, "the document")
+        XCTAssertEqual(1, fetches.current)
+
+        for _ in 0..<5 {
+            container.serverAddressChanged()
+            XCTAssertNotNil(
+                model.load,
+                "a redraw's shout blanked the manual to its loading state"
+            )
+        }
+        await everythingLands()
+
+        XCTAssertNotNil(model.load, "the manual did not come back after the shouting")
+        XCTAssertEqual(
+            1, fetches.current,
+            "the document was read again for an address that had not changed"
+        )
+        model.stop()
+    }
+
+    /// ``ManualModel/stop()`` takes the model off the server registry, and
+    /// SwiftUI does not promise that `@State` dies on every disappearance — a
+    /// tab switch may keep the model, so ``ManualModel/start()`` has to
+    /// re-join (``ApiRead``'s `joinTheServerKey()`). Without it the live slots
+    /// re-key to the new house while the page keeps the previous server's
+    /// document, which is the one thing the per-server copy exists to prevent.
+    func testTheServerKeyIsRejoinedWhenTheScreenComesBack() async {
+        let first = manualSeededDocument.replacingOccurrences(
+            of: "the manual of this house",
+            with: "the first house's sentence"
+        )
+        let second = manualSeededDocument.replacingOccurrences(
+            of: "the manual of this house",
+            with: "the second house's sentence"
+        )
+        StubURLProtocol.dispatch { request in
+            guard let parts = request.url.flatMap({
+                URLComponents(url: $0, resolvingAgainstBaseURL: false)
+            }) else { return .json("{}") }
+            if parts.path == "/api/health" {
+                let challenge = (parts.queryItems ?? []).first { $0.name == "challenge" }?.value
+                return .json((try? TestIdentity.real.healthBody(challenge: challenge)) ?? "{}")
+            }
+            guard parts.path == manualPath else { return .json("{}") }
+            let here = request.url?.absoluteString.contains("10.0.0.42") == true
+            return .json(here ? first : second)
+        }
+        let (model, container, store) = keyedRig()
+
+        model.start()
+        await settleUntil({ model.doc != nil }, "the first house's manual")
+        XCTAssertEqual("the first house's sentence", model.doc?.start.blocks.first?.text)
+
+        // The screen goes away and comes back, which is all a tab switch is.
+        model.stop()
+        model.start()
+        await everythingLands()
+        XCTAssertEqual(
+            "the first house's sentence",
+            model.doc?.start.blocks.first?.text,
+            "coming back re-read a document that had not changed"
+        )
+
+        _ = store.setServerURL(otherServer)
+        container.serverAddressChanged()
+        await settleUntil(
+            { model.doc?.start.blocks.first?.text == "the second house's sentence" },
+            "the second house's manual after the screen came back"
+        )
+        model.stop()
+    }
+
+    /// ``rig()`` keeps its container to itself; these two cases drive it.
+    private func keyedRig() -> (ManualModel, AppContainer, InMemoryShellStore) {
+        let store = InMemoryShellStore(serverURL: server, token: "household-abc")
+        store.trustServer(server, identity: TestIdentity.real.pin)
+        store.trustServer(otherServer, identity: TestIdentity.real.pin)
+        let container = AppContainer(
+            store: store,
+            vault: TokenVault(items: InMemoryKeychain()),
+            lock: HouseholdLock(),
+            clock: { 0 },
+            configuration: StubURLProtocol.session(timeout: 5)
+        )
+        let model = ManualModel(
+            in: container,
+            visibility: {
+                RouteVisibility(capabilities: .empty, sharedScreen: false, phoneCanChat: false)
+            },
+            cache: ManualCacheBox()
+        )
+        return (model, container, store)
+    }
 }

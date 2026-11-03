@@ -354,16 +354,23 @@ extension StubHouseUITests {
         )
         evidence(app, "manual-rooms-slot")
 
-        XCTAssertTrue(
-            app.staticTexts[StubManual.kitchen].firstMatch.waitForExistence(timeout: 15),
-            "the rooms slot did not name the room"
-        )
+        // The row is a `Button` with an explicit `accessibilityLabel`
+        // (`ManualLiveView.swift:120`) whenever the document defines the
+        // route it links to — which this fixture's `settings/rooms` does — so
+        // the inner `Text(room.name)` is NOT in the tree: a button is one
+        // element and an explicit label replaces its merged children. The
+        // room's name is asserted below off that one label, with everything
+        // else the line has to carry.
         let line = containing(app, StubManual.song)
         XCTAssertTrue(
-            line.waitForExistence(timeout: 10),
+            line.waitForExistence(timeout: 15),
             "the rooms slot did not say what the room is playing — the decoder is "
                 + "reading `now_playing.title` and the server sends "
                 + "`now_playing.song.title`"
+        )
+        XCTAssertTrue(
+            line.label.contains(StubManual.kitchen),
+            "the rooms slot did not name the room: \(line.label)"
         )
         XCTAssertTrue(
             line.label.contains(StubManual.online),
