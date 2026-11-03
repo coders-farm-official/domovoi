@@ -80,7 +80,7 @@ final class DocumentsEditorModelTests: XCTestCase {
     func testAMarkdownFileIsReadFromTheDocumentRoute() async throws {
         let calls = Calls()
         let model = editor(entry("notes.md"), kind: .markdown, calls: calls) { _, _ in
-            Data(#"{"rel_path":"notes.md","name":"notes","ext":".md","format":"md","markdown":"# Notes"}"#.utf8)
+            Data(##"{"rel_path":"notes.md","name":"notes","ext":".md","format":"md","markdown":"# Notes"}"##.utf8)
         }
         model.read()
         await settleUntil({ model.load == .ready }, "the markdown")
@@ -211,7 +211,7 @@ final class DocumentsEditorModelTests: XCTestCase {
     func testAMarkdownSaveGoesToTheDocumentRouteAsMarkdown() async throws {
         let calls = Calls()
         let model = editor(entry("notes.md"), kind: .markdown, calls: calls) { method, _ in
-            method == "GET" ? Data(#"{"markdown":"# Notes"}"#.utf8) : Data(#"{"rel_path":"notes.md"}"#.utf8)
+            method == "GET" ? Data(##"{"markdown":"# Notes"}"##.utf8) : Data(#"{"rel_path":"notes.md"}"#.utf8)
         }
         model.read()
         await settleUntil({ model.load == .ready }, "the markdown")
@@ -231,7 +231,7 @@ final class DocumentsEditorModelTests: XCTestCase {
         let calls = Calls()
         let detail = #"{"detail":{"reason":"empty_over_content","message":"Not saved: this would have replaced the document with an empty one."}}"#
         let model = editor(entry("notes.md"), kind: .markdown, calls: calls) { method, _ in
-            if method == "GET" { return Data(#"{"markdown":"# Notes"}"#.utf8) }
+            if method == "GET" { return Data(##"{"markdown":"# Notes"}"##.utf8) }
             throw refusing(409, body: detail)
         }
         model.read()

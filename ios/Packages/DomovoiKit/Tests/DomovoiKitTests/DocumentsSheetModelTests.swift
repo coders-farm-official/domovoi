@@ -8,6 +8,18 @@ private func sheetRefusal(_ status: Int, body: String) -> DomovoiError {
     .httpError(ApiFailure(status: status, message: "\(status): \(body)", body: body))
 }
 
+/// Three rows, ragged as the server sends them, with one cell carrying
+/// **both** a formula and a cached value — the case the display rule is
+/// about. At file scope, not a static on the test: the stubs below are
+/// `@Sendable` and may not read a `@MainActor` type's storage.
+private let sheetGrid = """
+{"rel_path":"a spreadsheet.xlsx",
+ "rows":[[{"v":"Item","f":null},{"v":"Cost","f":null}],
+         [{"v":"kettle","f":null},{"v":"19","f":null}],
+         [null,{"v":"42","f":"=SUM(B1:B2)"}]],
+ "max_rows":1000,"max_cols":60}
+"""
+
 /// The grid: the wrapper it arrives in, the padding, the display rule that
 /// decides between a formula and its value, and the body a save sends.
 @MainActor
@@ -30,21 +42,10 @@ final class DocumentsSheetModelTests: XCTestCase {
         XCTFail("\(what) never settled in \(settleYieldLimit) yields", file: file, line: line)
     }
 
-    /// Three rows, ragged as the server sends them, with one cell carrying
-    /// **both** a formula and a cached value — the case the display rule is
-    /// about.
-    private static let grid = """
-    {"rel_path":"a spreadsheet.xlsx",
-     "rows":[[{"v":"Item","f":null},{"v":"Cost","f":null}],
-             [{"v":"kettle","f":null},{"v":"19","f":null}],
-             [null,{"v":"42","f":"=SUM(B1:B2)"}]],
-     "max_rows":1000,"max_cols":60}
-    """
-
     // MARK: - the wrapper and the grid
 
     func testTheGridDecodesWithItsWindow() throws {
-        let read = try JSONDecoder().decode(DocumentsSheetGrid.self, from: Data(Self.grid.utf8))
+        let read = try JSONDecoder().decode(DocumentsSheetGrid.self, from: Data(sheetGrid.utf8))
         XCTAssertEqual("a spreadsheet.xlsx", read.relPath)
         XCTAssertEqual(3, read.rows.count)
         XCTAssertEqual(1000, read.maxRows)
@@ -59,7 +60,7 @@ final class DocumentsSheetModelTests: XCTestCase {
     /// household's sheet would become its own last value the next time
     /// anybody saved.
     func testAFormulaCellShowsTheFormulaAndNotItsValue() throws {
-        let read = try JSONDecoder().decode(DocumentsSheetGrid.self, from: Data(Self.grid.utf8))
+        let read = try JSONDecoder().decode(DocumentsSheetGrid.self, from: Data(sheetGrid.utf8))
         XCTAssertEqual("=SUM(B1:B2)", read.rows[2][1]?.display)
         XCTAssertEqual("kettle", read.rows[1][0]?.display)
         XCTAssertEqual("", DocumentsSheetCell().display)
@@ -69,7 +70,7 @@ final class DocumentsSheetModelTests: XCTestCase {
     /// is what gives a one-cell `.csv` somewhere to type, and the rectangle
     /// is what lets a save send a grid the server's diff can read.
     func testTheGridIsPaddedToAtLeastEightByFour() throws {
-        let read = try JSONDecoder().decode(DocumentsSheetGrid.self, from: Data(Self.grid.utf8))
+        let read = try JSONDecoder().decode(DocumentsSheetGrid.self, from: Data(sheetGrid.utf8))
         let padded = read.padded
         XCTAssertEqual(8, padded.count)
         XCTAssertTrue(padded.allSatisfy { $0.count == 4 })
@@ -132,7 +133,7 @@ final class DocumentsSheetModelTests: XCTestCase {
 
     func testTheSheetIsReadAndOneEditMakesItDirty() async throws {
         let calls = Calls()
-        let model = sheet(calls: calls) { _, _ in Data(Self.grid.utf8) }
+        let model = sheet(calls: calls) { _, _ in Data(sheetGrid.utf8) }
         model.read()
         await settleUntil({ model.load == .ready }, "the grid")
 
@@ -156,7 +157,7 @@ final class DocumentsSheetModelTests: XCTestCase {
     /// a programming error: it is ignored, and nothing traps.
     func testACellOutsideTheGridIsIgnored() async throws {
         let calls = Calls()
-        let model = sheet(calls: calls) { _, _ in Data(Self.grid.utf8) }
+        let model = sheet(calls: calls) { _, _ in Data(sheetGrid.utf8) }
         model.read()
         await settleUntil({ model.load == .ready }, "the grid")
         model.setCell(row: 99, column: 99, to: "x")
@@ -170,7 +171,7 @@ final class DocumentsSheetModelTests: XCTestCase {
     func testASaveSendsTheWholeGridBack() async throws {
         let calls = Calls()
         let model = sheet(calls: calls) { method, _ in
-            method == "GET" ? Data(Self.grid.utf8) : Data(#"{"rel_path":"a spreadsheet.xlsx","size":5000}"#.utf8)
+            method == "GET" ? Data(sheetGrid.utf8) : Data(#"{"rel_path":"a spreadsheet.xlsx","size":5000}"#.utf8)
         }
         model.read()
         await settleUntil({ model.load == .ready }, "the grid")
@@ -214,7 +215,7 @@ final class DocumentsSheetModelTests: XCTestCase {
     func testASaveRefusedSaysWhyAndKeepsTheEdit() async throws {
         let calls = Calls()
         let model = sheet(calls: calls) { method, _ in
-            if method == "GET" { return Data(Self.grid.utf8) }
+            if method == "GET" { return Data(sheetGrid.utf8) }
             throw sheetRefusal(413, body: #"{"detail":"more than 60 columns"}"#)
         }
         model.read()
@@ -229,7 +230,7 @@ final class DocumentsSheetModelTests: XCTestCase {
 
     func testAPhoneThatMayNotWriteGetsNoSave() async throws {
         let calls = Calls()
-        let model = sheet(canWrite: false, calls: calls) { _, _ in Data(Self.grid.utf8) }
+        let model = sheet(canWrite: false, calls: calls) { _, _ in Data(sheetGrid.utf8) }
         model.read()
         await settleUntil({ model.load == .ready }, "the grid")
         model.setCell(row: 0, column: 0, to: "Thing")
@@ -259,7 +260,7 @@ final class DocumentsSheetModelTests: XCTestCase {
     func testAGridReloadedInsideASaveIsNotMarkedSaved() async throws {
         let calls = Calls()
         let letThePutLand = Shared<Bool>(false)
-        let answer = Shared<String>(Self.grid)
+        let answer = Shared<String>(sheetGrid)
         let model = sheet(calls: calls) { method, _ in
             if method == "PUT" {
                 while !letThePutLand.current { await Task.yield() }
