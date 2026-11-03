@@ -1,6 +1,17 @@
 import DomovoiKit
 import SwiftUI
 
+/// The accessibility identifiers ``AssistantPlaceSwitch`` hands out.
+///
+/// A free enum and not a `static let` on the view: ``AssistantPlaceSwitch`` is
+/// generic over the house it wraps, and Swift refuses a stored static property
+/// on a generic type.
+enum AssistantPlaceSwitchIDs {
+
+    /// The capped, scrolling place band — see ``AssistantPlaceSwitch``.
+    static let picker = "assistant-place-picker"
+}
+
 /// Chat's two places: the house's threads, and the chats kept on this phone.
 ///
 /// `ChatHome.kt:126-127` builds both places and `:735-772` draws the picker
@@ -249,9 +260,21 @@ struct AssistantPlaceSwitch<House: View>: View {
                 // keeps. Everything is still reachable; some of it is reached
                 // by scrolling, which at a text size this large is true of
                 // every screen in the app.
+                //
+                // **And named.** Train R002: `reachPhonePlace` reached for
+                // `app.scrollViews.firstMatch` to creep this band, and what
+                // it got was the shell's phone bar — a `ScrollView` of its
+                // own at AX5, {{0, 706}, {393, 146}}. Eight press-drags
+                // inside it left the app on **Music**, and the case reported
+                // "the phone's place never drew at ax5" about a place that
+                // was drawn the whole time, one chip below the fold.
+                // ``AssistantPhoneConversationView/transcriptId`` was added
+                // for the same reason after train S008; this is the other
+                // scrolling view this item owns.
                 ScrollView(.vertical) { chips }
                     .frame(maxHeight: pickerCap)
                     .scrollBounceBehavior(.basedOnSize)
+                    .accessibilityIdentifier(AssistantPlaceSwitchIDs.picker)
             } else {
                 chips.layoutPriority(1)
             }

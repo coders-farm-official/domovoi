@@ -367,7 +367,54 @@ struct ChatConversationView: View {
                 // `ScrollView` takes ONE view, and two statements in its
                 // builder are a `TupleView` with no layout of its own.
                 VStack(spacing: 0) {
-                    LazyVStack(alignment: .leading, spacing: 10) {
+                    // **A `VStack`, and it was a `LazyVStack` until train
+                    // R002 measured what the laziness costs here.**
+                    //
+                    // A lazy container's content size is a function of which
+                    // rows are built: a row that leaves the built window is
+                    // replaced by an *estimate* taken from the rows that are
+                    // left. The rows of a transcript differ by two orders of
+                    // magnitude — the question `Archive this one for the
+                    // test, please` is 55 points tall and the reply under it
+                    // is 897 — and with the keyboard up this viewport is 174.
+                    // So one delta into a reply the question is gone from the
+                    // container and is costed as if it were the reply.
+                    //
+                    // R002's final hierarchy, 20 seconds after the stream
+                    // ended, with two messages on screen:
+                    //
+                    //   ScrollView  {{0, 225.7}, {393, 174.0}}
+                    //     content   {{0, -1245.3}, {393, 2423.0}}   ← 2,423
+                    //       built    897.6 … 1795.3 of the content  ← the reply
+                    //
+                    // The content really ends at 1,812 (16 of padding, the
+                    // question, the reply, `try again`, 16, the foot): 611
+                    // points of the box are nothing at all, and the 897.6
+                    // above the reply is one 55-point question costed as a
+                    // second reply. Two things follow, and both are wrong on
+                    // the screen rather than only in a test:
+                    //
+                    //  * the follow-scroll had just put the content's foot at
+                    //    the viewport's foot, and the box then grew underneath
+                    //    it — so the reply's own stamp line and `try again`
+                    //    ended 167 points below the fold, which is MS001's
+                    //    complaint arriving by a different road;
+                    //  * the person's own words, drawn 1.3 seconds earlier
+                    //    (recording, t=19.9s), are not in the hierarchy at
+                    //    all, so nothing — VoiceOver included — can reach the
+                    //    question a reply is answering without scrolling.
+                    //
+                    // Android's transcript is a `LazyColumn`
+                    // (`ChatScreen.kt:973`), so this is a departure, and
+                    // DECISIONS.md carries it with the number that bought it.
+                    // The departure is narrow: Android follows a stream with
+                    // `listState.scrollBy(FOLLOW_STEP_PX)` (`:635`), a
+                    // relative nudge that never asks the container where the
+                    // end of the content is, and this screen asks exactly
+                    // that ten times a second. Until the follow is rebuilt on
+                    // iOS 18's `ScrollPosition`, the container that gives a
+                    // true answer is the one to ask.
+                    VStack(alignment: .leading, spacing: 10) {
                         let messages = chat.transcript.messages
                         ForEach(Array(messages.enumerated()), id: \.element.ordinal) { index, message in
                             // `WindowDivider` (`ChatHome.kt:655`) at
@@ -410,9 +457,9 @@ struct ChatConversationView: View {
                     // A zero-height view at the end of the content has no height
                     // to fight: its foot and the content's foot are the same
                     // point, so `anchor: .bottom` can only mean the one thing. It
-                    // sits **outside** the `LazyVStack`, so it is built whether or
-                    // not the list has reached its own end, and `Color.clear`
-                    // draws nothing and leaves the audit no leaf to measure.
+                    // sits **outside** the stack of rows, which is what kept it
+                    // built while that stack was lazy, and `Color.clear` draws
+                    // nothing and leaves the audit no leaf to measure.
                     Color.clear
                         .frame(height: 1)
                         .id(Self.foot)
@@ -516,8 +563,18 @@ struct ChatConversationView: View {
                 guard !chat.transcript.messages.isEmpty else { return }
                 scroller.scrollTo(Self.foot)
             }
+            // Named so a case can drag **this** scroll view, as
+            // ``AssistantPhoneConversationView/transcriptId`` is: the shell's
+            // phone bar is a `ScrollView` too, and train R002 watched
+            // `scrollViews.firstMatch` resolve to it and walk the app off the
+            // screen under test. An identifier, not a label: nothing is read
+            // out by it.
+            .accessibilityIdentifier(Self.transcriptID)
         }
     }
+
+    /// The transcript's accessibility identifier — see ``transcript``.
+    static let transcriptID = "chat-transcript"
 
     /// The id of the zero-height view at the very end of the transcript.
     ///

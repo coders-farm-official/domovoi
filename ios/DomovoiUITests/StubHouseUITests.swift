@@ -2959,7 +2959,51 @@ final class StubHouseUITests: XCTestCase {
         // The person's own words land in the transcript before the stream
         // opens (``ChatTranscript/beginSend``), so this is the signal that the
         // send was taken rather than refused.
-        return startingWith(app, words).waitForExistence(timeout: 20)
+        let mine = startingWith(app, words)
+        if mine.waitForExistence(timeout: 20) { return true }
+        // **And if the reply has already carried them off the top, go and
+        // look.** The claim is unchanged — the person's words are in the
+        // transcript — but where to read it from is not a thing to guess at.
+        //
+        // Train R002 measured the window this has to hit. In
+        // `testArchivingAChatAndTheArchivedViewBehindItsOwnRow` the question
+        // is drawn at t=19.9s (recording, frame by frame) and is above the
+        // built window by t=20.1s: the stub's ordinary stream is eight pieces
+        // 0.12s apart, ChatMore's reply is 1,386 characters and about 900
+        // points, and with the keyboard up this viewport is 174. The first
+        // evaluation `waitForExistence` makes lands at t=21.2s, 1.3 seconds
+        // too late, and the app answered all twenty of its queries correctly:
+        // the words were not on the screen, because a long reply pushing your
+        // own question up is what a chat is supposed to do.
+        //
+        // That is 6/6 across the cases that call this, and it is the speed and
+        // the starting height together rather than either alone: the two that
+        // stream at 1.5s a piece are read while the question is still in view,
+        // the two that send into a house thread push it up by two short
+        // messages' worth, and the two that send into a chat made by the send
+        // itself lose it under six hundred points in a fifth of a second.
+        //
+        // So: scroll the transcript back towards its head, by its **own**
+        // identifier (`scrollViews.firstMatch` is the shell's phone bar at an
+        // accessibility size — train S008), and fail with the tree if the
+        // words are not up there either. The keyboard goes with the first
+        // drag (`.scrollDismissesKeyboard(.immediately)`), which is why this
+        // is the fallback and not the path: every case that measures the
+        // transcript against the keyboard's top is one whose words are found
+        // before a finger touches the screen.
+        let transcript = app.scrollViews[ChatStringsUnderTest.transcriptID].firstMatch
+        guard transcript.exists else {
+            print("=== NO TRANSCRIPT TO SCROLL BACK — tree follows ===")
+            print(app.debugDescription)
+            return false
+        }
+        for _ in 0..<12 {
+            transcript.swipeDown(velocity: .slow)
+            if mine.exists { return true }
+        }
+        print("=== THE SEND'S OWN WORDS ARE NOWHERE IN THE TRANSCRIPT — tree follows ===")
+        print(app.debugDescription)
+        return false
     }
 
     /// The list, drawn against the house's seven threads.
@@ -3917,6 +3961,10 @@ enum ChatStringsUnderTest {
     static let send = "send"
     static let rowActions = "chat actions"
     static let noChatsMatch = "no chats match"
+    /// ``ChatConversationView/transcriptID``: an accessibility identifier and
+    /// not a word anybody reads, written out here because a UI test cannot
+    /// import the app target.
+    static let transcriptID = "chat-transcript"
 
     static let archived = "archived"
     static let archivedToast = "archived"

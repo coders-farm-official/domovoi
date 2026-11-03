@@ -221,7 +221,30 @@ extension StubHouseUITests {
         // this is the reaching. Nothing is assumed: if the chip cannot be
         // brought under the finger, this says so and prints the tree.
         if !chip.isHittable {
-            let picker = app.scrollViews.firstMatch
+            // **The band by its own identifier, never `scrollViews.firstMatch`.**
+            //
+            // Train R002: `firstMatch` resolved to the shell's phone bar —
+            // which is a `ScrollView` of its own at AX5, {{0, 706}, {393,
+            // 146}} — and the eight creeps below were eight press-drags
+            // across `home · music · videos · chat`. The app was on **Music**
+            // when this printed its tree, and the case's own message said the
+            // phone's place "never drew" about a chip that was drawn the
+            // whole time, one scroll below the picker's fold. It is the trap
+            // ``AssistantPhoneConversationView/transcriptId`` was added for
+            // after train S008, arriving at the one scrolling view this item
+            // had left unnamed.
+            //
+            // No fallback: a band that cannot be found is a thing to report,
+            // and creeping *something else* is how the app ended up on Music.
+            // The literal, as `assistant-transcript` is written out above: a
+            // UI test cannot import the app target, and a query that followed
+            // a renamed constant would stop testing what it claims to.
+            let picker = app.scrollViews["assistant-place-picker"].firstMatch
+            guard picker.exists else {
+                print("=== THE PLACE BAND IS NOT A SCROLLING VIEW — tree follows ===")
+                print(app.debugDescription)
+                return false
+            }
             for _ in 0..<8 {
                 if chip.isHittable { break }
                 if !assistantCreep(picker, towards: .foot) { break }

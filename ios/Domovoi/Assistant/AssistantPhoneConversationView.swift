@@ -200,7 +200,19 @@ struct AssistantPhoneConversationView: View {
     private var transcript: some View {
         ScrollViewReader { scroller in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 10) {
+                // **A `VStack`, for the reason and the measurement in
+                // ``ChatConversationView/transcript``**: a lazy container
+                // costs a recycled row at the height of the rows that are
+                // left, and a transcript's rows differ by two orders of
+                // magnitude — so the content box grows under a follow-scroll
+                // that has just put the foot at the viewport's foot, and the
+                // question a reply is answering leaves the hierarchy
+                // altogether. Train R002 measured 2,423 points of box over
+                // 1,812 of content on the house's conversation; this screen
+                // has the same shape, the same follow and the same crossing
+                // from under-filled to over-filled, and round 2 already gave
+                // the two of them the same scroll target for that reason.
+                VStack(alignment: .leading, spacing: 10) {
                     let messages = phone.transcript
                     // Identity is the **position**, not
                     // ``AssistantMessage/id``: that id is a fresh `UUID` made
