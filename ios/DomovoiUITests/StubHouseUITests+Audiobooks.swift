@@ -307,16 +307,35 @@ extension StubHouseUITests {
     /// to, the first book out of view, because a lazy grid follows the old
     /// first row's key into the new list (`AudiobooksScreen.kt:143-150`).
     ///
-    /// The list is grown past one page and scrolled into the fillers, then
-    /// swiped back only until the chips are **built** — not to the top, which
-    /// is the difference that makes this discriminate. A `newest` tapped from
-    /// there must leave `zzz-last of the breed` on screen; with the old offset
-    /// kept, the new list's first row would be unbuilt and `exists` false.
+    /// ### What this case asserted until 2026-11-03, and why it caught nothing
     ///
-    /// The scroll-offset arithmetic itself is the package test's
-    /// (`testANewListAsksTheViewToGoToTheTop`): a Simulator cannot park a lazy
-    /// list at a chosen offset and keep a top-of-screen chip reachable at the
-    /// same time.
+    /// It waited for `zzz-last of the breed` to **exist** after the chip, and
+    /// that row exists either way. A new list blanks the pager
+    /// (`Pager.readFromTop(want: 0,…)`), so while the read is in flight the
+    /// whole content is the heading, the field, the chips and a spinner —
+    /// about 450 points against the window's 677 — and UIKit clamps the offset
+    /// to zero before the answer lands. The new list therefore draws from the
+    /// top with its first row built whether or not anything asked it to. The
+    /// negative control of 2026-11-03 (train X007) took `wantsTop = true` out
+    /// of `AudiobooksModel.listAnswered()` and this case passed in 39 seconds.
+    ///
+    /// ### What does discriminate, measured from the two trees
+    ///
+    /// Where the list **ends up**. ``AudiobooksModel/wantsTop`` makes the view
+    /// `scrollTo(first, anchor: .top)`, which parks the first row under the
+    /// navigation bar and takes the heading and `reindex` off the top of the
+    /// window — a move of some 240 points that the clamp cannot imitate,
+    /// because the clamp can only ever stop at zero:
+    ///
+    /// | run | `reindex` minY | first row minY | list minY |
+    /// |---|---|---|---|
+    /// | healthy (train S012) | **-84.3** | 137.3 | 93.3 |
+    /// | no `wantsTop` (train X007) | **153.3** | 375.0 | 93.3 |
+    ///
+    /// So the two assertions are frames and not `exists`: the first row sits
+    /// within ``StubAudiobooks/topSlack`` of the list's own top, and the
+    /// heading has left the window. Every element named here exists in both
+    /// trees, which is why the old assertion could not tell them apart.
     @MainActor
     func testAudiobooks_ANewSortOpensAtTheTop() throws {
         let (app, landed) = openAudiobooks(grow: 60)
@@ -326,19 +345,69 @@ extension StubHouseUITests {
         XCTAssertTrue(audiobooksScroll(app, to: deep), "the list never built \(StubAudiobooks.fillerDeep)")
 
         let chip = app.buttons[StubAudiobooks.sortNewest].firstMatch
-        for _ in 0..<40 where !chip.exists {
-            audiobooksList(app).swipeDown(velocity: .slow)
-        }
-        XCTAssertTrue(chip.exists, "the sort chips never came back into the list's window")
+        XCTAssertTrue(
+            audiobooksScroll(app, to: chip, flicks: 40, up: true),
+            "the sort chips never came back into the list's window"
+        )
+        // **The before half of the measurement.** If the heading were already
+        // off the top of the window when the chip was tapped, "the heading is
+        // gone afterwards" would say nothing about the handshake.
+        let heading = app.buttons[StubAudiobooks.reindex].firstMatch
+        XCTAssertTrue(
+            audiobooksInWindow(app, heading),
+            "the heading is not in the window before the tap, so this case "
+                + "cannot tell a scroll from where the list already was"
+        )
         chip.tap()
 
+        XCTAssertTrue(
+            waitForFirstRow(app, StubAudiobooks.firstByNewest),
+            "the newest sort never drew \(StubAudiobooks.firstByNewest) first"
+        )
         let first = app.buttons[StubAudiobooks.firstByNewest].firstMatch
-        let onScreen = first.waitForExistence(timeout: 25)
+        // The scroll is animated and runs *after* the page lands, so the gap
+        // is polled rather than read once.
+        let settled = audiobooksSettledAtTop(app, first)
         evidence(app, "audiobooks-14-new-sort-at-top")
         XCTAssertTrue(
-            onScreen,
-            "the new sort's first book is not on screen — the list kept the "
-                + "old scroll offset, which is Android's batch 18 bug"
+            settled,
+            "the new sort's first row is \(audiobooksTopGap(app, first)) points below the list's "
+                + "top rather than within \(StubAudiobooks.topSlack) — the list opened where the "
+                + "old one was scrolled to, which is Android's batch 18 bug"
+        )
+        XCTAssertFalse(
+            audiobooksInWindow(app, heading),
+            "the heading is still in the window, so nothing scrolled: the new "
+                + "list opened at the offset the clamp left behind"
+        )
+    }
+
+    /// Paging does **not** take you back to the top.
+    ///
+    /// The top request is once per *list*, not once per answer: `toppedFor`
+    /// is what makes it once (``AudiobooksModel``'s `listAnswered`), and a
+    /// `wantsTop` raised on every page would throw the reader back to book one
+    /// each time they reached the foot of one — Android's batch 18 fix gone
+    /// wrong in the other direction, which nothing else here would notice.
+    ///
+    /// `Grasshopper Lies Heavy` sorts after every filler, so it is on page
+    /// **two** only: reaching it is a second request. By then the heading is
+    /// some 1,300 points above the window; a yank back to the top would put it
+    /// in the window again.
+    @MainActor
+    func testAudiobooks_PagingDoesNotYankTheListBackToTheTop() throws {
+        let (app, landed) = openAudiobooks(grow: 60)
+        XCTAssertTrue(landed, "the grown audiobooks list never answered")
+
+        XCTAssertTrue(
+            audiobooksScroll(app, to: app.buttons[StubAudiobooks.firstByAuthor].firstMatch),
+            "page two's rows never drew"
+        )
+        evidence(app, "audiobooks-16-paged-without-a-yank")
+        XCTAssertFalse(
+            audiobooksInWindow(app, app.buttons[StubAudiobooks.reindex].firstMatch),
+            "the heading is back in the window after a second page landed, so "
+                + "paging scrolled the reader to the top of the list"
         )
     }
 
@@ -1245,6 +1314,58 @@ extension StubHouseUITests {
         return element.exists
     }
 
+    // MARK: - where the list is, which `exists` cannot say
+
+    /// How far below the list's own top an element's top sits, in points.
+    ///
+    /// Negative means it has been scrolled off the top of the window.
+    /// `exists` stays true for a built row that is no longer visible, and
+    /// true for a heading parked above the viewport, which is why every
+    /// scroll-position assertion on this screen is a frame and not an
+    /// existence. `.greatestFiniteMagnitude` for an element that is not built
+    /// at all: as far away as the list can put it.
+    @MainActor
+    func audiobooksTopGap(_ app: XCUIApplication, _ element: XCUIElement) -> CGFloat {
+        let list = audiobooksList(app)
+        guard list.exists, element.exists else { return .greatestFiniteMagnitude }
+        return element.frame.minY - list.frame.minY
+    }
+
+    /// Whether `element`'s top is inside the list's window at all.
+    ///
+    /// An unbuilt element is **not** in the window: a lazy stack drops what is
+    /// far enough away, so for a heading 1,300 points above the viewport
+    /// "scrolled away" and "unbuilt" are the same answer and both are what
+    /// this asks about.
+    @MainActor
+    func audiobooksInWindow(_ app: XCUIApplication, _ element: XCUIElement) -> Bool {
+        let gap = audiobooksTopGap(app, element)
+        return gap >= 0 && gap < audiobooksList(app).frame.height
+    }
+
+    /// Poll until `row` is parked at the top of the list, and say whether it
+    /// got there.
+    ///
+    /// Polled rather than read once: the scroll
+    /// (``AudiobooksView``'s `onChange(of: books.wantsTop)`) runs **after** the
+    /// page has landed and is animated, so the frame right after the first row
+    /// appears is the frame before the move.
+    @MainActor
+    func audiobooksSettledAtTop(
+        _ app: XCUIApplication,
+        _ row: XCUIElement,
+        seconds: TimeInterval = 10
+    ) -> Bool {
+        let deadline = Date().addingTimeInterval(seconds)
+        repeat {
+            if audiobooksTopGap(app, row) <= StubAudiobooks.topSlack { return true }
+            usleep(300_000)
+        } while Date() < deadline
+        print("=== THE NEW LIST SAT \(audiobooksTopGap(app, row)) POINTS DOWN — tree follows ===")
+        print(app.debugDescription)
+        return false
+    }
+
     /// The title of the list's first row, or "" when nothing drew.
     ///
     /// By **position**, not by `firstMatch` on a label: the question these
@@ -1337,6 +1458,12 @@ enum StubAudiobooks {
     /// The Hobbit's three files, which become its three chapter rows because
     /// its row carries no chapters at all.
     static let hobbitFiles = ["An Unexpected Party", "Roast Mutton", "A Short Rest"]
+
+    /// How far below the list's own top the first row of a new list may sit:
+    /// the navigation bar's 44 points and a little. Measured — train S012's
+    /// healthy tree has it at **44.0**, and train X007's `wantsTop`-less one
+    /// at **281.7**.
+    static let topSlack: CGFloat = 60
 
     /// The library grown past one page: nine seeded plus sixty fillers. The
     /// fillers sort between `Dune` and `Grasshopper Lies Heavy`, so page one

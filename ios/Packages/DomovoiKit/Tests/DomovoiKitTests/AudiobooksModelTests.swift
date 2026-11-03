@@ -901,6 +901,54 @@ final class AudiobooksModelTests: XCTestCase {
         XCTAssertFalse(model.wantsTop)
     }
 
+    /// A new **needle** is a new list too, and it opens at the top.
+    ///
+    /// `listKey` is the sort *and* the needle (`AudiobooksModel:234`), so a
+    /// search that narrowed the list without asking for the top would leave
+    /// the reader parked where the wide list was — the same batch 18 bug
+    /// reached by the other control on the screen. The sort leg is
+    /// ``testANewListAsksTheViewToGoToTheTop()``; this is the search leg, and
+    /// nothing else covered it.
+    func testANewNeedleAlsoAsksTheViewToGoToTheTop() async {
+        let (model, _, waits, _) = rig()
+        await started(model)
+        XCTAssertFalse(model.wantsTop, "the first list is already at the top")
+
+        model.typed("quill")
+        waits.release()
+        await settleUntil({ model.needle == "quill" }, "the needle")
+        await settleUntil({ model.wantsTop }, "the top request")
+    }
+
+    /// The top request is once per **list**, not once per answer.
+    ///
+    /// `toppedFor` is what makes it once (`:257-259`): a second page lands
+    /// through the same `onLoaded` callback, and a `wantsTop` raised on every
+    /// answer would throw the reader back to book one each time they reached
+    /// the foot of a page — the batch 18 fix gone wrong in the other
+    /// direction. The UI case for it is
+    /// `testAudiobooks_PagingDoesNotYankTheListBackToTheTop`.
+    func testASecondPageDoesNotAskTheViewToGoToTheTopAgain() async {
+        let house = House()
+        house.total.set(120)
+        let (model, _, _, _) = rig(house: house)
+        await started(model)
+
+        model.choose(.newest)
+        await settleUntil({ model.wantsTop }, "the new list's top request")
+        model.toppedTheList()
+        await settleUntil({ model.books.count == 50 }, "the new list's first page")
+
+        model.list.loadMore()
+        await settleUntil({ model.books.count > 50 }, "the second page")
+        await nothingHappens()
+
+        XCTAssertFalse(
+            model.wantsTop,
+            "a second page of the same list asked the view to go back to the top"
+        )
+    }
+
     func testTheTwoEmptyMessagesAreNotSwapped() async {
         let house = House()
         house.total.set(0)
