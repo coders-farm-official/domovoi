@@ -102,6 +102,27 @@ public enum AssistantStrings {
     /// `AssistantChat.kt:656`.
     public static let copy = "copy"
 
+    /// `AssistantChat.kt:377` — the control that stops a reply being written.
+    ///
+    /// Android's is the **voice** row's icon (`Icons.Filled.Stop`, that
+    /// `contentDescription`), because on Android a typed turn is stopped by
+    /// the same control that silences a spoken one. This milestone has no
+    /// voice row at all (M2), so the word moves to the composer's own button,
+    /// where it stops the same thing. The word is the Kotlin's; only the
+    /// control it labels is this milestone's, and DECISIONS.md carries that.
+    public static let stop = "stop"
+
+    /// What a screen reader hears after a message's words: who said it
+    /// (`bubbleState`, `AssistantChat.kt:664-668`).
+    ///
+    /// Ported because a bubble is a `VStack` of two or three leaves and the
+    /// words alone do not say whose they are — the one thing a sighted reader
+    /// gets from the side of the screen a bubble is on.
+    public static func bubbleState(fromUser: Bool, writing: Bool) -> String {
+        if fromUser { return "your message" }
+        return writing ? "Domovoi, writing" : "Domovoi's reply"
+    }
+
     // MARK: - clear all (`AssistantChat.kt:830-832`)
 
     public static let clearAllTitle = "clear all conversations?"

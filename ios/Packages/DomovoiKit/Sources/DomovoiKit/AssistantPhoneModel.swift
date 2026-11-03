@@ -162,6 +162,17 @@ public final class AssistantPhoneModel {
         return a.id > b.id
     }
 
+    /// A row's age in words (``ChatModel/timeText(_:)``, over this place's own
+    /// clock).
+    ///
+    /// The clock is the model's — `nowMs` is injected — so a test can place a
+    /// chat an hour ago and read the words back. A view calling `Date()` could
+    /// not be moved at all, which is the reason ``ChatModel`` holds the same
+    /// function rather than letting its rows format themselves.
+    public func timeText(_ row: ChatRow) -> String {
+        relTimeMs(row.updatedMs == 0 ? nil : row.updatedMs, nowMs: nowMs())
+    }
+
     public var searching: Bool { !filter.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
     /// What the list draws, as one value (`ChatHome.kt:421`), in
@@ -518,6 +529,15 @@ public final class AssistantPhoneModel {
         assistantRowActions(pinned: false, archived: row.archived)
             .filter { $0 != ChatStrings.actionPin && $0 != ChatStrings.actionUnpin }
     }
+
+    /// The toast has been said, or is being replaced.
+    ///
+    /// The toast itself is the **shell's** — it is drawn over the whole app
+    /// because a failed delete has to outlive this screen — so the view hands
+    /// it over and clears it here, exactly as ``ChatModel/setToast(_:)`` is
+    /// used. Without a clearer the same sentence could not be said twice: a
+    /// view watching ``toast`` for a change would see none.
+    public func setToast(_ text: String?) { toast = text }
 
     public func renameRequested(_ row: ChatRow) { renaming = row }
     public func deleteRequested(_ row: ChatRow) { deleting = row }

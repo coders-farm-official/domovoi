@@ -266,4 +266,28 @@ final class AssistantStringsTests: XCTestCase {
         XCTAssertFalse(AssistantStrings.writeFailed(ChatStrings.verbDelete).contains("offline"),
                        "there is no server in this failure at all")
     }
+
+    /// The composer's stop, and who a bubble belongs to — the two words the
+    /// views needed and the headless half had not transcribed.
+    ///
+    /// `stop` is the Kotlin's own word (`AssistantChat.kt:377`); what moved is
+    /// the control it labels, from the voice row this milestone does not have
+    /// to the composer, and DECISIONS.md carries that move. `bubbleState` is
+    /// transcribed whole, all three branches.
+    func testTheStopAndTheBubbleState() {
+        assertKotlinLiteral(AssistantStrings.stop, in: Self.assistantChat)
+        for branch in [
+            AssistantStrings.bubbleState(fromUser: true, writing: false),
+            AssistantStrings.bubbleState(fromUser: false, writing: true),
+            AssistantStrings.bubbleState(fromUser: false, writing: false),
+        ] {
+            assertKotlinLiteral(branch, in: Self.assistantChat)
+        }
+        // The person's own message says so whether or not a reply is being
+        // written somewhere: `fromUser` is the Kotlin's first branch.
+        XCTAssertEqual(
+            AssistantStrings.bubbleState(fromUser: true, writing: true),
+            AssistantStrings.bubbleState(fromUser: true, writing: false)
+        )
+    }
 }
