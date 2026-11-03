@@ -87,8 +87,9 @@ final class StationsRulesTests: XCTestCase {
         XCTAssertEqual([], row.tags)
         XCTAssertFalse(row.favorited)
         XCTAssertFalse(row.createdByPlay)
-        XCTAssertEqual("Odd One · sampling every —s", StationsStrings.metaLine(row),
-                       "a nil interval renders Android's dash, not a zero")
+        XCTAssertEqual("online · sampling every —s", StationsStrings.metaLine(row),
+                       "a nil interval renders Android's dash, not a zero — and a row with no "
+                       + "country reads as online, which is what the head falls back to")
     }
 
     func testTheBadgeDecodesAndDefaultsToZero() throws {

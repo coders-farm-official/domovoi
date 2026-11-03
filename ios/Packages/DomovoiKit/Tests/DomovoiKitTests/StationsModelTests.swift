@@ -51,10 +51,13 @@ final class StationsModelTests: XCTestCase {
     private final class House: Sendable {
 
         /// Every request that reached the stub, as `"METHOD path?query"`.
+        ///
+        /// The query is `URLComponents.query`, which is **percent-decoded**:
+        /// a line here reads `q=Kestrel 04` where the wire carried
+        /// `q=Kestrel%2004`. That the escaping happens at all is asserted in
+        /// `StationsRulesTests` against the path itself; these lines are for
+        /// saying *which* routes were asked and in what order.
         let seen = Shared<[String]>([])
-
-        /// Every body that came with one, in the same order.
-        let bodies = Shared<[String]>([])
 
         /// The id the next `POST /stations` answers.
         let savedID = Shared<Int>(101)
@@ -187,9 +190,6 @@ final class StationsModelTests: XCTestCase {
                 let line = parts.query.map { "\(method) \(parts.path)?\($0)" } ?? "\(method) \(parts.path)"
                 if parts.path != "/api/health" {
                     seen.mutate { $0.append(line) }
-                    bodies.mutate {
-                        $0.append(request.httpBody.map { String(decoding: $0, as: UTF8.self) } ?? "")
-                    }
                 }
                 let limit = Int(value("limit") ?? "0") ?? 0
                 let offset = Int(value("offset") ?? "0") ?? 0
@@ -338,6 +338,19 @@ final class StationsModelTests: XCTestCase {
         return (model, house, store, container)
     }
 
+    /// Every body that left the phone, in order.
+    ///
+    /// Off ``StubURLProtocol/recorded`` and **not** off the dispatcher's own
+    /// `request`: a `URLProtocol` is handed the body as a stream, so
+    /// `httpBody` is nil inside the dispatcher and the recorded copy is the
+    /// one that has it (`StubURLProtocol.swift:111`). Five assertions here
+    /// passed vacuously against the dispatcher's copy before the Mac said so.
+    private func bodiesSent() -> [String] {
+        StubURLProtocol.recorded.compactMap { request in
+            request.httpBody.map { String(decoding: $0, as: UTF8.self) }
+        }
+    }
+
     private func settleUntil(
         _ done: @MainActor () -> Bool,
         _ what: String = "the model",
@@ -469,7 +482,7 @@ final class StationsModelTests: XCTestCase {
             house.requests(to: "/stations/101"),
             "the second tap PATCHED the id the POST answered — it did not POST again"
         )
-        XCTAssertTrue(house.bodies.current.contains(#"{"favorited":false}"#))
+        XCTAssertTrue(bodiesSent().contains(#"{"favorited":false}"#))
     }
 
     /// A star on an FM row with a blank URL fires `resolve-simulcast` as a
@@ -509,7 +522,7 @@ final class StationsModelTests: XCTestCase {
         await settleUntil({ model.toast != nil }, "the PATCH")
         XCTAssertEqual("favorited Played Once Gull", model.toast)
         XCTAssertEqual(["PATCH /api/plugins/radio/stations/90"], house.requests(to: "/stations/90"))
-        XCTAssertTrue(house.bodies.current.contains(#"{"favorited":true}"#))
+        XCTAssertTrue(bodiesSent().contains(#"{"favorited":true}"#))
         XCTAssertTrue(
             house.requests(to: "POST /api/plugins/radio/stations").isEmpty,
             "nothing was created: the row already existed"
@@ -546,7 +559,7 @@ final class StationsModelTests: XCTestCase {
             model.metaLine(try XCTUnwrap(model.favorites.state.items.first)),
             "the loaded row is patched in place rather than the page re-read to it"
         )
-        XCTAssertTrue(house.bodies.current.contains(#"{"sample_interval_sec":600}"#))
+        XCTAssertTrue(bodiesSent().contains(#"{"sample_interval_sec":600}"#))
     }
 
     // MARK: - forgetting
@@ -588,7 +601,7 @@ final class StationsModelTests: XCTestCase {
         XCTAssertEqual("playing Catalogue Ibis 01", model.toast)
         XCTAssertEqual(["POST /api/plugins/radio/play"], house.requests(to: "radio/play"))
         XCTAssertTrue(
-            house.bodies.current.contains { $0.contains(#""external_id":"rb-ibis-01""#) },
+            bodiesSent().contains { $0.contains(#""external_id":"rb-ibis-01""#) },
             "an unsaved hit is sent in the directory shape, not as a station_id"
         )
     }
@@ -718,7 +731,7 @@ final class StationsModelTests: XCTestCase {
             "the directory is a network hop and is not touched per keystroke: \(house.seen.current)"
         )
         XCTAssertEqual(
-            ["GET /api/plugins/radio/stations?favorited_only=true&q=Kestrel%2004&limit=8"],
+            ["GET /api/plugins/radio/stations?favorited_only=true&q=Kestrel 04&limit=8"],
             house.requests(to: "limit=8")
         )
     }
@@ -744,7 +757,7 @@ final class StationsModelTests: XCTestCase {
         XCTAssertFalse(gate.gaveUp.current, "the gate ran out, so this asserts nothing")
         XCTAssertEqual(["Favourite Kestrel 04"], model.favoriteMatches.map(\.name))
         XCTAssertEqual(
-            ["GET /api/plugins/radio/stations?favorited_only=true&q=Kestrel%2004&limit=8"],
+            ["GET /api/plugins/radio/stations?favorited_only=true&q=Kestrel 04&limit=8"],
             house.requests(to: "limit=8"),
             "one request, for the text that was still in the box"
         )
@@ -898,7 +911,7 @@ final class StationsModelTests: XCTestCase {
             model.favorites.state.items.first { $0.id == 77 }?.streamURL,
             "trimmed, and patched onto the loaded row"
         )
-        XCTAssertTrue(house.bodies.current.contains(#"{"stream_url":"https://simul.example/wjim"}"#))
+        XCTAssertTrue(bodiesSent().contains(#"{"stream_url":"https://simul.example/wjim"}"#))
     }
 
     func testResolvingASimulcastFromTheDetailSaysWhenThereIsNone() async throws {
