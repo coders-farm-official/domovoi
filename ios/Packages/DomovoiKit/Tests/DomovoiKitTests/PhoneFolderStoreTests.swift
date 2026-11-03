@@ -255,7 +255,8 @@ final class PhoneFolderStoreTests: XCTestCase {
             page: PageRequest(cursor: nil, offset: 0, limit: 10)
         ))
         let row = try XCTUnwrap(page.items.first)
-        XCTAssertEqual(try await reader.bytes(of: row), Data("one".utf8))
+        let got = try await reader.bytes(of: row)
+        XCTAssertEqual(got, Data("one".utf8))
     }
 
     func testBytesOfAPhotoAssetAreNotThisSourcesToGive() async throws {

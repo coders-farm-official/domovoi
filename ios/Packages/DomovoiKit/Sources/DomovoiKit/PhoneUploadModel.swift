@@ -54,7 +54,12 @@ public final class PhoneUploadModel {
     /// main-actor read from a non-isolated initialiser. The **number** and
     /// the reasoning are the same deliberately — both are `Data` through
     /// `raw` — and a test asserts the two are equal, so they cannot drift.
-    public static let cap: Int64 = 64 * 1024 * 1024
+    ///
+    /// `nonisolated`, because a row's own "is this too big to offer a control
+    /// for" question is asked from wherever a row is built — including inside
+    /// the `@Sendable` closures that read the bytes — and a `@MainActor`
+    /// type's static would be main-actor isolated like everything else on it.
+    public nonisolated static let cap: Int64 = 64 * 1024 * 1024
 
     public let kind: PhoneUploadKind
 

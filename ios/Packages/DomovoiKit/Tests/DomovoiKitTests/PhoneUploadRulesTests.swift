@@ -149,7 +149,7 @@ final class PhoneUploadRulesTests: XCTestCase {
             phoneUploadTarget(.video, status),
             .direct(.library(id: "core:documents", label: "Documents", path: ""))
         )
-        XCTAssertEqual(phoneUploadTarget(.video, status)?.refusal, nil)
+        XCTAssertNil(phoneUploadTarget(.video, status)?.refusal, "a destination is not a refusal")
     }
 
     func testAVideoSaysTheLibrariesCouldNotBeReadAndWhy() {
