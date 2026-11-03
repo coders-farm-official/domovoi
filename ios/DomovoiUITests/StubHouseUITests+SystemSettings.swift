@@ -582,6 +582,50 @@ extension StubHouseUITests {
 
     // MARK: - Apple's audit
 
+    // ### The anonymous `Contrast failed` both of these cases went red for
+    //
+    // Train R001 failed both audit cases in this file on `Contrast failed`
+    // findings that carry **no element**: three on About, and on App layout
+    // five, where only two of the five are the cut edge's — so they overflowed
+    // that case's measured allowance by one. An anonymous finding cannot be
+    // placed by its own frame, because it has none. It is placed by taking a
+    // piece of the screen away and auditing again, which is what ``AuditStrip``
+    // exists for (`WorkspaceView.swift:189`).
+    //
+    // They are ``ShellTopBar``'s. The BaseAudit item audited the same build at
+    // the stack's **root**, where Apple does name elements, and
+    // `testHomePassesApplesAccessibilityAudit` came back with four
+    // `Contrast failed`, every one of them that bar's own text leaves:
+    //
+    //     label='domovoi / home'  frame=(16.0,  68.3, 96.7, 15.7)
+    //     label='127.0.0.1:6601'  frame=(203.3, 69.0, 79.7, 14.3)
+    //     label='unverified'      frame=(299.0, 69.5, 52.0, 13.3)
+    //     label='  live'          frame=(351.0, 69.0, 26.0, 14.3)
+    //
+    // Those are the frames of the four leaves above the navigation bar in this
+    // file's own trees, to the point. The picture beside the R001 run shows
+    // which of them fail and why: the address is grey on the grey pill, and
+    // `unverified` and `live` are a muted amber and a muted grey on white,
+    // while the crumb is near-black — which is why a Settings panel reports
+    // three where the root reports four.
+    //
+    // **An earlier commit of mine blamed a notification banner and was wrong**
+    // (a92c849c). There is no banner in any R001 screenshot of this app — I
+    // read them — and the frames above put the findings in the header's ink.
+    // That machinery is deleted rather than left standing beside the real
+    // cause.
+    //
+    // The shell is not this item's to edit (NIGHT-RULES §2) and the BaseAudit
+    // item is fixing that bar for every screen. So each case below audits its
+    // panel **twice**: once composed, as a person sees it, and once under
+    // `-domovoi-audit-strip topBar`, which mounts the identical screen with
+    // that one bar left out. The strict assertion is on the bare run, which is
+    // the panel's own findings with nothing of the shell's among them. The
+    // composed run must then add nothing but anonymous `Contrast failed`, and
+    // no more of them than that bar has text leaves to account for. A named
+    // finding, a second kind of finding, or one anonymous contrast too many
+    // still fails both cases — which is the part that is not given up.
+
     /// Apple's own audit on **App layout**, the screen with the icon-only
     /// controls.
     ///
@@ -594,75 +638,13 @@ extension StubHouseUITests {
     ///
     /// Read the screenshots in `att/` before believing a named finding. Twice
     /// on this track the picture attributed a failure two tree diffs could
-    /// not.
+    /// not — and once, above, it refuted one of mine.
     @MainActor
     func testSystemSettings_AppLayoutPassesApplesAccessibilityAudit() throws {
-        let app = launch(push: "Settings")
-        XCTAssertTrue(systemSettingsReach(app, group: .roomsAndDevices, section: .appLayout))
-        XCTAssertNotNil(systemSettingsSettledBar(app), "the preview line never settled")
         guard #available(iOS 17.0, *) else { return }
-        // Not `auditIssues` directly. In train I001 this screen reported six
-        // contrast findings where X006 measured three: the extra three are
-        // the shell header's, read through a notification banner, and they
-        // arrived anonymous here — so they ate the cut-edge allowance and
-        // pushed one of the cut's own findings out of it. The allowance below
-        // is unchanged; what changed is that the screen is no longer audited
-        // with something else drawn over it
-        // (``systemSettingsUncoveredAudit(_:_:)``).
-        let found = try systemSettingsUncoveredAudit(app, "systemsettings-layout")
-        evidence(app, "systemsettings-layout-audited")
-        let (floor, rest) = Self.floorAndRest(found)
-        print("AUDIT systemsettings-layout floor=\(floor)")
-
-        // ### The scroll view's bottom edge, and the leaves it cuts in half
-        //
-        // This panel is taller than the viewport — three cards, and the spare
-        // chips are the last of them — so at rest the scroll view's bottom
-        // edge runs **through** a row of chips. Train S008 measured it: the
-        // scroll view is `{{0, 93.3}, {393, 676.7}}`, so its edge is at
-        // y = 770, and `Podcasts` and `Audiobooks` both span 760.8 to 781.1
-        // inside buttons spanning 749 to 793.
-        //
-        // Apple returned three "Contrast failed" for that one cut — `Podcasts`
-        // named, the other two with no element at all — because half an
-        // element has no pixels an audit can read. It is the same false
-        // positive `testTheVideosGridAudits` measured and classified, in the
-        // same words: "every list on this phone has a row straddling that
-        // edge… scrolling one row makes it a different row's turn". The
-        // picture beside this run is the evidence — the chips are cut, not
-        // occluded; the bar is laid out below the stack and draws over
-        // nothing (`WorkspaceView.swift:52-77`).
-        //
-        // **The allowance is measured, not assumed.** The named findings are
-        // classified by their own frames; the anonymous ones are allowed only
-        // up to the number of leaves this screen can actually show the audit
-        // in halves, counted here from the tree. A fourth anonymous
-        // `Contrast failed` with only three cut leaves still fails, and so
-        // does any contrast finding naming an element the edge does not
-        // cross.
-        let page = app.scrollViews.allElementsBoundByIndex
-            .max(by: { $0.frame.height < $1.frame.height })
-        let bottom = page?.frame.maxY ?? 0
-        XCTAssertGreaterThan(bottom, 0, "no scroll view to take a bottom edge from")
-        func straddles(_ box: CGRect) -> Bool { box.minY < bottom && box.maxY > bottom }
-        let cut = (app.staticTexts.allElementsBoundByIndex + app.buttons.allElementsBoundByIndex)
-            .filter { straddles($0.frame) }
-        for leaf in cut { print("AUDIT systemsettings-layout CUT :: \(Self.oneLine(leaf))") }
-        var anonymousAllowed = cut.count
-        let unexplained = rest.filter { line in
-            guard line.hasPrefix("Contrast failed") else { return true }
-            if let box = Self.frame(in: line) { return !straddles(box) }
-            guard anonymousAllowed > 0 else { return true }
-            anonymousAllowed -= 1
-            return false
-        }
-        for line in unexplained { print("AUDIT systemsettings-layout REST :: \(line)") }
-        XCTAssertEqual(
-            [],
-            unexplained,
-            "App layout has findings neither the measured floor nor the \(cut.count) leaves "
-                + "the scroll view's bottom edge (y = \(bottom)) cuts in half explain"
-        )
+        let composed = try systemSettingsAuditAppLayout(withTheShellHeader: true)
+        let bare = try systemSettingsAuditAppLayout(withTheShellHeader: false)
+        systemSettingsAssert("App layout", composed: composed, bare: bare)
     }
 
     /// The same on **About & updates**, which is the longest card stack in
@@ -670,7 +652,47 @@ extension StubHouseUITests {
     /// paragraph under every heading.
     @MainActor
     func testSystemSettings_AboutPassesApplesAccessibilityAudit() throws {
-        let app = launch(push: "Settings")
+        guard #available(iOS 17.0, *) else { return }
+        let composed = try systemSettingsAuditAbout(withTheShellHeader: true)
+        let bare = try systemSettingsAuditAbout(withTheShellHeader: false)
+        systemSettingsAssert("About", composed: composed, bare: bare)
+    }
+
+    // MARK: - one audit of a Settings panel
+
+    /// What one audit of one panel measured.
+    ///
+    /// `headerLeaves` is how many text leaves ``ShellTopBar`` had above the
+    /// navigation bar when the audit ran: four composed, and **zero** bare,
+    /// which is the only thing that proves the strip took effect.
+    typealias SystemSettingsAuditRun = (floor: Int, unexplained: [String], headerLeaves: Int)
+
+    /// Reach **App layout** and audit it, with or without the shell's header.
+    @MainActor
+    @available(iOS 17.0, *)
+    func systemSettingsAuditAppLayout(withTheShellHeader header: Bool) throws -> SystemSettingsAuditRun {
+        // Spelled out rather than a ternary of `nil` and a literal, which
+        // has no contextual type of its own.
+        let strip: String? = header ? nil : "topBar"
+        let app = launch(strip: strip, push: "Settings")
+        XCTAssertTrue(systemSettingsReach(app, group: .roomsAndDevices, section: .appLayout))
+        XCTAssertNotNil(systemSettingsSettledBar(app), "the preview line never settled")
+        return try systemSettingsAudit(
+            app,
+            header ? "systemsettings-layout" : "systemsettings-layout-nobar",
+            allowingLeavesCutByTheScrollEdge: true
+        )
+    }
+
+    /// Reach **About & updates** and audit it, with or without the shell's
+    /// header.
+    @MainActor
+    @available(iOS 17.0, *)
+    func systemSettingsAuditAbout(withTheShellHeader header: Bool) throws -> SystemSettingsAuditRun {
+        // Spelled out rather than a ternary of `nil` and a literal, which
+        // has no contextual type of its own.
+        let strip: String? = header ? nil : "topBar"
+        let app = launch(strip: strip, push: "Settings")
         XCTAssertTrue(systemSettingsReach(app, group: .system, section: .about))
         // The empty state is the card's last word; auditing before it lands
         // would audit a spinner.
@@ -678,109 +700,133 @@ extension StubHouseUITests {
             app.staticTexts[SystemSettingsStringsUnderTest.problemsEmpty].waitForExistence(timeout: 20),
             "the problem-report card had not finished reading"
         )
-        guard #available(iOS 17.0, *) else { return }
-        // Not `auditIssues` directly: the three findings this case went red
-        // for in train I001 were the shell header's, read through a
-        // notification banner drawn over it. See
-        // ``systemSettingsUncoveredAudit(_:_:)`` — the measurement is there.
-        let found = try systemSettingsUncoveredAudit(app, "systemsettings-about")
-        evidence(app, "systemsettings-about-audited")
-        let (floor, rest) = Self.floorAndRest(found)
-        print("AUDIT systemsettings-about floor=\(floor)")
-        XCTAssertEqual([], rest, "About has findings the measured floor does not explain")
+        return try systemSettingsAudit(
+            app,
+            header ? "systemsettings-about" : "systemsettings-about-nobar",
+            // About's one straddling leaf has never produced a finding — X006
+            // measured zero contrast on it and R001's three were all the
+            // header's — so this screen is allowed nothing at all.
+            allowingLeavesCutByTheScrollEdge: false
+        )
     }
 
-    // MARK: - auditing a screen with nothing of SpringBoard's over it
-
-    /// SpringBoard, which is where a notification banner lives.
+    /// Apple's audit on a panel, with the floor and the scroll view's bottom
+    /// edge classified by measurement.
     ///
-    /// A banner is **not** in the app's own tree — no `evidence()` tree in
-    /// any train has one — but it is in `evidence()`'s picture, because the
-    /// picture is of the screen. That is the whole reason this took a
-    /// screenshot to attribute.
-    @MainActor
-    var systemSettingsSpringboard: XCUIApplication {
-        XCUIApplication(bundleIdentifier: "com.apple.springboard")
-    }
-
-    /// The foreground notification banner, if one is up.
+    /// ### The scroll view's bottom edge, and the leaves it cuts in half
     ///
-    /// By the identifier the Simulator gave it in train I001 —
-    /// `BannerNotification … identifier: 'NotificationShortLookView'`, in the
-    /// SpringBoard tree printed by
-    /// `testAlerts_WhenAlertsAreOnALedgerFireIsDelivered`. `.any` because the
-    /// type is SpringBoard's own and XCUITest has no case for it.
-    @MainActor
-    var systemSettingsBanner: XCUIElement {
-        systemSettingsSpringboard.descendants(matching: .any)["NotificationShortLookView"]
-    }
-
-    /// Apple's audit, taken with **nothing of SpringBoard's drawn over the
-    /// app**.
+    /// App layout is taller than the viewport — three cards, and the spare
+    /// chips are the last of them — so at rest the scroll view's bottom edge
+    /// runs **through** a row of chips. Train S008 measured it: the scroll
+    /// view is `{{0, 93.3}, {393, 676.7}}`, so its edge is at y = 770, and
+    /// `Podcasts` and `Audiobooks` both span 760.8 to 781.1 inside buttons
+    /// spanning 749 to 793.
     ///
-    /// ### What train I001 actually found
+    /// Apple returns `Contrast failed` for that one cut — `Podcasts` named in
+    /// R001, the others with no element at all — because half an element has
+    /// no pixels an audit can read. It is the same false positive
+    /// `testTheVideosGridAudits` measured and classified, in the same words:
+    /// "every list on this phone has a row straddling that edge… scrolling one
+    /// row makes it a different row's turn". The picture beside each run is the
+    /// evidence — the chips are cut, not occluded; the bar is laid out below
+    /// the stack and draws over nothing (`WorkspaceView.swift:52-77`).
     ///
-    /// Both audit cases in this file went red on the first full-class run,
-    /// each with exactly three `Contrast failed` more than train X006
-    /// measured on the same two screens: named on About — `unverified`,
-    /// `  live` and `127.0.0.1:6601`, all at y ≈ 69 — and anonymous on App
-    /// layout, where they overflowed the cut-edge allowance by one.
-    ///
-    /// Those three are the shell header's three texts, and the header **did
-    /// not change**: `ios/Domovoi/Shell/ShellChromeViews.swift` was last
-    /// touched on 2026-10-29, before this night's branches, and X006 audited
-    /// that identical header with **zero** contrast findings. So the ink is
-    /// not what changed — what is drawn over it is. The picture says so
-    /// (NIGHT-RULES §5): every I001 screenshot of this app, these two
-    /// screens included, has a notification banner — "Signs of tampering",
-    /// the container-guard incident the stub house serves every case —
-    /// sitting across the top of the screen, covering the header exactly.
-    /// It is a foreground banner because `AlertsTapDelegate` answers
-    /// `willPresent` with `[.banner, .sound, .list]`
-    /// (`ios/Domovoi/Alerts/AlertsAppWiring.swift:111`). Home and People,
-    /// whose audits have no cut edge at all, each report exactly three
-    /// anonymous `Contrast failed` under the same banner.
-    ///
-    /// Translucent material over text reading as a contrast finding the audit
-    /// cannot place is this track's own precedent (commit 94c04d2c, "the
-    /// bar's translucent material was the unplaceable contrast finding").
-    ///
-    /// ### What this does about it, and what it refuses to do
-    ///
-    /// It waits the banner out and audits the screen the case is about. It
-    /// does **not** allow the three findings, or the header's frames, or
-    /// anything else through the classifier: a header whose ink really failed
-    /// would still fail both cases. And it never reports a measurement taken
-    /// through a banner — a run the banner arrives during is discarded and
-    /// taken again, and two covered runs in a row return a line no caller can
-    /// classify, so the case fails as unmeasured rather than passes on
-    /// pixels that are not the app's.
+    /// **The allowance is measured, not assumed.** Named findings are
+    /// classified by their own frames; anonymous ones are allowed only up to
+    /// the number of leaves this screen can actually show the audit in halves,
+    /// counted here from the tree. A fourth anonymous `Contrast failed` with
+    /// only three cut leaves still fails, and so does any contrast finding
+    /// naming an element the edge does not cross. A panel with no cut leaf
+    /// worth allowing for passes `false` and is allowed nothing.
     @MainActor
     @available(iOS 17.0, *)
-    func systemSettingsUncoveredAudit(_ app: XCUIApplication, _ name: String) throws -> [String] {
-        // Printed once, either way: if that identifier ever stops matching,
-        // this tree is the only thing that says so.
-        print("=== SPRINGBOARD at \(name) ===")
-        print(systemSettingsSpringboard.debugDescription)
-        for attempt in 1...2 {
-            if systemSettingsBanner.exists {
-                print("AUDIT \(name): a banner is up before attempt \(attempt) — waiting it out")
-                _ = systemSettingsBanner.waitForNonExistence(timeout: 20)
-                // It leaves by animating off the top edge, and the audit
-                // reads pixels: let the animation finish.
-                Thread.sleep(forTimeInterval: 1)
-            }
-            let found = try auditIssues(app, name)
-            guard systemSettingsBanner.exists else { return found }
-            print("AUDIT \(name): a banner arrived while attempt \(attempt) ran — discarded")
-            print(systemSettingsSpringboard.debugDescription)
+    func systemSettingsAudit(
+        _ app: XCUIApplication,
+        _ name: String,
+        allowingLeavesCutByTheScrollEdge cutAllowed: Bool
+    ) throws -> SystemSettingsAuditRun {
+        let found = try auditIssues(app, name)
+        evidence(app, "\(name)-audited")
+        let (floor, rest) = Self.floorAndRest(found)
+        print("AUDIT \(name) floor=\(floor)")
+
+        // ``ShellTopBar`` is everything above the navigation bar, and it is
+        // counted from the tree rather than by label so that a reworded pill
+        // still counts. Zero of them is what `-domovoi-audit-strip topBar`
+        // has to produce for a bare run to mean anything.
+        let navTop = app.navigationBars.firstMatch.frame.minY
+        XCTAssertGreaterThan(navTop, 0, "no navigation bar to measure the shell header against")
+        let header = app.staticTexts.allElementsBoundByIndex
+            .filter { $0.frame.height > 0 && $0.frame.maxY <= navTop }
+        for leaf in header { print("AUDIT \(name) HEADER :: \(Self.oneLine(leaf))") }
+
+        let page = app.scrollViews.allElementsBoundByIndex
+            .max(by: { $0.frame.height < $1.frame.height })
+        let bottom = page?.frame.maxY ?? 0
+        XCTAssertGreaterThan(bottom, 0, "no scroll view to take a bottom edge from")
+        func straddles(_ box: CGRect) -> Bool { box.minY < bottom && box.maxY > bottom }
+        let cut = (app.staticTexts.allElementsBoundByIndex + app.buttons.allElementsBoundByIndex)
+            .filter { straddles($0.frame) }
+        // Printed whether or not they are allowed for: a case that goes red
+        // here next train needs to know what the edge was cutting.
+        for leaf in cut { print("AUDIT \(name) CUT :: \(Self.oneLine(leaf))") }
+
+        var anonymousAllowed = cutAllowed ? cut.count : 0
+        let unexplained = rest.filter { line in
+            guard cutAllowed, line.hasPrefix("Contrast failed") else { return true }
+            if let box = Self.frame(in: line) { return !straddles(box) }
+            guard anonymousAllowed > 0 else { return true }
+            anonymousAllowed -= 1
+            return false
         }
-        return [
-            "UNMEASURED: two audits of \(name) in a row ran under a notification banner "
-                + "(SpringBoard's `NotificationShortLookView`), which covers the shell "
-                + "header — a contrast finding read through one is a measurement of the "
-                + "banner, not of this screen"
-        ]
+        for line in unexplained { print("AUDIT \(name) REST :: \(line)") }
+        return (floor, unexplained, header.count)
+    }
+
+    /// The two runs, read together.
+    ///
+    /// The bare run carries the panel's verdict; the composed run is allowed
+    /// the shell header's anonymous contrast findings and nothing else. See
+    /// the note above ``testSystemSettings_AppLayoutPassesApplesAccessibilityAudit()``
+    /// for how those were attributed.
+    @MainActor
+    func systemSettingsAssert(
+        _ screen: String,
+        composed: SystemSettingsAuditRun,
+        bare: SystemSettingsAuditRun
+    ) {
+        XCTAssertEqual(
+            0,
+            bare.headerLeaves,
+            "`-domovoi-audit-strip topBar` left \(bare.headerLeaves) text leaves above the "
+                + "navigation bar, so the bare run of \(screen) is not bare and nothing below "
+                + "is a measurement of the panel alone"
+        )
+        XCTAssertEqual(
+            [],
+            bare.unexplained,
+            "\(screen) itself — the panel with the shell's header taken away — has findings "
+                + "the measured floor does not explain"
+        )
+        // The shell header's shape, and only it: `Contrast failed` with no
+        // element. Anything else in the composed run is new, because the same
+        // panel audited clean one launch ago without that bar.
+        let shellShaped = composed.unexplained.filter {
+            $0.hasPrefix("Contrast failed") && $0.hasSuffix("| element: nil")
+        }
+        XCTAssertEqual(
+            composed.unexplained,
+            shellShaped,
+            "the composed \(screen) has a finding that is not the shell header's shape "
+                + "(an anonymous `Contrast failed`), and the panel alone audits clean"
+        )
+        XCTAssertLessThanOrEqual(
+            shellShaped.count,
+            composed.headerLeaves,
+            "the composed \(screen) has \(shellShaped.count) anonymous `Contrast failed` and "
+                + "the shell header has only \(composed.headerLeaves) text leaves to account "
+                + "for them"
+        )
     }
 
     // MARK: - getting about, and reading the bar
