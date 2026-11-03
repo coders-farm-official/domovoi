@@ -107,6 +107,25 @@ public enum VoiceSettingsStrings {
         "The sample could not be played: \(reason)"
     }
 
+    /// **iOS-only.** The `reason` for the one failure that is **this phone's
+    /// and not the server's**: the bytes arrived and `AVAudioPlayer(data:)`
+    /// refused them, which means the body was not the WAV the route promises
+    /// (`voice.py:177-184`) or it was truncated.
+    ///
+    /// Here rather than in `VoiceSettingsSamplePlayer.swift` because it is a
+    /// sentence a person reads, and NIGHT-RULES §3 keeps those together. The
+    /// underlying `NSError`'s own description is not one — "The operation
+    /// couldn't be completed" over a voice sample says nothing about either
+    /// the voice or the sample.
+    public static let samplePhoneCouldNotRead = "the phone could not read the audio"
+
+    /// **iOS-only.** The other half: the bytes decoded and the player would
+    /// not start. `prepareToPlay()` and `play()` do not throw — they return
+    /// `false` — so without this the failure would be silence, which is the
+    /// one outcome the no-misleading-controls rule rejects for a button a
+    /// person just pressed.
+    public static let samplePhoneWouldNotPlay = "the phone would not play it"
+
     // MARK: - how names are said
 
     /// **iOS-only.**

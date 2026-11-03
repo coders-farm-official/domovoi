@@ -328,13 +328,13 @@ struct SettingsSectionScreen: View {
             SettingsSectionNotBuilt()
         case "wake-words":
             // slot: wake-words
-            SettingsSectionNotBuilt()
+            VoiceSettingsDashboardPanel(model: model, section: section)
         case "voices":
             // slot: voices
-            SettingsSectionNotBuilt()
+            VoiceSettingsPanel(model: model)
         case "greetings":
             // slot: greetings
-            SettingsSectionNotBuilt()
+            VoiceSettingsDashboardPanel(model: model, section: section)
         case "models":
             // slot: models
             SettingsSectionNotBuilt()
@@ -346,7 +346,7 @@ struct SettingsSectionScreen: View {
             SettingsSectionNotBuilt()
         case "voice-history":
             // slot: voice-history
-            SettingsSectionNotBuilt()
+            VoiceSettingsDashboardPanel(model: model, section: section)
         case "about":
             // slot: about
             SettingsSectionNotBuilt()
