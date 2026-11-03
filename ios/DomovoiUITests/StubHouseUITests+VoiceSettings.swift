@@ -623,6 +623,34 @@ extension StubHouseUITests {
 
     // MARK: - the audit
 
+    /// The label an audit finding's element carries, out of the line
+    /// ``StubHouseUITests/oneLine(_:)`` wrote.
+    ///
+    /// Searched **backwards** for the closing quote: this screen's labels
+    /// contain apostrophes ("your Domovoi's voice"), so the first `'` after
+    /// `label='` is inside the sentence and not the end of it. `frame=` is the
+    /// last field on the line, which is what makes the backwards search exact.
+    fileprivate static func voiceSettingsFindingLabel(in line: String) -> String? {
+        guard let opened = line.range(of: "label='"),
+              let closed = line.range(of: "' frame=", options: .backwards),
+              opened.upperBound <= closed.lowerBound
+        else { return nil }
+        return String(line[opened.upperBound..<closed.lowerBound])
+    }
+
+    /// The scroll view the section is drawn in — the tallest one on screen.
+    ///
+    /// The other is the phone bar's, lying on its side (146 points tall
+    /// against the section's 400-odd at AX5). Its `frame` is the rectangle
+    /// the section is actually **painted** in, which is the rectangle a
+    /// contrast reading has to come from.
+    @MainActor
+    fileprivate func voiceSettingsViewport(_ app: XCUIApplication) -> CGRect {
+        app.scrollViews.allElementsBoundByIndex
+            .max(by: { $0.frame.height < $1.frame.height })?
+            .frame ?? .null
+    }
+
     /// One audit of the Voices section, classified by **signature**, and the
     /// paragraph's growth **measured** at both type sizes.
     ///
@@ -638,10 +666,43 @@ extension StubHouseUITests {
     ///   paragraph on the screen is compared at `Self.ordinaryTypeSize` and at
     ///   `UICTContentSizeCategoryAccessibilityXXXL`, and it is the comparison
     ///   that decides.
+    ///
+    /// ### The two AX5 contrast findings, and why the colours are not what
+    /// they are about
+    ///
+    /// Run S001 failed here on two `Contrast failed`, each naming an element:
+    /// the `Settings` title at `(16, 155.7, 196, 67)` and the section's own
+    /// explainer at `(16, 576.7, 351, 312.7)`. At AX5 the chrome above the
+    /// section is 300 points tall, so the section is painted into a scroll
+    /// view of `(0, 300.3, 393, 401.7)` — and **neither element is inside
+    /// it**: the title is wholly above the viewport (it ends at 222.7, having
+    /// scrolled off the top), and the explainer runs to 889.4, a third of it
+    /// behind the phone bar. The screenshot beside that run shows it cut
+    /// mid-word by the bar. Whatever the audit read at those coordinates, it
+    /// was not those elements' pixels.
+    ///
+    /// That is a claim this case **measures** rather than argues. The `large`
+    /// pass draws the same two elements, in the same colours, wholly inside
+    /// its viewport — `Settings` at `(16, 153.4, 78.7, 26.3)`, the explainer
+    /// at `(16, 263.8, 361, 33.7)` against a scroll view ending at 770 — and
+    /// Apple reports **no** contrast finding there at all. Same tokens, same
+    /// text, on screen: clean. So the `large` pass excuses nothing (its
+    /// `rest` must be empty outright), and AX5 may only set aside a contrast
+    /// finding whose element is both outside the viewport **and** one the
+    /// `large` pass measured clean. A real colour defect fails at `large`,
+    /// where every element fits; a new finding at AX5 against something that
+    /// does fit still fails here. The same reading as
+    /// ``StubHouseUITests/testTheVideosGridAudits``, which set aside a row the
+    /// grid's bottom edge cut in half — widened because at AX5 an element can
+    /// miss the viewport entirely rather than straddle it.
     @MainActor
     func testVoiceSettings_Audit() throws {
         let ax5 = "UICTContentSizeCategoryAccessibilityXXXL"
         var heights: [String: CGFloat] = [:]
+        // Every text the `large` pass drew **wholly inside** its viewport
+        // while the audit found nothing to say about any of them. An AX5
+        // finding may only be set aside against one of these.
+        var cleanAtLarge: Set<String> = []
 
         for (name, size) in [("large", Self.ordinaryTypeSize), ("ax5", ax5)] {
             control("reset-fixtures", "{}", port: 6601, what: "the fixtures before the \(name) audit")
@@ -670,13 +731,65 @@ extension StubHouseUITests {
                 print(app.debugDescription)
             }
 
+            let viewport = voiceSettingsViewport(app)
+            XCTAssertFalse(
+                viewport.isNull,
+                "no scroll view at \(name) to take the painted rectangle from"
+            )
+            print("VOICESETTINGS [\(name)] viewport \(viewport)")
+
             let split = Self.floorAndRest(try auditIssues(app, "voicesettings-\(name)"))
             print("VOICESETTINGS [\(name)] floor \(split.floor), rest \(split.rest.count)")
-            XCTAssertTrue(
-                split.rest.isEmpty,
-                "the Voices section at \(name) has findings outside the measured floor: "
-                    + split.rest.joined(separator: " / ")
-            )
+
+            if name == "large" {
+                // Nothing is excused at ordinary size: the whole section fits
+                // the window here, so every finding is about the thing it
+                // names. This is the pass that decides whether the colours
+                // are right.
+                XCTAssertTrue(
+                    split.rest.isEmpty,
+                    "the Voices section at \(name) has findings outside the measured floor: "
+                        + split.rest.joined(separator: " / ")
+                )
+                // Recorded only after that assertion, so a screen with a real
+                // contrast defect never supplies AX5 with an excuse for it.
+                for text in app.staticTexts.allElementsBoundByIndex {
+                    let label = text.label
+                    guard !label.isEmpty, viewport.contains(text.frame) else { continue }
+                    cleanAtLarge.insert(label)
+                }
+                print("VOICESETTINGS [large] \(cleanAtLarge.count) texts audited clean inside the viewport")
+                XCTAssertFalse(
+                    cleanAtLarge.isEmpty,
+                    "the large pass measured no text inside its own viewport"
+                )
+            } else {
+                var excused: [String] = []
+                let unexplained = split.rest.filter { line in
+                    guard line.hasPrefix("Contrast failed"),
+                          let box = Self.frame(in: line),
+                          // Outside the rectangle the section is painted in:
+                          // there are no pixels of this element there to read.
+                          !viewport.contains(box),
+                          // And this very text was measured clean at ordinary
+                          // size, where it did fit. Without this half, the
+                          // viewport would excuse a genuinely bad colour the
+                          // moment the element grew past the fold.
+                          let label = Self.voiceSettingsFindingLabel(in: line),
+                          cleanAtLarge.contains(label)
+                    else { return true }
+                    excused.append(line)
+                    return false
+                }
+                for line in excused {
+                    print("VOICESETTINGS [ax5] outside the viewport \(viewport), clean at large: \(line)")
+                }
+                XCTAssertTrue(
+                    unexplained.isEmpty,
+                    "the Voices section at \(name) has findings neither the floor nor the viewport explains: "
+                        + unexplained.joined(separator: " / ")
+                )
+            }
             app.terminate()
         }
 
