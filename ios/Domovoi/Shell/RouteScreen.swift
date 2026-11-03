@@ -96,7 +96,10 @@ struct RouteScreen: View {
             ScreenPlaceholder(route: route, onThisPhone: false)
         case .calendar:
             // slot: calendar
-            ScreenPlaceholder(route: route, onThisPhone: false)
+            // ``CalendarScreenView`` says what is left out and why there is
+            // no control for any of it — the week grid, "sync now", and the
+            // all-day flag no API can read.
+            CalendarScreenView(model: model)
         case .stations:
             // slot: stations
             ScreenPlaceholder(route: route, onThisPhone: false)

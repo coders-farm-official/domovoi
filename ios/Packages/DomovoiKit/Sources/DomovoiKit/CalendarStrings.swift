@@ -60,6 +60,15 @@ public enum CalendarStrings {
     /// error state shows when even that is nil.
     public static let requestFailed = "request failed"
 
+    /// `ErrorState`'s own button (`ui/components/Kit.kt:296`), which
+    /// `CalendarScreen.kt:163` passes `state.refresh` to.
+    ///
+    /// **`retry`, not the `try again` the other four screens say.** Those are
+    /// each their own screen's word and this one is the shared Kotlin
+    /// component's, which is what this screen draws; a quiet harmonisation
+    /// here would make the phone and the dashboard disagree about one button.
+    public static let retry = "retry"
+
     // MARK: - the two emptinesses
 
     /// `CalendarScreen.kt:173`, agenda only.
@@ -210,6 +219,24 @@ public enum CalendarStrings {
     /// equivalent.
     public static func moreEventsLabel(_ overflow: Int) -> String {
         overflow == 1 ? "1 more event" : "\(overflow) more events"
+    }
+
+    /// **iOS-only:** what a month cell is worth to VoiceOver, as its
+    /// `accessibilityValue` — `4 events`, `1 event`, `no events`.
+    ///
+    /// Android needs nothing like it: its cell draws up to three event
+    /// *titles*, so a person hears what is on the day by hearing the chips.
+    /// This port's cell is a day number and up to three dots, and the dots are
+    /// `accessibilityHidden` (a colour is never the only carrier of meaning),
+    /// so without this line a cell with two events and a cell with none read
+    /// out identically. It is also what a UI case matches the four-event cell
+    /// by, there being no way to query a dot.
+    public static func dayEvents(_ count: Int) -> String {
+        switch count {
+        case 0: return "no events"
+        case 1: return "1 event"
+        default: return "\(count) events"
+        }
     }
 
     /// **iOS-only:** the month grid's own hint, because this port's cell shows

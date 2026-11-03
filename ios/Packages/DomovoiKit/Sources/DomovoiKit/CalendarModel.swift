@@ -160,6 +160,20 @@ public final class CalendarModel {
     /// Every event the read has, or none while it has not answered.
     public var all: [CalendarEntry] { events.data ?? [] }
 
+    /// The zone every view of this screen formats in.
+    ///
+    /// Exposed rather than left to a view reading `TimeZone.current` again:
+    /// the window, the grouping and the grid placement are all cut in
+    /// ``timeZone``, and a row whose clock was written in a *second* zone
+    /// would sit under the wrong day header on a phone that had just crossed
+    /// one. One zone, read once, from the thing that owns it.
+    public var zone: TimeZone { timeZone() }
+
+    /// The clock the day grid's `now` rule and the detail sheet's
+    /// ``CalendarStrings/synced(_:)`` are measured against — ``nowMs``, for
+    /// the same reason as ``zone``.
+    public var clockMs: Int64 { nowMs() }
+
     /// `"<n> events · the household's calendar"` (`CalendarScreen.kt:145`) —
     /// counted over the **whole** list, not the visible window, as Android
     /// counts it.
