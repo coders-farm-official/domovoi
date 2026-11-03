@@ -253,8 +253,7 @@ struct PrintingCopiesRow: View {
                 // (`PrintSheet.kt:181,183`), with a spoken label beside each:
                 // `−` read aloud as "minus" is not what the control does.
                 Button(PrintingStrings.fewerCopiesGlyph) { job.fewerCopies() }
-                    .buttonStyle(.bordered)
-                    .tint(Color.brandInk)
+                    .buttonStyle(PrintingOutlineButtonStyle())
                     .frame(minWidth: 44, minHeight: 44)
                     .disabled(job.copies <= 1)
                     .accessibilityLabel(PrintingStrings.fewerCopies)
@@ -265,8 +264,7 @@ struct PrintingCopiesRow: View {
                     .accessibilityValue("\(job.copies)")
 
                 Button(PrintingStrings.moreCopiesGlyph) { job.moreCopies() }
-                    .buttonStyle(.bordered)
-                    .tint(Color.brandInk)
+                    .buttonStyle(PrintingOutlineButtonStyle())
                     .frame(minWidth: 44, minHeight: 44)
                     .disabled(job.copies >= job.copiesMax)
                     .accessibilityLabel(PrintingStrings.moreCopies)
@@ -311,8 +309,7 @@ struct PrintingJobProgress: View {
             }
             if job.job?.canCancel == true, job.job?.finished == false {
                 Button(PrintingStrings.cancel) { job.cancelJob() }
-                    .buttonStyle(.bordered)
-                    .tint(Color.brandInk)
+                    .buttonStyle(PrintingOutlineButtonStyle())
             }
         }
     }

@@ -951,6 +951,26 @@ extension StubHouseUITests {
     /// measured floor (``floorAndRest(_:)``), and anything Apple can
     /// attribute to an element is a defect to fix. Never a pinned total — a
     /// count drifts with the house's data, where a signature does not.
+    ///
+    /// ### Train I001: the case was right and the app was wrong
+    ///
+    /// Two "Contrast nearly passed … unless font size is larger" — one
+    /// against `label='Test page'`, one with no element. The picture settled
+    /// both. Sampled from `printing-25-audit` at 3x, the card's secondary
+    /// buttons were `.buttonStyle(.bordered).tint(Color.brandInk)`, which
+    /// washes the surface with the tint and then draws the label in it:
+    /// `#975800` on `#E4D9C9` is **4.06:1**, under the 4.5 a `subheadline`
+    /// needs, where the same ink on the bare card is 5.19:1. The second
+    /// finding is the next button down — `Which one is it?` at
+    /// `y = 763…797` against a scroll view that ends at 770, so the only
+    /// strip of it Apple could sample holds no glyphs and it had nothing to
+    /// attribute the finding to.
+    ///
+    /// Fixed in the app (`PrintingOutlineButtonStyle`), not here: the
+    /// assertion is unchanged, and a wash coming back fails it again —
+    /// including on a button the scroll edge cuts, because an anonymous
+    /// *contrast* headline is not in ``knownAnonymousHeadlines`` and lands
+    /// in `rest` like any other.
     @MainActor
     func testPrinting_PanelAudit() throws {
         guard let app = printingOpenPanel() else { return }
