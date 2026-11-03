@@ -219,8 +219,8 @@ final class PrintersPanelModelTests: XCTestCase {
                 case ("POST", "/api/printers/1/identify"):
                     return .json(#"{"ok":true}"#)
 
-                case ("POST", "/api/printers/1/test-page"):
-                    return .json(#"{"id":77,"printer_id":1,"title":"test page","state":"queued","can_cancel":true}"#)
+                case ("POST", _) where parts.path.hasSuffix("/test-page"):
+                    return .json(#"{"id":77,"title":"test page","state":"queued","can_cancel":true}"#)
 
                 case ("GET", "/api/print/jobs"):
                     // The wrapper with BOTH keys: a decoder that read the
@@ -418,10 +418,18 @@ final class PrintersPanelModelTests: XCTestCase {
         await settleUntil({ model.rows.count == 2 }, "the list")
 
         model.toggleRoom(model.rows[0], PrintingRoom(id: "study", label: "Study"))
-        await settleUntil({ house.rooms.current == ["kitchen", "study"] }, "the room added")
+        await settleUntil(
+            { model.busy == nil && model.rows[0].rooms == ["kitchen", "study"] },
+            "the room added"
+        )
+        XCTAssertEqual(house.rooms.current, ["kitchen", "study"])
 
         model.toggleRoom(model.rows[0], PrintingRoom(id: "kitchen", label: "Kitchen"))
-        await settleUntil({ house.rooms.current == ["study"] }, "the room taken off")
+        await settleUntil(
+            { model.busy == nil && model.rows[0].rooms == ["study"] },
+            "the room taken off"
+        )
+        XCTAssertEqual(house.rooms.current, ["study"])
         model.stop()
     }
 
@@ -508,11 +516,14 @@ final class PrintersPanelModelTests: XCTestCase {
         await settleUntil({ house.asked.current.contains("/api/print/jobs/3/cancel") }, "the cancel")
 
         // A finished job has no cancel control, and asking anyway sends
-        // nothing.
-        let before = house.asked.current.count
+        // nothing. Counted by path rather than in total: the cancel that DID
+        // go out re-reads the log, and that read lands whenever it lands.
         model.cancelJob(jobs[0], on: 1)
         for _ in 0..<200 { await Task.yield() }
-        XCTAssertEqual(house.asked.current.count, before)
+        XCTAssertTrue(
+            house.asked.current.allSatisfy { $0 != "/api/print/jobs/1/cancel" },
+            "a finished job was cancelled"
+        )
 
         model.toggleJobs(model.rows[0])
         XCTAssertFalse(model.showingJobs.contains(1))
