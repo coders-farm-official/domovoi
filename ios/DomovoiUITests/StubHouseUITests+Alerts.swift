@@ -9,22 +9,19 @@ import XCTest
 // does, that nothing asks for the permission at launch, and that neither of
 // Android's two exact-alarm sentences came across.
 //
-// ### Five of the seven cannot run yet, and say so rather than passing
+// ### Five of the seven were unmeasured on train S003, and are not any more
 //
-// The row is built (`ios/Domovoi/Alerts/AlertsHintRowView.swift`) and so is
-// the engine that posts (`DomovoiKit/AlertsEngine.swift`), and **nothing
-// mounts or starts either**: both hooks are lines in
-// `ios/Domovoi/DomovoiApp.swift` and `ios/Domovoi/Home/HomeTimersView.swift`,
-// shared files this item may not edit (NIGHT-RULES §2). The three lines are
-// written out in `design-notes/ios/overnight/alerts/DECISIONS.md` §2 for
-// whoever merges.
+// The row and the engine were both built and **nothing mounted or started
+// either**, so five cases threw `XCTSkip` naming the missing hook rather than
+// passing against an app that could not do the thing — a skip is an honest
+// "unmeasured", where a green tick would have been the `TokenVault`-shaped lie
+// this track has a memory file about.
 //
-// Those five cases therefore **skip**, with the hook named in the skip
-// message, rather than passing against an app that cannot do the thing. A
-// skip is an honest "unmeasured"; a green tick here would be the
-// `TokenVault`-shaped lie this track has a memory file about. They are written
-// now so the train that follows the hook measures them, instead of a later one
-// having to write them from scratch.
+// The hook landed after that train (`ios/Domovoi/Alerts/AlertsAppWiring.swift`
+// plus two lines in `DomovoiApp.swift` and three in `HomeTimersView.swift`),
+// so these five now measure for real. The two `require…` guards below are
+// **kept**: if a later merge drops the hook, the right answer is still
+// "unmeasured" and not "passed".
 //
 // ### Run order is load-bearing, and the names carry it
 //
@@ -120,21 +117,21 @@ extension StubHouseUITests {
     /// case goes green — is the one thing NIGHT-RULES §5 forbids outright.
     ///
     /// The skip cannot tell "the hook is missing" from "the row is broken",
-    /// and that is stated rather than hidden: while the hook is absent every
-    /// one of these cases is unmeasured, which is what `REPORT.md` says in as
-    /// many words. The moment DECISIONS §2 is applied, the skip stops firing
-    /// and all five become real measurements with no edit.
+    /// and that is stated rather than hidden. It fired for every one of these
+    /// cases on train S003, where the hook was absent; it is kept because the
+    /// honest answer to a merge that drops the hook again is still
+    /// "unmeasured" and not "passed".
     @MainActor
     func requireAlertsRow(_ app: XCUIApplication) throws {
         guard !alertsHintRow(in: app).waitForExistence(timeout: 20) else { return }
         evidence(app, "alerts-row-not-mounted")
         throw XCTSkip(
             "UNMEASURED: no `\(Self.alertsOffRow)` row on Home. The row is built "
-                + "(ios/Domovoi/Alerts/AlertsHintRowView.swift) and nothing mounts it: "
-                + "HomeTimersView.swift and DomovoiApp.swift are shared files this item "
-                + "may not edit. Apply the two hooks in "
-                + "design-notes/ios/overnight/alerts/DECISIONS.md §2 and this case measures "
-                + "for real."
+                + "(ios/Domovoi/Alerts/AlertsHintRowView.swift) and something has to mount "
+                + "it: `AlertsHintRowView` in HomeTimersView's card, and DomovoiApp "
+                + "putting AlertsAppWiring's hint model into the environment. Both "
+                + "landed after train S003 — if this fires again, a merge dropped one of "
+                + "them (design-notes/ios/overnight/alerts/DECISIONS.md §2)."
         )
     }
 
@@ -431,12 +428,12 @@ extension StubHouseUITests {
     /// iOS does not show a banner for a local notification delivered while
     /// the app is in the **foreground** unless the app's
     /// `UNUserNotificationCenterDelegate` returns `.banner` from
-    /// `willPresent`. There is no delegate yet — it is DECISIONS §2's hook 4,
-    /// a line in `DomovoiApp.swift` — and `willPresent` is not in that hook
-    /// as the mapper wrote it. **That is a finding, not a test problem**, and
-    /// it is written into DECISIONS §2 as the fourth hook's second half. Until
-    /// then the honest place to look is where iOS really puts it: the
-    /// notification list.
+    /// `willPresent`. ``AlertsTapDelegate`` now returns it, which was a
+    /// finding of this case rather than a test problem: the mapper's hook 4
+    /// had `didReceive` only, and an app that answers neither swallows its own
+    /// alert. The case still looks in the notification **list** first and
+    /// falls back to pulling Notification Centre down, because a banner that
+    /// has already auto-dismissed is not evidence of anything either way.
     ///
     /// Named to sort **last**: it is the only case that needs a phone that
     /// can post, and the grant comes from the case before it.
@@ -489,10 +486,11 @@ extension StubHouseUITests {
 
         guard delivered else {
             throw XCTSkip(
-                "UNMEASURED: no notification titled `\(Self.alertsFireTitle)`. Nothing "
-                    + "starts AlertsCenter — DomovoiApp.swift is a shared file this item "
-                    + "may not edit; apply DECISIONS §2's hooks 1 and 4 (including the "
-                    + "`willPresent` half) and this case measures for real."
+                "UNMEASURED: no notification titled `\(Self.alertsFireTitle)`. "
+                    + "`AlertsAppWiring` is what starts AlertsCenter and sets the "
+                    + "`willPresent` delegate, and `DomovoiApp` is its only caller — if "
+                    + "this fires again, a merge dropped that line, or the ledger's one "
+                    + "fire aged past alertsFirstRunWindowMs before the launch."
             )
         }
         XCTAssertTrue(

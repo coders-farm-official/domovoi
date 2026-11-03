@@ -37,22 +37,27 @@ import SwiftUI
 ///    suspended, so a container incident that opens meanwhile is never
 ///    notified (DECISIONS §10), and no wording here implies otherwise.
 ///
-/// ### Where it is mounted, and why not yet
+/// ### Where it is mounted
 ///
-/// Nowhere, today. The row belongs above the first timer row on Home's timers
-/// card, which is `HomeSections.kt:396-407`'s position exactly — and
-/// `ios/Domovoi/Home/HomeTimersView.swift` is a shared file this item may not
-/// edit (NIGHT-RULES §2). The hook is written out in
-/// `design-notes/ios/overnight/alerts/DECISIONS.md` §2 for whoever merges, and
-/// the UI cases that measure this row skip with that reference until it lands.
+/// Above the first timer row on Home's timers card
+/// (`ios/Domovoi/Home/HomeTimersView.swift`), which is
+/// `HomeSections.kt:396-407`'s position exactly. The first Simulator train
+/// skipped five of this item's seven cases because nothing mounted it; the
+/// hook landed after that train, and `DECISIONS.md` §2 records what was
+/// applied and the one place it departs from what the mapper wrote.
 ///
-/// It is **two** lines there and not one, because the read belongs to the
-/// screen and the drawing to the row: `.alertsHintLifecycle(alerts)` on Home's
-/// root is `HomeScreen.kt:241-247`'s `ON_RESUME` re-read, and this view is
-/// `HomeSections.kt:396`'s row. A row that read its own status could not: it
-/// is not drawn until the status is known, so its own `.task` would never run
-/// — and the whole of what it has to notice is a person coming back from
-/// Settings having turned notifications on.
+/// It is **two** things and not one, because the read belongs to the screen
+/// and the drawing to the row: ``AlertsHintLifecycle`` is
+/// `HomeScreen.kt:241-247`'s `ON_RESUME` re-read and sits on the app's root
+/// (``DomovoiApp``), while this view is `HomeSections.kt:396`'s row. A row
+/// that read its own status could not: it is not drawn until the status is
+/// known, so its own `.task` would never run — and the whole of what it has
+/// to notice is a person coming back from Settings having turned
+/// notifications on.
+///
+/// The model reaches this row through
+/// ``EnvironmentValues/alertsHintModel`` rather than a parameter, for the
+/// reason that property's own comment gives.
 ///
 /// ### What a person has to confirm on a screen
 ///
@@ -172,8 +177,10 @@ struct AlertsHintRowView: View {
 /// back, and a `.task` without the `scenePhase` half misses exactly that
 /// person.
 ///
-/// It goes on **Home's root**, not on the row. The row is not drawn until the
-/// status is known, so a `.task` of its own would never run.
+/// It goes on the **app's root** (``DomovoiApp``) and not on the row. The row
+/// is not drawn until the status is known, so a `.task` of its own would never
+/// run — and the overlay it carries is a modal dialog, which a tab switch
+/// must not be able to take away mid-sentence.
 struct AlertsHintLifecycle: ViewModifier {
 
     let model: AlertsHintModel

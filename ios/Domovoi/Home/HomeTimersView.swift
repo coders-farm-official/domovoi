@@ -21,14 +21,24 @@ import SwiftUI
 /// minute wrong. The date and today's grouping use the phone's. Two clocks,
 /// and this is the one that is not the obvious one.
 ///
-/// ### Neither alert-hint row is here
+/// ### One alert-hint row is here now, and the other never will be
 ///
-/// Owner decision, 2026-10-30, settled rather than deferred: `Timer alerts
-/// are off on this phone` and `Timers may ring a few minutes late on this
-/// phone` are not ported, because this app schedules no local notifications
-/// and a row offering to turn on an alert that will never ring is the
-/// misleading control the owner has ruled out. `HomeTimers.swift`'s header
-/// carries the reasoning and the price of bringing it back.
+/// The owner decision of 2026-10-30 left both rows out — `Timer alerts are
+/// off on this phone` and `Timers may ring a few minutes late on this phone`
+/// — because this app scheduled no local notifications, so a row offering to
+/// turn on an alert that would never ring was the misleading control the
+/// owner has ruled out. It named its own condition: *if local timer alerts
+/// are ever built here, the row comes back with them and not before.*
+///
+/// The overnight `alerts` item built them (``AlertsCenter``,
+/// `DomovoiKit/AlertsEngine.swift`), so the condition is met and the first
+/// row is back, one line below — ``AlertsHintRowView``, drawn above the first
+/// timer row as `HomeSections.kt:396-407` draws it.
+///
+/// The **second** row stays out for good: there is no exact-alarm grant on an
+/// iPhone, so that sentence would describe nothing and its `allow alarms`
+/// link would open nothing (`StubHouseUITests+Alerts.swift`'s
+/// `testAlerts_NoLateRingRowOrAllowAlarmsLink` is what keeps it out).
 ///
 /// ### What a person has to confirm on a screen
 ///
@@ -79,6 +89,11 @@ struct HomeTimersView: View {
 
     @Environment(\.dynamicTypeSize) private var typeSize
 
+    /// The alerts' hint model, put into the environment by ``DomovoiApp``
+    /// (``AlertsAppWiring``). Nil in a preview, which is why it is optional
+    /// and not a parameter.
+    @Environment(\.alertsHintModel) private var alertsHint
+
     private var compact: Bool { ShellWidth(sizeClass) == .compact }
 
     /// `HOME_PHONE_TIMERS = 2` on a phone, every row on a wide pane
@@ -106,6 +121,16 @@ struct HomeTimersView: View {
                 onAction: onMore
             ) {
                 VStack(alignment: .leading, spacing: 14) {
+                    // `AlertHintRow`, above the first timer row, which is
+                    // `HomeSections.kt:396-407`'s position exactly. One of
+                    // the two cases only — see ``AlertsHintRowView`` for the
+                    // exact-alarm sentence that has no iPhone counterpart.
+                    // `shown` is read here and not only inside the row so
+                    // that a card with no hint gets no 14-point gap where
+                    // the row would be.
+                    if let alertsHint, alertsHint.shown {
+                        AlertsHintRowView(model: alertsHint)
+                    }
                     ForEach(shownTimers, id: \.id) { timer in
                         row(timer)
                     }
