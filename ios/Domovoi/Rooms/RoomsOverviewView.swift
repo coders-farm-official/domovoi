@@ -155,8 +155,23 @@ struct RoomsOverviewView: View {
     /// dozens of values and one discrete value. A POST per slider step would
     /// both flood the room and arrive out of order, so the level that stuck
     /// would be whichever request the server handled last.
+    ///
+    /// All three are **gated on presence**, as Android's are
+    /// (`Slider(..., enabled = online)` and `IconButton(..., enabled = online)`,
+    /// `SatOverviewTab.kt:304-320`): `POST …/volume` proxies to
+    /// `/v1/admin/satellite/set-volume` and its own docstring says it 404s
+    /// when the room isn't connected (`web/backend/api/satellites.py:1557-1573`),
+    /// so a drag on an offline room could only ever raise a failure toast.
+    /// That is the control Kamron's no-misleading-controls rule forbids. The
+    /// announce field below is the other shape of the same rule: it stays
+    /// enabled because ``RoomsModel/announce(to:)`` answers offline itself,
+    /// in words, without sending.
     private var volume: some View {
         let state = reads.volumeLevel(room)
+        // The help line says whether this *board* reports its level, which is
+        // not ``state.known`` — that one also becomes true the moment the
+        // thumb is touched. See ``RoomsRoomModel/volumeLevel(_:)``.
+        let serverKnown = roomsVolumeLevel(room) != nil
         return VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 RoomsSectionLabel(text: RoomsStrings.volumeLabel)
@@ -181,7 +196,7 @@ struct RoomsOverviewView: View {
             Text(
                 RoomsStrings.volumeHelp(
                     room: room.roomID,
-                    levelKnown: state.known,
+                    levelKnown: serverKnown,
                     online: room.online
                 )
             )
@@ -205,6 +220,7 @@ struct RoomsOverviewView: View {
         // which room's.
         .accessibilityLabel(RoomsStrings.volumeFor(room: room.roomID))
         .accessibilityValue("\(level)%")
+        .disabled(!room.online)
     }
 
     private var nudges: some View {
@@ -226,6 +242,7 @@ struct RoomsOverviewView: View {
         .buttonStyle(.plain)
         .foregroundStyle(Color.brandInk)
         .accessibilityLabel(label)
+        .disabled(!room.online)
     }
 
     // MARK: - announce to this room (`AnnounceSection`, `SatOverviewTab.kt:336`)

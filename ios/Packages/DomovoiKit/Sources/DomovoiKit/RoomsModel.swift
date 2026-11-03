@@ -106,10 +106,22 @@ public final class RoomsModel {
     /// Public because every relative time on this screen — `2h ago`,
     /// `fires in 3m`, a timer's remaining seconds — is rendered in a view
     /// against the same clock the rules take, and ``nowMs`` itself is the
-    /// injected closure the tests replace. Reading it does not observe
-    /// anything; what redraws these lines once a second is ``extraSec``,
-    /// which the tick writes and the same bodies read.
-    public var clockMs: Int64 { nowMs() }
+    /// injected closure the tests replace.
+    ///
+    /// It reads the **stored** ``tickedMs``, so a body that reads it is an
+    /// `@Observable` dependent of the tick and is redrawn once a second.
+    /// Reading the `nowMs` closure alone registers nothing — a computed
+    /// property over a `let` closure is not observed, and the timers tab's
+    /// countdown froze for exactly that reason. `max` of the two so a redraw
+    /// for any other reason still sees a current clock, which is what
+    /// ``HomeModel/nowMs`` does (`HomeScreen.kt:131`).
+    public var clockMs: Int64 { max(tickedMs, nowMs()) }
+
+    /// The wall clock as of the last ``tick()``. Stored, and therefore
+    /// observed; see ``clockMs``. Android ticks for the same reason
+    /// (`SatHistoryTabs.kt:447-453`, "1s tick so the remaining column counts
+    /// down between fetches").
+    public private(set) var tickedMs: Int64
 
     /// Seconds to add to each room's reported `elapsed_sec`, so the song
     /// clocks move between reads (`SatellitesScreen.kt:108`).
@@ -159,6 +171,7 @@ public final class RoomsModel {
         self.nowMs = nowMs
         self.wait = wait
         self.tickBaseMs = nowMs()
+        self.tickedMs = nowMs()
 
         let client = container.client
         self.roster = ApiRead(in: container, eventTypes: Self.rosterEvents) {
@@ -275,7 +288,12 @@ public final class RoomsModel {
     /// real second going by, and so the view's `TimelineView` is not the only
     /// thing that can.
     public func tick() {
-        extraSec = max(0, Double(nowMs() - tickBaseMs) / 1000)
+        let now = nowMs()
+        extraSec = max(0, Double(now - tickBaseMs) / 1000)
+        // Written beside ``extraSec`` because the song clocks are not the only
+        // thing that moves per second: every relative time and the timers
+        // tab's remaining column read ``clockMs``, which reads this.
+        tickedMs = now
     }
 
     private func restartTickLoop() {
@@ -553,11 +571,20 @@ public final class RoomsRoomModel {
         timerScopeOverride ?? room?.timersOwnOnly ?? false
     }
 
-    /// The level to draw, and whether the server has ever reported one
+    /// The level to draw, and whether there is a level worth printing
     /// (`SatOverviewTab.kt:231-294`).
+    ///
+    /// `known` is Android's `known || touched` (`:291-295`) and **not** "the
+    /// server reported a level": a board that has never reported one is still
+    /// told to move the slider (``RoomsStrings/volumeHelp(room:levelKnown:online:)``),
+    /// and a read-out that stayed at `unknown` while the thumb moved would
+    /// contradict that instruction. ``volumeDraft`` is non-nil exactly once
+    /// the slider or a nudge has been used, which is `touched`. The help line
+    /// still takes the server's own answer — `roomsVolumeLevel(room) != nil` —
+    /// because what it says is whether this board reports its level at all.
     public func volumeLevel(_ room: RoomsSatellite?) -> (level: Int, known: Bool) {
         let server = room.flatMap { roomsVolumeLevel($0) }
-        if let draft = volumeDraft { return (draft, server != nil) }
+        if let draft = volumeDraft { return (draft, true) }
         return (server ?? 50, server != nil)
     }
 
@@ -566,6 +593,21 @@ public final class RoomsRoomModel {
     public func followServerVolume(_ room: RoomsSatellite?) {
         guard !volumeDirty, let level = room.flatMap({ roomsVolumeLevel($0) }) else { return }
         volumeDraft = level
+    }
+
+    /// A fresh roster landed: drop the timer-scope override once the server
+    /// has caught up to it (`SatOverviewTab.kt:415-417`,
+    /// `LaunchedEffect(s.timers_own_only) { if (!busy && override == s.timers_own_only) override = null }`).
+    ///
+    /// Without this half the optimistic value is permanent: ``timerScopeOn``
+    /// prefers the override, so a change made from the dashboard or another
+    /// phone — or a PUT the core later reverts — could never move the switch
+    /// again while the screen is up. The override is dropped only when it
+    /// **agrees** with the roster, so a roster that landed mid-write does not
+    /// flick the switch back under the finger.
+    public func followServerTimerScope(_ room: RoomsSatellite?) {
+        guard busy == nil, let on = room?.timersOwnOnly, timerScopeOverride == on else { return }
+        timerScopeOverride = nil
     }
 
     /// The conversations tab's filtered turns and its `"2 of 7"` count.

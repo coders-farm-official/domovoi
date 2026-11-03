@@ -684,6 +684,69 @@ final class RoomsModelTests: XCTestCase {
         XCTAssertTrue(reads.timerScopeOn(kitchen), "rolled back to the position it was in")
     }
 
+    /// The optimistic switch is **dropped** once the roster agrees with it.
+    ///
+    /// Without this the override is permanent: ``RoomsRoomModel/timerScopeOn(_:)``
+    /// prefers it, so a change made from the dashboard or another phone could
+    /// never move the switch again while the screen is up. Android drops it in
+    /// a `LaunchedEffect(s.timers_own_only)` (`SatOverviewTab.kt:415-417`) and
+    /// this is that half.
+    func testTheSwitchFollowsTheServerAgainOnceItAgrees() async {
+        let house = House()
+        let (model, _, _, _) = rig(house: house)
+        await loaded(model)
+        let reads = model.reads(for: "kitchen")
+
+        model.setTimerScope(model.rooms[0], on: true)
+        await settleUntil({ model.toast != nil }, "the PUT")
+        _ = model.takeToast()
+        XCTAssertEqual(true, reads.timerScopeOverride, "still optimistic until the roster lands")
+
+        // The server caught up. Only now may the override go.
+        house.roster.set(house.roster.current.replacingOccurrences(
+            of: #""timers_own_only":false"#,
+            with: #""timers_own_only":true"#
+        ))
+        model.roster.refresh()
+        await settleUntil({ model.rooms.first?.timersOwnOnly == true }, "the fresh roster")
+        reads.followServerTimerScope(model.rooms[0])
+        XCTAssertNil(reads.timerScopeOverride, "the override agreed with the server, so it goes")
+        XCTAssertTrue(reads.timerScopeOn(model.rooms[0]), "and the switch still reads on")
+
+        // A roster that says the OTHER thing is a change this phone has not
+        // seen land yet; dropping the override there would flick the switch
+        // back under the finger, so it stays.
+        reads.timerScopeOverride = false
+        reads.followServerTimerScope(model.rooms[0])
+        XCTAssertEqual(false, reads.timerScopeOverride, "a disagreeing roster does not clear it")
+    }
+
+    /// A board that never reported its level still shows the level being set.
+    ///
+    /// ``RoomsStrings/volumeHelp(room:levelKnown:online:)`` tells the person to
+    /// move the slider in exactly this state, so a read-out frozen on
+    /// `unknown` while the thumb moves contradicts the screen's own
+    /// instruction. Android's read-out is `known || touched`
+    /// (`SatOverviewTab.kt:291-295`).
+    func testASliderOnABoardThatReportsNoLevelStillShowsWhatIsBeingSet() async {
+        let house = House()
+        // The nine-field row: no `volume` at all.
+        house.roster.set("""
+        [{"room_id":"kitchen","status":"online","last_connected_at":"2026-11-02T18:00:00Z"}]
+        """)
+        let (model, _, _, _) = rig(house: house)
+        await loaded(model)
+        let reads = model.reads(for: "kitchen")
+        let before = reads.volumeLevel(model.rooms[0])
+        XCTAssertEqual(50, before.level, "the fallback, since nothing was reported")
+        XCTAssertFalse(before.known, "and it is honestly unknown until something touches it")
+
+        model.volumeDragged(model.rooms[0], to: 72)
+        let after = reads.volumeLevel(model.rooms[0])
+        XCTAssertEqual(72, after.level)
+        XCTAssertTrue(after.known, "a touched slider has a level worth printing")
+    }
+
     // MARK: - quiet hours
 
     /// Custom hours that are not both clock times **send nothing**: a screen

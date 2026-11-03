@@ -305,7 +305,11 @@ extension RoomsModel {
                 guard let self, self.stillHome(epoch) else { return }
                 let reads = self.reads(for: roomID)
                 reads.busy = nil
-                reads.timerScopeOverride = previous
+                // `null` and not `previous` when the roster already says
+                // that: the override's job is to differ from the server, and
+                // one left equal to it would pin the switch for good
+                // (`SatOverviewTab.kt:415-417`).
+                reads.timerScopeOverride = (previous == room.timersOwnOnly) ? nil : previous
                 self.say(roomsFailure("change timer announcements", error))
             }
         }

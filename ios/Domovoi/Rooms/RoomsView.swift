@@ -107,12 +107,15 @@ struct RoomsView: View {
             }
             // A fresh roster landed: the open room's slider follows the
             // server's level again unless a drag is still in flight
-            // (`SatOverviewTab.kt:251`). Keyed on when the data landed rather
-            // than on the rooms themselves, so a payload that says the same
-            // thing does not re-write a draft.
+            // (`SatOverviewTab.kt:251`), and the timer-scope switch drops its
+            // optimistic override once the server agrees with it
+            // (`SatOverviewTab.kt:415-417`). Keyed on when the data landed
+            // rather than on the rooms themselves, so a payload that says the
+            // same thing does not re-write a draft.
             .onChange(of: rooms?.roster.dataAt) { _, _ in
                 guard let rooms else { return }
                 rooms.openReads?.followServerVolume(rooms.openRoom)
+                rooms.openReads?.followServerTimerScope(rooms.openRoom)
             }
             .onChange(of: model.inputs.serverURL) { _, _ in
                 guard visible else { return }

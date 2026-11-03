@@ -32,19 +32,20 @@ import XCTest
 ///  * ``testRooms_VolumeSendsTheLevelOnce`` drags from the fallback 50 rather
 ///    than from a reported level.
 ///
-/// ### One collision with another overnight item, recorded rather than worked
-/// around
+/// ### The other item that claims these paths stands down, and the house
+/// really serves ours
 ///
-/// `fixtures/manual.py` (the `manual` item) claims `/api/satellites/` **and**
-/// `/api/config/version`, and answers `…/{room}/sessions` itself — with an
-/// empty array unless its own control route seeded its rooms. Modules are
-/// offered a request in **name order**, so `manual` answers the sessions read
-/// before `rooms` ever sees it. Nothing in this item's files can change that
-/// (renaming either module, or giving the house a declared order, is a shared
-/// change), so ``testRooms_SessionsTabSaysWhatTheServerAnswered`` asserts the
-/// empty state that the house really produces, and the session row's own
-/// decisions — its subtitle, its duration, `person #4` — stay covered by
-/// `RoomsRulesTests`. DECISIONS says what the one-line fix would be.
+/// `fixtures/manual.py` (the `manual` item) also claims `/api/satellites/`
+/// and `/api/config/version`, and it sorts first — but both of its branches
+/// open with `if _claimed_elsewhere(house, …): return False`
+/// (`fixtures/manual.py:452`, `:494-499`), and a module that returns `False`
+/// leaves the request to the next one (`stubhouse.py:818-830`). `rooms.py`
+/// lists both in its `PREFIXES`, so it is the module that answers them.
+/// Curled against a local house on this item's port, `…/kitchen/sessions`
+/// returns this fixture's two sessions and `/api/config/version` returns its
+/// `aaaa111`. An earlier revision of this file assumed the opposite and
+/// asserted the sessions tab's **empty state**; that case would have failed
+/// on the train, and it is now written against what the house serves.
 extension StubHouseUITests {
 
     // MARK: - getting there
@@ -790,29 +791,143 @@ extension StubHouseUITests {
         }
     }
 
-    /// The sessions tab says what the server answered.
+    /// The sessions tab draws the room's sessions, and a tap expands one into
+    /// **its own** turns.
     ///
-    /// The server here is `fixtures/manual.py`, which claims
-    /// `/api/satellites/` and answers `…/{room}/sessions` with an empty array
-    /// before `fixtures/rooms.py` is offered the request (see this
-    /// extension's note). So the honest assertion is the empty state, plus
-    /// that it is **not** the error branch — a read that 500ed and a room with
-    /// no sessions are different screens, and that difference is the whole of
-    /// what this tab decides.
+    /// The two decisions this tab makes are both asserted with data that
+    /// discriminates:
+    ///
+    ///  * the subtitle shows the **first eight characters** of a uuid — the
+    ///    fixture's ids are full-length on purpose, so a port that printed the
+    ///    whole thing would not match `3fa85f64` as a prefix of the row's own
+    ///    short form — and `person #4` is on the attributed session and absent
+    ///    from the other;
+    ///  * tapping expands `roomsTurns(of:in:)`, which filters the
+    ///    conversations read by `session_id`. `marmalade` is in turn 101
+    ///    (session `3fa85f64…`) and `turn the lamp off` is turn 104 (session
+    ///    `7b1d2c48…`), so a filter that was dropped — or keyed on the room
+    ///    instead — shows both and fails here.
     @MainActor
-    func testRooms_SessionsTabSaysWhatTheServerAnswered() throws {
+    func testRooms_SessionsTabExpandsOneSessionsOwnTurns() throws {
         let app = roomsOpen()
         XCTAssertTrue(roomsOpenRoom(app, "kitchen"), "the kitchen card did not open")
         XCTAssertTrue(roomsTab(app, RoomsStringsUnderTest.tabSessions), "no sessions tab")
+
         XCTAssertTrue(
-            roomsWaitFor(app, RoomsStringsUnderTest.noSessions),
-            "the sessions tab drew neither sessions nor its empty state"
+            roomsWaitFor(app, "3fa85f64"),
+            "the sessions tab never drew the first session's short id"
+        )
+        // Both rows are `accessibilityElement(children: .combine)`, so each
+        // row's words are one label: `3 turns`, the subtitle and `last …`.
+        XCTAssertTrue(
+            containing(app, "3 turns").exists,
+            "the attributed session's turn count is not drawn"
+        )
+        XCTAssertTrue(
+            containing(app, "person #4").exists,
+            "`person #4` is not drawn on the session that has a person"
+        )
+        XCTAssertTrue(
+            containing(app, "7b1d2c48").exists,
+            "the unattributed session is not drawn at all"
         )
         evidence(app, "rooms-28-sessions")
-        XCTAssertFalse(
-            containing(app, "HTTP 5").exists,
-            "the sessions tab is showing a transport failure, not an empty room"
+
+        let first = app.buttons
+            .matching(NSPredicate(format: "label CONTAINS %@", "3fa85f64"))
+            .firstMatch
+        XCTAssertTrue(first.waitForExistence(timeout: 20), "the first session is not a button")
+        first.tap()
+        XCTAssertTrue(
+            roomsWaitFor(app, "marmalade"),
+            "tapping the session did not expand its turns"
         )
+        XCTAssertFalse(
+            containing(app, "turn the lamp off").exists,
+            "the expanded session is showing the OTHER session's turn, so the "
+                + "`session_id` filter is not being applied"
+        )
+        evidence(app, "rooms-28b-session-turns")
+    }
+
+    /// The timers tab's remaining column counts down between fetches.
+    ///
+    /// The clock is the point: `pasta water` is seeded 480 s out, so its
+    /// remaining column is the only one on the tab in single-digit minutes —
+    /// `laundry` is `1h 30m` and the masked reminder is `50m 00s`, so a
+    /// `^<d>m <dd>s$` match picks the one row that matters without depending
+    /// on the exact second the read landed. A `clockMs` that is not
+    /// observable — a
+    /// computed property over the injected closure, which is what shipped
+    /// first — freezes the text at whatever it was when the tab was built, and
+    /// this case is what fails. Android ticks for the same reason
+    /// (`SatHistoryTabs.kt:447-453`).
+    @MainActor
+    func testRooms_TimerRemainingCountsDown() throws {
+        let app = roomsOpen()
+        XCTAssertTrue(roomsOpenRoom(app, "kitchen"), "the kitchen card did not open")
+        XCTAssertTrue(roomsTab(app, RoomsStringsUnderTest.tabTimers), "no timers tab")
+        XCTAssertTrue(roomsWaitFor(app, "pasta water"), "the timers tab drew no timer")
+
+        let countdown = NSPredicate(format: "label MATCHES %@", "^[0-9]m [0-5][0-9]s$")
+        let column = app.staticTexts.matching(countdown).firstMatch
+        XCTAssertTrue(
+            column.waitForExistence(timeout: 20),
+            "no single-digit-minute remaining column for a timer seeded 480s out"
+        )
+        let before = column.label
+        evidence(app, "rooms-33b-countdown-before")
+
+        // Four seconds, not one: the tick's period is a second and the first
+        // one may already have gone by when the label was read.
+        Thread.sleep(forTimeInterval: 4)
+        let frozen = app.staticTexts.matching(NSPredicate(format: "label == %@", before)).firstMatch
+        if frozen.exists {
+            print("=== THE COUNTDOWN DID NOT MOVE (still \(before)) — tree follows ===")
+            print(app.debugDescription)
+        }
+        XCTAssertFalse(
+            frozen.exists,
+            "the remaining column still reads \(before) four seconds on, so nothing "
+                + "in the timers tab is redrawn by the tick"
+        )
+        let after = app.staticTexts.matching(countdown).firstMatch
+        XCTAssertTrue(after.exists, "the remaining column is gone, not counting down")
+        XCTAssertNotEqual(after.label, before, "the countdown is frozen")
+        evidence(app, "rooms-33c-countdown-after")
+    }
+
+    /// An offline room's volume controls are not live.
+    ///
+    /// `POST …/volume` 404s when the room isn't connected
+    /// (`web/backend/api/satellites.py:1557-1573`), so a slider that could be
+    /// dragged there is the control Kamron's rule forbids; Android gates all
+    /// three on `enabled = online` (`SatOverviewTab.kt:304-320`). The house's
+    /// `study` is offline and its `kitchen` is not, so this discriminates: the
+    /// same assertion is made the other way round on `kitchen`.
+    @MainActor
+    func testRooms_VolumeIsNotLiveForAnOfflineRoom() throws {
+        let app = roomsOpen()
+        XCTAssertTrue(roomsOpenRoom(app, "study"), "the study card did not open")
+        let slider = app.sliders.firstMatch
+        XCTAssertTrue(slider.waitForExistence(timeout: 20), "the study has no volume slider")
+        XCTAssertFalse(
+            slider.isEnabled,
+            "the volume slider is live for an offline room, and every POST it sends 404s"
+        )
+        XCTAssertFalse(
+            app.buttons[RoomsStringsUnderTest.louder].isEnabled,
+            "the `louder` nudge is live for an offline room"
+        )
+        evidence(app, "rooms-20b-volume-offline")
+
+        let closer = app.buttons[RoomsStringsUnderTest.closeRoom]
+        XCTAssertTrue(closer.exists, "no close control on the study")
+        closer.tap()
+        XCTAssertTrue(roomsOpenRoom(app, "kitchen"), "the kitchen card did not open")
+        let live = app.sliders.firstMatch
+        XCTAssertTrue(live.waitForExistence(timeout: 20), "the kitchen has no volume slider")
+        XCTAssertTrue(live.isEnabled, "the volume slider is disabled for a room that IS online")
     }
 
     /// The notes tab draws the room's notes.
@@ -964,6 +1079,10 @@ enum RoomsStringsUnderTest {
     /// ``RoomsStrings/volumeSet(room:level:)``'s start, without the level.
     static let volumeSetPrefix = "kitchen volume set to"
 
+    /// The `+5` nudge's accessibility label (``RoomsStrings/louder``), which
+    /// is the only words that icon-only button has.
+    static let louder = "louder"
+
     static let timerScopeLabel = "Only reminders for this device"
     /// ``RoomsStrings/timerScopeToast(room:on:)`` with `on: true`.
     static let ownTimersOnly = "kitchen now announces only its own timers and reminders"
@@ -1004,6 +1123,10 @@ enum RoomsStringsUnderTest {
         "restarting and upgrading a room are done from the dashboard on a computer"
     static let configIsReadOnly = "Changing any of it is done from the dashboard on a computer."
 
+    /// The sessions tab's empty state. No UI case asserts it — the house
+    /// really serves two sessions (see this extension's header) — but it is
+    /// the string a case for an empty room would need, and
+    /// `RoomsRulesTests` pins the wording.
     static let noSessions = "no sessions in this room"
 
     static let tabSessions = "sessions"

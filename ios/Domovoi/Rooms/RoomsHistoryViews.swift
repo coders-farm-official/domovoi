@@ -464,8 +464,12 @@ struct RoomsTimerRow: View {
     @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
-        // ``RoomsModel/extraSec`` is what redraws this once a second: the tick
-        // writes it and this body reads the clock beside it.
+        // ``RoomsModel/clockMs`` is what redraws this once a second, and it
+        // only does so because it reads the **stored** ``RoomsModel/tickedMs``
+        // — an `@Observable` dependency. The first revision of this comment
+        // claimed ``RoomsModel/extraSec`` did it, which nothing in this
+        // subtree reads, and the countdown was frozen from the moment the tab
+        // was built (`SatHistoryTabs.kt:447-453` ticks for the same reason).
         let left = roomsRemainingSec(expiresAt: timer.expiresAt, nowMs: model.clockMs)
         return VStack(alignment: .leading, spacing: 6) {
             if typeSize.isAccessibilitySize {
