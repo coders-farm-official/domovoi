@@ -222,6 +222,66 @@ extension StubHouseUITests {
     /// key is hittable, so hittability cannot tell them apart. The keyboard's
     /// top edge can: anything above it is this screen's.
     /// (`StubHouseUITests.swift`'s own note on `firstMatch`.)
+    /// Scroll **this screen's** scroll view until `element` is built.
+    ///
+    /// Not ``StubHouseUITests/scrollUntilBuilt(_:_:flicks:)``: that one drives
+    /// `app.collectionViews.firstMatch`, and its own doc says why — "the list
+    /// is a `UICollectionView` because Chat's rows need `swipeActions`"
+    /// (`ChatView.swift:202` is a `List`). Images is
+    /// `ScrollView { LazyVStack }` (`ImagesView.swift:99-102`), the shape
+    /// Files, Videos and Home have, and a SwiftUI `ScrollView` reports as
+    /// `.scrollView` and **never** as `.collectionView`. On an iPhone there
+    /// is no collection view anywhere in the pushed Images hierarchy — the
+    /// only other `List` is `SidebarList` (`WorkspaceView.swift:294`), which
+    /// is the regular size class only — so the shared helper waited its
+    /// twenty seconds, printed `NO LIST TO SCROLL` and returned false. Six
+    /// cases then failed on the history half of the screen while blaming the
+    /// app for a key read wrong (2026-11-02 review).
+    ///
+    /// The page is taken as the **tallest** scroll view, not `firstMatch`:
+    /// the composer's own field and the picker's menu each put one in the
+    /// tree, and the one worth flicking is the one that is the page.
+    /// `.slow` for ``StubHouseUITests/scrollUntilBuilt(_:_:flicks:)``'s
+    /// measured reason — a plain `swipeUp()` steps over a row.
+    @MainActor
+    func imagesScrollUntilBuilt(
+        _ app: XCUIApplication,
+        _ element: XCUIElement,
+        flicks: Int = 30
+    ) -> Bool {
+        guard let page = imagesPage(app) else {
+            print("=== NO SCROLL VIEW TO SCROLL — tree follows ===")
+            print(app.debugDescription)
+            return false
+        }
+        for _ in 0..<flicks {
+            if element.exists { return true }
+            page.swipeUp(velocity: .slow)
+        }
+        if !element.exists {
+            print("=== \(flicks) FLICKS AND STILL UNBUILT — tree follows ===")
+            print(app.debugDescription)
+        }
+        return element.exists
+    }
+
+    /// The other direction, for a measurement that has to walk down from the
+    /// top of the page twice ([[audit-reports-one-issue]], and Chat's own
+    /// note at `StubHouseUITests.swift:3732-3740`).
+    @MainActor
+    func imagesScrollToTop(_ app: XCUIApplication, flicks: Int = 30) {
+        guard let page = imagesPage(app) else { return }
+        for _ in 0..<flicks { page.swipeDown(velocity: .slow) }
+    }
+
+    /// The page's own scroll view: the tallest one in the tree.
+    @MainActor
+    func imagesPage(_ app: XCUIApplication) -> XCUIElement? {
+        guard app.scrollViews.firstMatch.waitForExistence(timeout: 20) else { return nil }
+        return app.scrollViews.allElementsBoundByIndex
+            .max(by: { $0.frame.height < $1.frame.height })
+    }
+
     @MainActor
     func imagesGenerateButton(_ app: XCUIApplication) -> XCUIElement? {
         let ceiling = app.keyboards.firstMatch.exists
@@ -323,14 +383,28 @@ extension StubHouseUITests {
             "a model this house has not installed is on offer"
         )
 
-        // Choosing it is what the picker is for, and the field has to say so
+        // Choosing is what the picker is for, and the field has to say so
         // afterwards: a menu that opens and changes nothing is the half of
         // this control a presence check would miss.
-        recommended.tap()
-        XCTAssertTrue(
-            app.buttons[ImagesWords.pickAModel].firstMatch
-                .waitForExistence(timeout: 10),
-            "the picker vanished after a choice"
+        //
+        // **The other model, not the recommended one.** `SDXL Turbo` is
+        // already active — `activeModel(chosen: nil)` falls back to the first
+        // installed model (`ImagesModels.swift:107-110`) and the fixture
+        // lists `sdxl-turbo` first — so picking it changes nothing
+        // observable, and the old assertion (that `pick a model` still
+        // exists) was on the picker's static `accessibilityLabel`
+        // (`ImagesModelPicker.swift:145`), which is there whatever is chosen.
+        // Both halves passed against a menu whose buttons did nothing
+        // (2026-11-02 review). The one element that moves when a choice lands
+        // is the picker's `accessibilityValue`, which is `images.pickerLabel`
+        // (`:146`).
+        app.buttons[StubImages.otherInstalledModel].firstMatch.tap()
+        let field = app.buttons[ImagesWords.pickAModel].firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 10), "the picker vanished after a choice")
+        XCTAssertEqual(
+            StubImages.otherInstalledModel,
+            field.value as? String,
+            "the picker does not read back the model that was chosen"
         )
     }
 
@@ -520,7 +594,7 @@ extension StubHouseUITests {
         // looked for.
         let historyRow = containing(app, StubImages.historyPromptWord)
         XCTAssertTrue(
-            scrollUntilBuilt(app, historyRow),
+            imagesScrollUntilBuilt(app, historyRow),
             "no history row is on screen — `history` was read with the wrong key"
         )
         evidence(app, "images-two-keys")
@@ -540,12 +614,12 @@ extension StubHouseUITests {
         XCTAssertTrue(landed, "Images never opened")
         let full = app.staticTexts[StubImages.historyMeta]
         XCTAssertTrue(
-            scrollUntilBuilt(app, full),
+            imagesScrollUntilBuilt(app, full),
             "the full meta line is not `model · w × h · steps · seed`"
         )
         let widthOnly = app.staticTexts[StubImages.widthOnlyMeta]
         XCTAssertTrue(
-            scrollUntilBuilt(app, widthOnly),
+            imagesScrollUntilBuilt(app, widthOnly),
             "the width-only row's meta line is not `model · steps`"
         )
         evidence(app, "images-meta")
@@ -570,7 +644,7 @@ extension StubHouseUITests {
         let (app, landed) = openImages()
         XCTAssertTrue(landed, "Images never opened")
         let first = app.buttons[StubImages.tileOne]
-        XCTAssertTrue(scrollUntilBuilt(app, first), "the first tile is not on the card")
+        XCTAssertTrue(imagesScrollUntilBuilt(app, first), "the first tile is not on the card")
         XCTAssertTrue(app.buttons[StubImages.tileTwo].exists, "the second tile is missing")
         XCTAssertTrue(app.buttons[StubImages.tileThree].exists, "the third tile is missing")
         evidence(app, "images-tiles")
@@ -593,7 +667,7 @@ extension StubHouseUITests {
         let (app, landed) = openImages()
         XCTAssertTrue(landed, "Images never opened")
         let tile = app.buttons[StubImages.tileOne]
-        XCTAssertTrue(scrollUntilBuilt(app, tile), "the first tile is not on the card")
+        XCTAssertTrue(imagesScrollUntilBuilt(app, tile), "the first tile is not on the card")
         tile.tap()
 
         // The sheet's title is the file's own name; `close` is its way out,
@@ -601,8 +675,15 @@ extension StubHouseUITests {
         let closer = app.buttons[ImagesWords.close].firstMatch
         XCTAssertTrue(closer.waitForExistence(timeout: 30), "no picture sheet opened")
         evidence(app, "images-picture")
+        // **In the navigation bar, not anywhere in the tree.** The tile that
+        // was just tapped carries the same label — `ImagesTile` sets
+        // `.accessibilityLabel(name)` (`ImagesJobCards.swift:315`) — and it
+        // is still behind the presented sheet, so `containing` was true
+        // before the sheet drew anything and would stay true with
+        // `.navigationTitle(name)` deleted (`ImagesPictureSheet.swift:62`).
         XCTAssertTrue(
-            containing(app, StubImages.tileOne).exists,
+            app.navigationBars.staticTexts[StubImages.tileOne]
+                .waitForExistence(timeout: 10),
             "the sheet does not name the picture it is showing"
         )
         // The picture itself: the fixture serves a real PNG, so a sheet that
@@ -628,7 +709,7 @@ extension StubHouseUITests {
         let (app, landed) = openImages()
         XCTAssertTrue(landed, "Images never opened")
         let row = containing(app, StubImages.historyPromptWord)
-        XCTAssertTrue(scrollUntilBuilt(app, row), "the history row is not on screen")
+        XCTAssertTrue(imagesScrollUntilBuilt(app, row), "the history row is not on screen")
 
         let bin = app.buttons[ImagesWords.delete].firstMatch
         XCTAssertTrue(bin.waitForExistence(timeout: 20), "the history card has no delete")
@@ -785,21 +866,45 @@ extension StubHouseUITests {
     /// ([[audit-reports-one-issue]]).
     @MainActor
     func testImages_AtTheLargestTypeSize() throws {
+        let leaves = [
+            ("engine", ImagesWords.engineRunning),
+            ("history-label", ImagesWords.history),
+            ("progress", StubImages.runningProgress),
+            ("lane-title", StubImages.runningPrompt),
+            ("error", StubImages.failedError),
+            ("meta", StubImages.historyMeta),
+            ("band", StubImages.pluginName),
+        ]
+
+        /// Every leaf, **walked down from the top of the page**.
+        ///
+        /// Four of the seven are below the fold at AX5 and a lazy stack's
+        /// foot is unbuilt, not merely off screen, so one look at whatever
+        /// is on screen measures a different set in each pass. Flicking to
+        /// the tiles first and then looking is worse still: five of the
+        /// seven live above the tiles and the scroller only goes down, so
+        /// they were gone by the time this ran, and the case could satisfy
+        /// its own `compared >= 3` guard on two leaves while printing
+        /// seven (2026-11-02 review). Chat's note at
+        /// `StubHouseUITests.swift:3732-3740` is the same lesson: the walk
+        /// has to start at the top and record each leaf the first time it
+        /// is seen.
         func heights(_ app: XCUIApplication) -> [String: CGFloat] {
             var out: [String: CGFloat] = [:]
-            for (leaf, label) in [
-                ("engine", ImagesWords.engineRunning),
-                ("history-label", ImagesWords.history),
-                ("progress", StubImages.runningProgress),
-                ("lane-title", StubImages.runningPrompt),
-                ("error", StubImages.failedError),
-                ("meta", StubImages.historyMeta),
-                ("band", StubImages.pluginName),
-            ] {
-                let text = app.descendants(matching: .any)
-                    .matching(NSPredicate(format: "label == %@", label))
-                    .firstMatch
-                if text.exists { out[leaf] = text.frame.height }
+            func take() {
+                for (leaf, label) in leaves where out[leaf] == nil {
+                    let text = app.descendants(matching: .any)
+                        .matching(NSPredicate(format: "label == %@", label))
+                        .firstMatch
+                    if text.exists { out[leaf] = text.frame.height }
+                }
+            }
+            imagesScrollToTop(app)
+            take()
+            guard let page = imagesPage(app) else { return out }
+            for _ in 0..<30 where out.count < leaves.count {
+                page.swipeUp(velocity: .slow)
+                take()
             }
             return out
         }
@@ -813,15 +918,27 @@ extension StubHouseUITests {
             let (app, landed) = openImages(mode)
             XCTAssertTrue(landed, "Images never opened at \(label)")
             usleep(2_000_000)
-            // The tiles are below the fold at AX5 and **unbuilt**, not merely
-            // off screen, so they are scrolled to before being measured.
+            // **The text leaves first, from the top of the page.** Five of
+            // the seven — `engine`, `progress`, `lane-title`, `error` and
+            // `history-label` — live ABOVE the tiles, and the scroller only
+            // ever goes down: measured after the flick to the tile they are
+            // unbuilt or above the viewport, so the two passes compared
+            // different sets and the case could pass having compared two
+            // leaves while claiming seven. Chat already paid for this exact
+            // bug (`StubHouseUITests.swift:3732-3740`) — walking down from
+            // the top is the whole trick, and it only works from the top.
+            // `heights` walks the page from the top itself, so it ends
+            // somewhere down the page — the tile is scrolled to afterwards,
+            // from wherever that is.
+            let sizes = heights(app)
+            measured[label] = sizes
+            evidence(app, "images-ax5-\(label)")
             let tile = app.buttons[StubImages.tileOne]
-            if scrollUntilBuilt(app, tile) {
+            if imagesScrollUntilBuilt(app, tile) {
                 tileSides[label] = tile.frame.width
             }
-            evidence(app, "images-ax5-\(label)")
-            measured[label] = heights(app)
-            for (leaf, height) in heights(app).sorted(by: { $0.key < $1.key }) {
+            evidence(app, "images-ax5-\(label)-tiles")
+            for (leaf, height) in sizes.sorted(by: { $0.key < $1.key }) {
                 print("SCALE [images \(label)] \(leaf) height=\(height)")
             }
             print("SCALE [images \(label)] tile side=\(tileSides[label] ?? -1)")
@@ -873,7 +990,10 @@ extension StubHouseUITests {
         // The history card, which is where every finding this expects would
         // be, is at the foot of a lazy list: an audit of a screen whose cards
         // are unbuilt audits the header.
-        _ = scrollUntilBuilt(app, app.buttons[StubImages.tileOne])
+        XCTAssertTrue(
+            imagesScrollUntilBuilt(app, app.buttons[StubImages.tileOne]),
+            "the history card never built, so this audited the header only"
+        )
         let found = try auditIssues(app, "images-audit")
         evidence(app, "images-audited")
         let (floor, rest) = Self.floorAndRest(found)

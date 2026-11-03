@@ -6,9 +6,9 @@ import Foundation
 ///
 /// Anything here that is **not** Android's own sentence is marked
 /// **iOS-only** and recorded, with its reason, in
-/// `design-notes/ios/overnight/images/IOS-ONLY-STRINGS.md`. There are two,
-/// both for a failure Android reports through a toast that this app has no
-/// toast for at that moment.
+/// `design-notes/ios/overnight/images/IOS-ONLY-STRINGS.md`. There are
+/// **three**, each marked below and recorded with its reason there (§3, §5,
+/// §7).
 ///
 /// The ellipsis in `describe the image…` and `working…` is U+2026, the
 /// separator in the meta lines is U+00B7 with a space either side, and the

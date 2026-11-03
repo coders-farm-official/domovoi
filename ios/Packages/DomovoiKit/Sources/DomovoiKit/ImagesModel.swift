@@ -192,7 +192,31 @@ public final class ImagesModel {
         self.history = ApiRead(in: container, eventTypes: ImagesPaths.events) {
             try await client.get(ImagesPaths.history, as: ImagesHistoryList.self).history
         }
-        self.tiles = VideoPosterStore(in: container)
+        // ``VideoPosterStore``, but **not** its `init(in:)`. That
+        // convenience fetches with a four-second timeout chosen for video
+        // poster frames — "nothing at all is worth a screen of tiles hanging
+        // on" (`VideoPosterStore.swift:103-108`). These tiles are not
+        // thumbnails: the plugin has no thumb route, so Android's
+        // `filePath(name)` is the same path for the tile and for the open
+        // (`ImagesScreen.kt:125`, `:405`), and each tile downloads the whole
+        // generated picture — a 1024x1024 PNG, one to two megabytes, three to
+        // a card. Coil fetches those on OkHttp's default ten-second read
+        // timeout, so four seconds would time a tile out here that loads on
+        // the phone beside it, and ``VideoPoster/failed`` carries no reason to
+        // explain it. Twenty seconds: twice Coil's, and under the thirty the
+        // picture sheet gives the same bytes at full size
+        // (``ImagesPictureModel``, `ImagesPicture.swift:74`).
+        let tileClient = container.client
+        self.tiles = VideoPosterStore(fetch: { path in
+            // `trackPairing: false` for `init(in:)`'s reason: a 401 from a
+            // tile must not raise the pairing screen.
+            try await tileClient.raw(
+                method: "GET",
+                path: path,
+                trackPairing: false,
+                timeout: 20
+            )
+        })
     }
 
     // MARK: - the three writes
@@ -252,7 +276,21 @@ public final class ImagesModel {
         let client = container.client
         Task { @MainActor [weak self] in
             do throws(DomovoiError) {
-                try await client.send(method: "POST", path: ImagesPaths.cancel(job: job.id))
+                // `{}` and not an absent body. Android's `api.post`
+                // substitutes `JsonObject(emptyMap())` when no body is given
+                // and always sends `application/json`
+                // (`ApiClient.kt:339-353`), so that is the only shape the
+                // plugin's cancel route has ever been called with; a bodyless
+                // POST would be a 422 against a Pydantic body and the button
+                // would fail every time. This repo's one other bodyless POST
+                // passes it explicitly for the same reason
+                // (`HomeWrites.swift:35`), and `DomovoiClient.post` defaults
+                // to it.
+                try await client.send(
+                    method: "POST",
+                    path: ImagesPaths.cancel(job: job.id),
+                    body: DomovoiClient.emptyObject
+                )
                 guard let self, self.stillHome(epoch) else { return }
                 self.jobs.refresh()
             } catch let trouble {

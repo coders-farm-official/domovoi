@@ -228,11 +228,38 @@ struct ImagesHistoryCard: View {
     /// because that is what is being deleted (``ImagesStrings/deleteBody(images:)``).
     /// DECISIONS, "A fourth generated image is not shown, and not counted".
     private var thumbnails: some View {
-        HStack(spacing: 8) {
-            ForEach(job.tileNames, id: \.self) { name in
-                ImagesTile(name: name, tiles: tiles) { onOpen(name) }
+        // **Android's cap, and Android's own scrolling.** The strip is a
+        // `LazyRow` with `Modifier.weight(1f, fill = false)` against the text
+        // column's `weight(1.4f)` (`ImagesScreen.kt:394-416`), so the tiles
+        // get at most ~42% of the row and scroll inside that.
+        //
+        // A plain `HStack` of three 84-point tiles does not fit here and took
+        // the text with it: on a 393-point phone the stack's 16 and the card's
+        // 16 leave 329, and the fixed children already want 268 (tiles) + 44
+        // (delete) + 36 (gaps) + 8 (the `Spacer` minimum) = 356 — so the
+        // flexible text column was proposed **zero** width and the prompt and
+        // the meta line, the only two things that say what made the picture,
+        // were crushed to nothing while the tiles overflowed anyway. At an
+        // accessibility size `side` is ~300 points each and a vertically
+        // scrolling `ScrollView` clips horizontally, so the second and third
+        // pictures were off the viewport and could not be tapped at all
+        // (2026-11-02 review). No UI case could see it: they assert
+        // existence, and existence does not depend on width.
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(job.tileNames, id: \.self) { name in
+                    ImagesTile(name: name, tiles: tiles) { onOpen(name) }
+                }
             }
         }
+        // The strip's share of the row, Android's weights' ~42% of a compact
+        // card. In the accessibility branch the strip is on its own line, so
+        // it takes the card's full width and only scrolls when the tiles
+        // outgrow it.
+        .frame(maxWidth: dynamicTypeSize.isAccessibilitySize ? .infinity : 140)
+        // The tile is square and the strip must not grow a line taller than
+        // one: a horizontal `ScrollView` is otherwise greedy vertically.
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     /// The prompt at three lines, then the monospace meta line (`:417-428`).
