@@ -156,8 +156,8 @@ extension StubHouseUITests {
 
     // MARK: - the page under the switch
 
-    /// The scrolling page **under the source switch** — the upper of the
-    /// window's full-width scroll views.
+    /// Scroll the page **under the source switch** until `element` is built,
+    /// and say whether it is.
     ///
     /// ### Why the server side's own cases need this (train I001)
     ///
@@ -165,90 +165,73 @@ extension StubHouseUITests {
     /// `VStack` of the pill and the two sides, so the side that is shown
     /// scrolls in whatever the pill leaves. At `large` the pill is 45 points
     /// and nothing notices. At AX5 it is **164**, and the folder's
-    /// `ScrollView` on a 393×852 phone is 178.7 points tall (the trees under
-    /// `overnight-trains/I001/ALL/att/testFilesAtTheLargestTypeSize/`).
-    /// SwiftUI builds a `LazyVStack` about two viewports deep, Files' header
-    /// alone is 383.7 points, and so the `choose library` button — the second
-    /// lazy item — is **unbuilt**, not off screen. Five of the Files and
-    /// Videos cases this item wrapped were written before there was a pill
-    /// and waited for a marker that can no longer arrive on its own.
+    /// `ScrollView` on a 393×852 phone is left 178.7 points (the tree beside
+    /// `overnight-trains/R001/FilesVideos/testFilesAtTheLargestTypeSize.log`).
+    /// A `LazyVStack` builds about a viewport deep, Files' header alone is
+    /// 383.7 points, and so the `choose library` button — the second lazy
+    /// item — is **unbuilt**, not off screen. Five of the Files and Videos
+    /// cases this item wrapped were written before there was a pill and
+    /// waited for a marker that can no longer arrive on its own.
     ///
-    /// Width decides before position, as ``documentsFolderScroll(_:)``'s own
-    /// note says: the breadcrumb strip is a *horizontal* `ScrollView` inset
-    /// in the folder's 16-point gutter, so it is 32 points narrower, and once
-    /// the folder has scrolled it sits above its own clipping parent and
-    /// would win on `minY`. Among what is left, the smallest `minY` is the
-    /// page, because the phone bar is pinned to the window's bottom.
+    /// ### It is ``documentsScrollTo(_:_:flicks:big:)``, deliberately
     ///
-    /// The **frame**, not the element: an `XCUIElement` is re-resolved on
-    /// every use, and a case that drags more than once wants the geometry it
-    /// started from (``testPhoneMedia_TheDeviceSideTextGrowsAtAX5`` learnt
-    /// this about the device side's list).
-    @MainActor
-    func phoneSourcePageFrame(_ app: XCUIApplication) -> CGRect? {
-        let window = app.windows.firstMatch.frame.width
-        let all = app.scrollViews
-        var best: CGRect?
-        var bestY = CGFloat.greatestFiniteMagnitude
-        for index in 0..<all.count {
-            let candidate = all.element(boundBy: index)
-            guard candidate.exists else { continue }
-            let box = candidate.frame
-            guard window <= 0 || box.width >= window - 1 else { continue }
-            if box.minY < bestY {
-                bestY = box.minY
-                best = box
-            }
-        }
-        return best
-    }
-
-    /// One drag of that page, for a case that measures as it goes.
+    /// Round 1 wrote a second mechanism for this — a press-then-drag between
+    /// two corners of the page's measured frame — and no train ever ran it
+    /// (R001's five failures all cite `wf/ios-n-all`'s line numbers, so the
+    /// Mac's checkout was a commit behind). Meanwhile the Documents item had
+    /// already solved the same problem and **passed** at AX5 twice in that
+    /// same run: a slow `swipeUp` on the full-width scroll view with the
+    /// smallest `minY`, re-resolved every flick. Trains S011 and S013 are
+    /// what taught it to check width before position and not to trust
+    /// `scrollViews.firstMatch`; its own doc comment has both stories.
     ///
-    /// A press-then-drag, not `swipeUp()`: a flick's momentum carries it over
-    /// rows, and at AX5 a row stepped over is a leaf that was never built and
-    /// so never measured. And never `app.swipeUp()`, whose gesture starts in
-    /// the middle of the window — which at AX5 **is the pill**, so it scrolls
-    /// nothing at all.
-    @MainActor
-    func phoneSourceDragUp(_ app: XCUIApplication, _ frame: CGRect) {
-        let origin = app.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
-        origin
-            .withOffset(CGVector(dx: frame.midX, dy: frame.maxY - 16))
-            .press(
-                forDuration: 0.1,
-                thenDragTo: origin.withOffset(
-                    CGVector(dx: frame.midX, dy: frame.minY + 16)
-                )
-            )
-    }
-
-    /// Drag the page under the switch until `element` is **built**.
+    /// So this is a name, not a mechanism: the Files and Videos cases say
+    /// what they mean by it and there is one copy of how it is done. A second
+    /// copy is how two cases come to disagree about one screen's scroll.
     ///
-    /// `true` the moment it exists — so at an ordinary type size, where the
-    /// pill costs 45 points and everything is built already, this does
-    /// nothing and costs one query. A screen that really never answered still
-    /// fails, one budget later, with its tree printed.
+    /// `true` the moment `element` exists — so at an ordinary type size,
+    /// where the pill costs 45 points and everything near the top is built
+    /// already, this does nothing and costs one query. A screen that really
+    /// never answered still fails, one flick budget later, with its tree
+    /// printed.
     @MainActor
     @discardableResult
-    func phoneSourceScrollTo(
-        _ app: XCUIApplication,
-        _ element: XCUIElement,
-        drags: Int = 24
-    ) -> Bool {
+    func phoneSourceScrollTo(_ app: XCUIApplication, _ element: XCUIElement) -> Bool {
         if element.exists { return true }
-        guard let frame = phoneSourcePageFrame(app), frame.height > 48 else {
-            print("=== NO PAGE UNDER THE SWITCH TO SCROLL — tree follows ===")
-            print(app.debugDescription)
-            return false
+        // **The number this scroll exists because of, in every log.** The
+        // window left to the page is what makes the difference between a
+        // marker that is off screen and one that was never built, and it is
+        // also the open finding on this screen: 178.7 of 852 points at AX5,
+        // against the 260 dp of content Android's own shell treats as the
+        // floor (`AppShell.kt:481`'s `CONTENT_FLOOR`). Printed rather than
+        // asserted — the three chrome bars that divide those 852 points
+        // belong to three different owners and only one of them is this
+        // item's. `integration/filesvideos.md` has the breakdown.
+        if let page = documentsFolderScroll(app) {
+            print("PAGE UNDER THE SWITCH height=\(page.frame.height) minY=\(page.frame.minY)")
         }
-        for _ in 0..<drags {
-            phoneSourceDragUp(app, frame)
-            if element.exists { return true }
-        }
-        print("=== \(drags) DRAGS AND STILL UNBUILT — tree follows ===")
-        print(app.debugDescription)
-        return false
+        // `big: true` whatever the type size: it buys the slow swipe and the
+        // forty-flick budget, and at `large` the short-circuit above means
+        // neither is spent. The flag names the window that has to be crossed,
+        // not the launch mode.
+        return documentsScrollTo(app, element, big: true)
+    }
+
+    /// One flick of that page, for a case that measures as it goes.
+    ///
+    /// The scroll view is re-resolved on every call — ``documentsScrollTo``'s
+    /// own reason: a query held across a swipe goes stale on this screen, and
+    /// the frame taken before the first flick is not the frame after it.
+    /// `.slow` because a full-velocity flick's momentum carries the page over
+    /// rows, and at AX5 a row stepped over is a leaf that was never built and
+    /// so never measured.
+    ///
+    /// Never `app.swipeUp()`, whose gesture starts in the middle of the
+    /// window — which at AX5 **is the pill**, so it scrolls nothing at all.
+    /// That is half of why these cases found nothing.
+    @MainActor
+    func phoneSourceFlick(_ app: XCUIApplication) {
+        documentsFolderScroll(app)?.swipeUp(velocity: .slow)
     }
 
     // MARK: - the switch

@@ -1921,8 +1921,8 @@ final class StubHouseUITests: XCTestCase {
     /// above this page, one read of a still screen finds **none** of these
     /// five at AX5 — the grid is unbuilt below a 331.7-point header in a
     /// 178.7-point window. The leaves are taken as they appear while the page
-    /// is dragged (``phoneSourceDragUp(_:_:)``), and a leaf never seen is
-    /// still skipped rather than failed.
+    /// is flicked (``phoneSourceFlick(_:)``), and a leaf never seen is still
+    /// skipped rather than failed.
     @MainActor
     func testTheVideosGridTextGrowsAtAX5() throws {
         func heights(_ app: XCUIApplication) -> [String: CGFloat] {
@@ -1953,17 +1953,22 @@ final class StubHouseUITests: XCTestCase {
             if !landed, mode == Self.ordinaryTypeSize {
                 XCTFail("the videos list never answered at \(label)")
             }
+            // A slow flick moves a 178.7-point window by well under its own
+            // height, and the resume line is the last of the five — so AX5
+            // gets the Documents item's forty. At `large` the whole grid was
+            // measured in **one** read before the switch existed, so the
+            // budget there stays small: a leaf that has not appeared in six
+            // flicks at an ordinary size is not hiding behind a scroll, and
+            // forty of them would only spend three minutes proving it.
             var seen: [String: CGFloat] = [:]
-            let page = phoneSourcePageFrame(app)
-            let drags = 10
-            for drag in 0...drags {
+            let flicks = mode == Self.ordinaryTypeSize ? 6 : 40
+            for flick in 0...flicks {
                 for (leaf, height) in heights(app) where seen[leaf] == nil {
                     seen[leaf] = height
                 }
-                if drag == 0 { evidence(app, "4A-videos-scale-\(label)") }
-                if seen.count == 5 { break }
-                guard let page, drag < drags else { break }
-                phoneSourceDragUp(app, page)
+                if flick == 0 { evidence(app, "4A-videos-scale-\(label)") }
+                if seen.count == 5 || flick == flicks { break }
+                phoneSourceFlick(app)
             }
             measured[label] = seen
             for (leaf, height) in seen.sorted(by: { $0.key < $1.key }) {
@@ -2343,7 +2348,7 @@ final class StubHouseUITests: XCTestCase {
     /// PhoneMedia item now wraps this route in a pinned source switch that is
     /// 164 points tall at AX5, leaving the folder a 178.7-point window to
     /// scroll in while its header alone is 383.7 points
-    /// (``phoneSourcePageFrame(_:)`` has the numbers and the trees). The
+    /// (``phoneSourceScrollTo(_:_:)`` has the numbers and the trees). The
     /// picker is **unbuilt**, which is this screen's standing lazy-list trap
     /// one level above the rows it was written about.
     ///
@@ -2360,11 +2365,11 @@ final class StubHouseUITests: XCTestCase {
             landed || phoneSourceScrollTo(app, app.buttons["choose library"].firstMatch),
             "the folder never answered at AX5"
         )
-        let count = app.descendants(matching: .any)
-            .matching(NSPredicate(format: "label BEGINSWITH %@", "showing 50 of 56"))
-            .firstMatch
+        // `startingWith` and not `app.staticTexts[…]`: the count line may be
+        // merged into the row above it, and a 128-character query string
+        // throws anyway (train S001).
         XCTAssertTrue(
-            phoneSourceScrollTo(app, count),
+            phoneSourceScrollTo(app, startingWith(app, "showing 50 of 56")),
             "the folder's own count line never built at AX5"
         )
         evidence(app, "51-files-ax5-scrolled")
@@ -2424,9 +2429,13 @@ final class StubHouseUITests: XCTestCase {
         let readOnly = app.staticTexts["read-only — editing is on the dashboard"]
         XCTAssertTrue(readOnly.waitForExistence(timeout: 20), "the reader never opened")
         evidence(app, "53-files-document")
+        // ``containing(_:_:)`` and not `app.staticTexts.containing(…)`: that
+        // overload matches an element by its **descendants**, and the
+        // reader's body is one leaf `Text` with no children. The helper
+        // matches the element's own label, across every type, because the
+        // body is a monospaced `Text` whose label is the whole file.
         XCTAssertTrue(
-            app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Dear sir or madam"))
-                .firstMatch.exists,
+            containing(app, "Dear sir or madam").exists,
             "the document's own text is not on screen"
         )
         // The half of "read-only" that is a control and not a sentence: a
@@ -2686,9 +2695,9 @@ final class StubHouseUITests: XCTestCase {
     /// `app.swipeUp()`, and since the PhoneMedia item pinned a 164-point
     /// source switch above this page, the first is unbuilt rather than absent
     /// and the second lands **on the switch** and scrolls nothing
-    /// (``phoneSourcePageFrame(_:)``). The leaves are now taken as they
-    /// appear, which is also what makes the comparison possible at all — at
-    /// AX5 no one scroll position holds all four.
+    /// (``phoneSourceFlick(_:)``). The leaves are now taken as they appear,
+    /// which is also what makes the comparison possible at all — at AX5 no
+    /// one scroll position holds all four.
     @MainActor
     func testTheFilesListTextGrowsAtAX5() throws {
         func heights(_ app: XCUIApplication) -> [String: CGFloat] {
@@ -2727,22 +2736,26 @@ final class StubHouseUITests: XCTestCase {
             // the window, so the rows are not merely off screen but unbuilt —
             // and a leaf already measured unbuilds in its turn once it has
             // scrolled far enough away. So each leaf is taken the **first**
-            // time it exists, and the drag is the folder's own
-            // (``phoneSourceDragUp(_:_:)``): `app.swipeUp()` starts in the
+            // time it exists, and the flick is the folder's own
+            // (``phoneSourceFlick(_:)``): `app.swipeUp()` starts in the
             // middle of the window, which at AX5 is the source switch, and
             // scrolls nothing at all. A leaf still missing at the end is
             // skipped, not failed.
+            //
+            // Forty at AX5, the Documents item's budget: the first row sits
+            // past a 383.7-point header in a 178.7-point window, and a slow
+            // flick crosses well under one window at a time. Six at `large`,
+            // which is what this case always spent and what always reached
+            // `Albums` there.
             var seen: [String: CGFloat] = [:]
-            let page = phoneSourcePageFrame(app)
-            let drags = 10
-            for drag in 0...drags {
+            let flicks = mode == Self.ordinaryTypeSize ? 6 : 40
+            for flick in 0...flicks {
                 for (leaf, height) in heights(app) where seen[leaf] == nil {
                     seen[leaf] = height
                 }
-                if drag == 0 { evidence(app, "67-files-scale-\(label)") }
-                if seen.count == 4 { break }
-                guard let page, drag < drags else { break }
-                phoneSourceDragUp(app, page)
+                if flick == 0 { evidence(app, "67-files-scale-\(label)") }
+                if seen.count == 4 || flick == flicks { break }
+                phoneSourceFlick(app)
             }
             measured[label] = seen
             for (leaf, height) in seen.sorted(by: { $0.key < $1.key }) {
