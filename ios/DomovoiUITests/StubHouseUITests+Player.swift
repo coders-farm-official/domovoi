@@ -96,6 +96,19 @@ extension StubHouseUITests {
     /// added it moves the assertion into their own file — which is the point.
     @MainActor
     func testPlayer_NothingInTheAppOffersPhonePlaybackYet() throws {
+        // The Chat tab is gated on the household's AI switch
+        // (`chatAvailable(_:phoneCanChat:)` — `phoneCanChat` is `false` on
+        // iOS, so the tab follows `features.ai` alone), and that switch is a
+        // mutable global in the stub house that any `chat-ai` case leaves
+        // where it last put it. `reset-fixtures` does NOT restore it; only
+        // `chat-reset` does. Train S003 failed here with a three-tab bar —
+        // home · music · videos — because the house was still AI-off from
+        // whatever ran against port 6601 before. The app was right and the
+        // case had no precondition, so set one rather than drop the tab from
+        // the assertion: the bar being the four tabs it was is exactly what
+        // this case is for. Before `launch()`, because the manifest is read
+        // once at launch.
+        resetChatHouse()
         let app = launch()
         XCTAssertTrue(houseName(in: app).waitForExistence(timeout: 20), "Home never drew")
         evidence(app, "player-20-home-has-no-player")
