@@ -981,7 +981,7 @@ extension StubHouseUITests {
         // (`fixtures/people.py`; this screen defers to it).
         // An explicit result type: a multi-statement closure whose branches
         // are `String` and `nil` is one Swift will not always infer.
-        ["Kamron", "Chevy", "Alex", "alex "].compactMap { (name: String) -> String? in
+        return ["Kamron", "Chevy", "Alex", "alex "].compactMap { (name: String) -> String? in
             let chip = app.buttons["news-chip-\(name)"]
             guard chip.exists else { return "no chip for \(name)" }
             let leaves = chip.staticTexts.count
