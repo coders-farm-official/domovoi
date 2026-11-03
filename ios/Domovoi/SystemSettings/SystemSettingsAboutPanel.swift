@@ -54,7 +54,15 @@ struct SystemSettingsAboutPanel: View {
                 serverKey: { [container = model.container] in
                     AppContainer.serverKey(container.store.serverURL)
                 },
-                createThread: { [client = model.container.client] in
+                // **The thrown type is spelled out.** A closure literal
+                // infers `throws` as `any Error`, not as the parameter's
+                // `throws(DomovoiError)`, so without this signature it does
+                // not convert — `error: invalid conversion of thrown error
+                // type 'any Error' to 'DomovoiError'`, which is the same
+                // typed-throws trap this item's package tests hit at
+                // `27652c11`.
+                createThread: { [client = model.container.client] ()
+                    async throws(DomovoiError) -> ChatThread in
                     try await client.post(
                         ChatPath.newThread,
                         body: systemSettingsHelpThreadBody(),
