@@ -470,4 +470,58 @@ final class VoiceSettingsModelTests: XCTestCase {
         await settleUntil({ model.playingVoiceID == nil }, "the silence")
         XCTAssertGreaterThan(ears.stops, 0)
     }
+
+    // MARK: - leaving the section
+
+    /// `stop()` takes the section's **three** sinks off the server-change
+    /// registry, and a second visit neither stacks them nor comes back
+    /// unkeyed.
+    ///
+    /// The review that found `stop()` with no caller anywhere in the tree is
+    /// what this case exists for. Counted as a **delta** and not as a total:
+    /// the container may grow sinks of its own, and the claim here is about
+    /// this model's own three — itself and its two reads.
+    func testLeavingTheSectionComesOffTheServerRegistryAndComingBackRejoinsOnce() async {
+        let (model, house, _, _, container) = rig()
+        house.install()
+        await loaded(model)
+        let joined = container.serverChangeSinkCount
+
+        model.stop()
+        XCTAssertEqual(
+            container.serverChangeSinkCount, joined - 3,
+            "stop() left the model's or a read's sink on the registry: an add-only sink is a leak"
+        )
+
+        // The section comes back, as `.task` re-running does it.
+        await loaded(model)
+        XCTAssertEqual(
+            container.serverChangeSinkCount, joined,
+            "a re-appeared section is either unkeyed (fewer) or stacked (more)"
+        )
+    }
+
+    /// And the noise still goes quiet on a house switch **after** a visit has
+    /// ended and begun again.
+    ///
+    /// The half of the fix a count cannot see: `stop()` dropping the model's
+    /// own sink would be silent until someone left the section, came back, and
+    /// moved house — the exact sequence here.
+    func testASampleStartedAfterComingBackIsStillSilencedByAHouseSwitch() async {
+        let (model, house, ears, store, container) = rig()
+        house.install()
+        await loaded(model)
+        model.stop()
+        await loaded(model)
+
+        model.tappedSample(VoiceIDs.norman)
+        await settleUntil({ model.playingVoiceID != nil }, "the sample on the second visit")
+        XCTAssertTrue(store.setServerURL(serverB))
+        container.serverAddressChanged()
+        await settleUntil(
+            { model.playingVoiceID == nil },
+            "the silence on the second visit — the model never re-joined the server key"
+        )
+        XCTAssertGreaterThan(ears.stops, 0)
+    }
 }

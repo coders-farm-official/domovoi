@@ -142,6 +142,19 @@ public final class VoiceSettingsModel {
         // which is the rule being relied on, and a sink that cancelled it
         // instead would quietly replace the guard with a race and leave the
         // guard untested.
+        joinTheServerKey()
+    }
+
+    /// Join ``AppContainer/onServerChange(_:)``, once, if this model is not on
+    /// it already — ``ApiRead``'s `joinTheServerKey()` for the noise.
+    ///
+    /// Called from `init` and again from ``refresh()``, so that ``stop()``
+    /// taking this model off the registry is undone when its section comes
+    /// back. Without the second call a re-appeared section would read and
+    /// play but no longer go quiet on a house switch: the sink is added in one
+    /// place and only there.
+    private func joinTheServerKey() {
+        guard serverSink == nil else { return }
         serverSink = container.onServerChange { [weak self] in
             Task { @MainActor in self?.stopPlayback() }
         }
@@ -151,11 +164,23 @@ public final class VoiceSettingsModel {
     /// `:128`'s `fetchFromServer()`, which are one thing here because
     /// nothing is cached per server.
     public func refresh() {
+        // Before the reads, for ``ApiRead/refresh()``'s reason: a model whose
+        // section has come back is a model that has to be re-keyed.
+        joinTheServerKey()
         info.refresh()
         samples.refresh()
     }
 
-    /// The section is going away: stop the reads, stop the noise.
+    /// The section is going away: stop the reads, stop the noise, and come off
+    /// the server-change registry.
+    ///
+    /// ``VoiceSettingsPanel``'s `onDisappear` calls this and not
+    /// ``stopSample()`` alone. ``SinkRegistry``'s own note is the reason: a
+    /// sink that can only be added is a leak, and three of them (this model's
+    /// and the two reads') per visit to the section would fire N dead closures
+    /// on the Nth house switch. Nothing is lost on a re-appear, because
+    /// ``refresh()`` and ``ApiRead/refresh()`` both re-join the key as their
+    /// first statement.
     ///
     /// **The model owns the task, not a row.** A lazy row that held this
     /// `Task` would keep a 120-second request alive after it scrolled out of

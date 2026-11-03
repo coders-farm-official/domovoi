@@ -65,6 +65,7 @@ extension StubHouseUITests {
         static let privacyGroup = "Privacy"
         static let voicesSection = "Voices"
         static let wakeWordsSection = "Wake words"
+        static let greetingsSection = "Greetings"
         static let voiceHistorySection = "Voice history"
         static let onTheDashboard = "On the dashboard"
     }
@@ -537,6 +538,47 @@ extension StubHouseUITests {
         XCTAssertTrue(
             address.label.hasSuffix("#settings/wake-words"),
             "the address is not Wake words' dashboard page: \(address.label)"
+        )
+    }
+
+    /// Greetings signposts the dashboard, at its own section's address.
+    ///
+    /// The third of the item's four slots, and the one a review found
+    /// untested: `VoiceSettingsDashboardTests` only exercises the URL builder
+    /// against the section table, so a `greetings` slot left as
+    /// `SettingsSectionNotBuilt()` — or wired with the wrong `section:`
+    /// argument, the copy-paste the wake-words case was written to catch —
+    /// would have shipped with nothing failing, the night's negative control
+    /// included.
+    @MainActor
+    func testVoiceSettings_GreetingsSignpostsTheDashboard() throws {
+        control("reset-fixtures", "{}", port: 6601, what: "the fixtures before the greetings signpost")
+        let app = launch()
+        let open = app.buttons["voicesettings-open-dashboard"]
+        XCTAssertTrue(
+            reachVoiceSettings(
+                app,
+                group: VoiceSettingsStub.voiceGroup,
+                section: VoiceSettingsStub.greetingsSection,
+                marker: open
+            ),
+            "never reached Settings → Greetings with a dashboard link on it"
+        )
+        evidence(app, "voicesettings-22-greetings")
+
+        XCTAssertTrue(
+            containing(app, VoiceSettingsStub.onTheDashboard).exists,
+            "the signpost card is not there"
+        )
+        XCTAssertTrue(
+            containing(app, "\(VoiceSettingsStub.greetingsSection) is changed on the Domovoi dashboard").exists,
+            "the signpost does not name Greetings"
+        )
+        let address = app.descendants(matching: .any)["voicesettings-dashboard-address"]
+        XCTAssertTrue(address.exists, "the signpost prints no address")
+        XCTAssertTrue(
+            address.label.hasSuffix("#settings/greetings"),
+            "the address is not Greetings' dashboard page: \(address.label)"
         )
     }
 

@@ -110,14 +110,19 @@ struct VoiceSettingsPanel: View {
             voice?.refresh()
         }
         .onDisappear {
-            // ``VoiceSettingsModel/stopSample()`` and not `stop()`: a sample
-            // can be a 120-second request (`voice.py:185`) and noise that
-            // outlives its screen is the worst of the two, so both go. The
-            // two reads stay joined to the server key, because `.task`
-            // re-runs on a re-appear and a read that was taken off the
-            // registry would come back unkeyed — ``ApiRead/refresh()``'s own
-            // note about `@State` surviving a disappearance.
-            voice?.stopSample()
+            // The whole of ``VoiceSettingsModel/stop()``, which includes
+            // `stopSample()`: a sample can be a 120-second request
+            // (`voice.py:185`) and noise that outlives its screen is the worst
+            // of it, so that still goes. But a half-stop leaks: `stop()` is
+            // the only thing that takes this model's sink and the two reads'
+            // sinks off ``AppContainer``'s server-change registry, and
+            // ``SinkRegistry``'s own note says what an add-only sink costs —
+            // every visit to this section would leave three dead closures
+            // behind, each spawning a `Task` on the next house switch. Nothing
+            // is lost on a re-appear: `.task` re-runs and both
+            // ``VoiceSettingsModel/refresh()`` and ``ApiRead/refresh()``
+            // re-join the server key as their first statement.
+            voice?.stop()
         }
     }
 
