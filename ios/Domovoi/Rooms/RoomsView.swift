@@ -282,8 +282,11 @@ struct RoomsBroadcastCard: View {
             // it, which is Home's rule for the same control.
             .disabled(model.onlineCount == 0)
             // The placeholder vanishes the moment anything is typed, so it
-            // cannot be the label.
-            .accessibilityLabel(RoomsStrings.broadcastHeading)
+            // cannot be the label — and neither sentence on the card can be,
+            // because each is drawn as text of its own and two elements
+            // answering to one name is what sends a test's tap to the
+            // heading. ``RoomsStrings/broadcastFieldLabel`` is iOS only.
+            .accessibilityLabel(RoomsStrings.broadcastFieldLabel)
     }
 
     private var send: some View {

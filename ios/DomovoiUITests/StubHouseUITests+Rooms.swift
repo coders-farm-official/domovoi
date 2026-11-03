@@ -1,0 +1,1015 @@
+import XCTest
+
+/// Settings → Rooms, driven against the stub house.
+///
+/// Every case here arrives the same way: `launch(push: "Satellites")`, which
+/// is ``AuditStrip/seededRoute`` putting `Satellites` through
+/// ``ShellModel/navigate(_:)`` — and that resolves to **Settings on its Rooms
+/// section** (`Route.swift:137-139`), which is the entry point a person
+/// actually reaches. The `satellites` route slot draws the same view and is
+/// reachable only by a direct `go(.satellites)`, which nothing in the app
+/// does.
+///
+/// ### What the house can and cannot say, and what that costs these cases
+///
+/// `/api/satellites` is the **house's** route (`stubhouse.py:705`) and Home's
+/// cases audit its two rooms, so `fixtures/rooms.py` deliberately does not
+/// claim it (NIGHT-RULES §2 forbids editing `stubhouse.py`, and a fixture that
+/// owned that path would take it from Home). The roster therefore carries nine
+/// fields, and the fields this screen would otherwise draw — `volume`,
+/// `version`, `full_duplex`, `in_call_with`, `timers_own_only`, `mpd_ports`,
+/// `voice`, `last_seen_at`, `upgrade` — are **absent**. That is a real state
+/// of the screen, and these cases assert it honestly rather than pretending
+/// otherwise:
+///
+///  * ``testRooms_OpeningARoomShowsItsOverview`` asserts the unknown branches
+///    (`registry default`, the em dashes) because that is what an absent
+///    `voice` and absent `mpd_ports` mean;
+///  * ``testRooms_HangUpIsNotOfferedWhenNoRoomIsInACall`` is MAP's `hang up`
+///    case turned the one way round the house can support — no room is ever in
+///    a call here, so what is testable is that the control is **not** drawn and
+///    the honest sentence is;
+///  * ``testRooms_VolumeSendsTheLevelOnce`` drags from the fallback 50 rather
+///    than from a reported level.
+///
+/// ### One collision with another overnight item, recorded rather than worked
+/// around
+///
+/// `fixtures/manual.py` (the `manual` item) claims `/api/satellites/` **and**
+/// `/api/config/version`, and answers `…/{room}/sessions` itself — with an
+/// empty array unless its own control route seeded its rooms. Modules are
+/// offered a request in **name order**, so `manual` answers the sessions read
+/// before `rooms` ever sees it. Nothing in this item's files can change that
+/// (renaming either module, or giving the house a declared order, is a shared
+/// change), so ``testRooms_SessionsTabSaysWhatTheServerAnswered`` asserts the
+/// empty state that the house really produces, and the session row's own
+/// decisions — its subtitle, its duration, `person #4` — stay covered by
+/// `RoomsRulesTests`. DECISIONS says what the one-line fix would be.
+extension StubHouseUITests {
+
+    // MARK: - getting there
+
+    /// Settings → Rooms, with the roster drawn.
+    ///
+    /// The fixtures are reset **first**: cases share one house for a whole run
+    /// and this screen's fixture remembers volume levels, a flipped timer
+    /// scope and a cancelled timer.
+    @MainActor
+    func roomsOpen(
+        mode: String = StubHouseUITests.ordinaryTypeSize,
+        pushDelay: Double = 3
+    ) -> XCUIApplication {
+        control("reset-fixtures", "{}", port: 6601, what: "the Rooms fixtures")
+        let app = launch(mode: mode, push: "Satellites", pushDelay: pushDelay)
+        let summary = roomsSummaryText(app)
+        if !summary.waitForExistence(timeout: 30) {
+            // The tree, not a sentence about what is missing: a claim about
+            // something absent cannot say what is present, and this file's
+            // header is about the six runs that cost.
+            print("=== ROOMS DID NOT DRAW — tree follows ===")
+            print(app.debugDescription)
+        }
+        return app
+    }
+
+    /// The summary line, which only a landed roster read can produce: the
+    /// counts come from `status`, the key the house once sent as `online`.
+    @MainActor
+    func roomsSummaryText(_ app: XCUIApplication) -> XCUIElement {
+        app.staticTexts[RoomsStringsUnderTest.summary]
+    }
+
+    /// Open the room whose card's label starts with its id.
+    ///
+    /// **Not `firstMatch` on a label that merely contains the name**: the
+    /// detail's own header contains it too, and a query that matched either
+    /// would pass on a screen that never opened.
+    @MainActor
+    func roomsOpenRoom(_ app: XCUIApplication, _ room: String) -> Bool {
+        let card = app.buttons
+            .matching(NSPredicate(format: "label BEGINSWITH %@", room))
+            .firstMatch
+        guard card.waitForExistence(timeout: 20) else {
+            print("=== NO CARD FOR \(room) — tree follows ===")
+            print(app.debugDescription)
+            return false
+        }
+        card.tap()
+        let closer = app.buttons[RoomsStringsUnderTest.closeRoom]
+        guard closer.waitForExistence(timeout: 20) else {
+            print("=== \(room) DID NOT OPEN — tree follows ===")
+            print(app.debugDescription)
+            return false
+        }
+        return true
+    }
+
+    /// Pick one of the seven tabs by its word.
+    @MainActor
+    func roomsTab(_ app: XCUIApplication, _ label: String) -> Bool {
+        let tab = app.buttons[label].firstMatch
+        guard tab.waitForExistence(timeout: 20) else {
+            print("=== NO \(label) TAB — tree follows ===")
+            print(app.debugDescription)
+            return false
+        }
+        tab.tap()
+        return true
+    }
+
+    /// A field on this screen, picked by its accessibility label across every
+    /// element type.
+    ///
+    /// ``composerField(_:)``'s reason: the announce and broadcast boxes are
+    /// `TextField`s with a **vertical axis**, so that they grow with the type
+    /// size instead of clipping, and a vertically-growing SwiftUI field does
+    /// not always report as `.textField` in the query tree. A case that asked
+    /// for `app.textFields[…]` would pass or fail on that detail rather than
+    /// on the field.
+    ///
+    /// Both labels are words drawn **nowhere else** on their screen
+    /// (``RoomsStrings/announcePlaceholder(room:)`` and
+    /// ``RoomsStrings/broadcastFieldLabel``), which is what makes the match
+    /// unambiguous: the section heading above the announce box says
+    /// `announce to kitchen` too, and a query for that would take the heading
+    /// and type into nothing.
+    @MainActor
+    func roomsField(_ app: XCUIApplication, _ label: String) -> XCUIElement {
+        app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label == %@", label))
+            .firstMatch
+    }
+
+    /// Wait for words to appear, polling faster than `waitForExistence` does.
+    ///
+    /// A toast lives for ``ShellStrings/toastMs`` — **2.4 seconds** — and
+    /// `waitForExistence` polls about once a second, so a toast can be raised
+    /// and gone between two of its looks. Every assertion about a toast in
+    /// this file goes through here.
+    @MainActor
+    func roomsWaitFor(_ app: XCUIApplication, _ text: String, timeout: Double = 20) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if containing(app, text).exists { return true }
+            usleep(150_000)
+        }
+        print("=== NEVER SAW “\(text)” — tree follows ===")
+        print(app.debugDescription)
+        return false
+    }
+
+    /// Read one of the fixture's own readback routes, as text.
+    ///
+    /// ``control(_:_:port:what:)`` posts and asserts a 200; this is the other
+    /// direction, and it is what makes "the app sent **one** POST with the
+    /// final level" an assertion about the wire rather than about a toast.
+    @MainActor
+    func roomsAsk(_ route: String, port: Int = 6601) -> String {
+        var request = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/api/_test/\(route)")!)
+        request.httpMethod = "GET"
+        request.setValue(Self.token, forHTTPHeaderField: "X-Device-Token")
+        let answered = expectation(description: "the stub answered \(route)")
+        var said = ""
+        URLSession.shared.dataTask(with: request) { data, _, _ in
+            said = String(data: data ?? Data(), encoding: .utf8) ?? ""
+            answered.fulfill()
+        }.resume()
+        wait(for: [answered], timeout: 15)
+        print("ASK \(route) -> \(said)")
+        return said
+    }
+
+    // MARK: - the roster
+
+    /// The Settings slot is filled, and the roster decoded.
+    ///
+    /// Both room names **and** the summary: the counts come from `status`,
+    /// which is the key the house once sent as `online: true` — and
+    /// `HomeRoom.online` is computed from it, so every room decoded as offline
+    /// for a week without a single test failing. A port that defaulted the
+    /// roster would draw `0 online · 0 offline · 0 provisioned` here.
+    @MainActor
+    func testRooms_SettingsRoomsDrawsTheRoster() throws {
+        let app = roomsOpen()
+        evidence(app, "rooms-10-roster")
+        XCTAssertTrue(
+            roomsSummaryText(app).exists,
+            "Settings → Rooms drew no summary line — either the slot is still "
+                + "the placeholder or the roster read did not land"
+        )
+        XCTAssertTrue(
+            containing(app, "kitchen").exists,
+            "the online room is not on the roster"
+        )
+        XCTAssertTrue(
+            containing(app, "study").exists,
+            "the offline room is not on the roster"
+        )
+        XCTAssertFalse(
+            app.staticTexts[ShellStringsUnderTest.notBuilt].exists,
+            "the Rooms section still says `not built yet` — the slot was not filled"
+        )
+    }
+
+    /// An offline room says when it was last heard from; an online one says
+    /// `active now`.
+    ///
+    /// The house's `study` carries `last_connected_at` and **no**
+    /// `last_seen_at`, so what this exercises is
+    /// ``roomsLastSeenISO(_:)``'s fallback — the preference for `last_seen_at`
+    /// itself is pinned in `RoomsRulesTests`, because the roster is the
+    /// house's and cannot be given the field from here (see this extension's
+    /// note).
+    @MainActor
+    func testRooms_OfflineRoomSaysWhenItWasLastSeen() throws {
+        let app = roomsOpen()
+        evidence(app, "rooms-11-last-seen")
+        XCTAssertTrue(
+            roomsWaitFor(app, RoomsStringsUnderTest.activeNow),
+            "the online room's card does not say `active now`"
+        )
+        // `_iso(-9000)` in the house's seed: two and a half hours.
+        XCTAssertTrue(
+            containing(app, "2h ago").exists,
+            "the offline room's card does not say how long ago it was heard "
+                + "from — `study` has a `last_connected_at` 9000s old"
+        )
+    }
+
+    /// The playing room shows its song and its clock; the quiet one does not
+    /// show the playing room's song.
+    ///
+    /// The second half is the discriminating one: `Harvest Moon` belongs to
+    /// `kitchen` alone, and a card that drew the roster's first `now_playing`
+    /// for every room would put it on `study` as well.
+    @MainActor
+    func testRooms_PlayingRoomShowsSongAndProgress() throws {
+        let app = roomsOpen()
+        evidence(app, "rooms-12-song")
+        XCTAssertTrue(
+            roomsWaitFor(app, "Harvest Moon"),
+            "the playing room's card does not name its song"
+        )
+        XCTAssertTrue(
+            containing(app, "Neil Young").exists,
+            "the song line has no artist in it"
+        )
+        // `elapsed_sec: 97` of `duration_sec: 302` -> `1:37 / 5:02`, and the
+        // ticker may have advanced it a second or two.
+        XCTAssertTrue(
+            containing(app, "/ 5:02").exists,
+            "the song clock does not show the track's length"
+        )
+        let study = app.buttons
+            .matching(NSPredicate(format: "label BEGINSWITH %@", "study"))
+            .firstMatch
+        XCTAssertTrue(study.exists, "no card for the offline room")
+        XCTAssertFalse(
+            study.label.contains("Harvest Moon"),
+            "the offline room's card is showing the playing room's song: \(study.label)"
+        )
+        XCTAssertTrue(
+            study.label.contains(RoomsStringsUnderTest.noMusic),
+            "the quiet room's card does not say `no music`: \(study.label)"
+        )
+    }
+
+    /// Opening a room shows **that room's** overview.
+    ///
+    /// The read rows name the room the card was for, and the two unknown
+    /// branches are asserted as such: the house's roster sends no `voice` and
+    /// no `mpd_ports`, so `registry default` and the em dash are the honest
+    /// readings — and a port that invented a default would draw a voice name
+    /// here.
+    @MainActor
+    func testRooms_OpeningARoomShowsItsOverview() throws {
+        let app = roomsOpen()
+        XCTAssertTrue(roomsOpenRoom(app, "kitchen"), "the kitchen card did not open")
+        evidence(app, "rooms-13-overview")
+        XCTAssertTrue(
+            roomsWaitFor(app, RoomsStringsUnderTest.roomIDLabel),
+            "the overview drew no read rows"
+        )
+        XCTAssertTrue(
+            containing(app, RoomsStringsUnderTest.registryDefault).exists,
+            "a room with no `voice` must read `registry default`"
+        )
+        XCTAssertTrue(
+            containing(app, RoomsStringsUnderTest.lastConnected).exists,
+            "the overview has no `last connected` row"
+        )
+        XCTAssertTrue(
+            containing(app, "kitchen-pi").exists,
+            "the health read's host name is not on screen — this is the value "
+                + "only this room's own health document carries"
+        )
+    }
+
+    /// Announcing into one room says **what happened**, which is not the
+    /// status code.
+    ///
+    /// The second half is the whole reason the app reads `announced_to`: in the
+    /// dead-socket state the server still answers 200 and the room is missing
+    /// from the list, and the sentence is a different one.
+    @MainActor
+    func testRooms_AnnounceToOneRoomSaysWhatHappened() throws {
+        let app = roomsOpen()
+        XCTAssertTrue(roomsOpenRoom(app, "kitchen"), "the kitchen card did not open")
+        let field = roomsField(app, RoomsStringsUnderTest.announceFieldLabel)
+        XCTAssertTrue(field.waitForExistence(timeout: 20), "no announce field for the room")
+        // The section heading is on screen as well, and says so: this is the
+        // assertion that the two are different elements.
+        XCTAssertTrue(
+            containing(app, RoomsStringsUnderTest.announceToKitchen).exists,
+            "the announce section is not labelled with the room it speaks in"
+        )
+        field.tap()
+        app.typeText("the kettle is on")
+        let send = app.buttons[RoomsStringsUnderTest.send].firstMatch
+        XCTAssertTrue(send.waitForExistence(timeout: 10), "no send button beside the announce field")
+        evidence(app, "rooms-14-announce")
+        send.tap()
+        XCTAssertTrue(
+            roomsWaitFor(app, RoomsStringsUnderTest.announcedToKitchen),
+            "sending an announcement said nothing"
+        )
+
+        // The same send against a house whose socket is dead: a 200 with an
+        // empty `announced_to`.
+        control("rooms-dead-ws", "{}", port: 6601, what: "the dead-socket state")
+        field.tap()
+        app.typeText("and again")
+        send.tap()
+        XCTAssertTrue(
+            roomsWaitFor(app, RoomsStringsUnderTest.acceptedButDidNotPlay),
+            "a 200 with nothing in `announced_to` was reported as a success"
+        )
+    }
+
+    /// The broadcast card reports who took it.
+    @MainActor
+    func testRooms_BroadcastReportsWhoTookIt() throws {
+        let app = roomsOpen()
+        let field = roomsField(app, RoomsStringsUnderTest.broadcastFieldLabel)
+        XCTAssertTrue(field.waitForExistence(timeout: 20), "no broadcast field on the roster")
+        XCTAssertTrue(
+            containing(app, RoomsStringsUnderTest.broadcastHeading).exists,
+            "the broadcast card has no heading"
+        )
+        field.tap()
+        app.typeText("dinner's ready")
+        let send = app.buttons[RoomsStringsUnderTest.broadcastButton].firstMatch
+        XCTAssertTrue(send.waitForExistence(timeout: 10), "no broadcast button")
+        evidence(app, "rooms-15-broadcast")
+        send.tap()
+        // One room is online and one took it.
+        XCTAssertTrue(
+            roomsWaitFor(app, RoomsStringsUnderTest.broadcastedToOneRoom),
+            "a delivered broadcast said nothing"
+        )
+
+        control("rooms-dead-ws", "{}", port: 6601, what: "the dead-socket state")
+        field.tap()
+        app.typeText("anyone there")
+        send.tap()
+        XCTAssertTrue(
+            roomsWaitFor(app, RoomsStringsUnderTest.noRoomsAccepted),
+            "a broadcast nothing accepted was reported as a success"
+        )
+    }
+
+    /// A drag sends **one** level, not one per step.
+    ///
+    /// The readback is what makes this an assertion about the wire: a POST per
+    /// slider value would both flood the room and arrive out of order, so the
+    /// level that stuck would be whichever request the server handled last.
+    @MainActor
+    func testRooms_VolumeSendsTheLevelOnce() throws {
+        let app = roomsOpen()
+        XCTAssertTrue(roomsOpenRoom(app, "kitchen"), "the kitchen card did not open")
+        let slider = app.sliders.firstMatch
+        XCTAssertTrue(slider.waitForExistence(timeout: 20), "no volume slider on the overview")
+        evidence(app, "rooms-16-volume")
+        slider.adjust(toNormalizedSliderPosition: 0.8)
+        XCTAssertTrue(
+            roomsWaitFor(app, RoomsStringsUnderTest.volumeSetPrefix),
+            "setting the volume said nothing"
+        )
+        let said = roomsAsk("rooms-volume")
+        XCTAssertTrue(
+            said.contains("\"count\": 1"),
+            "the app sent more than one volume POST for one drag: \(said)"
+        )
+        // 0.8 of 0..100. A tolerance, because the gesture lands where it
+        // lands; what is under test is that exactly one level went out and
+        // that it is the one the thumb ended on, not a value from the middle
+        // of the drag.
+        let posted = said
+            .split(separator: ":")
+            .last?
+            .trimmingCharacters(in: CharacterSet(charactersIn: " }\n"))
+        let level = Int(posted ?? "") ?? -1
+        XCTAssertTrue(
+            (70...90).contains(level),
+            "the level that went out was \(level), not the one the drag ended on: \(said)"
+        )
+    }
+
+    /// The timer-scope switch flips, and the server is told.
+    ///
+    /// The toast and the readback, because the switch is **optimistic**: it
+    /// moves before the PUT answers, so the position alone would pass against
+    /// an app that never sent anything.
+    @MainActor
+    func testRooms_TimerScopeSwitchSticks() throws {
+        let app = roomsOpen()
+        XCTAssertTrue(roomsOpenRoom(app, "kitchen"), "the kitchen card did not open")
+        let toggle = app.switches
+            .matching(NSPredicate(format: "label CONTAINS %@", RoomsStringsUnderTest.timerScopeLabel))
+            .firstMatch
+        XCTAssertTrue(toggle.waitForExistence(timeout: 20), "no timer-scope switch on the overview")
+        evidence(app, "rooms-17-timer-scope")
+        toggle.tap()
+        XCTAssertTrue(
+            roomsWaitFor(app, RoomsStringsUnderTest.ownTimersOnly),
+            "flipping the switch said nothing"
+        )
+        let said = roomsAsk("rooms-asked")
+        XCTAssertTrue(
+            said.contains("\"own_only\": true"),
+            "the PUT did not ask for `own_only: true`: \(said)"
+        )
+    }
+
+    /// Custom quiet hours need two clock times, and `7:5` is not one.
+    ///
+    /// Both halves: nothing is sent for a time that is not a 24-hour clock
+    /// time, and a good one is **normalised** before it goes — `7:05` is sent
+    /// as `07:05`, which is the readback's discriminating value.
+    @MainActor
+    func testRooms_QuietHoursCustomNeedsTwoClockTimes() throws {
+        let app = roomsOpen()
+        XCTAssertTrue(roomsOpenRoom(app, "kitchen"), "the kitchen card did not open")
+        XCTAssertTrue(roomsTab(app, RoomsStringsUnderTest.tabSettings), "no settings tab")
+        let custom = app.buttons[RoomsStringsUnderTest.quietCustom].firstMatch
+        XCTAssertTrue(custom.waitForExistence(timeout: 20), "no custom quiet-hours choice")
+        custom.tap()
+        let from = app.textFields[RoomsStringsUnderTest.quietFrom].firstMatch
+        XCTAssertTrue(from.waitForExistence(timeout: 20), "picking custom drew no `from` field")
+        // A tap lands the caret where it falls, so the field is cleared
+        // before anything is typed into it.
+        from.tap()
+        clearField(app)
+        // The Return key dismisses a single-line field's keyboard, which is
+        // what keeps `Save` reachable: it sits under the two fields, and a
+        // keyboard over it would take the tap instead.
+        app.typeText("7:5
+")
+        let save = app.buttons[RoomsStringsUnderTest.quietSave].firstMatch
+        XCTAssertTrue(save.waitForExistence(timeout: 10), "no Save on the custom hours")
+        evidence(app, "rooms-18-quiet-bad")
+        save.tap()
+        XCTAssertTrue(
+            roomsWaitFor(app, RoomsStringsUnderTest.timesLookLike),
+            "a time that is not a clock time was accepted silently"
+        )
+        var said = roomsAsk("rooms-asked")
+        XCTAssertFalse(
+            said.contains("\"custom\""),
+            "something was PUT for a time that is not a clock time: \(said)"
+        )
+
+        from.tap()
+        clearField(app)
+        app.typeText("7:05
+")
+        save.tap()
+        XCTAssertTrue(
+            roomsWaitFor(app, RoomsStringsUnderTest.keepsQuiet),
+            "saving good custom hours said nothing"
+        )
+        said = roomsAsk("rooms-asked")
+        XCTAssertTrue(
+            said.contains("\"start\": \"07:05\""),
+            "`7:05` was not normalised to `07:05` before it was sent: \(said)"
+        )
+    }
+
+    /// A masked reminder's words are **not** on screen.
+    ///
+    /// The one assertion on this screen that is about privacy rather than
+    /// layout: the server held those words back on purpose (rule M1,
+    /// `satellites.py:1090`), and the fixture keeps them in a constant it
+    /// never serialises — so this fails if the app ever puts a name on a
+    /// masked row from somewhere else.
+    @MainActor
+    func testRooms_TimersTabHidesMaskedReminderWords() throws {
+        let app = roomsOpen()
+        XCTAssertTrue(roomsOpenRoom(app, "kitchen"), "the kitchen card did not open")
+        XCTAssertTrue(roomsTab(app, RoomsStringsUnderTest.tabTimers), "no timers tab")
+        XCTAssertTrue(
+            roomsWaitFor(app, RoomsStringsUnderTest.timerWordsHidden),
+            "the masked reminder is not drawn as `reminder (words hidden)`"
+        )
+        evidence(app, "rooms-19-timers")
+        XCTAssertFalse(
+            containing(app, "take the pills").exists,
+            "a masked reminder's words are on screen"
+        )
+        // The two unmasked rows are named, so this is not passing because the
+        // tab drew nothing at all.
+        XCTAssertTrue(containing(app, "pasta water").exists, "the plain timer is missing")
+        XCTAssertTrue(containing(app, "laundry").exists, "the long timer is missing")
+    }
+
+    /// Cancelling a timer removes it, and cancelling one that has gone is not
+    /// reported as a failure.
+    @MainActor
+    func testRooms_CancellingATimerRemovesIt() throws {
+        let app = roomsOpen()
+        XCTAssertTrue(roomsOpenRoom(app, "kitchen"), "the kitchen card did not open")
+        XCTAssertTrue(roomsTab(app, RoomsStringsUnderTest.tabTimers), "no timers tab")
+        let row = containing(app, "pasta water")
+        XCTAssertTrue(row.waitForExistence(timeout: 20), "the timer to cancel is not there")
+        let cancels = app.buttons[RoomsStringsUnderTest.cancel]
+        XCTAssertTrue(cancels.firstMatch.waitForExistence(timeout: 10), "no cancel button")
+        evidence(app, "rooms-20-cancel")
+        // The first row's own cancel: the rows are in the fixture's order and
+        // `pasta water` is the first of the three.
+        cancels.element(boundBy: 0).tap()
+        XCTAssertTrue(
+            roomsWaitFor(app, RoomsStringsUnderTest.cancelledTimer),
+            "cancelling a timer said nothing"
+        )
+        XCTAssertTrue(
+            waitUntilGone(row),
+            "the cancelled timer is still on the list after the re-read"
+        )
+    }
+
+    /// The conversations search keeps the turn that matched and drops the one
+    /// that did not.
+    ///
+    /// `marmalade` is in one turn's words and `wellington` in another's, and
+    /// in no other turn — so both directions are asserted and a search that
+    /// did nothing fails on the second.
+    @MainActor
+    func testRooms_ConversationsSearchFiltersByWord() throws {
+        let app = roomsOpen()
+        XCTAssertTrue(roomsOpenRoom(app, "kitchen"), "the kitchen card did not open")
+        XCTAssertTrue(roomsTab(app, RoomsStringsUnderTest.tabConversations), "no conversations tab")
+        XCTAssertTrue(
+            roomsWaitFor(app, "marmalade"),
+            "the conversations tab drew no turns"
+        )
+        XCTAssertTrue(containing(app, "wellington").exists, "the second turn is missing")
+        let search = app.textFields[RoomsStringsUnderTest.searchThisRoom].firstMatch
+        XCTAssertTrue(search.waitForExistence(timeout: 20), "no search box on the conversations tab")
+        search.tap()
+        app.typeText("marmalade")
+        evidence(app, "rooms-21-search")
+        XCTAssertTrue(
+            roomsWaitFor(app, RoomsStringsUnderTest.oneOfFour),
+            "the count line does not say how many of how many are shown"
+        )
+        XCTAssertTrue(containing(app, "marmalade").exists, "the matching turn was filtered out")
+        XCTAssertFalse(
+            containing(app, "wellington").exists,
+            "the search kept a turn that does not contain the word"
+        )
+    }
+
+    /// A long answer is cut, and `more` reveals the rest.
+    ///
+    /// `sourdough` is past the 130-character cut and appears nowhere else in
+    /// the house, so "the answer was truncated" and "the answer was whole" are
+    /// different screens.
+    @MainActor
+    func testRooms_LongAnswerExpandsWithMore() throws {
+        let app = roomsOpen()
+        XCTAssertTrue(roomsOpenRoom(app, "kitchen"), "the kitchen card did not open")
+        XCTAssertTrue(roomsTab(app, RoomsStringsUnderTest.tabConversations), "no conversations tab")
+        XCTAssertTrue(roomsWaitFor(app, "Heat the oven"), "the long answer is not on screen")
+        XCTAssertFalse(
+            containing(app, "sourdough").exists,
+            "a 168-character answer was drawn whole — nothing cut it at 130"
+        )
+        let more = app.buttons[RoomsStringsUnderTest.more].firstMatch
+        XCTAssertTrue(more.waitForExistence(timeout: 20), "a truncated answer offers no `more`")
+        evidence(app, "rooms-22-more")
+        more.tap()
+        XCTAssertTrue(
+            roomsWaitFor(app, "sourdough"),
+            "`more` did not reveal the rest of the answer"
+        )
+        XCTAssertTrue(
+            app.buttons[RoomsStringsUnderTest.less].firstMatch.waitForExistence(timeout: 10),
+            "an expanded answer offers no `less`"
+        )
+    }
+
+    /// Recently played shows each row's source, and `+ add` only where the
+    /// server said it may.
+    ///
+    /// The refused state is the second half: `can_add` is computed without
+    /// consulting a fulfiller, so the honest thing when the house refuses is
+    /// to say **what the house said**.
+    @MainActor
+    func testRooms_RecentlyPlayedShowsSourceAndAdd() throws {
+        let app = roomsOpen()
+        XCTAssertTrue(roomsOpenRoom(app, "kitchen"), "the kitchen card did not open")
+        XCTAssertTrue(roomsTab(app, RoomsStringsUnderTest.tabRecentlyPlayed), "no recently-played tab")
+        XCTAssertTrue(roomsWaitFor(app, "The Rite of Spring"), "the library row is missing")
+        XCTAssertTrue(containing(app, "Lost Mariner").exists, "the external row is missing")
+        XCTAssertTrue(containing(app, "Nightwaves").exists, "the external row's channel is missing")
+        let adds = app.buttons[RoomsStringsUnderTest.add]
+        evidence(app, "rooms-23-played")
+        // **One** row may be added, and the server says which: two buttons
+        // would mean the library row had one too.
+        XCTAssertEqual(
+            adds.count,
+            1,
+            "there are \(adds.count) `add` buttons for one addable row"
+        )
+        // The server's own refusal wording, not a generic failure.
+        control("rooms-add", "{\"how\":\"no-fulfiller\"}", port: 6601, what: "the add refusal")
+        adds.element(boundBy: 0).tap()
+        XCTAssertTrue(
+            roomsWaitFor(app, RoomsStringsUnderTest.noFulfiller),
+            "a refused add did not say what the house said about it"
+        )
+    }
+
+    /// **The no-misleading-controls rule, as a test.**
+    ///
+    /// None of Android's admin controls is drawn anywhere in an opened room,
+    /// at either type size. This is the case that fails if a later edit ports
+    /// the buttons faithfully: each of them 401s, 403s or 501s every time from
+    /// a phone that holds only the household token.
+    @MainActor
+    func testRooms_NoAdminControlsAreDrawn() throws {
+        for mode in [Self.ordinaryTypeSize, "UICTContentSizeCategoryAccessibilityXXXL"] {
+            let app = roomsOpen(mode: mode)
+            XCTAssertTrue(roomsOpenRoom(app, "kitchen"), "the kitchen card did not open at \(mode)")
+            evidence(app, "rooms-24-no-admin-\(mode)")
+            for forbidden in RoomsStringsUnderTest.adminControls {
+                XCTAssertFalse(
+                    app.buttons[forbidden].exists,
+                    "`\(forbidden)` is drawn at \(mode) — it is an admin-tier "
+                        + "control and would fail every time from this phone"
+                )
+            }
+            // The facts stay, and one line says where the buttons are.
+            XCTAssertTrue(
+                roomsWaitFor(app, RoomsStringsUnderTest.upgradeIsOnTheDashboard),
+                "nothing says where restarting and upgrading are done"
+            )
+            app.terminate()
+        }
+    }
+
+    /// `hang up` is offered only for a room that is in a call — and no room
+    /// here is.
+    ///
+    /// MAP's case the one way round the house can support: `in_call_with` is
+    /// not in the roster the house serves (see this extension's note), so what
+    /// is testable is that the control is absent and the honest sentence is
+    /// drawn. The present-case half is pinned in `RoomsRulesTests` against
+    /// ``roomsDropInState(_:)``.
+    @MainActor
+    func testRooms_HangUpIsNotOfferedWhenNoRoomIsInACall() throws {
+        let app = roomsOpen()
+        XCTAssertTrue(roomsOpenRoom(app, "kitchen"), "the kitchen card did not open")
+        XCTAssertTrue(
+            roomsWaitFor(app, RoomsStringsUnderTest.dropInLabel),
+            "the overview has no drop-in section"
+        )
+        evidence(app, "rooms-25-dropin")
+        XCTAssertFalse(
+            app.buttons[RoomsStringsUnderTest.hangUp].exists,
+            "`hang up` is drawn for a room that is not in a call"
+        )
+        // The house's roster sends no `full_duplex`, so this room reads as one
+        // whose mic cannot do drop-in at all — which is the honest sentence
+        // for the data, and not the `starting a drop-in needs the dashboard`
+        // one.
+        XCTAssertTrue(
+            containing(app, RoomsStringsUnderTest.noAecMic).exists,
+            "a room with no echo-cancelling array does not say so"
+        )
+    }
+
+    /// The health read's two maintenance lines, and the room that has neither.
+    @MainActor
+    func testRooms_RebootNeededSaysWhatToDo() throws {
+        let app = roomsOpen()
+        XCTAssertTrue(roomsOpenRoom(app, "kitchen"), "the kitchen card did not open")
+        XCTAssertTrue(
+            roomsWaitFor(app, RoomsStringsUnderTest.rebootNeeded),
+            "a room whose health says a reboot is wanted does not say so"
+        )
+        evidence(app, "rooms-26-reboot")
+        XCTAssertTrue(
+            containing(app, "Unplug it for a few seconds").exists,
+            "the reboot line does not say what to do about it"
+        )
+        XCTAssertTrue(
+            containing(app, "kernel updated").exists,
+            "the reason the satellite gave is not on screen"
+        )
+        XCTAssertTrue(
+            containing(app, RoomsStringsUnderTest.bootNetworkStep).exists,
+            "the boot network step is not drawn for a sample that has one"
+        )
+        XCTAssertTrue(
+            containing(app, "wpa_supplicant").exists,
+            "the boot step's own detail is not on screen"
+        )
+        // **The other room draws none of it**: `study` answers
+        // `{"latest": null}`, so a panel built from a stale read would show
+        // the kitchen's reason here.
+        app.buttons[RoomsStringsUnderTest.closeRoom].firstMatch.tap()
+        XCTAssertTrue(roomsOpenRoom(app, "study"), "the study card did not open")
+        XCTAssertTrue(
+            roomsWaitFor(app, RoomsStringsUnderTest.upgradeIsOnTheDashboard),
+            "the study's maintenance section did not draw"
+        )
+        evidence(app, "rooms-26-reboot-other")
+        XCTAssertFalse(
+            containing(app, "kernel updated").exists,
+            "a room with no health document is showing another room's reason"
+        )
+        XCTAssertFalse(
+            containing(app, RoomsStringsUnderTest.rebootNeeded).exists,
+            "a room with no health document is drawing the reboot pill"
+        )
+    }
+
+    /// The settings tab shows what the room is set to and offers no way to
+    /// change it.
+    ///
+    /// The values are the server's — `Hello Domo` is the `choice_labels` entry
+    /// for `hello_domo`, so a row that printed the raw value would fail — and
+    /// there is no switch, no dropdown and no save anywhere on the tab, which
+    /// is what `PATCH …/config` being admin means for a phone.
+    @MainActor
+    func testRooms_ConfigFieldsAreReadOnly() throws {
+        let app = roomsOpen()
+        XCTAssertTrue(roomsOpenRoom(app, "kitchen"), "the kitchen card did not open")
+        XCTAssertTrue(roomsTab(app, RoomsStringsUnderTest.tabSettings), "no settings tab")
+        XCTAssertTrue(roomsWaitFor(app, "microphone"), "the config fields are not drawn")
+        evidence(app, "rooms-27-config")
+        XCTAssertTrue(
+            containing(app, "Hello Domo").exists,
+            "a `choice` field drew its raw value instead of its `choice_labels` entry"
+        )
+        XCTAssertTrue(containing(app, "6 dB").exists, "an `int` field dropped its unit")
+        XCTAssertTrue(
+            containing(app, RoomsStringsUnderTest.configIsReadOnly).exists,
+            "nothing says where this room's settings are changed"
+        )
+        // Quiet hours is the one writable thing on this tab, and its radios
+        // are buttons rather than switches — so a switch anywhere here is a
+        // config field that was made editable.
+        XCTAssertEqual(
+            app.switches.count,
+            0,
+            "the settings tab has \(app.switches.count) switch(es) on it — "
+                + "`PATCH …/config` is admin and nothing here may be edited"
+        )
+        for forbidden in RoomsStringsUnderTest.adminControls {
+            XCTAssertFalse(
+                app.buttons[forbidden].exists,
+                "`\(forbidden)` is drawn on the settings tab"
+            )
+        }
+    }
+
+    /// The sessions tab says what the server answered.
+    ///
+    /// The server here is `fixtures/manual.py`, which claims
+    /// `/api/satellites/` and answers `…/{room}/sessions` with an empty array
+    /// before `fixtures/rooms.py` is offered the request (see this
+    /// extension's note). So the honest assertion is the empty state, plus
+    /// that it is **not** the error branch — a read that 500ed and a room with
+    /// no sessions are different screens, and that difference is the whole of
+    /// what this tab decides.
+    @MainActor
+    func testRooms_SessionsTabSaysWhatTheServerAnswered() throws {
+        let app = roomsOpen()
+        XCTAssertTrue(roomsOpenRoom(app, "kitchen"), "the kitchen card did not open")
+        XCTAssertTrue(roomsTab(app, RoomsStringsUnderTest.tabSessions), "no sessions tab")
+        XCTAssertTrue(
+            roomsWaitFor(app, RoomsStringsUnderTest.noSessions),
+            "the sessions tab drew neither sessions nor its empty state"
+        )
+        evidence(app, "rooms-28-sessions")
+        XCTAssertFalse(
+            containing(app, "HTTP 5").exists,
+            "the sessions tab is showing a transport failure, not an empty room"
+        )
+    }
+
+    /// The notes tab draws the room's notes.
+    @MainActor
+    func testRooms_NotesTabDrawsWhatWasJottedDown() throws {
+        let app = roomsOpen()
+        XCTAssertTrue(roomsOpenRoom(app, "kitchen"), "the kitchen card did not open")
+        XCTAssertTrue(roomsTab(app, RoomsStringsUnderTest.tabNotes), "no notes tab")
+        XCTAssertTrue(
+            roomsWaitFor(app, "the recycling goes out on Thursday"),
+            "the notes tab did not draw the room's note"
+        )
+        evidence(app, "rooms-29-notes")
+    }
+
+    /// The screen grows with the type size — **measured**, not read off the
+    /// audit's headline.
+    ///
+    /// A named Dynamic Type finding has twice been a false positive on this
+    /// track, so this compares the same two elements' heights at the ordinary
+    /// size and at AX5: the room card on the roster, and a timer row inside a
+    /// room.
+    @MainActor
+    func testRooms_TheScreenGrowsWithTheTypeSize() throws {
+        var card: [String: CGFloat] = [:]
+        var timer: [String: CGFloat] = [:]
+        for (name, mode) in [
+            ("ordinary", Self.ordinaryTypeSize),
+            ("AX5", "UICTContentSizeCategoryAccessibilityXXXL"),
+        ] {
+            let app = roomsOpen(mode: mode)
+            let kitchen = app.buttons
+                .matching(NSPredicate(format: "label BEGINSWITH %@", "kitchen"))
+                .firstMatch
+            XCTAssertTrue(kitchen.waitForExistence(timeout: 25), "no kitchen card at \(name)")
+            card[name] = kitchen.frame.height
+            XCTAssertTrue(roomsOpenRoom(app, "kitchen"), "the kitchen card did not open at \(name)")
+            XCTAssertTrue(roomsTab(app, RoomsStringsUnderTest.tabTimers), "no timers tab at \(name)")
+            let row = containing(app, "pasta water")
+            XCTAssertTrue(row.waitForExistence(timeout: 25), "no timer row at \(name)")
+            timer[name] = row.frame.height
+            evidence(app, "rooms-30-type-\(name)")
+            print("ROOMS SCALE [\(name)] card=\(card[name] ?? -1) timer=\(timer[name] ?? -1)")
+            app.terminate()
+        }
+        XCTAssertGreaterThan(
+            card["AX5"] ?? 0,
+            (card["ordinary"] ?? 0) * 1.3,
+            "the room card is \(card["AX5"] ?? 0) points tall at AX5 against "
+                + "\(card["ordinary"] ?? 0) at the ordinary size — it is not growing"
+        )
+        XCTAssertGreaterThan(
+            timer["AX5"] ?? 0,
+            (timer["ordinary"] ?? 0) * 1.3,
+            "the timer row is \(timer["AX5"] ?? 0) points tall at AX5 against "
+                + "\(timer["ordinary"] ?? 0) at the ordinary size"
+        )
+    }
+
+    /// Apple's audit, on the roster and on an opened room.
+    ///
+    /// Classified by **signature** (``floorAndRest(_:)``), never by a pinned
+    /// total: this is a pushed screen, so it sits on the measured
+    /// ``knownPushedBarFloor`` of anonymous Dynamic Type findings, and
+    /// anything the audit can attribute to an element is a defect to fix.
+    @MainActor
+    func testRooms_Audit() throws {
+        let app = roomsOpen(pushDelay: Self.pushDelay)
+        XCTAssertTrue(
+            roomsSummaryText(app).waitForExistence(timeout: 30),
+            "the roster did not draw, so there is nothing to audit"
+        )
+        evidence(app, "rooms-31-audit-roster")
+        let roster = try auditIssues(app, "rooms-roster")
+        let rosterSplit = Self.floorAndRest(roster)
+        print("ROOMS AUDIT roster floor=\(rosterSplit.floor) rest=\(rosterSplit.rest.count)")
+
+        XCTAssertTrue(roomsOpenRoom(app, "kitchen"), "the kitchen card did not open")
+        XCTAssertTrue(roomsWaitFor(app, RoomsStringsUnderTest.roomIDLabel), "the overview did not draw")
+        evidence(app, "rooms-31-audit-detail")
+        let detail = try auditIssues(app, "rooms-detail")
+        let detailSplit = Self.floorAndRest(detail)
+        print("ROOMS AUDIT detail floor=\(detailSplit.floor) rest=\(detailSplit.rest.count)")
+
+        XCTAssertTrue(
+            rosterSplit.rest.isEmpty,
+            "Apple's audit has findings against the Rooms roster beyond the "
+                + "measured floor: " + rosterSplit.rest.joined(separator: " / ")
+        )
+        XCTAssertTrue(
+            detailSplit.rest.isEmpty,
+            "Apple's audit has findings against an opened room beyond the "
+                + "measured floor: " + detailSplit.rest.joined(separator: " / ")
+        )
+        XCTAssertEqual(
+            rosterSplit.floor,
+            Self.knownPushedBarFloor,
+            "the Rooms roster's anonymous floor is \(rosterSplit.floor), not the "
+                + "known \(Self.knownPushedBarFloor): " + roster.joined(separator: " | ")
+        )
+    }
+}
+
+/// The words these cases match on, spelled out rather than imported.
+///
+/// Deliberately **not** `@testable import DomovoiKit`: a UI test drives the app
+/// through the same surface a person does, and a query that silently followed a
+/// renamed string would stop testing what it claims to. Each one is
+/// ``RoomsStrings``' value, or the stub house's own data.
+enum RoomsStringsUnderTest {
+
+    /// ``RoomsStrings/summary(online:offline:provisioned:)`` for the house's
+    /// two rooms. **U+00B7 with one space each side.**
+    static let summary = "1 online · 1 offline · 2 provisioned"
+
+    static let activeNow = "active now"
+    static let noMusic = "no music"
+    static let closeRoom = "close this room"
+
+    static let roomIDLabel = "room id"
+    static let registryDefault = "registry default"
+    static let lastConnected = "last connected"
+
+    static let send = "send"
+    /// The section's heading (``RoomsStrings/announceTo(room:)``), which is a
+    /// `Text` of its own.
+    static let announceToKitchen = "announce to kitchen"
+    /// The **field**'s label, which is its placeholder
+    /// (``RoomsStrings/announcePlaceholder(room:)``) and is deliberately not
+    /// the heading above it. **The ellipsis is U+2026.**
+    static let announceFieldLabel = "speak in the kitchen room…"
+    static let announcedToKitchen = "announced to kitchen"
+    /// ``RoomsStrings/acceptedButDidNotPlay(_:)`` — the sentence the whole
+    /// `announced_to` reading exists for. Matched on its tail, because the
+    /// **U+2014 em dash** in the middle is the part most likely to be
+    /// mistyped in a test and the part that must not change in the app.
+    static let acceptedButDidNotPlay = "accepted the request but didn't play — connection may be dead"
+
+    static let broadcastHeading = "Broadcast"
+    /// ``RoomsStrings/broadcastFieldLabel`` — iOS only, and drawn nowhere
+    /// else on the card.
+    static let broadcastFieldLabel = "broadcast to every room"
+    static let broadcastButton = "broadcast"
+    /// ``HomeToastStrings/broadcastedToPrefix`` plus ``plural(_:_:_:)``.
+    static let broadcastedToOneRoom = "broadcasted to 1 room"
+    /// ``HomeToastStrings/noRoomsAccepted``.
+    static let noRoomsAccepted = "broadcast queued but no rooms accepted it"
+
+    /// ``RoomsStrings/volumeSet(room:level:)``'s start, without the level.
+    static let volumeSetPrefix = "kitchen volume set to"
+
+    static let timerScopeLabel = "Only reminders for this device"
+    /// ``RoomsStrings/timerScopeToast(room:on:)`` with `on: true`.
+    static let ownTimersOnly = "kitchen now announces only its own timers and reminders"
+
+    /// ``RoomsStrings/quietModes``' second entry.
+    static let quietCustom = "Custom hours"
+    static let quietFrom = "from"
+    static let quietSave = "Save"
+    static let timesLookLike = "times look like 22:00"
+    /// ``RoomsStrings/quietToast(room:mode:start:end:)``'s custom branch, up
+    /// to the normalised time.
+    static let keepsQuiet = "kitchen keeps quiet 07:05"
+
+    /// `SAT_TIMER_WORDS_HIDDEN` — rule M1.
+    static let timerWordsHidden = "reminder (words hidden)"
+    static let cancel = "cancel"
+    /// ``RoomsStrings/cancelled(kind:id:)`` for the fixture's first timer.
+    static let cancelledTimer = "cancelled timer #41"
+
+    static let searchThisRoom = "search this room…"
+    /// ``RoomsStrings/countOf(_:_:)`` once `marmalade` has filtered four turns
+    /// to one.
+    static let oneOfFour = "1 of 4"
+    static let more = "more"
+    static let less = "less"
+
+    static let add = "add"
+    /// The stub's own refusal, surfaced as the server wrote it.
+    static let noFulfiller = "no fulfiller plugin is installed"
+
+    static let dropInLabel = "drop in"
+    static let hangUp = "hang up"
+    static let noAecMic = "this room's mic can't do drop-in"
+
+    static let rebootNeeded = "reboot needed"
+    static let bootNetworkStep = "boot network step"
+    static let upgradeIsOnTheDashboard =
+        "restarting and upgrading a room are done from the dashboard on a computer"
+    static let configIsReadOnly = "Changing any of it is done from the dashboard on a computer."
+
+    static let noSessions = "no sessions in this room"
+
+    static let tabSessions = "sessions"
+    static let tabConversations = "conversations"
+    static let tabRecentlyPlayed = "recently played"
+    static let tabNotes = "notes"
+    static let tabTimers = "timers"
+    static let tabSettings = "settings"
+
+    /// Every control Android draws that this phone cannot work, by the label
+    /// it would carry. ``testRooms_NoAdminControlsAreDrawn`` asserts none of
+    /// them exists; each would 401, 403 or 501 every time.
+    static let adminControls = ["restart", "upgrade", "save & restart", "start", "reboot"]
+}

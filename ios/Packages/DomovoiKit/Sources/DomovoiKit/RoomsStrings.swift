@@ -59,6 +59,15 @@ public enum RoomsStrings {
     public static let broadcastPlaceholder = "dinner's ready"
     public static let broadcastButton = "broadcast"
 
+    /// **iOS only.** The field's accessibility label.
+    ///
+    /// The placeholder vanishes the moment anything is typed, so it cannot be
+    /// the label — and the two sentences already on the card
+    /// (``broadcastHeading`` and ``broadcastHelp``) are each drawn as text of
+    /// their own, so either as a label would make two elements answer to one
+    /// name. Android needs none of this: its field is inside a labelled row.
+    public static let broadcastFieldLabel = "broadcast to every room"
+
     /// `"$onlineCount online"` on the card's pill (`SatellitesScreen.kt:366`).
     public static func onlinePill(_ count: Int) -> String { "\(count) online" }
 

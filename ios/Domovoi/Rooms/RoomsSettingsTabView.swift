@@ -44,7 +44,7 @@ struct RoomsSettingsTabView: View {
             // control: "Same as the house" and "Off for this room" do not fit
             // a phone's width between them, and `minimumScaleFactor` is
             // rejected throughout this app.
-            ForEach(RoomsStrings.quietModes, id: \.value) { choice in
+            ForEach(RoomsQuietChoice.all) { choice in
                 quietChoice(choice)
             }
             if reads.quietMode == "custom" {
@@ -62,12 +62,12 @@ struct RoomsSettingsTabView: View {
     /// Picking `house` or `off` saves at once; picking `custom` saves
     /// **nothing** on its own, because the two times are what it means and
     /// they may not be clock times yet (`SatQuietHours.kt:150-152`).
-    private func quietChoice(_ choice: (value: String, label: String)) -> some View {
-        let picked = reads.quietMode == choice.value
+    private func quietChoice(_ choice: RoomsQuietChoice) -> some View {
+        let picked = reads.quietMode == choice.id
         return Button {
-            reads.quietModeDraft = choice.value
-            if choice.value != "custom" {
-                model.saveQuietHours(room, mode: choice.value)
+            reads.quietModeDraft = choice.id
+            if choice.id != "custom" {
+                model.saveQuietHours(room, mode: choice.id)
             }
         } label: {
             HStack(spacing: 8) {
@@ -166,8 +166,8 @@ struct RoomsSettingsTabView: View {
                         .foregroundStyle(Color.fgMuted)
                         .fixedSize(horizontal: false, vertical: true)
                     let split = roomsConfigSplit(answer.fields)
-                    ForEach(roomsConfigGroups(split.common), id: \.group) { group in
-                        groupRows(group.group, group.fields)
+                    ForEach(RoomsConfigGroup.of(split.common)) { group in
+                        groupRows(group.id, group.fields)
                     }
                     if !split.advanced.isEmpty {
                         // Android puts the advanced fields behind a disclosure
@@ -175,8 +175,8 @@ struct RoomsSettingsTabView: View {
                         // changes anything, so the disclosure stays (it is a
                         // long list nobody scans) and the warning does not.
                         DisclosureGroup(RoomsStrings.advancedGroup) {
-                            ForEach(roomsConfigGroups(split.advanced), id: \.group) { group in
-                                groupRows(group.group, group.fields)
+                            ForEach(RoomsConfigGroup.of(split.advanced)) { group in
+                                groupRows(group.id, group.fields)
                             }
                         }
                         .font(.subheadline)
@@ -231,5 +231,40 @@ struct RoomsSettingsTabView: View {
             .quaternary.opacity(0.4),
             in: RoundedRectangle(cornerRadius: 12, style: .continuous)
         )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Two shapes a `ForEach` can take
+//
+// ``RoomsStrings/quietModes`` and ``roomsConfigGroups(_:)`` are both arrays of
+// **labelled tuples**, which is the right shape for a rule that a test reads
+// and the wrong one for a view: Swift has no key path to a tuple element, so
+// `ForEach(..., id: \.value)` does not compile at all. Rather than change two
+// package signatures a package test already pins, each is wrapped here, in the
+// one file that iterates it.
+// ---------------------------------------------------------------------------
+
+/// One quiet-hours mode, as a row (`QUIET_CHOICES`, `SatQuietHours.kt:58`).
+struct RoomsQuietChoice: Identifiable {
+
+    /// The value the server takes — `house`, `custom`, `off`.
+    let id: String
+    let label: String
+
+    static let all: [RoomsQuietChoice] = RoomsStrings.quietModes.map {
+        RoomsQuietChoice(id: $0.value, label: $0.label)
+    }
+}
+
+/// One group of config fields, **in the order the server listed them**
+/// (``roomsConfigGroups(_:)`` keeps first-appearance order on purpose).
+struct RoomsConfigGroup: Identifiable {
+
+    let id: String
+    let fields: [RoomsConfigField]
+
+    static func of(_ fields: [RoomsConfigField]) -> [RoomsConfigGroup] {
+        roomsConfigGroups(fields).map { RoomsConfigGroup(id: $0.group, fields: $0.fields) }
     }
 }

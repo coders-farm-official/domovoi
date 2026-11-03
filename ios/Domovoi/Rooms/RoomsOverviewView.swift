@@ -269,7 +269,10 @@ struct RoomsOverviewView: View {
         .overlay {
             RoundedRectangle(cornerRadius: 8).strokeBorder(.quaternary)
         }
-        .accessibilityLabel(RoomsStrings.announceTo(room: room.roomID))
+        // The **placeholder**, not the section label above it: that label is
+        // drawn as a `Text` of its own, and two elements answering to one
+        // name is what sends a tap to the heading instead of the field.
+        .accessibilityLabel(RoomsStrings.announcePlaceholder(room: room.roomID))
         // **No `submitLabel` and no `onSubmit`.** A vertical-axis field's
         // Return key makes a newline and `onSubmit` never fires, so a key
         // labelled `send` would lie — the defect measured in the Chat composer
