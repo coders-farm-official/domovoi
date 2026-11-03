@@ -161,7 +161,7 @@ struct CalendarScreenView: View {
         // beside a two-line title leaves the button about four characters of
         // width at AX5, and this header is the one place on the screen where
         // a control and a heading compete for the same line.
-        AdaptiveHeaderStack(stacked: typeSize.isAccessibilitySize) {
+        CalendarHeaderStack(stacked: typeSize.isAccessibilitySize) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(CalendarStrings.title)
                     .font(.title2)
@@ -407,10 +407,16 @@ struct CalendarNoteView: View {
 /// A heading and a control: side by side, or stacked at an accessibility
 /// size.
 ///
+/// Named for this screen, not for the shape, even though nothing about it is
+/// calendar-specific: twenty branches are adding files to this one module
+/// tonight and "a heading beside a control" is the likeliest shape for two of
+/// them to need. A bare `AdaptiveHeaderStack` in two of them is an
+/// `invalid redeclaration` found only when a train merges them.
+///
 /// Its own type rather than an `if` in the body, because the two branches
 /// must hold the **same** two subviews — a header written twice is a header
 /// whose two spellings drift, and this app has one of those already.
-struct AdaptiveHeaderStack<Leading: View, Trailing: View>: View {
+struct CalendarHeaderStack<Leading: View, Trailing: View>: View {
 
     let stacked: Bool
     let leading: Leading

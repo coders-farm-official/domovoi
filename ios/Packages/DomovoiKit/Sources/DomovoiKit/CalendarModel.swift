@@ -86,6 +86,12 @@ public final class CalendarModel {
     /// The row the confirm alert is about — `deleteTarget` (`:94`).
     public private(set) var deleteTarget: CalendarEntry?
 
+    /// Which house the last confirm alert was raised in, captured when it was
+    /// asked for. ``confirmDelete(_:)`` takes its row as an argument rather
+    /// than reading ``deleteTarget`` back, so this — and not the target — is
+    /// what keeps a pending delete belonging to one house.
+    private var deleteAskedServer: String?
+
     /// What the last write said. Read and cleared by the screen, like
     /// ``MusicModel/takeToast()``.
     public private(set) var toast: String?
@@ -147,6 +153,7 @@ public final class CalendarModel {
         selectedID = nil
         draft = nil
         deleteTarget = nil
+        deleteAskedServer = nil
         toast = nil
     }
 
@@ -279,8 +286,14 @@ public final class CalendarModel {
 
     public func askToDelete(_ entry: CalendarEntry) {
         deleteTarget = entry
+        deleteAskedServer = container.store.serverURL
     }
 
+    /// **Leaves ``deleteAskedServer`` alone on purpose.** The alert's
+    /// dismissal binding calls this from the very same tap that confirms, in
+    /// an order SwiftUI does not contract, so clearing the house here would
+    /// put back the silent no-op ``confirmDelete(_:)`` was changed to avoid.
+    /// Only a new ask or a house change writes it.
     public func cancelDelete() {
         deleteTarget = nil
     }
@@ -334,11 +347,22 @@ public final class CalendarModel {
     /// the route answers **204 with no body** (`calendar.py:172`) and a
     /// decoding delete would throw on the empty reply — a delete that worked
     /// and said it failed.
-    public func confirmDelete() {
-        guard let entry = deleteTarget else { return }
+    ///
+    /// **The row is an argument, not a read of ``deleteTarget``.** The alert's
+    /// destructive button and the binding that calls ``cancelDelete()`` on
+    /// dismissal both fire from one tap, and SwiftUI does not contract which
+    /// goes first: reading the target back here made a confirm that ran second
+    /// a silent no-op — the alert closed, the sheet closed, no DELETE was sent
+    /// and nothing said so. What keeps the delete bound to one house is
+    /// ``deleteAskedServer``, captured when the alert was asked for.
+    public func confirmDelete(_ entry: CalendarEntry) {
         deleteTarget = nil
-        let client = container.client
         let asked = container.store.serverURL
+        // The house the alert was raised in, not the row: a confirm after the
+        // saved server moved names an id that belongs to the house the person
+        // has left.
+        guard deleteAskedServer == asked else { return }
+        let client = container.client
         Task { @MainActor [weak self] in
             do throws(DomovoiError) {
                 try await client.send(method: "DELETE", path: "/api/calendar/events/\(entry.id)")

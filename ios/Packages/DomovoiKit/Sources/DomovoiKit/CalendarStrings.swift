@@ -208,17 +208,15 @@ public enum CalendarStrings {
     ///
     /// **iOS-only wording:** this port's month cell draws dots rather than
     /// title chips (DECISIONS §4), so the count stands alone in a cell with no
-    /// room for a word: `+2`, not `+2 more`. The full sentence is what
-    /// VoiceOver gets, through ``moreEventsLabel(_:)``.
+    /// room for a word: `+2`, not `+2 more`.
+    ///
+    /// Nothing reads it out: the chip sits inside the cell's `Button`, whose
+    /// `accessibilityValue` is ``dayEvents(_:)`` over **every** event on the
+    /// day, overflow included, so VoiceOver already hears the number the `+2`
+    /// is standing in for. A second sentence for the overflow alone used to
+    /// live here; it had no caller and said nothing new, so it is gone.
     public static func moreCount(_ overflow: Int) -> String {
         "+\(overflow)"
-    }
-
-    /// **iOS-only:** what VoiceOver reads for ``moreCount(_:)``, which is a
-    /// bare `+2` on screen. Android's chips name themselves, so it has no
-    /// equivalent.
-    public static func moreEventsLabel(_ overflow: Int) -> String {
-        overflow == 1 ? "1 more event" : "\(overflow) more events"
     }
 
     /// **iOS-only:** what a month cell is worth to VoiceOver, as its

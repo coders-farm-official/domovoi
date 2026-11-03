@@ -113,9 +113,16 @@ public struct CalendarEntry: Equatable, Sendable, Decodable, Identifiable {
 /// `startLocal()` (`CalendarModels.kt:33`) as epoch milliseconds.
 ///
 /// **`Int64.max` for a timestamp that will not parse**, which is
-/// ``eventStartMs(_:)``'s choice for the same reason: an unreadable time sorts
-/// last and falls outside every window, so it is dropped rather than drawn at
-/// the epoch.
+/// ``eventStartMs(_:)``'s choice: an unreadable time sorts last and is drawn
+/// nowhere, rather than drawn at the epoch.
+///
+/// Being outside the window is only *half* of why it disappears, and the half
+/// that does not carry here. Month and day view compare the sentinel's date
+/// against the anchor and so drop it; the agenda's window has a floor and no
+/// ceiling, so `Int64.max` passes it — and `CalendarDay(ms: Int64.max, …)`
+/// falls out of the Gregorian component range and groups under 1970. The
+/// agenda therefore drops the sentinel **by name**
+/// (``calendarVisibleEvents(mode:anchor:events:in:)``) and not by its window.
 ///
 /// **A deliberate divergence from Android**, which falls back to
 /// `LocalDateTime.now()` (`:34`) — so over there an event whose `starts_at`

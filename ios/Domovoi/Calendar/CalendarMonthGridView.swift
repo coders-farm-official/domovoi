@@ -49,13 +49,19 @@ struct CalendarMonthGridView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        // Built **once** per body pass and sliced below. `monthCells` is a
+        // computed property that walks the whole list (up to the route's 500
+        // rows), makes a `CalendarDay` per row and then all 42 cells; read
+        // once per grid row it did that six times on every redraw — a toast
+        // arriving, a chevron, a type-size change.
+        let all = calendar.monthCells
+        return VStack(alignment: .leading, spacing: 8) {
             ScrollView(.horizontal) {
                 VStack(spacing: 2) {
                     heads
                     ForEach(0..<6, id: \.self) { row in
                         HStack(spacing: 2) {
-                            ForEach(cells(row: row)) { cell in
+                            ForEach(cells(row: row, of: all)) { cell in
                                 cellView(cell)
                             }
                         }
@@ -86,8 +92,7 @@ struct CalendarMonthGridView: View {
         }
     }
 
-    private func cells(row: Int) -> [CalendarMonthCell] {
-        let all = calendar.monthCells
+    private func cells(row: Int, of all: [CalendarMonthCell]) -> [CalendarMonthCell] {
         let start = row * 7
         guard start < all.count else { return [] }
         return Array(all[start..<min(start + 7, all.count)])

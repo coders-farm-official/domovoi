@@ -79,7 +79,15 @@ struct CalendarEventSheetView: View {
                     // delete is: the request belongs to the model and
                     // outlives this sheet, and the toast reports either
                     // outcome over whatever is on screen then.
-                    calendar.confirmDelete()
+                    //
+                    // The row is **passed**, as `MusicTrackSheet` passes its
+                    // track: this tap also drives `confirming`'s setter,
+                    // which calls `cancelDelete()`, and SwiftUI does not
+                    // contract which runs first. A `confirmDelete()` that
+                    // read the target back was a no-op on the order where the
+                    // dismissal won — a destructive control that silently did
+                    // nothing.
+                    calendar.confirmDelete(entry)
                     dismiss()
                 }
                 Button(CalendarStrings.cancel, role: .cancel) {

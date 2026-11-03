@@ -499,7 +499,7 @@ final class CalendarModelTests: XCTestCase {
         XCTAssertEqual(CalendarStrings.deleteTitle, "delete event")
         XCTAssertEqual(#"Delete "call Mum"? This can't be undone."#, CalendarStrings.deleteBody(row.title))
 
-        model.confirmDelete()
+        model.confirmDelete(row)
         await settleUntil({ model.toast != nil }, "the delete")
         XCTAssertEqual(#"deleted "call Mum""#, model.toast)
         XCTAssertNil(model.selectedID)
@@ -507,6 +507,8 @@ final class CalendarModelTests: XCTestCase {
         XCTAssertTrue(house.seen.current.contains("DELETE /api/calendar/events/3"))
     }
 
+    /// Cancel is the alert's **other** button: it closes the alert and
+    /// `confirmDelete(_:)` is never reached.
     func testCancellingTheAlertDeletesNothing() async {
         let (model, house, _, _) = rig()
         await started(model)
@@ -514,9 +516,52 @@ final class CalendarModelTests: XCTestCase {
         guard let row = model.selected else { return XCTFail("nothing selected") }
         model.askToDelete(row)
         model.cancelDelete()
-        model.confirmDelete()
+        XCTAssertNil(model.deleteTarget)
         await everythingLands()
         XCTAssertEqual(["GET /api/calendar/events"], house.seen.current)
+        XCTAssertNil(model.toast)
+    }
+
+    /// **The dismissal racing the confirm.** The alert's destructive button
+    /// and the `isPresented` binding that calls ``CalendarModel/cancelDelete()``
+    /// fire from one tap, in an order SwiftUI does not contract. On the order
+    /// where the dismissal wins, a `confirmDelete()` that read `deleteTarget`
+    /// back found it nil and did nothing at all — no DELETE, no toast, the row
+    /// still there. The row is an argument now, so either order deletes.
+    func testADismissalRacingTheConfirmStillDeletes() async {
+        let (model, house, _, _) = rig()
+        await started(model)
+        model.select(3)
+        guard let row = model.selected else { return XCTFail("nothing selected") }
+        model.askToDelete(row)
+        model.cancelDelete()
+        model.confirmDelete(row)
+        await settleUntil({ model.toast != nil }, "the delete")
+        XCTAssertEqual(#"deleted "call Mum""#, model.toast)
+        XCTAssertTrue(house.seen.current.contains("DELETE /api/calendar/events/3"))
+    }
+
+    /// And the house check that replaced the target read: a confirm after the
+    /// saved server moved names a row in the house the person has left, so it
+    /// sends nothing — what ``CalendarModel/serverChanged()`` used to get from
+    /// nilling `deleteTarget`.
+    func testAConfirmAfterMovingHouseSendsNoDelete() async {
+        let (model, house, store, _) = rig()
+        await started(model)
+        model.select(3)
+        guard let row = model.selected else { return XCTFail("nothing selected") }
+        model.askToDelete(row)
+
+        store.trustServer(otherServer, identity: TestIdentity.real.pin)
+        XCTAssertTrue(store.setServerURL(otherServer))
+        model.serverChanged()
+
+        model.confirmDelete(row)
+        await everythingLands()
+        XCTAssertFalse(
+            house.seen.current.contains("DELETE /api/calendar/events/3"),
+            "the delete went to the house the person had left"
+        )
         XCTAssertNil(model.toast)
     }
 
@@ -527,7 +572,7 @@ final class CalendarModelTests: XCTestCase {
         model.select(3)
         guard let row = model.selected else { return XCTFail("nothing selected") }
         model.askToDelete(row)
-        model.confirmDelete()
+        model.confirmDelete(row)
         await settleUntil({ model.toast != nil }, "the refusal")
         XCTAssertTrue(model.toast?.hasPrefix("delete failed: ") == true, model.toast ?? "nil")
         XCTAssertEqual(3, model.selectedID, "a row the house still has stays selected")

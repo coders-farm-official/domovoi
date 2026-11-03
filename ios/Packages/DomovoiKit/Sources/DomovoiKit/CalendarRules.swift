@@ -69,8 +69,8 @@ public func calendarStep(
 ///   and not "the month": the grid's first and last rows spill into the
 ///   neighbouring months and those cells carry marks too.
 /// * **day** — that date exactly.
-/// * **agenda** — every event whose **end** is not before the anchor's
-///   midnight, sorted by start, and the **first 25**. The cap is Android's
+/// * **agenda** — every event whose `starts_at` parses and whose **end** is
+///   not before the anchor's midnight, sorted by start, and the **first 25**. The cap is Android's
 ///   `.take(25)`, not a page: the list is already in memory and the cap is
 ///   what keeps the agenda from being five hundred rows.
 ///
@@ -103,7 +103,12 @@ public func calendarVisibleEvents(
     case .agenda:
         let floor = anchor.startMs(in: timeZone)
         return events
-            .filter { calendarEndMs($0) >= floor }
+            // The sentinel is excluded explicitly: this window has a floor
+            // and no ceiling, so `Int64.max >= floor` is true and an
+            // unreadable `starts_at` would otherwise be kept, sort last, and
+            // group under 1970-01-01 — a junk trailing day header. Month and
+            // day view drop it through their own predicates.
+            .filter { calendarStartMs($0) != Int64.max && calendarEndMs($0) >= floor }
             .sorted { ($0.startMsSort, $0.id) < ($1.startMsSort, $1.id) }
             .prefix(25)
             .map { $0 }
@@ -175,7 +180,8 @@ public let calendarGridHours = calendarGridEndHour - calendarGridStartHour
 /// reason an event is never missing from this view:
 ///
 /// * an event before 6am or after 10pm is **pinned to the edge**, not hidden —
-///   the offset is clamped into `[0, GRID_HOURS * 60]`;
+///   the offset is clamped into `[0, GRID_HOURS * 60 - 20]`, which leaves
+///   room for the twenty the next clamp asks for;
 /// * a block is at least **20 minutes** tall, so an event with no `ends_at`
 ///   (whose end is its start, ``calendarEndMs(_:)``) is still a visible block
 ///   rather than a hairline.
@@ -194,9 +200,17 @@ public func calendarDayGridPlacement(
     let startMinutes = Int((calendarStartMs(entry) - gridTop) / 60_000)
     let rawDuration = Int((calendarEndMs(entry) - calendarStartMs(entry)) / 60_000)
 
-    let offset = min(max(startMinutes, 0), gridMinutes)
+    // `gridMinutes - 20`, not `gridMinutes`: Android's own cap is
+    // `coerceIn(0, GRID_HOURS * 60 - 20)` (`CalendarGrids.kt:313`), and the
+    // twenty it leaves is what the block's own minimum needs. Capped at
+    // `gridMinutes` instead, an event at 22:00 or later landed at offset 960
+    // — a block positioned at exactly the grid's full height, so below the
+    // hours, below the scroll view's measured content, and neither visible
+    // nor tappable. With this cap `gridMinutes - offset` is never under 20,
+    // which is why the height needs no rescue of its own.
+    let offset = min(max(startMinutes, 0), gridMinutes - 20)
     let height = min(max(rawDuration, 20), gridMinutes - offset)
-    return (offset, max(height, 20))
+    return (offset, height)
 }
 
 /// Where the `now` rule goes, in minutes from the grid's top, or nil when now

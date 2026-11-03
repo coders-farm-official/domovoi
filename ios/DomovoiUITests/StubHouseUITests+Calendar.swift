@@ -270,7 +270,7 @@ extension StubHouseUITests {
             openCalendarEvent(app, StubCalendar.offsite, number: "event #4"),
             "the detail sheet did not open on the google event"
         )
-        let synced = app.staticTexts[CalendarWords.synced15m]
+        let synced = app.staticTexts[CalendarWords.syncedTwoHours]
         evidence(app, "calendar-04-synced")
         XCTAssertTrue(synced.exists, "the google row does not say when it was synced")
 
@@ -630,6 +630,31 @@ extension StubHouseUITests {
             early.frame.minY, sevenLabel.frame.minY,
             "the clamped 05:30 event is not in the grid's first hour row"
         )
+
+        // **And the other edge.** `night walk` is 23:15 with no `ends_at`
+        // (`calendar.py:138`), past the grid's last hour, so it is pinned to
+        // the bottom — twenty minutes up from it, which is Android's
+        // `coerceIn(0, GRID_HOURS * 60 - 20)`. Clamped to the full height
+        // instead it was laid out at exactly the grid's own height: inside the
+        // last hour row's label by one pixel of nothing, below the hours,
+        // below the scroll view's content, drawn nowhere and tappable nowhere.
+        // The last label is `9pm` — `calendarGridEndHour` is one past the last
+        // row, so no `10pm` is drawn — and the pinned block starts inside its
+        // row, not under it.
+        let nineLabel = app.staticTexts["9pm"]
+        let night = calendarRow(app, StubCalendar.night)
+        XCTAssertTrue(
+            nineLabel.exists && night.exists,
+            "the 23:15 event is missing — after 10pm is clamped to the bottom, not dropped"
+        )
+        XCTAssertGreaterThan(
+            night.frame.minY, nineLabel.frame.minY,
+            "the clamped 23:15 event is not in the grid's last hour row"
+        )
+        XCTAssertLessThan(
+            night.frame.minY, nineLabel.frame.maxY,
+            "the clamped 23:15 event starts below the last hour row — off the grid"
+        )
     }
 
     // MARK: - moving the range, and the two emptinesses
@@ -874,7 +899,11 @@ enum CalendarWords {
 
     /// Event 4's `last_synced_at` is 900 seconds old, which `relTime` writes
     /// as `15m ago`.
-    static let synced15m = "synced 15m ago"
+    /// Event 4's `last_synced_at`, two hours back (`calendar.py:124`). Two
+    /// hours and not fifteen minutes because `relTimeMs` rounds to the hour
+    /// there: `2h ago` holds across a half-hour, where `15m ago` was a
+    /// sixty-second bucket this case could swipe straight past.
+    static let syncedTwoHours = "synced 2h ago"
 
     /// The seeded list's own size, which the header counts in full.
     static let thirteenEvents = "13 events · the household's calendar"

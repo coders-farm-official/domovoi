@@ -268,7 +268,12 @@ final class CalendarRulesTests: XCTestCase {
     func testAnEventAfterTenAndOneWithNoEndStillGetATwentyMinuteBlock() {
         let late = local(11, "2026-11-04T23:15:00-06:00")
         let placed = calendarDayGridPlacement(late, on: day(2026, 11, 4), in: chicago)
-        XCTAssertEqual(calendarGridHours * 60, placed.offsetMinutes)
+        // `GRID_HOURS * 60 - 20`, Android's cap (`CalendarGrids.kt:313`) —
+        // twenty minutes up from the bottom, which is where the block's own
+        // minimum height fits. Pinned at `GRID_HOURS * 60` the block was laid
+        // out at exactly the grid's height: off the bottom of the hours and
+        // out of the scroll view's content, invisible and untappable.
+        XCTAssertEqual(calendarGridHours * 60 - 20, placed.offsetMinutes)
         XCTAssertEqual(20, placed.heightMinutes)
 
         let openInside = local(12, "2026-11-04T14:00:00-06:00")
@@ -276,6 +281,35 @@ final class CalendarRulesTests: XCTestCase {
             20,
             calendarDayGridPlacement(openInside, on: day(2026, 11, 4), in: chicago).heightMinutes
         )
+    }
+
+    /// **A `starts_at` nothing can parse is drawn by no view.**
+    ///
+    /// ``calendarStartMs(_:)`` answers `Int64.max` for it. Month and day view
+    /// compare that date against the anchor and drop it; the agenda's window
+    /// has a floor and **no ceiling**, so the sentinel passed it, sorted last,
+    /// and grouped under `CalendarDay(ms: Int64.max, …)` — outside the
+    /// Gregorian component range, which falls back to 1970 and grew the agenda
+    /// a trailing `1970-01-01` header with a junk row under it.
+    func testAnUnreadableStartIsInNoViewAndInNoAgendaGroup() {
+        let junk = CalendarEntry(id: 99, title: "unreadable", startsAt: "not a date", endsAt: nil)
+        let real = local(1, "2026-11-04T11:00:00-06:00", to: "2026-11-04T12:00:00-06:00")
+        let anchor = day(2026, 11, 4)
+        let todayMs = anchor.startMs(in: chicago)
+
+        for mode in [CalendarViewMode.month, .day, .agenda] {
+            let visible = calendarVisibleEvents(
+                mode: mode, anchor: anchor, events: [real, junk], in: chicago
+            )
+            XCTAssertEqual([1], visible.map(\.id), "\(mode) kept the unreadable row")
+        }
+
+        let sections = calendarAgendaSections(
+            calendarVisibleEvents(mode: .agenda, anchor: anchor, events: [real, junk], in: chicago),
+            todayMs: todayMs,
+            in: chicago
+        )
+        XCTAssertEqual([anchor], sections.map(\.day), "the agenda grew a 1970 day group")
     }
 
     /// The `now` rule is nil off the day and nil outside the hours — a line
@@ -353,7 +387,10 @@ final class CalendarRulesTests: XCTestCase {
         XCTAssertEqual(3, cell.marks.count)
         XCTAssertEqual(1, cell.overflow)
         XCTAssertEqual("+1", CalendarStrings.moreCount(cell.overflow))
-        XCTAssertEqual("1 more event", CalendarStrings.moreEventsLabel(cell.overflow))
+        // What VoiceOver gets for the cell is the full count, not the
+        // overflow: the `+1` chip is inside the cell's button and carries no
+        // label of its own.
+        XCTAssertEqual("4 events", CalendarStrings.dayEvents(cell.events.count))
         XCTAssertEqual([6, 7, 8], cell.marks.map(\.id), "the marks are the earliest three")
 
         let quiet = cells.first { $0.day == day(2026, 11, 16) }
