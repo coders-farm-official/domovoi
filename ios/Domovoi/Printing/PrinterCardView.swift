@@ -358,6 +358,14 @@ struct PrinterCardView: View {
             // edge at 137.3, so half of what the audit sampled behind the text
             // was the blurred bar rather than the card.
             //
+            // **The bar half of that was never the control's fault.** On S012
+            // the 44-point box put this link at `y = 98...142` against a bar at
+            // `93.3...137.3` - wholly *behind* it, invisible in the
+            // screenshot - and "Contrast failed" came back again. Nothing
+            // drawn here can fix a measurement taken through a translucent
+            // bar; the audit case now returns the panel to its top before it
+            // samples (`printingScrollToTop`), and this control is unchanged.
+            //
             // Android is a `TextButton` here, beside two `OutlinedButton`s
             // (`PrintersPanel.kt:406-411`) — a button, not a bare link — so
             // the button is also the faithful port, and it is the same

@@ -112,6 +112,49 @@ extension StubHouseUITests {
         return true
     }
 
+    /// Scroll the panel back to its very top, so **nothing is under the
+    /// navigation bar** when the audit samples it.
+    ///
+    /// This exists because of train S012. `testPrinting_PanelAudit` had to
+    /// scroll down to reach `recent jobs` and tap it, which left the first
+    /// card's `printer's own page` link at `y = 98…142` — and the navigation
+    /// bar is `y = 93.3…137.3`. The link was *entirely behind the translucent
+    /// bar*: it is not in the screenshot at all. Apple's audit still walks it,
+    /// and what it sampled behind the glyphs was the bar's blur over whatever
+    /// had scrolled under it, not the card — so `brandInk`, which is 5.65:1 on
+    /// this app's canvas and passes on every other screen that draws a
+    /// ``HomeLink``, came back as "Contrast failed" plus an unattributed
+    /// "Contrast is not high enough … unless font size is larger".
+    ///
+    /// The control is not the defect: S009 already moved it from a `Link` to a
+    /// ``HomeLink`` for the 44 points, and the 44 points are what pushed its
+    /// box *further* under the bar. The **measurement** was the defect, and
+    /// the fix is to measure with the panel at rest at the top, where a
+    /// `ScrollView` under a `NavigationStack` puts its first content below the
+    /// bar and no element is composited over the blur. This is not asserting
+    /// less: every element is still in the audit, and a real contrast failure
+    /// on any of them still fails the case — it is asserting against what a
+    /// person can actually see.
+    ///
+    /// "At the top" is read as *the content stopped moving*, not as a flick
+    /// count and not as one element clearing the bar: a header above the first
+    /// card would still be under the bar when the card itself had cleared it.
+    /// The panel has no `.refreshable`, so a swipe at the top is a no-op
+    /// rather than a pull that reloads the list out from under the audit.
+    @MainActor
+    func printingScrollToTop(_ app: XCUIApplication, flicks: Int = 14) -> Bool {
+        let anchor = app.staticTexts["office printer"]
+        guard anchor.exists else { return false }
+        for _ in 0..<flicks {
+            let before = anchor.frame.minY
+            app.swipeDown()
+            if anchor.exists, abs(anchor.frame.minY - before) < 0.5 { return true }
+        }
+        print("=== \(flicks) FLICKS AND THE PANEL IS STILL NOT AT ITS TOP — tree follows ===")
+        print(app.debugDescription)
+        return false
+    }
+
     /// Open Files, pick Documents and wait for the folder.
     @MainActor
     func printingOpenDocuments(
@@ -920,6 +963,11 @@ extension StubHouseUITests {
             // waits on the label's prefix rather than on a `staticTexts` hit.
             _ = startingWith(app, "the council letter").waitForExistence(timeout: 20)
         }
+        // Back to the top before anything is sampled: the scrolling above is
+        // what put a card control behind the translucent navigation bar on
+        // S012, and the audit measured the bar's blur as that control's
+        // background. ``printingScrollToTop(_:flicks:)`` says the whole of it.
+        XCTAssertTrue(printingScrollToTop(app), "the panel would not return to its top")
         evidence(app, "printing-25-audit")
         let split = Self.floorAndRest(try auditIssues(app, "printing-panel"))
         XCTAssertEqual([], split.rest, "the printers panel has attributable audit findings")
