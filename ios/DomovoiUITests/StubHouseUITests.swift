@@ -494,14 +494,36 @@ final class StubHouseUITests: XCTestCase {
         // because a real house posts the first time too.)
         var found: [String] = []
         for attempt in 1...3 {
-            waitForNoNotificationBanner("\(name)/attempt-\(attempt)")
+            let waitedOut = waitForNoNotificationBanner("\(name)/attempt-\(attempt)")
             found = try runOneAudit(app, name)
-            guard notificationBanner() != nil else { return found }
+            guard let over = notificationBanner()?.frame else {
+                // **Say what the retake was worth.** A clean audit taken after
+                // a banner was waited out is the measurement that attributes
+                // the previous run's findings, and it is worth one line in the
+                // log rather than silence: R001's Home came back with four,
+                // and the question the next session will ask is whether they
+                // went away because the screen was finally this app's.
+                if let waitedOut {
+                    print(
+                        "AUDIT [\(name)] clean on attempt \(attempt) after waiting out a "
+                            + "banner at \(waitedOut) — \(found.count) finding(s)"
+                    )
+                }
+                return found
+            }
+            // **Attributed by geometry, not by assertion.** `isInside` takes
+            // the element's midpoint, so a finding named here is one whose
+            // element is *under* the banner — which is the whole claim this
+            // retake rests on, written down as a number per finding rather
+            // than as a sentence about banners in general.
+            let covered = found.filter { Self.isInside(over, $0) }
             print(
-                "AUDIT [\(name)] a notification banner was on screen when attempt "
-                    + "\(attempt) finished — that measurement is of the banner, not of "
-                    + "this app. Retaking it."
+                "AUDIT [\(name)] a notification banner at \(over) was on screen when "
+                    + "attempt \(attempt) finished: \(covered.count) of \(found.count) "
+                    + "finding(s) name an element inside it, so that measurement is of "
+                    + "the banner, not of this app. Retaking it."
             )
+            for line in covered { print("AUDIT [\(name)]   under the banner: \(line)") }
         }
         // **Never silently.** A caller asserting `rest.isEmpty` or a count
         // fails on this line, which is the honest outcome: nothing on this
@@ -510,6 +532,27 @@ final class StubHouseUITests: XCTestCase {
         // it.
         return [Self.bannerPollutedAudit] + found
     }
+
+    /// A marker in every message the six base audit instruments fail with.
+    ///
+    /// ### Why a test file carries a version string
+    ///
+    /// Round 1's fix never ran, and nothing in the results said so. Train
+    /// R001 reports every one of the six failures at a **line number in the
+    /// parent's copy** of this file — `:611` is `XCTAssertEqual(` in
+    /// `wf/ios-n-all`'s version and a doc comment in the merged one — while
+    /// the merge commit the train recorded (`cdc3cf92`) does contain the fix.
+    /// So the branch merged and the binary that ran was built from something
+    /// else, and the only reason that was noticeable at all is that the six
+    /// failure *texts* came back identical to I001's. The three cases that
+    /// went green in R001 (`testChatMore_Audits`, `testPrinting_PanelAudit`,
+    /// `testVoiceSettings_Audit`) were each fixed in their **own** file.
+    ///
+    /// A line number is a thing you have to go and check. This is in
+    /// `cases.json`, where a train's results are read: if a failure message
+    /// does not carry it, the file that ran was not this one, and no
+    /// diagnosis built on those findings means anything.
+    static let auditInstrumentRevision = "baseaudit-r2"
 
     /// What ``auditIssues(_:_:)`` returns when every attempt was covered.
     static let bannerPollutedAudit =
@@ -609,27 +652,37 @@ final class StubHouseUITests: XCTestCase {
     /// A banner dismisses itself in about five seconds. The swipe is the
     /// fallback for one that outstays that, and it is sent to the banner's own
     /// element so the gesture cannot land on the app underneath.
+    /// It returns the **frame** of the banner it waited out, or `nil` if there
+    /// was none, because the frame is what lets a finding be attributed to it
+    /// by measurement instead of by argument. Train R001 printed one:
+    /// `BannerNotification … {{8.0, 56.0}, {377.0, 78.7}}`
+    /// (`att/testTheStatesTheAuditHadNeverSeen/Debug_description_for_Notificat…`),
+    /// and every one of the four findings against Home in that run —
+    /// `domovoi / home`, `127.0.0.1:6601`, `unverified`, `  live`, all at
+    /// `y ≈ 69` — has its midpoint inside that rectangle. That is the
+    /// difference between "the banner probably did it" and a number.
     @MainActor
+    @discardableResult
     func waitForNoNotificationBanner(
         _ name: String,
         appearIn: TimeInterval = 2,
         clearIn: TimeInterval = 20
-    ) {
-        var arrived = notificationBanner() != nil
+    ) -> CGRect? {
+        var seen = notificationBanner().map { $0.frame }
         let appearBy = Date().addingTimeInterval(appearIn)
-        while !arrived, Date() < appearBy {
+        while seen == nil, Date() < appearBy {
             usleep(200_000)
-            arrived = notificationBanner() != nil
+            seen = notificationBanner().map { $0.frame }
         }
-        guard arrived else { return }
-        print("BANNER [\(name)] a notification banner is over the app — waiting")
+        guard let first = seen else { return nil }
+        print("BANNER [\(name)] a notification banner is over the app at \(first) — waiting")
         let swipeAfter = Date().addingTimeInterval(8)
         let clearBy = Date().addingTimeInterval(clearIn)
         var swiped = false
         while Date() < clearBy {
             guard let banner = notificationBanner() else {
                 print("BANNER [\(name)] gone")
-                return
+                return first
             }
             if !swiped, Date() > swipeAfter, banner.frame.height > 10 {
                 print("BANNER [\(name)] it outstayed its welcome — swiping it away")
@@ -639,6 +692,7 @@ final class StubHouseUITests: XCTestCase {
             usleep(300_000)
         }
         print("BANNER [\(name)] STILL THERE after \(clearIn)s")
+        return first
     }
 
     /// Every scroll view on screen, as one region — which on a pushed screen
@@ -740,6 +794,19 @@ final class StubHouseUITests: XCTestCase {
     /// the top bar with it, the pill's `.quaternary` capsule included
     /// (`#DDDDDE` on white is 1.36:1, and it is on this screen too).
     ///
+    /// **It is not a control for `unverified`, and round 1's integration note
+    /// said it was.** This screen's pill reads `connect`; there is no trust
+    /// word on it at all (`I001/ALL/att/testTheLocalShellPassesTheAudit/`
+    /// `40-local-shell-tree`: `  domovoi / local media`, then a `connect`
+    /// button and the gear, and nothing else in the bar). So a clean audit
+    /// here clears the capsule and the breadcrumb and says nothing about
+    /// `Color.warnInk`. What does say something about it is in
+    /// ``ShellTopBar``: the R001 run failed **every** leaf of Home's bar,
+    /// primary-ink labels included, and all four sit inside the notification
+    /// banner's rectangle. A control that does not draw the thing is not a
+    /// control for it — writing one down as if it were is how a measurement
+    /// becomes folklore.
+    ///
     /// So this is not only the I1-C result turned into a standing test,
     /// though it is that as well — the chrome has been rebuilt twice since
     /// that run, and "the local shell passed" was a thing remembered rather
@@ -779,7 +846,7 @@ final class StubHouseUITests: XCTestCase {
             XCTAssertEqual(
                 found.count,
                 Self.knownHomeIssues,
-                "Apple's audit has \(found.count) against Home, not the "
+                "[\(Self.auditInstrumentRevision)] Apple's audit has \(found.count) against Home, not the "
                     + "\(Self.knownHomeIssues) known: "
                     + found.joined(separator: " | ")
             )
@@ -1032,7 +1099,7 @@ final class StubHouseUITests: XCTestCase {
         XCTAssertTrue(
             app.staticTexts[ShellStringsUnderTest.printersSectionSub]
                 .waitForExistence(timeout: 10),
-            "Printers & scanners did not draw its section"
+            "[\(Self.auditInstrumentRevision)] Printers & scanners did not draw its section"
         )
         try step("C-printers")
 
@@ -1206,7 +1273,7 @@ final class StubHouseUITests: XCTestCase {
         XCTAssertEqual(
             root.count,
             Self.knownHomeIssues,
-            "Home audited \(root.count), not the known \(Self.knownHomeIssues) — "
+            "[\(Self.auditInstrumentRevision)] Home audited \(root.count), not the known \(Self.knownHomeIssues) — "
                 + "the pushed count is being read against a baseline that moved"
         )
     }
@@ -1500,7 +1567,7 @@ final class StubHouseUITests: XCTestCase {
         }
         XCTAssertEqual(
             [], unexpectedNamed,
-            "a Dynamic Type finding named an element that is not the known "
+            "[\(Self.auditInstrumentRevision)] a Dynamic Type finding named an element that is not the known "
                 + "false positive — measure it at both sizes before believing it"
         )
 
@@ -1753,7 +1820,7 @@ final class StubHouseUITests: XCTestCase {
         }
         XCTAssertTrue(
             rest.isEmpty,
-            "Apple's audit has findings outside the measured floor: "
+            "[\(Self.auditInstrumentRevision)] Apple's audit has findings outside the measured floor: "
                 + rest.joined(separator: "  //  ")
         )
     }
@@ -1855,7 +1922,7 @@ final class StubHouseUITests: XCTestCase {
                 }
                 XCTAssertTrue(
                     ours.isEmpty,
-                    "a pushed screen at AX5 with `\(variant)` stripped has findings "
+                    "[\(Self.auditInstrumentRevision)] a pushed screen at AX5 with `\(variant)` stripped has findings "
                         + "outside the floor, in the chrome rather than in the "
                         + "destination: " + ours.joined(separator: " / ")
                 )
