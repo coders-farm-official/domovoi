@@ -48,10 +48,18 @@ import XCTest
 // went `UNMEASURED` against an app that was right. The order was never the
 // problem; a second run of the same install was. Nothing a test can do from
 // outside the app un-asks an install, so the app grew the seam:
-// `-domovoi-alerts-unasked` (``AlertsHintModel/pretendUnasked``) has the
-// status read answer `.notDetermined` **until this process asks**, and retires
-// on the ask so that what the row believes afterwards is iOS's own answer.
+// `-domovoi-alerts-unasked` (`AlertsUnaskedLatch`) has the hint's status read
+// answer `.notDetermined` **until this install is asked**, and retires in
+// `AlertsCenter.askForPermission()` — the app's one wrapper around
+// `UNUserNotificationCenter.requestAuthorization` — so that what the row
+// believes afterwards is iOS's own answer, whoever asked.
 // ``alertsLaunch`` passes it by default.
+//
+// Round 2 moved the latch there from ``AlertsHintModel``, where it retired in
+// the row's own `askIOS()`: see
+// `testAlerts_NothingAsksForNotificationsAtLaunch`, whose evidence on this
+// install *is* the row, and which a model-local latch would have had passing
+// against an ask added anywhere else at launch.
 //
 // The order is kept anyway — it costs nothing, and it is still what makes the
 // ledger case meet a phone that can post.
@@ -258,11 +266,11 @@ extension StubHouseUITests {
         throw XCTSkip(
             "UNMEASURED: no `\(Self.alertsOffRow)` row on Home. Three things can do "
                 + "this, and the first is the one I001 hit: (1) "
-                + "`-domovoi-alerts-unasked` did not reach "
-                + "`AlertsHintModel.pretendUnasked`, so the row is reading an install "
-                + "whose alerts are already ON and is right to draw nothing — the "
-                + "authorization survives every train once a case has answered "
-                + "`Allow`; (2) the mount is gone: `AlertsHintRowView` in "
+                + "`-domovoi-alerts-unasked` did not reach `AlertsUnaskedLatch`, or "
+                + "something in this launch asked for the permission and retired it, so "
+                + "the row is reading an install whose alerts are already ON and is "
+                + "right to draw nothing — the authorization survives every train once "
+                + "a case has answered `Allow`; (2) the mount is gone: `AlertsHintRowView` in "
                 + "HomeTimersView's card, or DomovoiApp putting AlertsAppWiring's hint "
                 + "model into the environment (design-notes/ios/overnight/alerts/"
                 + "DECISIONS.md §2); (3) Home has no timers card to draw it on, which "
@@ -340,14 +348,24 @@ extension StubHouseUITests {
     ///    log records what the springboard held either way.
     ///  * **the row is still there, still saying `turn on`.** This is the half
     ///    that holds on an install which has already been asked, and it is why
-    ///    it was added: `-domovoi-alerts-unasked` retires the moment the app
-    ///    calls `requestAuthorization` (``AlertsHintModel/pretendUnasked``),
-    ///    and the real install is granted, so an ask fired at launch would
-    ///    replace the forced `.notDetermined` with `.authorized` and take the
-    ///    row with it. A row still offering `turn on` after the launch has
-    ///    settled is therefore positive evidence that nothing asked — on the
-    ///    install this rig actually has, where no prompt would have appeared
-    ///    to be seen.
+    ///    it was added: `-domovoi-alerts-unasked` retires inside
+    ///    `AlertsCenter.askForPermission()`, which is the app's one wrapper
+    ///    around `UNUserNotificationCenter.requestAuthorization`
+    ///    (`AlertsNotifier.swift:268`). The real install is granted, so an ask
+    ///    fired at launch — from `AlertsAppWiring.start()`, an engine, a later
+    ///    item, anywhere — replaces the forced `.notDetermined` with
+    ///    `.authorized` and takes the row with it. A row still offering
+    ///    `turn on` after the launch has settled is therefore positive
+    ///    evidence that nothing asked, on the install this rig actually has,
+    ///    where no prompt would have appeared to be seen.
+    ///
+    ///    **The boundary is what makes that true, and round 1 did not have
+    ///    it**: the latch was a property of ``AlertsHintModel`` and retired in
+    ///    its `askIOS()` — the row's own ask and no other. An ask added at
+    ///    launch somewhere else would have left the latch armed and this row
+    ///    on screen, and this case would have gone green against precisely
+    ///    the defect it is named for (`AlertsUnaskedLatch`, and
+    ///    `testAnAskFromAnywhereElseTakesTheRow` in the package suite).
     @MainActor
     func testAlerts_NothingAsksForNotificationsAtLaunch() throws {
         control("reset-fixtures", "{}", port: 6601, what: "the alerts fixture's seed")
@@ -737,8 +755,9 @@ extension StubHouseUITests {
         //  * the card came first and no system alert was up while it was —
         //    asserted above, and real: the app genuinely had not called
         //    `requestAuthorization` yet, whatever the install holds;
-        //  * **the row is gone after `ask iOS`** — below. The latch retires on
-        //    that tap (``AlertsHintModel/pretendUnasked``), so the state the
+        //  * **the row is gone after `ask iOS`** — below. The latch retires in
+        //    `AlertsCenter.askForPermission()`, which that tap is the only
+        //    caller of in this app's code, so the state the
         //    row is drawn from afterwards is the real centre's answer and
         //    nothing else. A `ask iOS` wired to nothing leaves the forced
         //    `.notDetermined` in place and the row on screen; so does an ask

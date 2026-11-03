@@ -188,18 +188,37 @@ final class AlertsHintModelTests: XCTestCase {
 
     // MARK: - `-domovoi-alerts-unasked`, the latch the UI cases need
 
-    // The latch itself is `#if DEBUG` in ``AlertsHintModel``, so these four
-    // are too: `swift test` is a debug build, and a release build of the suite
-    // would not compile against a symbol that is not there.
+    // The latch itself is `#if DEBUG` in `AlertsHintModel.swift`, so these
+    // five are too: `swift test` is a debug build, and a release build of the
+    // suite would not compile against a symbol that is not there.
     #if DEBUG
+
+    /// ``AlertsUnaskedLatch`` is **process-wide** — it has to be, because the
+    /// ask it has to notice is `AlertsCenter`'s and not this model's (round 2;
+    /// see the type's own doc comment). One process runs every case in
+    /// `swift test`, so every case below states the arming it wants and puts
+    /// it back on the way out.
+    ///
+    /// A `defer` in each case rather than a `setUp`/`tearDown` pair: an
+    /// override on a `@MainActor` `XCTestCase` has to restate the isolation
+    /// XCTest declares, and the restore matters even for a case that fails
+    /// half way — which is exactly what `defer` is.
+    private func withLatch(_ on: Bool) {
+        AlertsUnaskedLatch.arm(on)
+    }
 
     /// The default is **off**, which is the assertion that says the latch
     /// cannot change a shipped app: `swift test` passes no launch argument, so
     /// a phone that can post draws nothing exactly as it did before the flag
     /// existed.
     func testTheUnaskedLatchIsOffUnlessItIsAskedFor() async {
+        defer { withLatch(false) }
         let (model, _, _) = make(.authorized)
-        XCTAssertFalse(model.pretendUnasked)
+        XCTAssertFalse(
+            model.pretendUnasked,
+            "the latch is armed without `-domovoi-alerts-unasked`, or a case before this "
+                + "one left it armed"
+        )
         await model.refresh()
         XCTAssertFalse(model.shown)
     }
@@ -210,7 +229,8 @@ final class AlertsHintModelTests: XCTestCase {
     /// Simulator install outlives a train (I001; the grant came from S012).
     func testTheUnaskedLatchDrawsTheRowOnAGrantedInstall() async {
         let (model, _, _) = make(.authorized)
-        model.pretendUnasked = true
+        defer { withLatch(false) }
+        withLatch(true)
         await model.refresh()
         XCTAssertTrue(model.shown, "the latch did not reach the status read")
         XCTAssertEqual(AlertsStrings.notificationsOff, model.line)
@@ -230,7 +250,8 @@ final class AlertsHintModelTests: XCTestCase {
     /// phone is every return to the foreground.
     func testTheUnaskedLatchRetiresTheMomentTheAppAsks() async {
         let (model, _, log) = make(.authorized)
-        model.pretendUnasked = true
+        defer { withLatch(false) }
+        withLatch(true)
         await model.refresh()
         model.fix()
         XCTAssertTrue(model.explaining, "the card comes first, whatever the install has answered")
@@ -251,12 +272,53 @@ final class AlertsHintModelTests: XCTestCase {
     /// control, not the ask again — the real answer, not the latch's.
     func testTheUnaskedLatchDoesNotSurviveARefusal() async {
         let (model, _, _) = make(.notDetermined, granting: .denied)
-        model.pretendUnasked = true
+        defer { withLatch(false) }
+        withLatch(true)
         await model.refresh()
         model.fix()
         await model.askIOS()
         XCTAssertTrue(model.shown)
         XCTAssertEqual(AlertsStrings.openSettings, model.fixLabel)
+    }
+
+    /// **An ask made anywhere but this model still takes the row away.**
+    ///
+    /// This is round 2's finding, and the case for it. Round 1 stored the
+    /// latch on ``AlertsHintModel`` and retired it in `askIOS()` — the
+    /// **row's** ask. The UI case
+    /// `testAlerts_NothingAsksForNotificationsAtLaunch` reads a row that is
+    /// still there, still saying `turn on`, as its evidence that nothing asked
+    /// at launch; with a model-local latch, an ask added in
+    /// `AlertsAppWiring.start()` or in an engine would spend the install's one
+    /// prompt, leave the latch armed, and leave that row exactly where the
+    /// case wants to find it. Green against the one defect it names.
+    ///
+    /// ``AlertsCenter/askForPermission()`` now retires the latch, and it is
+    /// the only wrapper around the app's one `requestAuthorization`
+    /// (`AlertsNotifier.swift:268`). What that method does is what this
+    /// asserts, because the centre itself needs a container and three engines
+    /// to build and the retirement is the whole of its contribution.
+    func testAnAskFromAnywhereElseTakesTheRow() async {
+        let (model, _, log) = make(.authorized)
+        defer { withLatch(false) }
+        withLatch(true)
+        await model.refresh()
+        XCTAssertTrue(model.shown, "the latch did not reach the status read")
+
+        // `AlertsCenter.askForPermission()`'s first line, and nothing of this
+        // model's: the row never asked and `askIOS()` was never called.
+        AlertsUnaskedLatch.retire()
+        await model.refresh()
+        XCTAssertEqual(
+            [], log.current,
+            "this case is about an ask the row did not make"
+        )
+        XCTAssertFalse(
+            model.shown,
+            "something else asked for the permission and the row stayed up offering to "
+                + "ask — which is what `testAlerts_NothingAsksForNotificationsAtLaunch` "
+                + "would then have passed against"
+        )
     }
 
     #endif

@@ -1,5 +1,60 @@
 import Foundation
 import Observation
+import Synchronization
+
+#if DEBUG
+/// `-domovoi-alerts-unasked`: have the hint's status read answer
+/// ``AlertsPermissionState/notDetermined`` **until this install is asked**.
+///
+/// ### Why the latch is here and not in ``AlertsHintModel``
+///
+/// The notification authorization is a fact about the **install**, iOS gives
+/// exactly one system prompt per install, and a Simulator install outlives a
+/// train. `testAlerts_TurningOnAlertsExplainsItselfFirst` answered `Allow` on
+/// train S012, so every Alerts case in the first full-class run (I001) met an
+/// install whose alerts were already **on** — and the row is only drawn while
+/// they are off. Four cases went `UNMEASURED` against an app that was right,
+/// and nothing a test can do from outside un-asks an install.
+///
+/// Round 1 of the integration pass put the latch inside the hint model and
+/// retired it in ``AlertsHintModel/askIOS()``. That closed the skip and left a
+/// hole, which is why this type exists: the one case this item has for *the
+/// app must not ask at launch* then reads a row that is still there as its
+/// evidence, and `askIOS()` is **the row's own** ask, not every ask. An ask
+/// added anywhere else — `AlertsAppWiring.start()`, an engine, a later item —
+/// would spend the install's one prompt, leave a model-local latch armed, and
+/// leave the row on screen for the case to pass against.
+///
+/// So the latch is **process-wide and retires at the ask boundary**:
+/// ``AlertsCenter/askForPermission()``, which wraps the only
+/// `UNUserNotificationCenter.requestAuthorization` in the app
+/// (`AlertsNotifier.swift:268`). Whoever asks, the next ``AlertsHintModel``
+/// read tells the truth, and the row goes.
+///
+/// One way only, and `DEBUG` only, beside the two launch arguments
+/// ``AlertsHintModel`` already has.
+enum AlertsUnaskedLatch {
+
+    /// A `Mutex` rather than a `MainActor` box because
+    /// ``AlertsCenter/askForPermission()`` is nonisolated — the same shape
+    /// `AiSettingsHeadsUp`'s one-shot gate uses (`AiSettingsHeadsUp.swift:158`).
+    private static let armed = Mutex(
+        ProcessInfo.processInfo.arguments.contains("-domovoi-alerts-unasked")
+    )
+
+    /// Whether the hint's read should still answer `.notDetermined`.
+    static var isArmed: Bool { armed.withLock { $0 } }
+
+    /// This install has now been asked, by somebody. Irreversible in a run,
+    /// which is what keeps every real boundary where it was.
+    static func retire() { armed.withLock { $0 = false } }
+
+    /// **Tests only.** `swift test` is one process with no launch arguments to
+    /// arm it, so the package suite sets it directly and
+    /// `AlertsHintModelTests.setUp` puts it back.
+    static func arm(_ on: Bool) { armed.withLock { $0 = on } }
+}
+#endif
 
 // ---------------------------------------------------------------------------
 // The state behind the one row Home's timers card draws about this phone's
@@ -69,37 +124,22 @@ public final class AlertsHintModel {
     public private(set) var explaining = false
 
     #if DEBUG
-    /// `-domovoi-alerts-unasked`: read the status as
-    /// ``AlertsPermissionState/notDetermined`` **until this process asks**,
-    /// whatever the install has already answered.
+    /// Whether ``refresh()`` should still answer
+    /// ``AlertsPermissionState/notDetermined`` — see ``AlertsUnaskedLatch``
+    /// for why this install needs a seam at all, and why the latch is not a
+    /// property of this object.
     ///
-    /// ### Why it has to exist
+    /// **Computed, and that is the fix round 2 made.** As a stored `var` it
+    /// retired in ``askIOS()`` only, so the row outlived an ask made anywhere
+    /// else in the app and `testAlerts_NothingAsksForNotificationsAtLaunch`
+    /// would have read that row as evidence that nothing asked. Now every ask
+    /// goes through ``AlertsCenter/askForPermission()``, which retires the
+    /// latch, so the row is evidence again.
     ///
-    /// The notification authorization is a fact about the **install**, iOS
-    /// gives exactly one system prompt per install, and a Simulator install
-    /// outlives a train. `testAlerts_TurningOnAlertsExplainsItselfFirst`
-    /// answered `Allow` on train S012, so every Alerts case in the first
-    /// full-class run (I001) met an install whose alerts were **on** — and the
-    /// row is only drawn while they are off. Four cases went `UNMEASURED`
-    /// against an app that was behaving correctly, and no amount of fixture
-    /// resetting un-asks an install from outside the app. This is the seam that
-    /// lets the row's cases run a second time.
-    ///
-    /// ### Why it is a `var`
-    ///
-    /// It **retires the moment the app asks** (``askIOS()``), which is what
-    /// keeps every real boundary where it was. The explain card's button still
-    /// calls the real `UNUserNotificationCenter.requestAuthorization`, and the
-    /// state the row then believes is iOS's own answer — on a never-asked
-    /// install the prompt it put up, on an install that has already answered
-    /// the grant it already holds. A permanent override would put the row back
-    /// on the next ``refresh()`` and would have the cases measuring a lie.
-    ///
-    /// Internal rather than private so the package suite can drive the latch a
-    /// launch argument sets; there is no launching process in `swift test` to
-    /// give the argument to.
-    var pretendUnasked =
-        ProcessInfo.processInfo.arguments.contains("-domovoi-alerts-unasked")
+    /// Not observable, and it does not need to be: nothing reads it but
+    /// ``refresh()`` and ``askIOS()``, and both assign ``state`` straight
+    /// after, which is what the row is observing.
+    var pretendUnasked: Bool { AlertsUnaskedLatch.isArmed }
     #endif
 
     /// - Parameters:
@@ -224,8 +264,8 @@ public final class AlertsHintModel {
         // read-after-await defect this track has a rule about: that rule is
         // about a *key* that says which server an answer belongs to, and
         // capturing this one early would let a refresh that started before
-        // `ask iOS` land after it and put the row back. The latch only ever
-        // goes true → false, so reading it last means the ask always wins.
+        // the ask land after it and put the row back. The latch only ever
+        // goes armed → retired, so reading it last means the ask always wins.
         if pretendUnasked {
             state = .notDetermined
             return
@@ -281,7 +321,14 @@ public final class AlertsHintModel {
         #if DEBUG
         // Before the await: from here on the row believes iOS and nothing
         // else, including a ``refresh()`` that is already in flight.
-        pretendUnasked = false
+        //
+        // ``AlertsCenter/askForPermission()`` retires it too, and that is the
+        // one that matters — it is the boundary *every* ask crosses, including
+        // one this item never wrote. This call is kept because `ask` is
+        // injected: the package suite's fake never reaches the centre, and the
+        // ordering above is a promise about this method rather than about its
+        // closure. Retiring a one-way latch twice costs nothing.
+        AlertsUnaskedLatch.retire()
         #endif
         state = await ask()
     }
