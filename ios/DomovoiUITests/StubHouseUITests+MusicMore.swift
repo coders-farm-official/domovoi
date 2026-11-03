@@ -92,7 +92,7 @@ extension StubHouseUITests {
         -> (app: XCUIApplication, landed: Bool) {
         let (app, landed) = openMusicMore(mode)
         guard landed else { return (app, false) }
-        startingWith(app, MusicMoreUnderTest.tabPlaylists).tap()
+        guard musicMoreTapTab(app, MusicMoreUnderTest.tabPlaylists) else { return (app, false) }
         let row = containing(app, MusicMoreUnderTest.longwater)
         if row.waitForExistence(timeout: 30) { return (app, true) }
         // The rows are under the strip, so at an accessibility size they are
@@ -117,6 +117,69 @@ extension StubHouseUITests {
         // behind the sheet, so waiting for it would not prove the sheet came
         // up at all.
         return app.buttons[MusicMoreUnderTest.close].waitForExistence(timeout: 20)
+    }
+
+    /// Tap one of the four tab words, bringing it **sideways** into view
+    /// first.
+    ///
+    /// **Train S012 is why this is not a `tap()`.** The strip is a
+    /// horizontal `ScrollView` (`MusicTabBar`, Android's `ScrollableTabRow`),
+    /// and at AX5 its four words are 844 points wide inside a 361-point
+    /// frame: `playlists` sits at `{{522.0, 526.7}, {193.0, 58.7}}`, wholly
+    /// to the right of a 393-point screen. XCUITest's own
+    /// "scroll element to visible" cannot move a horizontal scroll view, so
+    /// the tap failed with `Activation point invalid and no suggested hit
+    /// points`, and the case read as the playlists tab being broken when the
+    /// screen was fine and the word was simply off the right-hand edge.
+    ///
+    /// A person swipes the strip. So does this. The flick count has a
+    /// stop-when-nothing-moves guard for the same reason the vertical one
+    /// does (``musicMoreScroll(_:to:flicks:)``): a strip already at its end
+    /// should not pay for twelve more.
+    @MainActor
+    func musicMoreTapTab(_ app: XCUIApplication, _ word: String) -> Bool {
+        let tab = startingWith(app, word)
+        guard tab.waitForExistence(timeout: 30) else {
+            print("=== NO '\(word)' TAB ON MUSIC — tree follows ===")
+            print(app.debugDescription)
+            return false
+        }
+        if !tab.isHittable, let strip = musicMoreTabStrip(app, holding: tab) {
+            var last = CGFloat.greatestFiniteMagnitude
+            for _ in 0..<12 {
+                if tab.isHittable { break }
+                // `nan` when the word is momentarily out of the snapshot: a
+                // missing measurement is not "nothing moved".
+                let left = tab.exists ? tab.frame.minX : CGFloat.nan
+                if !left.isNaN, abs(left - last) < 1 { break }
+                last = left
+                strip.swipeLeft(velocity: .slow)
+            }
+        }
+        guard tab.isHittable else {
+            print("=== '\(word)' TAB NOT HITTABLE AT \(tab.frame) — tree follows ===")
+            print(app.debugDescription)
+            return false
+        }
+        tab.tap()
+        return true
+    }
+
+    /// The tab strip, found by the tab it holds.
+    ///
+    /// Not by order and not by "the one that scrolls sideways": at AX5 the
+    /// **phone bar** scrolls sideways too (``musicMorePage(_:)`` is where
+    /// that cost a train). The strip is the scroll view that is as tall as
+    /// the tab itself — 58.7 points at AX5, 44 at the ordinary size, against
+    /// the bar's 146 and the page's 178.7 — and whose band the tab's own
+    /// middle falls inside.
+    @MainActor
+    func musicMoreTabStrip(_ app: XCUIApplication, holding tab: XCUIElement) -> XCUIElement? {
+        let middle = tab.frame.midY
+        return app.scrollViews.allElementsBoundByIndex.first {
+            abs($0.frame.height - tab.frame.height) < 8
+                && $0.frame.minY <= middle && middle <= $0.frame.maxY
+        }
     }
 
     /// Music's own page scroll view — the one a flick should move.
@@ -326,44 +389,83 @@ extension StubHouseUITests {
         )
     }
 
-    /// The badge's glyph is **not an element** — the fix train S010's audit
-    /// asked for.
+    /// The badge's glyph is decorative — **nothing says it**, and it is not
+    /// clipped.
     ///
-    /// The audit read `Text clipped` and `Contrast failed` off the motorway
-    /// emoji on Longwater Drive's badge, in the sheet header and on the row
-    /// alike: ``MusicPlaylistBadge`` marked itself hidden, but all three of
-    /// its call sites merge it into a row and a merge collects the
-    /// descendants back. Neither finding has an answer in the drawing — the
-    /// box and the font scale together, and an emoji's own colours are not
-    /// ours to contrast — so the answer is that a decorative mark is not in
-    /// the tree at all (`children: .ignore`).
+    /// ### What this case used to assert, and why it was wrong about the app
     ///
-    /// Asserted on the glyph **and** on the row that carries it: an app that
-    /// failed to draw the playlists tab at all would satisfy the absence,
-    /// and that is the one way this case could pass while saying nothing.
+    /// It asserted that the motorway emoji was not an element of the tree at
+    /// all, because that is what would silence the `Text clipped` and
+    /// `Contrast failed` the audit reads off it. Three trains say SwiftUI
+    /// does not offer that: `accessibilityHidden` and
+    /// `accessibilityElement(children: .ignore)` on ``MusicPlaylistBadge``
+    /// both lost to the merge at each of its three call sites, which
+    /// collects the descendants back with their hidden flags disregarded
+    /// (S007 listed the glyph as the badge, S010 the same, S012 one level
+    /// deeper under the `.ignore` container). An assertion about the tree
+    /// was an assertion about SwiftUI, not about this app.
+    ///
+    /// So this is the same concern, measured where it is decidable:
+    ///
+    /// * **Nothing reads it out.** The row's merged label is `Longwater
+    ///   Drive, songs for the Vantersk road` — the glyph's own name,
+    ///   `motorway`, is not in it, which is the whole of what the hidden
+    ///   flag is for and what a VoiceOver user gets. Drop the modifier and
+    ///   the merge puts `motorway` in the middle of that sentence.
+    /// * **It is not clipped.** `Text clipped` claims the text "may be
+    ///   clipped at larger Dynamic Type sizes", and the badge's box is
+    ///   `@ScaledMetric` — so the box is measured at both type sizes, the
+    ///   same way three other named findings on this track turned out to be
+    ///   false positives. A fixed `frame(width: 36, height: 36)` would
+    ///   measure 36 points at AX5 too, and that is the defect the headline
+    ///   describes.
+    ///
+    /// The contrast half has no measurement and needs none: the glyph is
+    /// drawn by the system emoji font in its own colours, which no app can
+    /// change, and `musicMoreUnexplained` carries both exclusions pinned to
+    /// this one label.
     @MainActor
-    func testMusicMore_ThePlaylistEmojiIsNotAnElement() throws {
-        musicMoreReset()
-        let (app, landed) = openPlaylistsTab()
-        XCTAssertTrue(landed, "the playlists tab never drew a row")
-        XCTAssertTrue(
-            containing(app, MusicMoreUnderTest.longwater).exists,
-            "the playlist whose badge carries the emoji is not on the tab"
-        )
-        evidence(app, "musicmore-10B-badge-decorative")
+    func testMusicMore_ThePlaylistEmojiIsDecorative() throws {
+        func badgeHeight(_ mode: String, _ name: String) -> CGFloat {
+            musicMoreReset()
+            let (app, landed) = openPlaylistsTab(mode)
+            XCTAssertTrue(landed, "the playlists tab never drew a row at \(mode)")
+            let glyph = app.staticTexts[MusicMoreUnderTest.playlistEmoji]
+            XCTAssertTrue(
+                musicMoreScroll(app, to: glyph),
+                "the badge that carries the emoji was never built at \(mode)"
+            )
+            evidence(app, name)
 
-        XCTAssertEqual(
-            0, countContaining(app, MusicMoreUnderTest.playlistEmoji),
-            "the decorative badge glyph is an accessibility element again, "
-                + "so Apple's audit can read a clipped-text and a contrast "
-                + "failure off it (train S010)"
-        )
+            // The spoken sentence, on the same screen the box is measured on:
+            // the row that merges the badge must not have the glyph in its
+            // label.
+            let row = app.buttons
+                .matching(NSPredicate(format: "label BEGINSWITH %@", MusicMoreUnderTest.longwater))
+                .firstMatch
+            XCTAssertTrue(row.exists, "the playlist row that carries the badge is not a button")
+            XCTAssertFalse(
+                row.label.contains(MusicMoreUnderTest.playlistEmoji),
+                "the decorative glyph is inside the row's spoken label (\(row.label)) — "
+                    + "the badge's accessibilityHidden is gone"
+            )
 
-        // And in the sheet header, which is where the audit found it.
-        XCTAssertTrue(openPlaylistSheet(app, MusicMoreUnderTest.longwater), "the sheet never opened")
-        XCTAssertEqual(
-            0, countContaining(app, MusicMoreUnderTest.playlistEmoji),
-            "the sheet header's badge glyph is an accessibility element again"
+            let height = glyph.frame.height
+            print("SCALE [musicmore-badge] \(mode) height=\(height)")
+            app.terminate()
+            return height
+        }
+
+        let ordinary = badgeHeight(Self.ordinaryTypeSize, "musicmore-10B-badge-ordinary")
+        let huge = badgeHeight(
+            "UICTContentSizeCategoryAccessibilityXXXL",
+            "musicmore-10C-badge-ax5"
+        )
+        XCTAssertGreaterThan(
+            huge, ordinary * 1.5,
+            "the badge's box did not grow with the type size (\(ordinary) -> \(huge) "
+                + "points), so the audit's `Text clipped` against the glyph is real "
+                + "after all and `side` is not scaling"
         )
     }
 
@@ -641,7 +743,10 @@ extension StubHouseUITests {
         // fold now.
         musicMoreScrollTop(app)
 
-        startingWith(app, MusicMoreUnderTest.tabPlaylists).tap()
+        XCTAssertTrue(
+            musicMoreTapTab(app, MusicMoreUnderTest.tabPlaylists),
+            "the playlists tab could not be reached after the create"
+        )
         let row = containing(app, MusicMoreUnderTest.newPlaylist)
         XCTAssertTrue(
             row.waitForExistence(timeout: 25),
@@ -1168,7 +1273,7 @@ extension StubHouseUITests {
     /// The named findings this item has an **answer** for, taken out — and
     /// everything else left in.
     ///
-    /// Three exclusions, each with its reason, and none of them "the audit is
+    /// Four exclusions, each with its reason, and none of them "the audit is
     /// usually wrong". The shape is `testTheVideosGridAudits`'s, which is
     /// where both of the first two were settled first.
     ///
@@ -1220,6 +1325,31 @@ extension StubHouseUITests {
                line.contains("id='\(MusicMoreUnderTest.phoneSourceServer)'") {
                 return false
             }
+            // 4. The two findings Apple reads off a playlist's **cover
+            //    emoji**, and only off that one label
+            //    (``MusicPlaylistBadge``). Neither has an answer in the
+            //    drawing, and three trains tried to answer them in the
+            //    accessibility tree instead before S012 showed that a merge
+            //    at the call site puts the glyph back whatever the badge
+            //    says about itself:
+            //
+            //    * `Text clipped` — "may be clipped at larger Dynamic Type
+            //      sizes". The box is `@ScaledMetric` and
+            //      ``testMusicMore_ThePlaylistEmojiIsDecorative`` measures
+            //      it at both sizes, 36 points to about 94. The audit has
+            //      only the `frame(width:height:)` to look at and cannot
+            //      see what the number in it is.
+            //    * `Contrast failed` — an emoji is drawn by the system
+            //      emoji font in its own colours. There is no foreground
+            //      style to change and no app can pass this.
+            //
+            //    Pinned to the emoji's own label, so a contrast or clipping
+            //    finding against any other element on either screen still
+            //    fails this case.
+            if line.hasPrefix("Text clipped") || line.hasPrefix("Contrast failed"),
+               line.contains("label='\(MusicMoreUnderTest.playlistEmoji)'") {
+                return false
+            }
             return true
         }
     }
@@ -1257,7 +1387,9 @@ enum MusicMoreUnderTest {
     static let longwater = "Longwater Drive"
     static let longwaterNote = "songs for the Vantersk road"
     /// Longwater Drive's `cover_emoji` (`fixtures/musicmore.py:269`) — the
-    /// one glyph on this screen that must never be an element of its own.
+    /// one glyph on this screen that nothing may read out, and the label the
+    /// audit's two drawing findings are classified against
+    /// (``musicMoreUnexplained``).
     static let playlistEmoji = "\u{1F6E3}"
     static let quietHours = "Quiet Hours"
     static let derivedFromFavorites = "derived from your favorites"
