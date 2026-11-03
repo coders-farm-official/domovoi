@@ -258,7 +258,10 @@ struct PrinterCardView: View {
             title: title,
             chosen: label(value),
             enabled: panel.busy == nil,
-            options: [nil, true, false].map { option in
+            // `[Bool?]` written out: a literal of `nil, true, false` leaves
+            // Swift to infer the element type, and the one it must infer here
+            // is the optional — which is the whole point of the control.
+            options: ([nil, true, false] as [Bool?]).map { option in
                 PrintingMenuRow.Option(label: label(option)) { pick(option) }
             }
         )
