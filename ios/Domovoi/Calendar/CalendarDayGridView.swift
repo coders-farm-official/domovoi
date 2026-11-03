@@ -115,15 +115,28 @@ struct CalendarDayGridView: View {
             }
             .padding(.horizontal, 6)
             .padding(.vertical, 4)
-            // **`height:`, not `minHeight:`.** A `ZStack` proposes its own
-            // size to every child, and a `minHeight` child with
-            // `maxWidth: .infinity` accepts the whole proposal: the train's
-            // tree showed all four blocks at `309 x 960` — the entire grid —
-            // stacked on top of each other, so the last one drawn swallowed
-            // every tap in the day view and the first three were untappable.
-            // An exact height is what `offsetMinutes`/`heightMinutes` are
-            // computed for.
-            .frame(maxWidth: .infinity, height: tall, alignment: .topLeading)
+            // **An exact height, pinned by `minHeight` AND `maxHeight`.** A
+            // `ZStack` proposes its own size to every child, and a child with
+            // only a `minHeight` and `maxWidth: .infinity` accepts the whole
+            // proposal: the train's tree showed all four blocks at `309 x 960`
+            // — the entire grid — stacked on top of each other, so the last
+            // one drawn swallowed every tap in the day view and the first
+            // three were untappable. An exact height is what
+            // `offsetMinutes`/`heightMinutes` are computed for.
+            //
+            // It has to be said this way round, not `height: tall`: `frame`
+            // has no overload taking a flexible width and a fixed height
+            // (`width:height:alignment:` is the fixed one), so
+            // `maxWidth:height:` is an "extra argument 'height' in call"
+            // — which is exactly how train C041 failed to build. Equal
+            // `minHeight`/`maxHeight` is the same exact height through the
+            // flexible overload.
+            .frame(
+                maxWidth: .infinity,
+                minHeight: tall,
+                maxHeight: tall,
+                alignment: .topLeading
+            )
             .background(
                 // The brand fill under ``Color/brandFg`` text, which is the
                 // one prominent pair this app has measured (8.49:1). A
