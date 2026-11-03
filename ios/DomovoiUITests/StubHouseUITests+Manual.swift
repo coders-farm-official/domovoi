@@ -639,19 +639,44 @@ extension StubHouseUITests {
     /// the search path free to assert the one thing that is its own, that the
     /// keyboard is down.
     ///
-    /// ### The finding that is left, and the two states that bisect it
+    /// ### The finding that was left, and what it turned out to be
     ///
-    /// It is not a colour. Sampled off the audit's own screenshot, every text
-    /// leaf on the piece page clears 4.5:1 — the weakest are `ok` at 5.05:1
-    /// and `needs internet` at 5.13:1, the `fgMuted` pills are 6.66:1 and the
-    /// phrase chips 18.8:1 — and a window scan of the whole page finds no
-    /// region at all where ink reads under 4.5:1 against what it is drawn on.
-    /// The finding carries no element and no frame, so the log cannot say
-    /// what it is about.
+    /// It was never a colour. Sampled off the audit's own screenshot, every
+    /// text leaf on the piece page clears 4.5:1 — the weakest are `ok` at
+    /// 5.05:1 and `needs internet` at 5.13:1, the `fgMuted` pills are 6.66:1
+    /// and the phrase chips 18.8:1 — and a window scan of the whole page finds
+    /// no region at all where ink reads under 4.5:1 against what it is drawn
+    /// on.
     ///
-    /// What the three states *can* say is where it lives, so this case now
-    /// audits two more on the way to the piece, and the three answers between
-    /// them say which third of the page to look at:
+    /// **Train R001 named the element**, which S009, S012 and I001 had all
+    /// reported as `element: nil`: the piece page's eyebrow,
+    /// `type=9 label='rooms & devices' frame=(16.0, 321.3, 94.3, 44.0)`.
+    /// Nothing about the app had changed between I001 and R001, so the
+    /// attribution is the audit being inconsistent about what it can resolve,
+    /// not a new defect — but it is the name, and it is enough.
+    ///
+    /// The ink there measures `(151, 88, 0)` on white, **5.66:1**, the same
+    /// pixel value to the unit as the three ``ManualCrumb`` buttons and
+    /// `zoom out` eleven points above it, which the same audit of the same
+    /// page leaves unnamed. What was unique to it was its **shape**: a row
+    /// profile of the screenshot puts its ink in points 353.3–362.3 of a
+    /// 44-point frame running 321.3–365.3 — three points off the bottom edge,
+    /// 32 points of blank above — because ``ManualPiecePage`` hung the text at
+    /// `alignment: .bottomLeading`, the only `.bottomLeading` in
+    /// `ios/Domovoi/`. Every crumb's ink sits near its own frame's middle.
+    /// That frame is now `alignment: .leading` like the rest of the app, which
+    /// also stops a tap in the white 25 points above the word from navigating.
+    ///
+    /// Nothing is excused to get there: the classifier is untouched, no colour
+    /// is repainted, and a `Contrast failed` naming this element again fails
+    /// this case exactly as it did.
+    ///
+    /// ### The two states that bisect it, which are kept
+    ///
+    /// R001 ran the three-state version of this case — S012's commit, not the
+    /// five-state one — so the two below have still never run. They stay: they
+    /// cost one tap each, and between them the five answers say which third of
+    /// the page a future finding is in:
     ///
     ///  - **`manual-audit-topic`** — the topic's cluster, one tap short of a
     ///    piece. It draws this page's chrome and nothing else of it: a crumb
