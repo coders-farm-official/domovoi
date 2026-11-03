@@ -21,13 +21,27 @@ extension StubHouseUITests {
 
     // MARK: - getting there
 
-    /// Reset the seed, launch onto Calendar, and wait for a row only a
-    /// completed read can draw.
+    /// Reset the seed, launch onto Calendar, wait for the **push** to land,
+    /// and then for a row only a completed read can draw.
     ///
-    /// The marker is the `pottery class` row and not the page title: `Calendar`
-    /// is on screen from the first frame as a launcher tile, and the subtitle
-    /// is drawn with a count of zero before the read lands — both are true of
-    /// a screen that never got an answer. A row with a clock in it is not.
+    /// The marker is two things, and the first of them is why: **Home draws
+    /// this fixture's events itself.** Its `today` section reads the same
+    /// `/api/calendar/events` (`HomeReads.swift`, `HomeEvent`), so the moment
+    /// the house is up the root carries a `pottery class` leaf of its own —
+    /// and `-domovoi-audit-push` does not push for ``StubHouseUITests/pushDelay``
+    /// seconds. In train S010 that made `landed` true on the **root**, twelve
+    /// seconds before Calendar existed: every case that asserted something
+    /// immediately after it failed against Home's tree (`new event`, `month`
+    /// and `day` are not on Home; its row label begins with the clock, not the
+    /// title), while the cases that happened to burn twelve seconds flicking
+    /// first passed. The screen was never broken.
+    ///
+    /// So the arrival marker is `new event`, which this screen's header draws
+    /// in all four of its states and no other screen in the app draws at all,
+    /// and the root's own leaves are gone from the tree once it is covered.
+    /// Only then is the row waited for — the page title and the subtitle still
+    /// cannot be the read's marker, since `Calendar` is a launcher tile and
+    /// the subtitle counts zero before the answer comes.
     @MainActor
     func openCalendar(
         _ mode: String = StubHouseUITests.ordinaryTypeSize,
@@ -35,6 +49,15 @@ extension StubHouseUITests {
     ) -> (app: XCUIApplication, landed: Bool) {
         control("reset-fixtures", "{}", port: port, what: "the calendar seed")
         let app = launch(mode: mode, port: port, push: "Calendar", pushDelay: Self.pushDelay)
+        // The seeded push is held `pushDelay` seconds on purpose, so this
+        // waits that out and then some.
+        let arrived = app.buttons[CalendarWords.newEvent]
+            .waitForExistence(timeout: Self.pushDelay + 40)
+        if !arrived {
+            print("=== THE CALENDAR PUSH NEVER LANDED — tree follows ===")
+            print(app.debugDescription)
+            return (app, false)
+        }
         return (app, calendarRow(app, StubCalendar.pottery).waitForExistence(timeout: 40))
     }
 
@@ -812,6 +835,13 @@ extension StubHouseUITests {
             what: "the calendar read's failure"
         )
         let app = launch(port: 6601, push: "Calendar", pushDelay: Self.pushDelay)
+        // The push is waited out explicitly, for ``openCalendar(_:port:)``'s
+        // reason: Home reads the same route, so a reason drawn on the root
+        // would read as this screen's.
+        XCTAssertTrue(
+            app.buttons[CalendarWords.newEvent].waitForExistence(timeout: Self.pushDelay + 40),
+            "the calendar push never landed"
+        )
         let why = containing(app, StubCalendar.failDetail)
         let explained = why.waitForExistence(timeout: 40)
         evidence(app, "calendar-15-failed-read")
