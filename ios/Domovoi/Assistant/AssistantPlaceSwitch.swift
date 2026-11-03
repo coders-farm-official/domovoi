@@ -1,6 +1,17 @@
 import DomovoiKit
 import SwiftUI
 
+/// The accessibility identifiers ``AssistantPlaceSwitch`` hands out.
+///
+/// A free enum and not a `static let` on the view: ``AssistantPlaceSwitch`` is
+/// generic over the house it wraps, and Swift refuses a stored static property
+/// on a generic type.
+enum AssistantPlaceSwitchIDs {
+
+    /// The capped, scrolling place band — see ``AssistantPlaceSwitch``.
+    static let picker = "assistant-place-picker"
+}
+
 /// Chat's two places: the house's threads, and the chats kept on this phone.
 ///
 /// `ChatHome.kt:126-127` builds both places and `:735-772` draws the picker
@@ -88,6 +99,10 @@ struct AssistantPlaceSwitch<House: View>: View {
     /// a model.
     @State private var picked: ChatPlace?
 
+    /// Read for one decision: how the picker and the list share the screen
+    /// (``assistantPickerCap(of:)``).
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
     var body: some View {
         content
             .task {
@@ -149,31 +164,123 @@ struct AssistantPlaceSwitch<House: View>: View {
         let here = placeFacts(phone)
         let startable = assistantStartablePlaces(here)
         let place = chosen(phone, startable)
+        // **At an accessibility size the two halves are measured against the
+        // screen**, which needs the screen's own height; below one, nothing
+        // is short and the layout is the one every other train has run.
+        if dynamicTypeSize.isAccessibilitySize {
+            GeometryReader { proxy in
+                places(phone, place, startable, pickerCap: assistantPickerCap(of: proxy.size.height))
+                    .frame(width: proxy.size.width, height: proxy.size.height)
+            }
+        } else {
+            places(phone, place, startable, pickerCap: nil)
+        }
+    }
+
+    /// The picker over the place that is showing.
+    ///
+    /// - Parameter pickerCap: the tallest the picker may be, or nil for "as
+    ///   tall as it wants" — see ``assistantPickerCap(of:)``.
+    @ViewBuilder private func places(
+        _ phone: AssistantPhoneModel,
+        _ place: ChatPlace,
+        _ startable: [ChatPlace],
+        pickerCap: CGFloat?
+    ) -> some View {
         VStack(spacing: 0) {
             // Over a conversation the picker would offer to change the place
             // of a chat that is already in one, so the chip alone is drawn —
             // which is also what `PlacePicker` itself does with one choice
             // (`ChatHome.kt:741`).
-            AssistantPlacePickerView(
-                choices: inConversation(phone, place) ? [place] : startable,
+            let conversation = inConversation(phone, place)
+            let choices = conversation ? [place] : startable
+            let chips = AssistantPlacePickerView(
+                choices: choices,
                 selected: place,
                 onPick: { picked = $0 }
             )
-            // **The picker is laid out first, and the list takes what is
-            // left.** Without this the `VStack` shares a shortage out between
-            // both halves, and train S011's AX5 picture is what that looks
-            // like: Chat is given 401 points under a header that has grown to
-            // 300, the picker needs about 310 for `runs` and two chips, and it
-            // was handed 223 — so each chip's `Text`, which is `.fixedSize`,
-            // drew its three lines straight across the chip below it and the
-            // two chips' words were unreadable on top of each other.
+            // **And nothing at all over a conversation at an accessibility
+            // size**, which train R001 measured the price of. The
+            // conversation's chip is one word in a band 80 points tall at
+            // AX5, and it sits on top of a header row that is already 107 —
+            // of the 401.7 the shell leaves Chat at that size. What was left
+            // for the phone conversation's transcript was a `ScrollView`
+            // **6.7 points tall** holding 860 points of content: a chat with
+            // no room to show one message of itself.
             //
-            // A scrolling list is the half that can lose height without losing
-            // anything: at AX5 it is about 90 points and is still a list.
-            // Overlapping text is not a smaller version of a screen, it is a
-            // broken one.
-            .layoutPriority(1)
-            Divider()
+            // It is a label and not a control here (one choice:
+            // ``AssistantPlacePickerView`` draws a chip rather than a button,
+            // so VoiceOver is offered no action), and the thing it says —
+            // which place this conversation is in — is said by the
+            // conversation. Android puts it inside the header row rather than
+            // above it (`ChatHeader`, `ChatHome.kt:700`), so the band is this
+            // app's shape and not Android's; dropping the band where the band
+            // is what costs the screen is the faithful half of that. Below an
+            // accessibility size nothing changes: the chip is 44 points
+            // there, every train has run with it, and it is how a person on
+            // two places tells them apart at a glance. DECISIONS.md.
+            //
+            // **A conversation, not "one choice"**: a list with a single
+            // startable place keeps its chip at every size, because there the
+            // band is the only thing that says where the chats below it live
+            // — and it is what ``reachPhonePlace`` taps.
+            let bandDrawn = !(conversation && dynamicTypeSize.isAccessibilitySize)
+            // **The cap is for the picker that has chips to fit**, which is
+            // the one that was measured. A `ScrollView` is greedy — it takes
+            // the height it is allowed whether or not its content needs it —
+            // so putting the conversation's single chip in one would hand the
+            // transcript empty space, which is the MS003 mistake from the
+            // other end. One chip is short; it keeps the layout every train
+            // before this has run.
+            if !bandDrawn {
+                EmptyView()
+            } else if let pickerCap, choices.count > 1 {
+                // **Capped, and scrolling past the cap.** The two things the
+                // picker must never do are squeeze a chip and swallow the
+                // list, and the two trains before this one each caught one of
+                // them.
+                //
+                // Train S011: the `VStack` shared a shortage out between both
+                // halves, the picker was handed 223 of the 310 it needs, and
+                // each chip's `Text` — which is `.fixedSize` — drew its three
+                // lines straight across the chip below it. `.layoutPriority(1)`
+                // fixed that by giving the picker its whole ideal size.
+                //
+                // Train I001: that left the list **43.3 points** of the 401.7
+                // Chat is given at AX5 (the picker measured 314.4, from
+                // 344.3 to 658.7) — less than a third of one cell, and a list
+                // that cannot show a row is as broken as text drawn over text.
+                // The walk down it then pressed inside a 43-point window
+                // thirty-six times, the window went to zero height, and the
+                // case died resolving a view that was no longer there.
+                //
+                // A `ScrollView` is the one container that refuses both: the
+                // chips inside it keep their ideal size whatever the cap is —
+                // so nothing is ever squeezed — and the cap is what the list
+                // keeps. Everything is still reachable; some of it is reached
+                // by scrolling, which at a text size this large is true of
+                // every screen in the app.
+                //
+                // **And named.** Train R002: `reachPhonePlace` reached for
+                // `app.scrollViews.firstMatch` to creep this band, and what
+                // it got was the shell's phone bar — a `ScrollView` of its
+                // own at AX5, {{0, 706}, {393, 146}}. Eight press-drags
+                // inside it left the app on **Music**, and the case reported
+                // "the phone's place never drew at ax5" about a place that
+                // was drawn the whole time, one chip below the fold.
+                // ``AssistantPhoneConversationView/transcriptId`` was added
+                // for the same reason after train S008; this is the other
+                // scrolling view this item owns.
+                ScrollView(.vertical) { chips }
+                    .frame(maxHeight: pickerCap)
+                    .scrollBounceBehavior(.basedOnSize)
+                    .accessibilityIdentifier(AssistantPlaceSwitchIDs.picker)
+            } else {
+                chips.layoutPriority(1)
+            }
+            // The rule above it, with the band it belongs to: a divider over
+            // nothing is a line across the top of a conversation.
+            if bandDrawn { Divider() }
             switch place {
             case .server:
                 house
@@ -192,6 +299,23 @@ struct AssistantPlaceSwitch<House: View>: View {
                 )
             }
         }
+    }
+
+    /// How tall the picker may be when the screen is short of room.
+    ///
+    /// Three fifths of what Chat has, and never less than 132 points — which
+    /// is the `runs` label and one chip at AX5, the least that can be drawn
+    /// and still be a picker. At the 401.7 points train I001 measured, that
+    /// is 241 for the picker and 160 for the list: the list is back to the
+    /// 178 it had before `.layoutPriority(1)`, without the overlap that
+    /// modifier was added to stop.
+    ///
+    /// A fraction and not a subtraction, because the number this divides is
+    /// the shell's leftovers and the shell's header is itself a function of
+    /// the text size — a fixed "leave the list 180" would hand the picker
+    /// nothing at all on a screen the header has eaten.
+    private func assistantPickerCap(of available: CGFloat) -> CGFloat {
+        Swift.max(132, available * 0.6)
     }
 
     /// Which place is on screen: the one the person picked while it is still a

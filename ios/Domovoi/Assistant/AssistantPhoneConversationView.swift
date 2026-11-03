@@ -128,11 +128,25 @@ struct AssistantPhoneConversationView: View {
     /// `.fixedSize` is safe **because of** the line limit: the ideal height it
     /// asks for is at most two lines, which is what makes S008's collapse
     /// impossible to repeat.
+    ///
+    /// **One line at an accessibility size**, which train R001 measured the
+    /// price of. At AX5 two lines of `.headline` are 125.3 points of the
+    /// 401.7 this screen is given, and with the place chip (80) and the
+    /// composer (96) above and below them the transcript's own `ScrollView`
+    /// came out **6.7 points tall** against 860 points of content — a
+    /// conversation that cannot show one line of itself, let alone the
+    /// 125-point bubble that is one message at that size. The audit never
+    /// runs at an accessibility size (it is `large` that
+    /// ``testAssistant_Audit`` sweeps), so the two lines S011 asked for are
+    /// kept exactly where S011 found the clipping and the bound tightens only
+    /// where S008's collapse lives. The name is a label, not a sentence;
+    /// VoiceOver still reads the whole of it, and the untruncated name is on
+    /// the row in the list one tap behind.
     private var title: some View {
         Text(phone.conversation?.title ?? ChatStrings.newChat)
             .font(.headline)
             .accessibilityAddTraits(.isHeader)
-            .lineLimit(2)
+            .lineLimit(typeSize.isAccessibilitySize ? 1 : 2)
             .truncationMode(.tail)
             .fixedSize(horizontal: false, vertical: true)
             .multilineTextAlignment(.leading)
@@ -186,7 +200,19 @@ struct AssistantPhoneConversationView: View {
     private var transcript: some View {
         ScrollViewReader { scroller in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 10) {
+                // **A `VStack`, for the reason and the measurement in
+                // ``ChatConversationView/transcript``**: a lazy container
+                // costs a recycled row at the height of the rows that are
+                // left, and a transcript's rows differ by two orders of
+                // magnitude — so the content box grows under a follow-scroll
+                // that has just put the foot at the viewport's foot, and the
+                // question a reply is answering leaves the hierarchy
+                // altogether. Train R002 measured 2,423 points of box over
+                // 1,812 of content on the house's conversation; this screen
+                // has the same shape, the same follow and the same crossing
+                // from under-filled to over-filled, and round 2 already gave
+                // the two of them the same scroll target for that reason.
+                VStack(alignment: .leading, spacing: 10) {
                     let messages = phone.transcript
                     // Identity is the **position**, not
                     // ``AssistantMessage/id``: that id is a fresh `UUID` made
@@ -228,10 +254,24 @@ struct AssistantPhoneConversationView: View {
             // ``tail``, which moves on a new message **and** on a chunk, so
             // the view scrolls as the reply grows rather than once when it
             // starts.
+            //
+            // **No animation and no anchor**, for the reason
+            // ``ChatConversationView/transcript`` spells out at length: a
+            // bottom anchor is an offset the scroll view cannot take while
+            // the content is shorter than the viewport, and re-applying it on
+            // every chunk over content that is crossing from one to the other
+            // wedged the house's conversation for a hundred seconds in trains
+            // I001 and R001. This screen has the same shape and the same
+            // crossing — a conversation on this phone starts empty too — and
+            // it is only luck of the scripted engine's timing that no case
+            // has caught it here. `scrollTo(_:)` with no anchor is "scroll
+            // the least that makes this visible", which always has an answer,
+            // and on content that overflows it puts the last row's foot at
+            // the viewport's foot exactly as the anchor did.
             .onChange(of: tail) { _, _ in
                 let last = phone.transcript.count - 1
                 guard last >= 0 else { return }
-                withAnimation { scroller.scrollTo(last, anchor: .bottom) }
+                scroller.scrollTo(last)
             }
             // Named so a case can drag **this** scroll view. The shell's phone
             // bar is a `ScrollView` too (the customisable strip along the

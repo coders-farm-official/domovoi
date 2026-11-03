@@ -34,15 +34,35 @@ struct ChatConversationView: View {
     @State private var sheet: ChatMoreSheet?
 
     /// Read for one decision: the header's title is bounded only at an
-    /// accessibility size (``chatMoreTitleLines``).
+    /// accessibility size (``title``).
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
-    /// How many lines the header's title may take: two at an accessibility
-    /// size, and as many as it wants below one. Spelt as a property and not
-    /// written into the `.lineLimit` call, because `nil` in a ternary there
-    /// has to pick between `lineLimit`'s overloads.
-    private var chatMoreTitleLines: Int? {
-        dynamicTypeSize.isAccessibilitySize ? 2 : nil
+    /// The header's title, bounded at an accessibility size and **untouched**
+    /// below one.
+    ///
+    /// Two branches rather than `.lineLimit(nil)` and a truncation mode that
+    /// applies at every size: `titleRow` has the measurement, and the short
+    /// of it is that a `Text` told how to truncate is one Apple's audit
+    /// predicts will be clipped, whatever its line limit says. The branch is
+    /// on `dynamicTypeSize`, which changes only when the reader changes their
+    /// text size — the one moment a view identity change here costs nothing.
+    @ViewBuilder
+    private var title: some View {
+        let words = Text(chat.openTitle)
+            .font(.headline)
+        if dynamicTypeSize.isAccessibilitySize {
+            words
+                .accessibilityAddTraits(.isHeader)
+                .lineLimit(2)
+                .truncationMode(.tail)
+                .fixedSize(horizontal: false, vertical: true)
+                .multilineTextAlignment(.leading)
+        } else {
+            words
+                .accessibilityAddTraits(.isHeader)
+                .fixedSize(horizontal: false, vertical: true)
+                .multilineTextAlignment(.leading)
+        }
     }
 
     var body: some View {
@@ -278,13 +298,22 @@ struct ChatConversationView: View {
             // people read at. Android truncates at one line at every size
             // (`maxLines = 1`, `ChatHome.kt:722`), so the bound itself is
             // the faithful behaviour and this only delays it. DECISIONS.md.
-            Text(chat.openTitle)
-                .font(.headline)
-                .accessibilityAddTraits(.isHeader)
-                .lineLimit(chatMoreTitleLines)
-                .truncationMode(.tail)
-                .fixedSize(horizontal: false, vertical: true)
-                .multilineTextAlignment(.leading)
+            //
+            // **And the cap is a branch, not a `nil` argument.** Round four
+            // made `.lineLimit` nil below an accessibility size and left
+            // `.truncationMode(.tail)` on the `Text` at every size — and the
+            // finding came back unchanged in train I001, with the same two
+            // frames it had in MS004. The tree says why: the reply's own
+            // words on the same screen are a two-line `Text` of exactly the
+            // same shape *without* a truncation mode (26.0, 335.3, 284.0,
+            // 42.3) and the audit says nothing about them, while the title
+            // (64.0, 138.2, 193.3, 42.3) is named. A `Text` that has been
+            // told how to truncate is a `Text` the audit predicts will have
+            // to; MS003, which carried neither modifier, audited clean. So
+            // at the sizes Apple's audit runs at the title now carries
+            // neither — exactly MS003's shape — and both modifiers apply
+            // only where the bound is wanted.
+            title
 
             Spacer(minLength: 8)
 
@@ -338,7 +367,54 @@ struct ChatConversationView: View {
                 // `ScrollView` takes ONE view, and two statements in its
                 // builder are a `TupleView` with no layout of its own.
                 VStack(spacing: 0) {
-                    LazyVStack(alignment: .leading, spacing: 10) {
+                    // **A `VStack`, and it was a `LazyVStack` until train
+                    // R002 measured what the laziness costs here.**
+                    //
+                    // A lazy container's content size is a function of which
+                    // rows are built: a row that leaves the built window is
+                    // replaced by an *estimate* taken from the rows that are
+                    // left. The rows of a transcript differ by two orders of
+                    // magnitude — the question `Archive this one for the
+                    // test, please` is 55 points tall and the reply under it
+                    // is 897 — and with the keyboard up this viewport is 174.
+                    // So one delta into a reply the question is gone from the
+                    // container and is costed as if it were the reply.
+                    //
+                    // R002's final hierarchy, 20 seconds after the stream
+                    // ended, with two messages on screen:
+                    //
+                    //   ScrollView  {{0, 225.7}, {393, 174.0}}
+                    //     content   {{0, -1245.3}, {393, 2423.0}}   ← 2,423
+                    //       built    897.6 … 1795.3 of the content  ← the reply
+                    //
+                    // The content really ends at 1,812 (16 of padding, the
+                    // question, the reply, `try again`, 16, the foot): 611
+                    // points of the box are nothing at all, and the 897.6
+                    // above the reply is one 55-point question costed as a
+                    // second reply. Two things follow, and both are wrong on
+                    // the screen rather than only in a test:
+                    //
+                    //  * the follow-scroll had just put the content's foot at
+                    //    the viewport's foot, and the box then grew underneath
+                    //    it — so the reply's own stamp line and `try again`
+                    //    ended 167 points below the fold, which is MS001's
+                    //    complaint arriving by a different road;
+                    //  * the person's own words, drawn 1.3 seconds earlier
+                    //    (recording, t=19.9s), are not in the hierarchy at
+                    //    all, so nothing — VoiceOver included — can reach the
+                    //    question a reply is answering without scrolling.
+                    //
+                    // Android's transcript is a `LazyColumn`
+                    // (`ChatScreen.kt:973`), so this is a departure, and
+                    // DECISIONS.md carries it with the number that bought it.
+                    // The departure is narrow: Android follows a stream with
+                    // `listState.scrollBy(FOLLOW_STEP_PX)` (`:635`), a
+                    // relative nudge that never asks the container where the
+                    // end of the content is, and this screen asks exactly
+                    // that ten times a second. Until the follow is rebuilt on
+                    // iOS 18's `ScrollPosition`, the container that gives a
+                    // true answer is the one to ask.
+                    VStack(alignment: .leading, spacing: 10) {
                         let messages = chat.transcript.messages
                         ForEach(Array(messages.enumerated()), id: \.element.ordinal) { index, message in
                             // `WindowDivider` (`ChatHome.kt:655`) at
@@ -381,9 +457,9 @@ struct ChatConversationView: View {
                     // A zero-height view at the end of the content has no height
                     // to fight: its foot and the content's foot are the same
                     // point, so `anchor: .bottom` can only mean the one thing. It
-                    // sits **outside** the `LazyVStack`, so it is built whether or
-                    // not the list has reached its own end, and `Color.clear`
-                    // draws nothing and leaves the audit no leaf to measure.
+                    // sits **outside** the stack of rows, which is what kept it
+                    // built while that stack was lazy, and `Color.clear` draws
+                    // nothing and leaves the audit no leaf to measure.
                     Color.clear
                         .frame(height: 1)
                         .id(Self.foot)
@@ -415,12 +491,90 @@ struct ChatConversationView: View {
             // ``tail``, which moves on a new message **and** on a delta, so
             // the view scrolls while a reply grows rather than once when it
             // starts.
+            //
+            // **And with no implicit animation.** This used to be
+            // `withAnimation { … }`, which was harmless while the stub's
+            // reply was five short pieces and the target was a message row.
+            // It is not harmless now: the reply is eight pieces and about
+            // 1,400 characters, the target is a one-point view at the very
+            // end of the content, and at the stub's ordinary speed the eight
+            // deltas land about 0.12s apart — so each animation re-targets
+            // the one before it, over a transcript that is growing from one
+            // point to six hundred underneath them.
+            //
+            // Train I001 measured what that costs: the two cases that send
+            // into a **new** chat at full speed painted the finished reply
+            // and then answered no accessibility snapshot at all — three
+            // thirty-second timeouts and "Timed out while evaluating UI
+            // query" from a screen that is sitting still in the recording.
+            //
+            // A reply being written is appended continuously, so a glide per
+            // word was noise as well: the content moving under a still
+            // viewport is the animation. Where the transcript moves for any
+            // other reason — opening a thread, a re-read — it is positioned,
+            // not scrolled, so there is nothing else here that wanted one.
+            //
+            // **And with no anchor**, which is what train R001 cost. Cutting
+            // the animation did not free the two cases: they hung again, at
+            // the same line, with the same three thirty-second snapshot
+            // timeouts, and the frames of the recording are byte-identical
+            // from the moment the reply finishes (t=24s) to the moment the
+            // case gives up (t=130s) apart from the status-bar clock. A
+            // screen that is painted, still and answering no hierarchy
+            // request for a hundred seconds is a main thread that is not
+            // coming back.
+            //
+            // So the discriminator was re-read, and the one that survives
+            // round 1 is **not** the stream's speed. Six cases call
+            // `say(_:_:)`; all four that pass send into a thread the house
+            // already has, and both that hang send into a chat whose
+            // transcript starts at nothing:
+            //
+            //  | case | thread | content when the scrolling starts |
+            //  |---|---|---|
+            //  | `testAReplyArrivesAWordAtATime` | 11, six messages | over the viewport throughout |
+            //  | `testChatMore_ReplyFollowsItsOwnGrowth` | 11 | over the viewport throughout |
+            //  | `testAMidStreamFailure…` | 12, two short messages | under it throughout (two deltas) |
+            //  | `testASendRefused…` | 12 | under it (no delta at all) |
+            //  | `testANewChatIsNamedByItsFirstMessage…` | **made by the send** | **crosses, ten times in a second** |
+            //  | `testArchivingAChatAndTheArchivedView…` | **made by the send** | **crosses** |
+            //
+            // `anchor: .bottom` on a one-point view at the end of the content
+            // reads as "put the content's foot at the viewport's foot", and
+            // while the content is SHORTER than the viewport that is an
+            // offset the scroll view cannot take — it clamps, the reader
+            // keeps the target, the next delta re-lays the content out and
+            // the target is applied again. Thread 12 asks for the impossible
+            // too, and settles, because its content never changes category;
+            // thread 11 never asks for it at all. A new chat is the one that
+            // crosses from one to the other while the request is being
+            // re-applied every 0.12s, and that is the pair that hangs.
+            //
+            // `scrollTo(_:)` with no anchor is "scroll the least that makes
+            // this visible", which is a request that always has an answer: on
+            // under-filled content the foot is already visible and nothing is
+            // asked for, and once the content overflows, the least that makes
+            // a **zero-height** view at its very end visible is the bottom of
+            // the content — the same place `anchor: .bottom` put it, which is
+            // what MS001 paid for and what
+            // `testChatMore_ReplyFollowsItsOwnGrowth` measures against the
+            // keyboard's top. The foot target and the `tail` key are kept.
             .onChange(of: tail) { _, _ in
                 guard !chat.transcript.messages.isEmpty else { return }
-                withAnimation { scroller.scrollTo(Self.foot, anchor: .bottom) }
+                scroller.scrollTo(Self.foot)
             }
+            // Named so a case can drag **this** scroll view, as
+            // ``AssistantPhoneConversationView/transcriptId`` is: the shell's
+            // phone bar is a `ScrollView` too, and train R002 watched
+            // `scrollViews.firstMatch` resolve to it and walk the app off the
+            // screen under test. An identifier, not a label: nothing is read
+            // out by it.
+            .accessibilityIdentifier(Self.transcriptID)
         }
     }
+
+    /// The transcript's accessibility identifier — see ``transcript``.
+    static let transcriptID = "chat-transcript"
 
     /// The id of the zero-height view at the very end of the transcript.
     ///
