@@ -835,13 +835,15 @@ const mutationErrorText = (e, verb = 'Save', { kept = true } = {}) => {
  * names the server's own reason instead of `play failed: 401
  * Unauthorized: {"detail":…}`, which is what `${e.message}` put in front
  * of the operator. `kept` defaults to false — pass { kept: true } where a
- * form the operator typed into stays open after the failure. Returns the
- * text it fired (or null). The radio Stations page's reportFailure is the
- * same rule for a plugin page that may meet an older dashboard. */
-const reportMutationFailure = (fire, verb, e, { kept = false } = {}) => {
+ * form the operator typed into stays open after the failure. `key`: the
+ * key of the progress toast this failure ends ("validating zip…"), which it
+ * replaces instead of showing beside it. Returns the text it fired (or
+ * null). The radio Stations page's reportFailure is the same rule for a
+ * plugin page that may meet an older dashboard. */
+const reportMutationFailure = (fire, verb, e, { kept = false, key = null } = {}) => {
   const msg = mutationErrorText(e, verb, { kept });
   // "ask Domovoi about this" on the toast, with the error's code (help.jsx).
-  if (msg) fire(msg, { help: { code: apiErrorCode(e) } });
+  if (msg) fire(msg, { help: { code: apiErrorCode(e) }, key });
   return msg;
 };
 

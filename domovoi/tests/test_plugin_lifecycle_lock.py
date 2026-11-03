@@ -60,14 +60,14 @@ class _Pip:
             self.events.append(("end", what))
         return ret
 
-    def install(self, lockfile: Path) -> dict[str, Any]:
+    def install(self, lockfile: Path, owned: frozenset[str] = frozenset()) -> dict[str, Any]:
         slug = lockfile.parent.name
         return self._run(f"install:{slug}", {"newly_installed": [{"name": f"dep-{slug}"}]})
 
     def uninstall(self, dist_names: list[str]) -> None:
         self._run(f"uninstall:{','.join(dist_names)}", None)
 
-    def dry_run(self, lockfile: Path) -> dict[str, Any]:
+    def dry_run(self, lockfile: Path, may_change: frozenset[str] = frozenset()) -> dict[str, Any]:
         return self._run("dry-run", {"resolved": []})
 
     def runs(self, prefix: str) -> list[str]:
@@ -262,7 +262,7 @@ async def test_the_lock_is_free_again_after_a_failed_confirm(world, monkeypatch)
     """A confirm that fails still lets go of the lock and its claim."""
     staged_id = _stage(world, "alpha")
 
-    def broken(lockfile):
+    def broken(lockfile, owned=frozenset()):
         raise RuntimeError("index unreachable")
 
     monkeypatch.setattr(installer, "pip_install", broken)

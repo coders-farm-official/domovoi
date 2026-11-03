@@ -4,6 +4,21 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-11-02 — a plugin upgrade may bump its own packages
+
+Upgrading a plugin whose new version pins a newer copy of its own tool
+(the media-provider plugin's 1.2.5) failed with "install would change the
+version of already-installed distribution(s)": the check read every
+changed version as a conflict, the plugin's own package included. An
+upgrade may now move the packages the plugin itself brought in or pins;
+one the core or another plugin uses is still refused. Update Domovoi
+first, then upgrade the plugin.
+
+On the Plugins page, an install's or upgrade's failure now replaces the
+"validating zip…" toast instead of showing beside it. On a Windows
+install, About & updates no longer shows an old failed Windows step in
+red once the Windows side is up to date.
+
 ## 2026-11-02 — music holds 3 s before it plays
 
 Music on a satellite was choppy, library songs included. The room's MPD

@@ -539,11 +539,78 @@ def _pip_offline_error(stderr: str) -> InstallError | None:
     )
 
 
-def pip_dry_run(lockfile: Path) -> dict[str, Any]:
+def _dist_key(name: str) -> str:
+    """A distribution name as pip compares them (PEP 503): ``yt_dlp``,
+    ``YT.dlp`` and ``yt-dlp`` are one distribution."""
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def _requirement_name(req: str) -> str | None:
+    m = re.match(r"\s*([A-Za-z0-9][A-Za-z0-9._-]*)", req or "")
+    return _dist_key(m.group(1)) if m else None
+
+
+async def _upgrade_owned_dists(existing: Any) -> frozenset[str]:
+    """The distributions an upgrade of ``existing`` may move to another
+    version: the ones its installed version brought (``newly_installed``)
+    or pins itself, less any the core requires or another installed plugin
+    declares. Without this an upgrade that bumps its own pin (a plugin
+    following its upstream tool) could never install: every changed
+    version reads as a conflict with the environment. A failed upgrade's
+    rollback puts the old code back, not the old versions of these."""
+    mine = {
+        _dist_key(d["name"])
+        for d in (existing.pip_report or {}).get("newly_installed", [])
+        if d.get("name")
+    }
+    for req in ((existing.manifest or {}).get("requirements") or {}).get("python") or []:
+        if (name := _requirement_name(req)) is not None:
+            mine.add(name)
+    if not mine:
+        return frozenset()
+    others: set[str] = set()
+    for other in await reg.list_plugins():
+        if other.slug == existing.slug or other.status == "uninstalled":
+            continue
+        for req in ((other.manifest.get("requirements") or {}).get("python") or []):
+            if (name := _requirement_name(req)) is not None:
+                others.add(name)
+    return frozenset(mine - others - _core_dists())
+
+
+def _core_dists() -> set[str]:
+    """Every installed distribution the core needs, transitively (extras
+    included: what the host installed is what it runs)."""
+    from importlib import metadata as importlib_metadata
+
+    seen: set[str] = set()
+    todo = ["domovoi"]
+    while todo:
+        name = todo.pop()
+        try:
+            reqs = importlib_metadata.requires(name) or []
+        except importlib_metadata.PackageNotFoundError:
+            continue
+        for req in reqs:
+            dep = _requirement_name(req)
+            if dep is not None and dep not in seen:
+                seen.add(dep)
+                todo.append(dep)
+    return seen
+
+
+def pip_dry_run(
+    lockfile: Path, may_change: frozenset[str] = frozenset()
+) -> dict[str, Any]:
     """§3.2 step 7 — resolve the lockfile INERTLY in a throwaway
     subprocess. ``--only-binary=:all:`` is security-load-bearing: without
     it pip runs sdist build backends (arbitrary code) just to read
-    metadata, before the trust screen."""
+    metadata, before the trust screen.
+
+    ``may_change``: distributions (:func:`_dist_key` form) an upgrade may
+    move to another version because the plugin being upgraded owns them
+    (:func:`_upgrade_owned_dists`). Any other version change is a
+    conflict."""
     args = _pip_base_args(lockfile)
     args.insert(args.index("install") + 1, "--dry-run")
     args += ["--report", "-", "--quiet"]
@@ -610,7 +677,7 @@ def pip_dry_run(lockfile: Path) -> dict[str, Any]:
             installed_version = importlib_metadata.version(name)
         except importlib_metadata.PackageNotFoundError:
             continue
-        if installed_version != version:
+        if installed_version != version and _dist_key(name) not in may_change:
             conflicts.append(
                 {
                     "package": name,
@@ -629,9 +696,15 @@ def pip_dry_run(lockfile: Path) -> dict[str, Any]:
     return {"resolved": resolved}
 
 
-def pip_install(lockfile: Path) -> dict[str, Any]:
+def pip_install(
+    lockfile: Path, owned: frozenset[str] = frozenset()
+) -> dict[str, Any]:
     """§3.2 step 9 — the real install. Returns the pip_report persisted to
-    the registry row: which dists were newly installed vs pre-existing."""
+    the registry row: which dists were newly installed vs pre-existing.
+
+    ``owned`` (an upgrade's :func:`_upgrade_owned_dists`) count as newly
+    installed although they were already there: the upgraded plugin still
+    owns them, so its uninstall still removes them."""
     from importlib import metadata as importlib_metadata
 
     before = {
@@ -657,7 +730,9 @@ def pip_install(lockfile: Path) -> dict[str, Any]:
         name = d.metadata["Name"]
         if name:
             after[name.lower()] = d.version
-    newly = sorted(set(after) - set(before))
+    newly = sorted(
+        (set(after) - set(before)) | {n for n in after if _dist_key(n) in owned}
+    )
     return {
         "newly_installed": [{"name": n, "version": after[n]} for n in newly],
         "preexisting": sorted(set(before) & set(after)),
@@ -685,6 +760,8 @@ class StagedInstall:
     install_source: str              # 'zip' | 'github'
     preview: dict[str, Any] = field(default_factory=dict)
     upgrade_of: str | None = None    # slug when this staging is an upgrade
+    # An upgrade's _upgrade_owned_dists: what its pip install may move.
+    owned_dists: frozenset[str] = frozenset()
 
 
 _STAGED: dict[str, StagedInstall] = {}
@@ -863,13 +940,18 @@ async def stage_zip(
         # subprocess for up to ten minutes, a read of the whole tree):
         # worker threads, like the validators above.
         transitive: list[dict[str, Any]] = []
+        owned: frozenset[str] = frozenset()
         if manifest.python_requirements:
             lock = stage_dir / (manifest.lockfile or "requirements.lock")
             validate_lockfile(lock)
+            if upgrade_of is not None:
+                owned = await _upgrade_owned_dists(existing)
             # Under the lifecycle lock: a dry run beside a real install
             # resolves against a half-written environment.
             async with lifecycle_lock():
-                transitive = (await executors.run("plugins", pip_dry_run, lock))["resolved"]
+                transitive = (
+                    await executors.run("plugins", pip_dry_run, lock, owned)
+                )["resolved"]
 
         tree_hash = await executors.run("plugins", hash_tree, stage_dir)   # step 8
 
@@ -937,6 +1019,7 @@ async def stage_zip(
             install_source=install_source,
             preview=preview,
             upgrade_of=upgrade_of,
+            owned_dists=owned,
         )
         (stage_dir / ".domovoi-staging.json").write_text(
             json.dumps(
@@ -1159,7 +1242,9 @@ async def _confirm_install_locked(
         if manifest.python_requirements:
             lock = staged.root / (manifest.lockfile or "requirements.lock")
             # Blocking for up to half an hour: off the event loop.
-            pip_report = await executors.run("plugins", pip_install, lock)
+            pip_report = await executors.run(
+                "plugins", pip_install, lock, staged.owned_dists
+            )
 
         # Step 10 — migrations, both DBs (the runner owns fresh-install
         # both-or-neither internally).

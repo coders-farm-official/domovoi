@@ -132,6 +132,8 @@ SCENARIOS = {
         "log": "C:\\Users\\k\\AppData\\Local\\Domovoi\\updates\\20261022-213000-0a1b2c3d\\setup.log"}))),
     "updated": _scenario(_version(_win(step_needed=False, why_not="up_to_date", version="1.0.1",
                                        result={"outcome": "ok", "version": "1.0.1"}))),
+    "stale_failure": _scenario(_version(_win(step_needed=False, why_not="up_to_date", version="1.0.1",
+                                             result={"outcome": "not_newer", "detail": "Domovoi didn't run the downloaded Setup: it is version 1.0.1, which isn't newer than the installed 1.0.1."}))),
     "internet_never": _scenario(_version(_win(step_needed=False, why_not="internet_off"))),
     "unsigned": _scenario(_version(_win(step_needed=False, why_not="unsigned_release"))),
     "main_channel": _scenario(_version(_win(), channel="main", version="1.0.1 + 4 (4d6b414)")),
@@ -246,6 +248,13 @@ def test_a_failed_repair_names_its_log(driven) -> None:
 
 def test_an_update_that_worked_says_so(driven) -> None:
     assert driven["updated"]["before"]["result"] == "The Windows side updated to 1.0.1."
+
+
+def test_a_failure_the_windows_side_caught_up_with_is_not_shown(driven) -> None:
+    """2026-11-02: an old refusal stayed red on a card whose Windows side was current."""
+    s = driven["stale_failure"]["before"]
+    assert s["result"] is None
+    assert "didn't run" not in s["text"]
 
 
 def test_why_there_is_no_step(driven) -> None:

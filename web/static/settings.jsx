@@ -972,7 +972,11 @@ const WindowsSideNotes = ({ win, channel, busy, onRetry, requesting }) => {
             icon’s menu), and Windows asks for an administrator’s permission.
           </div>);
   }
-  if (result && result.outcome && result.outcome !== 'ok' && result.outcome !== 'nothing_new') {
+  // A failure the Windows side has since caught up with (why_not
+  // up_to_date) is history: the card kept an Oct 31 not_newer refusal in
+  // red for days while the side already ran the release (2026-11-02).
+  const caughtUp = win.why_not === 'up_to_date';
+  if (result && result.outcome && result.outcome !== 'ok' && result.outcome !== 'nothing_new' && !caughtUp) {
     // Worded by what ran: "half done" only after a press that updated the
     // Linux side first.
     const declined = result.outcome === 'declined';

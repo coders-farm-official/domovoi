@@ -397,7 +397,12 @@ const UninstallModal = ({ plugin, onClose, onDone, fire }) => {
 /* Phase A of the two-phase flow: POST the zip (multipart) or the
  * GitHub URL (JSON) to /api/plugins/install (or .../{slug}/upgrade),
  * then hand the returned {staged_id, preview} to TrustConfirmModal. */
-const useInstallFlow = (fire, refresh) => {
+/* The progress toast ("validating zip…") carries STAGE_TOAST, so the
+ * outcome replaces it: the failure takes its place, the trust screen
+ * dismisses it. Without the key the failure stacked under a progress toast
+ * that still said it was validating (2026-11-02). */
+const STAGE_TOAST = 'plugin-stage';
+const useInstallFlow = (fire, refresh, dismissToast) => {
   const [staged, setStaged] = React.useState(null);  // {stagedId, preview, sourceLabel, verb}
   const fileInputRef = React.useRef(null);
   const upgradeSlugRef = React.useRef(null);
@@ -407,7 +412,7 @@ const useInstallFlow = (fire, refresh) => {
    * Asking again from here would only re-open the modal they closed. */
   const _wasSignInDismissed = (e) => {
     if (!e.authCancelled) return false;
-    fire('sign-in cancelled — the install was not started');
+    fire('sign-in cancelled — the install was not started', { key: STAGE_TOAST });
     return true;
   };
 
@@ -416,8 +421,9 @@ const useInstallFlow = (fire, refresh) => {
     fd.append('file', file, file.name);
     const path = slug ? `/api/plugins/${slug}/upgrade` : '/api/plugins/install';
     try {
-      fire('validating zip…');
+      fire('validating zip…', { key: STAGE_TOAST });
       const res = await apiUpload(path, fd);
+      dismissToast(STAGE_TOAST);
       setStaged({
         stagedId: res.staged_id, preview: res.preview,
         sourceLabel: file.name, verb: slug ? 'upgrade' : 'install',
@@ -429,27 +435,28 @@ const useInstallFlow = (fire, refresh) => {
       const errInfo = (((e.detail || {}).detail || {}).error) || {};
       const existingSlug = (errInfo.details || {}).slug;
       if (!slug && errInfo.code === 'slug_exists' && existingSlug) {
-        fire(`${existingSlug} is already installed — staging as an upgrade`);
+        fire(`${existingSlug} is already installed — staging as an upgrade`, { key: STAGE_TOAST });
         return stageZip(file, existingSlug);
       }
       // The core's own sentence ("install failed: bundled plugins update
       // with the core — …"), not "422 Unprocessable Entity: {…}".
-      reportMutationFailure(fire, slug ? 'upgrade' : 'install', e);
+      reportMutationFailure(fire, slug ? 'upgrade' : 'install', e, { key: STAGE_TOAST });
     }
   };
 
   const stageGithub = async (url, slug) => {
     const path = slug ? `/api/plugins/${slug}/upgrade` : '/api/plugins/install';
     try {
-      fire('downloading + validating…');
+      fire('downloading + validating…', { key: STAGE_TOAST });
       const res = await apiPost(path, { github_url: url });
+      dismissToast(STAGE_TOAST);
       setStaged({
         stagedId: res.staged_id, preview: res.preview,
         sourceLabel: url, verb: slug ? 'upgrade' : 'install',
       });
     } catch (e) {
       if (_wasSignInDismissed(e)) return;
-      reportMutationFailure(fire, slug ? 'upgrade' : 'install', e);
+      reportMutationFailure(fire, slug ? 'upgrade' : 'install', e, { key: STAGE_TOAST });
     }
   };
 
@@ -721,7 +728,7 @@ const PluginRow = ({ p, restartPending, onEnable, onDisable, onUninstall, onUpgr
 
 /* ---- The page -------------------------------------------------- */
 const PluginsPage = () => {
-  const [fire, toastNode] = useToast();
+  const [fire, toastNode, dismissToast] = useToast();
   const { data, refresh: refreshList } = useApiObject('/api/plugins', { eventTypes: ['plugins.changed'] });
   const plugins = (data && data.plugins) || [];
   // Upgrades staged for the next restart (open read, same as Settings →
@@ -733,7 +740,7 @@ const PluginsPage = () => {
   const waitingSlugs = new Set(waiting.map((w) => w.slug));
   // Returns the re-reads, so the restart card can wait for them (onSettled).
   const refresh = () => Promise.all([refreshList(), refreshVersion()]);
-  const flow = useInstallFlow(fire, refresh);
+  const flow = useInstallFlow(fire, refresh, dismissToast);
   const [ghUrl, setGhUrl] = React.useState('');
   // Installing from GitHub downloads; a zip install stays available.
   // The internet answer, read once for the page (the GET /api/config the

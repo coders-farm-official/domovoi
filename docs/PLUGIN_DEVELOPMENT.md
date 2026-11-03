@@ -484,6 +484,14 @@ system = [
   the lock's version is refused there until that environment matches the
   lock.
 
+  An **upgrade** may move the plugin's own dists: the ones its installed
+  version brought in or pins itself, less any the core requires or another
+  installed plugin declares. So a new version that bumps its own tool's pin
+  installs; one that moves a dist the core or another plugin depends on is
+  still refused. A moved dist stays the plugin's, so uninstalling the
+  plugin still removes it. A failed upgrade's rollback restores the old
+  code, not the old versions of these dists.
+
   The lockfile is **parsed, line by line**, before pip ever sees it, and
   the only shape a line may take is `name[extras]==version` followed by
   `--hash=sha256:…` options (an environment marker after `;` is fine).
