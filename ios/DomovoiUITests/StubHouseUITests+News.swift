@@ -868,14 +868,24 @@ extension StubHouseUITests {
             // Unattributed they are six unknowns, and every classifier in
             // this file reads the element.
             //
-            // The difference between the two runs is three seconds: S005's
-            // page pass ran at t = 18.5s and resolved every element, S008's
-            // at t = 15.4s and resolved none. The dialog and foot passes get
-            // that settling for free from their own taps and swipes, and
-            // both of them did attribute findings in the same run. This is
-            // the page pass being given the same thing on purpose — the foot
-            // of a 1111-point page existing, the category grid built, and a
-            // beat after them.
+            // The difference between the two runs looked like three seconds:
+            // S005's page pass ran at t = 18.5s and resolved every element,
+            // S008's at t = 15.4s and resolved none. The dialog and foot
+            // passes get that settling for free from their own taps and
+            // swipes, and both of them did attribute findings in the same
+            // run. So the page pass is given the same thing on purpose — the
+            // foot of a 1111-point page existing, the category grid built,
+            // and a beat after them.
+            //
+            // **The timing explanation is spent.** With the waits below, R002
+            // audited this page at t = 20.4s and still attributed none of the
+            // six. The waits stay — auditing a half-built page is its own
+            // defect and the dialog and foot passes have no equivalent — but
+            // what makes a finding anonymous here is not how late it runs.
+            // Five of the six were the chip leaves, by count and by S005's
+            // own attribution of them, and those are now out of the tree; a
+            // sixth that arrives anonymous is an unknown this case reports
+            // rather than discounts.
             _ = newsElement(app, "news-story-meta-301").waitForExistence(timeout: 25)
             _ = app.buttons["news-category-entertainment"].waitForExistence(timeout: 10)
             let settled = XCTestExpectation(description: "the page settled before the audit")
@@ -956,24 +966,30 @@ extension StubHouseUITests {
             // pixels, same geometry, opposite verdict: the colours are not
             // the finding.
             //
-            // What did change is the build. S008 was News alone; R001 is the
-            // integration, and in it Apple's contrast audit fails elements
-            // app-wide that no single-item train ever failed —
-            // `ShellTopBar`'s address pill `127.0.0.1:6601` is flagged in
-            // I001 and R001 and in none of S008, S011, S012, S013 or S014,
-            // on a file the merge did not touch. The one app-level
-            // difference is at the window's root:
+            // **And R002 cleared all ten without a line of anyone else's
+            // code changing.** Round 2 read the difference as an app-wide
+            // sweep coming from the window's root —
             // `AlertsHintLifecycle.body(content:)` puts
             // `.accessibilityHidden(model.explaining)` on the whole app
             // (`ios/Domovoi/Alerts/AlertsHintRowView.swift:265-266`, hooked
-            // in at `ios/Domovoi/DomovoiApp.swift:214`), and R001's chip row
-            // shows the cost of it in the tree — a synthesised `Button`
-            // layer inside every person chip that S008's tree does not have.
+            // in at `ios/Domovoi/DomovoiApp.swift:214`) — and cited a
+            // synthesised `Button` layer in R001's chip row as its cost.
+            // Both halves were wrong, and this run says so: the root
+            // modifier is still there in R002, and its foot pass names
+            // neither a category chip nor `saved feed`. The only thing that
+            // changed between the two runs is this screen's own ring
+            // (`fgMuted@0.35` to `0.7`, `brandInk` to `brandFg`), which is
+            // the chips' half; `saved feed` does not turn on a ring and is a
+            // run-to-run difference in what the auditor would sample. The
+            // extra `Button` layer was round 1's own
+            // `accessibilityElement(children: .ignore)` — S005, S008 and
+            // S011 predate it and R001 and R002 both carry it, and
+            // ``HomeAttentionView``'s rows wear the same layer from the same
+            // modifier in the same run.
             //
-            // **Nothing is classified for it here.** A classifier in this
-            // file would hide an app-wide regression behind News's own
-            // screen, and the measurement says there is nothing of News's to
-            // discount. `integration/news.md` round 2 carries the numbers.
+            // Nothing is classified for any of it: a `Contrast failed`
+            // naming an element of this screen fails this case.
+            // `integration/news.md` round 3 carries the numbers.
             for _ in 0..<12 { app.swipeUp(velocity: .slow) }
             evidence(app, "news-12-audited-foot")
             findings += try auditNews(app, "news-foot", "the foot of the page")
@@ -994,23 +1010,30 @@ extension StubHouseUITests {
             "Apple's audit has findings beyond the measured anonymous floor, "
                 + "the content the viewport has clipped away, the two meta "
                 + "lines measured to scale, and the page this app hides "
-                + "behind a dialog. A `Contrast failed` naming a category "
-                + "chip or `saved feed` is measured at 5.07:1 and 18.60:1 on "
-                + "this run's own screenshot and belongs to the integration "
-                + "build's app-wide sweep, not to this screen — the foot "
-                + "pass's comment names the root modifier"
+                + "behind a dialog. Nothing else is discounted: a "
+                + "`Contrast failed` naming a category chip, `saved feed` or "
+                + "a person chip is this screen's to fix — R001 named ten of "
+                + "them and R002 named none, with only this screen's own ring "
+                + "changed in between (the foot pass's comment carries that "
+                + "measurement). An anonymous one is an unknown, and the page "
+                + "pass's comment says what the six used to be"
         )
     }
 
     /// Every person chip is **one** accessibility element.
     ///
-    /// The five `Contrast failed` this screen carried for three trains were
+    /// The five `Contrast failed` this screen carried for five trains were
     /// the chip row's own leaves: a `StaticText` per name wearing the pill's
     /// 113 x 44 frame, and the initial of the chip the scroller clips. The
     /// fix is in ``NewsPeopleChipRow``, and it is a shape rather than a
     /// colour, so this is what holds it: a chip with any text descendant is
     /// a chip whose children are back in the tree, and the audit below will
     /// report them again.
+    ///
+    /// It has already earned its place. Round 1's fix *read* as if it had
+    /// worked — the chip gained an element with the right label and the right
+    /// traits — and this pin is what said the leaves were still underneath it
+    /// in R001 and R002, which no reading of the tree's top line would have.
     ///
     /// Asked of the whole roster rather than of one chip, because the leaf
     /// that cost the fifth finding belonged to the **last** chip — the one
@@ -1039,9 +1062,17 @@ extension StubHouseUITests {
     // children, the name of them carrying the **pill's** frame rather than
     // the text's, while the identically-framed Buttons beside them audited
     // clean. So the audit was reading leaves that should never have been in
-    // the tree — and ``NewsPeopleChipRow`` now takes them out
-    // (`accessibilityElement(children: .ignore)`), which is also what
-    // ``NewsStrings/personChip(_:)`` always meant a reader to hear.
+    // the tree.
+    //
+    // **Round 1 reached for `accessibilityElement(children: .ignore)` and it
+    // did nothing.** R001 and R002 ran with it and this pin reported all four
+    // chips exposing two leaves in both: on a `Button` that modifier adds a
+    // wrapper element and leaves the control and its leaves underneath it.
+    // ``HomeAttentionView``'s rows are the same three-deep shape in the same
+    // run, so it is the modifier and not this screen. What takes the leaves
+    // out is a label that is a single `Text` — the bubble moved out of the
+    // label and over the pill (``NewsPeopleChipRow/chip(_:stacked:)``), which
+    // is the shape of every pill in this app that audits clean.
     //
     // Nothing is discounted in their place: a `Contrast failed` anywhere in
     // the chip row now fails this case, and ``newsChipRowIsOneElement``
