@@ -140,6 +140,14 @@ public enum AlertsStrings {
     /// rather than claiming to switch something on.
     public static let askConfirm = "ask iOS"
 
+    /// The explain card's second button. The same word as the row's
+    /// ``notNow`` — Android's own (`HomeSections.kt:366`) — under its own
+    /// name because the two answers are not the same answer: the row's is
+    /// remembered for the install, the card's only closes the card
+    /// (DECISIONS.md #11). Named so that changing one never silently
+    /// changes the other.
+    public static let askCancel = notNow
+
     /// **iOS-only.** `UNAuthorizationStatus.denied` is a state Android's row
     /// cannot reach. iOS allows exactly one ask, so a second `turn on` would
     /// do nothing; this is literally what the control does
