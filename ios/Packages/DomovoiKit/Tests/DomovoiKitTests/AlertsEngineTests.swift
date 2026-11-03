@@ -350,7 +350,9 @@ final class AlertsEngineTests: XCTestCase {
             clock: { clock.current }
         )
 
-        XCTAssertTrue(await engine.syncMirror())
+        // Hoisted: an `await` cannot live in an `XCTAssert` autoclosure.
+        let synced = await engine.syncMirror()
+        XCTAssertTrue(synced)
         XCTAssertEqual(
             ["timer_fire:\(Self.keyA):2"], centre.added.map(\.identifier),
             "the timer 2s out is left to the live `timer_fires.changed` path"
