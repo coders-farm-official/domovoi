@@ -127,7 +127,7 @@ struct AssistantPlaceSwitch<House: View>: View {
 
     // MARK: - two places
 
-    private func facts(_ phone: AssistantPhoneModel) -> AssistantPlaceFacts {
+    private func placeFacts(_ phone: AssistantPhoneModel) -> AssistantPlaceFacts {
         AssistantPlaceFacts(
             availability: phone.availability,
             // `away` is Android's "no home server in reach, or none paired,
@@ -143,8 +143,11 @@ struct AssistantPlaceSwitch<House: View>: View {
     }
 
     @ViewBuilder private func twoPlaces(_ phone: AssistantPhoneModel) -> some View {
-        let facts = facts(phone)
-        let startable = assistantStartablePlaces(facts)
+        // Named `here` and not `facts`: a local `let facts = facts(phone)`
+        // shadows the method from its own declaration, which Swift refuses as
+        // "variable used within its own initial value".
+        let here = placeFacts(phone)
+        let startable = assistantStartablePlaces(here)
         let place = chosen(phone, startable)
         VStack(spacing: 0) {
             // Over a conversation the picker would offer to change the place

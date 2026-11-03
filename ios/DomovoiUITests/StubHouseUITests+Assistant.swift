@@ -712,7 +712,6 @@ extension StubHouseUITests {
     /// is how the modal-dialog contrast bug was found.
     @MainActor
     func testAssistant_Audit() throws {
-        guard #available(iOS 17.0, *) else { return }
         control("reset-fixtures", "{}", port: 6601, what: "the fixtures before the audit case")
         let app = assistantLaunch(model: "fake")
         XCTAssertTrue(reachPhonePlace(app), "the phone's place never drew")
@@ -721,6 +720,10 @@ extension StubHouseUITests {
         var floors: [String: Int] = [:]
         func sweep(_ name: String) throws {
             evidence(app, "assistant-audit-\(name)")
+            // Inside the nested function, which is where the shared file's own
+            // `sweep` has it: a `guard #available` in the enclosing method
+            // does not reliably widen availability into a declaration.
+            guard #available(iOS 17.0, *) else { return }
             let split = Self.floorAndRest(try auditIssues(app, "assistant-\(name)"))
             floors[name] = split.floor
             findings[name] = split.rest

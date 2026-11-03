@@ -42,7 +42,7 @@ struct AssistantPlacePickerView: View {
                         chip(place, picked: place == selected)
                     }
                     .buttonStyle(.plain)
-                    .accessibilityAddTraits(place == selected ? [.isButton, .isSelected] : .isButton)
+                    .accessibilityAddTraits(traits(picked: place == selected))
                 }
                 if !wrapped { Spacer(minLength: 0) }
             }
@@ -73,6 +73,15 @@ struct AssistantPlacePickerView: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     private var wrapped: Bool { dynamicTypeSize.isAccessibilitySize }
+
+    /// Spelled out with its type rather than as a ternary of two array
+    /// literals, which is a shape Swift's inference reads badly in a modifier
+    /// argument.
+    private func traits(picked: Bool) -> AccessibilityTraits {
+        var out: AccessibilityTraits = .isButton
+        if picked { out.insert(.isSelected) }
+        return out
+    }
 
     private func chip(_ place: ChatPlace, picked: Bool) -> some View {
         // `serverShareSeen: false` on every call, and ``AssistantPlaceSwitch``
