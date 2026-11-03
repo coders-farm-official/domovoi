@@ -151,6 +151,12 @@ struct PhoneSourceSwitchPill: View {
         PhoneSourceSegment(
             glyph: "house",
             label: serverTitle,
+            // **What VoiceOver says is not what is written on it.** The
+            // visible words are the house's address, which Apple's audit
+            // reported as a label that is not human-readable (train S006);
+            // ``PhoneMediaStrings/serverSideLabel(_:)`` says what the address
+            // IS, and the segment still shows the address itself.
+            voice: PhoneMediaStrings.serverSideLabel(serverTitle),
             // The server's segment is labelled with the house's own name,
             // which is whatever its owner called it — so a UI case cannot
             // find it by label. It carries an identifier instead; the
@@ -162,6 +168,9 @@ struct PhoneSourceSwitchPill: View {
         PhoneSourceSegment(
             glyph: "iphone",
             label: PhoneMediaStrings.yourDevice,
+            // The same words it shows: `your device` is already a phrase,
+            // and every case that finds this segment finds it by that label.
+            voice: PhoneMediaStrings.yourDevice,
             identifier: Self.deviceSegmentID,
             selected: source == .device,
             onTap: { onPick(.device) }
@@ -178,6 +187,11 @@ struct PhoneSourceSegment: View {
 
     let glyph: String
     let label: String
+    /// What VoiceOver reads, which is the visible `label` for every segment
+    /// whose words are already a phrase. The server's are its address, and an
+    /// address alone is a label Apple's audit calls not human-readable — so
+    /// the two are separate arguments rather than one.
+    let voice: String
     /// An accessibility identifier **beside** the label, never instead of it:
     /// the server's segment is named by its house and a case needs a stable
     /// handle on it.
@@ -234,6 +248,9 @@ struct PhoneSourceSegment: View {
         // tells VoiceOver which of the two is on; without it both read
         // identically and the switch is unusable without sight.
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
+        // Before the identifier, so the identifier is not what names it: an
+        // identifier is a handle for a test and never reaches VoiceOver.
+        .accessibilityLabel(voice)
         .accessibilityIdentifier(identifier)
     }
 }

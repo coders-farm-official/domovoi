@@ -179,6 +179,24 @@ public enum PhoneMediaStrings {
     /// which the shell knows and this enum does not.
     public static let yourDevice = "your device"
 
+    /// What VoiceOver says for the **server's** segment, whose visible words
+    /// are the house's address.
+    ///
+    /// Apple's audit: "the accessibilityLabel of this element is not
+    /// human-readable" against `phone-source-server` labelled
+    /// `127.0.0.1:6601` (train S006). `ShellModel.serverLabel` is always
+    /// `ServerCredentials.address(_:)`, so this segment is the second place
+    /// in the app where an address is the whole of an element's label — the
+    /// first was the forget-server card, and the wording that cleared the
+    /// finding there (``forgetServerAddressLabel(_:)``, 2026-10-30) is the
+    /// wording used here. **The words on screen are unchanged**: the segment
+    /// still shows the address, which is what a person compares with the
+    /// dashboard. **iOS-only** — Android's segment has no separate
+    /// content description (`YourDevice.kt:212`).
+    public static func serverSideLabel(_ title: String) -> String {
+        "the server at \(title)"
+    }
+
     // MARK: - saving to this phone
 
     /// The second destination this item adds beside the share sheet.

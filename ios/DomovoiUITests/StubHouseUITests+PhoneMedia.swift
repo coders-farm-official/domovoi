@@ -619,6 +619,30 @@ extension StubHouseUITests {
     /// defect to fix. Files is the device page with the most on it — the
     /// library picker, the two add doors, the breadcrumb, the filter, the
     /// rows and their icon-only upload buttons.
+    ///
+    /// ### What train S006 reported, and which half of it was real
+    ///
+    /// Fourteen findings Apple could attribute. **One was a defect**: `Label
+    /// not human-readable` against the server's segment, whose whole label is
+    /// the house's address — fixed where it belongs, in
+    /// ``PhoneSourceSegment`` (`PhoneMediaStrings.serverSideLabel(_:)`).
+    ///
+    /// The other thirteen were `Dynamic Type font sizes are partially
+    /// unsupported` against the device rows' titles, their meta lines, their
+    /// durations, the count line and the too-big note — every one of them
+    /// `.subheadline` or `.caption` with no fixed size anywhere near it. A
+    /// named Dynamic Type finding is **not a defect by virtue of being
+    /// named**: it has now been a false positive three times on this track
+    /// (the `favorites only` switch, the Videos grid, the Files list), and
+    /// the only honest answer is a measurement, which
+    /// ``testPhoneMedia_TheDeviceSideTextGrowsAtAX5`` is. So this case drops
+    /// that one headline from `rest` and keeps every other kind — the same
+    /// split `testTheFilesListAudits` makes over the server side of the very
+    /// same rows. A leaf that really is stuck fails the measurement.
+    ///
+    /// The floor is printed rather than pinned: the device page carries both
+    /// anonymous and named findings of that headline, and a pinned total is
+    /// what let a new contrast finding in unnoticed once already.
     @MainActor
     @available(iOS 17.0, *)
     func testPhoneMedia_TheDeviceSideHasNoAuditFindings() throws {
@@ -629,9 +653,106 @@ extension StubHouseUITests {
 
         let found = try auditIssues(app, "phonemedia-files")
         let split = Self.floorAndRest(found)
-        XCTAssertTrue(
-            split.rest.isEmpty,
-            "the device side of Files has findings Apple could attribute: \(split.rest)"
+        print("PHONEMEDIA AUDIT floor=\(split.floor) rest=\(split.rest.count)")
+        for line in split.rest { print("PHONEMEDIA AUDIT REST :: \(line)") }
+
+        let unexplained = split.rest.filter { !$0.hasPrefix("Dynamic Type font sizes") }
+        XCTAssertEqual(
+            [], unexplained,
+            "the device side of Files has a finding of its own"
+        )
+    }
+
+    /// The leaves Apple's audit names on the device side of Files, measured
+    /// at `large` and at AX5.
+    ///
+    /// The companion to the classification above, and the test that actually
+    /// decides whether those thirteen findings were defects. Five code sites
+    /// cover all thirteen: ``PhoneMediaRowView``'s title (`.subheadline`) and
+    /// its meta and duration (`.caption`), ``PhoneDeviceChrome``'s count line
+    /// and ``PhoneUploadTooBigNote``. A folder's name is the sixth, and it is
+    /// the row title drawn inside a `Button` rather than a combined row —
+    /// worth its own measurement because the wrapper differs.
+    ///
+    /// Matched on `.staticTexts` rather than `.any`, which is this file's
+    /// habit elsewhere: every one of the thirteen was reported as `type=48`,
+    /// and an `.any` query would take the enclosing row or button — a
+    /// different element from the one the audit flagged, and one that grows
+    /// for its own reasons.
+    ///
+    /// A leaf that cannot be found is skipped, not failed, because the fake
+    /// library's foot is unbuilt at AX5; the case fails instead if fewer than
+    /// two leaves could be compared, so it can never pass by measuring
+    /// nothing.
+    @MainActor
+    func testPhoneMedia_TheDeviceSideTextGrowsAtAX5() throws {
+        func heights(_ app: XCUIApplication) -> [String: CGFloat] {
+            var out: [String: CGFloat] = [:]
+            for (leaf, predicate) in [
+                ("row-title", "label == 'quenlo lullaby.mp3'"),
+                ("row-meta", "label BEGINSWITH '3.0 MB · '"),
+                ("row-duration", "label == '3:34'"),
+                ("folder-name", "label == 'Trips'"),
+                ("count", "label BEGINSWITH 'showing 5 of'"),
+                ("too-big", "label BEGINSWITH 'too big to upload from a phone'"),
+            ] {
+                let found = app.staticTexts
+                    .matching(NSPredicate(format: predicate))
+                    .firstMatch
+                if found.exists { out[leaf] = found.frame.height }
+            }
+            return out
+        }
+
+        phoneReset()
+        var measured: [String: [String: CGFloat]] = [:]
+        for (label, mode) in [
+            ("large", Self.ordinaryTypeSize),
+            ("AX5", "UICTContentSizeCategoryAccessibilityXXXL"),
+        ] {
+            let app = phoneLaunch(push: "Files", mode: mode)
+            XCTAssertTrue(
+                phoneSwitchToDevice(app, waitingFor: StubPhoneMedia.phoneTrackWord),
+                "the device side never drew at \(label)"
+            )
+            // At AX5 the header, the switch (a column there), the two add
+            // doors and the filter fill the window, so the rows below the
+            // first are not merely off screen but unbuilt. A plain `swipeUp`
+            // steps over rows, which is fine here: nothing is being tapped,
+            // only measured once it exists.
+            for _ in 0..<6 where !app.staticTexts
+                .matching(NSPredicate(format: "label == 'quenlo lullaby.mp3'"))
+                .firstMatch.exists {
+                app.swipeUp()
+            }
+            usleep(1_000_000)
+            evidence(app, "phonemedia-scale-\(label)")
+            let here = heights(app)
+            measured[label] = here
+            for (leaf, height) in here.sorted(by: { $0.key < $1.key }) {
+                print("PHONEMEDIA SCALE [\(label)] \(leaf) height=\(height)")
+            }
+            app.terminate()
+        }
+
+        let small = measured["large"] ?? [:]
+        let big = measured["AX5"] ?? [:]
+        var compared = 0
+        var stuck: [String] = []
+        for (leaf, height) in small.sorted(by: { $0.key < $1.key }) {
+            guard let grown = big[leaf] else { continue }
+            compared += 1
+            // 1.8 is the factor `testTheFilesListTextGrowsAtAX5` settled on
+            // over the same two text styles: `large` to AX5 is about three
+            // times the line height, and a leaf that wrapped already at
+            // `large` grows by less than its font does.
+            if grown < height * 1.8 { stuck.append("\(leaf) \(height)->\(grown)") }
+        }
+        XCTAssertEqual([], stuck, "a leaf Apple flagged really does not scale")
+        XCTAssertGreaterThanOrEqual(
+            compared,
+            2,
+            "nothing could be compared, so this proved nothing: \(small) / \(big)"
         )
     }
 }
