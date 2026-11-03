@@ -300,6 +300,17 @@ public final class NewsFeedsModel {
         loading = nil
     }
 
+    /// The screen came back (``NewsPersonModel/start()``). Reads again only
+    /// if this list is open and has **nothing to show and nothing to say** —
+    /// a cancelled read leaves both nil, which the view draws as
+    /// `loading feeds…` for ever. A list that answered keeps its rows and
+    /// costs no request; a list that failed keeps its message and its
+    /// ``retry()``, which is the person's own decision to make.
+    public func resume() {
+        guard !stopped, isOpen, feeds == nil, readError == nil else { return }
+        load()
+    }
+
     /// The person went away, or the topic did. Stops the read in flight and
     /// makes every pending write a no-op on the way back — **permanent**, so
     /// a model whose topic was removed can never publish again.

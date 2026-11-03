@@ -212,7 +212,7 @@ struct NewsTopicRow: View {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack(spacing: 8) {
                         chevron
-                        HomeTonePill(label: topic.kindLabel, tone: topic.isCategory ? .brand : .idle)
+                        kindPill
                         Spacer(minLength: 4)
                         remove
                     }
@@ -222,7 +222,7 @@ struct NewsTopicRow: View {
             } else {
                 HStack(spacing: 8) {
                     chevron
-                    HomeTonePill(label: topic.kindLabel, tone: topic.isCategory ? .brand : .idle)
+                    kindPill
                     word
                     Spacer(minLength: 4)
                     count
@@ -254,6 +254,16 @@ struct NewsTopicRow: View {
         .accessibilityLabel(feeds.chevronLabel)
         .accessibilityValue(topic.topicLabel)
         .accessibilityIdentifier("news-expand-\(topic.topicLabel)")
+    }
+
+    /// Identified **per row** by its topic's word, so a case can read back
+    /// what kind the app posted for one named topic. Without the identifier
+    /// the only way to ask was "is there a `freeform` label anywhere on the
+    /// screen", which the seeded row already answered — the assertion that
+    /// named the behaviour was testing nothing.
+    private var kindPill: some View {
+        HomeTonePill(label: topic.kindLabel, tone: topic.isCategory ? .brand : .idle)
+            .accessibilityIdentifier("news-topic-kind-\(topic.topicLabel)")
     }
 
     private var word: some View {

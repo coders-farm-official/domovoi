@@ -37,6 +37,15 @@ final class NewsModelTests: XCTestCase {
         /// An empty roster — the "nobody is enrolled" pane.
         let noPeople = Shared<Bool>(false)
 
+        /// Kamron has left the roster and Chevy has not — the roster read
+        /// that is **not** empty and no longer holds the picked person, which
+        /// is the only way to reach `.pickAPerson` through the live code.
+        let kamronGone = Shared<Bool>(false)
+
+        /// `DELETE /api/news/topics/{tid}` answers this instead of 204 — 409
+        /// is what a topic removed from another device gives.
+        let topicDeleteStatus = Shared<Int>(204)
+
         /// The roster answers 401, as `require_device_read` does for an
         /// unpaired phone (`people.py:60-80`).
         let rosterStatus = Shared<Int>(200)
@@ -112,7 +121,9 @@ final class NewsModelTests: XCTestCase {
         """
 
         func rosterBody() -> String {
-            noPeople.current ? "[]" : "[\(Self.kamron),\(Self.chevy)]"
+            if noPeople.current { return "[]" }
+            if kamronGone.current { return "[\(Self.chevy)]" }
+            return "[\(Self.kamron),\(Self.chevy)]"
         }
 
         /// `egress.http_exception`'s shape: a 409 whose `detail` is the
@@ -186,7 +197,13 @@ final class NewsModelTests: XCTestCase {
                     // Every DELETE really sends **no body** (`news.py:215`,
                     // `:303`), and the two remaining POSTs — favourite and
                     // validate — answer with a row this screen does not read.
-                    if method == "DELETE" { return .json("", status: 204) }
+                    if method == "DELETE" {
+                        let answer = self.topicDeleteStatus.current
+                        guard answer == 204 else {
+                            return .json(#"{"detail":"that topic is already gone"}"#, status: answer)
+                        }
+                        return .json("", status: 204)
+                    }
                     if method == "POST" { return .json("{}") }
                     return .json("{}", status: 404)
                 }
@@ -450,6 +467,30 @@ final class NewsModelTests: XCTestCase {
 
         XCTAssertEqual(.noPeople, model.pane, "nobody at all is the stronger statement")
         XCTAssertEqual(1, model.selectedID, "the id is kept; the pane says what is true")
+    }
+
+    /// The case the one above cannot reach: the picked person leaves and
+    /// **somebody else is still there**, so `roster.isEmpty` does not answer
+    /// it. The pane used to stay `.person`, drawing the departed person's
+    /// topics and briefing for ever, because nothing dropped her detail.
+    func testThePickedPersonLeavingARosterThatStillHasPeopleFallsToPickAPerson() async {
+        let (model, house) = rig()
+        await started(model)
+        XCTAssertEqual(.person, model.pane)
+
+        house.kamronGone.set(true)
+        house.seen.set([])
+        model.people.refresh()
+        await settleUntil({ model.roster.count == 1 }, "the roster without Kamron")
+        await nothingHappens()
+
+        XCTAssertEqual(.pickAPerson, model.pane, "the departed person's news is still on screen")
+        XCTAssertNil(model.detail, "her detail outlived her")
+        XCTAssertEqual(1, model.selectedID, "she is not replaced by whoever is left")
+        XCTAssertFalse(
+            house.seen.current.contains { $0.contains("/api/news/people/1/") },
+            "a read for the person who left went out anyway: \(house.seen.current)"
+        )
     }
 
     // MARK: - the category toggle
@@ -912,6 +953,102 @@ final class NewsModelTests: XCTestCase {
         await settleUntil({ model.toast != nil }, "the toast")
         model.setToast(nil)
         XCTAssertNil(model.toast)
+    }
+
+    /// A refused removal must leave the row it did not remove **working**.
+    /// Dropping the topic's feeds model before the DELETE went out stopped it
+    /// permanently, and `stop()` cannot be undone: the row stayed on screen
+    /// saying `loading feeds…` with add-feed, re-check and remove-feed as
+    /// silent no-ops.
+    func testAFailedTopicRemovalLeavesThatTopicsFeedsUsable() async {
+        let house = House()
+        house.topicDeleteStatus.set(409)
+        let (model, _) = rig(house: house)
+        await started(model)
+        let detail = model.detail!
+        guard let tech = detail.topicRows.first(where: { $0.id == 11 }) else {
+            return XCTFail("the seeded category topic is not in the list")
+        }
+        let feeds = detail.feeds(for: tech)
+
+        detail.confirmRemoval(tech)
+        await settleUntil({ model.toast != nil }, "the refusal")
+
+        XCTAssertTrue(
+            detail.feeds(for: tech) === feeds,
+            "the topic's feeds model was replaced, so the row on screen holds a stopped one"
+        )
+        feeds.toggle()
+        await settleUntil({ feeds.feeds != nil }, "the feeds of a topic whose removal failed")
+        guard case .rows(let rows) = feeds.showing else {
+            return XCTFail("the row shows \(feeds.showing) rather than its feeds")
+        }
+        XCTAssertEqual(2, rows.count)
+    }
+
+    /// Leaving the screen with an expanded topic's feeds read in flight left
+    /// `loading feeds…` on that row for ever: `pause()` cancels the read, and
+    /// a cancelled read leaves nothing to show and nothing to say.
+    func testAnOpenFeedListThatLostItsReadToAPauseIsReadAgainOnTheWayBack() async {
+        let (model, _) = rig()
+        await started(model)
+        let detail = model.detail!
+        let tech = detail.topicRows.first { $0.id == 11 }!
+        let feeds = detail.feeds(for: tech)
+
+        feeds.toggle()
+        detail.pause()
+        await nothingHappens()
+        XCTAssertTrue(feeds.isOpen, "the pause collapsed the row")
+        XCTAssertNil(feeds.feeds, "the read was not actually cancelled by the pause")
+
+        detail.start()
+        await settleUntil({ feeds.feeds != nil }, "the resumed feeds read")
+        guard case .rows(let rows) = feeds.showing else {
+            return XCTFail("the row shows \(feeds.showing) rather than its feeds")
+        }
+        XCTAssertEqual(2, rows.count)
+    }
+
+    /// A failed feed list keeps its message and its retry across the same
+    /// trip — ``NewsFeedsModel/resume()`` is not a blanket re-read.
+    func testAFailedFeedListKeepsItsMessageRatherThanBeingReadAgain() async {
+        let house = House()
+        house.feedsStatus.set(503)
+        let (model, _) = rig(house: house)
+        await started(model)
+        let detail = model.detail!
+        let tech = detail.topicRows.first { $0.id == 11 }!
+        let feeds = detail.feeds(for: tech)
+
+        feeds.toggle()
+        await settleUntil({ feeds.readError != nil }, "the feeds failure")
+        detail.pause()
+        detail.start()
+        await nothingHappens()
+
+        guard case .failed(let said) = feeds.showing else {
+            return XCTFail("the row shows \(feeds.showing) rather than why it failed")
+        }
+        XCTAssertTrue(said.contains("rebuilt"), "the server's own sentence was thrown away: \(said)")
+    }
+
+    /// The mechanism that drops a refusal for the person who was just
+    /// switched away from is ``NewsPersonModel``'s own `stopped` flag, not a
+    /// test in the sink — so this asserts it there, where deleting that guard
+    /// makes it fail. The end-to-end case above cannot tell the two apart.
+    func testAStoppedPersonsModelPublishesNothing() async {
+        let house = House()
+        house.internetOff.set(true)
+        let (model, _) = rig(house: house)
+        await started(model)
+        let kamron = model.detail!
+
+        kamron.toggleCategory("science")
+        kamron.stop()
+        await nothingHappens()
+
+        XCTAssertNil(model.toast, "a stopped person's model still published its refusal")
     }
 
     // MARK: - pushes

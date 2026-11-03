@@ -294,8 +294,13 @@ extension StubHouseUITests {
         // The kind the app posted, read back off the row's pill: a write that
         // sent `category` would have the server refuse the word outright, and
         // one that sent nothing would be a 400.
-        XCTAssertTrue(
-            containing(app, NewsStringsUnderTest.freeformKind).exists,
+        // Read off *this* row's pill by identifier. `containing(...)` matched
+        // any label holding `freeform`, and the seeded `Formula 1` row's pill
+        // already said it before the write — so that assertion passed
+        // whatever kind the new row carried, and passed with no pill at all.
+        XCTAssertEqual(
+            newsElement(app, "news-topic-kind-Trebuchets").label,
+            NewsStringsUnderTest.freeformKind,
             "the new row's pill does not say what kind of topic was posted"
         )
         // The field is cleared on success only (`NewsDetail.kt:225`).
@@ -740,13 +745,26 @@ extension StubHouseUITests {
 
     // MARK: - 12. Apple's audit
 
-    /// One audit of this screen, **with the remove dialog up**.
+    /// Two audits of this screen: the page on its own, then the page with the
+    /// remove dialog up.
     ///
-    /// The dialog is up because that is how the modal gap shows: a finding
-    /// that names an element *behind* a confirmation means the page under it
-    /// is still content, which cost this app two `Contrast failed` on
-    /// Settings. Everything the audit can attribute is a defect to fix;
-    /// anonymous Dynamic Type findings are the measured platform floor
+    /// **Both passes are needed, and the first one is the screen's.** This
+    /// case used to raise the dialog *before* its only audit, and
+    /// ``NewsView`` applies `.accessibilityHidden(removalAsked != nil)` to
+    /// the whole page — which does not de-prioritise the page, it deletes it
+    /// from the hierarchy `performAccessibilityAudit` walks. The audit saw
+    /// the dialog card and the shell's phone bar and nothing else: not one
+    /// chip, topic row, category chip, feed row, story, star, chevron, poll
+    /// button or briefing. It passed against a screen it never looked at, and
+    /// would have passed against a sabotaged colour.
+    ///
+    /// The second pass is still worth running: it covers the dialog's own
+    /// card, and a finding naming an element *behind* the confirmation would
+    /// mean the page is no longer hidden — the gap that cost this app two
+    /// `Contrast failed` on Settings.
+    ///
+    /// Everything the audit can attribute is a defect to fix; anonymous
+    /// Dynamic Type findings are the measured platform floor
     /// (``floorAndRest(_:)``), and the floor is printed rather than pinned —
     /// a total would hide a new finding the moment one of the floor's went
     /// away.
@@ -755,24 +773,43 @@ extension StubHouseUITests {
         resetNewsHouse()
         let (app, landed) = openNews()
         XCTAssertTrue(landed, "News never drew a person's heading")
-
-        let remove = app.buttons["news-remove-topic-tech"]
-        if revealNews(app, remove) {
-            remove.tap()
-            _ = newsElement(app, "news-remove-ask").waitForExistence(timeout: 10)
-        } else {
-            print("NEWS AUDIT: the remove control was not reachable — auditing without the dialog")
-        }
         evidence(app, "news-12-audited")
 
-        let found = try auditIssues(app, "news")
-        let split = Self.floorAndRest(found)
-        print("NEWS AUDIT floor=\(split.floor) rest=\(split.rest.count)")
-        for line in split.rest { print("NEWS AUDIT   \(line)") }
+        try auditNews(app, "news", "the page")
+
+        // Now the dialog, which hides everything above.
+        let remove = app.buttons["news-remove-topic-tech"]
+        guard revealNews(app, remove) else {
+            print("NEWS AUDIT: the remove control was not reachable — the dialog was not audited")
+            return
+        }
+        remove.tap()
+        XCTAssertTrue(
+            newsElement(app, "news-remove-ask").waitForExistence(timeout: 10),
+            "the remove confirmation never came up"
+        )
+        evidence(app, "news-12-audited-dialog")
+        try auditNews(app, "news-dialog", "the remove confirmation")
+    }
+
+    /// One audit, classified by signature and asserted on the rest.
+    @MainActor
+    private func auditNews(
+        _ app: XCUIApplication,
+        _ name: String,
+        _ what: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) throws {
+        let split = Self.floorAndRest(try auditIssues(app, name))
+        print("NEWS AUDIT [\(what)] floor=\(split.floor) rest=\(split.rest.count)")
+        for found in split.rest { print("NEWS AUDIT   \(found)") }
         XCTAssertTrue(
             split.rest.isEmpty,
-            "Apple's audit has findings against News beyond the measured "
-                + "anonymous floor: " + split.rest.joined(separator: " / ")
+            "Apple's audit has findings against \(what) beyond the measured "
+                + "anonymous floor: " + split.rest.joined(separator: " / "),
+            file: file,
+            line: line
         )
     }
 

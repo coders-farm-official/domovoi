@@ -272,17 +272,29 @@ public final class NewsPersonModel {
     /// Takes the topic as an argument rather than reading
     /// ``confirmingRemoval`` inside the task: the dialog is dismissed first,
     /// and a value read after that would be nil.
+    /// The topic's feeds model is dropped **only on success**, in the write's
+    /// own hook. Dropping it up front broke the row a refused DELETE left
+    /// behind: `stop()` is permanent, the row stays on screen (a failure
+    /// re-reads nothing, so `topicRows` is unchanged),
+    /// ``NewsTopicsCardView``'s `@State` dictionary still holds the stopped
+    /// model — its `.task(id:)` does not re-run, the id list did not change —
+    /// and the chevron's `load()` returns at `guard !stopped`. The row said
+    /// `loading feeds…` for ever and add-feed, re-check and remove-feed on it
+    /// were silent no-ops. Reachable with a 404 (removed from another device)
+    /// or an unreachable house.
     public func confirmRemoval(_ topic: NewsTopic) {
         guard !stopped else { return }
         confirmingRemoval = nil
-        feedModels.removeValue(forKey: topic.id)?.stop()
+        let gone = topic.id
         write(
             method: "DELETE",
-            path: NewsPath.topic(topic.id),
+            path: NewsPath.topic(gone),
             body: nil,
             verb: NewsStrings.verbRemoveTopic,
             said: nil
-        )
+        ) { model in
+            model.feedModels.removeValue(forKey: gone)?.stop()
+        }
     }
 
     // MARK: - the saved feed
@@ -381,6 +393,14 @@ public final class NewsPersonModel {
         topics.refresh()
         items.refresh()
         briefing.refresh()
+        // An expanded topic whose feeds read was in flight when the screen
+        // went away lost that read to ``NewsFeedsModel/pause()`` — a
+        // cancelled read leaves `feeds` nil and `readError` nil, which is
+        // exactly `showing == .loading`. `isOpen` survived the pause, so
+        // without this the row showed `loading feeds…` until the person
+        // happened to collapse and expand it again. ``resume()`` is the one
+        // that keeps a row which genuinely *failed*, and its retry.
+        for model in feedModels.values { model.resume() }
     }
 
     /// A push arrived. Handed to all three reads, each of which filters on

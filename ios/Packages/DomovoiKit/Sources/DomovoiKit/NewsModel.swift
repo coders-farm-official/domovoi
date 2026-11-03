@@ -59,12 +59,16 @@ public final class NewsModel {
     /// it with ``setToast(_:)``.
     ///
     /// **It lives here and not on ``NewsPersonModel``**, which is where the
-    /// map put it: a failed write's sentence has to outlive the person it was
-    /// made for, because tapping another chip while a slow DELETE is in
-    /// flight would otherwise throw the refusal away with the model. Files
-    /// found the same thing about leaving a screen (`FilesView.swift:86-93`).
-    /// A line from a person who is no longer picked is still **dropped** —
-    /// see ``sink(for:)``.
+    /// map put it: the sentence has to outlive the *view* that showed it, so
+    /// a refusal is still on screen after the topics list re-reads and the
+    /// rows are rebuilt. Files found the same thing about leaving a screen
+    /// (`FilesView.swift:86-93`).
+    ///
+    /// It does **not** outlive the person it was made for: switching chips
+    /// stops that person's model, and a stopped model publishes nothing, so
+    /// a refusal that lands after the switch is dropped rather than shown
+    /// late. That is Android's behaviour too — see ``sink()`` and
+    /// DECISIONS.md.
     public private(set) var toast: String?
 
     private let container: AppContainer
@@ -124,6 +128,17 @@ public final class NewsModel {
     /// ejected library *is* replaced, and the reason is that a library is a
     /// place and a person is a person.
     private func rosterLanded() {
+        // Her detail goes with her. Without this the pane kept drawing the
+        // departed person's topics and briefing for ever: `pane` turns on
+        // `detail != nil`, and nothing else tears a detail down on a read of
+        // the roster, so "is not re-picked" was true while "is not shown" was
+        // not. Runs on every landed roster read, before the default
+        // selection, so a roster that lost the picked person and nobody else
+        // falls to `.pickAPerson`.
+        if selectedID != nil, selectedPerson == nil {
+            detail?.stop()
+            detail = nil
+        }
         guard selectedID == nil, let first = roster.first else { return }
         select(first.id)
     }
@@ -142,23 +157,31 @@ public final class NewsModel {
             detail = nil
             return
         }
-        let model = NewsPersonModel(person: person, in: container, say: sink(for: person.id))
+        let model = NewsPersonModel(person: person, in: container, say: sink())
         detail = model
         model.start()
     }
 
-    /// Where a write's sentence goes: into ``toast``, **unless the person it
-    /// was made for is no longer the one picked**.
+    /// Where a write's sentence goes: into ``toast``.
     ///
-    /// The captured `person` is the key, taken before any `await` the write
-    /// does. Without it, a slow DELETE for Kamron's topic would toast
-    /// `remove topic failed: …` over Chevy's news, naming a row that is not
-    /// on screen — the same defect shape as a reply landing under the wrong
-    /// server ([[read-after-await-wrong-key]]), one level up.
-    private func sink(for person: Int64) -> @MainActor (String) -> Void {
+    /// There is deliberately no "is this still the picked person?" test here,
+    /// and there used to be one: it could never fire. ``rebuildDetail()``
+    /// calls ``NewsPersonModel/stop()`` before the next person's model
+    /// exists, and every write and poll over there returns at
+    /// `guard let self, !self.stopped` **before** it calls this — so a slow
+    /// DELETE for Kamron's topic cannot toast `remove topic failed: …` over
+    /// Chevy's news, because it never reaches this closure at all. A guard
+    /// that cannot fire is a guard no test can hold, and it read as the thing
+    /// keeping the wrong person's sentence off the screen.
+    ///
+    /// The cost is that the refusal is **dropped rather than shown late**,
+    /// which is Android's behaviour too — `rememberCoroutineScope` dies with
+    /// `key(person.id)` (`NewsScreen.kt:95`), so the Kotlin throws it away on
+    /// the same switch. DECISIONS.md, "a refusal for the person you just
+    /// switched away from".
+    private func sink() -> @MainActor (String) -> Void {
         { [weak self] line in
-            guard let self, self.selectedID == person else { return }
-            self.toast = line
+            self?.toast = line
         }
     }
 
@@ -193,7 +216,11 @@ public final class NewsModel {
             return .loading
         }
         if roster.isEmpty { return .noPeople }
-        guard detail != nil else { return .pickAPerson }
+        // Both, not either: a detail whose person has left the roster is
+        // dropped by ``rosterLanded()``, and this is the second lock on the
+        // same door — the pane must never be `.person` with nobody picked who
+        // is actually in the house.
+        guard selectedPerson != nil, detail != nil else { return .pickAPerson }
         return .person
     }
 
