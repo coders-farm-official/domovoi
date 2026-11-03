@@ -131,7 +131,14 @@ struct CalendarMonthGridView: View {
                 if cell.overflow > 0 {
                     Text(CalendarStrings.moreCount(cell.overflow))
                         .font(.caption2)
-                        .foregroundStyle(Color.fgMuted)
+                        // **Not ``Color/fgMuted``.** Apple's audit reported
+                        // "Contrast nearly passed — unless font size is
+                        // larger" against both `+1` cells in train S002.
+                        // `caption2` is the smallest text on this screen and
+                        // the count is the only thing saying a cell holds
+                        // more than its three dots, so it takes the full ink
+                        // rather than the meta one.
+                        .foregroundStyle(Color.primary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 0)

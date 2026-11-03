@@ -181,9 +181,25 @@ struct CalendarScreenView: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal, 12)
                     .frame(minHeight: 44)
+                    // **Not `.buttonStyle(.bordered)`.** That style draws the
+                    // label in the tint and the fill in the tint at low
+                    // opacity, and this app's tint is ``Color/brand`` —
+                    // amber-on-pale-amber, which Apple's audit failed with
+                    // "Contrast nearly passed" in all four states of train
+                    // S002 and which the screenshot shows plainly. The one
+                    // prominent pair this app has measured is
+                    // ``Color/brandFg`` on ``Color/brand``, 8.49:1, which is
+                    // what the selected view-toggle capsule already uses.
+                    .foregroundStyle(Color.brandFg)
+                    .background(Color.brand, in: Capsule())
                     .contentShape(.rect)
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.plain)
+            // `.plain` draws no disabled state of its own, and a live-looking
+            // button that does nothing is the no-misleading-controls rule
+            // (NIGHT-RULES §3). The model exists one frame after `task`, so
+            // this is only ever the very first frame.
+            .opacity(calendar == nil ? 0.4 : 1)
             .disabled(calendar == nil)
         }
     }
@@ -338,6 +354,25 @@ struct CalendarRangeBarView: View {
                                     ? Color.brand
                                     : Color(.secondarySystemBackground),
                                 in: Capsule()
+                            )
+                            // **The unselected capsule gets an edge.** Apple's
+                            // audit failed `day` with "Contrast failed" in
+                            // train S002 while naming neither of its two
+                            // identical neighbours, and the only pair inside
+                            // that element that is anywhere near a threshold
+                            // is the capsule's own fill against the white
+                            // canvas — `secondarySystemBackground` on white
+                            // is about 1.07:1, so the control's shape is
+                            // invisible rather than its text unreadable. The
+                            // stroke gives the shape a 3:1 edge and costs the
+                            // selected capsule nothing.
+                            .overlay(
+                                Capsule().strokeBorder(
+                                    calendar.mode == mode
+                                        ? Color.clear
+                                        : Color.fgMuted.opacity(0.45),
+                                    lineWidth: 1
+                                )
                             )
                             .contentShape(.rect)
                     }

@@ -115,7 +115,15 @@ struct CalendarDayGridView: View {
             }
             .padding(.horizontal, 6)
             .padding(.vertical, 4)
-            .frame(maxWidth: .infinity, minHeight: tall, alignment: .topLeading)
+            // **`height:`, not `minHeight:`.** A `ZStack` proposes its own
+            // size to every child, and a `minHeight` child with
+            // `maxWidth: .infinity` accepts the whole proposal: the train's
+            // tree showed all four blocks at `309 x 960` — the entire grid —
+            // stacked on top of each other, so the last one drawn swallowed
+            // every tap in the day view and the first three were untappable.
+            // An exact height is what `offsetMinutes`/`heightMinutes` are
+            // computed for.
+            .frame(maxWidth: .infinity, height: tall, alignment: .topLeading)
             .background(
                 // The brand fill under ``Color/brandFg`` text, which is the
                 // one prominent pair this app has measured (8.49:1). A

@@ -121,7 +121,7 @@ struct CalendarEventEditorView: View {
                     set: { draft.title = $0; titleError = nil }
                 )
             )
-            .textFieldStyle(.roundedBorder)
+            .calendarFieldBox()
             .submitLabel(.done)
             .accessibilityLabel(CalendarStrings.titleLabel)
             if let titleError {
@@ -144,7 +144,7 @@ struct CalendarEventEditorView: View {
                 CalendarStrings.optional,
                 text: Binding(get: { draft.location }, set: { draft.location = $0 })
             )
-            .textFieldStyle(.roundedBorder)
+            .calendarFieldBox()
             .submitLabel(.done)
             .accessibilityLabel(CalendarStrings.locationLabel)
         }
@@ -164,7 +164,7 @@ struct CalendarEventEditorView: View {
                 axis: .vertical
             )
             .lineLimit(3...)
-            .textFieldStyle(.roundedBorder)
+            .calendarFieldBox()
             .accessibilityLabel(CalendarStrings.descriptionLabel)
         }
     }
@@ -327,5 +327,34 @@ struct CalendarEventEditorView: View {
         endError = draft.end <= draft.start ? CalendarStrings.endAfterStart : nil
         guard titleError == nil, endError == nil else { return }
         calendar.save(draft)
+    }
+}
+
+// MARK: - the field's own box
+
+extension View {
+
+    /// The editor's text fields' border, drawn here rather than by
+    /// `.textFieldStyle(.roundedBorder)`.
+    ///
+    /// `.roundedBorder` builds a UIKit control of a **fixed** height around
+    /// the text, and Apple's audit failed the `title` field with "Text
+    /// clipped: text of this element may be clipped at larger Dynamic Type
+    /// sizes" in train S002 — the element measured 361 x 34 whatever the type
+    /// size was. An unstyled field inside padding and a rounded background
+    /// has no fixed box in it, so the control grows with the text instead of
+    /// cropping it, which is the same shape
+    /// ``PhonesAndBrowsersView`` settled on for the same reason.
+    ///
+    /// Named for the screen, not for the shape (NIGHT-RULES §2): twenty
+    /// branches are adding to this module tonight and `fieldBox()` is a name
+    /// two of them would take.
+    func calendarFieldBox() -> some View {
+        padding(.horizontal, 8)
+            .padding(.vertical, 10)
+            .background(
+                Color(.secondarySystemBackground),
+                in: RoundedRectangle(cornerRadius: 8)
+            )
     }
 }
