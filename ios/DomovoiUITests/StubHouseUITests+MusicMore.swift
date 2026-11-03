@@ -109,6 +109,283 @@ extension StubHouseUITests {
         return (app, musicMoreScroll(app, to: row))
     }
 
+    // MARK: - reaching a control, by its frame and nothing else
+
+    /// Whether `it` sits wholly inside `seat` **along the axis being
+    /// scrolled**.
+    ///
+    /// ### Why this file no longer asks `isHittable` at all
+    ///
+    /// **`isHittable` is not a total function, and train I001 paid for it
+    /// three times.** For an element whose activation point falls outside
+    /// the window XCTest cannot compute one and cannot sample one off the
+    /// frame either, so the getter does not return `false`: it **fails the
+    /// test** with "Failed to determine hittability of "playlists" Button:
+    /// Activation point invalid and no suggested hit points based on element
+    /// frame". The measurement from that train's own snapshot is
+    /// `playlists` at `{{522.0, 485.0}, {193.0, 58.7}}` inside a strip at
+    /// `{{16.0, 485.0}, {361.0, 58.7}}` on a 393-point screen — a midpoint
+    /// at x 618.5, 225 points off the right-hand edge. Three cases died on
+    /// that message at the one line that merely **asked** the question
+    /// (``musicMoreScrollOnScreen(_:_:flicks:)``), before any tap.
+    ///
+    /// Round 1 guarded the getter with the window's frame. That is sound and
+    /// not enough: the getter is still asked, about an element whose visible
+    /// frame can be empty for a second reason (a clip, not the screen's
+    /// edge), and a guard that has to predict every input a getter cannot
+    /// answer for is a guard that will be wrong again. So the walks are now
+    /// **geometry only** — ``musicMoreBring(_:into:vertical:steps:)`` and
+    /// these three — and `isHittable` appears nowhere in this file. The one
+    /// question left for XCTest is the `tap()` itself, by which point the
+    /// control has been measured wholly inside its own clip.
+    ///
+    /// ### Why containment is measured on one axis
+    ///
+    /// Train S008 (Rooms, the same strip problem on another screen) is the
+    /// precedent: `CGRect.contains(_:)` asks about both axes, and a tab
+    /// inside ``MusicTabBar`` is **exactly as tall as the strip** — 58.7
+    /// against 58.7 at AX5, 44 against 44 at the ordinary size. The two are
+    /// then equal to within SwiftUI's layout rounding between a clip and its
+    /// content, and that rounding fell the wrong way there: a tab plainly
+    /// inside its strip horizontally was reported outside because its bottom
+    /// edge sat a fraction below the strip's, the shortfall came back zero,
+    /// and no drag was ever made. Containment across the scroll axis is also
+    /// the only part that bears on tappability.
+    ///
+    /// **Not an app defect.** ``MusicTabBar`` is a horizontal `ScrollView`
+    /// on purpose (Android's `ScrollableTabRow`), and at AX5 its four words
+    /// are 828 points wide inside a 361-point frame; a word off the right
+    /// edge of a strip that scrolls is a word a person drags to, which is
+    /// what ``musicMoreTapTab(_:_:)`` now does.
+    func musicMoreInside(_ it: CGRect, _ seat: CGRect, vertical: Bool) -> Bool {
+        // Half a point: far smaller than any real clipping, which is tens of
+        // points, so a control genuinely cut off is still reported outside.
+        let slack: CGFloat = 0.5
+        return vertical
+            ? (it.minY >= seat.minY - slack && it.maxY <= seat.maxY + slack)
+            : (it.minX >= seat.minX - slack && it.maxX <= seat.maxX + slack)
+    }
+
+    /// How far, in points, `seat`'s content must move for `it` to sit inside
+    /// it — negative towards the top or the left, zero when it already fits.
+    ///
+    /// The eight-point margin is why a measured drag converges where the
+    /// flicks did not: landing a control exactly on the clip's edge is
+    /// landing it outside, and a drag measured to the edge lands there about
+    /// half the time.
+    ///
+    /// **An element bigger than its own clip** can never be wholly inside it,
+    /// and asking for that is how a loop oscillates until its budget runs
+    /// out. At AX5 Music's page viewport is 178.7 points tall — the
+    /// phone-source pill above it is a column there, see this item's report —
+    /// while one room card is 1520, so this is not hypothetical. The best
+    /// that can be asked of such an element is that its **leading edge** is
+    /// inside, which is where a tap on it lands.
+    func musicMoreShortfall(_ it: CGRect, in seat: CGRect, vertical: Bool) -> CGFloat {
+        let margin: CGFloat = 8
+        let itNear = vertical ? it.minY : it.minX
+        let itFar = vertical ? it.maxY : it.maxX
+        let seatNear = vertical ? seat.minY : seat.minX
+        let seatFar = vertical ? seat.maxY : seat.maxX
+        if itFar - itNear >= (seatFar - seatNear) - 2 * margin {
+            return (seatNear + margin) - itNear
+        }
+        if itFar > seatFar { return -(itFar - seatFar + margin) }
+        if itNear < seatNear { return (seatNear - itNear) + margin }
+        return 0
+    }
+
+    /// Drag a scroller by a measured number of points, and say whether a drag
+    /// was attempted.
+    ///
+    /// A press-and-drag, not a flick: a flick's momentum moves the content by
+    /// an amount nobody asked for, which at AX5 is how the build scroll
+    /// carried the tab strip 38 points **past** the page's top in one go
+    /// (I001's own snapshot: content at `minY -1083.3`, strip at y 485,
+    /// viewport from 523.3).
+    ///
+    /// ### The hold at the end, and why round 2's drag still flicked
+    ///
+    /// Round 2 wrote here that "a press has no momentum, so it moves the
+    /// content by the number of points asked for and converges from either
+    /// side". **That was a belief about the API, and train R002 measured it
+    /// false.** `press(forDuration:thenDragTo:)` is a press followed by a
+    /// *flick*: XCTest's own log line for it is "… then drag to … **with
+    /// velocity of 500.00 pixels per second, and then hold for 0.0
+    /// seconds**", and lifting a finger that is still moving is what a
+    /// scroll view reads as a throw however long the press before it was.
+    /// R002's numbers, from ``musicMoreBring(_:into:vertical:steps:)``'s own
+    /// re-measurement after each drag: a drag asked for -142.9 points moved
+    /// the page's content about 294, and the one asked for +24 moved it
+    /// nearly 290. So the loop never converged — thirty drags alternating
+    /// -142.9, +47.3, -136.0, +74.3, … with the shortfall no smaller at the
+    /// end than at the start — and the two Dynamic Type cases reported the
+    /// playlists tab as never drawn.
+    ///
+    /// The fix is the fourth argument: `thenHoldForDuration`. Holding at the
+    /// destination before the lift ends the gesture stationary, so the
+    /// scroller takes no velocity from it and the content stops where the
+    /// finger did. This is the same correction `assistantCreep` made on the
+    /// Assistant screen ("the hold is what kills the momentum: lifting
+    /// mid-drag is a flick however slowly the drag was made",
+    /// `StubHouseUITests+Assistant.swift:896`) — the two walks were written
+    /// the same night and only one of them had been measured.
+    ///
+    /// The whole gesture has to stay inside the scroller — a touch that
+    /// leaves it is a touch on something else, and on this screen the
+    /// something else is the pinned pill above or the phone bar below — so
+    /// one drag travels at most 80% of the scroller's own extent and
+    /// ``musicMoreBring(_:into:vertical:steps:)``'s loop does the rest.
+    ///
+    /// A shortfall of zero means **no drag was attempted**, so it answers
+    /// false: the caller has already asked whether the element is inside.
+    @MainActor
+    func musicMoreDrag(_ view: XCUIElement, by delta: CGFloat, vertical: Bool) -> Bool {
+        guard delta != 0, view.exists else { return false }
+        let box = view.frame
+        let extent = vertical ? box.height : box.width
+        guard extent > 40 else { return false }
+        // **At least 24 points, whatever the shortfall asked for.** A gesture
+        // that moves less than a scroll view's pan slop is not a pan: the
+        // touch stays with whatever is under the finger, and a `Button` that
+        // keeps it fires on touch-up however long the press was (SwiftUI's
+        // button has no duration limit). The smallest shortfall this file can
+        // produce is a hair over the eight-point margin, which is inside that
+        // slop — so the floor is the difference between dragging a page and
+        // tapping a row of it. Overshooting by up to sixteen points lands the
+        // element further *inside* the clip, which is the harmless direction,
+        // and an element nearly as tall as its clip is routed to the
+        // leading-edge branch of ``musicMoreShortfall(_:in:vertical:)``
+        // before it gets here.
+        let leastTravel: CGFloat = 24
+        let asked = abs(delta) < leastTravel
+            ? (delta < 0 ? -leastTravel : leastTravel)
+            : delta
+        let travel = max(-extent * 0.8, min(extent * 0.8, asked))
+        // Start near the edge the content is travelling away from, so the far
+        // end of the gesture is still inside the scroller.
+        let near: CGFloat = travel < 0 ? 0.9 : 0.1
+        let from = view.coordinate(
+            withNormalizedOffset: vertical
+                ? CGVector(dx: 0.5, dy: near)
+                : CGVector(dx: near, dy: 0.5)
+        )
+        // The press before the move is long enough that the control under
+        // the finger cannot read the gesture as a tap; the **hold after** it
+        // is what makes the whole thing a drag rather than a flick — see
+        // this method's doc comment for the measurement that cost two cases.
+        from.press(
+            forDuration: 0.4,
+            thenDragTo: from.withOffset(
+                vertical ? CGVector(dx: 0, dy: travel) : CGVector(dx: travel, dy: 0)
+            ),
+            withVelocity: .slow,
+            thenHoldForDuration: 0.4
+        )
+        return true
+    }
+
+    /// Move `view`'s content until `element` sits inside `view` on one axis.
+    ///
+    /// Measured drags first, then the flicks they replaced as a fallback —
+    /// if the drag gesture is not recognised at all, nothing else would move
+    /// the content, and the cases that were green on flicks stay green.
+    ///
+    /// ### Each step is checked, and the flicks are no longer unconditional
+    ///
+    /// **Train R002 is why.** Two things went wrong together there and only
+    /// the first was the drag's own fault:
+    ///
+    /// 1. The drag carried momentum (``musicMoreDrag(_:by:vertical:)``), so
+    ///    the measured loop oscillated through all thirty of its steps
+    ///    without ever landing the tab strip inside the page.
+    /// 2. The loop then fell into the flicks **because it had run out of
+    ///    steps**, and the first `swipeDown` carried the page far enough
+    ///    that its `LazyVStack` unbuilt the strip. The next iteration's
+    ///    `guard element.exists` saw nothing and answered false, so
+    ///    ``musicMoreReveal(_:_:flicks:)`` reported an element it had
+    ///    already built as never drawn — "the playlists tab never drew a row
+    ///    at UICTContentSizeCategoryAccessibilityXXXL", about a screen that
+    ///    had drawn it twice.
+    ///
+    /// So the flicks are now reached only by the one condition their own
+    /// comment names: **a drag the scroller did not see**, which is a drag
+    /// after which the element has not moved by even a point. A loop that is
+    /// moving the element but has run out of steps reports what it measured
+    /// and prints the frames, rather than handing a nearly-converged page to
+    /// a gesture that scrolls by an amount nobody asked for. And an element
+    /// a drag has just unbuilt is dragged back the way it came, so what the
+    /// caller gets is a measurement and not the absence of one.
+    @MainActor
+    func musicMoreBring(
+        _ element: XCUIElement,
+        into view: XCUIElement,
+        vertical: Bool,
+        steps: Int = 10
+    ) -> Bool {
+        // Starts true: the flicks are the answer to a gesture that did
+        // nothing, and until a drag has been measured and moved nothing,
+        // nothing says the scroller is deaf.
+        var scrollerTookTheDrag = true
+        for step in 0..<steps {
+            guard element.exists, view.exists else { return false }
+            let before = element.frame
+            if self.musicMoreInside(before, view.frame, vertical: vertical) { return true }
+            let shortfall = self.musicMoreShortfall(
+                before, in: view.frame, vertical: vertical
+            )
+            if !self.musicMoreDrag(view, by: shortfall, vertical: vertical) { break }
+            // A lazy container can unbuild the element the drag was for. Put
+            // it back the way it came rather than leaving the caller with no
+            // frame to measure at all.
+            guard element.exists else {
+                _ = self.musicMoreDrag(view, by: -shortfall, vertical: vertical)
+                break
+            }
+            let after = element.frame
+            let moved = vertical
+                ? abs(after.minY - before.minY)
+                : abs(after.minX - before.minX)
+            if moved < 1 {
+                scrollerTookTheDrag = false
+                break
+            }
+            if step == steps - 1 {
+                // Printed, not swallowed: a walk that is moving and still
+                // short after its budget is a number the next train needs.
+                print(
+                    "=== BRING RAN OUT OF STEPS: element \(after) in \(view.frame), "
+                        + "last shortfall \(shortfall), last step moved \(moved) ==="
+                )
+            }
+        }
+        guard !scrollerTookTheDrag else {
+            guard element.exists, view.exists else { return false }
+            return self.musicMoreInside(element.frame, view.frame, vertical: vertical)
+        }
+        for _ in 0..<steps {
+            guard element.exists, view.exists else { return false }
+            let seat = view.frame
+            let it = element.frame
+            if self.musicMoreInside(it, seat, vertical: vertical) { return true }
+            if vertical {
+                if it.midY > seat.midY {
+                    view.swipeUp(velocity: .slow)
+                } else {
+                    view.swipeDown(velocity: .slow)
+                }
+            } else {
+                if it.midX > seat.midX {
+                    view.swipeLeft(velocity: .slow)
+                } else {
+                    view.swipeRight(velocity: .slow)
+                }
+            }
+        }
+        guard element.exists, view.exists else { return false }
+        return self.musicMoreInside(element.frame, view.frame, vertical: vertical)
+    }
+
     /// Scroll Music until `element` is built **and on screen**.
     ///
     /// ``musicMoreScroll(_:to:flicks:)`` answers "is it built", which is the
@@ -123,38 +400,19 @@ extension StubHouseUITests {
         return element.exists
     }
 
-    /// Flick Music's page until `element` sits inside the page's viewport.
+    /// Move Music's page until `element` sits inside the page's viewport.
     ///
     /// The viewport is ``musicMorePage(_:)``'s own frame, not the window's:
     /// an element 95 points past the foot of the page is still inside a
-    /// 852-point screen and still untouchable. A word that is on screen
-    /// vertically but off the **right** edge — the AX5 case
+    /// 852-point screen and still untouchable. A word that is inside the
+    /// viewport vertically but off the **right** edge — the AX5 case
     /// ``musicMoreTapTab(_:_:)`` exists for — is left alone here, because a
-    /// vertical flick is not what moves it.
+    /// vertical gesture is not what moves it: that is the sideways half,
+    /// against the strip and not against the page.
     @MainActor
     func musicMoreScrollOnScreen(_ app: XCUIApplication, _ element: XCUIElement, flicks: Int = 30) {
         guard element.exists, let page = musicMorePage(app) else { return }
-        var last = CGFloat.greatestFiniteMagnitude
-        for _ in 0..<flicks {
-            guard element.exists else { return }
-            if element.isHittable { return }
-            let box = element.frame
-            let viewport = page.frame
-            guard box.height > 0, viewport.height > 0 else { return }
-            if box.maxY > viewport.maxY {
-                page.swipeUp(velocity: .slow)
-            } else if box.minY < viewport.minY {
-                page.swipeDown(velocity: .slow)
-            } else {
-                return
-            }
-            // Same stop-when-nothing-moves guard as the vertical build scroll,
-            // and `nan` for the same reason: a missing measurement is not
-            // "nothing moved".
-            let top = element.exists ? element.frame.minY : CGFloat.nan
-            if !top.isNaN, abs(top - last) < 1 { return }
-            last = top
-        }
+        _ = musicMoreBring(element, into: page, vertical: true, steps: flicks)
     }
 
     /// Open one playlist's sheet from the tab.
@@ -184,18 +442,21 @@ extension StubHouseUITests {
     ///
     /// **Train S012 is why this is not a `tap()`.** The strip is a
     /// horizontal `ScrollView` (`MusicTabBar`, Android's `ScrollableTabRow`),
-    /// and at AX5 its four words are 844 points wide inside a 361-point
-    /// frame: `playlists` sits at `{{522.0, 526.7}, {193.0, 58.7}}`, wholly
-    /// to the right of a 393-point screen. XCUITest's own
-    /// "scroll element to visible" cannot move a horizontal scroll view, so
-    /// the tap failed with `Activation point invalid and no suggested hit
-    /// points`, and the case read as the playlists tab being broken when the
-    /// screen was fine and the word was simply off the right-hand edge.
+    /// and at AX5 its four words are 828 points wide inside a 361-point
+    /// frame: I001's snapshot has `playlists` at
+    /// `{{522.0, 485.0}, {193.0, 58.7}}` in a strip at
+    /// `{{16.0, 485.0}, {361.0, 58.7}}`, so its right-hand edge is 322
+    /// points past the strip's and its midpoint 225 past a 393-point
+    /// screen's. XCUITest's own "scroll element to visible" cannot move a
+    /// horizontal scroll view, so the tap failed with `Activation point
+    /// invalid and no suggested hit points`, and the case read as the
+    /// playlists tab being broken when the screen was fine and the word was
+    /// simply off the right-hand edge.
     ///
-    /// A person swipes the strip. So does this. The flick count has a
-    /// stop-when-nothing-moves guard for the same reason the vertical one
-    /// does (``musicMoreScroll(_:to:flicks:)``): a strip already at its end
-    /// should not pay for twelve more.
+    /// A person drags the strip. So does this: two measured brings, one per
+    /// axis, and no `isHittable` anywhere — see ``musicMoreInside(_:_:vertical:)``
+    /// for the three cases train I001 lost to asking that getter about the
+    /// very word this walk exists to reach.
     @MainActor
     func musicMoreTapTab(_ app: XCUIApplication, _ word: String) -> Bool {
         let tab = startingWith(app, word)
@@ -204,27 +465,31 @@ extension StubHouseUITests {
             print(app.debugDescription)
             return false
         }
-        // Down the page before sideways along the strip: a strip below the
-        // page's foot cannot be flicked at all (S013), and the frames the
-        // sideways walk measures are only meaningful once it is on screen.
-        if !tab.isHittable { musicMoreScrollOnScreen(app, tab) }
-        if !tab.isHittable, let strip = musicMoreTabStrip(app, holding: tab) {
-            var last = CGFloat.greatestFiniteMagnitude
-            for _ in 0..<12 {
-                if tab.isHittable { break }
-                // A strip still off screen would throw "visible frame is
-                // empty" instead of scrolling; the tree below says why.
-                guard strip.isHittable else { break }
-                // `nan` when the word is momentarily out of the snapshot: a
-                // missing measurement is not "nothing moved".
-                let left = tab.exists ? tab.frame.minX : CGFloat.nan
-                if !left.isNaN, abs(left - last) < 1 { break }
-                last = left
-                strip.swipeLeft(velocity: .slow)
-            }
+        // Down the page before sideways along the strip: a strip outside the
+        // page's clip cannot be dragged at all (S013 — a gesture on an
+        // element whose visible frame is empty throws instead of scrolling
+        // it), and the frames the sideways bring measures are only meaningful
+        // once the strip is inside the page.
+        //
+        // The **strip** is what is brought into the page, not the word: at
+        // AX5 the word is 225 points off the right-hand edge, and a frame
+        // that far outside the window is one XCTest will not drag to.
+        if let page = musicMorePage(app), let strip = musicMoreTabStrip(app, holding: tab) {
+            _ = musicMoreBring(strip, into: page, vertical: true)
         }
-        guard tab.isHittable else {
-            print("=== '\(word)' TAB NOT HITTABLE AT \(tab.frame) — tree follows ===")
+        // Re-found after the vertical bring: ``musicMoreTabStrip(_:holding:)``
+        // picks the strip by the band the tab's own middle falls in, and that
+        // band has just moved.
+        guard let strip = musicMoreTabStrip(app, holding: tab) else {
+            print("=== NO STRIP AROUND '\(word)' AT \(tab.frame) — tree follows ===")
+            print(app.debugDescription)
+            return false
+        }
+        guard musicMoreBring(tab, into: strip, vertical: false) else {
+            print(
+                "=== '\(word)' TAB STILL OUTSIDE ITS STRIP: tab \(tab.frame) "
+                    + "in strip \(strip.frame) — tree follows ==="
+            )
             print(app.debugDescription)
             return false
         }
@@ -337,10 +602,21 @@ extension StubHouseUITests {
     func musicMoreScrollTop(_ app: XCUIApplication, flicks: Int = 12) {
         guard let page = musicMorePage(app) else { return }
         let bar = startingWith(app, MusicMoreUnderTest.tabPlaylists)
+        // The strip can be unbuilt as well as off the top — a `LazyVStack`
+        // foot the page has scrolled past — and a frame no element has is a
+        // frame no bring can measure, so the flicks come first and only until
+        // it exists.
         for _ in 0..<flicks {
-            if bar.exists, bar.isHittable { return }
+            if bar.exists { break }
             page.swipeDown(velocity: .slow)
         }
+        guard bar.exists else { return }
+        // Then by measurement, not by `isHittable`: at AX5 this word is 225
+        // points off the right-hand edge and the getter fails the case rather
+        // than answering it (I001). What this helper owes its callers is a
+        // strip inside the page's clip; reaching the word along the strip is
+        // ``musicMoreTapTab(_:_:)``'s half.
+        _ = musicMoreBring(bar, into: page, vertical: true, steps: flicks)
     }
 
     /// Open a library row's track sheet, by a title that appears once.
@@ -1351,9 +1627,16 @@ extension StubHouseUITests {
     @MainActor
     func musicMoreUnexplained(_ rest: [String], in app: XCUIApplication) -> [String] {
         // The outer scroll view: the tallest on screen. The others are the
-        // tab strip, lying on its side, and the phone bar.
+        // tab strip, lying on its side, and the phone bar. Kept as the
+        // **element**, not just its frame: rule 2 needs to know what is
+        // inside it, and a rectangle cannot say.
         let page = app.scrollViews.allElementsBoundByIndex
-            .max(by: { $0.frame.height < $1.frame.height })?.frame ?? .null
+            .max(by: { $0.frame.height < $1.frame.height })
+        let pageBox = page?.frame ?? .null
+        // Read **once**, before the filter: one snapshot of the page's
+        // subtree, not one per finding.
+        let pageContent = page?.descendants(matching: .any)
+            .allElementsBoundByIndex.map(\.frame) ?? []
 
         return rest.filter { line in
             // 1. A Dynamic Type headline **with** an element. The four tab
@@ -1367,17 +1650,49 @@ extension StubHouseUITests {
             if Self.knownAnonymousHeadlines.contains(where: { line.hasPrefix($0) }) {
                 return false
             }
-            // 2. A contrast finding against an element one of the scroll
-            //    view's own edges is cutting. Half an element has no pixels
-            //    to read, which is what the audit reports. S007's single
-            //    contrast finding was `playing in parlour` at y
+            // 2. A contrast finding against an element of the page's own
+            //    content that the page's clip is cutting — or has carried
+            //    **wholly** past. Pixels the element does not have are
+            //    pixels the audit read off whatever is drawn there instead.
+            //
+            //    S007's was the cut half: `playing in parlour` at y
             //    184.3–198.7 against a content area starting at 197.3 — 1.3
             //    points of it visible — while `playing in cellar`, the same
             //    string in the same colour on the same card two rooms down
-            //    and fully on screen, passed. One row further down the
-            //    scroll and it is a different row's turn.
+            //    and fully on screen, passed.
+            //
+            //    **I001 is why "cutting" is no longer enough.** The merge
+            //    put ``PhoneSourceSwitchView``'s pinned pill above this page
+            //    (`RouteScreen.swift:74`), moving the content area's top
+            //    from about 149 to 197.3 while the scroll distance to the
+            //    playlists tab is unchanged. At the position this case
+            //    audits from, `Veldrassen Overture` sits at
+            //    `(100.0, 148.67, 140.0, 18.0)` — 30 points **above** the
+            //    clip, not across it, so `intersects` was false and the row
+            //    that used to straddle the edge now fails to be forgiven by
+            //    the rule written for it. The screen behind those pixels is
+            //    the pill, at `{{15.5, 144.8}, {362.0, 45.0}}`: the audit
+            //    measured the pill's colours and named the room card's
+            //    title. The control that says so is one card down —
+            //    `Vantersk Night Radio`, the same `Text(song.displayTitle)`
+            //    of the same `identity(_:)` in the same unstyled primary
+            //    ink (`MusicRoomCards.swift:109`), fully on screen, and
+            //    passed.
+            //
+            //    The condition is therefore "not wholly inside the page",
+            //    and the discriminator that keeps that from forgiving the
+            //    pill itself — which sits in the very same band — is
+            //    ``musicMoreIsPageContent(_:_:)``.
+            //
+            //    Measured on the **vertical** axis alone, which is the axis
+            //    this page clips on: it does not scroll sideways, so a row
+            //    whose frame ends a third of a point outside the page's left
+            //    or right edge is a rounding difference and not a row with no
+            //    pixels. Two-axis `contains` would forgive it.
             if line.hasPrefix("Contrast failed"), let box = Self.frame(in: line),
-               box.intersects(page), !page.contains(box) {
+               !pageBox.isNull,
+               !self.musicMoreInside(box, pageBox, vertical: true),
+               Self.musicMoreIsPageContent(box, pageContent) {
                 return false
             }
             // 3. The phone-source segmented control, which is the PhoneMedia
@@ -1418,6 +1733,32 @@ extension StubHouseUITests {
                 return false
             }
             return true
+        }
+    }
+
+    /// Whether the element a finding names at `box` belongs to the page's
+    /// own scrolling content.
+    ///
+    /// **The discriminator geometry alone cannot give.** After the merge the
+    /// phone-source pill occupies `{{15.5, 144.8}, {362.0, 45.0}}` and a room
+    /// card's title carried off the top of the page occupies
+    /// `(100.0, 148.67, 140.0, 18.0)` — the same band, both outside the
+    /// page's clip. Forgiving a contrast finding by position would forgive
+    /// the pill too, and the pill is a drawn, visible control whose colours
+    /// are a fair thing for Apple to fail. The row that scrolled away is
+    /// still a **descendant** of the page; the pill is its sibling
+    /// (``PhoneSourceSwitchView``'s `VStack`, `PhoneSourceSwitchView.swift:80`).
+    ///
+    /// Matched **by frame, not by label**: the label is the only thing the
+    /// finding gives and it is also the thing a screen can repeat, while two
+    /// elements of one snapshot cannot share a rectangle. A third of a point
+    /// of slack, because that is the resolution the frames come back in.
+    static func musicMoreIsPageContent(_ box: CGRect, _ content: [CGRect]) -> Bool {
+        content.contains { other in
+            abs(other.minX - box.minX) < 0.5
+                && abs(other.minY - box.minY) < 0.5
+                && abs(other.width - box.width) < 0.5
+                && abs(other.height - box.height) < 0.5
         }
     }
 }
