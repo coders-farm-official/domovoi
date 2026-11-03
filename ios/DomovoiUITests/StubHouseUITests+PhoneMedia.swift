@@ -785,34 +785,57 @@ extension StubHouseUITests {
     /// read by `YourDevice.kt:198` and `Kit.kt:212`).
     ///
     /// So ``PhoneSourceCollapsedSwitch`` collapses the switch to one row at
-    /// accessibility sizes, and this case now measures the two properties
+    /// accessibility sizes, and this case now measures the four properties
     /// that the one it replaced was standing in for:
     ///
-    /// 1. **The words still grow.** The same string at both sizes — the
-    ///    house's address, which is the server segment's label at `large` and
-    ///    the collapsed row's at AX5 — so this is one sentence measured
-    ///    twice and not two different sentences compared. A fixed font size
-    ///    or a `minimumScaleFactor` anywhere in the switch fails it.
-    /// 2. **The page gets its window back**, and every touch target is still
-    ///    44 points. A future switch that grows back into a column fails on
-    ///    the floor rather than scoring well on height.
+    /// 1. **The collapse happens where it should and nowhere else** — the
+    ///    two-segment pill at an ordinary size, the one row at AX5, never
+    ///    both and never the wrong one.
+    /// 2. **The row's text still scales**, measured against the 44-point
+    ///    floor rather than against the old size (see below). A fixed font
+    ///    size or a `minimumScaleFactor` anywhere in the switch fails it.
+    /// 3. **Both sides are still offered and the house is still named** — the
+    ///    row says which side, the menu says which server, so the name the
+    ///    column used to show in full is still shown in full.
+    /// 4. **The page gets its window back.** A future switch that grows back
+    ///    into a column fails on Android's floor rather than scoring well on
+    ///    height, which is the trap the case this replaced fell into.
     ///
-    /// The text is found **inside the switch's own box** rather than by a
-    /// query for the address: the shell's server chip shows the same address
-    /// 300 points higher up, and an app-wide query would measure whichever it
-    /// reached first. The box is the discriminator, which is the shape this
-    /// file's audit classification settled on for the same reason — two
-    /// elements of one snapshot cannot share a rectangle.
+    /// ### And why the AX5 half is `> 44` rather than a ratio
+    ///
+    /// Because the accessibility tree cannot report a `Text`'s own height
+    /// inside a `Button`. R003's `large` tree has the segment at
+    /// `{{15.5, 144.8}, {178.7, 45}}` and its `StaticText` at
+    /// `{{16, 145.3}, {177.7, 44}}` — the **button's** 44-point `minHeight`,
+    /// not the 18-point line in the middle of it. So "the words grew" is not
+    /// a measurable quantity here, and the measurable thing that means the
+    /// same is this: the collapsed row is one line of `.subheadline` against a
+    /// 44-point floor, so a row **taller than 44** is a row whose text
+    /// outgrew the floor, and a row of exactly 44 is a row whose text did not
+    /// scale. R003's AX5 tree gives that line as 49 points (the server
+    /// segment's two lines measured 98), which is the five points of margin
+    /// this assertion lives on; the number is printed either way.
     @MainActor
     func testPhoneMedia_TheSwitchSegmentsGrowWithTheTypeSize() throws {
         phoneReset()
+        // At `large` the pill is intact: two segments, side by side, which is
+        // Android's control to the point. If this ever collapses at an
+        // ordinary size the AX5 half below would still pass, so it is asserted
+        // here.
         let small = phoneLaunch(push: "Music")
         let ordinary = small.buttons[StubPhoneMedia.serverSegment].firstMatch
         XCTAssertTrue(ordinary.waitForExistence(timeout: 40), "the switch never drew at L")
         let boxAtL = ordinary.frame
-        let textAtL = phoneSourceSwitchWords(small, within: boxAtL)
         evidence(small, "phonemedia-segment-L")
-        print("SWITCH AT L row=\(boxAtL) words=\(String(describing: textAtL))")
+        print("SWITCH AT L segment=\(boxAtL)")
+        XCTAssertTrue(
+            small.buttons[StubPhoneMedia.yourDevice].exists,
+            "the pill drew one segment at an ordinary size — both sides are on screen there"
+        )
+        XCTAssertFalse(
+            small.buttons[StubPhoneMedia.collapsedSwitch].exists,
+            "the switch collapsed at an ordinary size, where there is room for the pill"
+        )
         small.terminate()
 
         let big = phoneLaunch(push: "Music", mode: "UICTContentSizeCategoryAccessibilityXXXL")
@@ -822,63 +845,53 @@ extension StubHouseUITests {
             "the switch drew no collapsed row at AX5"
         )
         let boxAtAX5 = collapsed.frame
-        let textAtAX5 = phoneSourceSwitchWords(big, within: boxAtAX5)
         // The page under the switch, by the same helper the Files and Videos
         // cases scroll with, so the number this asserts is the number they
         // print.
         let page = documentsFolderScroll(big)?.frame ?? .null
         evidence(big, "phonemedia-segment-AX5")
-        print("SWITCH AT AX5 row=\(boxAtAX5) words=\(String(describing: textAtAX5)) page=\(page)")
+        print("SWITCH AT AX5 row=\(boxAtAX5) page=\(page)")
 
-        guard let atL = textAtL, let atAX5 = textAtAX5 else {
-            print("=== THE SWITCH'S OWN WORDS WERE NOT IN ITS BOX — tree follows ===")
-            print(big.debugDescription)
-            return XCTFail(
-                "nothing could be measured: L=\(String(describing: textAtL)) "
-                    + "AX5=\(String(describing: textAtAX5))"
-            )
-        }
-        // 1.8, the factor the other Dynamic Type cases on this screen settled
-        // on over `.subheadline`: `large` to AX5 is about three times the line
-        // height, and one line at each size is the cleanest form of that
-        // comparison there is.
+        // 1. The collapse happened, rather than both shapes drawing.
+        XCTAssertFalse(
+            big.buttons[StubPhoneMedia.serverSegment].exists,
+            "the two-segment pill is still on screen at AX5 as well as the collapsed row"
+        )
+        // 2. The row's one line of text outgrew the 44-point floor, which is
+        //    what a scaling font does and a fixed one does not.
         XCTAssertGreaterThan(
-            atAX5, atL * 1.8,
-            "the switch's words are \(atL) points at L and \(atAX5) at AX5 — a fixed size somewhere in it"
-        )
-        XCTAssertGreaterThanOrEqual(
             boxAtAX5.height, 44,
-            "the collapsed switch is \(boxAtAX5.height) points tall, under the platform minimum"
+            "the collapsed row is \(boxAtAX5.height) points at AX5 — exactly the platform "
+                + "minimum, so its text is not scaling"
         )
+        // 3. Both sides are still offered, in full. The row names the side;
+        //    the menu names the house, and this is what says the name did not
+        //    simply go away.
+        collapsed.tap()
+        let serverRow = phoneSourceMenuRow(big, .server)
+        let deviceRow = phoneSourceMenuRow(big, .device)
+        evidence(big, "phonemedia-segment-AX5-menu")
+        XCTAssertNotNil(deviceRow, "the collapsed switch does not offer the phone's side")
+        guard let serverRow else {
+            print("=== THE MENU DOES NOT NAME THE HOUSE — tree follows ===")
+            print(big.debugDescription)
+            return XCTFail("the collapsed switch's menu does not carry the server's own name")
+        }
+        XCTAssertTrue(
+            serverRow.label.contains(StubPhoneMedia.serverAddressStem),
+            "the menu's server row says `\(serverRow.label)`, which is not the house's name"
+        )
+        // Picking the side that is already on is idempotent
+        // (`PhoneSourceChoices.choose`) and is how this closes the menu
+        // without tapping anything it did not mean to.
+        serverRow.tap()
+
+        // 4. And the page is above the floor Android's own shell keeps.
         XCTAssertGreaterThanOrEqual(
             page.height, 260,
             "the switch leaves the page \(page.height) of 852 points, under Android's own "
                 + "CONTENT_FLOOR of 260 (AppShell.kt:481). switch=\(boxAtAX5) page=\(page)"
         )
-    }
-
-    /// The height of the switch's **own** copy of the house's address.
-    ///
-    /// Matched on a stem of the address rather than the whole of it: the
-    /// collapsed row draws it with `lineLimit(1)`, and a label read back from
-    /// a truncated `Text` is not a string this case wants to depend on. The
-    /// box is what makes the match unambiguous — see the case above.
-    @MainActor
-    func phoneSourceSwitchWords(_ app: XCUIApplication, within box: CGRect) -> CGFloat? {
-        let texts = app.staticTexts
-            .matching(NSPredicate(format: "label CONTAINS %@", StubPhoneMedia.serverAddressStem))
-        for index in 0..<texts.count {
-            let candidate = texts.element(boundBy: index)
-            guard candidate.exists else { continue }
-            // Half a point of slack: the row's text is laid out inside the
-            // row and the two frames come back rounded independently.
-            let frame = candidate.frame
-            if frame.minY >= box.minY - 0.5, frame.maxY <= box.maxY + 0.5,
-               frame.minX >= box.minX - 0.5, frame.maxX <= box.maxX + 0.5 {
-                return frame.height
-            }
-        }
-        return nil
     }
 
     // MARK: - the audit

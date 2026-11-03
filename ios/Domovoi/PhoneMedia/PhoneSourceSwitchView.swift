@@ -251,37 +251,51 @@ struct PhoneSourceSwitchPill: View {
 /// Why this exists at all, and what the column it replaces cost, is in
 /// ``PhoneSourceSwitchPill``'s doc comment. What is here is the shape.
 ///
-/// ### The row truncates and the menu does not, deliberately
+/// ### The row says which SIDE, and the menu says which server
 ///
-/// `lineLimit(1)` on the row is Android's own `maxLines = 1, overflow =
-/// Ellipsis` (`YourDevice.kt:251-252`), and it is the whole point of the
-/// collapse: one line is a fixed height, and a fixed height is what the page
-/// under it gets back. A house whose address or name is longer than the row
-/// therefore shows `127.0.0.1:660…` — which would be a control that cannot
-/// say what it is for, except that the **menu** shows the same name on a
-/// full-width row that wraps as far as it needs, and VoiceOver is given the
-/// whole of it either way (``accessibilityLabel``, below, never the truncated
-/// glyphs). `minimumScaleFactor` is rejected throughout this app and is not
-/// what is happening here: nothing is shrunk.
+/// The row shows a short fixed phrase — ``PhoneMediaStrings/theServerSide``
+/// or ``PhoneMediaStrings/yourDevice`` — and not the house's own name, and
+/// that is a width decision with a number behind it. R003's `large` tree has
+/// the segment's text needing two lines for `127.0.0.1:6601` inside 289
+/// points at AX5, so about 21 points a character; this row's words have about
+/// 282 points to live in once its chevron and padding are taken off, which is
+/// thirteen characters. `the server` and `your device` fit on one line there
+/// and an address or a house name does not.
+///
+/// So `lineLimit(1)` here — Android's own `maxLines = 1, overflow = Ellipsis`
+/// (`YourDevice.kt:251-252`) — is what guarantees the height rather than what
+/// hides the words: **nothing on this row is ever truncated**, because what
+/// is on it is short by construction. The house's whole name is one tap away
+/// in the menu, on a full-width row that wraps as far as it needs, and it is
+/// also on screen the whole time in the shell's own server chip 300 points
+/// above (`ShellChromeViews.swift`). Nothing is hidden and nothing is shrunk
+/// — `minimumScaleFactor` is rejected throughout this app and is not what is
+/// happening here.
 ///
 /// ### What VoiceOver gets
 ///
 /// The row's label is ``PhoneMediaStrings/showingSide(_:)`` over the current
-/// side's spoken name — so "showing the server at 127.0.0.1:6601", never a
-/// bare address, which is the finding train S006 raised against
-/// ``PhoneSourceSegment``. The two menu rows carry the same spoken names and
-/// the current one carries `.isSelected`, so "which side is on" and "the
-/// other one is offered here" are both answered without sight.
+/// side's spoken name, which for the server is
+/// ``PhoneMediaStrings/serverSideLabel(_:)`` and so names the house — "showing
+/// the server at 127.0.0.1:6601", never a bare address, which is the finding
+/// train S006 raised against ``PhoneSourceSegment``. The two menu rows carry
+/// the same spoken names and the current one carries `.isSelected`, so "which
+/// side is on" and "the other one is offered here" are both answered without
+/// sight.
+///
+/// ### No side glyph on the row, and why
+///
+/// The segments' `house`/`iphone` icons are `@ScaledMetric` and so about 43
+/// points wide at AX5 — a sixth of the row, beside words that are already
+/// 41-point text, for a distinction the words themselves make. Those points
+/// are what let the words stay on one line; the chevron stays, because it is
+/// the only thing that says the row opens a menu. The menu's own rows keep
+/// each side's glyph, where there is room for it.
 struct PhoneSourceCollapsedSwitch: View {
 
     let serverTitle: String
     let source: PhoneContentSource
     let onPick: (PhoneContentSource) -> Void
-
-    /// ``PhoneSourceSegment``'s reason, unchanged: the glyph is drawn at
-    /// `.footnote` and is about twice as wide at AX5, and a fixed
-    /// `frame(width:)` there draws the icon column across the row's words.
-    @ScaledMetric(relativeTo: .footnote) private var glyphWidth: CGFloat = 18
 
     var body: some View {
         Menu {
@@ -309,21 +323,17 @@ struct PhoneSourceCollapsedSwitch: View {
             }
         } label: {
             HStack(spacing: 6) {
-                Image(systemName: Self.glyph(of: source))
-                    .font(.footnote)
-                    .frame(width: glyphWidth)
-                    // Decorative: the row's own label says which side it is.
-                    .accessibilityHidden(true)
-                Text(Self.title(of: source, serverTitle))
+                Text(Self.sideName(of: source))
                     .font(.subheadline)
-                    // One line, so the row is one line tall. See this type's
-                    // doc comment for why truncating here is not a control
-                    // that lies.
+                    // One line, so the row is one line tall — and never a
+                    // truncated one, because what is on it is short by
+                    // construction. See this type's doc comment.
                     .lineLimit(1)
-                    .truncationMode(.tail)
                 Spacer(minLength: 6)
                 Image(systemName: "chevron.down")
                     .font(.footnote)
+                    // Decorative: the row's own label says which side it is
+                    // and its hint says what the menu is for.
                     .accessibilityHidden(true)
             }
             // `brandInk` inside the label, not `.foregroundStyle` on the
@@ -357,11 +367,18 @@ struct PhoneSourceCollapsedSwitch: View {
         .accessibilityIdentifier(PhoneSourceSwitchPill.collapsedID)
     }
 
-    /// The words on screen for a side — the house's own name, or
+    /// The words on a **menu** row: the house's own name, or
     /// ``PhoneMediaStrings/yourDevice``. The same two strings the segments
-    /// show (`YourDevice.kt:212`, `:215`).
+    /// show (`YourDevice.kt:212`, `:215`), in full, wrapping as far as they
+    /// need.
     static func title(of side: PhoneContentSource, _ serverTitle: String) -> String {
         side == .server ? serverTitle : PhoneMediaStrings.yourDevice
+    }
+
+    /// The words on the **row**: which side, not which server. See this
+    /// type's doc comment for the width measurement that decided it.
+    static func sideName(of side: PhoneContentSource) -> String {
+        side == .server ? PhoneMediaStrings.theServerSide : PhoneMediaStrings.yourDevice
     }
 
     /// What VoiceOver says for a side. The server's visible words are an

@@ -216,6 +216,16 @@ public enum PhoneMediaStrings {
     /// **iOS-only**, for ``showingSide(_:)``'s reason.
     public static let pickWhichSide = "choose which side this page shows"
 
+    /// The server's side on the collapsed row — which **side**, not which
+    /// server. ``yourDevice`` is already that shape; this is its pair.
+    ///
+    /// Short on purpose: at `AccessibilityXXXL` the row has about thirteen
+    /// characters of width, and an address or a house name has more than
+    /// that, so putting the name here would be putting an ellipsis here. The
+    /// name is on the menu's own row in full, and in the shell's server chip
+    /// above. **iOS-only**, for ``showingSide(_:)``'s reason.
+    public static let theServerSide = "the server"
+
     // MARK: - saving to this phone
 
     /// The second destination this item adds beside the share sheet.
