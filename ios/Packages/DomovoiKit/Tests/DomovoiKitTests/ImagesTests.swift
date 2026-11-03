@@ -614,14 +614,22 @@ final class ImagesTests: XCTestCase {
         model.stop()
     }
 
-    func testCancelIsRefusedForAJobThatIsNotStillHappening() async {
+    func testCancelIsRefusedForAJobThatIsNotStillHappening() async throws {
         let (model, _, _, _) = rig()
         model.start()
         await settleUntil { model.jobs.data != nil }
+        // **And the history, which is a second read.** Waiting on `jobs`
+        // alone and then taking `historyJobs[0]` is a race this suite lost:
+        // `start()` fires three reads, the lane's can land first, and the
+        // subscript then traps on an empty array — which takes the whole
+        // xctest process with it and reports as `0 tests in 0 suites`, not as
+        // a failing case ([[ios-app-track]]: never index in a test). It was
+        // intermittent for exactly that reason.
+        await settleUntil { model.history.data != nil }
 
-        let running = model.laneJobs.first { $0.id == 11 }!
-        let failed = model.laneJobs.first { $0.id == 12 }!
-        let completed = model.historyJobs[0]
+        let running = try XCTUnwrap(model.laneJobs.first { $0.id == 11 })
+        let failed = try XCTUnwrap(model.laneJobs.first { $0.id == 12 })
+        let completed = try XCTUnwrap(model.historyJobs.first)
 
         XCTAssertFalse(model.cancel(failed), "a failed job has no cancel button (`:347`)")
         XCTAssertFalse(model.cancel(completed))
@@ -648,13 +656,15 @@ final class ImagesTests: XCTestCase {
         model.stop()
     }
 
-    func testDeletingAHistoryRowAsksFirstThenToastsAndRereads() async {
+    func testDeletingAHistoryRowAsksFirstThenToastsAndRereads() async throws {
         let (model, _, _, _) = rig()
         model.start()
         await settleUntil { model.history.data != nil }
 
         XCTAssertNil(model.deleteBody)
-        model.confirmingDelete = model.historyJobs[0]
+        // `first`, not `[0]`: a subscript on an empty array traps, and a trap
+        // in a test ends the process rather than the case.
+        model.confirmingDelete = try XCTUnwrap(model.historyJobs.first)
         XCTAssertEqual(
             "Delete this generation and its 4 images? This can't be undone.",
             model.deleteBody
@@ -679,7 +689,7 @@ final class ImagesTests: XCTestCase {
         await settleUntil { model.history.data != nil }
         house.writeStatus.set(500)
 
-        model.confirmingDelete = model.historyJobs[0]
+        model.confirmingDelete = try XCTUnwrap(model.historyJobs.first)
         model.confirmDelete()
         await settleUntil { model.toast != nil }
         let said = try XCTUnwrap(model.toast)
