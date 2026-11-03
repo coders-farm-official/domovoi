@@ -141,7 +141,22 @@ public final class ChatMoreDraftModel {
             } catch {
                 guard self.stillHere(asked) else { return }
                 self.busy = false
-                self.error = ChatMoreStrings.couldNotReadTheDraft(error.message)
+                // **The server's own sentence, not its status line.** This is
+                // not a toast that flashes past: it is the only thing on the
+                // canvas, and `error.message` is `"{status}: {body}"`, so a
+                // 500 put `couldn't read the draft: 500: {"detail": "the
+                // draft store is not answering"}` on screen as the whole of
+                // what a person is told (train MS002). The house's sentence
+                // is inside that body; `docFailureText` already prefers it
+                // over the status line (`ChatDocsApi.kt:257`), and
+                // ``ChatMoreModel/job`` does the same here. The status stays
+                // for a failure that sent no words of its own -- then it is
+                // all there is to say.
+                self.error = ChatMoreStrings.couldNotReadTheDraft(
+                    error.failure
+                        .flatMap { ChatMoreJSON.string(ChatMoreJSON.object($0.body), "detail") }
+                        ?? error.message
+                )
             }
         }
     }

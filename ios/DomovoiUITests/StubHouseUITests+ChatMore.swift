@@ -99,6 +99,78 @@ extension StubHouseUITests {
         for _ in 0..<30 { list.swipeDown(velocity: .slow) }
     }
 
+    /// Close the keyboard, and answer whether it went.
+    ///
+    /// **Nothing else frees the bottom third of the screen.** The chat
+    /// composer is a vertical-axis `TextField`, so its Return key makes a
+    /// newline (NIGHT-RULES §3) and there is no key to press; what closes it
+    /// is a drag on the transcript, which the screen now honours
+    /// (`.scrollDismissesKeyboard(.interactively)`). The search field above
+    /// the thread list is single-line with `.submitLabel(.search)`, so a
+    /// newline typed into *that* one submits and ends the edit.
+    @MainActor
+    func chatMoreCloseKeyboard(
+        _ app: XCUIApplication,
+        submitting: Bool = true,
+        dragging: XCUIElement? = nil
+    ) -> Bool {
+        for round in 0..<12 {
+            if !app.keyboards.firstMatch.exists { return true }
+            if let dragging, dragging.exists {
+                dragging.swipeDown(velocity: .slow)
+            } else if submitting, round == 0 {
+                app.typeText(XCUIKeyboardKey.return.rawValue)
+            } else {
+                // Nothing else to press: a drag on the window itself. Never
+                // a drag on ``app``'s first scroll view, which at an
+                // accessibility size is the phone bar
+                // (``chatMoreTranscript(_:)`` says what that cost).
+                app.swipeDown()
+            }
+            usleep(400_000)
+        }
+        return !app.keyboards.firstMatch.exists
+    }
+
+    /// The transcript's own scroll view.
+    ///
+    /// **Never `app.scrollViews.firstMatch`.** At an accessibility size the
+    /// phone bar is wider than the screen and so is a scroll view too, 146
+    /// points of it at the foot of the window — and when the screen on top is
+    /// not a conversation it is the *only* one, which is what `firstMatch`
+    /// then resolves to and caches. Fifteen `swipeDown`s on it, from a point
+    /// that lands inside the `music` button, walked the app off Chat and onto
+    /// the Music tab, and the tree the case printed was Music's
+    /// (`testChatMore_TheCardsGrowWithTheTypeSize`, train MS002). So this
+    /// answers nil rather than swiping something else.
+    ///
+    /// **Bounded by the composer and not by a height.** A height would have
+    /// to be a number, and the transcript's own height is whatever is left
+    /// after the shell's header, a job strip, the composer, the phone bar and
+    /// the keyboard have taken theirs — 476 points on one screen and 68 on
+    /// another, both of them this screen. What does not move is the order:
+    /// the transcript is above the composer and the phone bar is below it. A
+    /// screen with no composer is not a conversation, and then there is no
+    /// transcript to answer with.
+    @MainActor
+    func chatMoreTranscript(_ app: XCUIApplication) -> XCUIElement? {
+        let composer = composerField(app)
+        guard composer.exists else { return nil }
+        let ceiling = composer.frame.minY
+        let all = app.scrollViews
+        var best: XCUIElement?
+        var tallest: CGFloat = 0
+        for index in 0..<all.count {
+            let candidate = all.element(boundBy: index)
+            guard candidate.exists else { continue }
+            let frame = candidate.frame
+            guard frame.maxY <= ceiling, frame.height > tallest else { continue }
+            tallest = frame.height
+            best = candidate
+        }
+        return best
+    }
+
     /// Search the thread list for `search` and open the thread called `title`,
     /// waiting for a transcript that starts with `words`.
     ///
@@ -121,6 +193,18 @@ extension StubHouseUITests {
         }
         field.tap()
         app.typeText(search)
+        // **And close the keyboard before anything is looked for.** At AX5
+        // what was left of the list between the shell's 300-point header and
+        // the keyboard was 55 points — a sixth of one row — so the row below
+        // was built and then *tapped through the keyboard*: a key is
+        // hittable, and both Dynamic Type cases tapped the row, waited
+        // twenty-five seconds on a thread that had never opened, and printed
+        // a tree of the screen they were still on (train MS002). The field is
+        // single-line with `.submitLabel(.search)`, so one newline ends the
+        // edit and gives the list all 400 points back.
+        if !chatMoreCloseKeyboard(app) {
+            print("=== THE SEARCH KEYBOARD WOULD NOT CLOSE — the row may be behind it ===")
+        }
         // **The filtered row is unbuilt, not merely off screen.** ``openThread``
         // waits for the row and does not scroll, which is right at `large` and
         // wrong at an accessibility size: the search field takes the keyboard
@@ -152,9 +236,13 @@ extension StubHouseUITests {
         // noise when the next thing to do is scroll.
         let landing = startingWith(app, words)
         if landing.waitForExistence(timeout: 25) { return true }
-        let scroller = app.scrollViews.firstMatch
+        guard let scroller = chatMoreTranscript(app) else {
+            print("=== THREAD \(title) HAS NO TRANSCRIPT TO SCROLL — tree follows ===")
+            print(app.debugDescription)
+            return false
+        }
         for _ in 0..<15 {
-            if scroller.exists { scroller.swipeDown(velocity: .slow) } else { app.swipeDown() }
+            scroller.swipeDown(velocity: .slow)
             if landing.exists { return true }
         }
         print("=== THREAD \(title) DREW NO TRANSCRIPT — tree follows ===")
@@ -337,6 +425,68 @@ extension StubHouseUITests {
             return false
         }
         return true
+    }
+
+    /// Whether the canvas's editor **holds** `words`.
+    ///
+    /// Its text is the field's `value`; the field's `label` is the word
+    /// "edit" and nothing else. `containing(_:_:)` is a query over labels, so
+    /// it could never find typed words however long it waited — and that is
+    /// what the 409 case reported as "the typed words are not here" about an
+    /// editor whose tree line read `value: " and the gateDear …"` (train
+    /// MS002). The words really were kept; the question was asked of the
+    /// wrong half of the element.
+    @MainActor
+    func chatMoreEditorHolds(_ app: XCUIApplication, _ words: String, timeout: Double = 15) -> Bool {
+        // `.any` and not `app.textFields`: the editor is a vertical-axis
+        // `TextField`, and a growing SwiftUI field does not always report as
+        // `.textField` (``composerField(_:)`` was written for the same
+        // reason). Every element carrying the label is checked, because while
+        // the editor is open the only other "edit" — the canvas's own button
+        // — is not drawn.
+        let all = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label == %@", ChatMoreStringsUnderTest.edit))
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            for index in 0..<all.count {
+                let candidate = all.element(boundBy: index)
+                guard candidate.exists else { continue }
+                if ((candidate.value as? String) ?? "").contains(words) { return true }
+            }
+            usleep(300_000)
+        }
+        print("=== THE EDITOR DOES NOT HOLD \(words) — tree follows ===")
+        print(app.debugDescription)
+        return false
+    }
+
+    /// ``waitUntilGone(_:timeout:)``'s other half: wait for a condition the
+    /// app reaches rather than for an element to appear.
+    @MainActor
+    func chatMoreWaitUntil(_ timeout: Double = 20, _ settled: () -> Bool) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if settled() { return true }
+            usleep(300_000)
+        }
+        return settled()
+    }
+
+    /// The canvas's chip for version `number`.
+    ///
+    /// **A `Button` and not any element with that label.** The transcript
+    /// behind the canvas holds four draft cards, and a sheet does not hide
+    /// the screen under it from a query (NIGHT-RULES §5): `exactly(app, "v1")`
+    /// took a *card's* line of text, 471 points down the transcript, tapped
+    /// it, and the canvas it was asserting about never changed version —
+    /// which the case then read as the app leaving a switch on
+    /// (`testChatMore_TheCanvasShowsChangesForAVersionNotSeenHere`, train
+    /// MS002). The canvas's chips are the only buttons that spell a version.
+    @MainActor
+    func versionChip(_ app: XCUIApplication, _ number: Int) -> XCUIElement {
+        app.buttons
+            .matching(NSPredicate(format: "label == %@", ChatMoreStringsUnderTest.version(number)))
+            .firstMatch
     }
 
     /// Turn the canvas's changes switch off if it is on.
@@ -549,13 +699,22 @@ extension StubHouseUITests {
         // v1 has no changes at all, so the switch is not drawn for it — a
         // switch that could not do anything is not drawn
         // ([[no-misleading-controls]]).
-        let first = exactly(app, ChatMoreStringsUnderTest.version(1))
+        let first = versionChip(app, 1)
         guard first.waitForExistence(timeout: 15) else {
             evidence(app, "chatmore-08-no-v1-chip")
             XCTFail("the canvas has no chip for v1")
             return
         }
         first.tap()
+        // **That the tap landed is its own assertion.** The chip carries
+        // `.isSelected` for the version on screen, so a tap that went
+        // somewhere else — the transcript behind the sheet, which is where it
+        // used to go — fails here and not three assertions later as a switch
+        // that would not go away.
+        XCTAssertTrue(
+            chatMoreWaitUntil { self.versionChip(app, 1).isSelected },
+            "the canvas is still on another version, so the v1 tap went somewhere else"
+        )
         evidence(app, "chatmore-09-v1")
         XCTAssertTrue(
             waitUntilGone(app.switches[ChatMoreStringsUnderTest.changes].firstMatch),
@@ -613,7 +772,7 @@ extension StubHouseUITests {
         evidence(app, "chatmore-13-draft-409")
         XCTAssertTrue(said, "a refused save does not say a newer version came in")
         XCTAssertTrue(
-            containing(app, StubChatMore.typed).waitForExistence(timeout: 15),
+            chatMoreEditorHolds(app, StubChatMore.typed),
             "the sentence promises the typed words are still here and they are not"
         )
 
@@ -862,8 +1021,31 @@ extension StubHouseUITests {
         // second, and the composer clearing is the signal that does not move.
         XCTAssertTrue(chatMoreSay(app, "and the mowing rota?"), "the composer would not send")
 
+        // **Close the keyboard, then go to the foot.** This thread carries a
+        // long-document job as well, so with the composer still focused the
+        // shell's header, the job strip, the composer, the phone bar and the
+        // keyboard left the transcript **68 points** tall and its lazy stack
+        // built nothing at all — the tree the case printed held one zero-size
+        // view where the rows should be, and the card could have arrived
+        // twice over without this seeing it (train MS002). The screen now
+        // honours a drag to dismiss, which is what gives those points back.
+        let transcript = chatMoreTranscript(app)
+        XCTAssertTrue(
+            chatMoreCloseKeyboard(app, submitting: false, dragging: transcript),
+            "the keyboard would not close, so the transcript is too short to read"
+        )
         let asked = exactly(app, StubChatMore.sentCardQueryQuoted)
-        let arrived = asked.waitForExistence(timeout: 60)
+        var arrived = asked.waitForExistence(timeout: 30)
+        if !arrived, let scroller = chatMoreTranscript(app) {
+            // The dismissing drag scrolled the transcript up with it, and the
+            // card is on the newest row — so back to the foot, a row at a
+            // time, because a lazy list's foot is unbuilt rather than off
+            // screen (NIGHT-RULES §5).
+            for _ in 0..<15 where !arrived {
+                scroller.swipeUp(velocity: .slow)
+                arrived = asked.exists
+            }
+        }
         evidence(app, "chatmore-26-card-on-a-new-reply")
         XCTAssertTrue(
             arrived,

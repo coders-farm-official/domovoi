@@ -32,10 +32,24 @@ struct ChatMoreDraftCardView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             heading
+            // **The card's one spoken line is the whole sentence.** The kind
+            // and the version are two-word pills beside each other, and
+            // `.contain` left them as leaves of their own: a reader moving
+            // through this transcript heard "letter", then "v2", then a
+            // title, with nothing joining them -- and the only place the
+            // card's own sentence existed was the `value` of the button
+            // inside it (train MS002 printed the tree). So the pills are
+            // ``heading``'s decoration, hidden from a reader, and the title
+            // speaks for all three: "draft: Boiler service at Fernbrook,
+            // version 2" (`DraftUi.kt:241`). The button keeps that sentence
+            // as its value too -- that is what tells four "open"s apart.
             Text(draft.title)
                 .font(.body.weight(.semibold))
                 .fixedSize(horizontal: false, vertical: true)
                 .multilineTextAlignment(.leading)
+                .accessibilityLabel(
+                    ChatMoreStrings.draftCard(title: draft.title, version: draft.version)
+                )
             if !draft.change.isEmpty {
                 Text(draft.change)
                     .font(.caption)
@@ -73,9 +87,11 @@ struct ChatMoreDraftCardView: View {
         // Fernbrook, version 2" (`DraftUi.kt:241`).
         // **Not** `.accessibilityElement(children: .combine)`: combining
         // would fold the "open" button into the card and leave no button to
-        // press. The sentence the card reads as a whole lives on that button's
-        // value instead.
+        // press.
         .accessibilityElement(children: .contain)
+        // The sentence itself is on the title leaf, below: a container's own
+        // label is read on the way in and is not an element a reader stops
+        // on.
     }
 
     /// kind · vN, in a column at an accessibility size (NIGHT-RULES §3).
@@ -94,8 +110,10 @@ struct ChatMoreDraftCardView: View {
         }
     }
 
+    /// Decoration: the title leaf speaks the kind and the version.
     private func pill(_ word: String) -> some View {
         Text(word)
+            .accessibilityHidden(true)
             .font(.caption2)
             .foregroundStyle(Color.fgMuted)
             .fixedSize(horizontal: false, vertical: true)

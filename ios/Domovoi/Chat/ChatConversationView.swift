@@ -353,6 +353,19 @@ struct ChatConversationView: View {
                         .id(Self.foot)
                 }
             }
+            // **A drag frees the keyboard's 336 points**, as the thread list
+            // already does (``ChatView``'s `.scrollDismissesKeyboard`). The
+            // composer keeps focus after a send, and on a thread that also
+            // carries a long-document job the strip, the composer and the
+            // phone bar left the transcript **68 points** tall on a
+            // Simulator -- the reply a person had just asked for could not be
+            // read without closing the keyboard, and there was no gesture
+            // that closed it (`testChatMore_ACardOnANewReplyArrivesWithout`
+            // `ReopeningTheThread`, train MS002, which measured a built
+            // transcript of exactly nothing). `.interactively` and not
+            // `.immediately`, so a flick of the transcript does not dismiss a
+            // keyboard somebody is still typing into.
+            .scrollDismissesKeyboard(.interactively)
             // Follow the reply down the screen as it is written. Keyed on
             // ``tail``, which moves on a new message **and** on a delta, so
             // the view scrolls while a reply grows rather than once when it
