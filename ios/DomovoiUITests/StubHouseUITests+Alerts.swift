@@ -23,23 +23,38 @@ import XCTest
 // **kept**: if a later merge drops the hook, the right answer is still
 // "unmeasured" and not "passed".
 //
-// ### Run order is load-bearing, and the names carry it
+// ### Run order was load-bearing, and the install outlived it
 //
 // XCTest runs a class's cases in **alphabetical order**, and two pieces of
 // state here survive a relaunch:
 //
-//  * the **notification authorization** is a fact about the install, and iOS
-//    grants exactly one system prompt per install. So exactly one case may
-//    ask — `testAlerts_TurningOnAlertsExplainsItselfFirst` — and every case
-//    that needs the row (which is only drawn while alerts are *off*) is named
-//    to sort **before** it. `testAlerts_WhenAlertsAreOnALedgerFireIsDelivered`
-//    is named to sort after it, because it is the one case that needs them on.
 //  * the **`not now` dismissal** is in `UserDefaults`. Every launch below
 //    passes `-domovoi-alerts-forget-hint` (``AlertsHintModel``'s DEBUG-only
 //    argument) so that one case's dismissal cannot decide what a later case
 //    sees — except the second half of the dismissal case, which relaunches
 //    **without** it on purpose, because surviving the relaunch is the thing
 //    it measures.
+//  * the **notification authorization** is a fact about the **install**, and
+//    iOS grants exactly one system prompt per install. That one is not a thing
+//    an order can fix, and ordering is what this file tried: exactly one case
+//    asks — `testAlerts_TurningOnAlertsExplainsItselfFirst` — with everything
+//    that needs the row named to sort before it and the one case that needs
+//    alerts *on* named to sort after.
+//
+// **That worked once.** The ask case answered `Allow` on train S012, the
+// Simulator install kept the grant, and in the first full-class run (I001)
+// every case here met a phone whose alerts were already **on** — so the row,
+// which is only drawn while they are off, was correctly absent and four cases
+// went `UNMEASURED` against an app that was right. The order was never the
+// problem; a second run of the same install was. Nothing a test can do from
+// outside the app un-asks an install, so the app grew the seam:
+// `-domovoi-alerts-unasked` (``AlertsHintModel/pretendUnasked``) has the
+// status read answer `.notDetermined` **until this process asks**, and retires
+// on the ask so that what the row believes afterwards is iOS's own answer.
+// ``alertsLaunch`` passes it by default.
+//
+// The order is kept anyway — it costs nothing, and it is still what makes the
+// ledger case meet a phone that can post.
 // ---------------------------------------------------------------------------
 
 extension StubHouseUITests {
@@ -105,6 +120,7 @@ extension StubHouseUITests {
     func alertsLaunch(
         mode: String = StubHouseUITests.ordinaryTypeSize,
         forgetHint: Bool = true,
+        unasked: Bool = true,
         hideHint: Bool = false,
         forgetBooks: Bool = false,
         port: Int = 6601
@@ -116,6 +132,14 @@ extension StubHouseUITests {
             "-UIPreferredContentSizeCategoryName", mode,
         ]
         if forgetHint { app.launchArguments += ["-domovoi-alerts-forget-hint"] }
+        // `-domovoi-alerts-unasked`: the status read answers `.notDetermined`
+        // until this process asks, so the row is drawn on an install that has
+        // already been asked. **On by default, and that is the point**: the
+        // authorization is a fact about the install, and the only run in which
+        // these cases met a never-asked phone was the first one (see this
+        // file's header, and I001). It retires on `ask iOS`, so no assertion
+        // after that tap is reading anything but iOS's own answer.
+        if unasked { app.launchArguments += ["-domovoi-alerts-unasked"] }
         // The audit baseline: the same Home, with the row's space drawn
         // **blank** — `.hidden()`, so no pixels and no accessibility element
         // and not one point of layout moved
@@ -222,20 +246,27 @@ extension StubHouseUITests {
     ///
     /// The skip cannot tell "the hook is missing" from "the row is broken",
     /// and that is stated rather than hidden. It fired for every one of these
-    /// cases on train S003, where the hook was absent; it is kept because the
-    /// honest answer to a merge that drops the hook again is still
-    /// "unmeasured" and not "passed".
+    /// cases on train S003, where the hook was absent, and for four of them
+    /// again on I001, where both hooks were intact and the **install** was the
+    /// difference. It is kept because the honest answer to either is still
+    /// "unmeasured" and not "passed" — and the message now names all three
+    /// causes in the order they are worth checking.
     @MainActor
     func requireAlertsRow(_ app: XCUIApplication) throws {
         guard !alertsHintRow(in: app).waitForExistence(timeout: 20) else { return }
         evidence(app, "alerts-row-not-mounted")
         throw XCTSkip(
-            "UNMEASURED: no `\(Self.alertsOffRow)` row on Home. The row is built "
-                + "(ios/Domovoi/Alerts/AlertsHintRowView.swift) and something has to mount "
-                + "it: `AlertsHintRowView` in HomeTimersView's card, and DomovoiApp "
-                + "putting AlertsAppWiring's hint model into the environment. Both "
-                + "landed after train S003 — if this fires again, a merge dropped one of "
-                + "them (design-notes/ios/overnight/alerts/DECISIONS.md §2)."
+            "UNMEASURED: no `\(Self.alertsOffRow)` row on Home. Three things can do "
+                + "this, and the first is the one I001 hit: (1) "
+                + "`-domovoi-alerts-unasked` did not reach "
+                + "`AlertsHintModel.pretendUnasked`, so the row is reading an install "
+                + "whose alerts are already ON and is right to draw nothing — the "
+                + "authorization survives every train once a case has answered "
+                + "`Allow`; (2) the mount is gone: `AlertsHintRowView` in "
+                + "HomeTimersView's card, or DomovoiApp putting AlertsAppWiring's hint "
+                + "model into the environment (design-notes/ios/overnight/alerts/"
+                + "DECISIONS.md §2); (3) Home has no timers card to draw it on, which "
+                + "is the stub house's `/api/timers`."
         )
     }
 
@@ -244,7 +275,7 @@ extension StubHouseUITests {
         XCUIApplication(bundleIdentifier: "com.apple.springboard")
     }
 
-    // MARK: - the two cases that run today
+    // MARK: - what the row must never grow, and what must never ask
 
     /// **Neither exact-alarm sentence came across, and no link pretends to
     /// open a grant that does not exist.**
@@ -255,9 +286,11 @@ extension StubHouseUITests {
     /// An iPhone has no counterpart: a scheduled notification is delivered on
     /// time, and that link would open nothing.
     ///
-    /// Runs **today**, with or without the Home hook, and keeps running after
-    /// it: the port of `ExactAlarms.kt` is the obvious thing for a later batch
-    /// to "finish", and this is what says it must not.
+    /// The port of `ExactAlarms.kt` is the obvious thing for a later batch to
+    /// "finish", and this is what says it must not. It used to run with or
+    /// without the Home hook on purpose — and on I001 that is how it passed
+    /// while measuring nothing, so it now requires the row it is asserting
+    /// about.
     @MainActor
     func testAlerts_NoLateRingRowOrAllowAlarmsLink() throws {
         control("reset-fixtures", "{}", port: 6601, what: "the alerts fixture's seed")
@@ -270,6 +303,16 @@ extension StubHouseUITests {
             houseName(in: app).waitForExistence(timeout: 20),
             "the config read never landed, so nothing on this screen is evidence of anything"
         )
+        // **The row has to be drawn for the absences below to mean anything.**
+        //
+        // This case used to run "with or without the Home hook", and on I001
+        // that is exactly what it did: the install's alerts were on, no hint
+        // row was drawn at all, and the two absences it asserts were true of a
+        // card that had nothing on it. A green tick for a measurement that
+        // could not have failed. With `-domovoi-alerts-unasked` the row is
+        // there, so `Timers may ring a few minutes late on this phone` being
+        // absent is a fact about the row that **is** drawn.
+        try requireAlertsRow(app)
         evidence(app, "alerts-no-late-ring-row")
         XCTAssertFalse(
             app.staticTexts[Self.alertsLateRingRow].exists,
@@ -291,10 +334,20 @@ extension StubHouseUITests {
     ///
     ///  * our **explain card** is not on screen. Always meaningful — the card
     ///    is this app's own view, and only this app can put it there.
-    ///  * no **system alert** is on screen. Meaningful only while the status
+    ///  * no **system alert** is on screen. Meaningful only while the install
     ///    is `.notDetermined`, because iOS will not prompt twice. Hence the
     ///    name: this case is ordered before the one case that asks, and the
     ///    log records what the springboard held either way.
+    ///  * **the row is still there, still saying `turn on`.** This is the half
+    ///    that holds on an install which has already been asked, and it is why
+    ///    it was added: `-domovoi-alerts-unasked` retires the moment the app
+    ///    calls `requestAuthorization` (``AlertsHintModel/pretendUnasked``),
+    ///    and the real install is granted, so an ask fired at launch would
+    ///    replace the forced `.notDetermined` with `.authorized` and take the
+    ///    row with it. A row still offering `turn on` after the launch has
+    ///    settled is therefore positive evidence that nothing asked — on the
+    ///    install this rig actually has, where no prompt would have appeared
+    ///    to be seen.
     @MainActor
     func testAlerts_NothingAsksForNotificationsAtLaunch() throws {
         control("reset-fixtures", "{}", port: 6601, what: "the alerts fixture's seed")
@@ -316,6 +369,28 @@ extension StubHouseUITests {
         XCTAssertFalse(
             appeared,
             "a system alert is on screen at launch — the one thing this item's scope forbids"
+        )
+        // The half that measures something on an install that has already been
+        // asked: see this case's doc comment. The row is the evidence, and its
+        // words are the evidence that the latch has not retired.
+        //
+        // An assertion and **not** ``requireAlertsRow(_:)`` here, which is the
+        // one place in this file the two differ: a missing row is the shape an
+        // ask-at-launch takes on this install (the latch retires, the real
+        // state is granted, the row goes), and that is the defect the case is
+        // named for. Recording it as "unmeasured" would file the bug as a gap
+        // in the rig. The four cases that do skip cover a dropped hook.
+        XCTAssertTrue(
+            alertsHintRow(in: app).waitForExistence(timeout: 20),
+            "no row after launch. Either something asked for the permission at launch — "
+                + "which retires `-domovoi-alerts-unasked` and, on a granted install, "
+                + "takes the row with it — or the Home hook is gone "
+                + "(design-notes/ios/overnight/alerts/DECISIONS.md §2)"
+        )
+        XCTAssertEqual(
+            Self.alertsTurnOn, app.buttons[Self.alertsFixId].label,
+            "the row's fix link is not `turn on`, so this launch has already asked for the "
+                + "permission and taken an answer — which is what the case forbids"
         )
     }
 
@@ -576,8 +651,10 @@ extension StubHouseUITests {
     /// wrong here because iOS allows the prompt once.
     ///
     /// **It is the only case in this file that may ask**, and it answers the
-    /// prompt `Allow`, because the case after it needs a phone that can post.
-    /// Everything that needs the row is named to sort before it.
+    /// prompt `Allow` when there is a prompt, because the case after it needs
+    /// a phone that can post. Everything that needs the row is named to sort
+    /// before it — which mattered when the install was fresh and is now
+    /// belt-and-braces beside `-domovoi-alerts-unasked`.
     @MainActor
     func testAlerts_TurningOnAlertsExplainsItselfFirst() throws {
         control("reset-fixtures", "{}", port: 6601, what: "the alerts fixture's seed")
@@ -644,14 +721,42 @@ extension StubHouseUITests {
             let allow = prompt.buttons["Allow"]
             (allow.exists ? allow : prompt.buttons.firstMatch).tap()
         }
-        XCTAssertTrue(
-            asked,
-            "`ask iOS` did not reach iOS — the card's button is the only caller of "
-                + "requestAuthorization"
-        )
+        // **`asked` is printed and not asserted, and that is a platform fact
+        // rather than a softened assertion.**
+        //
+        // iOS puts the prompt up once per install. This case asserted `asked`
+        // and passed on S012, where it was the first run; the grant it was
+        // given then is still on the Simulator, so on I001 and every run after
+        // it `requestAuthorization` answers from the grant and iOS shows
+        // nothing. Asserting `asked` from here on would be asserting that the
+        // rig had never run before.
+        //
+        // What is asserted instead holds in **both** worlds and fails for
+        // every defect this case is here to catch:
+        //
+        //  * the card came first and no system alert was up while it was —
+        //    asserted above, and real: the app genuinely had not called
+        //    `requestAuthorization` yet, whatever the install holds;
+        //  * **the row is gone after `ask iOS`** — below. The latch retires on
+        //    that tap (``AlertsHintModel/pretendUnasked``), so the state the
+        //    row is drawn from afterwards is the real centre's answer and
+        //    nothing else. A `ask iOS` wired to nothing leaves the forced
+        //    `.notDetermined` in place and the row on screen; so does an ask
+        //    whose answer is dropped. Neither can pass this.
+        //
+        // The one install state it cannot recover from is a phone that has
+        // already **refused**: the real ask then answers `.denied`, the row
+        // stays with `open Settings`, and the message below says so — only the
+        // Simulator's own notification setting can undo that, and no agent
+        // touches the Simulator (NIGHT-RULES §1).
         XCTAssertFalse(
-            alertsHintRow(in: app).waitForExistence(timeout: 8),
-            "alerts are on and the row is still offering to turn them on"
+            alertsHintRow(in: app).waitForExistence(timeout: 10),
+            "the row still offers to turn alerts on after `ask iOS` was tapped. Either "
+                + "the card's button reaches no `requestAuthorization` at all, or its "
+                + "answer is not taken — or this install has already REFUSED "
+                + "notifications, in which case the answer is `.denied`, the row is "
+                + "right, and the Simulator's own notification setting is the only thing "
+                + "that can change it (prompt seen this run = \(asked))"
         )
     }
 
@@ -710,7 +815,15 @@ extension StubHouseUITests {
         // `forgetBooks`: the one case whose subject is what the engine does
         // with a fire rather than what is on screen, so the one case that has
         // to start from an install with no history. See ``alertsLaunch``.
-        let app = alertsLaunch(forgetBooks: true)
+        //
+        // `unasked: false`, and it is the only launch in this file that turns
+        // the latch off: this case's phone is one whose alerts are **on**, and
+        // `-domovoi-alerts-unasked` would have Home's row say the opposite in
+        // the screenshot this case attaches. It changes nothing the case
+        // measures — the latch is ``AlertsHintModel``'s alone and the engines
+        // read the real centre — so what is left is a screen that does not
+        // contradict its own evidence.
+        let app = alertsLaunch(unasked: false, forgetBooks: true)
         XCTAssertTrue(houseName(in: app).waitForExistence(timeout: 20))
         // The catch-up is a round trip and the post follows it. Nothing on
         // screen says it happened, so this is a wait rather than a

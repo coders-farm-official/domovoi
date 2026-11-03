@@ -68,6 +68,40 @@ public final class AlertsHintModel {
     /// system prompt.
     public private(set) var explaining = false
 
+    #if DEBUG
+    /// `-domovoi-alerts-unasked`: read the status as
+    /// ``AlertsPermissionState/notDetermined`` **until this process asks**,
+    /// whatever the install has already answered.
+    ///
+    /// ### Why it has to exist
+    ///
+    /// The notification authorization is a fact about the **install**, iOS
+    /// gives exactly one system prompt per install, and a Simulator install
+    /// outlives a train. `testAlerts_TurningOnAlertsExplainsItselfFirst`
+    /// answered `Allow` on train S012, so every Alerts case in the first
+    /// full-class run (I001) met an install whose alerts were **on** — and the
+    /// row is only drawn while they are off. Four cases went `UNMEASURED`
+    /// against an app that was behaving correctly, and no amount of fixture
+    /// resetting un-asks an install from outside the app. This is the seam that
+    /// lets the row's cases run a second time.
+    ///
+    /// ### Why it is a `var`
+    ///
+    /// It **retires the moment the app asks** (``askIOS()``), which is what
+    /// keeps every real boundary where it was. The explain card's button still
+    /// calls the real `UNUserNotificationCenter.requestAuthorization`, and the
+    /// state the row then believes is iOS's own answer — on a never-asked
+    /// install the prompt it put up, on an install that has already answered
+    /// the grant it already holds. A permanent override would put the row back
+    /// on the next ``refresh()`` and would have the cases measuring a lie.
+    ///
+    /// Internal rather than private so the package suite can drive the latch a
+    /// launch argument sets; there is no launching process in `swift test` to
+    /// give the argument to.
+    var pretendUnasked =
+        ProcessInfo.processInfo.arguments.contains("-domovoi-alerts-unasked")
+    #endif
+
     /// - Parameters:
     ///   - status: ``AlertsCenter/permissionState()``.
     ///   - ask: ``AlertsCenter/askForPermission()`` — which also syncs the
@@ -184,7 +218,20 @@ public final class AlertsHintModel {
     /// Read the status. Called when the row appears and again on every return
     /// to the app (`HomeScreen.kt:241-247`).
     public func refresh() async {
-        state = await status()
+        let read = await status()
+        #if DEBUG
+        // Read **after** the await, which is deliberate and is not the
+        // read-after-await defect this track has a rule about: that rule is
+        // about a *key* that says which server an answer belongs to, and
+        // capturing this one early would let a refresh that started before
+        // `ask iOS` land after it and put the row back. The latch only ever
+        // goes true → false, so reading it last means the ask always wins.
+        if pretendUnasked {
+            state = .notDetermined
+            return
+        }
+        #endif
+        state = read
     }
 
     /// The fix link was tapped: the explain card, or Settings.
@@ -231,6 +278,11 @@ public final class AlertsHintModel {
     /// answered.
     public func askIOS() async {
         explaining = false
+        #if DEBUG
+        // Before the await: from here on the row believes iOS and nothing
+        // else, including a ``refresh()`` that is already in flight.
+        pretendUnasked = false
+        #endif
         state = await ask()
     }
 }

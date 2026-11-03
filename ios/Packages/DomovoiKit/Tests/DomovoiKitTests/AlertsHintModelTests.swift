@@ -185,4 +185,79 @@ final class AlertsHintModelTests: XCTestCase {
         books.forgetHint()
         XCTAssertFalse(books.hintDismissed)
     }
+
+    // MARK: - `-domovoi-alerts-unasked`, the latch the UI cases need
+
+    // The latch itself is `#if DEBUG` in ``AlertsHintModel``, so these four
+    // are too: `swift test` is a debug build, and a release build of the suite
+    // would not compile against a symbol that is not there.
+    #if DEBUG
+
+    /// The default is **off**, which is the assertion that says the latch
+    /// cannot change a shipped app: `swift test` passes no launch argument, so
+    /// a phone that can post draws nothing exactly as it did before the flag
+    /// existed.
+    func testTheUnaskedLatchIsOffUnlessItIsAskedFor() async {
+        let (model, _, _) = make(.authorized)
+        XCTAssertFalse(model.pretendUnasked)
+        await model.refresh()
+        XCTAssertFalse(model.shown)
+    }
+
+    /// With the latch on, an install whose alerts are **on** draws the row
+    /// anyway — the one thing `testAlerts_*`'s four UNMEASURED cases needed
+    /// and could not get, because iOS gives one prompt per install and a
+    /// Simulator install outlives a train (I001; the grant came from S012).
+    func testTheUnaskedLatchDrawsTheRowOnAGrantedInstall() async {
+        let (model, _, _) = make(.authorized)
+        model.pretendUnasked = true
+        await model.refresh()
+        XCTAssertTrue(model.shown, "the latch did not reach the status read")
+        XCTAssertEqual(AlertsStrings.notificationsOff, model.line)
+        XCTAssertEqual(
+            AlertsStrings.turnOn, model.fixLabel,
+            "`open Settings` belongs to `.denied`; the latch's state is `.notDetermined`"
+        )
+    }
+
+    /// **The latch retires on the ask, and the row then believes iOS.**
+    ///
+    /// This is the half that keeps the UI case a measurement rather than a
+    /// lie: `ask iOS` reaches the real centre, and whatever comes back — the
+    /// prompt's answer on a fresh install, the existing grant on a used one —
+    /// is what the row is drawn from from then on. A latch that stayed on
+    /// would put the row back on the next ``refresh()``, which on a real
+    /// phone is every return to the foreground.
+    func testTheUnaskedLatchRetiresTheMomentTheAppAsks() async {
+        let (model, _, log) = make(.authorized)
+        model.pretendUnasked = true
+        await model.refresh()
+        model.fix()
+        XCTAssertTrue(model.explaining, "the card comes first, whatever the install has answered")
+        XCTAssertEqual([], log.current)
+
+        await model.askIOS()
+        XCTAssertEqual(["ask"], log.current, "`ask iOS` did not reach the centre")
+        XCTAssertFalse(model.pretendUnasked)
+        XCTAssertFalse(model.shown, "the row is still offering to turn on alerts that are on")
+
+        // Every return to the foreground is a `refresh()`, and this is the one
+        // that would have resurrected the row.
+        await model.refresh()
+        XCTAssertFalse(model.shown, "a refresh after the ask put the row back")
+    }
+
+    /// A refused prompt under the latch leaves the row with the **Settings**
+    /// control, not the ask again — the real answer, not the latch's.
+    func testTheUnaskedLatchDoesNotSurviveARefusal() async {
+        let (model, _, _) = make(.notDetermined, granting: .denied)
+        model.pretendUnasked = true
+        await model.refresh()
+        model.fix()
+        await model.askIOS()
+        XCTAssertTrue(model.shown)
+        XCTAssertEqual(AlertsStrings.openSettings, model.fixLabel)
+    }
+
+    #endif
 }
