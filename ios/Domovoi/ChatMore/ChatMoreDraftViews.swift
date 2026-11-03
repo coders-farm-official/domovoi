@@ -89,7 +89,7 @@ struct ChatMoreDraftCardView: View {
         // would fold the "open" button into the card and leave no button to
         // press.
         .accessibilityElement(children: .contain)
-        // The sentence itself is on the title leaf, below: a container's own
+        // The sentence itself is on the title leaf above: a container's own
         // label is read on the way in and is not an element a reader stops
         // on.
     }
@@ -113,13 +113,13 @@ struct ChatMoreDraftCardView: View {
     /// Decoration: the title leaf speaks the kind and the version.
     private func pill(_ word: String) -> some View {
         Text(word)
-            .accessibilityHidden(true)
             .font(.caption2)
             .foregroundStyle(Color.fgMuted)
             .fixedSize(horizontal: false, vertical: true)
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
             .background(RoundedRectangle(cornerRadius: 6).fill(Color.fgMuted.opacity(0.12)))
+            .accessibilityHidden(true)
     }
 }
 
