@@ -114,15 +114,13 @@ extension StubHouseUITests {
     ///
     /// `.buttons` and not ``containing(_:_:)``'s `.any`, which is this file's
     /// habit everywhere else, for one reason found by reading
-    /// ``PhonePickToSendView``: the photo door's own face is
-    /// `Text(PhoneMediaStrings.sendHomeVerb(asUpload: true))`, which is the
-    /// literal word `upload`. Its picker carries
-    /// `.accessibilityLabel(PhoneMediaStrings.photosLibrary)`, so the control
-    /// is called `photos` — but whether that inner `Text` is subsumed or
-    /// reported beside it is SwiftUI's business, and an `.any` query that
-    /// caught it would turn every count below into "one more than it should
-    /// be" on the Videos page only. The row control is a `Button`; the stray
-    /// text is not.
+    /// ``PhonePickToSendView``: the two picker doors sit on the same page and
+    /// their words begin with the same one. They are now `upload a photo` and
+    /// `upload a file` (the review's low finding: `open in another app` is
+    /// Android's open-with on a file you already have, the opposite
+    /// direction), so an **exact** match on `upload` is what separates the
+    /// row controls from the doors — a `BEGINSWITH` or an `.any` query would
+    /// turn every count below into "two more than it should be".
     @MainActor
     func phoneUploadControls(_ app: XCUIApplication) -> XCUIElementQuery {
         app.buttons.matching(NSPredicate(format: "label == %@", StubPhoneMedia.upload))
@@ -195,7 +193,16 @@ extension StubHouseUITests {
         XCTAssertTrue(inside.waitForExistence(timeout: 30), "the folder never opened")
 
         XCTAssertTrue(phoneSwitchToDevice(app, waitingFor: StubPhoneMedia.phoneTrackWord))
-        app.buttons[StubPhoneMedia.yourDevice].firstMatch.tap()
+        // **The SERVER's segment**, by its identifier. Tapping `your device`
+        // a second time is what this case used to do, and `onPick(.device)`
+        // is idempotent — so it never left the phone's side, and the
+        // assertion below could only pass if the parked server side leaked
+        // into the accessibility tree, which is the very defect
+        // `ShownOrParked` exists to prevent. The server's segment cannot be
+        // found by label: its label is the house's own name.
+        let back = app.buttons[StubPhoneMedia.serverSegment].firstMatch
+        XCTAssertTrue(back.waitForExistence(timeout: 20), "the switch has no server segment")
+        back.tap()
         evidence(app, "phonemedia-server-kept-its-place")
         // Back on the server's side, and still in the folder. A container
         // that rebuilt the server side would be at its root, asking the
@@ -643,6 +650,10 @@ enum StubPhoneMedia {
 
     /// `PhoneMediaStrings.yourDevice` (`YourDevice.kt:215`).
     static let yourDevice = "your device"
+    /// The server's segment, by `PhoneSourceSwitchPill.serverSegmentID`. Its
+    /// LABEL is the house's own name, so an identifier is the only stable
+    /// handle on it.
+    static let serverSegment = "phone-source-server"
     /// The phone bar's buttons carry the route's own name
     /// (`ShellChromeViews.swift:304`), which is `Route`'s raw value.
     static let musicTab = "Music"

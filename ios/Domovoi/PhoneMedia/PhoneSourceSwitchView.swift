@@ -7,9 +7,11 @@ import SwiftUI
 /// `ui/screens/local/YourDevice.kt:126`'s `SourceSwitchPage` and `:196`'s
 /// `SourceSwitch`.
 ///
-/// ### Both sides stay alive, and that is the whole point of this type
+/// ### Both sides stay alive *once shown*, and that is the whole point
 ///
-/// Android keeps both compositions and merely declines to **place** the
+/// Android keeps a `kept` set and composes a side only when it is the shown
+/// one or has been shown before (`YourDevice.kt:140`); after that it keeps
+/// both compositions and merely declines to **place** the
 /// hidden one (`YourDevice.kt:173`), parking its back handlers on a
 /// dispatcher nothing presses (`:181`). The reason is stated at
 /// `YourDevice.kt:134`: switching to the phone and back must find the
@@ -35,9 +37,15 @@ import SwiftUI
 /// to nothing. DECISIONS records it.
 ///
 /// **The switch does not step aside for the keyboard.** Android's does
-/// (`YourDevice.kt:198`) because its page header is pinned and the keyboard
-/// covers it. Here the switch scrolls with the page it heads, so there is
-/// nothing to step aside from.
+/// (`YourDevice.kt:198`) because its pinned header sits in a window the
+/// keyboard is drawn *over*. This pill is pinned too — it is in the `VStack`
+/// above the two sides, and each side scrolls under it — so the earlier
+/// reason given here ("it scrolls with the page it heads") was simply wrong
+/// about this file's own layout. The real reason the omission is safe is the
+/// platform's: on iOS the keyboard shrinks the safe area rather than
+/// overlaying the window, so everything above the scrolling content is still
+/// on screen. Nothing to step aside from, for a different reason than the one
+/// that was written here.
 struct PhoneSourceSwitchView<Server: View, Device: View>: View {
 
     let page: PhoneMediaPageKind
@@ -57,6 +65,17 @@ struct PhoneSourceSwitchView<Server: View, Device: View>: View {
 
     private var shown: PhoneContentSource { choices.of(page) }
 
+    /// The sides that have been looked at, this view's lifetime —
+    /// `YourDevice.kt:140`'s `kept`.
+    ///
+    /// Without it the device side was **built on every visit** to Music,
+    /// Videos and Files even when nobody switched to it: its `.task` runs
+    /// ``PhoneFolderBookmarks``' resolution per saved folder, a directory
+    /// listing (or on Videos a whole `PHAsset` fetch), and two HTTP requests
+    /// to the house for the upload status. Android does not pay that, and
+    /// neither should this.
+    @State private var kept: Set<PhoneContentSource> = []
+
     var body: some View {
         VStack(spacing: 0) {
             PhoneSourceSwitchPill(
@@ -65,10 +84,21 @@ struct PhoneSourceSwitchView<Server: View, Device: View>: View {
                 onPick: { choices.choose(page, $0) }
             )
             ZStack {
-                side(server, visible: shown == .server)
-                side(device, visible: shown == .device)
+                // A side that has been shown keeps the SAME modifier chain
+                // afterwards — see ``side(_:visible:)``. Only a side nobody
+                // has opened yet is absent.
+                if kept.contains(.server) {
+                    side(server, visible: shown == .server)
+                }
+                if kept.contains(.device) {
+                    side(device, visible: shown == .device)
+                }
             }
         }
+        // `.onAppear` as well as `.onChange`: the first side is shown without
+        // anything changing.
+        .onAppear { kept.insert(shown) }
+        .onChange(of: shown) { _, next in kept.insert(next) }
     }
 
     /// One side, shown or parked — ``ShownOrParked``'s counterpart
@@ -121,16 +151,25 @@ struct PhoneSourceSwitchPill: View {
         PhoneSourceSegment(
             glyph: "house",
             label: serverTitle,
+            // The server's segment is labelled with the house's own name,
+            // which is whatever its owner called it — so a UI case cannot
+            // find it by label. It carries an identifier instead; the
+            // device's has one for symmetry, and neither replaces a label.
+            identifier: Self.serverSegmentID,
             selected: source == .server,
             onTap: { onPick(.server) }
         )
         PhoneSourceSegment(
             glyph: "iphone",
             label: PhoneMediaStrings.yourDevice,
+            identifier: Self.deviceSegmentID,
             selected: source == .device,
             onTap: { onPick(.device) }
         )
     }
+
+    static let serverSegmentID = "phone-source-server"
+    static let deviceSegmentID = "phone-source-device"
 }
 
 /// One segment. `YourDevice.kt:222`'s `SourceSegment`: brand-soft fill and a
@@ -139,6 +178,10 @@ struct PhoneSourceSegment: View {
 
     let glyph: String
     let label: String
+    /// An accessibility identifier **beside** the label, never instead of it:
+    /// the server's segment is named by its house and a case needs a stable
+    /// handle on it.
+    let identifier: String
     let selected: Bool
     let onTap: () -> Void
 
@@ -191,5 +234,6 @@ struct PhoneSourceSegment: View {
         // tells VoiceOver which of the two is on; without it both read
         // identically and the switch is unusable without sight.
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
+        .accessibilityIdentifier(identifier)
     }
 }
