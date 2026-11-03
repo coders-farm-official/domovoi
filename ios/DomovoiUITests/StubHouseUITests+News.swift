@@ -767,9 +767,12 @@ extension StubHouseUITests {
 
     /// Three audits of this screen: the page as it lands, the page with the
     /// remove dialog up, and the foot of the page — a third of which is below
-    /// the fold when it lands. **Each in its own app process**, because a
-    /// process that has walked one of these passes does not reliably survive
-    /// the next (the body says what S002, S005 and S011 each lost to that).
+    /// the fold when it lands. **In two app processes** — the page and its
+    /// foot in one, the dialog in the other — because a process that has
+    /// walked these passes does not reliably survive, and neither does a
+    /// third launch (the body says what S002, S005, S011 and R004 each lost,
+    /// and what R004's own recording and its sibling unit say about whose
+    /// fault the last one was).
     ///
     /// **The first pass is the screen's, and it has to come first.** This
     /// case used to raise the dialog *before* its only audit, and
@@ -809,7 +812,8 @@ extension StubHouseUITests {
     func testNews_PassesApplesAccessibilityAudit() throws {
         resetNewsHouse()
 
-        // **One audit pass per app process.**
+        // **Two app processes: the page and its foot in one, the dialog in
+        // the other.**
         //
         // Train S011 lost this case in the third pass: the foot audit ran,
         // and partway through reading its findings' elements the app was
@@ -826,10 +830,9 @@ extension StubHouseUITests {
         // reason this case terminates its app at all. A third pass moved the
         // death inside the case.
         //
-        // So each pass now gets its own launch, runs one audit, and is put
-        // down before the next one starts. Nothing is audited less: the page
-        // as it lands, the confirmation, and the foot are all still walked —
-        // each by a process that has walked nothing else.
+        // So each pass got its own launch, ran one audit, and was put down
+        // before the next one started. Nothing is audited less: the page as
+        // it lands, the confirmation, and the foot are all still walked.
         //
         // **Train I001 lost it again, and not to an audit.** `Lost connection
         // to the application (pid 71471)` at t = 13.47s, inside the *first*
@@ -846,6 +849,37 @@ extension StubHouseUITests {
         // a two-hour Simulator. Nothing here is changed for it: this is the
         // crowd death I1H2-SIM-REPORT.md run 11 could not pin, and a case
         // cannot be written around a process that is taken from it.
+        //
+        // **R004 lost the third launch, and the run says it was not this
+        // case's doing.** The page pass classified (`floor=0 rest=0 leaves an
+        // edge cuts in half=1`) and the dialog pass classified (`floor=8
+        // rest=0 the hidden page's text=7`); the third process came up,
+        // reached `news-person-heading` at t = 67.92s, and was gone by
+        // t = 68.5s — `Lost connection to the application (pid 89100)` on the
+        // `news-story-meta-301` wait, with no crash report. The run's own
+        // screen recording is what settles what was in the frame: frames at
+        // t = 67.75, 68.0 and 68.25 are the News page drawn whole and still —
+        // chip rail, briefing, category grid, phone bar — no dialog, no
+        // banner, no alert, and at t = 68.5 the Simulator is on Springboard.
+        // The page the audit was about to read was fine.
+        //
+        // And it is not this case's: **the same train lost
+        // `testPhoneMedia_AProgressRingShowsWhileAnUploadRuns` to the
+        // identical signature after a *single* launch** (`Lost connection …
+        // (pid 91621)`, R004/SourceSwitch), on another screen in another
+        // unit, plus `testTheFilesListTextGrowsAtAX5` beside it. Three cases,
+        // two units, one train. No count of launches in this file explains a
+        // one-launch case dying the same way.
+        //
+        // So this is not fixed here; the exposure is reduced. This was R004's
+        // longest case by far at 89.7s — the two casualties beside it ran
+        // 42.7s and 54.4s — and a third of that was the third launch and its
+        // twelve-second push. The page and the foot now share one process:
+        // the same three audits run, with the same classifiers and the same
+        // per-pass measured counts, in two launches instead of three. Two
+        // audits in one process is the shape S002 and S005 ran through; the
+        // three S011 died on is not back, and the terminate that S002's
+        // leftover bought is still here.
         var findings: [String] = []
         var mishaps: [String] = []
         var pins: [String] = []
@@ -910,59 +944,19 @@ extension StubHouseUITests {
 
             pins += newsChipRowIsOneElement(app)
             findings += try auditNews(app, "news", "the page")
-        } catch {
-            mishaps.append("the page audit could not be run: \(error)")
-        }
 
-        // ### 2. The remove confirmation, which hides everything above it.
-        do {
-            let (app, landed) = openNews()
-            defer { app.terminate() }
-            if !landed {
-                mishaps.append("News never drew a person's heading for the dialog pass")
-            }
-            let remove = app.buttons["news-remove-topic-tech"]
-            if revealNews(app, remove) {
-                remove.tap()
-                if newsElement(app, "news-remove-ask").waitForExistence(timeout: 10) {
-                    evidence(app, "news-12-audited-dialog")
-                    findings += try auditNews(
-                        app,
-                        "news-dialog",
-                        "the remove confirmation",
-                        behindADialog: true,
-                        // **This pass is allowed nothing anonymous.** The
-                        // page is `.accessibilityHidden` behind the scrim, so
-                        // it offers the audit no elements at all — which is
-                        // why its findings are `Potentially inaccessible
-                        // text` and not contrast — and R003's dialog tree has
-                        // no leaf either edge cuts (measured: 0). An
-                        // allowance here would buy nothing and hide the one
-                        // thing this pass exists to catch.
-                        allowingLeavesCutByAnEdge: false
-                    )
-                    app.buttons["news-remove-cancel"].tap()
-                } else {
-                    mishaps.append("the remove confirmation never came up")
-                }
-            } else {
-                mishaps.append("the remove control was not reachable")
-            }
-        } catch {
-            mishaps.append("the dialog audit could not be run: \(error)")
-        }
-
-        // ### 3. The foot of the page.
-        do {
-            let (app, landed) = openNews()
-            defer { app.terminate() }
-            if !landed {
-                mishaps.append("News never drew a person's heading for the foot pass")
-            }
-            // Same settling as the page pass, for the same reason: an audit
-            // against a half-built page attributes nothing.
-            _ = newsElement(app, "news-story-meta-301").waitForExistence(timeout: 25)
-
+            // ### 1b. The foot of the page — walked by this same process.
+            //
+            // R004's lost third launch is why this is no longer a launch of
+            // its own; the measurement that settles whose fault that was is
+            // in the comment at the top of this case. Nothing about the pass
+            // itself changes: the page audit above has run, nothing has been
+            // tapped, and every number this pass stands on — the viewport
+            // (``newsPageViewport(_:)``) and the leaves the edges cut
+            // (``newsCutLeaves(_:)``) — is measured again inside
+            // ``auditNews(_:_:_:behindADialog:allowingLeavesCutByAnEdge:)``
+            // after the swipes below, so it reads this scroll position and
+            // not the one the page pass read.
             // **The foot of the page, audited on screen.** The page pass
             // covers what the viewport holds, and this screen is 1111 points
             // of content in a 677-point scroll view: every topic row, every
@@ -1037,7 +1031,45 @@ extension StubHouseUITests {
             evidence(app, "news-12-audited-foot")
             findings += try auditNews(app, "news-foot", "the foot of the page")
         } catch {
-            mishaps.append("the foot audit could not be run: \(error)")
+            mishaps.append("the page and foot audits could not be run: \(error)")
+        }
+
+        // ### 2. The remove confirmation, which hides everything above it.
+        do {
+            let (app, landed) = openNews()
+            defer { app.terminate() }
+            if !landed {
+                mishaps.append("News never drew a person's heading for the dialog pass")
+            }
+            let remove = app.buttons["news-remove-topic-tech"]
+            if revealNews(app, remove) {
+                remove.tap()
+                if newsElement(app, "news-remove-ask").waitForExistence(timeout: 10) {
+                    evidence(app, "news-12-audited-dialog")
+                    findings += try auditNews(
+                        app,
+                        "news-dialog",
+                        "the remove confirmation",
+                        behindADialog: true,
+                        // **This pass is allowed nothing anonymous.** The
+                        // page is `.accessibilityHidden` behind the scrim, so
+                        // it offers the audit no elements at all — which is
+                        // why its findings are `Potentially inaccessible
+                        // text` and not contrast — and R003's dialog tree has
+                        // no leaf either edge cuts (measured: 0). An
+                        // allowance here would buy nothing and hide the one
+                        // thing this pass exists to catch.
+                        allowingLeavesCutByAnEdge: false
+                    )
+                    app.buttons["news-remove-cancel"].tap()
+                } else {
+                    mishaps.append("the remove confirmation never came up")
+                }
+            } else {
+                mishaps.append("the remove control was not reachable")
+            }
+        } catch {
+            mishaps.append("the dialog audit could not be run: \(error)")
         }
 
         XCTAssertEqual([], mishaps, "the audit never reached what it was meant to look at")
