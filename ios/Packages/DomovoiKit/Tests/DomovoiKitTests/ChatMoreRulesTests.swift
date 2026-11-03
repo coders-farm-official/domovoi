@@ -1164,7 +1164,9 @@ final class ChatMoreRulesTests: XCTestCase {
         // both phones, which is the point.
         XCTAssertEqual(ChatMoreDraftBlocks.inline("\\*not italic\\*"), "\\not italic\\")
         // An escape the italic pass does not touch is undone, as it should be.
-        XCTAssertEqual(ChatMoreDraftBlocks.inline(#"\#heading"#), "#heading")
+        // Two hashes on the literal: in a one-hash raw string `\#` is itself
+        // the escape introducer.
+        XCTAssertEqual(ChatMoreDraftBlocks.inline(##"\#heading"##), "#heading")
     }
 
     func testTheKindsNameAndTheVersionPill() {
