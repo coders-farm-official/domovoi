@@ -68,6 +68,16 @@ public protocol AlertsBookStore: Sendable {
 
     var hintDismissed: Bool { get }
     func dismissHint()
+
+    /// Forget the dismissal, so the row is offered again.
+    ///
+    /// **Nothing in the app calls this.** It exists for the UI cases: the
+    /// dismissal is a fact about the install (`UserDefaults`), so one case
+    /// answering `not now` would hide the row from every case that ran after
+    /// it, and a suite whose cases depend on their own order is a suite that
+    /// measures one thing and reports another. ``AlertsHintModel`` reads the
+    /// launch argument that calls it, under `#if DEBUG`.
+    func forgetHint()
 }
 
 /// The mirror's own store, separate because its contents are not ids
@@ -184,6 +194,8 @@ public final class AlertsDefaultsBookStore: AlertsBookStore, @unchecked Sendable
     public var hintDismissed: Bool { defaults.bool(forKey: key("hint_dismissed")) }
 
     public func dismissHint() { defaults.set(true, forKey: key("hint_dismissed")) }
+
+    public func forgetHint() { defaults.removeObject(forKey: key("hint_dismissed")) }
 }
 
 // MARK: - the mirror, in a file the backup does not take
