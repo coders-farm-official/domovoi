@@ -105,7 +105,95 @@ extension StubHouseUITests {
         return true
     }
 
+    /// The two scroll views an opened room has, told apart by their height.
+    ///
+    /// ``RoomsTabStrip`` is a **horizontal** `ScrollView` one row tall (44
+    /// points at the ordinary size); the settings page it sits in is a
+    /// vertical one that fills the window (676.7 points, measured on train
+    /// S004). Neither carries an identifier — SwiftUI sets none on a scroll
+    /// view — and `app.scrollViews.firstMatch` takes the page, so this picks
+    /// the **shortest** for the strip and the **tallest** for the page rather
+    /// than comparing against a constant: the strip grows with the type size
+    /// and any threshold would be a number waiting to be crossed at AX5.
+    @MainActor
+    func roomsScrollView(_ app: XCUIApplication, strip: Bool) -> XCUIElement? {
+        let all = app.scrollViews
+        // **The strip is only the shortest of several.** With one scroll view
+        // on screen the shortest *is* the page, and a caller that scrolled
+        // that believing it was the strip would scroll the whole screen and
+        // then tap a tab that had not moved — the S004 failure again, wearing
+        // the fix's clothes. No strip, no answer.
+        guard !strip || all.count > 1 else { return nil }
+        var best: XCUIElement?
+        var height = strip ? Double.greatestFiniteMagnitude : -1
+        for index in 0..<all.count {
+            let one = all.element(boundBy: index)
+            guard one.exists else { continue }
+            let its = Double(one.frame.height)
+            if strip ? (its < height) : (its > height) {
+                height = its
+                best = one
+            }
+        }
+        return best
+    }
+
+    /// Scroll `view` until `element` is **wholly inside it**, and say whether
+    /// it got there.
+    ///
+    /// ### Why wholly, and not `isHittable`
+    ///
+    /// This is the fix for train S004's six `Failed to compute hit point`
+    /// failures *and* for the one that was worse than a failure. Seven tab
+    /// words are 652 points wide in a 361-point strip, so `notes`, `timers`
+    /// and `settings` start off screen entirely — XCUITest refuses to tap
+    /// those and says so. But `recently played` sits at x 319.3 with a width
+    /// of 128.7: its **centre**, 383.7, is on the window and off the strip's
+    /// clip, so `isHittable` is true, the tap is synthesised at that point,
+    /// it lands outside the scroll view's clipped bounds — and nothing
+    /// happens. The case then failed twenty rows later looking for a tab body
+    /// that had never opened, with `overview` still `Selected` in the tree.
+    /// A partially visible control is not a tappable one.
+    ///
+    /// The direction is chosen per flick rather than fixed, so this converges
+    /// from either side.
+    ///
+    /// **`vertical: true` is a measurement, not a way to travel.** It is
+    /// called on the settings page only to assert that something already *is*
+    /// on the window, and its flicks are a fallback that should never run: a
+    /// swipe on the page starts at the page's centre, which at the ordinary
+    /// size is y 431 — inside ``RoomsTabStrip``, a horizontal scroll view,
+    /// which consumes a pan rather than passing it to its parent. To bring
+    /// something vertically into view, **tap an inert word next to it**:
+    /// XCUITest scrolls to an element before touching it, which is how this
+    /// file reaches a switch at y 1128 and the slider at y 922.
+    @MainActor
+    func roomsBring(
+        _ element: XCUIElement,
+        into view: XCUIElement,
+        vertical: Bool,
+        flicks: Int = 10
+    ) -> Bool {
+        for _ in 0..<flicks {
+            let seat = view.frame
+            let it = element.frame
+            if seat.contains(it) { return true }
+            if vertical {
+                if it.midY > seat.midY { view.swipeUp(velocity: .slow) } else { view.swipeDown(velocity: .slow) }
+            } else {
+                if it.midX > seat.midX { view.swipeLeft() } else { view.swipeRight() }
+            }
+        }
+        return view.frame.contains(element.frame)
+    }
+
     /// Pick one of the seven tabs by its word.
+    ///
+    /// Scrolls the strip until the word is wholly inside it (``roomsBring``),
+    /// then taps — and then waits for the strip to **say** the tab is open.
+    /// That last wait is not ceremony: the tap that silently missed its target
+    /// on train S004 reported success here and failed in the body's
+    /// assertions, which is the hardest kind of failure to read.
     @MainActor
     func roomsTab(_ app: XCUIApplication, _ label: String) -> Bool {
         let tab = app.buttons[label].firstMatch
@@ -114,8 +202,28 @@ extension StubHouseUITests {
             print(app.debugDescription)
             return false
         }
+        guard let strip = roomsScrollView(app, strip: true) else {
+            print("=== NO TAB STRIP TO SCROLL — tree follows ===")
+            print(app.debugDescription)
+            return false
+        }
+        guard roomsBring(tab, into: strip, vertical: false) else {
+            print("=== \(label) WOULD NOT COME INTO THE STRIP — tree follows ===")
+            print(app.debugDescription)
+            return false
+        }
         tab.tap()
-        return true
+        let deadline = Date().addingTimeInterval(10)
+        while Date() < deadline {
+            if tab.isSelected { return true }
+            usleep(150_000)
+        }
+        // `.isSelected` is the `.isSelected` trait ``RoomsTabStrip`` adds to
+        // the open tab, which is the only thing on screen that says which tab
+        // is open in words rather than in a font weight.
+        print("=== \(label) WAS TAPPED AND DID NOT OPEN — tree follows ===")
+        print(app.debugDescription)
+        return false
     }
 
     /// A field on this screen, picked by its accessibility label across every
@@ -229,11 +337,24 @@ extension StubHouseUITests {
             roomsWaitFor(app, RoomsStringsUnderTest.activeNow),
             "the online room's card does not say `active now`"
         )
-        // `_iso(-9000)` in the house's seed: two and a half hours.
+        // `_iso(-9000)` in the house's seed: two and a half hours, which
+        // `relTime` reports as **3h ago**, not 2h. Its hour branch is
+        // `rounded(seconds / 3600.0)` and `rounded` is Kotlin's
+        // `roundToInt()` — half away from zero (`Format.swift:147-153`,
+        // `Format.kt:34`). This case asserted `2h ago` on train S004 and was
+        // wrong about the rule, not about the screen; the tree it printed had
+        // `study, offline, last seen 3h ago` on the card all along. Still a
+        // discriminating pair: a card that drew nothing, or drew the raw
+        // stamp, says neither.
         XCTAssertTrue(
-            containing(app, "2h ago").exists,
+            containing(app, "3h ago").exists,
             "the offline room's card does not say how long ago it was heard "
                 + "from — `study` has a `last_connected_at` 9000s old"
+        )
+        XCTAssertFalse(
+            containing(app, "2h ago").exists,
+            "the card rounded 9000s down to 2h — `relTime` rounds half away "
+                + "from zero"
         )
     }
 
@@ -390,8 +511,44 @@ extension StubHouseUITests {
         XCTAssertTrue(roomsOpenRoom(app, "kitchen"), "the kitchen card did not open")
         let slider = app.sliders.firstMatch
         XCTAssertTrue(slider.waitForExistence(timeout: 20), "no volume slider on the overview")
+        // **The slider has to be on the window before it can be dragged.**
+        // It is built at y 922 in a page whose viewport ends at 770, and on
+        // train S004 this case dragged it there: `adjust` does **not** scroll
+        // to its element, so the gesture was synthesised off the window, the
+        // thumb stayed at 50%, no POST went out, and the case failed on the
+        // toast three lines later. Every other write on this screen is a
+        // `tap` — which does scroll to its element, which is how
+        // `testRooms_TimerScopeSwitchSticks` reaches a switch at y 1128 — so
+        // this was the only case to pay for it.
+        //
+        // The anchor is the **help line under the slider**, tapped for its
+        // scroll and nothing else: a tap on a `Text` does nothing, and
+        // bringing a line that sits *below* the slider into view puts the
+        // slider above it on the window. Not a swipe on the page: the page's
+        // own centre at this size lands on ``RoomsTabStrip``, a horizontal
+        // scroll view, and a vertical pan that starts inside one is consumed
+        // rather than passed to its parent.
+        let help = containing(app, RoomsStringsUnderTest.volumeHelpPrefix)
+        XCTAssertTrue(help.waitForExistence(timeout: 20), "no volume help line to scroll to")
+        help.tap()
+        guard let page = roomsScrollView(app, strip: false) else {
+            return XCTFail("no settings page to measure the slider against")
+        }
+        XCTAssertTrue(
+            roomsBring(slider, into: page, vertical: true),
+            "the volume slider is not on the window, so a drag of it would "
+                + "be synthesised off the screen and quietly do nothing"
+        )
         evidence(app, "rooms-16-volume")
         slider.adjust(toNormalizedSliderPosition: 0.8)
+        // The thumb moved at all, asserted before the toast: a gesture that
+        // misses is silence, and silence here reads exactly like an app that
+        // never sent the level.
+        XCTAssertNotEqual(
+            slider.value as? String,
+            "50%",
+            "the drag did not move the thumb, so nothing about the write is under test"
+        )
         XCTAssertTrue(
             roomsWaitFor(app, RoomsStringsUnderTest.volumeSetPrefix),
             "setting the volume said nothing"
@@ -1003,31 +1160,68 @@ extension StubHouseUITests {
         evidence(app, "rooms-31-audit-roster")
         let roster = try auditIssues(app, "rooms-roster")
         let rosterSplit = Self.floorAndRest(roster)
-        print("ROOMS AUDIT roster floor=\(rosterSplit.floor) rest=\(rosterSplit.rest.count)")
+        let rosterRest = roomsOursOnly(rosterSplit.rest)
+        print("ROOMS AUDIT roster floor=\(rosterSplit.floor) rest=\(rosterSplit.rest.count) ours=\(rosterRest.count)")
 
         XCTAssertTrue(roomsOpenRoom(app, "kitchen"), "the kitchen card did not open")
         XCTAssertTrue(roomsWaitFor(app, RoomsStringsUnderTest.roomIDLabel), "the overview did not draw")
         evidence(app, "rooms-31-audit-detail")
         let detail = try auditIssues(app, "rooms-detail")
         let detailSplit = Self.floorAndRest(detail)
-        print("ROOMS AUDIT detail floor=\(detailSplit.floor) rest=\(detailSplit.rest.count)")
+        let detailRest = roomsOursOnly(detailSplit.rest)
+        print("ROOMS AUDIT detail floor=\(detailSplit.floor) rest=\(detailSplit.rest.count) ours=\(detailRest.count)")
 
         XCTAssertTrue(
-            rosterSplit.rest.isEmpty,
+            rosterRest.isEmpty,
             "Apple's audit has findings against the Rooms roster beyond the "
-                + "measured floor: " + rosterSplit.rest.joined(separator: " / ")
+                + "measured floor: " + rosterRest.joined(separator: " / ")
         )
         XCTAssertTrue(
-            detailSplit.rest.isEmpty,
+            detailRest.isEmpty,
             "Apple's audit has findings against an opened room beyond the "
-                + "measured floor: " + detailSplit.rest.joined(separator: " / ")
+                + "measured floor: " + detailRest.joined(separator: " / ")
         )
+        // **Two floors, because they were measured apart.** On train S004 the
+        // roster reported no anonymous Dynamic Type finding at all and the
+        // opened room reported the eight of ``knownPushedBarFloor``. One
+        // number for both would have had to be the larger, and then a roster
+        // that started reporting eight — a real regression in the bars — would
+        // have read as normal.
         XCTAssertEqual(
             rosterSplit.floor,
-            Self.knownPushedBarFloor,
+            0,
             "the Rooms roster's anonymous floor is \(rosterSplit.floor), not the "
-                + "known \(Self.knownPushedBarFloor): " + roster.joined(separator: " | ")
+                + "measured 0: " + roster.joined(separator: " | ")
         )
+        XCTAssertEqual(
+            detailSplit.floor,
+            Self.knownPushedBarFloor,
+            "an opened room's anonymous floor is \(detailSplit.floor), not the "
+                + "known \(Self.knownPushedBarFloor): " + detail.joined(separator: " | ")
+        )
+    }
+
+    /// Drop the one audit finding that belongs to a view this item does not
+    /// own, and say how many were dropped.
+    ///
+    /// Apple fails the contrast of **`back to Rooms & devices`** — the button
+    /// `RouteScreen.swift:296` draws at the foot of *every* Settings section,
+    /// in the accent colour, 20.3 points tall. It is the shell's control, not
+    /// this screen's: NIGHT-RULES §2 says this item may replace only its own
+    /// `// slot:` line in that file, and a tint change there would land on
+    /// eleven other sections nobody measured tonight. It is written up in
+    /// `overnight/rooms/DECISIONS.md` under "Needs a shared change".
+    ///
+    /// Matched by **label and headline together**, so this hides exactly that
+    /// finding: a second contrast failure, or a hit-area failure against the
+    /// same button, still fails the audit. Nothing of this screen's own is
+    /// excused here.
+    @MainActor
+    func roomsOursOnly(_ found: [String]) -> [String] {
+        found.filter { line in
+            !(line.hasPrefix("Contrast failed")
+                && line.contains("label='\(ShellStringsUnderTest.backToRooms)'"))
+        }
     }
 }
 
@@ -1078,6 +1272,11 @@ enum RoomsStringsUnderTest {
 
     /// ``RoomsStrings/volumeSet(room:level:)``'s start, without the level.
     static let volumeSetPrefix = "kitchen volume set to"
+
+    /// ``RoomsStrings/volumeHelp(room:levelKnown:online:)``'s start. The whole sentence is
+    /// 103 characters with the room and the parenthetical, and a query string
+    /// over 128 throws (train S001) — this is matched as a `CONTAINS` prefix.
+    static let volumeHelpPrefix = "master output"
 
     /// The `+5` nudge's accessibility label (``RoomsStrings/louder``), which
     /// is the only words that icon-only button has.

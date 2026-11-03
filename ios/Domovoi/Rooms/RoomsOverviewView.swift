@@ -61,11 +61,24 @@ struct RoomsOverviewView: View {
                 // The server's stamp as the server wrote it, said to be UTC
                 // rather than converted: a stamp relabelled into the phone's
                 // zone would disagree with the same row in the dashboard.
-                Text(roomsRawStamp(room))
-                    .font(.caption.monospaced())
-                    .foregroundStyle(Color.fgMuted)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .textSelection(.enabled)
+                //
+                // **Only when there is one.** ``roomsRawStamp(_:)`` answers an
+                // em dash for a room that has reported no stamp (the house's
+                // roster carries no `last_connected_at` at all), and a
+                // selectable monospaced em dash is both nothing to read and
+                // two findings in Apple's audit, which named this very
+                // element on train S004: `Hit area is too small` — 7.7 x 14.3
+                // points, because `.textSelection(.enabled)` makes the text
+                // interactive — and `Contrast failed`. The line above it
+                // already says what is known (`active now`, or `3h ago`), so
+                // the honest answer to an absent stamp is no second line.
+                if roomsLastSeenISO(room) != nil {
+                    Text(roomsRawStamp(room))
+                        .font(.caption.monospaced())
+                        .foregroundStyle(Color.fgMuted)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                }
             }
             wifiPair
         }
