@@ -48,6 +48,12 @@ final class AudiobooksModelTests: XCTestCase {
         /// out of reach looks like.
         let hangGet = Shared<Bool>(false)
 
+        /// Holds the read open and **lets it go again** — the window a house
+        /// change has to land in for a read-after-await test. Unlike
+        /// ``hangGet`` this is re-read while it waits, so a test can set it
+        /// false and watch the answer arrive under the new house.
+        let heldGet = Shared<Bool>(false)
+
         /// Run **while a PUT is in flight** — the only moment the in-flight
         /// guard is about.
         private let onPut: (@Sendable () -> Void)?
@@ -65,6 +71,11 @@ final class AudiobooksModelTests: XCTestCase {
                     await Task.yield()
                 }
                 throw CancellationError()
+            }
+            for _ in 0..<settleYieldLimit {
+                if !heldGet.current { break }
+                try Task.checkCancellation()
+                await Task.yield()
             }
             return answer.current
         }
@@ -742,6 +753,55 @@ final class AudiobooksModelTests: XCTestCase {
         return (model, house, waits, container)
     }
 
+    /// The same house, built through the initialiser a test drives: the
+    /// server key is a box a case can set, and the place slot is a ``Slot``
+    /// whose read can be held open. The two together are what a move *during*
+    /// a request needs.
+    private func switchableRig(
+        house: House = House()
+    ) -> (AudiobooksModel, Slot, Shared<BookServerKey>) {
+        house.install()
+        let store = InMemoryShellStore(serverURL: server, token: "household-abc")
+        store.trustServer(server, identity: TestIdentity.real.pin)
+        let container = AppContainer(
+            store: store,
+            vault: TokenVault(items: InMemoryKeychain()),
+            lock: HouseholdLock(),
+            clock: { 0 },
+            configuration: StubURLProtocol.session(timeout: 1)
+        )
+        let pointedAt = Shared<BookServerKey>(Self.home)
+        let slot = Slot(server: Self.home)
+        let places = BookPositionSync(
+            store: BookPositionStore(place: BookPositionMemory()),
+            remote: { slot },
+            clock: { 1_000 },
+            // **The opposite of ``sync(store:remote:)``'s timer.** There the
+            // bound is opened at once, so a hung read costs no time; here the
+            // whole point is that the read is *in flight*, so the bound must
+            // not fire — ``BookTimeout/bounded`` races the work against this
+            // sleep and returns whichever lands first. Twenty thousand yields
+            // is far longer than any assertion below waits, so the leg that
+            // answers is always the slot's read.
+            sleep: { _ in
+                for _ in 0..<settleYieldLimit {
+                    try Task.checkCancellation()
+                    await Task.yield()
+                }
+            }
+        )
+        let model = AudiobooksModel(
+            in: container,
+            serverKey: { pointedAt.current },
+            remote: { slot },
+            knowsThisPhone: true,
+            positions: places,
+            covers: AudiobookCoverStore(in: container),
+            wait: { _ in }
+        )
+        return (model, slot, pointedAt)
+    }
+
     private func queries(to path: String) -> [String] {
         StubURLProtocol.recorded.compactMap { request in
             guard
@@ -1025,6 +1085,65 @@ final class AudiobooksModelTests: XCTestCase {
         model.start(model.books[3])
         await settleUntil({ model.ask != nil }, "the question")
         model.dismissAsk()
+        await nothingHappens()
+
+        XCTAssertEqual([], ears.played.map { $0.bookID })
+    }
+
+    /// **Read-after-await, on starting a book** — the top defect class on
+    /// this track, on the path that owns a place.
+    ///
+    /// The slot's read is held open, the app moves house *while the plan is
+    /// in flight*, and then the read is let go. ``AudiobooksModel/start(_:)``
+    /// captured the old key before its `await`: what comes back is a plan for
+    /// a library this phone is no longer looking at, and it must neither
+    /// raise the resume dialog over the new house's screen (which
+    /// ``AudiobooksModel/serverChanged()`` has just cleared) nor start
+    /// playing a book the connected house has never heard of.
+    ///
+    /// Note what the switch is: both the model's `serverKey` **and** the
+    /// screen's `serverChanged()`, inside the round trip, which is what a
+    /// move actually is. `testABooksPlaceIsNeverReadFromAnotherHouse` above
+    /// is a *different* property — a book of another house, settled before
+    /// any await — and does not cover this one.
+    func testAStartInFlightWhenTheHouseChangesNeitherAsksNorPlays() async {
+        let (model, slot, pointedAt) = switchableRig()
+        await started(model)
+        let ears = Ears()
+        model.player = ears
+        await model.positions.record(bookID: 3, server: Self.home, positionSec: 3672, speed: 1.25)
+        slot.heldGet.set(true)
+
+        model.start(model.books[3])
+        await settleUntil({ slot.gets.current > 0 }, "the slot read")
+        // The move happens INSIDE the round trip.
+        pointedAt.set(Self.away)
+        model.serverChanged()
+        slot.heldGet.set(false)
+        await nothingHappens()
+
+        XCTAssertNil(model.ask, "a plan for the old library is not a question about this one")
+        XCTAssertEqual(
+            [],
+            ears.played.map { $0.bookID },
+            "and a book of the house we have left does not start playing"
+        )
+    }
+
+    /// The same, on a chapter tap: ``AudiobooksModel/play(_:from:)`` goes
+    /// through the sync too, and hands the result straight to the player.
+    func testAChapterTapInFlightWhenTheHouseChangesPlaysNothing() async {
+        let (model, slot, pointedAt) = switchableRig()
+        await started(model)
+        let ears = Ears()
+        model.player = ears
+        slot.heldGet.set(true)
+
+        model.play(model.books[3], from: 1_200)
+        await settleUntil({ slot.gets.current > 0 }, "the slot read")
+        pointedAt.set(Self.away)
+        model.serverChanged()
+        slot.heldGet.set(false)
         await nothingHappens()
 
         XCTAssertEqual([], ears.played.map { $0.bookID })

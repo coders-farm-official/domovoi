@@ -120,20 +120,27 @@ struct AudiobooksView: View {
             // model needs the container and a `@State` initialiser runs
             // before the view has one.
             if books == nil {
-                let made = AudiobooksModel(in: model.container, deviceID: model.deviceID)
+                books = AudiobooksModel(in: model.container, deviceID: model.deviceID)
+            }
+            if let books {
                 // **The Player merge.** Nil until this line, and nil draws no
                 // `play` anywhere on the screen; the bridge is nil in turn
                 // when this phone has no device id, because the player cannot
                 // own a server slot without one. ``AudiobooksPhonePlayer``
                 // has the whole reason it is a process-wide object.
-                made.player = AudiobooksPhonePlayer.shared(
+                //
+                // Asked for on **every** appearance and not only when the
+                // model is built: `shared(...)` reads the household at the
+                // moment it is called, so this is what re-keys the player
+                // after a move made while this screen was away — the
+                // `onChange` below only runs while it is on screen.
+                books.player = AudiobooksPhonePlayer.shared(
                     in: model.container,
                     deviceID: model.deviceID,
-                    places: made.positions
+                    places: books.positions
                 )
-                books = made
+                books.start()
             }
-            books?.start()
         }
         .onAppear { visible = true }
         .onDisappear {
@@ -157,6 +164,24 @@ struct AudiobooksView: View {
             openBook = nil
             page = nil
             books?.serverChanged()
+            // **The player is re-asked for, not kept.**
+            // ``AudiobooksPhonePlayer`` reads the household only when
+            // `shared(...)` is called, and the one built in `.task` above was
+            // keyed to whatever house was connected then. Kept across a move
+            // it would go on stamping every item's `origin` with the old
+            // house, so ``AudiobookPlaces`` would record places under the old
+            // key while ``AudiobookDetailModel`` reads the new one — a book
+            // page showing no place however long you listen — and
+            // ``BookPositionSync/push(bookID:server:)`` would match no remote
+            // and send nothing up for ever. `shared(...)` stops and re-keys
+            // the old one, so this is also what ends the old house's book.
+            if let books {
+                books.player = AudiobooksPhonePlayer.shared(
+                    in: model.container,
+                    deviceID: model.deviceID,
+                    places: books.positions
+                )
+            }
         }
     }
 

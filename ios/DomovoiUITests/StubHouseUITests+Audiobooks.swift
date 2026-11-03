@@ -21,10 +21,16 @@ import XCTest
 /// houses inside a list read. The only way to change servers from the app is
 /// the connection sheet, and NIGHT-RULES §1 forbids opening it on a
 /// Simulator — it starts a LAN discovery sweep across Kamron's real home
-/// network. That property is covered where it can be: the package test
-/// `testABooksPlaceIsNeverReadFromAnotherHouse` switches the key **inside**
-/// the round trip, which is the shape [[read-after-await-wrong-key]] asks
-/// for. DECISIONS §8.
+/// network. That property is covered where it can be: the package tests
+/// `testAStartInFlightWhenTheHouseChangesNeitherAsksNorPlays`,
+/// `testAChapterTapInFlightWhenTheHouseChangesPlaysNothing` and
+/// `testACoverInFlightWhenTheHouseChangesLandsNowhere` hold a request open,
+/// switch the key **inside** the round trip and then let it go, which is the
+/// shape [[read-after-await-wrong-key]] asks for. DECISIONS §17.
+///
+/// This comment used to cite `testABooksPlaceIsNeverReadFromAnotherHouse`,
+/// which switches nothing mid-flight; the three above were written in the
+/// fixer pass of 2026-11-02 together with the guards they were missing.
 extension StubHouseUITests {
 
     // MARK: - getting there

@@ -350,10 +350,15 @@ public final class AudiobooksModel {
     // MARK: - the reindex
 
     /// `POST /api/audiobooks/reindex`, then the toast and a reload. `:167-176`.
+    ///
+    /// The house is settled before the request and checked after it: a scan
+    /// of the old library must not announce itself over the new one's screen
+    /// or make it re-read — [[read-after-await-wrong-key]].
     public func reindex() {
         guard !reindexing else { return }
         reindexing = true
         let client = container.client
+        let key = serverKey()
         Task { @MainActor [weak self] in
             defer { self?.reindexing = false }
             do {
@@ -361,13 +366,15 @@ public final class AudiobooksModel {
                     AudiobookPath.reindex,
                     as: AudiobookReindexResult.self
                 )
-                guard let self else { return }
+                guard let self, self.serverKey().isSame(key) else { return }
                 self.toast = AudiobooksStrings.indexed(answer.scanned)
                 self.list.reload()
             } catch let trouble as DomovoiError {
-                self?.toast = failureText(AudiobooksStrings.reindexVerb, trouble)
+                guard let self, self.serverKey().isSame(key) else { return }
+                self.toast = failureText(AudiobooksStrings.reindexVerb, trouble)
             } catch {
-                self?.toast = failureText(AudiobooksStrings.reindexVerb, .unreachable("\(error)"))
+                guard let self, self.serverKey().isSame(key) else { return }
+                self.toast = failureText(AudiobooksStrings.reindexVerb, .unreachable("\(error)"))
             }
         }
     }
@@ -383,6 +390,16 @@ public final class AudiobooksModel {
     ///
     /// Does nothing when ``canPlay(_:)`` is false, which is the same fact the
     /// absent button states.
+    ///
+    /// The plan's two reads are bounded at three seconds
+    /// (``BookStartPlanner/othersTimeoutMs``), so there is a real window in
+    /// which the app moves house while one is in flight — and
+    /// ``serverChanged()`` has already cleared ``ask``. The key captured
+    /// before the `await` is checked after it, as
+    /// ``AudiobookDetailModel/refreshPlace()`` does, so a plan made for the
+    /// old library neither raises its dialog over the new one nor starts
+    /// playing a book the connected house has never heard of —
+    /// [[read-after-await-wrong-key]].
     public func start(_ book: AudiobookRow) {
         guard canPlay(book) else { return }
         let key = serverKey()
@@ -397,7 +414,7 @@ public final class AudiobooksModel {
                 remote: there,
                 sleep: wait
             )
-            guard let self else { return }
+            guard let self, self.serverKey().isSame(key) else { return }
             if plan.asks {
                 self.ask = (book: book, plan: plan)
             } else {
@@ -420,13 +437,18 @@ public final class AudiobooksModel {
 
     /// Play `book` from `startSec` with no question — a tap on a chapter row
     /// (`BookPage.kt:221`). The speed is the one the phone's place carries.
+    ///
+    /// ``BookPositionSync/open(bookID:server:)`` talks to the server's slot,
+    /// so the key is checked again on the way back: a chapter tapped in the
+    /// old library does not start playing after the app has moved house.
     public func play(_ book: AudiobookRow, from startSec: Double) {
         guard canPlay(book) else { return }
         let key = serverKey()
         let sync = positions
         Task { @MainActor [weak self] in
             let place = await sync.open(bookID: book.id, server: key)
-            self?.player?.play(
+            guard let self, self.serverKey().isSame(key) else { return }
+            self.player?.play(
                 AudiobookPlayRequest.streaming(book, startSec: startSec, speed: place.speed)
             )
         }

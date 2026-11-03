@@ -31,6 +31,14 @@ import SwiftUI
 /// makes the move safe: whoever lifts this onto the container is lifting a
 /// single instance, not merging several.
 ///
+/// **The key is only consulted when ``shared(in:deviceID:places:)`` is
+/// called**, so whoever holds a player must ask for it again when the house
+/// changes — a player kept across a move still stamps every item with the old
+/// house's `origin`, and a place written under that key is a place the book
+/// page (which reads the *connected* key) will never find.
+/// ``AudiobooksView``'s `onChange(of: model.inputs.serverURL)` re-asks for
+/// exactly that reason.
+///
 /// ### Nil, and what nil means
 ///
 /// ``shared(in:deviceID:places:)`` answers nil when this phone has no device
@@ -74,10 +82,22 @@ final class AudiobooksPhonePlayer: AudiobooksPlayer {
         }
         let key = Self.key(of: container)
         if let held, held.key.isSame(key) { return held.player }
-        // A player for another house is stopped before it is let go: an
-        // `AVQueuePlayer` that is merely dropped keeps playing until it is
-        // collected, and two audiobooks heard at once is the bug the Player
-        // item's own `leaveRoom` exists for.
+        // A player for another house is told the house changed and then
+        // stopped before it is let go.
+        //
+        // **Both halves matter.** `serverChanged(to:)` is the Player item's
+        // own move-house path (`PlayerModel.swift:889`, whose doc says the
+        // shell calls it — nothing does, so this item calls it for its own
+        // player): it drops whatever came from the old server from the queue
+        // and ends a cast to one of its rooms *without a word to the new
+        // server*, which a bare `stop()` would not — `stop()` while casting
+        // posts a room action, and that room is the old house's. Then
+        // `stop()`, because an `AVQueuePlayer` that is merely dropped keeps
+        // playing until it is collected, and two audiobooks heard at once is
+        // the bug the Player item's own `leaveRoom` exists for.
+        held?.player.player.serverChanged(
+            to: PlayerServerScope(address: key.address, fingerprint: key.fingerprint)
+        )
         held?.player.player.stop()
         let made = AudiobooksPhonePlayer(
             in: container,
