@@ -95,7 +95,13 @@ final class PlayerModelQueueTests: XCTestCase {
         XCTAssertEqual(h.model.target, .thisPhone)
         XCTAssertNil(h.model.roomReading, "the room is no longer watched")
         XCTAssertEqual(h.model.queue.map(\.uid), ["pod-9"])
-        await h.settle(until: { PlayerHouse.paths.count > before }, "the room's pause")
+        // Wait for the pause itself, not merely for the next request: the room
+        // poll is still asking for now-playing, so `paths.count > before`
+        // settles on a poll and the case then reads a slice the pause has not
+        // reached yet.
+        await h.settle(
+            until: { PlayerHouse.paths.contains("/api/music/pause/office") }, "the room's pause"
+        )
         let after = Array(PlayerHouse.paths.dropFirst(before))
         XCTAssertTrue(
             after.contains("/api/music/pause/office"),
@@ -279,6 +285,7 @@ final class PlayerModelQueueTests: XCTestCase {
         let h = PlayerHarness()
         h.model.play([PlayerSeed.transmission])
         h.engine.currentTimeSec = 90
+        h.model.tickForTests()
         h.model.pause()
         // The `AVPlayer` reached the end of its items, or failed: a bare
         // play() would do nothing (`resumeLocal`, `PlayerController.kt:416`).

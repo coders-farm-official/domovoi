@@ -74,10 +74,15 @@ final class PlayerPositionsTests: XCTestCase {
             body["position_sec"] as? Int, 912,
             "podcasts.py:109 and audiobooks.py:78 type it int; a float there is a 422"
         )
-        XCTAssertFalse(
-            body["position_sec"] is Double,
-            "and it must not go on the wire as 912.6"
-        )
+        // Asserted on the BYTES, not on the parsed value: `JSONSerialization`
+        // hands back an `NSNumber`, and `is Double` is true for the `912` in
+        // `{"position_sec":912}` as well as for `912.6` — so the parsed check
+        // above cannot tell them apart and that assertion would always pass.
+        let wire = String(decoding: PlayerServerPositions.saveBody(
+            deviceID: "phone-1", personID: nil, positionSec: 912.6, speed: 1.5
+        ), as: UTF8.self)
+        XCTAssertTrue(wire.contains("\"position_sec\":912"), wire)
+        XCTAssertFalse(wire.contains("912.6"), "a float there is a 422: \(wire)")
         XCTAssertEqual(body["speed"] as? Double, 1.5)
         XCTAssertNil(body["person_id"], "absent, not null, when nobody is identified")
     }

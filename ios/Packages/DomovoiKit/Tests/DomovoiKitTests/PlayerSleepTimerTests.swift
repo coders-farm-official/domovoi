@@ -69,6 +69,7 @@ final class PlayerSleepTimerTests: XCTestCase {
         h.model.play([PlayerSeed.transmission])
         h.engine.currentTimeSec = 7
         h.engine.status = .playing
+        h.model.tickForTests()
         h.model.sleepAtEndOfTrack()
         XCTAssertEqual(h.model.sleepRemainingSec, 3, "10 s long, 7 s in")
 
