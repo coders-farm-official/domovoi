@@ -119,6 +119,45 @@ struct DocumentsEditorPill: View {
     }
 }
 
+/// `close` and `save`, drawn as explicit labels rather than
+/// `Button(String)`.
+///
+/// ### Why this is not `Button(DocumentsStrings.save) { … }.disabled(…)`
+///
+/// Train S008's audit failed the text editor with **`Contrast failed`
+/// naming `save`**, and the screenshot in
+/// `overnight-trains/S008/Documents/att/testDocuments_EditorAudit/` shows it
+/// plainly: a `.disabled()` bar button is drawn in the system's light grey
+/// on a white bar, which is nowhere near 4.5:1.
+///
+/// The **state** is right and stays: Android disables Save until there is
+/// something to save (`DocumentsEditor.kt:175`, `enabled = dirty &&
+/// !saving`), and ``testDocuments_SaveWaitsForAChange`` is the case for it.
+/// What was wrong is the colour, so the colour is what changed —
+/// ``Color/fgMuted`` is the token measured against the **white** canvas this
+/// bar is (about 8:1), and ``Color/brandInk`` is what every other word in
+/// this app that can be acted on is drawn in.
+///
+/// `.buttonStyle(.plain)` at the call sites is part of the same fix: the
+/// automatic style resolves its own tint for the enabled *and* the disabled
+/// state and would put the system grey back over this.
+struct DocumentsEditorBarLabel: View {
+
+    let word: String
+    /// False only for `save` with nothing to save — `close` is always live.
+    let live: Bool
+
+    var body: some View {
+        Text(word)
+            // Named rather than inherited: a bar item under
+            // `.buttonStyle(.plain)` takes the surrounding font, and `.body`
+            // is both what the bar drew before and a style that scales.
+            .font(.body)
+            .foregroundStyle(live ? Color.brandInk : Color.fgMuted)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
 /// Why an opened file has no Save button, said where the button would have
 /// been.
 ///

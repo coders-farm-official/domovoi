@@ -78,13 +78,24 @@ struct DocumentsTextEditorView: View {
             .navigationTitle(entry.displayTitle)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                // Both labels are ``DocumentsEditorBarLabel`` and both
+                // buttons are `.plain`: the audit failed the disabled `save`
+                // on contrast, and the fix is the colour rather than the
+                // disabled state. The whole reason is in that view's note.
                 ToolbarItem(placement: .cancellationAction) {
-                    Button(DocumentsStrings.close) { closeRequested() }
+                    Button { closeRequested() } label: {
+                        DocumentsEditorBarLabel(word: DocumentsStrings.close, live: true)
+                    }
+                    .buttonStyle(.plain)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     if editor?.offersSave == true {
-                        Button(DocumentsStrings.save) { editor?.save() }
-                            .disabled(!(editor?.canSave ?? false))
+                        let live = editor?.canSave ?? false
+                        Button { editor?.save() } label: {
+                            DocumentsEditorBarLabel(word: DocumentsStrings.save, live: live)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(!live)
                     }
                 }
             }
