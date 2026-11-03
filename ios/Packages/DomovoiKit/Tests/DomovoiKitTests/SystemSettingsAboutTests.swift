@@ -64,10 +64,10 @@ final class SystemSettingsAboutTests: XCTestCase {
             let accepted = accepted
             let inside = insideTheRoundTrip
             let answer = answer
-            // Spelt out rather than inferred: the seam's type carries a typed
-            // `throws(DomovoiError)`, and a closure literal that only ever
-            // throws one case is easy to infer as something narrower.
-            let create: @Sendable () async throws(DomovoiError) -> ChatThread = {
+            // A local function and not a closure literal: a closure's typed
+            // `throws(DomovoiError)` is not inferred from an annotation on
+            // the variable, and the body's throw reads as `any Error`.
+            @Sendable func create() async throws(DomovoiError) -> ChatThread {
                 inside?()
                 switch answer {
                 case .success(let thread): return thread

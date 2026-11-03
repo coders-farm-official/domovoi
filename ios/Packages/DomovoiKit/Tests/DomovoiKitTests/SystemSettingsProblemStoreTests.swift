@@ -69,8 +69,10 @@ final class SystemSettingsProblemStoreTests: XCTestCase {
         let store = store()
         await store.absorb(systemSettingsProblems(from: [facts(.crash, 1)]))
         await store.clear()
-        XCTAssertEqual(SystemSettingsProblemLog(), await store.read())
-        XCTAssertEqual(SystemSettingsProblemLog(), await self.store().read())
+        let cleared = await store.read()
+        let reopened = await self.store().read()
+        XCTAssertEqual(SystemSettingsProblemLog(), cleared)
+        XCTAssertEqual(SystemSettingsProblemLog(), reopened)
     }
 
     /// A file some other build, or some other thing, wrote: an empty log and
@@ -82,10 +84,12 @@ final class SystemSettingsProblemStoreTests: XCTestCase {
             .write(to: directory.appendingPathComponent("problems.json"))
 
         let store = store()
-        XCTAssertEqual(SystemSettingsProblemLog(), await store.read())
+        let read = await store.read()
+        XCTAssertEqual(SystemSettingsProblemLog(), read)
         let after = await store.absorb(systemSettingsProblems(from: [facts(.crash, 5)]))
         XCTAssertEqual(1, after.problems.count)
-        XCTAssertEqual(after, await self.store().read())
+        let reopened = await self.store().read()
+        XCTAssertEqual(after, reopened)
     }
 
     /// The claim the privacy card makes: the reports are kept out of this
@@ -158,7 +162,8 @@ final class SystemSettingsProblemStoreTests: XCTestCase {
         await model.clear()
         XCTAssertFalse(model.confirmingClear)
         XCTAssertFalse(model.hasProblems)
-        XCTAssertEqual(SystemSettingsProblemLog(), await store.read())
+        let onDisk = await store.read()
+        XCTAssertEqual(SystemSettingsProblemLog(), onDisk)
     }
 
     /// **The read-after-await case for this model.** A clear that runs inside
@@ -182,7 +187,8 @@ final class SystemSettingsProblemStoreTests: XCTestCase {
         })
         await clearing?.value
         XCTAssertFalse(model.hasProblems, "the clear is newer than the load that was in flight")
-        XCTAssertEqual(SystemSettingsProblemLog(), await store.read())
+        let onDisk = await store.read()
+        XCTAssertEqual(SystemSettingsProblemLog(), onDisk)
     }
 
     /// A trace toggle lives in the model, not in the row: a lazy row is
