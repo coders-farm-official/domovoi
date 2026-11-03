@@ -22,7 +22,8 @@ import SwiftUI
 /// * **No multiple selection.** ``PhoneUploadModel`` posts one file per
 ///   request and reports one toast; a five-photo pick would be five uploads
 ///   with one message, and the one that failed would be the one nobody heard
-///   about. `maxSelectionCount: 1`, and the extra files are a later item's.
+///   about. The picker takes a single-item binding, which allows exactly one,
+///   and the extra files are a later item's.
 /// * **No destination choice**, for ``PhoneDeviceFilesView``'s reason: the
 ///   default library for the file's kind, named in the toast.
 /// * **Nothing at all in the local shell**, where there is no server to send
@@ -47,9 +48,11 @@ struct PhonePickToSendView: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 16) {
                 if photos {
+                    // The single-item `selection:` binding IS the limit:
+                    // `maxSelectionCount:` only exists on the array overload,
+                    // so asking for both does not compile.
                     PhotosPicker(
                         selection: $picked,
-                        maxSelectionCount: 1,
                         matching: .any(of: [.images, .videos])
                     ) {
                         Text(PhoneMediaStrings.sendHomeVerb(asUpload: true))
