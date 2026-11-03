@@ -149,11 +149,12 @@ struct ImagesView: View {
         // One `.sheet`, as ``FilesView`` has one: several `.sheet` modifiers
         // on a single view do not reliably coexist in SwiftUI — the last
         // attached wins and the others never present.
+        // No ``ImagesModel`` is handed to the sheet: it holds none, by
+        // ``ImagesPictureSheet``'s own note, so this screen's `looking = nil`
+        // on a house move is the whole mechanism that closes it.
         .sheet(item: $looking) { open in
-            if let images {
-                ImagesPictureSheet(name: open.id, model: model, images: images) {
-                    looking = nil
-                }
+            ImagesPictureSheet(name: open.id, model: model) {
+                looking = nil
             }
         }
     }
