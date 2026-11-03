@@ -1111,6 +1111,82 @@ extension StubHouseUITests {
         line.hasPrefix("Contrast failed") && line.hasSuffix("| element: nil")
     }
 
+    /// The title of the notification another item posts during a full-class
+    /// run, as a literal.
+    ///
+    /// `AlertsStrings.incidentTamperTitle`
+    /// (`DomovoiKit/AlertsStrings.swift:77`) is the source of truth and is
+    /// package-tested against Android's string; this target links no
+    /// DomovoiKit, so the literal is copied here the way
+    /// `StubHouseUITests+Alerts.swift` copies `alertsFireTitle`. It is only
+    /// ever used to *recognise* a banner, never to assert one.
+    static let peopleOverlayTitle = "Signs of tampering"
+
+    /// SpringBoard — the app a notification banner belongs to.
+    ///
+    /// A banner is drawn over Domovoi by a different process, so it is in no
+    /// Domovoi tree. That is the whole reason Apple's audit can attribute
+    /// nothing it measures under one: `app.debugDescription` for the I001
+    /// failure does not contain the banner at all.
+    @MainActor
+    var peopleSpringboard: XCUIApplication {
+        XCUIApplication(bundleIdentifier: "com.apple.springboard")
+    }
+
+    /// Whether SpringBoard has a notification banner over the app right now.
+    ///
+    /// Two queries because each misses the other's case: the short-look
+    /// view's identifier is Apple's and has moved between releases, and the
+    /// title only catches the one banner this run is known to post — but a
+    /// banner of any other kind is still something drawn over the app.
+    @MainActor
+    func peopleBannerIsOverTheApp() -> Bool {
+        let springboard = peopleSpringboard
+        return springboard.otherElements["NotificationShortLookView"].exists
+            || springboard.staticTexts[Self.peopleOverlayTitle].exists
+    }
+
+    /// Wait until nothing SpringBoard owns is drawn over the app, and say
+    /// whether anything was.
+    ///
+    /// This replaces a blind eight-second sleep. The sleep was a guess at how
+    /// long a banner lives; this is the banner itself, read out of the
+    /// process that owns it, so the audit runs on a screen that is **measured
+    /// to be uncovered** rather than one that probably is by now.
+    ///
+    /// The return value is carried into the failure message on purpose: a run
+    /// with anonymous contrast and *no* banner is a different problem from
+    /// this one, and whoever reads the next train's log should not have to
+    /// re-derive which it was.
+    ///
+    /// It never dismisses the banner. A swipe aimed at something that has
+    /// just gone lands on the app, and on this screen the thing under the bar
+    /// is a lazy roster: a stray scroll would leave a row straddling the
+    /// viewport edge, which is itself a source of contrast findings the audit
+    /// cannot attribute.
+    @MainActor
+    @discardableResult
+    func peopleWaitForAnUncoveredScreen(_ what: String) -> Bool {
+        var sawOne = false
+        let deadline = Date().addingTimeInterval(15)
+        while Date() < deadline {
+            guard peopleBannerIsOverTheApp() else {
+                if sawOne { print("PEOPLE AUDIT [\(what)] the banner has cleared") }
+                return sawOne
+            }
+            if !sawOne {
+                print(
+                    "PEOPLE AUDIT [\(what)] SpringBoard has a notification banner over "
+                        + "the app — waiting for it to clear before auditing"
+                )
+            }
+            sawOne = true
+            usleep(500_000)
+        }
+        print("PEOPLE AUDIT [\(what)] a banner is STILL over the app after 15s")
+        return true
+    }
+
     /// Apple's audit on the roster, classified by signature.
     ///
     /// `rest` is what this asserts: a finding Apple can attribute to an
@@ -1148,18 +1224,49 @@ extension StubHouseUITests {
     /// green at 4.10:1 — was reported by every single run it was in (S002,
     /// S005, S008) and by none after it was darkened. Both audits are
     /// printed, and a finding that survives fails the case exactly as before.
+    ///
+    /// ### Round 2: the pixels, and why the wait is no longer a guess
+    ///
+    /// The three findings were measured, not reasoned about. Sampling R001's
+    /// own screenshots at the frames in their tree attachments:
+    ///
+    /// | leaf (same frame in both shots) | under the banner | banner-free |
+    /// |---|---|---|
+    /// | `unverified` | **4.12:1** | 5.72:1 |
+    /// | `  live` | **4.15:1** | 7.43:1 |
+    /// | `domovoi / people` | — | 7.43:1 |
+    /// | `127.0.0.1:6601` | — | 15.47:1 |
+    ///
+    /// The two that fail fail at the banner's own grey timestamp — `now`,
+    /// `#787575` on `#F5F3F1` — which sits across those two frames. The
+    /// banner-free column is from `testPeople_AddingAFavoriteNeedsBothFields`
+    /// in the **same run**, so it is the same build, the same palette and the
+    /// same frames: the pixels the audit read were SpringBoard's, and the
+    /// bar's own are nowhere near the line. People's own leaves measure
+    /// 5.07:1 (`home` tab) to 21:1, and the four avatars 5.12–5.64:1.
+    ///
+    /// So the retry no longer sleeps and hopes. It asks SpringBoard whether a
+    /// banner is there (``peopleBannerIsOverTheApp()``) and audits once there
+    /// is not — before the first audit as well, because in I001 the banner
+    /// was already up by the time the roster had drawn.
     @MainActor
     func testPeople_PassesTheAccessibilityAudit() throws {
         let app = peopleLaunch()
+        // Before the first audit, not only between audits: `peopleLaunch`
+        // returns about four seconds in, and that is when the banner lands.
+        var sawABanner = peopleWaitForAnUncoveredScreen("first")
         evidence(app, "people-audit")
         var split = Self.floorAndRest(try auditIssues(app, "people-audit"))
-        print("PEOPLE AUDIT floor=\(split.floor) rest=\(split.rest.count)")
+        print(
+            "PEOPLE AUDIT floor=\(split.floor) rest=\(split.rest.count) "
+                + "banner-seen=\(sawABanner)"
+        )
 
-        // Three audits with two eight-second waits between them: a banner is
-        // on screen for about five seconds, and I001 had one arrive during
-        // this case and another during Home's.
+        // Up to four audits. One banner is waited out by the gate above; this
+        // is for one that arrives *during* an audit, which is the only way a
+        // screen measured uncovered can still report the signature.
         var attempt = 1
-        while attempt < 3,
+        while attempt < 4,
             !split.rest.isEmpty,
             split.rest.allSatisfy({ Self.peopleAnonymousContrast($0) })
         {
@@ -1167,8 +1274,12 @@ extension StubHouseUITests {
                 "PEOPLE AUDIT attempt \(attempt) was all anonymous contrast — "
                     + "something is drawn over the app; waiting it out"
             )
-            let until = Date().addingTimeInterval(8)
-            while Date() < until { usleep(500_000) }
+            if peopleWaitForAnUncoveredScreen("attempt \(attempt + 1)") { sawABanner = true }
+            // The dismissal animation outlives the element: the banner is
+            // still sliding off the bar for a moment after SpringBoard stops
+            // reporting it.
+            let until = Date().addingTimeInterval(2)
+            while Date() < until { usleep(250_000) }
             attempt += 1
             let name = "people-audit-\(attempt)"
             evidence(app, name)
@@ -1179,7 +1290,8 @@ extension StubHouseUITests {
         XCTAssertTrue(
             split.rest.isEmpty,
             "Apple's audit has findings against People beyond the anonymous floor, in "
-                + "\(attempt) audit(s) of an uncovered screen: "
+                + "\(attempt) audit(s) of a screen SpringBoard reported nothing over "
+                + "(a banner was over the app at some point in this case: \(sawABanner)): "
                 + split.rest.joined(separator: " / ")
         )
     }
