@@ -94,7 +94,13 @@ struct PhonePhotosSource: PhoneMediaReading {
             .first(where: \.isKeyWindow)?
             .rootViewController
         guard let host else { return }
-        PHPhotoLibrary.shared().presentLimitedLibraryPicker(from: host)
+        // Under Swift concurrency this arrives as the async form: its
+        // completion handler hands back the local identifiers the person just
+        // added, so the call suspends until the sheet is dismissed. Nothing
+        // here needs the identifiers — ``libraries()`` re-reads the library
+        // from `PHAuthorizationStatus` when the screen reloads — so they are
+        // discarded rather than threaded through.
+        _ = await PHPhotoLibrary.shared().presentLimitedLibraryPicker(from: host)
     }
 
     /// **Empty while the person has not allowed it**, which is what makes the
@@ -120,38 +126,93 @@ struct PhonePhotosSource: PhoneMediaReading {
         // Newest first, as Android's `DATE_ADDED DESC, _ID DESC` is
         // (`LocalMedia.kt:137`).
         options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
-        let wanted = media.isEmpty ? [PHAssetMediaType.image, .video] : Array(media)
+        // **The kinds go into the PREDICATE, not into the loop.** That is
+        // what makes the index window below the page: the server-side
+        // narrowing has to happen before the rows are counted, or row N of
+        // the result is not row N of the page.
+        var wanted: Set<PHAssetMediaType> = media.isEmpty ? [.image, .video] : media
+        if !request.kinds.isEmpty {
+            let asked: Set<PHAssetMediaType> = Set(request.kinds.compactMap { kind in
+                switch kind {
+                case .video: return PHAssetMediaType.video
+                case .image: return PHAssetMediaType.image
+                // The photo library holds nothing else; a page asking for
+                // audio or documents asks this source for nothing.
+                default: return nil
+                }
+            })
+            wanted.formIntersection(asked)
+        }
+        guard !wanted.isEmpty else {
+            return Page(items: [], total: 0, serverHasMore: false, nextCursor: nil)
+        }
         options.predicate = NSPredicate(
             format: "mediaType IN %@", wanted.map { NSNumber(value: $0.rawValue) }
         )
         let found = PHAsset.fetchAssets(with: options)
 
         let needle = phoneMediaNeedle(request.filter)
-        var rows: [PhoneMediaItem] = []
-        rows.reserveCapacity(found.count)
-        found.enumerateObjects { asset, _, _ in
-            let name = Self.filename(of: asset)
-            let kind: PhoneMediaKind = asset.mediaType == .video ? .video : .image
-            if !request.kinds.isEmpty, !request.kinds.contains(kind) { return }
-            if !needle.isEmpty, !name.lowercased().contains(needle) { return }
-            rows.append(PhoneMediaItem(
-                id: asset.localIdentifier,
-                libraryID: PhoneFolderList.photosID,
-                name: name,
-                kind: kind,
-                // See "What is not": the phone will not say how big an asset
-                // is without private API, so the ceiling is applied to the
-                // bytes instead.
-                sizeBytes: nil,
-                modified: asset.creationDate?.timeIntervalSince1970,
-                // `ms/1000.0 only when > 0` is Android's rule
-                // (`LocalMedia.kt:82`); a still has duration 0 and gets nil,
-                // which is what draws the dash rather than `0:00`.
-                durationSec: asset.duration > 0 ? asset.duration : nil,
-                origin: .asset(asset.localIdentifier)
-            ))
+        guard needle.isEmpty else {
+            // **A name filter costs a whole-library walk**, and there is no
+            // way around it: PhotoKit has no predicate on a filename —
+            // the name lives on `PHAssetResource`, not on the asset — so
+            // every asset must be asked for its resources before it can be
+            // kept or dropped. The search field is the one place on this
+            // screen where the owner's "no list ever holds everything at
+            // once" rule cannot be honoured, and it is bounded by the
+            // person having typed something.
+            var matched: [PhoneMediaItem] = []
+            found.enumerateObjects { asset, _, _ in
+                let row = Self.row(for: asset)
+                guard row.name.lowercased().contains(needle) else { return }
+                matched.append(row)
+            }
+            return phoneMediaSlice(matched, request.page)
         }
-        return phoneMediaSlice(rows, request.page)
+
+        // No filter: the window comes out of the `PHFetchResult` **by
+        // index**. The fetch predicate above has already applied every
+        // narrowing a page asks for (the kinds are media types), so row N of
+        // the result is row N of the page — and the cost is the 50 rows
+        // asked for rather than the whole library. The walk this replaced
+        // called `PHAssetResource.assetResources(for:)` once per asset, so a
+        // 5,000-video library paid 5,000 hits on the Photos database for
+        // every page, and `loadMore` paid it again.
+        let total = found.count
+        let start = max(0, min(request.page.offset, total))
+        let end = max(start, min(start + max(0, request.page.limit), total))
+        var rows: [PhoneMediaItem] = []
+        rows.reserveCapacity(end - start)
+        for index in start..<end {
+            rows.append(Self.row(for: found.object(at: index)))
+        }
+        return Page(
+            items: rows,
+            total: total,
+            serverHasMore: end < total,
+            nextCursor: nil
+        )
+    }
+
+    /// One asset as a row. Synchronous, and never live across an `await` —
+    /// `PHAsset` is not `Sendable`.
+    private static func row(for asset: PHAsset) -> PhoneMediaItem {
+        PhoneMediaItem(
+            id: asset.localIdentifier,
+            libraryID: PhoneFolderList.photosID,
+            name: filename(of: asset),
+            kind: asset.mediaType == .video ? .video : .image,
+            // See "What is not": the phone will not say how big an asset is
+            // without private API, so the ceiling is applied to the bytes
+            // instead.
+            sizeBytes: nil,
+            modified: asset.creationDate?.timeIntervalSince1970,
+            // `ms/1000.0 only when > 0` is Android's rule
+            // (`LocalMedia.kt:82`); a still has duration 0 and gets nil,
+            // which is what draws the dash rather than `0:00`.
+            durationSec: asset.duration > 0 ? asset.duration : nil,
+            origin: .asset(asset.localIdentifier)
+        )
     }
 
     /// The asset's own filename, which is what a person recognises and what
