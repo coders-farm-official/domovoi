@@ -202,8 +202,34 @@ extension StubHouseUITests {
     /// an amount nobody asked for, which at AX5 is how the build scroll
     /// carried the tab strip 38 points **past** the page's top in one go
     /// (I001's own snapshot: content at `minY -1083.3`, strip at y 485,
-    /// viewport from 523.3). A press has no momentum, so it moves the content
-    /// by the number of points asked for and converges from either side.
+    /// viewport from 523.3).
+    ///
+    /// ### The hold at the end, and why round 2's drag still flicked
+    ///
+    /// Round 2 wrote here that "a press has no momentum, so it moves the
+    /// content by the number of points asked for and converges from either
+    /// side". **That was a belief about the API, and train R002 measured it
+    /// false.** `press(forDuration:thenDragTo:)` is a press followed by a
+    /// *flick*: XCTest's own log line for it is "… then drag to … **with
+    /// velocity of 500.00 pixels per second, and then hold for 0.0
+    /// seconds**", and lifting a finger that is still moving is what a
+    /// scroll view reads as a throw however long the press before it was.
+    /// R002's numbers, from ``musicMoreBring(_:into:vertical:steps:)``'s own
+    /// re-measurement after each drag: a drag asked for -142.9 points moved
+    /// the page's content about 294, and the one asked for +24 moved it
+    /// nearly 290. So the loop never converged — thirty drags alternating
+    /// -142.9, +47.3, -136.0, +74.3, … with the shortfall no smaller at the
+    /// end than at the start — and the two Dynamic Type cases reported the
+    /// playlists tab as never drawn.
+    ///
+    /// The fix is the fourth argument: `thenHoldForDuration`. Holding at the
+    /// destination before the lift ends the gesture stationary, so the
+    /// scroller takes no velocity from it and the content stops where the
+    /// finger did. This is the same correction `assistantCreep` made on the
+    /// Assistant screen ("the hold is what kills the momentum: lifting
+    /// mid-drag is a flick however slowly the drag was made",
+    /// `StubHouseUITests+Assistant.swift:896`) — the two walks were written
+    /// the same night and only one of them had been measured.
     ///
     /// The whole gesture has to stay inside the scroller — a touch that
     /// leaves it is a touch on something else, and on this screen the
@@ -244,14 +270,17 @@ extension StubHouseUITests {
                 ? CGVector(dx: 0.5, dy: near)
                 : CGVector(dx: near, dy: 0.5)
         )
-        // The press before the move is what makes this a drag rather than a
-        // flick; it is also long enough that the control under the finger
-        // cannot read the gesture as a tap.
+        // The press before the move is long enough that the control under
+        // the finger cannot read the gesture as a tap; the **hold after** it
+        // is what makes the whole thing a drag rather than a flick — see
+        // this method's doc comment for the measurement that cost two cases.
         from.press(
             forDuration: 0.4,
             thenDragTo: from.withOffset(
                 vertical ? CGVector(dx: 0, dy: travel) : CGVector(dx: travel, dy: 0)
-            )
+            ),
+            withVelocity: .slow,
+            thenHoldForDuration: 0.4
         )
         return true
     }
@@ -261,6 +290,32 @@ extension StubHouseUITests {
     /// Measured drags first, then the flicks they replaced as a fallback —
     /// if the drag gesture is not recognised at all, nothing else would move
     /// the content, and the cases that were green on flicks stay green.
+    ///
+    /// ### Each step is checked, and the flicks are no longer unconditional
+    ///
+    /// **Train R002 is why.** Two things went wrong together there and only
+    /// the first was the drag's own fault:
+    ///
+    /// 1. The drag carried momentum (``musicMoreDrag(_:by:vertical:)``), so
+    ///    the measured loop oscillated through all thirty of its steps
+    ///    without ever landing the tab strip inside the page.
+    /// 2. The loop then fell into the flicks **because it had run out of
+    ///    steps**, and the first `swipeDown` carried the page far enough
+    ///    that its `LazyVStack` unbuilt the strip. The next iteration's
+    ///    `guard element.exists` saw nothing and answered false, so
+    ///    ``musicMoreReveal(_:_:flicks:)`` reported an element it had
+    ///    already built as never drawn — "the playlists tab never drew a row
+    ///    at UICTContentSizeCategoryAccessibilityXXXL", about a screen that
+    ///    had drawn it twice.
+    ///
+    /// So the flicks are now reached only by the one condition their own
+    /// comment names: **a drag the scroller did not see**, which is a drag
+    /// after which the element has not moved by even a point. A loop that is
+    /// moving the element but has run out of steps reports what it measured
+    /// and prints the frames, rather than handing a nearly-converged page to
+    /// a gesture that scrolls by an amount nobody asked for. And an element
+    /// a drag has just unbuilt is dragged back the way it came, so what the
+    /// caller gets is a measurement and not the absence of one.
     @MainActor
     func musicMoreBring(
         _ element: XCUIElement,
@@ -268,13 +323,45 @@ extension StubHouseUITests {
         vertical: Bool,
         steps: Int = 10
     ) -> Bool {
-        for _ in 0..<steps {
+        // Starts true: the flicks are the answer to a gesture that did
+        // nothing, and until a drag has been measured and moved nothing,
+        // nothing says the scroller is deaf.
+        var scrollerTookTheDrag = true
+        for step in 0..<steps {
             guard element.exists, view.exists else { return false }
-            if self.musicMoreInside(element.frame, view.frame, vertical: vertical) { return true }
+            let before = element.frame
+            if self.musicMoreInside(before, view.frame, vertical: vertical) { return true }
             let shortfall = self.musicMoreShortfall(
-                element.frame, in: view.frame, vertical: vertical
+                before, in: view.frame, vertical: vertical
             )
             if !self.musicMoreDrag(view, by: shortfall, vertical: vertical) { break }
+            // A lazy container can unbuild the element the drag was for. Put
+            // it back the way it came rather than leaving the caller with no
+            // frame to measure at all.
+            guard element.exists else {
+                _ = self.musicMoreDrag(view, by: -shortfall, vertical: vertical)
+                break
+            }
+            let after = element.frame
+            let moved = vertical
+                ? abs(after.minY - before.minY)
+                : abs(after.minX - before.minX)
+            if moved < 1 {
+                scrollerTookTheDrag = false
+                break
+            }
+            if step == steps - 1 {
+                // Printed, not swallowed: a walk that is moving and still
+                // short after its budget is a number the next train needs.
+                print(
+                    "=== BRING RAN OUT OF STEPS: element \(after) in \(view.frame), "
+                        + "last shortfall \(shortfall), last step moved \(moved) ==="
+                )
+            }
+        }
+        guard !scrollerTookTheDrag else {
+            guard element.exists, view.exists else { return false }
+            return self.musicMoreInside(element.frame, view.frame, vertical: vertical)
         }
         for _ in 0..<steps {
             guard element.exists, view.exists else { return false }
