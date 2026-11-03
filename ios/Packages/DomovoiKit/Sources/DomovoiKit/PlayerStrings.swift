@@ -1,0 +1,189 @@
+import Foundation
+
+/// Every word the player says, transcribed from the Kotlin, each with the file
+/// and line it came from — the shape ``ChatStrings`` and ``FileStrings`` have.
+///
+/// This item draws nothing (MAP §7.3), so every one of these reaches a person
+/// through a consumer's toast or a sentence the lock screen shows. They are
+/// built **here** and never in a view: a view that assembles "casting to
+/// office" out of parts can claim playback that is not happening, which is the
+/// bug `CastOutcome` was written to stop (`CastPlan.kt:232`).
+///
+/// Anything that had to change is marked **iOS-only** and recorded in
+/// `design-notes/ios/overnight/player/IOS-ONLY-STRINGS.md` with its reason.
+public enum PlayerStrings {
+
+    // MARK: - the queue item
+
+    /// `PlayItem.kt:60` — a station's artist line.
+    public static let liveRadio = "live radio"
+
+    // MARK: - a cast that can send nothing (`CastPlan.kt:135-142`)
+
+    public static let castRefusalPhoneOnly =
+        "songs saved on this phone can't play in a room: the domovoi can't "
+        + "read this phone's storage. rooms play from the domovoi's library."
+
+    public static let castRefusalNothingFromHere =
+        "nothing from here on can play in a room: songs saved on this phone "
+        + "stay on the phone, and only library songs can be cast."
+
+    public static let castRefusalLibraryOnly = "only library songs can be cast to a room."
+
+    /// `CastPlan.kt:148`.
+    public static func castRefusalItemPhoneOnly(title: String) -> String {
+        "\"\(title)\" is saved on this phone only; a room can't play it."
+    }
+
+    /// `CastPlan.kt:150`.
+    public static func castRefusalItemNotInLibrary(title: String) -> String {
+        "\"\(title)\" isn't in the library; only library songs can be cast."
+    }
+
+    /// `PlayerController.kt:787` — a tapped queue row while not casting.
+    public static let notCastingToARoom = "not casting to a room"
+
+    /// `PlayerController.kt:788`.
+    public static let thatQueueEntryIsGone = "that queue entry is gone"
+
+    /// `CastPlan.kt:186`'s fallback.
+    public static let nothingHereCanPlayInARoom = "nothing here can play in a room"
+
+    // MARK: - a cast that went (`CastPlan.kt:154-166`)
+
+    /// `"casting to office"`, or `"casting 3 songs to office, paused · left
+    /// out 2 only on this phone"`.
+    public static func sentNote(
+        count: Int,
+        phoneOnly: Int,
+        notInLibrary: Int,
+        room: String,
+        paused: Bool
+    ) -> String {
+        var left: [String] = []
+        if phoneOnly > 0 { left.append("\(phoneOnly) only on this phone") }
+        if notInLibrary > 0 { left.append("\(notInLibrary) not in the library") }
+        let there = paused ? "\(room), paused" : room
+        if left.isEmpty { return "casting to \(there)" }
+        let songs = count == 1 ? "1 song" : "\(count) songs"
+        return "casting \(songs) to \(there) · left out \(left.joined(separator: ", "))"
+    }
+
+    /// `CastPlan.kt:169`.
+    public static func playHereNote(playing: String, room: String, paused: Bool) -> String {
+        paused
+            ? "\(playing) · paused \(room)"
+            : "\(playing) · couldn't pause \(room), it may still be playing"
+    }
+
+    /// The tail `CastOutcome.ToRoom` adds for the room it left
+    /// (`CastPlan.kt:250-252`).
+    public static func alsoPaused(_ room: String) -> String { " · paused \(room)" }
+
+    public static func alsoCouldNotPause(_ room: String) -> String {
+        " · couldn't pause \(room), it may still be playing"
+    }
+
+    // MARK: - a cast that failed (`CastPlan.kt:186-203`)
+
+    public static let couldNotSwitchBack = "couldn't switch back to this device"
+
+    public static func castFailedMusicPlayer(room: String) -> String {
+        "couldn't cast to \(room): its music player on the domovoi server isn't answering "
+        + "(try again in a minute; if it keeps failing, restart the domovoi)"
+    }
+
+    public static func castFailedNoSatellite(room: String) -> String {
+        "couldn't cast to \(room): no room has connected to the domovoi yet, so there's no speaker to play on"
+    }
+
+    public static func castFailedNeedsPairing(room: String) -> String {
+        "couldn't cast to \(room): this phone needs pairing with the domovoi again"
+    }
+
+    public static func castFailedNotInLibrary(room: String) -> String {
+        "couldn't cast to \(room): none of these songs are in the library now (try a library rescan)"
+    }
+
+    public static func castFailedServer(room: String, status: Int) -> String {
+        "couldn't cast to \(room): the domovoi couldn't start it (it said \(status))"
+    }
+
+    public static func castFailedStatus(room: String, status: Int) -> String {
+        "couldn't cast to \(room) (the domovoi said \(status))"
+    }
+
+    public static func castFailedOffline(room: String) -> String {
+        "couldn't cast to \(room): the domovoi can't be reached (offline?)"
+    }
+
+    public static func castFailed(room: String) -> String { "couldn't cast to \(room)" }
+
+    // MARK: - what a change of target did (`CastPlan.kt:247-289`)
+
+    public static let playingOnThisDevice = "playing on this device"
+    public static let onThisDevice = "on this device"
+
+    public static func didNotCast(room: String) -> String {
+        "didn't cast to \(room) · playing on this device instead"
+    }
+
+    public static func castCancelled(room: String) -> String {
+        "cast to \(room) cancelled · playing on this device instead"
+    }
+
+    public static func castCancelledNotPaused(room: String) -> String {
+        "cast to \(room) cancelled, but \(room) couldn't be paused, it may be playing"
+    }
+
+    public static func backPausedCouldNotPause(room: String) -> String {
+        "back on this device, paused · couldn't pause \(room), it may still be playing"
+    }
+
+    public static func playingHerePaused(room: String) -> String {
+        "playing on this device · paused \(room)"
+    }
+
+    public static func backNothingQueued(room: String) -> String {
+        "back on this device · nothing queued · paused \(room)"
+    }
+
+    public static func backRoomWasNotPlaying(room: String) -> String {
+        "back on this device, paused · \(room) wasn't playing"
+    }
+
+    public static func backPausedPaused(room: String) -> String {
+        "back on this device, paused · paused \(room)"
+    }
+
+    // MARK: - what the lock screen says while casting
+    // (`CastAwarePlayer.kt:213-214`)
+
+    /// The title with no reading of the room yet. Never "casting to office"
+    /// over a room that was sent nothing: a cast that can send nothing never
+    /// changes the target (``PlayerCastPlanner/refusal(_:)-5s0v4``).
+    public static func castingTo(room: String) -> String { "casting to \(room)" }
+
+    /// The suffix on the artist line: `"Joy Division · in office"`.
+    public static func inRoom(_ room: String) -> String { "in \(room)" }
+
+    /// `CastAwarePlayer.kt:214` joins the artist and the room with this.
+    public static let metadataSeparator = " · "
+
+    // MARK: - the microphone (`audio/MicArbiter.kt:64-72`)
+
+    public static let micHeldByRoomMode =
+        "This phone is a room right now: room mode has the microphone."
+
+    public static func micAlreadyYours(_ label: String) -> String {
+        "The microphone is already in use by \(label)."
+    }
+
+    public static func micHeldBy(_ label: String) -> String {
+        "The microphone is in use by \(label)."
+    }
+
+    /// `MicArbiter.kt:84`'s fallback, when the holder let go between the
+    /// refusal and the throw.
+    public static let micInUse = "the microphone is in use"
+}
