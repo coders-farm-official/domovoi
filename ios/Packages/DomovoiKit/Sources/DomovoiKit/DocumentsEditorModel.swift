@@ -185,6 +185,12 @@ public final class DocumentsEditorModel {
         text = ""
         loadedText = ""
         saveFailure = nil
+        // A save still in flight for the OLD file is dropped by the epoch
+        // check, which means its completion never clears this — and a Save
+        // button stuck on `saving…` for the new file is a control that
+        // cannot do what it says. (Found by the test that moves the editor
+        // inside a PUT's round trip.)
+        saving = false
         load = .loading
         read()
     }

@@ -118,11 +118,16 @@ final class DocumentsMarkdownToolsTests: XCTestCase {
     /// A stale caret — a keystroke the model has not seen yet — must not
     /// trap: a crash in a formatting button is a worse answer than a mark in
     /// the wrong place.
+    ///
+    /// Only the past-the-end case is testable, and that is the argument for
+    /// taking a `Range`: a reversed selection cannot be built at all —
+    /// `4..<2` traps in the **literal**, in `Range`'s own initialiser, before
+    /// any of this is reached (it did, in this file, on the Mac).
     func testASelectionPastTheEndIsClamped() throws {
         let edit = DocumentsMarkdownTools.apply(try tool("B"), to: "short", selection: 99..<120)
         XCTAssertEqual("short****", edit.text)
-        let backwards = DocumentsMarkdownTools.apply(try tool("B"), to: "short", selection: 4..<2)
-        XCTAssertEqual("shor****t", backwards.text)
+        let heading = DocumentsMarkdownTools.apply(try tool("H1"), to: "short", selection: 99..<120)
+        XCTAssertEqual("# short", heading.text)
     }
 
     /// Characters, not UTF-16 units: a selection counted in code units would
