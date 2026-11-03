@@ -105,6 +105,35 @@ struct NewsPeopleChipRow: View {
         }
         .buttonStyle(.plain)
         .foregroundStyle(picked ? Color.brandFg : Color.primary)
+        // **One element per chip, and the children are not in the tree.**
+        //
+        // `.accessibilityLabel` alone did not do this. Train S005's own
+        // hierarchy shows each chip Button holding *two* `StaticText`
+        // children — the bubble's initial, which ``NewsAvatarBubble`` asks
+        // to be hidden and was exposed anyway, and the name, which arrives
+        // with the **whole pill's frame** rather than the text's:
+        //
+        //     Button, {{16, 217.3}, {113, 44}}, id: 'news-chip-Kamron', label: 'Kamron's news'
+        //       StaticText, {{28, 225.3}, {28, 28}}, label: 'K'
+        //       StaticText, {{16, 217.3}, {113, 44}}, label: 'Kamron'
+        //
+        // So a reader heard the chip, then the initial, then the name —
+        // which is the thing ``NewsStrings/personChip(_:)`` exists to
+        // prevent — and Apple's contrast audit reported `Contrast failed`
+        // against all four names and against the one initial the scroller
+        // clips, because a 113 x 44 "text" element is mostly pill fill and
+        // avatar bubble (measured off that run's screenshot: 242,166,24 and
+        // 206,140,20 inside a picked chip, 1.30:1; 242,242,247 and
+        // 242,166,24 inside an unpicked one, 1.84:1). The glyphs the audit
+        // was meant to read are `brandFg` on `brand` at 8.49:1 and
+        // `Color.primary` on `secondarySystemBackground` at 19.1:1, and the
+        // identically-framed Buttons beside them audited clean — which is
+        // what says the leaf, not the colour, was the finding.
+        //
+        // `children: .ignore` removes the leaves, so the chip is one
+        // element with one label, the way the line below always meant it to
+        // be. The traits under it keep it a button XCUI can find and tap.
+        .accessibilityElement(children: .ignore)
         // **iOS-only** (`IOS-ONLY-STRINGS.md`): Android's chip is a
         // `Surface(onClick:)` whose only child is the name, so the name *is*
         // the control's label. Here the bubble and the name are two views and
@@ -145,6 +174,14 @@ struct NewsAvatarBubble: View {
             )
             // The name is beside it in words; an initial read out twice is
             // noise, which is what ``NewsStrings/personChip(_:)`` is for.
+            //
+            // **This did not take on its own.** Train S005's hierarchy has
+            // the initial in the tree anyway, as a leaf of the chip Button
+            // (``NewsPeopleChipRow/chip(_:stacked:)``) — a hidden view
+            // inside a Button's label is still walked. The chip's
+            // `accessibilityElement(children: .ignore)` is what removes it;
+            // this stays for the rail's own sake and for any caller that
+            // draws the bubble outside a button.
             .accessibilityHidden(true)
     }
 }
