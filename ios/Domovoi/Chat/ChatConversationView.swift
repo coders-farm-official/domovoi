@@ -582,10 +582,52 @@ struct ChatConversationView: View {
     private static let foot = "chat-transcript-foot"
 
     /// What "the transcript moved" means for the scroller: how many messages
-    /// there are, and how long the last one's words are.
+    /// there are, how long the last one's words are, and **whether it is still
+    /// being written**.
+    ///
+    /// ### The third part is train R003's measurement
+    ///
+    /// The `done` event is where a reply stops being pending, and it adds the
+    /// stamp line (`qwen3:8b`), the `more` button and `try again` **below** the
+    /// words — about 167 points of content — while changing neither the count
+    /// nor `content.count`: ``ChatLiveMessage/finish(with:)`` replaces the
+    /// streamed text with the server's kept row, which is the same sentence.
+    /// So the follow-scroll fired for every delta and then not for the one
+    /// change that put something new under the fold.
+    ///
+    /// Both of the trains that could see it measured the same gap, from the
+    /// hierarchy XCTest collected after the reply had finished and the screen
+    /// was still:
+    ///
+    /// | train | container | transcript viewport | content box | foot below the fold |
+    /// |---|---|---|---|---|
+    /// | R002 | `LazyVStack` | 225.7 … 399.7 | -1245.3, 2423.0 → 1177.7 | 778 (of a box that lied by 611) |
+    /// | R003 | `VStack` | 225.7 … 399.7 | -445.3, 1012.3 → **567.0** | **167.3** |
+    ///
+    /// R003's box is true to the point (the content ends at `try again`'s foot
+    /// plus the 16-point pad), so round 3's container change did what it was
+    /// for — and it left this half exactly where R002 found it: 167.3 points,
+    /// which is the stamp, `more` and `try again` of every reply this screen
+    /// has ever drawn, below the fold, on a screen nobody has touched since.
+    /// `testChatMore_ReplyFollowsItsOwnGrowth` cannot see it because it
+    /// measures the reply's own last words against the keyboard's top, and
+    /// those are above the fold; what is under it is what comes after them.
+    ///
+    /// Android follows a **growing** reply with a relative nudge
+    /// (`listState.scrollBy`, `ChatScreen.kt:635`) and a reply that has
+    /// *arrived* with `animateScrollToItem` (`:597`) — two triggers, where
+    /// this screen had one. This is the second of them.
+    ///
+    /// It is one more scroll request and not a repeat: `pending` goes false
+    /// once per reply, over content whose size is now settled and truthful.
+    /// If the two new-chat cases ever wedge again
+    /// (``transcript``'s long note has the history), this is the first thing
+    /// to cut, because it is the only scroll this screen has gained since
+    /// R003 passed them.
     private var tail: String {
         let messages = chat.transcript.messages
-        return "\(messages.count):\(messages.last?.content.count ?? 0)"
+        let last = messages.last
+        return "\(messages.count):\(last?.content.count ?? 0):\(last?.pending ?? false)"
     }
 
     private var windowDivider: some View {
