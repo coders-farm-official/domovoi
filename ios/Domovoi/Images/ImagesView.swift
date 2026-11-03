@@ -238,7 +238,12 @@ struct ImagesView: View {
 
     /// `history`, its monospace label and its cards — `:247-268`.
     @ViewBuilder private func history(_ images: ImagesModel) -> some View {
-        if !images.historyJobs.isEmpty {
+        // ``ImagesModel/showsHistory``, not `!historyJobs.isEmpty` written out
+        // again here: the guard is the one rule on this screen that lives in
+        // a view, so it is the one rule a package test cannot reach, and
+        // train X004's control widened it in place to `count >= 0`. Reading
+        // the model's rule puts it where ImagesTests can hold it.
+        if images.showsHistory {
             // `:248-255` — the label exists only when there is history, which
             // is why it is inside the guard rather than above it.
             Text(ImagesStrings.history)

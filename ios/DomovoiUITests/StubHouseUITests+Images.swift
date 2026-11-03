@@ -539,6 +539,21 @@ extension StubHouseUITests {
         field.tap()
         let asked = "a paper submarine in a bathtub"
         app.typeText(asked)
+
+        // **What the lane row must say, counted before the tap.**
+        //
+        // `containing` matches on `label`, and the field's label is pinned to
+        // the placeholder for VoiceOver's sake
+        // (`ImagesModelPicker.swift:86` — `.accessibilityLabel`), so the text
+        // somebody typed is the field's *value* and never its label. That is
+        // why one `containing(app, asked).exists` is a sound check on the
+        // lane today — and why it would stop being one the day the field
+        // reports its contents as a label as well. The count makes it not
+        // depend on that: whatever the composer contributes, it contributes
+        // the same before and after, and a new match is the lane's.
+        let matches = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label CONTAINS %@", asked))
+        let beforeTap = matches.count
         guard let button = imagesGenerateButton(app) else {
             evidence(app, "images-no-generate-2")
             return XCTFail("there is no generate button")
@@ -549,15 +564,37 @@ extension StubHouseUITests {
         let appeared = queued.waitForExistence(timeout: 30)
         evidence(app, "images-generated")
         XCTAssertTrue(appeared, "the new job never reached the lane")
+        XCTAssertGreaterThan(
+            matches.count,
+            beforeTap,
+            "nothing new on screen carries the prompt — the POST sent it under another key"
+        )
         XCTAssertTrue(
             containing(app, "pending").exists,
             "the new job is on screen without its status word"
         )
+        // A generate that posted the prompt under another key queues a job
+        // whose title is an **empty** string — `laneTitle` is
+        // `prompt ?? model` (`ImagesScreen.kt:341`) and the fixture writes
+        // `said.get("prompt") or ""` (`fixtures/images.py:389`), so the row
+        // arrives with a `pending` pill and no words at all. The two
+        // assertions above are what deny it; a query for the empty label
+        // itself is not asserted on, because SwiftUI puts unlabelled leaves
+        // in the tree on every screen and that query would fail on a healthy
+        // app.
+        //
         // **The prompt is not cleared** — `ImagesScreen.kt:156-170` clears
         // neither it nor the model choice, and a second go at a prompt one
         // word different is the ordinary next thing somebody does.
-        XCTAssertTrue(
-            containing(app, asked).exists,
+        //
+        // The field's **value**. This read `containing(app, asked)` a second
+        // time, which is the same element the lane assertion above is about:
+        // it asserted the lane twice and the composer never, so a screen that
+        // cleared the field would have passed it (2026-11-03, strengthening
+        // after train X004).
+        XCTAssertEqual(
+            asked,
+            field.value as? String,
             "something cleared the prompt that Android keeps"
         )
     }
@@ -586,6 +623,17 @@ extension StubHouseUITests {
         XCTAssertFalse(
             containing(app, StubImages.completedNotInLane).exists,
             "a completed job is in the live lane"
+        )
+        // **The pill, as well as the prompt.** The word above is the row's
+        // title; this is the row's *status*, and the fixture has no other
+        // `completed` job in `…/jobs` — so a lane that drew the pill without
+        // the prompt (a card that fell back to `model`) is caught too. The
+        // history cards below draw no status pill at all
+        // (`ImagesScreen.kt:380-430`), which is what makes the word
+        // discriminating on this screen rather than everywhere.
+        XCTAssertFalse(
+            app.staticTexts["completed"].exists,
+            "a `completed` pill is on screen, so the lane filter took every job"
         )
     }
 
@@ -715,6 +763,23 @@ extension StubHouseUITests {
             stray.count,
             "a row with a width and no height drew a size anyway"
         )
+        // **The exact line the control drew**, named. `params.height ?? 0` is
+        // the shape a dropped "both or neither" takes — a width paired with a
+        // zero — and naming it says what went wrong in the failure message
+        // instead of leaving `stray.count == 1` to be worked out from a tree.
+        XCTAssertFalse(
+            app.staticTexts["flux-schnell · 512 × 0 · 4 steps"].exists,
+            "the width-only row drew `512 × 0`: the size came from a width alone"
+        )
+        // **The section exists when there is history**, which is the other
+        // half of ``testImages_WithNothingGeneratedYetTheComposerIsStillThere()``'s
+        // absence check. On its own, that absence passes for a screen whose
+        // history section was deleted outright; the pair pins the guard from
+        // both sides (`ImagesScreen.kt:247`, ``ImagesModel/showsHistory``).
+        XCTAssertTrue(
+            app.staticTexts[ImagesWords.history].exists,
+            "two history rows on screen with no `history` label over them"
+        )
     }
 
     /// Three tiles of four, and no affordance for the fourth.
@@ -748,6 +813,19 @@ extension StubHouseUITests {
         XCTAssertFalse(
             app.buttons[ImagesWords.tile(position: 4)].exists,
             "a fourth tile is on the card"
+        )
+        // **Three, counted.** Both assertions above name the fourth file and
+        // the fourth position, so a `prefix` widened to five with a card that
+        // happens to have four images would slip past them. The count does
+        // not depend on knowing which tile is the extra one; `kingfisher` is
+        // row 21's word and no other row's (`fixtures/images.py:205`).
+        let kingfisherTiles = app.buttons.matching(
+            NSPredicate(format: "value BEGINSWITH %@", "kingfisher")
+        )
+        XCTAssertEqual(
+            3,
+            kingfisherTiles.count,
+            "the card draws \(kingfisherTiles.count) tiles of four, and Android draws three"
         )
     }
 
@@ -881,6 +959,15 @@ extension StubHouseUITests {
         XCTAssertFalse(
             app.staticTexts[ImagesWords.history].exists,
             "the history label is drawn over no history"
+        )
+        // The guard is one `if` over the label **and** the cards
+        // (`ImagesScreen.kt:247-268`, ``ImagesModel/showsHistory``), so a
+        // widened guard shows both: a heading, and whatever rows the house
+        // did not send. Asserting the label alone leaves a screen that drew
+        // the section's contents from a stale read unmentioned.
+        XCTAssertFalse(
+            containing(app, StubImages.historyPromptWord).exists,
+            "a history card is on a house that has generated nothing"
         )
         XCTAssertFalse(
             containing(app, StubImages.runningPrompt).exists,

@@ -131,6 +131,19 @@ public final class ImagesModel {
     /// The history rows, in the server's order.
     public var historyJobs: [ImagesJob] { history.data ?? [] }
 
+    /// Whether the `history` label and its cards are drawn at all —
+    /// `ImagesScreen.kt:247`, where the label lives **inside** the
+    /// `if (history.isNotEmpty())` and not above it.
+    ///
+    /// Here rather than as an `if` in the view, and that is the whole point
+    /// of it: the view's guard is the one rule on this screen a package test
+    /// could not reach, and train X004's negative control widened it to
+    /// `count >= 0` — a `history` heading over nothing on a house that has
+    /// generated nothing. `ImagesView.swift` reads this, so the rule has a
+    /// test (``ImagesTests/testTheHistorySectionIsDrawnOnlyWhenThereIsHistory``)
+    /// and not only a UI case on a Simulator that may not run.
+    public var showsHistory: Bool { !historyJobs.isEmpty }
+
     /// Which of the five things the engine line says — `:190-212`.
     public var engineLine: ImagesEngineLine {
         ImagesEngineLine.of(state.data, loading: state.loading, error: state.error)

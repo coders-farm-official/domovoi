@@ -785,4 +785,132 @@ final class ImagesTests: XCTestCase {
         XCTAssertNil(model.confirmingDelete, "and so is the row a dialog was asking about")
         model.stop()
     }
+
+    // MARK: - the five breakages of train X004, over the stub house's own rows
+
+    /// The negative control's five edits, each asserted against **the data
+    /// the UI cases actually see** — `fixtures/images.py`'s own `jobs` and
+    /// `history` rows, transcribed, ids and all.
+    ///
+    /// Why this exists next to tests that already cover the same four rules.
+    /// Train X004 broke the app on purpose and reported that none of the five
+    /// owning UI cases caught it. The train's own `summary.json` says why:
+    /// `Executed 3 tests`, and all seventeen `testImages_…` verdicts are
+    /// `not-run` with no per-case log and an empty `att/`. **Not one Images
+    /// case ran.** A case that does not run catches nothing, and nothing in
+    /// the evidence shows any of them to be vacuous — four of the five
+    /// breakages are caught here in the package, where this branch can run
+    /// them tonight without a Simulator or a build slot for a whole app.
+    ///
+    /// The existing rule tests (`testTheLanePredicatesMatchAndroidsForEveryWord`,
+    /// `testTheMetaLineNeedsBothWidthAndHeight`,
+    /// `testAHistoryCardDrawsThreeTilesOfFourAndTheDialogCountsFour`,
+    /// `testTheGenerateBodyIsTwoKeysAndTheTrimmedPrompt`) hold the rules at
+    /// their boundaries with data of their own. This one holds them against
+    /// the fixture, so that a seed edited to stop discriminating — the word
+    /// `quicksilver` moved into a history row, row 22 given a height — fails
+    /// here rather than quietly turning a UI case into a tautology.
+    func testTheFixturesOwnRowsDriveTheLaneTheMetaLineAndTheTiles() throws {
+        // `fixtures/images.py:151-196`.
+        let fixtureJobs = """
+        {"jobs":[
+        {"id":7,"kind":"txt2img","model":"sdxl-turbo","prompt":"a brass orrery on a velvet desk",
+         "params":{"width":1024,"height":1024,"steps":28,"seed":41},
+         "status":"running","pct":42,"status_text":"sampling step 7 of 20"},
+        {"id":8,"kind":"txt2img","model":"flux-schnell","prompt":"a cathedral of folded paper",
+         "params":{"width":512,"height":512,"steps":4,"seed":9001},
+         "status":"failed","error":"the engine ran out of memory"},
+        {"id":9,"kind":"txt2img","model":"sdxl-turbo","prompt":"a quicksilver tide at dusk",
+         "params":{"width":768,"height":768,"steps":20,"seed":5},
+         "status":"completed","pct":100,"result":{"images":["tide-01.png"]}}]}
+        """
+        let jobs = try decode(ImagesJobList.self, fixtureJobs).jobs
+        XCTAssertEqual(3, jobs.count, "the fixture's three rows, or this test is about something else")
+
+        // **Breakage 1** — `inLane` returned true unconditionally, so job 9
+        // was drawn in the live lane.
+        let lane = jobs.filter(\.status.inLane)
+        XCTAssertEqual([7, 8], lane.map(\.id), "the lane is the two that are still happening")
+        XCTAssertFalse(
+            lane.contains { ($0.prompt ?? "").contains("quicksilver") },
+            "a completed job reached the lane"
+        )
+        // And the word is still the discriminator the UI case leans on: it
+        // must be in exactly one row of the fixture, the one that must not be
+        // in the lane.
+        XCTAssertEqual(
+            1,
+            jobs.filter { ($0.prompt ?? "").contains("quicksilver") }.count,
+            "`quicksilver` is no longer the one word that tells the filter apart"
+        )
+
+        // `fixtures/images.py:199-247`.
+        let fixtureHistory = """
+        {"history":[
+        {"id":21,"kind":"txt2img","model":"sdxl-turbo",
+         "prompt":"a kingfisher on a frozen reed",
+         "params":{"width":1024,"height":1024,"steps":28,"seed":773451},
+         "status":"completed","pct":100,
+         "result":{"images":["kingfisher 01.png","kingfisher-02.png","kingfisher-03.png","kingfisher-04.png"]}},
+        {"id":22,"kind":"txt2img","model":"flux-schnell",
+         "prompt":"a tin robot watering a window box",
+         "params":{"width":512,"height":null,"steps":4,"seed":null},
+         "status":"completed","pct":100,"result":{"images":["robot-01.png"]}}]}
+        """
+        let history = try decode(ImagesHistoryList.self, fixtureHistory).history
+        XCTAssertEqual([21, 22], history.map(\.id))
+
+        // **Breakage 2** — a size drawn from a width alone, so row 22 read
+        // `flux-schnell · 512 × 0 · 4 steps`. The exact sabotaged string is
+        // named here because that is the shape the owning UI case now denies
+        // by name too.
+        XCTAssertEqual("flux-schnell · 4 steps", history[1].metaLine)
+        XCTAssertNotEqual("flux-schnell · 512 × 0 · 4 steps", history[1].metaLine)
+        XCTAssertFalse(history[1].metaLine.contains("×"), "half a size is not a size")
+        XCTAssertEqual("sdxl-turbo · 1024 × 1024 · 28 steps · seed 773451", history[0].metaLine)
+
+        // **Breakage 3** — `prefix(4)`, so a fourth tile Android does not
+        // draw. Four images on the row, three names on the card.
+        XCTAssertEqual(4, history[0].imageNames.count)
+        XCTAssertEqual(
+            ["kingfisher 01.png", "kingfisher-02.png", "kingfisher-03.png"],
+            history[0].tileNames
+        )
+        XCTAssertEqual(3, history[0].tileNames.count)
+        XCTAssertFalse(history[0].tileNames.contains("kingfisher-04.png"))
+
+        // **Breakage 4** — `CodingKeys` renamed `prompt` to `text`, so the
+        // POST carried the prompt under a key the plugin does not read and
+        // the queued job came back with none. The key's *name* is the whole
+        // assertion: a body with two keys and the right values under the
+        // wrong names passes a count.
+        let body = ImagesPaths.generateBody(model: "sdxl-turbo", prompt: "a paper submarine in a bathtub")
+        let fields = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        XCTAssertEqual("a paper submarine in a bathtub", fields["prompt"] as? String)
+        XCTAssertNil(fields["text"], "the prompt went out under `text`, which the plugin does not read")
+        XCTAssertEqual(["model", "prompt"], fields.keys.sorted())
+    }
+
+    /// **Breakage 5** — the view's `if` widened to `count >= 0`, so a house
+    /// that has generated nothing grew a `history` heading over nothing.
+    ///
+    /// The guard now lives in ``ImagesModel/showsHistory`` and the view reads
+    /// it, which is the point: in a view it was the one rule on this screen
+    /// that only a Simulator could check, and on the night it mattered the
+    /// Simulator ran none of the cases.
+    func testTheHistorySectionIsDrawnOnlyWhenThereIsHistory() async {
+        let (empty, _, _, _) = rig(jobs: #"{"jobs":[]}"#, history: #"{"history":[]}"#)
+        empty.start()
+        await settleUntil { empty.history.data != nil }
+        XCTAssertTrue(empty.historyJobs.isEmpty)
+        XCTAssertFalse(empty.showsHistory, "a `history` heading over no history")
+        empty.stop()
+
+        let seeded = rig().0
+        seeded.start()
+        await settleUntil { seeded.history.data != nil }
+        XCTAssertEqual(2, seeded.historyJobs.count)
+        XCTAssertTrue(seeded.showsHistory, "history rows with no section to put them in")
+        seeded.stop()
+    }
 }
