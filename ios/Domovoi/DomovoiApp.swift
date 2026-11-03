@@ -41,6 +41,12 @@ struct DomovoiApp: App {
 
     private let model: ShellModel
 
+    /// The alerts' process-wide half — the three engines, the notification
+    /// delegate and the hint row's model (``AlertsAppWiring``, overnight
+    /// `alerts`). Everything it does is in that file; this is the property
+    /// that keeps it alive for the process.
+    private let alerts: AlertsAppWiring
+
     /// A server and token handed in on the command line, for a UI test.
     ///
     /// **Why this exists.** With no server saved the shell is `.local`, so
@@ -156,6 +162,11 @@ struct DomovoiApp: App {
         // the app makes and not something a container does to whoever builds
         // one.
         container.start()
+        // After `container.start()`, because the alerts' first act is a read
+        // through the container's client, and `DomovoiApplication.onCreate`
+        // starts them beside the socket in the same order
+        // (`TimerAlerts.kt:97`).
+        alerts = AlertsAppWiring(container: container)
     }
 
     var body: some Scene {
@@ -183,6 +194,24 @@ struct DomovoiApp: App {
                 // ``Color/brandFg`` on the ink would be 3.08:1 — the fill
                 // role and the text role are two tokens for a reason.
                 .tint(Color.brandInk)
+                // The alerts' hint: the model goes into the environment for
+                // Home's timers card to draw a row from, and the lifecycle
+                // re-reads this phone's notification status on every return
+                // to the foreground (`HomeScreen.kt:241-247`).
+                //
+                // **On the app's root rather than Home's**, which is the one
+                // place this departs from DECISIONS §2's hook 2. Home's root
+                // is `HomeView.swift`, and the modifier carries the explain
+                // card's overlay: a dialog that belongs to a screen inside a
+                // tab is a dialog a tab switch can take away mid-sentence,
+                // and `.accessibilityHidden` behind the scrim then covers
+                // the tab bar too — which is what `.isModal` promises and
+                // what the other `DialogCard` in the app had to be given by
+                // hand (`RouteScreen.swift:196-203`). The read is a status
+                // read and never a prompt, so doing it once at launch asks
+                // nothing of anybody.
+                .environment(\.alertsHintModel, alerts.hint)
+                .alertsHintLifecycle(alerts.hint)
         }
     }
 }
