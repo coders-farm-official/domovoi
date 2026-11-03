@@ -243,7 +243,10 @@ final class ChatMoreDraftModelTests: XCTestCase {
         XCTAssertEqual(sent["device_id"] as? String, "ios-1")
         XCTAssertEqual(model.toast, ChatMoreStrings.savedAsVersion(4))
         XCTAssertNil(model.editing, "the editor closes on a save that went through")
-        XCTAssertTrue(house.seen.current.filter { $0 == "GET /api/chat/drafts/4" }.count >= 2)
+        await settleUntil(
+            { house.seen.current.filter { $0 == "GET /api/chat/drafts/4" }.count >= 2 },
+            "the re-read"
+        )
     }
 
     /// **A 409 is not swallowed.** Somebody else's newer version is on the
@@ -311,7 +314,10 @@ final class ChatMoreDraftModelTests: XCTestCase {
         )
         XCTAssertTrue(model.saved?.checkOK ?? false)
         // Read back, so the version's own list shows the file.
-        XCTAssertTrue(house.seen.current.filter { $0 == "GET /api/chat/drafts/4" }.count >= 2)
+        await settleUntil(
+            { house.seen.current.filter { $0 == "GET /api/chat/drafts/4" }.count >= 2 },
+            "the re-read"
+        )
     }
 
     func testASaveWithNoFormatUsesTheKindsOwn() async throws {

@@ -56,6 +56,7 @@ final class ChatMoreStringsTests: XCTestCase {
         "assistant/docs/DocHeadsUp.kt",
         "assistant/lookup/LookupRules.kt",
         "assistant/docs/DocExtract.kt",
+        "ui/screens/chat/ChatErrors.kt",
     ]
 
     /// One Kotlin literal, and whether the source joins it to the one before

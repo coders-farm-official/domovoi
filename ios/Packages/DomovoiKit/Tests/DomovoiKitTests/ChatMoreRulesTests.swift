@@ -685,8 +685,14 @@ final class ChatMoreRulesTests: XCTestCase {
 
         // A streamed writer's placeholder size, bigger than the file: read to
         // the end rather than refused.
-        let placeholder = Self.wav(pcm: pcm, rate: 16_000, channels: 1, dataSize: 0xFFFF_FFF0)
+        let placeholder = Self.wav(pcm: pcm, rate: 16_000, channels: 1, dataSize: 0x7FFF_FFF0)
         XCTAssertEqual(ChatMoreWav.parse(placeholder)?.data, pcm)
+        // A size with its top bit set is a **negative** size in the format's
+        // own signed field, and is refused rather than clamped — Kotlin's
+        // `if (size < 0) return null` (`ReplyPlayer.kt:47`). It is the one
+        // case where "bigger than the file" and "nonsense" look alike, and
+        // the sane answer is to play nothing.
+        XCTAssertNil(ChatMoreWav.parse(Self.wav(pcm: pcm, rate: 16_000, channels: 1, dataSize: 0xFFFF_FFF0)))
 
         // Not a WAV at all, and a WAV that is not PCM16.
         XCTAssertNil(ChatMoreWav.parse(Data("hello".utf8)))
@@ -838,8 +844,13 @@ final class ChatMoreRulesTests: XCTestCase {
         var form = ChatMoreMultipart(boundary: "B")
         form.add(name: "audio", filename: "a\"\r\nX-Evil: 1\".pcm", bytes: Data([9]))
         let text = try XCTUnwrap(String(data: form.body, encoding: .isoLatin1))
-        XCTAssertFalse(text.contains("X-Evil: 1"))
+        // The words are still in the file name — that is what the caller
+        // asked to send. What matters is that they are not a **header**: the
+        // quote is escaped and the CR LF dropped, so there is no line of its
+        // own for them to start.
+        XCTAssertFalse(text.contains("\r\nX-Evil: 1"))
         XCTAssertTrue(text.contains("filename=\"a\\\"X-Evil: 1\\\".pcm\""))
+        XCTAssertEqual(text.components(separatedBy: "Content-Disposition").count - 1, 1)
     }
 
     func testEachBodyIsFresh() {
@@ -1146,7 +1157,14 @@ final class ChatMoreRulesTests: XCTestCase {
         XCTAssertEqual(ChatMoreDraftBlocks.inline("**bold** and _thin_"), "bold and thin")
         XCTAssertEqual(ChatMoreDraftBlocks.inline("`code` here"), "code here")
         XCTAssertEqual(ChatMoreDraftBlocks.inline("a\t \u{00a0}b"), "a b")
-        XCTAssertEqual(ChatMoreDraftBlocks.inline("\\*not italic\\*"), "*not italic*")
+        // An escaped asterisk keeps its backslashes: the italic pass runs
+        // **before** the escape pass (`DraftBlocks.kt:26-33`), eats the pair
+        // of asterisks, and leaves the escape regex nothing to match. Ported
+        // order, ported result — the reader of a draft sees the same thing on
+        // both phones, which is the point.
+        XCTAssertEqual(ChatMoreDraftBlocks.inline("\\*not italic\\*"), "\\not italic\\")
+        // An escape the italic pass does not touch is undone, as it should be.
+        XCTAssertEqual(ChatMoreDraftBlocks.inline(#"\#heading"#), "#heading")
     }
 
     func testTheKindsNameAndTheVersionPill() {

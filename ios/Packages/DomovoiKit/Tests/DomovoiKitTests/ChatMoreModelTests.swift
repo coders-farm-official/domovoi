@@ -285,8 +285,11 @@ final class ChatMoreModelTests: XCTestCase {
     func testEveryPictureOfEveryRowIsAskedForOnce() async {
         let (model, house, _) = rig()
         await open(model, 7)
-        await settleUntil({ model.pictures.picture("p2") != nil }, "the pictures")
-        XCTAssertEqual(model.pictures.picture("p1"), .image(Data(repeating: 0x78, count: 200)))
+        await settleUntil(
+            { model.pictures.picture("p1") == .image(Data(repeating: 0x78, count: 200))
+                && model.pictures.picture("p2") != .loading },
+            "the pictures"
+        )
         model.refresh()
         await everythingLands()
         XCTAssertEqual(
@@ -374,9 +377,9 @@ final class ChatMoreModelTests: XCTestCase {
         XCTAssertNil(model.cardError)
         XCTAssertTrue(model.internetAllowed, "\u{201C}in this chat\u{201D} sets the thread's own flag")
         XCTAssertEqual(reopened.current, 1, "the transcript is re-read once")
-        XCTAssertEqual(
-            house.seen.current.filter { $0 == "GET /api/chat/threads/7/messages" }.count, 2,
-            "the extras are read again too"
+        await settleUntil(
+            { house.seen.current.filter { $0 == "GET /api/chat/threads/7/messages" }.count == 2 },
+            "the extras being read again"
         )
         let sent = try? body(of: "/api/chat/threads/7/lookups/12")
         XCTAssertEqual(sent?["decision"] as? String, "chat")
@@ -628,10 +631,12 @@ final class ChatMoreModelTests: XCTestCase {
         XCTAssertTrue(model.talk(pcm: Self.clip))
         await settleUntil({ gate.arrived.current }, "the voice request")
         // Inside the round trip: the request has reached the server and its
-        // answer has not come back.
+        // answer has not come back. Thread 8's own reads queue behind the
+        // held one — the loader serves one request at a time — so they are
+        // waited for after the release rather than before it.
         model.open(thread: 8)
-        await settleUntil({ model.jobs.first?.id == "j7" }, "thread 8")
         gate.release()
+        await settleUntil({ model.jobs.first?.id == "j7" }, "thread 8")
         await everythingLands()
 
         XCTAssertNil(model.replyAudio, "thread 7's audio did not follow the person to thread 8")

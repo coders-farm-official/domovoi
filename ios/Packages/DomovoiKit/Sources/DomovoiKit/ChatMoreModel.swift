@@ -161,6 +161,11 @@ public final class ChatMoreModel {
         headsUpPicks = [:]
         cardReply = ""
         cardError = nil
+        // **Cleared here as well as in ``close()``.** A card answer or a turn
+        // in flight for the old thread returns early on the epoch guard and
+        // never reaches `answering = false`, so a thread opened mid-answer
+        // used to arrive with every card and every job button dead.
+        answering = false
         replyAudio = nil
         talkPhase = .idle
         talkNote = nil
