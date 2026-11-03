@@ -16,6 +16,16 @@ import SwiftUI
 /// window divider where the model's memory began, a reply that arrives a word
 /// at a time, "try again" on a reply that can be replaced, and the composer.
 ///
+/// And, since the ChatMore item, the rest of a conversation: the pictures and
+/// documents a row carries, a reply's source chips and the page sheet behind
+/// them, draft cards and the canvas (versions, what changed, a hand edit, a
+/// save, the file, read aloud), long-document jobs with their progress and
+/// "carry on", the mid-answer `lookup_permission` card and its three answers,
+/// the per-thread internet switch, heads-up picks, report-a-message, and hold
+/// to talk with the reply spoken back in the house's own voice. Every one of
+/// those is drawn by a `ChatMore…` view and decided by ``ChatMoreModel``;
+/// `design-notes/ios/overnight/chatmore/MAP.md` is the port, file by file.
+///
 /// ### What is not, and why there is no control for it
 ///
 /// **The place chip and the place picker.** Android's Chat is one tab over two
@@ -25,22 +35,35 @@ import SwiftUI
 /// said where it bites instead, in the delete confirmation
 /// (``ChatStrings/serverDeleteNote``).
 ///
-/// **The per-thread internet switch** (`ServerInternetChip`,
-/// `ChatScreen.kt:1265`). The toggle itself would be honest — `chat.py:1823`
-/// allows a lookup on `internet_allowed` alone, with no client round trip —
-/// but this app cannot answer a mid-answer `lookup_permission` card, so a chat
-/// told it may go online can still stop and wait for an answer that never
-/// comes. ``ChatModel`` offers no setter for it, which is the rule working: a
-/// control that cannot do what it says is not drawn
-/// ([[no-misleading-controls]]). The thread's `used_internet` **is** read, so
-/// a row can still say that one went online.
+/// **The paperclip.** Pictures and documents a row already has are drawn
+/// (``ChatMoreRowTop``), and neither can be **sent**: ``ChatModel/send(_:)``
+/// takes a `String` and ``ChatPath/sendBody(content:deviceID:)`` writes
+/// `{content, device_id}` — there is no `images` and no `documents` key, and
+/// both are files the ChatMore item was not allowed to edit. An attach button
+/// whose message can never carry the attachment is exactly the control
+/// [[no-misleading-controls]] forbids, so there is none; `DECISIONS.md`'s
+/// shared change 1 is what adds it. The vision refusal is still worded for a
+/// picture that came from the dashboard or from Android
+/// (``ChatModel/visionRefusal``).
 ///
-/// **Pictures, voice, documents, drafts, letters, long-document jobs, lookups,
-/// report-a-message and heads-up picks.** Each is a milestone away rather than
-/// a decision to skip, and `ANDROID-CHAT-MAP.md` says which milestone.
-/// ``ChatLiveMessage/hasAttachments`` decodes for all four of the row-level
-/// ones and nothing here draws it — the same omission ``ChatModel`` records at
-/// the other end, written down where the code is.
+/// **The Revise box on a draft card, "send to home", print, and letters.**
+/// The first sends `revise_draft` on a message, which is the same missing
+/// send-body key; print needs `GET /api/printers` and Android itself draws no
+/// print without a printer (`ChatScreen.kt:1013`), so leaving it out is
+/// Android's own behaviour rather than a divergence; "send to home" posts to
+/// the Documents item's route and a saved draft is already in the house; and
+/// `/letters/read` hands back a transcript that Android's **phone** model then
+/// explains (`PhoneLetters.kt`) — this app has one place and no phone model,
+/// so there is nowhere for that transcript to become an answer.
+///
+/// **Chat export.** `PhoneChatExport.kt:24` zips the **phone's own** chats and
+/// puts nothing of the house in the file. There are no phone chats here, so
+/// there is nothing to export; the house's conversation is already shareable
+/// as text from the title row.
+///
+/// **A heads-up card's `choose_another`.** It re-opens the picture picker, and
+/// there is no picker — ``ChatMoreHeadsUp/offerable`` drops it and the card
+/// says nothing about it.
 ///
 /// ### Every decision is the model's
 ///
