@@ -70,15 +70,24 @@ final class ManualStoreTests: XCTestCase {
         }
     }
 
+    /// - Parameter house: pass the house a previous rig built to keep its
+    ///   answers. A fresh ``House`` installs a fresh dispatcher, which
+    ///   silently makes an unreachable server reachable again — two of these
+    ///   tests are about what happens when it is **not**.
     private func rig(
         server address: String? = nil,
-        cache: ManualCacheBox = ManualCacheBox()
+        cache: ManualCacheBox = ManualCacheBox(),
+        house: House? = nil
     ) -> (ManualStore, House, ManualCacheBox, InMemoryShellStore) {
-        let house = House()
-        house.install()
+        let house = house ?? {
+            let fresh = House()
+            fresh.install()
+            return fresh
+        }()
         let url = address ?? server
         let store = InMemoryShellStore(serverURL: url, token: "household-abc")
         store.trustServer(url, identity: TestIdentity.real.pin)
+        store.trustServer(otherServer, identity: TestIdentity.real.pin)
         let container = AppContainer(
             store: store,
             vault: TokenVault(items: InMemoryKeychain()),
@@ -190,7 +199,7 @@ final class ManualStoreTests: XCTestCase {
         _ = await first.load()
         house.manual.set(StubURLProtocol.Answer(error: URLError(.notConnectedToInternet)))
 
-        let (second, _, _, _) = rig(cache: box)
+        let (second, _, _, _) = rig(cache: box, house: house)
         let (_, load) = await second.load()
         XCTAssertEqual(.ready(true, true), Self.shape(load))
         XCTAssertEqual("the house keeps its own manual", sentence(load))
@@ -208,7 +217,7 @@ final class ManualStoreTests: XCTestCase {
         XCTAssertEqual([ManualStore.key(for: server)], Array(box.keys))
 
         house.manual.set(StubURLProtocol.Answer(error: URLError(.cannotFindHost)))
-        let (second, _, _, _) = rig(server: otherServer, cache: box)
+        let (second, _, _, _) = rig(server: otherServer, cache: box, house: house)
         let (address, load) = await second.load()
         XCTAssertEqual(otherServer, address)
         XCTAssertEqual(
@@ -223,7 +232,7 @@ final class ManualStoreTests: XCTestCase {
         let (store, _, _, shellStore) = rig(cache: box)
         _ = await store.load()
         XCTAssertNotNil(store.current())
-        _ = shellStore.setServerURL(otherServer)
+        XCTAssertTrue(shellStore.setServerURL(otherServer), "the book took the new address")
         XCTAssertNil(
             store.current(),
             "the document in memory belongs to the house it was read from"

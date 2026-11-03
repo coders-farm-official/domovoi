@@ -37,7 +37,11 @@ final class ManualRulesTests: XCTestCase {
         XCTAssertTrue(shownInApp(nil))
         XCTAssertTrue(shownInApp("app"))
         XCTAssertFalse(shownInApp("dashboard"))
-        XCTAssertTrue(shownInApp("kiosk"), "an `only` nobody knows is shown, as Kotlin's is")
+        XCTAssertFalse(
+            shownInApp("kiosk"),
+            "`only` is an allow-list of one reader, not a deny-list: a block addressed to a "
+                + "reader this app is not is not drawn here, which is Kotlin's `only == \"app\"`"
+        )
     }
 
     // MARK: - the wake word

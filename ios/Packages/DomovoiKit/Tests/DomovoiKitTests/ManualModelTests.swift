@@ -288,9 +288,12 @@ final class ManualModelTests: XCTestCase {
         model.start()
         await settleUntil({ model.doc != nil && model.plugins.data != nil })
         let playlists = try? XCTUnwrap(model.doc?.piece("playlists"))
-        XCTAssertNil(
-            model.next(after: playlists ?? ManualPiece()),
-            "radio is hidden and the alias is not a sibling to walk to"
+        XCTAssertEqual(
+            "pl-alias",
+            model.next(after: playlists ?? ManualPiece())?.id,
+            "the hidden plugin page is stepped over — the walk is the topic's list filtered "
+                + "by what this server shows, aliases included (Kotlin's `siblings`, "
+                + "which excludes an alias from search but not from the ring)"
         )
         house.plugins.set(
             #"{"plugins":[{"slug":"radio","enabled":true,"status":"degraded"}]}"#
