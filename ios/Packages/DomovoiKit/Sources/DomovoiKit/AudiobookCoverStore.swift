@@ -127,7 +127,10 @@ public final class AudiobookCoverStore {
     /// client turns into a ``DomovoiError`` carrying the status. Read off the
     /// status rather than the sentence: the wording is the server's to change
     /// and the status is the contract.
-    public static func isNotFound(_ error: any Error) -> Bool {
+    /// `nonisolated` so it can be this type's default argument: a
+    /// `@MainActor` static would lose its actor on the way into a
+    /// `@Sendable` closure parameter, which the compiler refuses.
+    public nonisolated static func isNotFound(_ error: any Error) -> Bool {
         (error as? DomovoiError)?.failure?.status == 404
     }
 

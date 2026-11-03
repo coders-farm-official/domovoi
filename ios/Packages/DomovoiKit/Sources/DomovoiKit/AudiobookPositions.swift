@@ -41,7 +41,8 @@ public struct BookServerKey: Codable, Sendable, Equatable {
     /// two spellings of one house are one key.
     public static func of(serverURL: String?, pin: ServerIdentity.Pin?) -> BookServerKey {
         let url = serverURL.flatMap { ServerCredentials.isBlank($0) ? nil : $0 }
-        let mark = pin?.fingerprint.flatMap { ServerCredentials.isBlank($0) ? nil : $0 }
+        var mark = pin?.fingerprint
+        if let held = mark, ServerCredentials.isBlank(held) { mark = nil }
         return BookServerKey(address: IdentityGate.pinKey(url), fingerprint: mark)
     }
 
