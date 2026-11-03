@@ -38,7 +38,12 @@ public final class ImagesPictureModel {
     /// error page served with a 200 — a thing a reverse proxy in front of a
     /// house does. The same guard, and the same number, as
     /// ``FileImageModel/smallestImage`` and ``VideoPosterStore/smallestImage``.
-    public static let smallestImage = 64
+    /// `nonisolated`, unlike ``FileImageModel/smallestImage``: a static on a
+    /// `@MainActor` class is actor-isolated, so a `@Sendable` fetch closure —
+    /// which is where the floor is most naturally compared against — cannot
+    /// read it under Swift 6 strict concurrency. A constant has no isolation
+    /// to protect.
+    public nonisolated static let smallestImage = 64
 
     public private(set) var load: FileImageLoad = .loading
 
