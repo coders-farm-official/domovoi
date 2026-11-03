@@ -325,7 +325,7 @@ struct SettingsSectionScreen: View {
             SettingsSectionNotBuilt()
         case "app-layout":
             // slot: app-layout
-            SettingsSectionNotBuilt()
+            SystemSettingsLayoutPanel(model: model)
         case "wake-words":
             // slot: wake-words
             SettingsSectionNotBuilt()
@@ -349,13 +349,13 @@ struct SettingsSectionScreen: View {
             SettingsSectionNotBuilt()
         case "about":
             // slot: about
-            SettingsSectionNotBuilt()
+            SystemSettingsAboutPanel(model: model)
         case "health":
             // slot: health
             SettingsSectionNotBuilt()
         case "advanced":
             // slot: advanced
-            SettingsSectionNotBuilt()
+            SystemSettingsAdvancedPanel(model: model)
         default:
             SettingsSectionNotBuilt()
         }

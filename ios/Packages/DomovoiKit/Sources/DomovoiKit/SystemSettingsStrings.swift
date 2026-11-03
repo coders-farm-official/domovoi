@@ -111,6 +111,20 @@ public enum SystemSettingsStrings {
     public static let showDetails = "show details"
     public static let hideDetails = "hide details"
 
+    /// What the shell's toast says after a copy (`ProblemReports.kt:86`,
+    /// `:102`), both verbatim.
+    ///
+    /// Added by the view builder, because the surface turned out to exist:
+    /// the map was written against `ShellModel.swift:23-26` ("no toast
+    /// producer"), and I1-C part 3 has since built one
+    /// (``ShellModel/showToast(_:)``, drawn app-wide at
+    /// `AppShellView.swift:36`). A copy is a momentary acknowledgement with no
+    /// state behind it, which is exactly what a toast is for — unlike the
+    /// restored phone bar, which is a state change and gets a line on the
+    /// screen that changed. The split is argued in this item's `DECISIONS.md`.
+    public static let problemReportCopied = "problem report copied"
+    public static let copied = "copied"
+
     /// The confirm dialog (`ProblemReports.kt:107-112`).
     public static let clearProblemsTitle = "clear problem reports?"
     public static let clearProblemsBody = "Removes every report saved on this phone."
