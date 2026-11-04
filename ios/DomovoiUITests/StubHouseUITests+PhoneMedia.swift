@@ -1048,6 +1048,18 @@ extension StubHouseUITests {
     /// The floor is printed rather than pinned: the device page carries both
     /// anonymous and named findings of that headline, and a pinned total is
     /// what let a new contrast finding in unnoticed once already.
+    ///
+    /// ### What train I002 reported, and why it was right
+    ///
+    /// `Text clipped` against `quenlo lullaby.mp3`, which is not the headline
+    /// this case excuses and so failed it — correctly. The row's name had
+    /// 79.0 points of width and 406.7 of height in a 361-point row at AX5:
+    /// one character per line, under a scaled 40-point glyph column and a
+    /// scaled 48-point upload box. ``PhoneMediaRowView`` lays the row out as
+    /// a column at an accessibility size now, so the prediction stops at the
+    /// source rather than being added to an excuse list. Nothing here
+    /// changed for it; ``testPhoneMedia_TheDeviceSideTextGrowsAtAX5`` is
+    /// where the widths are pinned.
     @MainActor
     @available(iOS 17.0, *)
     func testPhoneMedia_TheDeviceSideHasNoAuditFindings() throws {
@@ -1080,27 +1092,49 @@ extension StubHouseUITests {
     /// at `large` and at AX5.
     ///
     /// The companion to the classification above, and the test that actually
-    /// decides whether those thirteen findings were defects. Five code sites
-    /// cover all thirteen: ``PhoneMediaRowView``'s title (`.subheadline`) and
-    /// its meta and duration (`.caption`), ``PhoneDeviceChrome``'s count line
-    /// and the too-big note. (That note is **gone** since the 2026-11-03
-    /// batch — D43 removed the ceiling and this unit removed its two
-    /// branches — so one of the thirteen leaves is no longer drawn. The
-    /// count is not pinned here, which is the whole point of classifying by
-    /// signature.) A folder's name is the sixth, and it is
-    /// the row title drawn inside a `Button` rather than a combined row —
-    /// worth its own measurement because the wrapper differs.
+    /// decides whether those findings were defects. Four code sites cover
+    /// them: ``PhoneMediaRowView``'s title (`.subheadline`) and its meta and
+    /// duration (`.caption`), and ``PhoneDeviceChrome``'s count line. A
+    /// folder's name is a fifth and the video row's name a sixth — both are
+    /// row titles drawn inside a `Button` rather than inside a combined row,
+    /// and the wrapper is worth its own measurement.
+    ///
+    /// ### What train I002 found, and what this case got wrong about it
+    ///
+    /// I002 reported `Text clipped` against `quenlo lullaby.mp3` and this
+    /// case passed anyway. **It was a real defect and this case was the
+    /// reason nobody saw it**, in two ways, both now closed:
+    ///
+    /// 1. **It measured heights only.** At AX5 the title had 79.0 points of
+    ///    width and 406.7 of height in a 361-point row (R005's figures): one
+    ///    character per line, which is exactly the ratio a height-only check
+    ///    reads as healthy growth. Widths are recorded too now, and the AX5
+    ///    assertions are a floor on the title's width, a ceiling on its
+    ///    height in lines, and a floor on the meta's width.
+    /// 2. **`compared >= 2` let it pass having measured the wrong two.** In
+    ///    I002 the twenty-four drags left the device list at 14% and only
+    ///    `count` and `Trips` were ever built, neither of which is squeezed.
+    ///    `quenlo lullaby.mp3` and `zarbis dune ride.mp4` are **required**
+    ///    leaves now, at both sizes, and a run that cannot reach one prints
+    ///    the tree and fails.
+    ///
+    /// The fix measured is ``PhoneMediaRowView``'s: at an accessibility size
+    /// the row is a column, the glyph is above the name and the meta and
+    /// duration stack, so the name has the row's width.
+    ///
+    /// The `too-big` leaf is **gone** with the note it matched — D43 removed
+    /// the ceiling and this unit removed its two branches — and the zarbis
+    /// title takes its place in the list.
     ///
     /// Matched on `.staticTexts` rather than `.any`, which is this file's
-    /// habit elsewhere: every one of the thirteen was reported as `type=48`,
+    /// habit elsewhere: every one of the findings was reported as `type=48`,
     /// and an `.any` query would take the enclosing row or button — a
     /// different element from the one the audit flagged, and one that grows
     /// for its own reasons.
     ///
-    /// A leaf that cannot be found is skipped, not failed, because the fake
-    /// library's foot is unbuilt at AX5; the case fails instead if fewer than
-    /// two leaves could be compared, so it can never pass by measuring
-    /// nothing.
+    /// A leaf that is not required and cannot be found is skipped rather
+    /// than failed; the required ones can never be skipped, which is what
+    /// stops this passing on a measurement of nothing.
     ///
     /// ### Why it no longer waits for a row, and no longer swipes the app
     ///
@@ -1135,50 +1169,63 @@ extension StubHouseUITests {
             ("row-title", "label == 'quenlo lullaby.mp3'"),
             ("row-meta", "label BEGINSWITH '3.0 MB · '"),
             ("row-duration", "label == '3:34'"),
+            ("video-title", "label == 'zarbis dune ride.mp4'"),
             ("folder-name", "label == 'Trips'"),
             ("count", "label BEGINSWITH 'showing 5 of'"),
-            ("too-big", "label BEGINSWITH 'too big to upload from a phone'"),
         ]
+        // The two squeezed titles and the one-line folder name they are
+        // measured against. A run that cannot build all three measured
+        // nothing about the defect I002 found and must say so.
+        let required = ["row-title", "video-title", "folder-name"]
 
-        /// Flick the device list to its foot, taking each leaf's height the
+        /// Drag the device list to its foot, taking each leaf's FRAME the
         /// first time it exists.
         ///
         /// The drag is two **coordinates**, not `list.swipeUp()`, and they
-        /// are worked out once from the list's frame before the first flick.
+        /// are worked out once from the list's frame before the first drag.
         /// An `XCUIElement` is re-resolved on every use, and the only handle
         /// on this `ScrollView` is the header it contains — a header that is
         /// in a `LazyVStack` and unbuilds the moment it scrolls off, so the
-        /// second flick would have had nothing to send a swipe to.
-        func heights(_ app: XCUIApplication, _ frame: CGRect) -> [String: CGFloat] {
+        /// second drag would have had nothing to send a swipe to. The frame
+        /// itself does not move while the content scrolls, so one reading of
+        /// it is enough.
+        ///
+        /// **Inset a tenth of the band, not 16 points.** I002's twenty-four
+        /// drags moved the list to 14% of 2995 points, which is about one
+        /// drag's worth: a grab 16 points inside a band whose own edges are
+        /// the stub launch chrome above and the phone bar below lands on
+        /// those instead of on the list. A longer press, too — 0.1s is short
+        /// enough to be taken as a flick and leave momentum out of this
+        /// case's control.
+        func leafFrames(_ app: XCUIApplication, _ band: CGRect, _ label: String) -> [String: CGRect] {
             let origin = app.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
-            let from = origin.withOffset(
-                CGVector(dx: frame.midX, dy: frame.maxY - 16)
-            )
-            let to = origin.withOffset(
-                CGVector(dx: frame.midX, dy: frame.minY + 16)
-            )
-            var out: [String: CGFloat] = [:]
-            // A press-then-drag, not a flick: a flick's momentum carries it
-            // over rows, and at AX5 a row stepped over is a leaf that was
-            // never built and so never measured. It also moves only the drag
-            // distance, hence a count this high — at AX5 the viewport is
-            // under 180 points and the device list's content is 2995.
-            let flicks = 24
-            for flick in 0...flicks {
+            let inset = max(24, band.height * 0.1)
+            let from = origin.withOffset(CGVector(dx: band.midX, dy: band.maxY - inset))
+            let to = origin.withOffset(CGVector(dx: band.midX, dy: band.minY + inset))
+            var out: [String: CGRect] = [:]
+            // At AX5 the viewport is under 180 points and the list's content
+            // is 2995, and one drag moves the band's height less two insets.
+            let drags = 40
+            var used = 0
+            for drag in 0...drags {
                 for (leaf, predicate) in leaves where out[leaf] == nil {
                     let found = app.staticTexts
                         .matching(NSPredicate(format: predicate))
                         .firstMatch
-                    if found.exists { out[leaf] = found.frame.height }
+                    if found.exists { out[leaf] = found.frame }
                 }
-                if out.count == leaves.count { break }
-                if flick < flicks { from.press(forDuration: 0.1, thenDragTo: to) }
+                used = drag
+                if required.allSatisfy({ out[$0] != nil }) { break }
+                if drag < drags { from.press(forDuration: 0.3, thenDragTo: to) }
             }
+            print("PHONEMEDIA SCALE [\(label)] band=\(band) inset=\(inset) drags=\(used)"
+                  + " built=\(out.keys.sorted())")
             return out
         }
 
         phoneReset()
-        var measured: [String: [String: CGFloat]] = [:]
+        var measured: [String: [String: CGRect]] = [:]
+        var rowWidth: [String: CGFloat] = [:]
         for (label, mode) in [
             ("large", Self.ordinaryTypeSize),
             ("AX5", "UICTContentSizeCategoryAccessibilityXXXL"),
@@ -1197,34 +1244,73 @@ extension StubHouseUITests {
                 list.waitForExistence(timeout: 15),
                 "the device page's list is not a scroll view at \(label)"
             )
-            let here = heights(app, list.frame)
+            let band = list.frame
+            // The row's own width: the list less the `LazyVStack`'s 16-point
+            // padding on each side (``PhoneDeviceBody``). About 361 on the
+            // iPhone the trains run.
+            rowWidth[label] = band.width - 32
+            let here = leafFrames(app, band, label)
             evidence(app, "phonemedia-scale-\(label)")
             measured[label] = here
-            for (leaf, height) in here.sorted(by: { $0.key < $1.key }) {
-                print("PHONEMEDIA SCALE [\(label)] \(leaf) height=\(height)")
+            for (leaf, frame) in here.sorted(by: { $0.key < $1.key }) {
+                print("PHONEMEDIA SCALE [\(label)] \(leaf) w=\(frame.width) h=\(frame.height)")
             }
+            // The tree, not a sentence about what is missing: a required leaf
+            // that was never built is a case that measured nothing, and the
+            // only useful evidence is what IS there.
+            let missing = required.filter { here[$0] == nil }
+            if !missing.isEmpty {
+                print("=== PHONEMEDIA SCALE [\(label)] NEVER BUILT \(missing) — tree follows ===")
+                print(app.debugDescription)
+            }
+            XCTAssertEqual(
+                [], missing,
+                "at \(label) the list never reached \(missing) — the squeeze is on those rows,"
+                    + " so a run without them proves nothing (I002 passed on count and Trips alone)"
+            )
             app.terminate()
         }
 
         let small = measured["large"] ?? [:]
         let big = measured["AX5"] ?? [:]
-        var compared = 0
         var stuck: [String] = []
-        for (leaf, height) in small.sorted(by: { $0.key < $1.key }) {
+        for (leaf, frame) in small.sorted(by: { $0.key < $1.key }) {
             guard let grown = big[leaf] else { continue }
-            compared += 1
             // 1.8 is the factor `testTheFilesListTextGrowsAtAX5` settled on
             // over the same two text styles: `large` to AX5 is about three
             // times the line height, and a leaf that wrapped already at
             // `large` grows by less than its font does.
-            if grown < height * 1.8 { stuck.append("\(leaf) \(height)->\(grown)") }
+            if grown.height < frame.height * 1.8 {
+                stuck.append("\(leaf) \(frame.height)->\(grown.height)")
+            }
         }
         XCTAssertEqual([], stuck, "a leaf Apple flagged really does not scale")
-        XCTAssertGreaterThanOrEqual(
-            compared,
-            2,
-            "nothing could be compared, so this proved nothing: \(small) / \(big)"
+
+        // ---- the shape of the AX5 row, which height alone cannot see -----
+        let inner = rowWidth["AX5"] ?? 0
+        XCTAssertGreaterThan(inner, 0, "the AX5 list had no width")
+        for leaf in ["row-title", "video-title"] {
+            let box = try XCTUnwrap(big[leaf], "\(leaf) was required and is not here")
+            XCTAssertGreaterThanOrEqual(
+                box.width, inner * 0.75,
+                "\(leaf) is \(box.width) wide in a \(inner)-point row: the trailing boxes are"
+                    + " still taking the name's width (I002 measured 79.0)"
+            )
+        }
+        let line = try XCTUnwrap(big["folder-name"]).height
+        let title = try XCTUnwrap(big["row-title"]).height
+        XCTAssertLessThanOrEqual(
+            title, line * 3,
+            "the title is \(title) points against a \(line)-point line, so it is wrapping to"
+                + " four lines or more — 406.7 was one character per line in I002"
         )
+        if let meta = big["row-meta"] {
+            XCTAssertGreaterThan(
+                meta.width, 150,
+                "the meta line is \(meta.width) wide, which is the one-character-per-line"
+                    + " shape (36.3 in R005)"
+            )
+        }
     }
 }
 

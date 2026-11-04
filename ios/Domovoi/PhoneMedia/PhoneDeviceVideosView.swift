@@ -192,6 +192,13 @@ struct PhoneDeviceVideosView: View {
 
 /// One phone video: a poster, a play badge, and the caption Android draws —
 /// the name and how long it runs (`LocalMediaScreens.kt:389`).
+///
+/// ### The caption stacks at an accessibility type size
+///
+/// The same squeeze ``PhoneMediaRowView`` was measured with in train I002: a
+/// caption that wraps beside a trailing `@ScaledMetric` 48-point upload box
+/// (about 135 points at AX5) in a tile about 361 wide. The box keeps scaling
+/// and moves under the caption instead, so the name has the tile's width.
 struct PhoneVideoTile: View {
 
     let item: PhoneMediaItem
@@ -228,7 +235,7 @@ struct PhoneVideoTile: View {
             .accessibilityLabel(item.name)
             .accessibilityHint(item.isDir ? FileStrings.folder : VideoStrings.play)
 
-            HStack(alignment: .top, spacing: 6) {
+            captionLayout {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(item.name)
                         .font(.caption)
@@ -240,7 +247,10 @@ struct PhoneVideoTile: View {
                             .foregroundStyle(Color.fgMuted)
                     }
                 }
-                Spacer(minLength: 2)
+                .frame(maxWidth: captionMaxWidth, alignment: .leading)
+                // Horizontal branch only: inside a `VStackLayout` a `Spacer`
+                // is vertical padding, not a gap beside the caption.
+                if !typeSize.isAccessibilitySize { Spacer(minLength: 2) }
                 // One branch, not two: ``PhoneUploadModel/offersUpload(_:)``
                 // is `!item.isDir` since the transfers unit's streaming
                 // upload took the 64 MiB ceiling out, so the `else` that drew
@@ -258,6 +268,25 @@ struct PhoneVideoTile: View {
         // hundred PhotoKit requests, which is what a `.task` on a parent
         // would do.
         .task(id: assetID) { if let assetID { posters.want(assetID) } }
+    }
+
+    /// The app's pattern for a row that changes shape; the same one
+    /// ``PhoneMediaRowView`` uses.
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    /// The caption and the upload box: a row, or a column at an
+    /// accessibility size.
+    private var captionLayout: AnyLayout {
+        typeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 6))
+            : AnyLayout(HStackLayout(alignment: .top, spacing: 6))
+    }
+
+    /// Flexible only in the vertical branch, so the ordinary tile is laid out
+    /// exactly as it was. `CGFloat.infinity` spelt out rather than
+    /// `.infinity` in a ternary with `nil`.
+    private var captionMaxWidth: CGFloat? {
+        typeSize.isAccessibilitySize ? CGFloat.infinity : nil
     }
 
     /// The asset this tile's poster belongs to, or nil for a video in a
