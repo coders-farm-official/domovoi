@@ -1175,9 +1175,23 @@ extension StubHouseUITests {
              // element that is correctly absent.
              StationsWords.importIsAnAdminJob,
              StationsWords.tagsLabel]
+        // `firstFavourite` is here for the Recent card's **second** row, not
+        // for the Favorites card: the fixture plays Kestrel 01 as well as
+        // `Played Once Gull`, so `last 3` holds two station names and only
+        // one of them was ever measured. Train I004's audit named the other
+        // ("Dynamic Type font sizes are partially unsupported", `(70.0,
+        // 750.5, 134.0, 18.0)`, inside the viewport whose foot was 770) and
+        // ``StationsAudit/measuredLeaves`` had no answer for it, which is
+        // what made that case red. It is the same `Text(row.name)
+        // .font(.subheadline)` as `playedOnly` — `StationsRecentRow.face`,
+        // `StationsRowViews.swift:60-62` — and the same leaf the favourites
+        // row draws at `:121-122`, so the measurement below covers whichever
+        // of the two the tree hands over first; both are 18.0 points at the
+        // ordinary size.
         let below =
             [StationsWords.recent, StationsWords.lastThree,
              StubStations.playedOnly, StubStations.playedAgo,
+             StubStations.firstFavourite,
              StationsWords.favorites]
         let leaves = above + below
         // **Screen order, because the flicks only go one way.** The chips sit
@@ -1343,13 +1357,14 @@ extension StubHouseUITests {
     /// actually drew, never by a constant.
     ///
     /// **3. "Dynamic Type font sizes are partially unsupported" naming one
-    /// of the eleven leaves ``testStations_TheScreenTextGrowsAtAX5()``
+    /// of the twelve leaves ``testStations_TheScreenTextGrowsAtAX5()``
     /// measures.** Every one of them is inside a card — `HomeCard`'s heading
-    /// and count, the Recent row's two lines, the search card's `tags:` and
-    /// its six chips — and every identical leaf *outside* a card (the title,
-    /// the subtitle, `importing the FCC FM list…`) is reported by nobody. A
-    /// finding that names a leaf **not** on that list is a defect, because
-    /// nothing has measured it.
+    /// and count, **both** of the Recent card's rows, the search card's
+    /// `tags:` and its six chips — and every identical leaf *outside* a card
+    /// (the title, the subtitle, `importing the FCC FM list…`) is reported by
+    /// nobody. A finding that names a leaf **not** on that list is a defect,
+    /// because nothing has measured it. The twelfth is `firstFavourite`,
+    /// added in I004 for exactly that reason.
     ///
     /// Anything else lands in `rest` and fails. That is the point of
     /// classifying by signature: the floor cannot swallow a finding it has
@@ -1359,9 +1374,17 @@ extension StubHouseUITests {
 
         /// The leaves of ``testStations_TheScreenTextGrowsAtAX5()``, which is
         /// where their growth is measured.
+        ///
+        /// `firstFavourite` joined them in train I004: the Recent card holds
+        /// **two** station names and the list named only `playedOnly`, so the
+        /// audit's finding against the other had nothing measuring it and
+        /// failed the case correctly. The answer was to measure it, not to
+        /// forgive it — it is in the AX5 case's `below` now, with the reason
+        /// at its call site.
         static let measuredLeaves: Set<String> = Set(
             [StationsWords.recent, StationsWords.lastThree, StationsWords.tagsLabel,
-             StubStations.playedOnly, StubStations.playedAgo]
+             StubStations.playedOnly, StubStations.playedAgo,
+             StubStations.firstFavourite]
                 + StationsWords.tagPresets
         )
 
