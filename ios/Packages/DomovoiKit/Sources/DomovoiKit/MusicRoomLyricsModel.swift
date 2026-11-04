@@ -42,23 +42,39 @@ import Observation
 /// (NIGHT-RULES §3). A `Task` the model owns is cancelled by ``stop()`` with
 /// everything else.
 ///
-/// **It cannot yank the panel while a finger is down.** The timer is started
-/// by ``handReleased()`` and by nothing else, and ``handPaused()`` cancels
-/// whatever is pending — which is Android's own pair of branches. So a drag
-/// held for a minute starts no timer, and a drag that ends starts exactly
-/// one. The ``follow()`` chip stays (Android ships it too) and is still the
-/// immediate way back.
+/// **It cannot yank the panel while a finger is down**, and that takes
+/// three calls rather than two. The timer is started by ``handReleased()``
+/// and by nothing else, so a drag held for a minute starts no timer and a
+/// drag that ends starts exactly one; ``handPaused()`` cancels whatever is
+/// pending, which is Android's own pair of branches. The third call is
+/// ``handRested()``, and it is the one Android has no equivalent of: a
+/// finger that comes back down **inside** the four seconds, and has not
+/// moved the list yet, cancels the pending resume and records the finger —
+/// otherwise the resume fires under it. The ``follow()`` chip stays (Android
+/// ships it too) and is still the immediate way back.
 ///
 /// **And `onScrollPhaseChange` is three branches, not two** — the mapping is
 /// ``hand(_:)`` and ``MusicLyricsHandPhase``, here rather than in the view,
 /// because round 2 got it wrong in the view where nothing could test it.
 /// `.interacting` is a finger that is moving the list and `.idle`,
 /// `.decelerating` and `.animating` are a list nobody is holding, but
-/// **`.tracking` is a finger down that has not moved yet** — and mapping it
-/// to a release armed the four-second timer with the finger still on the
-/// glass. The post-sleep `!handDown` guard cannot catch that, because the
-/// very call that armed the timer is the one that cleared `handDown`
-/// (review 2, finding 3).
+/// **`.tracking` is a finger down that has not moved yet** — and it is
+/// neither of the other two:
+///
+/// * mapping it to a **release** armed the four-second timer with the finger
+///   still on the glass, and the post-sleep `!handDown` guard cannot catch
+///   that, because the very call that armed the timer is the one that
+///   cleared `handDown` (review 2, finding 3);
+/// * mapping it to **nothing at all** is the mirror image of the same
+///   defect, and it is what the fix for that finding shipped: a finger that
+///   lands after `.settled` has armed the resume neither cancels it nor sets
+///   `handDown`, so four seconds later the guard sees an empty list and the
+///   panel is pulled out from under a finger that is still on it (fix-pass
+///   review, must 1).
+///
+/// So it is its own call, ``handRested()``, which cancels and records
+/// without touching `following` — a finger resting on the list has dragged
+/// nothing, so there is nothing to pause.
 ///
 /// ### What is not, and why there is no control for it
 ///
@@ -146,6 +162,13 @@ public final class MusicRoomLyricsModel {
     /// `scrollTo` produces) must not start a resume for a drag that never
     /// happened — and must certainly not turn following *on* while it is
     /// already on.
+    ///
+    /// **Set by ``handPaused()`` and ``handRested()``, and by nothing else.**
+    /// That pair is the whole of "a finger is on the glass", so a scroll
+    /// phase mapped to neither of them is a finger this flag does not know
+    /// about — and then the resume's own `!handDown` guard reads `false` and
+    /// lets the panel move under it, however the guard is written (fix-pass
+    /// review, must 1).
     private var handDown = false
 
     private var onScreen = false
@@ -302,6 +325,45 @@ public final class MusicRoomLyricsModel {
         following = false
     }
 
+    /// A finger is **down on the list and has not moved it** —
+    /// `ScrollPhase.tracking`.
+    ///
+    /// Two of the three things ``handPaused()`` does, and deliberately not
+    /// the third:
+    ///
+    /// * it **cancels the pending resume**, because a resume armed by the
+    ///   last drag's release would otherwise fire four seconds later with
+    ///   this finger on the glass — the defect the fix for review 2's
+    ///   finding 3 left behind by mapping this phase to nothing at all;
+    /// * it **records the finger**, so the release that ends this gesture
+    ///   arms a fresh four seconds rather than falling through
+    ///   ``handReleased()``'s `guard handDown`;
+    /// * it does **not** touch `following`. Android pauses on
+    ///   `DragInteraction.Start` (`LyricsPanel.kt:472`) and a finger that is
+    ///   resting has raised no drag, so a tap on the words is not a scroll
+    ///   and must not stop the panel following.
+    ///
+    /// **Android has no branch for this** — Compose reports no interaction
+    /// for a finger that has not dragged, so over there the pending resume
+    /// does fire under it. The divergence is Kamron's brief item (D): "make
+    /// sure the resume cannot yank the panel while a finger is still down".
+    ///
+    /// Idempotent, like the other two: `onScrollPhaseChange` reports
+    /// `.tracking` more than once in one gesture.
+    ///
+    /// What the release after a bare rest costs: a tap arms one four-second
+    /// resume that turns `following` on when it fires. `following` can only
+    /// be false while a finger is down or while a resume is pending
+    /// (``handPaused()`` is the one line that clears it), so that resume can
+    /// only ever turn on a `following` that is already on, and the
+    /// alternative — a second flag telling a rest from a drag — is state
+    /// nothing else would read.
+    public func handRested() {
+        handDown = true
+        resume?.cancel()
+        resume = nil
+    }
+
     /// Kept under its old name for the one thing it meant: a scroll by hand
     /// pauses following.
     ///
@@ -322,8 +384,11 @@ public final class MusicRoomLyricsModel {
     /// was not cancelled, that the panel is still on screen, and that no new
     /// drag has begun. Without the last one a finger that came back down
     /// inside the four seconds would still have the list pulled out from
-    /// under it — ``handPaused()`` cancels this task, and the check is the
-    /// belt to that brace.
+    /// under it — ``handPaused()`` and ``handRested()`` both cancel this
+    /// task, and the check is the belt to those braces. **Both** of them:
+    /// the guard reads `handDown`, and the only two calls that set it are
+    /// those two, so a phase that sets neither leaves this task free to
+    /// fire under a finger however carefully the guard is written.
     public func handReleased() {
         guard handDown else { return }
         handDown = false
@@ -349,11 +414,15 @@ public final class MusicRoomLyricsModel {
         case .moving:
             handPaused()
         case .resting:
-            // **Nothing.** Not a pause — Android pauses on a drag
+            // Not a pause — Android pauses on a drag
             // (`DragInteraction.Start`) and a finger resting on the list has
-            // not dragged it — and above all not a release, which would arm
-            // the resume under a finger that is still down.
-            break
+            // not dragged it — and not a release, which would arm the resume
+            // under a finger that is still down (review 2, finding 3). But
+            // **not nothing either**: a finger that lands inside the four
+            // seconds has to cancel the resume the last release armed, or it
+            // fires under this one. ``handRested()`` is those two halves and
+            // no third.
+            handRested()
         case .settled:
             handReleased()
         }
@@ -502,9 +571,16 @@ public enum MusicLyricsHandPhase: Sendable, Equatable {
     case moving
 
     /// A finger is **down and has not moved** the list:
-    /// `ScrollPhase.tracking`. Neither of Android's two branches — nothing
-    /// has been dragged yet, so nothing is paused, and nothing has been let
-    /// go of, so nothing is counting down.
+    /// `ScrollPhase.tracking`. Neither of Android's two branches, and not
+    /// inert either — ``MusicRoomLyricsModel/handRested()``.
+    ///
+    /// Nothing has been dragged yet, so following is **not** paused; nothing
+    /// has been let go of, so no new resume is started. What it does do is
+    /// stop whatever **was** counting down, from the drag before it, and
+    /// record that a finger is on the glass: a resume left running here
+    /// fires four seconds later and pulls the list out from under this
+    /// finger, which is the shape the first fix for review 2's finding 3
+    /// shipped (fix-pass review, must 1).
     case resting
 
     /// Nobody is holding the list: `ScrollPhase.idle`, `.decelerating` after

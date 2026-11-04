@@ -459,12 +459,25 @@ extension StubHouseUITests {
     /// 1. the chips expose no text **leaf** at all
     ///    (``newsChipRowIsOneElement(_:)``, which the audit case also pins) —
     ///    a bubble back **inside** the button's label;
-    /// 2. nothing in the whole tree is drawn **over** a chip: no element's
-    ///    frame lies inside a chip's frame. That is the exact shape round 3
+    /// 2. no **text or image** element is drawn over a chip: none of their
+    ///    frames lies inside a chip's frame. That is the exact shape round 3
     ///    shipped and this one deleted — `StaticText 'K' {{28,225.3},{28,28}}`
-    ///    inside `Button 'Kamron' {{16,217.3},{113,44}}` — and it is
-    ///    letter-blind, so it fails on a bubble that draws a glyph, a digit
-    ///    or nothing nameable at all;
+    ///    inside `Button 'Kamron' {{16,217.3},{113,44}}` — and within those
+    ///    two element types it is **letter-blind**: a bubble drawing a glyph,
+    ///    a digit, a word or a symbol image fails it whatever the character
+    ///    is.
+    ///
+    ///    **What it cannot see**, because XCUITest cannot: a bubble that
+    ///    draws nothing nameable — a bare `Circle().fill(…)`, or an `Image`
+    ///    with `accessibilityHidden(true)` — is in no query's results, so it
+    ///    contributes no element to this reading and no text leaf to reading
+    ///    1 either. Nothing on this PC can close that, and it is **not** the
+    ///    shape that was removed: ``NewsAvatarBubble`` drew
+    ///    ``NewsPerson/initial`` as a `Text`, which is the `StaticText 'K'`
+    ///    above — round 3 drew that bubble as a decoration over the pill and
+    ///    it was still in the tree as that leaf, which is how this reading
+    ///    came to exist. An unlabelled fill would be caught by a screenshot
+    ///    diff and by nothing in this file (fix-pass review should 2);
     /// 3. no initial of the roster exists as a standalone element.
     ///    ``ScreensWords/newsInitials`` is the **whole** roster's, because
     ///    the chip row is driven by the People seed's four people and not by
@@ -487,10 +500,22 @@ extension StubHouseUITests {
         //    identifiers `newsChipRowIsOneElement` just proved exist, so a
         //    missing chip cannot make this half vacuous.
         //
-        //    `allElementsBoundByIndex` once over the text leaves, not a query
-        //    per chip: one snapshot of the tree, with `exists` asked of each
+        //    `allElementsBoundByIndex` once over each element type, not a
+        //    query per chip: one snapshot each, with `exists` asked of every
         //    element because one resolved from a stale snapshot answers a
         //    zero frame.
+        //
+        //    **Text leaves and images both.** The bubble that was removed
+        //    drew the initial as a `Text`, so `staticTexts` is what catches
+        //    the shape this case is about coming back — but a bubble redrawn
+        //    as an `Image` (an SF Symbol `person.circle.fill`, say) is an
+        //    image element and no text leaf at all, and reading 1 counts
+        //    `chip.staticTexts` only (`StubHouseUITests+News.swift`). One
+        //    query more is the difference between "no initial is drawn" and
+        //    "nothing is drawn on the pill". The chips themselves contain
+        //    neither: their label is a single `Text` and that is the whole
+        //    one-element fix (``NewsPeopleChipRow``), so an image inside a
+        //    chip's frame is by itself the defect.
         //
         //    An explicit result type and explicit labels on the tuple: a
         //    multi-statement closure whose branches are a tuple and `nil` is
@@ -506,7 +531,9 @@ extension StubHouseUITests {
             ScreensWords.newsChipPeople.count, chips.count,
             "a chip is missing, so the overlay half of this case checked nothing"
         )
-        for text in app.staticTexts.allElementsBoundByIndex where text.exists {
+        let drawn = app.staticTexts.allElementsBoundByIndex
+            + app.images.allElementsBoundByIndex
+        for text in drawn where text.exists {
             let box = text.frame
             // A zero-area frame is in no rectangle in any useful sense, and
             // `CGRect.contains` says a zero-height rect is contained by

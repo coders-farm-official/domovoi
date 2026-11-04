@@ -218,7 +218,12 @@ struct MusicLyricsPanelView: View {
             // four-second resume with a finger still on the glass — and the
             // model's post-sleep `!handDown` guard cannot catch that,
             // because the release is the call that clears `handDown`
-            // (review 2, finding 3). The mapping is
+            // (review 2, finding 3). Nor is `.tracking` inert: the first fix
+            // for that finding made it do nothing at all, and then a finger
+            // landing inside the four seconds cancelled nothing and set
+            // nothing, so the resume fired under it (fix-pass review,
+            // must 1). ``MusicRoomLyricsModel/handRested()`` is the third
+            // branch that mapping needs. All of it is
             // ``MusicLyricsHandPhase``'s now, in the model, where
             // `ScreensLyricsFollowTests` can hold it; what is left here is
             // the one translation only a view can do.

@@ -18,7 +18,11 @@ import XCTest
 ///
 /// ### How a timer that must not fire is tested
 ///
-/// Four of these cases are about a resume being **cancelled**, and "it did
+/// Six of these cases are about a resume being **cancelled** — the four this
+/// section was written for (a second drag, the panel going away, a new house,
+/// a new song), the chip, and
+/// ``testAFingerLandingInsideTheFourSecondsCancelsTheArmedResume``, which the
+/// fix-pass review added — and "it did
 /// not happen" is the hardest thing in this file to assert honestly: a
 /// resume still parked and a resume cancelled look identical from outside.
 /// So the parked wait is **releasable**. A cancel case cancels the resume,
@@ -523,11 +527,75 @@ final class ScreensLyricsFollowTests: XCTestCase {
         )
         XCTAssertEqual(0, rig.resumesThatWoke.current)
 
-        // And the gesture ending still works: `.tracking` is inert, not a
-        // state the panel can get stuck in.
+        // And the gesture ending still works: a rest arms nothing, but it is
+        // not a state the panel can get stuck in.
         rig.model.hand(.settled)
         await settleUntil({ rig.model.following }, "the resume after the finger lifts")
         XCTAssertEqual([MusicRoomLyricsModel.followResumeMs], rig.resumeWaits.current)
+    }
+
+    /// **A finger landing inside the four seconds cancels the resume the
+    /// release armed** — and this is the half the first fix for review 2's
+    /// finding 3 did not have.
+    ///
+    /// That fix mapped `ScrollPhase.tracking` to *nothing at all*, which is
+    /// the mirror image of round 2's defect rather than the end of it. The
+    /// sequence is one real gesture followed by another: a drag, the finger
+    /// lifting (which arms the four seconds), and the finger coming back
+    /// down a second later without having moved the list yet. With
+    /// `.resting` inert, that landing neither cancelled the pending resume
+    /// nor set `handDown`, so the post-sleep `!handDown` guard saw an empty
+    /// list and let it through — the panel scrolled itself out from under a
+    /// finger that was on the glass, which is exactly what
+    /// `MusicRoomLyricsModel`'s own doc comment said could not happen.
+    /// ``MusicRoomLyricsModel/handRested()`` is what closes it.
+    ///
+    /// Three measurements, because the first two are each satisfied by the
+    /// wrong thing: `following` staying false is also what a guard produces,
+    /// and ``Rig/resumesThatWoke`` staying zero is also what a resume that
+    /// was never armed produces — so the case waits for the resume to be
+    /// armed first, and `parkTheResume: true` holds it open until the finger
+    /// has landed.
+    func testAFingerLandingInsideTheFourSecondsCancelsTheArmedResume() async {
+        let rig = rig(parkTheResume: true)
+        rig.model.start()
+        defer { rig.model.stop() }
+
+        // A drag, and then the finger lifts: one resume, counting down.
+        rig.model.hand(.moving)
+        XCTAssertFalse(rig.model.following, "the drag did not pause following")
+        rig.model.hand(.settled)
+        await settleUntil(
+            { !rig.resumeWaits.current.isEmpty }, "the resume the release armed"
+        )
+
+        // One second into the four, the finger is back on the list and has
+        // not moved it. Releasing the park is what tells a cancelled resume
+        // from a sleeping one.
+        rig.model.hand(.resting)
+        rig.letTheResumeFinish()
+        await letTheResumeWakeIfItLives()
+
+        XCTAssertFalse(
+            rig.model.following,
+            "the resume woke with a finger resting on the list and pulled it back"
+        )
+        XCTAssertEqual(
+            0, rig.resumesThatWoke.current,
+            "`.resting` left the armed resume asleep rather than cancelling it, "
+                + "so it is only the post-sleep `!handDown` guard standing "
+                + "between a finger on the glass and the panel moving — and "
+                + "`.resting` is the call that has to set `handDown` for that "
+                + "guard to read anything at all"
+        )
+        XCTAssertFalse(rig.ranOut.current, "the parked resume ran its bound out")
+
+        // And the finger it recorded is why the gesture can still end: the
+        // release that follows the rest arms a fresh four seconds rather
+        // than falling through `handReleased()`'s `guard handDown`.
+        rig.model.hand(.settled)
+        await settleUntil({ rig.resumeWaits.current.count == 2 }, "the second resume")
+        await settleUntil({ rig.model.following }, "following after the finger lifted")
     }
 
     /// And a rest on its own — a tap that never became a drag — neither

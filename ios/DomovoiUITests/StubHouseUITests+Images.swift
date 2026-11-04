@@ -891,6 +891,12 @@ extension StubHouseUITests {
             // case waives anonymous `Text clipped` on the strength of *this*
             // list; a caption nothing here measures is a leaf that waiver
             // covers without having looked at it (review 2, finding 4).
+            //
+            // **Listed here and required below**: being in this array only
+            // gets a leaf compared *if it was found*, and the floor of three
+            // does not notice five missing. This one and `prompt` are
+            // unwrapped by name at the foot of the case (fix-pass review
+            // should 1).
             ("more-images", ImagesWords.fourImagesShowingThree),
         ]
 
@@ -1009,6 +1015,55 @@ extension StubHouseUITests {
             3,
             "nothing could be compared, so this proved nothing: \(small) / \(big)"
         )
+        // **The two leaves the audit case leans on are required by name**,
+        // and the floor stays where it is.
+        //
+        // Eight entries against a floor of three means five of them may go
+        // missing and this case still passes while printing all eight — and
+        // two of the eight are leaves `testImages_PassesApplesAccessibilityAudit`
+        // *relies* on having been measured. It waives an anonymous
+        // `Text clipped`, and an attributed one against the history prompt,
+        // on the strength of this list; a leaf whose label quietly stops
+        // resolving drops out of the comparison at `guard let grown` and is
+        // then waived without anything ever having looked at it (review 2
+        // should 4, fix-pass review should 1).
+        //
+        // The floor is not raised to eight, because the same argument does
+        // not hold for the other six and one of them cannot be met:
+        // `engine running` is 600 points down a page seen through a
+        // 102-point window at AX5 and is not in any of the six trains' AX5
+        // pass. A floor by signature, never by total
+        // ([[audit-reports-one-issue]]).
+        //
+        // Both passes each, for the reason `tileSides` is unwrapped at the
+        // foot of this case: a check that quietly covers one size is not a
+        // comparison. The prompt has resolved at both sizes in all six trains
+        // that have run this case (`prompt height=58.0` -> `174.67`); the
+        // caption is new in this batch and has never been in a train, so a
+        // first red here means the label did not resolve — not that it is
+        // stuck, which is `stuck` above.
+        _ = try XCTUnwrap(
+            small["prompt"],
+            "the history prompt was never located at the ordinary size, so the "
+                + "audit case's attributed `Text clipped` waiver rests on an "
+                + "unmeasured leaf: \(small)"
+        )
+        _ = try XCTUnwrap(
+            big["prompt"],
+            "the history prompt was never located at AX5, which is the size "
+                + "its three-line cap is waived at: \(big)"
+        )
+        _ = try XCTUnwrap(
+            small["more-images"],
+            "`\(ImagesWords.fourImagesShowingThree)` was never located at the "
+                + "ordinary size, so the audit case's anonymous `Text clipped` "
+                + "waiver covers a leaf nothing measured: \(small)"
+        )
+        _ = try XCTUnwrap(
+            big["more-images"],
+            "`\(ImagesWords.fourImagesShowingThree)` was never located at AX5, "
+                + "which is the size that waiver is about: \(big)"
+        )
         // **The tile.** 84 points through `@ScaledMetric`, so it grows with
         // the type size; a fixed `frame(width: 84)` would be identical at both
         // sizes, which is rule §3's own example and is the thing a height
@@ -1109,6 +1164,15 @@ extension StubHouseUITests {
             // this screen's leaves at `large` and at AX5 and fails if one of
             // them does not grow. An attributed one is *not* covered: it falls
             // through to the assertion below.
+            //
+            // **Eight listed is not eight required**, and that gap was this
+            // waiver's weak point: that case's floor is three, so a leaf
+            // whose label stops resolving drops out of the comparison in
+            // silence and this waiver goes on covering it. The two leaves
+            // this waiver is actually about — the history prompt and the
+            // `4 images, showing 3` caption — are required there by name
+            // (`XCTUnwrap` on both passes), which is as much as a floor of
+            // three can honestly carry (fix-pass review should 1).
             if line.hasPrefix("Text clipped"), line.hasSuffix("| element: nil") {
                 return false
             }
