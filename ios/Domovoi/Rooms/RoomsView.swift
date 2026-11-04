@@ -168,6 +168,17 @@ struct RoomsView: View {
             // was accepted and did not play must outlive a scroll, and does
             // outlive this screen. The model holds its own until something
             // takes it, so this is a hand-off and not a second copy.
+            //
+            // **This is the roster's half only.** ``RoomsRoomScreen`` carries
+            // the same four lines, and has to: a pushed room covers this view
+            // and a covered view's body is not re-evaluated while it is
+            // covered, so a toast raised from an opened room reached the
+            // shell only after the pop — train I004's six "said nothing"
+            // reds, measured against I002 where the room was not a push.
+            // ``RoomsModel/takeToast()`` clears as it reads, so the two
+            // hand-offs cannot both raise the same sentence. What is left
+            // here is the broadcast card's, which is raised with no room
+            // open at all.
             .onChange(of: rooms?.toast) { _, said in
                 guard said != nil, let text = rooms?.takeToast() else { return }
                 model.showToast(text)
