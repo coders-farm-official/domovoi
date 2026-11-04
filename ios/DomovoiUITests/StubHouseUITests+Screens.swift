@@ -300,6 +300,22 @@ extension StubHouseUITests {
             containing(app, StubImages.recommended).exists,
             "the model menu's `recommended` wording is on screen"
         )
+        // And no model is offered as a choice at all. The three catalog
+        // labels, cased as the catalog cases them — the history card's meta
+        // line says `sdxl-turbo`, the job's own id, so these three strings
+        // belong to the picker and to nothing else on this screen
+        // (`StubImages`' own note).
+        for model in [
+            StubImages.installedModel,
+            StubImages.otherInstalledModel,
+            StubImages.uninstalledModel,
+        ] {
+            XCTAssertEqual(
+                0,
+                app.buttons.matching(NSPredicate(format: "label == %@", model)).count,
+                "`\(model)` is offered as a model to generate with"
+            )
+        }
 
         // 2. The lane's cancel. The running job is asserted present first —
         // the cancel was drawn only for an active job (`:347`), so a lane

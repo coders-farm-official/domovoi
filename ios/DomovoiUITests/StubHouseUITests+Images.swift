@@ -61,13 +61,29 @@ extension StubHouseUITests {
     /// followed a renamed constant would stop testing what it claims to.
     enum StubImages {
 
-        /// Two models are installed…
+        /// The three model **labels** the fixture serves — two installed, one
+        /// not.
+        ///
+        /// Every one of them must now appear nowhere on screen, for a reason
+        /// that grew: the picker filtered on `installed`
+        /// (`ImagesScreen.kt:148`) so the third was always forbidden, and
+        /// since 2026-11-03 there is no picker at all — `generate` is
+        /// admin-only, so the composer is not drawn
+        /// (`ImagesView.swift`'s header). They are the labels
+        /// `testScreens_ImagesOffersNothingOnlyAnAdminCanDo` denies.
+        ///
+        /// Their case matters: the history card's meta line says
+        /// `sdxl-turbo`, lower-cased and hyphenated, which is the job's
+        /// `model` id and not the catalog's label. So an exact-label query
+        /// for `SDXL Turbo` is a query for the picker and for nothing else on
+        /// this screen.
         static let installedModel = "SDXL Turbo"
         static let otherInstalledModel = "Flux Schnell"
-        /// …and this one is **not**. Its label must appear nowhere on screen:
-        /// the picker filters on `installed` (`ImagesScreen.kt:148`) and
-        /// nothing on this screen can install a model.
         static let uninstalledModel = "HiDream E1"
+        /// The menu row's own wording — `label + "  ·  recommended"`
+        /// (`:318`), both spaces either side. Nothing else on the screen
+        /// spells anything that way, which is what makes it the one string
+        /// that catches a picker drawn without its accessibility label.
         static let recommended = "SDXL Turbo  ·  recommended"
 
         /// The lane: a running job and a failed one.
@@ -519,13 +535,22 @@ extension StubHouseUITests {
             containing(app, "failed").exists,
             "the failed job has no status word, so nothing marks it as failed"
         )
-        // A failed job offers **no cancel** (`:347`): a control that cannot
-        // do what it says is not drawn, and `ImagesModel.cancel` refuses it
-        // as well. One cancel is on screen — the running job's — and not two.
+        // A failed job offers **no cancel** (`:347`) — and neither does a
+        // running one any more, so the expected count is now **zero** and
+        // not one. `…/jobs/{id}/cancel` is admin-only and this app has no
+        // admin session, so the control is off the whole screen
+        // (`ImagesView.swift`'s header); the lane is a report on what the
+        // house is doing.
+        //
+        // The assertion is kept here rather than dropped, because this is
+        // the case that would catch a cancel coming back **on the wrong
+        // row**: `ImagesModel.cancel(_:)` still refuses a job that is not
+        // pending or running, and a future view that drew the button again
+        // without that guard would put one on this very row.
         XCTAssertEqual(
-            1,
+            0,
             app.buttons.matching(NSPredicate(format: "label == %@", ImagesWords.cancel)).count,
-            "a failed job is offering a cancel"
+            "the lane is offering a cancel this phone cannot send"
         )
     }
 
