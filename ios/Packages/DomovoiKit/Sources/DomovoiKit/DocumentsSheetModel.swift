@@ -454,6 +454,11 @@ public final class DocumentsSheetModel {
         /// same thing, so the reader's refusal is a symptom of this one.
         case thatIsNotDomovoi
 
+        /// `@MainActor`, and the compiler asked: a nested enum in a
+        /// `@MainActor` class is not itself isolated, and
+        /// ``DocumentsEditorModel/notDomovoi`` is a static on one that is.
+        /// Every caller is already on the main actor.
+        @MainActor
         var message: String {
             switch self {
             case .theCallFailed(let why): return why
