@@ -51,7 +51,7 @@ from domovoi.admin_auth import (
     require_device,
     require_device_read,
 )
-from domovoi import command_captures, quiet_hours, room_battery
+from domovoi import command_captures, egress, quiet_hours, room_battery
 from domovoi.db.repositories import notify_timers_changed
 from domovoi.satellite_abilities import BOARDS_WITHOUT_VOICE
 
@@ -1060,7 +1060,7 @@ async def list_recently_played(
     ``can_add=True`` so the drawer can offer "+ add to library", which
     enqueues a generic media acquisition (design §4.8/§10.1).
 
-    ``can_add`` asks the fulfiller allowlist too (D55, owner decision
+    ``can_add`` asks whether anything can fulfil it (D55, owner decision
     2026-11-03: "no fulfiller means no button and no error"). It used to
     be a property of the ROW alone, so with nothing installed to act on
     the queue every phone drew a button whose only outcome was the
@@ -1069,10 +1069,39 @@ async def list_recently_played(
     add-by-url get theirs (``_availability``, which reads the core's
     ``GET /v1/acquisitions`` → ``ACQUISITIONS.availability()``,
     domovoi/main.py:5874), so one answer cannot disagree with another.
-    The button posts the stored URL to add-by-url, so it is
-    ``can_fulfill_url`` that decides. A core that does not answer leaves
-    availability ``None`` — not a positive answer, so no button, and no
-    error for anyone to read either.
+    A core that does not answer leaves availability ``None`` — not a
+    positive answer, so no button, and no error for anyone to read
+    either.
+
+    Which flag decides is **per row**, because the add a client makes is:
+    a row with a stored ``url`` is added by add-by-url
+    (``can_fulfill_url``), and a row with only a title is added by
+    add-by-query (``can_fulfill_query``) — the dashboard's own fork
+    (``web/static/satellites.jsx:1752-1764``). One flag for both rows
+    would have withdrawn the dashboard's title-only add on a house whose
+    installed fulfiller takes queries and not URLs.
+
+    A URL row also needs the internet to be ON: add-by-url refuses with
+    409 under the "never" answer (``domovoi/main.py:5790-5791``), where
+    add-by-query still queues the row for later, so the switch only takes
+    the URL button away. ``egress.policy()`` is read from the
+    environment and the env file, so this process sees the same answer
+    the core does (``web/backend/api/chat.py:1822`` reads it the same
+    way).
+
+    **What this cannot ask, and so does not claim.** For a caller that is
+    not an admin session the core's gate is narrower still: the URL must
+    match a registered fulfiller's ``url_matcher`` allowlist
+    (``ACQUISITIONS.url_allowed_by_fulfillers``, domovoi/main.py:5785-5789,
+    and a fulfiller registered without a matcher never allowlists). That
+    is live core-process registry state with no route that answers it, so
+    the web process cannot ask per URL, and a button can still be drawn
+    for a URL the installed provider does not recognise — the press then
+    returns the core's own 403 verbatim ("adding by URL requires an admin
+    session, or a URL matching an installed media provider"). Closing
+    that needs a core route; see
+    design-notes/ios/batch-2026-11-03/android/DECISIONS.md, "Needs a
+    shared change".
     """
     _LOCAL_SOURCES = ("library", "playlist", "spoken_audio")
     async with session_scope() as s:
@@ -1110,9 +1139,25 @@ async def list_recently_played(
     # of nothing but library plays costs no round trip. Outside the session
     # block: this is a 2-second HTTP read, not something to hold a
     # database connection open for.
-    can_fulfill = False
+    by_url = False
+    by_query = False
     if any(_reacquirable(r) for r in raw):
-        can_fulfill = (await _acquisition_availability()).get("can_fulfill_url") is True
+        availability = await _acquisition_availability()
+        # `is True`: `None` means the core did not answer, which is not a
+        # positive answer.
+        by_url = (
+            availability.get("can_fulfill_url") is True
+            and not egress.internet_turned_off()
+        )
+        by_query = availability.get("can_fulfill_query") is True
+
+    def _can_add(r: Any) -> bool:
+        """Whether a client has a working add for THIS row (see the
+        docstring): the stored URL goes to add-by-url, a title-only row to
+        add-by-query, and the two can be fulfilled by different plugins."""
+        if not _reacquirable(r):
+            return False
+        return by_url if r.url else by_query
 
     return [
         RecentlyPlayed(
@@ -1126,7 +1171,7 @@ async def list_recently_played(
             url=r.url,
             started_at=r.started_at,
             in_library=bool(r.in_library),
-            can_add=can_fulfill and _reacquirable(r),
+            can_add=_can_add(r),
         )
         for r in raw
     ]

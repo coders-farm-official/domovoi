@@ -332,14 +332,22 @@ fun SatRecentlyPlayedTab(room: String) {
     // to the media-acquisition queue; whichever fulfiller plugin is
     // installed claims it.
     //
-    // The button is drawn on the row's `can_add` alone, and the server now
-    // computes that against the fulfiller allowlist it also answers
-    // add-by-url with (D55, owner 2026-11-03: "no fulfiller means no
-    // button and no error") — so with nothing installed to act on the
-    // queue there is no button here, and the queue's graceful-absence
-    // sentence is a reply this screen can no longer provoke. The toast of
-    // `res.message` stays for the replies it CAN provoke (already in the
-    // library, already queued), which still reach the person (answer 44).
+    // The button is drawn on the row's `can_add` and a stored URL, and the
+    // server now computes `can_add` from the fulfiller availability the
+    // adds themselves go through (D55, owner 2026-11-03: "no fulfiller
+    // means no button and no error") — so with nothing installed to act on
+    // the queue, or with the internet turned off, there is no button here,
+    // and the queue's graceful-absence sentence is a reply this screen can
+    // no longer provoke.
+    //
+    // What `can_add` still cannot ask is whether the installed provider's
+    // own `url_matcher` recognises THIS url — that is core-process state
+    // with no route to read it (web/backend/api/satellites.py's docstring),
+    // so a non-admin phone can still meet the core's 403 here. The toast
+    // of `res.message`, and of the failure, is what reaches the person
+    // then, which is also what answer 44 asks for: the replies this screen
+    // CAN provoke (already in the library, already queued) are not
+    // stripped.
     fun add(r: SatPlayed) {
         scope.launch {
             runCatching {
@@ -410,7 +418,14 @@ fun SatRecentlyPlayedTab(room: String) {
                             )
                         }
                     }
-                    if (r.can_add) {
+                    // `can_add` and a stored URL. The server says a
+                    // title-only row may be added too — the dashboard adds
+                    // that one by QUERY (satellites.jsx:1752-1764) — but
+                    // `add()` below has only the by-URL path, and
+                    // add-by-url rejects a null url outright
+                    // (AddByUrlRequest.url is required, min_length=1). A
+                    // button whose only outcome is a 422 is not drawn.
+                    if (r.can_add && r.url != null) {
                         if (queued.contains(r.id)) {
                             Text(
                                 "queued",

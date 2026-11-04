@@ -18,11 +18,15 @@ from typing import Any
 
 from sqlalchemy import text
 
+from domovoi import egress
 from domovoi.db.session import session_scope
 from domovoi.tests.conftest import requires_db
 from web.backend.api import satellites as sat_api
 
 ROOM = "canadd_room"
+
+# "this case did not say", so the url flag's value is used for both.
+_UNSET: Any = object()
 
 
 async def _clean() -> None:
@@ -50,15 +54,23 @@ async def _seed() -> None:
         )
 
 
-def _availability(answer: bool | None, calls: list[str]) -> Any:
+def _availability(
+    answer: bool | None, calls: list[str], *, query: Any = _UNSET
+) -> Any:
     """``_availability``'s shape (web/backend/api/acquisitions.py): ``None``
-    for both flags is "the core did not answer"."""
+    for both flags is "the core did not answer".
+
+    ``query`` is settable on its own so a case can tell the two flags
+    apart. They used to be given the same value in every case, which meant
+    a route reading the wrong one would have passed everything (review-1
+    note 4).
+    """
 
     async def fake() -> dict[str, Any]:
         calls.append("asked")
         return {
             "fulfillers": ["ytdlp"] if answer else [],
-            "can_fulfill_query": answer,
+            "can_fulfill_query": answer if query is _UNSET else query,
             "can_fulfill_url": answer,
             "core_reachable": answer is not None,
         }
@@ -66,8 +78,10 @@ def _availability(answer: bool | None, calls: list[str]) -> Any:
     return fake
 
 
-async def _rows(monkeypatch, answer: bool | None, calls: list[str]):
-    monkeypatch.setattr(sat_api, "_acquisition_availability", _availability(answer, calls))
+async def _rows(monkeypatch, answer: bool | None, calls: list[str], *, query: Any = _UNSET):
+    monkeypatch.setattr(
+        sat_api, "_acquisition_availability", _availability(answer, calls, query=query)
+    )
     rows = await sat_api.list_recently_played(ROOM, limit=100)
     return {r.title: r for r in rows}
 
@@ -131,6 +145,83 @@ async def test_the_core_is_not_asked_when_no_row_could_carry_the_button(monkeypa
         rows = await _rows(monkeypatch, True, calls)
         assert rows["something already here"].can_add is False
         assert calls == []
+    finally:
+        await _clean()
+
+
+@requires_db
+async def test_a_url_row_asks_the_url_flag_and_not_the_query_one(monkeypatch) -> None:
+    """Which flag decides is per row. This row has a stored URL, so the add
+    is add-by-url and ``can_fulfill_query`` is the wrong question: a house
+    whose installed fulfiller takes free-text queries and not URLs can do
+    nothing with it.
+
+    The two flags were given the same value in every case before, so a
+    route reading the wrong one passed them all (review-1 note 4).
+    """
+    await _clean()
+    try:
+        await _seed()
+        rows = await _rows(monkeypatch, False, [], query=True)
+        assert rows["Ode to the Beelink"].can_add is False
+    finally:
+        await _clean()
+
+
+@requires_db
+async def test_a_title_only_row_asks_the_query_flag(monkeypatch) -> None:
+    """And the other way round: a play with no stored URL is added by
+    QUERY — the dashboard's own fork (web/static/satellites.jsx:1752-1764)
+    — so a url-only fulfiller is no use to it and a query one is. Asking
+    ``can_fulfill_url`` for every row would have withdrawn the dashboard's
+    title-only add on a house with a query fulfiller installed.
+    """
+    await _clean()
+    try:
+        async with session_scope() as s:
+            await s.execute(
+                text(
+                    "INSERT INTO media_plays (room_id, source, title) "
+                    "VALUES (:r, 'ytdlp', 'a name and nothing else')"
+                ),
+                {"r": ROOM},
+            )
+        rows = await _rows(monkeypatch, False, [], query=True)
+        assert rows["a name and nothing else"].can_add is True
+        rows = await _rows(monkeypatch, True, [], query=False)
+        assert rows["a name and nothing else"].can_add is False
+    finally:
+        await _clean()
+
+
+@requires_db
+async def test_the_internet_being_off_takes_the_url_button_away(monkeypatch) -> None:
+    """Under the "never" answer add-by-url refuses with 409 before it ever
+    reaches the queue (domovoi/main.py:5790-5791), so every press of this
+    button would fail — the misleading control again, with a fulfiller
+    installed and reachable. add-by-query is NOT refused there (the row
+    waits and a fulfiller drains it later), so the switch only takes the
+    URL row's button.
+    """
+    await _clean()
+    try:
+        await _seed()
+        async with session_scope() as s:
+            await s.execute(
+                text(
+                    "INSERT INTO media_plays (room_id, source, title) "
+                    "VALUES (:r, 'ytdlp', 'a name and nothing else')"
+                ),
+                {"r": ROOM},
+            )
+        with egress.override_policy("never"):
+            rows = await _rows(monkeypatch, True, [])
+            assert rows["Ode to the Beelink"].can_add is False
+            assert rows["a name and nothing else"].can_add is True
+        # The same read with the answer back to default: the URL row returns.
+        with egress.override_policy("sometimes"):
+            rows = await _rows(monkeypatch, True, [])
+            assert rows["Ode to the Beelink"].can_add is True
     finally:
         await _clean()
 
