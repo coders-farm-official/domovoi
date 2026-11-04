@@ -672,3 +672,91 @@ public func manualContrastRatio(_ one: ManualWash, _ other: ManualWash) -> Doubl
     let b = manualRelativeLuminance(other)
     return (max(a, b) + 0.05) / (min(a, b) + 0.05)
 }
+
+/// The wash under a **map node's** folded-in `preview`/`plugin` word, light
+/// theme.
+///
+/// Not ``manualCodeWashLight``, and the difference is the whole point of this
+/// token existing: a map node's card is `secondarySystemBackground`
+/// (`#F2F2F7`), and `--sunken` on that is **1.008:1** — a wash nobody can
+/// see, which would have made the pills read as plain words with extra spaces
+/// around them. Android does not have that problem because it washes a node's
+/// tags with `idleSoft` over `card`, a different token from the `sunken` it
+/// washes a page's code runs with (`ManualScreen.kt:668` against `:872`).
+///
+/// So this is Android's own node wash, composited **once, by hand**, onto the
+/// surface this screen actually draws a node on: `idleSoft` is `#A09E9B` at
+/// α=0.141 (`Color.kt:64`) and over `#F2F2F7` that is `#E6E6EA`. The result
+/// is **1.115:1** against the card, which is Android's own 1.127:1 to within
+/// a rounding step — a tint you can see, with a ratio that can be stated
+/// because it is opaque.
+public let manualNodeWashLight = ManualWash(hex: 0xE6E6EA)
+
+/// The same, dark: `idleSoft` is `#73716E` at α=0.180 (`Color.kt:92`) and over
+/// `secondarySystemBackground`'s `#1C1C1E` that is `#2C2B2C` — **1.206:1**
+/// against the card, where Android's is 1.209:1.
+public let manualNodeWashDark = ManualWash(hex: 0x2C2B2C)
+
+// MARK: - the name that scrambles into place, as arithmetic
+
+/// The alphabet a scrambling name is drawn from (`GLYPHS`,
+/// `ManualScreen.kt:169`), character for character.
+public let manualScrambleGlyphs = Array("ABCDEFGHKMNPRSTVXZ0123456789#%&*/<>")
+
+/// Nine frames, `0...8` (`ScrambleText`'s `steps = 8`, `:688`).
+public let manualScrambleSteps = 8
+
+/// One frame of a name scrambling into place (`ScrambleText`'s `buildString`,
+/// `ManualScreen.kt:690-694`), as a function of the frame number.
+///
+/// It lives here rather than inside the view's loop so that it can be *tested*
+/// — the settle arithmetic is the part of answer 30 that can be wrong without
+/// anybody noticing on a screenshot, and the view (`ManualMapView.swift`'s
+/// ``ManualScrambleName``) calls exactly this.
+///
+///  * the name settles **from the left**, `frame / steps` of it at a time,
+///    which is the Kotlin's `i < frame.toFloat() / steps * text.length`;
+///  * a **space is never replaced**, so the word shapes stay where they are;
+///  * the character **count never changes**, at any frame.
+///
+/// `glyph` is the picker — `{ manualScrambleGlyphs.randomElement()! }` in the
+/// view, a constant in a test, which is the only way an effect built on
+/// `Random` can be asserted on at all.
+public func manualScrambleFrame(
+    of letters: [Character],
+    frame: Int,
+    steps: Int = manualScrambleSteps,
+    glyph: () -> Character
+) -> String {
+    let steps = max(steps, 1)
+    let frame = min(max(frame, 0), steps)
+    let settled = Int(Double(frame) / Double(steps) * Double(letters.count))
+    return String(
+        letters.enumerated().map { at, letter in
+            at < settled || letter == " " ? letter : glyph()
+        }
+    )
+}
+
+// MARK: - the float, as arithmetic
+
+/// How long one bob takes for the card at this index in the map's geometry:
+/// `5.5 + (i % 4) * 0.9` seconds (`bob`, `ManualScreen.kt:561`).
+public func manualFloatPeriod(at index: Int) -> Double {
+    5.5 + Double(index % 4) * 0.9
+}
+
+/// How far into its bob a card starts — Android's `i * 0.7` seconds
+/// (`:562`), **wrapped at eight**.
+///
+/// Android's phase is an offset inside a sine that is already running, so an
+/// unbounded `i * 0.7` only ever picks a point on the curve. Here it is a
+/// one-shot `delay` on a repeating animation, so it is the time the card
+/// spends *still* before its first bob: uncapped, the twentieth card of a
+/// larger geometry would sit motionless for fourteen seconds after the map
+/// opened, which reads as a bug rather than as a stagger. Wrapped at eight it
+/// is at most 4.9 s, under one of the 5.5–8.2 s periods, and the ring of seven
+/// nodes a phone draws is unaffected either way.
+public func manualFloatPhase(at index: Int) -> Double {
+    Double(index % 8) * 0.7
+}

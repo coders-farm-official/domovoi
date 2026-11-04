@@ -570,11 +570,28 @@ extension Color {
     /// | ``Color/fgMuted`` — a note, a table's second cell, `preview`/`plugin` | **6.72:1** | **7.77:1** |
     /// | ``Color/warnInk`` — the `{admin}` pill | **5.17:1** | **10.08:1** |
     ///
-    /// Body text needs 4.5:1 and the weakest pairing is 5.17:1. The wash
-    /// itself is 1.11:1 against the card it sits on, which is deliberate and
-    /// not a defect: it is a tint, and nothing is *only* said by it — the
-    /// monospaced face already tells code from prose and a pill's word is its
-    /// own label.
+    /// Body text needs 4.5:1 and the weakest pairing is 5.17:1.
+    ///
+    /// ### How strong the tint is, against the surface it is actually on
+    ///
+    /// **1.108:1 light and 1.090:1 dark** — measured against the page's own
+    /// background, which is where every run in this file is drawn: a
+    /// paragraph, a list item, a note, a checklist line and a table cell all
+    /// sit on the page (the table has a border and no fill), and nothing here
+    /// draws prose on a card. That is a tint you can see, and it is the same
+    /// strength as Android's own (`idleSoft` over `card` is 1.127:1).
+    ///
+    /// An earlier draft of this comment said "1.11:1 against the card it sits
+    /// on". The number was right and the surface was wrong — 1.108:1 is the
+    /// ratio against **white** — and that matters exactly once, on the one
+    /// card this screen washes a run on: a map node, whose card is
+    /// `secondarySystemBackground`, where `--sunken` measures 1.008:1 and is
+    /// invisible. That run takes ``Color/manualNodeWash`` instead.
+    ///
+    /// Nothing is *only* said by either wash — the monospaced face already
+    /// tells code from prose and a pill's word is its own label — but a tint
+    /// that cannot be seen is a tint that was not built, which is Kamron's
+    /// no-misleading-controls rule pointed at decoration.
     ///
     /// ### Why it is not `secondarySystemBackground`
     ///
@@ -583,14 +600,35 @@ extension Color {
     /// an inline run on an iPhone is washed the same colour as the same run on
     /// the dashboard and on Android.
     static let manualCodeWash = Color(UIColor { traits in
-        let wash = traits.userInterfaceStyle == .dark ? manualCodeWashDark : manualCodeWashLight
-        return UIColor(
+        opaque(traits.userInterfaceStyle == .dark ? manualCodeWashDark : manualCodeWashLight)
+    })
+
+    /// The wash under a `preview`/`plugin` word folded into a **map node's**
+    /// subtitle — Android's `SpanStyle(background = c.idleSoft)`
+    /// (`ManualScreen.kt:668`), which is a *different* token from the `sunken`
+    /// it washes a page's code runs with (`:872`).
+    ///
+    /// The port had one wash for both and that was a defect, not a
+    /// simplification: a node's card is `secondarySystemBackground`, and
+    /// ``Color/manualCodeWash`` on that is **1.008:1** — the two pills read as
+    /// plain words with extra spaces. This is Android's node wash composited
+    /// onto that card instead (``manualNodeWashLight``/``manualNodeWashDark``,
+    /// where the arithmetic is), **1.115:1** light and **1.206:1** dark, with
+    /// `fgMuted` over it at **5.98:1** and **5.68:1** — body text needs 4.5:1.
+    static let manualNodeWash = Color(UIColor { traits in
+        opaque(traits.userInterfaceStyle == .dark ? manualNodeWashDark : manualNodeWashLight)
+    })
+
+    /// A ``ManualWash`` — three sRGB components and no alpha — as the
+    /// `UIColor` a run's `backgroundColor` takes.
+    private static func opaque(_ wash: ManualWash) -> UIColor {
+        UIColor(
             red: CGFloat(wash.red),
             green: CGFloat(wash.green),
             blue: CGFloat(wash.blue),
             alpha: 1
         )
-    })
+    }
 }
 
 /// The manual's inline markup, drawn (`ManualText`, `ManualScreen.kt:861`).

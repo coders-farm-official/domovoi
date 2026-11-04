@@ -323,12 +323,18 @@ struct ManualMapStage: View {
                         levelKey: levelKey,
                         reduceMotion: reduceMotion,
                         // `5.5 + (i % 4) * 0.9` seconds (`:561`). Zero is
-                        // still, which is what Reduce Motion asks for.
-                        floatPeriod: reduceMotion ? 0 : 5.5 + Double(at % 4) * 0.9,
+                        // still, which is what Reduce Motion asks for — and
+                        // what ``ManualFloatClock`` asks for while a UI case
+                        // is driving this screen.
+                        floatPeriod: reduceMotion || !ManualFloatClock.on
+                            ? 0
+                            : manualFloatPeriod(at: at),
                         // Android phases the sine by `i * 0.7` seconds
-                        // (`:562`); a `delay` on a repeating animation is the
-                        // same idea, spent once at the start.
-                        floatPhase: Double(at % 8) * 0.7
+                        // (`:562`). Here it is a one-shot delay on a
+                        // repeating animation, so the wrap in
+                        // ``manualFloatPhase(at:)`` is load-bearing: it is
+                        // how long a card stands still before its first bob.
+                        floatPhase: manualFloatPhase(at: at)
                     ) {
                         manual.go(node.opens)
                     }
@@ -401,8 +407,8 @@ struct ManualMapNodeContent: Equatable {
 ///
 /// The name **scrambles into place** as its level opens
 /// (``ManualScrambleName``) — answer 30 — and the card floats
-/// (``float``) — answer 31. Both are ornament and both stop under Reduce
-/// Motion.
+/// (``floatAnimation``) — answer 31. Both are ornament and both stop under
+/// Reduce Motion.
 struct ManualMapNode: View {
 
     let node: ManualMapNodeContent
@@ -432,6 +438,15 @@ struct ManualMapNode: View {
     /// value change to animate — ``PrinterStatusDot``'s shape, which is this
     /// app's one other thing that never stops moving.
     @State private var floating = false
+
+    /// Whether the name is mid-scramble, written by ``ManualScrambleName``.
+    ///
+    /// It is here, on the control, and not kept private inside that view
+    /// because the *control* is the only thing a UI case can see: a node's
+    /// name is drawn inside a `Button`, and SwiftUI merges a button's children
+    /// into one accessibility element, so an identifier or a label on the
+    /// inner `Text` is not queryable. See ``scrambleState``.
+    @State private var nameScrambling = false
 
     var body: some View {
         Button(action: action) {
@@ -464,7 +479,8 @@ struct ManualMapNode: View {
                     ManualScrambleName(
                         text: node.title,
                         levelKey: levelKey,
-                        reduceMotion: reduceMotion
+                        reduceMotion: reduceMotion,
+                        scrambling: $nameScrambling
                     )
                 }
                 if !node.subtitle.isEmpty || !node.tags.isEmpty {
@@ -510,6 +526,12 @@ struct ManualMapNode: View {
         .accessibilityLabel(
             node.subtitle.isEmpty ? node.title : "\(node.title): \(node.subtitle)"
         )
+        // The one thing a UI case can read about the scramble — see
+        // ``scrambleState``. The **empty** string in every build that could
+        // ship, and in a DEBUG build nobody passed the argument to, which is
+        // no value at all: VoiceOver never hears it and the label above,
+        // which is the node's real name, is untouched either way.
+        .accessibilityValue(scrambleState)
         // ---- the float (`bob`, `ManualScreen.kt:559`), answer 31.
         //
         // ±5 points, and **5 here comes out as 5 × the node's scale** on
@@ -542,24 +564,67 @@ struct ManualMapNode: View {
 
     /// One bob, forever, or nothing at all.
     ///
+    /// **`delay` goes outside `repeatForever`, and the order is the bug the
+    /// review caught.** `.easeInOut(…).delay(phase).repeatForever(…)` makes
+    /// the delay part of the unit that repeats, so it is spent on *every*
+    /// cycle: a card with a 4.9 s phase would hold still at the top or the
+    /// bottom of its arc for 4.9 s between bobs, which is a stutter, not a
+    /// stagger. Android's bob is a continuous sine with the phase inside it
+    /// (`5f * sin(2π(t + i*0.7)/dur)`, `ManualScreen.kt:561-563`) and never
+    /// pauses. Delaying the repeating animation as a whole is the closest
+    /// SwiftUI gets: the card waits once, then bobs forever.
+    ///
     /// Written out rather than built inside `.animation(…)`: a chain of
     /// implicit members in the arm of a ternary whose other arm is `nil` is
     /// more inference than this needs to ask for.
     private var floatAnimation: Animation? {
         guard floatPeriod > 0 else { return nil }
         return .easeInOut(duration: floatPeriod)
-            .delay(floatPhase)
             .repeatForever(autoreverses: true)
+            .delay(floatPhase)
+    }
+
+    /// `"scrambling"` or `"settled"` while a UI case has asked for a slow
+    /// scramble, and `""` the rest of the time.
+    ///
+    /// ### Why there is a seam here at all
+    ///
+    /// The scramble's whole point is that the drawn glyphs are **nobody's**
+    /// label and nobody's value (see ``ManualScrambleName``), so nothing in
+    /// the accessibility tree carries them and no UI case can assert that the
+    /// effect is running. The review's finding was the consequence:
+    /// `testManual_ANodeIsNamedWhileItsNameScrambles` passed with
+    /// ``ManualScrambleName`` deleted outright, because the label it checks
+    /// predates the effect. A case that cannot fail is not a test.
+    ///
+    /// So one bit of state is exposed — *whether* a scramble is in flight,
+    /// never what it is drawing — and only to a process that asked for
+    /// `-domovoi-manual-scramble`, which is DEBUG-only
+    /// (``ManualScrambleClock``). In anything that could ship this property is
+    /// the empty string and this file behaves exactly as it reads.
+    ///
+    /// It is a value and not a label on purpose: a label is the node's name
+    /// and that claim is the other half of the same case.
+    private var scrambleState: String {
+        guard ManualScrambleClock.slowed else { return "" }
+        return nameScrambling ? "scrambling" : "settled"
     }
 
     /// The subtitle with the `preview` and `plugin` words folded into it
     /// (`:660`), each washed as the Kotlin washes them
     /// (`SpanStyle(background = c.idleSoft)`, `:668`).
     ///
-    /// The wash is ``Color/manualCodeWash`` — the same opaque token the pills
-    /// inside a page's prose take, so the two words look the same wherever
-    /// this screen draws them. `fgMuted` on it is **6.72:1** light and
-    /// **7.77:1** dark. It used to be plain text, because a translucent
+    /// The wash is ``Color/manualNodeWash`` and **not** the
+    /// ``Color/manualCodeWash`` a page's inline runs take. That is not a
+    /// style preference: this card is `secondarySystemBackground`, the page's
+    /// prose is on the page, and `--sunken` on a `secondarySystemBackground`
+    /// card measures **1.008:1** — a wash with no visible tint at all, which
+    /// is how the first version of this shipped and what the review caught.
+    /// Android has two tokens here for the same reason (`idleSoft` over
+    /// `card` at `:668`, `sunken` over the page at `:872`), and this is its
+    /// first one, composited opaque. **1.115:1** against the card light and
+    /// **1.206:1** dark, with `fgMuted` over it at **5.98:1** and **5.68:1**;
+    /// body text needs 4.5:1. It used to be plain text, because a translucent
     /// inline background has no ratio to state; an opaque one does.
     private var secondLine: AttributedString {
         var out = AttributedString()
@@ -567,7 +632,7 @@ struct ManualMapNode: View {
         for tag in node.tags {
             if !out.characters.isEmpty { out += AttributedString("  ") }
             var run = AttributedString(" \(tag) ")
-            run.backgroundColor = Color.manualCodeWash
+            run.backgroundColor = Color.manualNodeWash
             out += run
         }
         return out
@@ -576,21 +641,26 @@ struct ManualMapNode: View {
 
 // MARK: - the name that scrambles into place
 
-/// The alphabet a scrambling name is drawn from (`GLYPHS`,
-/// `ManualScreen.kt:169`), character for character.
-///
-/// Every one of them is a single ASCII glyph, which is what makes the effect
-/// safe here: see ``ManualScrambleName``.
-let manualScrambleGlyphs = Array("ABCDEFGHKMNPRSTVXZ0123456789#%&*/<>")
-
 /// How fast a name scrambles: nine frames, 24 ms apart (`ScrambleText`,
 /// `:688` — `steps = 8`, `delay(24)`), so 216 ms in all.
+///
+/// The alphabet and the per-frame arithmetic are **not** here. They are
+/// ``manualScrambleGlyphs`` and
+/// ``manualScrambleFrame(of:frame:steps:glyph:)`` in DomovoiKit, where a
+/// package test can reach them: with the loop inlined in a view's `.task`,
+/// the settle arithmetic — the half of answer 30 that can be wrong without
+/// anybody seeing it on a screenshot — had no test anywhere, which is what
+/// the review found.
 enum ManualScrambleClock {
 
-    static let steps = 8
+    static let steps = manualScrambleSteps
 
     /// 24 ms, unless a DEBUG launch argument slows it down.
     static var frame: Duration { .milliseconds(frameMS) }
+
+    /// Whether a case asked for a slow scramble. The only state in which a
+    /// node publishes ``ManualMapNode/scrambleState``.
+    static var slowed: Bool { frameMS != 24 }
 
     /// `-domovoi-manual-scramble <ms>`: a UI case cannot assert anything
     /// about a 216 ms effect it will never be inside, so it can ask for a
@@ -611,35 +681,81 @@ enum ManualScrambleClock {
     }()
 }
 
+/// Whether the cards bob at all — the float's one knob.
+///
+/// ### Why a UI test turns it off
+///
+/// Ten cards each carrying a `repeatForever` animation are ten animations
+/// that never finish, and XCUITest's every query waits for the app under test
+/// to go idle first. This app already ships forever-animating layers
+/// (``PrinterStatusDot``, every `ProgressView`), but one small dot is not ten
+/// cards filling the screen a whole suite of cases is driving, and the cost of
+/// being wrong is every Manual case idle-timing-out on a shared train.
+///
+/// So the float is **off** for the cases in `StubHouseUITests+Manual.swift`,
+/// which all launch through `manualLaunch(…)` and pass
+/// `-domovoi-manual-float-off`, and **on** everywhere else — including in one
+/// case of its own (`testManual_TheMapWorksWhileItsNodesFloat`) that passes
+/// `-domovoi-manual-float-on` and drives the map with the cards moving. If
+/// forever-animating nodes do hang XCUITest, that is the one case that hangs
+/// and the rest of the screen stays testable; if they do not, the knob costs
+/// nothing.
+///
+/// Both arguments are DEBUG-only and read once at launch, like
+/// ``ManualScrambleClock`` and ``AuditStrip``: a shipping build always floats.
+enum ManualFloatClock {
+
+    static let on: Bool = {
+        #if DEBUG
+        let args = ProcessInfo.processInfo.arguments
+        if args.contains("-domovoi-manual-float-off") { return false }
+        if args.contains("-domovoi-manual-float-on") { return true }
+        #endif
+        return true
+    }()
+}
+
 /// A node's name, retyped from the glyph alphabet as its level opens
 /// (`ScrambleText`, `ManualScreen.kt:683`) — **answer 30**, "bring the
 /// scramble back (it is meant to impress), leaving the accessibility label
 /// alone".
 ///
-/// ### Only the drawn glyphs change
+/// ### The real name is what the card is measured by
 ///
-/// The effect is `redacted`-style: it replaces characters in the **string
-/// being drawn** and nothing else. Two things make that safe, and they are the
-/// two objections the first port left it out over:
+/// The glyph frame is drawn in an **overlay** over the real name, which is
+/// what occupies the layout; the real name is only made transparent. So the
+/// card's width, its height and its wrap points come from `text` and from
+/// nothing else, at every frame, and a scramble **cannot** reflow the card.
 ///
-///  * **VoiceOver never reads gibberish.** The accessibility label of this
-///    `Text` is the real name, and the label of the control it sits in is
-///    `"<title>: <subtitle>"` set on the ``ManualMapNode`` button, so the
-///    scrambled run is not any element's label for a single frame. Android's
-///    scramble *is* its node's text, which is why its `contentDescription`
-///    being set at `:650` is the thing that saves it there too — but here it
-///    is said twice, because a case that reaches a node by its name
-///    (``manualNode``, every map case in this item) must not be racing an
-///    animation.
-///  * **The glyph run is exactly as wide as the name.** The name is drawn
-///    monospaced (`.system(.footnote, design: .monospaced)`), every glyph in
-///    ``manualScrambleGlyphs`` is one ASCII character, spaces are left where
-///    they are, and the scrambled string has the same character count as the
-///    real one — so it occupies the same advance, wraps at the same place, and
-///    the card cannot change height while it runs. That was the other reason
-///    it was dropped: in a proportional face a run of `#%&*` *is* wider than
-///    the name, and a node whose height is a `minHeight` would have grown
-///    under it.
+/// That is the review's finding, and the first version of this argued its way
+/// past it: it drew the glyph frame as the text, and reasoned that a
+/// monospaced face plus single-ASCII glyphs plus an unchanged character count
+/// meant an unchanged layout. The arithmetic was right and the conclusion was
+/// wrong — `/` is in ``manualScrambleGlyphs`` and opens a line-break
+/// opportunity where the letter it replaced had none, so a two-line name near
+/// its wrap boundary could take a third line mid-effect, and this card is a
+/// `minHeight` with no `lineLimit`, so it would have grown and taken the
+/// stage with it. Android cannot have that bug because its node is a fixed
+/// height and its name is `maxLines = 2, overflow = Ellipsis`
+/// (`ManualScreen.kt:667`, `:703`); this port keeps neither, on purpose, so
+/// that a name can grow with Dynamic Type. The overlay is how it keeps both
+/// things.
+///
+/// A glyph frame that *would* have needed more room is clipped to the real
+/// name's box rather than allowed to push anything — 216 ms of a clipped
+/// glyph, against a card that resizes under the reader's finger.
+///
+/// ### VoiceOver never reads gibberish
+///
+/// The effect replaces characters in the **string being drawn** and nothing
+/// else. The accessibility label of the laid-out `Text` is the real name, the
+/// overlay is hidden from accessibility outright, and the control these sit in
+/// carries `"<title>: <subtitle>"` (``ManualMapNode``), so the glyph run is
+/// not any element's label or value for a single frame. Android's scramble
+/// *is* its node's text, which is why its `contentDescription` at `:650` is
+/// what saves it there too — here it is said three times, because a case that
+/// reaches a node by its name (``manualNode``, every map case in this item)
+/// must not be racing an animation.
 ///
 /// Under Reduce Motion the name is drawn straight — the same cut the 280 ms
 /// zoom takes (``ManualMapStage``), and Android's own `reduce` branch
@@ -650,91 +766,74 @@ struct ManualScrambleName: View {
     let levelKey: String
     let reduceMotion: Bool
 
-    /// What is on screen. Empty until the first frame, and empty means the
-    /// real name: a node must never draw blank, not even for one frame.
-    @State private var shown = ""
+    /// Raised while a frame of glyphs is on screen, for the control that owns
+    /// this name to publish: ``ManualMapNode/scrambleState`` is the only thing
+    /// a UI case can read about the effect, and a `Button`'s children are
+    /// merged into one accessibility element, so it cannot live down here.
+    @Binding var scrambling: Bool
+
+    /// The frame on screen, or `""` for "the real name, as laid out".
+    @State private var glyphs = ""
 
     var body: some View {
-        Text(shown.isEmpty ? text : shown)
-            .font(.system(.footnote, design: .monospaced).weight(.semibold))
-            .multilineTextAlignment(.leading)
-            .fixedSize(horizontal: false, vertical: true)
+        name(text)
+            // Transparent, not absent: it is still the thing being measured.
+            .opacity(glyphs.isEmpty ? 1 : 0)
             // The real name, always — see this view's note.
             .accessibilityLabel(text)
+            .overlay(alignment: .topLeading) {
+                if !glyphs.isEmpty {
+                    name(glyphs)
+                        // The overlay is proposed the real name's size; this
+                        // frame takes all of it and the clip keeps a glyph
+                        // frame that wanted more lines inside it.
+                        .frame(
+                            maxWidth: .infinity,
+                            maxHeight: .infinity,
+                            alignment: .topLeading
+                        )
+                        .clipped()
+                        .accessibilityHidden(true)
+                }
+            }
             // `LaunchedEffect(key, text)` (`:685`): the name scrambles again
             // when the level changes, and when the document changes under it,
             // and at no other time. A `.task(id:)` is cancelled and restarted
             // on exactly those two.
-            //
-            // The loop is written **here** rather than in a method of its
-            // own: this app's screens all drive their timers inside the
-            // closure (`ChatMoreTalkView.swift:97`), and a `private func …
-            // async` that writes `@State` is the one shape Swift 6's
-            // isolation checking has an opinion about.
-            .task(id: "\(levelKey)\u{1}\(text)") {
-                guard !reduceMotion else {
-                    shown = text
-                    return
-                }
-                let letters = Array(text)
-                let steps = ManualScrambleClock.steps
-                for frame in 0...steps {
-                    // `i < frame / steps * length` (`:692`): the name settles
-                    // from the left, a slice at a time.
-                    let settled = Int(
-                        Double(frame) / Double(steps) * Double(letters.count)
-                    )
-                    shown = String(
-                        letters.enumerated().map { at, letter in
-                            at < settled || letter == " "
-                                ? letter
-                                : (manualScrambleGlyphs.randomElement() ?? letter)
-                        }
-                    )
-                    // `try?` and a cancellation check, not `do/catch`: a
-                    // cancelled sleep must leave the loop, and the real name
-                    // goes back on screen below whichever way it left.
-                    try? await Task.sleep(for: ManualScrambleClock.frame)
-                    if Task.isCancelled { break }
-                }
-                shown = text
+            .task(id: "\(levelKey)\u{1}\(text)") { await scramble() }
+    }
+
+    /// The name, drawn. One function, so the laid-out copy and the overlay
+    /// cannot be given different fonts — which would make the overlay a
+    /// different size from the box it is clipped to.
+    private func name(_ string: String) -> some View {
+        Text(string)
+            .font(.system(.footnote, design: .monospaced).weight(.semibold))
+            .multilineTextAlignment(.leading)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    /// Nine frames of ``manualScrambleFrame(of:frame:steps:glyph:)``, then the
+    /// real name.
+    ///
+    /// The loop is written **here** rather than in DomovoiKit because it is
+    /// the timing; the arithmetic inside it is in DomovoiKit because it is the
+    /// behaviour. `try?` and a cancellation check, not `do`/`catch`: a
+    /// cancelled sleep must leave the loop, and the real name comes back on
+    /// screen whichever way it left.
+    private func scramble() async {
+        guard !reduceMotion else { return }
+        let letters = Array(text)
+        guard !letters.isEmpty else { return }
+        scrambling = true
+        for frame in 0...ManualScrambleClock.steps {
+            glyphs = manualScrambleFrame(of: letters, frame: frame) {
+                manualScrambleGlyphs.randomElement() ?? " "
             }
-    }
-}
-
-/// A piece's `preview` and `plugin` words, in the document's own wording
-/// (`MapNode`'s folded pills, `ManualScreen.kt:660`, and `PiecePage`'s,
-/// `:755`).
-func manualPieceTags(_ piece: ManualPiece, _ doc: ManualDoc) -> [String] {
-    var tags: [String] = []
-    if piece.preview {
-        tags.append(doc.label("preview", "text", fallback: ManualStrings.Fallback.preview))
-    }
-    if piece.plugin != nil {
-        tags.append(doc.label("plugin", "text", fallback: ManualStrings.Fallback.plugin))
-    }
-    return tags
-}
-
-/// A topic's glyph (`TOPIC_ICONS`, `ManualScreen.kt:171`).
-///
-/// **A choice, not a transcription**, for ``Route/systemImage``'s reason:
-/// there is no mapping from Material's names to SF Symbols, so each one is
-/// the nearest symbol Apple ships, picked against the Material glyph. A topic
-/// the document adds later falls to the same `HelpOutline` the Kotlin falls
-/// to.
-func manualTopicIcon(_ topic: String) -> String {
-    switch topic {
-    case "how-it-works": return "cpu"
-    case "things-to-say": return "bubble.left"
-    case "rooms-and-devices": return "dot.radiowaves.left.and.right"
-    case "your-phone": return "iphone"
-    case "music-and-media": return "music.note"
-    case "chat-files-calendar": return "folder"
-    case "chat-and-help": return "bubble.left.and.bubble.right"
-    case "documents-and-letters": return "doc.text"
-    case "people-and-privacy": return "person.2"
-    case "keeping-it-running": return "wrench.and.screwdriver"
-    default: return "questionmark.circle"
+            try? await Task.sleep(for: ManualScrambleClock.frame)
+            if Task.isCancelled { break }
+        }
+        glyphs = ""
+        scrambling = false
     }
 }
