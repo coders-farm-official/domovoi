@@ -891,6 +891,55 @@ final class DropInCallModelTests: XCTestCase {
         XCTAssertEqual(model.tab, .overview)
     }
 
+    /// **Saying the room screen has gone writes nothing that screen draws.**
+    ///
+    /// Review round 3's must, on the half of it a case can reach. The screen
+    /// crossed a view identity under a live drop-in sheet because its
+    /// `onDisappear` — which a covered view goes on receiving while it is
+    /// still mounted, the whole reason ``RoomsModel/holders`` is a count —
+    /// wrote the state its `body` drew from. The view half is one call site
+    /// now (``RoomsRoomScreen``); this is the model half:
+    ///
+    ///  * ``RoomsModel/close()`` leaves ``RoomsModel/tab`` alone. It is what
+    ///    ``RoomsDetailView``'s body switches on, and a `switch`'s branches
+    ///    are separate identities, so a reset to `overview` under that sheet
+    ///    destroyed ``RoomsDropInRow`` and the `@State` holding the sheet up
+    ///    — exactly the unmount Android's comment warns about
+    ///    (`SatOverviewTab.kt:559-563`);
+    ///  * it leaves the room's **reads** alone, so a repeat of the callback
+    ///    cannot make the screen ask seven endpoints again;
+    ///  * and it clears ``RoomsModel/openRoomID``, which is the point: a
+    ///    popped room's reads must stop answering the house's pushes behind
+    ///    the roster (``RoomsModel/received(_:)`` goes through `openReads`),
+    ///    and a **fresh push** of the same room then starts on its overview
+    ///    because ``RoomsModel/open(_:)`` is no longer a no-op.
+    func testClosingARoomLeavesTheTabAndTheRoomsReadsAlone() async {
+        let (model, _, _) = roomsRig()
+        model.hold()
+        model.open("kitchen")
+        model.select(.timers)
+        let reads = model.reads(for: "kitchen")
+
+        model.close()
+
+        XCTAssertNil(model.openRoomID, "the room is still the open one after a pop")
+        XCTAssertEqual(
+            model.tab,
+            .timers,
+            "`close()` put the tab strip back to `overview` — under a live "
+                + "drop-in sheet that is the unmount this must is about"
+        )
+        XCTAssertTrue(
+            model.reads(for: "kitchen") === reads,
+            "`close()` dropped the room's reads"
+        )
+
+        // The fresh push: the same room, opened again, starts on its overview.
+        model.open("kitchen")
+        XCTAssertEqual(model.tab, .overview, "a re-pushed room did not start on its overview")
+        XCTAssertTrue(model.openReads === reads, "and it rebuilt the room's reads")
+    }
+
     /// `+ add` is the server's answer and nothing else (D55): a row the
     /// server did not offer cannot be added, however it is asked for.
     ///

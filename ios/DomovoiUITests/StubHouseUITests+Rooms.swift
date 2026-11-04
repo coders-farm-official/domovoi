@@ -32,10 +32,14 @@ import XCTest
 ///  * ``testRooms_VolumeSendsTheLevelOnce`` drags from the fallback 50 rather
 ///    than from a reported level.
 ///
-/// The one exception is D54's two cases. A phone can only drop into a room
-/// whose microphone can do two-way audio, and `full_duplex` is on the roster
-/// row and nowhere else — so against the house there is no room this phone
-/// could call, and ``RoomsOverviewView`` draws no control for one on purpose.
+/// The one exception is D54's cases. A phone can only drop into a room whose
+/// microphone can do two-way audio, and `full_duplex` is on the roster row
+/// and nowhere else — so against the house there is no room this phone could
+/// call. The control is still **drawn** for such a room, and `disabled`, with
+/// ``RoomsStrings/noAecMic`` the line above it saying why (Android composes
+/// its button after the `!s.full_duplex` arm too, `SatOverviewTab.kt:564`,
+/// and the gate is `roomsPhoneDropInEnabled(_:callIsBusy:)`) — so what the
+/// house's roster cannot give a case is a drop-in it can **press**.
 /// `fixtures/rooms.py` therefore claims `/api/satellites` **conditionally**,
 /// as `fixtures/manual.py` already does: unless a case arms `rooms-roster`
 /// the fixture answers False for that path and the request falls through to
@@ -67,11 +71,12 @@ extension StubHouseUITests {
     /// scope and a cancelled timer.
     /// `roster` arms the fixture's own roster **before the launch**, which is
     /// the only way a room with an echo-cancelling array reaches this screen:
-    /// the house's roster sends no `full_duplex` (see this extension's note)
-    /// and a room without it draws no drop-in control at all, on purpose. The
-    /// fixture answers that path only when it is armed and otherwise leaves it
-    /// to the house, so every case that passes nothing here sees what it saw
-    /// before (`fixtures/rooms.py`, `_roster`).
+    /// the house's roster sends no `full_duplex` (see this extension's note),
+    /// and a room without it draws the drop-in control `disabled` under
+    /// ``RoomsStrings/noAecMic`` — honest, and not something a case can
+    /// press. The fixture answers that path only when it is armed and
+    /// otherwise leaves it to the house, so every case that passes nothing
+    /// here sees what it saw before (`fixtures/rooms.py`, `_roster`).
     @MainActor
     func roomsOpen(
         mode: String = StubHouseUITests.ordinaryTypeSize,
@@ -1555,7 +1560,11 @@ extension StubHouseUITests {
             "the roster never reported the call, so this case proved nothing "
                 + "— the state socket's push is what re-reads it"
         )
-        evidence(app, "rooms-30-dropin-roster-flipped")
+        // `29b`, inside the drop-in family and after `29-dropin-busy`:
+        // `rooms-30-` is the Dynamic Type pair's (`rooms-30-type-…`), and two
+        // cases sharing a sequence number stop the evidence being a reading
+        // order even though the filenames differ.
+        evidence(app, "rooms-29b-dropin-roster-flipped")
         // The sheet is still the thing in front, and the call is still on.
         XCTAssertTrue(
             containing(app, RoomsStringsUnderTest.twoWayAudioKitchen).exists,

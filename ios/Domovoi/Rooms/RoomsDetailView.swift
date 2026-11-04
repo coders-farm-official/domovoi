@@ -40,9 +40,28 @@ struct RoomsDetailView: View {
     let model: RoomsModel
 
     /// **The roster's row, as it is now** — never a copy taken when the room
-    /// was opened (``RoomsModel/openRoom``). A room that goes offline while
-    /// its detail is up has to say so.
+    /// was opened. A room that goes offline while its detail is up has to say
+    /// so, which is why ``RoomsRoomScreen`` looks it up on every redraw.
     let room: RoomsSatellite
+
+    /// This room's reads, resolved by ``RoomsRoomScreen`` from the id it was
+    /// pushed with — and **not** ``RoomsModel/openReads``.
+    ///
+    /// Review round 3's must. `openReads` is derived from
+    /// ``RoomsModel/openRoomID``, which the screen's own `onDisappear` used
+    /// to clear; that callback arrives while this view is still mounted
+    /// (``RoomsView``'s `visible` and ``RoomsModel/holders`` both exist
+    /// because a covered view keeps receiving it), so the whole tab body —
+    /// ``RoomsDropInRow`` and the `@State` holding its call sheet up with it
+    /// — came down under a live call. What is drawn here now follows the
+    /// pushed room and the roster, and nothing the lifetime writes.
+    ///
+    /// Optional for one frame only: `body` runs before the screen's
+    /// `onAppear`, and the reads are taken there rather than built inside a
+    /// `body` that also reads ``RoomsModel``'s cache. It is never put back to
+    /// nil, so the branch below is crossed once, before anything is on screen
+    /// to lose.
+    let reads: RoomsRoomModel?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -78,7 +97,7 @@ struct RoomsDetailView: View {
 
     @ViewBuilder
     private var tabBody: some View {
-        if let reads = model.openReads {
+        if let reads = reads {
             switch model.tab {
             case .overview:
                 RoomsOverviewView(shell: shell, model: model, reads: reads, room: room)
@@ -120,8 +139,35 @@ struct RoomsDetailView: View {
 /// ``RoomsOpenRoom`` carries the id, and the row is looked up in the roster
 /// on every redraw — never captured when the push was made. A room that goes
 /// offline, starts playing or joins a call while its screen is up has to say
-/// so, which is ``RoomsModel/openRoom``'s whole point. A room that drops off
-/// the roster entirely says that instead of drawing a stale copy.
+/// so. A room that drops off the roster entirely says that instead of drawing
+/// a stale copy.
+///
+/// ### What is drawn comes from the pushed id, not from the model's lifetime
+///
+/// Review round 3's must, and the same mistake ``RoomsOverviewView`` was
+/// corrected for one layer down. This body used to draw ``RoomsDetailView``
+/// from **two** arms of an `if`/`else if` — ``RoomsModel/openRoom`` first,
+/// the roster second — and the `onDisappear` below used to call
+/// ``RoomsModel/close()``, which cleared the property the first arm asked
+/// about. Two arms of one `if` are two structural identities, so crossing
+/// from the first to the second destroys everything under it and builds it
+/// again: ``RoomsDropInRow``'s `@State showing` is in there, so a live call's
+/// sheet went with it, and `onDismiss` either fired and hung the call up or
+/// did not and left a microphone open in somebody's kitchen with no sheet.
+///
+/// Both arms ran the same query — the roster, by id — so there is one arm
+/// now, and nothing a lifetime callback writes decides what is drawn:
+///
+///  * the **room** is `model.rooms.first { $0.roomID == open.roomID }`, which
+///    is what ``RoomsModel/openRoom`` computes when the open room is this
+///    one and is defined whether or not anything has been told a room is
+///    open;
+///  * the **reads** are taken once in `onAppear` (``reads``) instead of read
+///    back out of ``RoomsModel/openReads``, which is derived from the same
+///    cleared property;
+///  * ``RoomsModel/close()`` no longer touches ``RoomsModel/tab``, which is
+///    what ``RoomsDetailView``'s body switches on — a `switch`'s branches
+///    are identities too.
 struct RoomsRoomScreen: View {
 
     /// The shell, for the one thing a room screen needs from it: this phone's
@@ -140,17 +186,26 @@ struct RoomsRoomScreen: View {
     /// arrive.
     @State private var held = false
 
+    /// This room's reads, taken in `onAppear` and never given back.
+    ///
+    /// Taken there rather than in `body` for two reasons.
+    /// ``RoomsModel/reads(for:)`` builds and **caches** on first use, and a
+    /// `body` that writes the cache it also reads is a redraw asking for
+    /// itself. And an `@State` of this view's is the one place a reads object
+    /// cannot be taken away from under a live call — ``RoomsModel/openReads``
+    /// can, which is the must above.
+    @State private var reads: RoomsRoomModel?
+
+    /// The pushed room, as the roster has it **now**.
+    private var room: RoomsSatellite? {
+        model.rooms.first { $0.roomID == open.roomID }
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                if let room = model.openRoom, room.roomID == open.roomID {
-                    RoomsDetailView(shell: shell, model: model, room: room)
-                } else if let room = model.rooms.first(where: { $0.roomID == open.roomID }) {
-                    // The model has not been told yet: `body` is evaluated
-                    // before the `onAppear` below runs, so the first frame
-                    // asks for a room nothing has opened. Draw the row we
-                    // have rather than a spinner that lasts one frame.
-                    RoomsDetailView(shell: shell, model: model, room: room)
+                if let room = room {
+                    RoomsDetailView(shell: shell, model: model, room: room, reads: reads)
                 } else {
                     // The room left the roster while this screen was up — a
                     // rename on the dashboard, or a room that was forgotten.
@@ -184,16 +239,30 @@ struct RoomsRoomScreen: View {
         // ``RoomsModel/open(_:)`` is idempotent, so re-entering cannot put
         // the tab strip back to `overview`, which is the one harm `.task`
         // was there to prevent.
+        //
+        // **What these two may write, after review round 3's must.** A
+        // covered view goes on receiving this pair — that is the whole
+        // reason ``RoomsModel/holders`` is a count — so neither of them may
+        // write anything `body` draws from. `hold()`/`release()` are a
+        // balanced count and ``RoomsModel/close()`` is now
+        // ``RoomsModel/openRoomID`` alone, which nothing on this screen
+        // reads any more. The reads are taken into ``reads`` here for the
+        // same reason.
         .onAppear {
             guard !held else { return }
             held = true
             model.open(open.roomID)
+            reads = model.reads(for: open.roomID)
             model.hold()
         }
         .onDisappear {
             guard held else { return }
             held = false
             model.release()
+            // Said here and not left to `stop()`: popping back to the roster
+            // does not stop the model (the roster re-holds it), and no room
+            // is open once this screen is gone — a push that lands on the
+            // room's reads is a read of a screen nobody is looking at.
             model.close()
         }
     }

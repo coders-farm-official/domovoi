@@ -179,18 +179,33 @@ public final class DropInAudioEngine: DropInAudio, @unchecked Sendable {
     /// one that already holds it finishes scheduling before the detach can
     /// start.
     ///
-    /// ### The ordering rule, which review round 2 found the hole in
+    /// ### The ordering rule, and which threads it is actually about
     ///
     /// **This lock is the outer one.** Whoever wants both takes ``playLock``
     /// first and ``lock`` second, and nobody takes ``playLock`` while holding
-    /// ``lock``. ``play(_:)`` does that already; ``start()`` now does too, and
-    /// round 2 found why it has to: it attached and `play()`ed the node under
-    /// ``lock`` alone, so a call begun while a hang-up was between `lock`'s
-    /// release and the detach attached a node the teardown was about to take
-    /// away. Taking ``playLock`` *inside* ``lock`` there would have inverted
-    /// the order against ``play(_:)`` and deadlocked instead, which is why
-    /// ``start()`` takes this one first and holds both for its whole body.
+    /// ``lock``. ``play(_:)`` does that, and ``start()`` does too — it holds
+    /// both for its whole body, because taking ``playLock`` *inside* ``lock``
+    /// there would invert the order against ``play(_:)`` and deadlock.
     /// ``stop()`` holds neither when it comes here.
+    ///
+    /// **The concurrency this is against is ``play(_:)``, and only that.**
+    /// Review round 3 was right to narrow the claim round 2 left here. The
+    /// off-actor entry points of this type are exactly two — the tap block
+    /// (``captured(_:into:)``) and ``play(_:)``, which ``DropInCallModel``
+    /// calls from the socket's `binary` callback without a hop
+    /// (`DropInCallModel.swift:266`) — while ``start()`` and ``stop()`` are
+    /// reached only from that model's own methods (`:234`, `:404`), and it is
+    /// `@MainActor` (`:43-45`). So `start()` against `stop()` is not an
+    /// interleave that exists: what ``start()`` needs this lock for is a
+    /// frame arriving from a previous call's socket while it attaches and
+    /// `play()`s the node.
+    ///
+    /// It is worth saying what a lock would **not** buy if that ever changed,
+    /// because it would be the obvious thing to reach for: mutual exclusion
+    /// only makes the bad outcome atomic. A `start()` that ran wholly before
+    /// `stop()`'s `playLock` section still ends with `running == true` and a
+    /// detached node. Keeping `start()`/`stop()` on one actor is the
+    /// invariant; the locks are for the frames.
     private let playLock = NSLock()
 
     private let engine = AVAudioEngine()
@@ -211,11 +226,13 @@ public final class DropInAudioEngine: DropInAudio, @unchecked Sendable {
     public init() {}
 
     public func start(onFrame: @escaping @Sendable (Data) -> Void) throws {
-        // ``playLock`` OUTSIDE ``lock``, for the whole of this: the attach and
-        // the `play()` below touch the node ``stop()`` detaches, and the
-        // ordering rule is on ``playLock``. Held across `engine.start()`,
-        // which only blocks a concurrent ``play(_:)`` — and a frame that
-        // arrives before the engine is up has nothing to be scheduled onto.
+        // ``playLock`` OUTSIDE ``lock``, for the whole of this: the attach
+        // and the `play()` below touch the node ``play(_:)`` schedules onto,
+        // and the ordering rule is on ``playLock``. The thing it keeps out is
+        // a frame from the previous call's socket, which is the only caller
+        // that arrives here off the main actor; held across `engine.start()`
+        // for the same reason, and a frame that arrives before the engine is
+        // up has nothing to be scheduled onto anyway.
         playLock.lock()
         defer { playLock.unlock() }
         lock.lock()

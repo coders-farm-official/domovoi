@@ -256,6 +256,11 @@ public final class RoomsModel {
     /// said a sheet can fire `onAppear` again, and `hold()`/`release()` were
     /// on that same `onAppear`. One mechanism now drives all four, and this
     /// is what makes it safe.
+    ///
+    /// A **fresh push** of the same room is a different thing from a repeated
+    /// `onAppear`, and it does start on the overview: the pop ran
+    /// ``close()``, so `openRoomID` is nil by the time the new screen opens
+    /// the room and this runs in full.
     public func open(_ roomID: String) {
         guard openRoomID != roomID else { return }
         openRoomID = roomID
@@ -265,9 +270,25 @@ public final class RoomsModel {
         version.refresh()
     }
 
+    /// No room is open: the screen that was drawing one has gone.
+    ///
+    /// **``openRoomID`` and nothing else**, which review round 3 narrowed it
+    /// to. It used to put ``tab`` back to `overview` as well, and that made
+    /// it unsafe for the one caller it has — ``RoomsRoomScreen``'s
+    /// `onDisappear`, which a covered view goes on receiving while it is
+    /// still mounted and drawing (the reason ``holders`` is a count at all).
+    /// ``tab`` is what that screen's body switches on, and a `switch`'s
+    /// branches are separate view identities, so a reset under a live drop-in
+    /// call would have destroyed the row holding its sheet up. Starting a
+    /// room on its overview is ``open(_:)``'s job, and with this clearing
+    /// ``openRoomID`` a re-push of the same room is no longer a no-op there.
+    ///
+    /// What this is still for: ``received(_:)`` and
+    /// ``RoomsRoomModel/followServerVolume(_:)`` go through ``openReads``,
+    /// and a popped room's seven reads must not keep answering the house's
+    /// pushes behind the roster.
     public func close() {
         openRoomID = nil
-        tab = .overview
     }
 
     /// Pick a tab, and read what it needs the first time it is shown.
