@@ -329,6 +329,18 @@ extension StubHouseUITests {
     /// about the stub's CSS would be a finding about nothing. If a train ever
     /// reports one that attributes to the page, the fixture is where it gets
     /// fixed, not the host.
+    ///
+    /// ### Train I003 reported one that attributes to nothing at all
+    ///
+    /// `Element has no description … | element: nil`, and not one named
+    /// finding beside it — no `close`, no `document` pill, where I002's audit
+    /// of the identical chrome in the text editor named three. The reading
+    /// was of a screen this editor had already been torn off, and
+    /// ``documentsEditorSurvivedTheAudit(_:_:)`` is both the witness that says
+    /// so and the note that places the cause. Until that lands, the anonymous
+    /// finding here is unexplained rather than excused: ``floorAndRest(_:)``
+    /// only floors the two Dynamic Type headlines, deliberately, and nothing
+    /// in this case widens that.
     @MainActor
     func testDocs_TheWebEditorAudits() throws {
         guard let app = documentsOpen() else { return }
@@ -337,7 +349,14 @@ extension StubHouseUITests {
                       "the web editor never drew the document")
         evidence(app, "docs-08-audit-web")
         let web = Self.floorAndRest(try auditIssues(app, "documents-web-editor"))
+        // Was this editor still there when the audit finished? In train I003
+        // it was not, in this case and in ``testDocuments_EditorAudit`` alike:
+        // ``documentsEditorSurvivedTheAudit(_:_:)`` has the cause and the two
+        // readings that place it. Asserted before the findings, because a
+        // reading of a torn-down screen is not this editor's.
+        let survived = documentsEditorSurvivedTheAudit(app, "documents-web-editor")
         app.terminate()
+        XCTAssertTrue(survived, Self.documentsAuditLostTheScreen)
 
         // Measured after the audit and in its own launches, as the other
         // audit case does: the pill and the bar are one `DocumentsEditorPill`

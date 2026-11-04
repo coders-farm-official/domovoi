@@ -759,33 +759,77 @@ extension StubHouseUITests {
     /// **only** for a label it has just watched grow. A label that does not
     /// grow fails with its two numbers printed, which is what a real defect
     /// looks like.
+    /// ### Train I003: one launch per audit, because an audit is not a read
+    ///
+    /// This case used to audit the text editor, tap `close`, open the
+    /// spreadsheet and audit that — two editors on one launch. In I003 the
+    /// `close` tap found no such button, and the snapshot XCTest took at that
+    /// moment is what placed it: the editor cover was **gone**, and the Files
+    /// screen underneath had reset to its first library (`Music`) from the
+    /// `Documents` the case had picked twelve seconds earlier. A whole
+    /// subtree had been rebuilt from scratch while the audit ran.
+    ///
+    /// The cause is ``documentsEditorSurvivedTheAudit(_:_:)``'s note, and it
+    /// is the shell's, not this screen's. What belongs here is the shape that
+    /// does not depend on it: **nothing is navigated after an audit**. Each
+    /// editor gets its own launch, its own audit, and then the app goes — so
+    /// an audit's side effects can cost at most the reading it was taking,
+    /// which the witness below reports honestly, rather than a `close` tap
+    /// three lines later whose failure says nothing about why.
     @MainActor
     func testDocuments_EditorAudit() throws {
-        guard let app = documentsOpen() else { return }
-        XCTAssertTrue(documentsTap(app, "shopping list.txt"), "the text file's row never built")
-        XCTAssertTrue(documentsBody(app).waitForExistence(timeout: 20), "the text editor never opened")
-        evidence(app, "documents-19-audit-text")
-        let text = Self.floorAndRest(try auditIssues(app, "documents-text-editor"))
-        app.buttons["close"].firstMatch.tap()
+        // Which audits read a screen that was still there when they finished.
+        // Collected rather than asserted inside, for the reason the two
+        // findings assertions are at the foot (below).
+        var lost: [String] = []
 
-        XCTAssertTrue(documentsTap(app, "a spreadsheet.xlsx"), "the spreadsheet's row never built")
-        XCTAssertTrue(app.textFields["A1"].waitForExistence(timeout: 20), "the grid never drew")
-        evidence(app, "documents-20-audit-sheet")
-        let sheet = Self.floorAndRest(try auditIssues(app, "documents-sheet-editor"))
+        func auditOf(
+            _ row: String,
+            ready: (XCUIApplication) -> Bool,
+            evidenceName: String,
+            auditName: String
+        ) throws -> [String] {
+            guard let app = documentsOpen() else { return [] }
+            XCTAssertTrue(documentsTap(app, row), "\(row)'s row never built")
+            XCTAssertTrue(ready(app), "\(row) never opened its editor")
+            evidence(app, evidenceName)
+            let found = Self.floorAndRest(try auditIssues(app, auditName))
+            if !documentsEditorSurvivedTheAudit(app, auditName) { lost.append(auditName) }
+            app.terminate()
+            return found.rest
+        }
+
         // **Both audits first, then the assertions.** `continueAfterFailure`
         // is false for this suite, so the text editor's four findings ended
         // train S008's case before the sheet editor was audited at all — and
         // the two bars were identical, so the sheet carried the same contrast
         // defect unreported for a round.
-        app.terminate()
+        let text = try auditOf(
+            "shopping list.txt",
+            ready: { documentsBody($0).waitForExistence(timeout: 20) },
+            evidenceName: "documents-19-audit-text",
+            auditName: "documents-text-editor"
+        )
+        let sheet = try auditOf(
+            "a spreadsheet.xlsx",
+            ready: { $0.textFields["A1"].waitForExistence(timeout: 20) },
+            evidenceName: "documents-20-audit-sheet",
+            auditName: "documents-sheet-editor"
+        )
+
+        // First, because a reading taken of a screen that had already gone is
+        // not a reading of these editors, and reporting its findings as theirs
+        // is the phantom defect ``auditIssues(_:_:)``'s own app-gone guard
+        // exists to prevent.
+        XCTAssertEqual([], lost, Self.documentsAuditLostTheScreen)
 
         let grew = documentsScalingGrew()
         XCTAssertEqual(
-            [], documentsUnexcused(text.rest, grew: grew),
+            [], documentsUnexcused(text, grew: grew),
             "the text editor has attributable audit findings"
         )
         XCTAssertEqual(
-            [], documentsUnexcused(sheet.rest, grew: grew),
+            [], documentsUnexcused(sheet, grew: grew),
             "the sheet editor has attributable audit findings"
         )
     }
@@ -830,6 +874,68 @@ extension StubHouseUITests {
             app.terminate()
         }
         return grew
+    }
+
+    /// The sentence the two audit cases fail with when the reading they took
+    /// was not of the editor they named.
+    static let documentsAuditLostTheScreen =
+        "the audit's own type-size sweep took the editor off the screen, so its findings "
+        + "are of whatever was left behind — see documentsEditorSurvivedTheAudit, the cause "
+        + "is ShellScrollAwayChrome's conditional branch and it is the shell's to fix"
+
+    /// Was the editor still on screen when the audit finished?
+    ///
+    /// ### An audit is not a read-only measurement
+    ///
+    /// `performAccessibilityAudit` re-renders the app at the larger content
+    /// size categories — that is how "Text of this element may be clipped at
+    /// larger Dynamic Type sizes" is decided — and since owner answer 29 this
+    /// app's header changes **shape** at those sizes. `ShellScrollAwayChrome`
+    /// (`ios/Domovoi/Shell/ShellChromeViews.swift`) wraps its `content` in
+    /// `if let title = fold.navigationTitle(crumb:) { content.navigationTitle(…)… }
+    /// else { content }`, which is a `_ConditionalContent`: two different
+    /// views as far as SwiftUI's structural identity is concerned. Each time
+    /// the sweep crosses `dynamicTypeSize.isAccessibilitySize` the branch
+    /// flips, the stack's whole subtree is rebuilt, every `@State` under it is
+    /// discarded and anything presented out of it is dismissed.
+    ///
+    /// ### What train I003 measured, which is why this is not a guess
+    ///
+    ///  * ``testDocuments_EditorAudit`` could not find `close` after the
+    ///    audit, and the snapshot XCTest took then has no editor at all — the
+    ///    Files screen is back, on `Music`, which is the first library
+    ///    ``FilesModel`` adopts when it is built fresh. The case had picked
+    ///    `Documents` twelve seconds before.
+    ///  * The audit of that same text editor came back with **one** anonymous
+    ///    finding (`Element has no description | element: nil`). Train I002
+    ///    audited the identical editor and came back with **three named**
+    ///    Dynamic Type findings — `close`, `save` and the `text` pill. Nothing
+    ///    about those three leaves changed in this batch; they were not on
+    ///    screen to be found.
+    ///  * ``testDocs_TheWebEditorAudits`` is the same reading of the same
+    ///    chrome at the same second of its run, with the same single
+    ///    anonymous finding and no named one.
+    ///
+    /// The clipped `domovoi / <page>` large title that every other unit's
+    /// audit case reported in I003 is the other half of the same flip: the
+    /// title only exists at the accessibility sizes, and the sweep draws it.
+    ///
+    /// So this is a witness, not a workaround. A reading taken of a screen
+    /// that had already gone tells you nothing about this editor, and
+    /// reporting its findings as the editor's is the phantom accessibility
+    /// defect ``auditIssues(_:_:)``'s own app-gone guard exists to prevent —
+    /// "the worst kind of result, because somebody goes looking for it in a
+    /// view that is fine".
+    ///
+    /// `close` is the witness because all four editors draw it, it is the one
+    /// leaf the host owns in every one of them, and it is what the tap that
+    /// found nothing was looking for.
+    @MainActor
+    func documentsEditorSurvivedTheAudit(_ app: XCUIApplication, _ name: String) -> Bool {
+        if app.buttons["close"].firstMatch.exists { return true }
+        print("=== \(name): THE EDITOR WAS GONE WHEN THE AUDIT FINISHED — tree follows ===")
+        print(app.debugDescription)
+        return false
     }
 
     /// One leaf of the editor's chrome by its word: `close` and `save` are
