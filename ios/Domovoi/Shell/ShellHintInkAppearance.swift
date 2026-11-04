@@ -74,32 +74,45 @@ import UIKit
 /// control that says this recoloured the hint and not the text.
 enum ShellHintInkAppearance {
 
-    /// Swap `UITextField.setPlaceholder:` for the version below, once.
+    /// Swap both of `UITextField`'s placeholder setters for the versions
+    /// below, once.
+    ///
+    /// **Both, because which one SwiftUI calls is SwiftUI's business.** The
+    /// element carries a `placeholderValue`, which says a placeholder was set
+    /// and not which property took it — and the two are documented to write
+    /// through to each other, so a reading of one does not settle the other.
+    /// Swapping the pair costs one more exchange and removes the question.
     ///
     /// Idempotent because exchanging twice puts the original back, which would
     /// be a silent undo: the flag is the whole guard against a second caller.
     @MainActor
     static func install() {
         guard !installed else { return }
-        guard
-            let original = class_getInstanceMethod(
-                UITextField.self,
-                #selector(setter: UITextField.placeholder)
-            ),
-            let replacement = class_getInstanceMethod(
-                UITextField.self,
+        let pairs: [(Selector, Selector)] = [
+            (
+                #selector(setter: UITextField.placeholder),
                 #selector(UITextField.shellHintInkSetPlaceholder(_:))
-            )
-        else {
-            // Nothing to do and nothing broken: the hint keeps Apple's grey
-            // and the two UI cases say so by measuring 1.7:1. **No
-            // `assertionFailure` here on purpose** — the UI train runs a Debug
-            // build, so a trap on this line would take every case in the
-            // suite down over a hint colour, and the measurement that is
-            // supposed to report it would never run.
-            return
+            ),
+            (
+                #selector(setter: UITextField.attributedPlaceholder),
+                #selector(UITextField.shellHintInkSetAttributedPlaceholder(_:))
+            ),
+        ]
+        for (apples, ours) in pairs {
+            guard
+                let original = class_getInstanceMethod(UITextField.self, apples),
+                let replacement = class_getInstanceMethod(UITextField.self, ours)
+            else {
+                // Nothing to do and nothing broken: the hint keeps Apple's
+                // grey and the two UI cases say so by measuring 1.7:1. **No
+                // `assertionFailure` here on purpose** — the UI train runs a
+                // Debug build, so a trap on this line would take every case in
+                // the suite down over a hint colour, and the measurement that
+                // is supposed to report it would never run.
+                continue
+            }
+            method_exchangeImplementations(original, replacement)
         }
-        method_exchangeImplementations(original, replacement)
         installed = true
     }
 
@@ -128,7 +141,12 @@ extension UITextField {
     /// grey; the cost of leaving it out and being wrong is a hung app on every
     /// screen with a field.
     @objc dynamic func shellHintInkSetPlaceholder(_ text: String?) {
-        // The exchanged implementation: this line is UIKit's own setter.
+        // The exchanged implementation: this line is UIKit's own setter, and
+        // it runs **first and unconditionally**. Whatever UIKit keeps in its
+        // plain slot is what `placeholder`, and so
+        // `XCUIElement.placeholderValue`, answers with; a version of this that
+        // skipped it to avoid the round trip would be trading a measured
+        // reading for a saved call.
         shellHintInkSetPlaceholder(text)
         guard let text, !text.isEmpty, !shellHintInkIsApplying else { return }
         shellHintInkIsApplying = true
@@ -142,6 +160,37 @@ extension UITextField {
             string: text,
             attributes: [.foregroundColor: HintInk.ink]
         )
+    }
+
+    /// The same for the attributed setter: whatever is handed in keeps its
+    /// text and its other attributes and gets ``HintInk/ink``.
+    ///
+    /// **It overrides a colour a call site chose, and no call site chooses
+    /// one**: `grep -rn "prompt:" ios/Domovoi/ --include=*.swift` returns one
+    /// line and it is a function parameter in `AssistantEngineHost`, not a
+    /// `TextField`'s. If one ever does, this is where it would be lost, so the
+    /// fix then is to leave an existing `.foregroundColor` alone rather than
+    /// to delete this leg — the 39 fields that set no colour are why it is
+    /// here.
+    ///
+    /// The recursion is bounded by the same flag: this calls the **original**
+    /// attributed setter by name (the implementations are exchanged), so it
+    /// cannot re-enter itself, and if UIKit syncs the plain slot from in here
+    /// the sibling above sees the flag and does nothing but pass the call on.
+    @objc dynamic func shellHintInkSetAttributedPlaceholder(_ text: NSAttributedString?) {
+        guard let text, text.length > 0, !shellHintInkIsApplying else {
+            shellHintInkSetAttributedPlaceholder(text)
+            return
+        }
+        shellHintInkIsApplying = true
+        defer { shellHintInkIsApplying = false }
+        let inked = NSMutableAttributedString(attributedString: text)
+        inked.addAttribute(
+            .foregroundColor,
+            value: HintInk.ink,
+            range: NSRange(location: 0, length: inked.length)
+        )
+        shellHintInkSetAttributedPlaceholder(inked)
     }
 }
 
