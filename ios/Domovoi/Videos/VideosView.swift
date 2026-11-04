@@ -35,6 +35,18 @@ import SwiftUI
 /// the **header**: a save is this app's own request, not `AVPlayer`'s, so
 /// none of ``VideoStream``'s token-in-a-URL reasoning applies to it.
 ///
+/// **And the save belongs to this screen, not to the feed.** A film takes
+/// minutes; the sheet it was started from takes one swipe to close and the
+/// player one more. So ``VideosModel/saves`` is held here, and this screen
+/// draws all three of the things a transfer needs — the percentage and the
+/// stop (``saving(_:)``), the share sheet a finished one ends in, and the
+/// toast a failed one says — for the case where the person has left the
+/// player. ``VideoFeedView`` draws the same three over the cover while the
+/// cover is up, because that is where the person is looking. Without this
+/// half, the two gestures that close the player left a film coming down with
+/// nothing on screen, no way to stop it, and a copy in the spool that nothing
+/// ever offered (REVIEW-2 finding 2).
+///
 /// ### What is not, and why there is no control for it
 ///
 /// **Share.** Sharing a *server* video is the one thing this app must not do
@@ -59,6 +71,19 @@ import SwiftUI
 /// recycled, so **no tile owns a task or a player**: the poster fetch belongs
 /// to ``VideoPosterStore`` and the playback to the feed, both of which
 /// outlive any tile.
+/// The finished copy of a saved video, as a `.sheet(item:)` needs it.
+///
+/// ``SaveToDeviceModel/State`` is not `Identifiable` and should not be — it is
+/// a state machine, and three of its four cases are not a thing. So this is
+/// the one case that is, with the file's own path as its identity: two
+/// different saves are two different sheets, and the same save re-read is one.
+struct VideosSavedFile: Identifiable {
+    let url: URL
+    let name: String
+
+    var id: String { url.path }
+}
+
 struct VideosView: View {
 
     let model: ShellModel
@@ -85,6 +110,7 @@ struct VideosView: View {
                 LazyVStack(alignment: .leading, spacing: 16) {
                     header
                     filterField
+                    if let videos { saving(videos) }
                     if let videos, let posters {
                         grid(videos, posters, scroller)
                     }
@@ -123,6 +149,44 @@ struct VideosView: View {
             videos?.serverChanged()
             posters?.serverChanged()
         }
+        // **A failed save, once the feed is gone.** ``VideoFeedView`` toasts
+        // it while the cover is up, because that is the view that is in front;
+        // this is the same sentence for the case where the person started a
+        // save and then left the player, which is the whole reason
+        // ``VideosModel/saves`` is held by the screen. Guarded on the feed
+        // being closed so the two cannot both say it.
+        .onChange(of: videos?.saves.state) { _, state in
+            guard let state, videos?.feed == nil else { return }
+            guard case .failed(let why) = state else { return }
+            model.showToast(why)
+            videos?.saves.taken()
+        }
+        // **And the finished file, once the feed is gone.** Same reason, and
+        // this is the gesture that had nothing: tap `save to device`, swipe
+        // the options sheet away, dismiss the player. The save kept running
+        // with no progress and no stop, and when it finished nothing presented
+        // a sheet — the copy sat in `domovoi-saved/sN/` until the next Videos
+        // save swept it (REVIEW-2 finding 2). ``FilesView`` never had the hole
+        // because its save row and its share sheet are both on the screen that
+        // owns the model, which is what these three modifiers and
+        // ``saving(_:)`` make true here.
+        //
+        // **Only while the cover is down.** A `.sheet` and a
+        // `.fullScreenCover` asked to present from the same view at the same
+        // moment is the coexistence problem ``FilesView`` wrote down for two
+        // sheets; while the feed is open ``VideoFeedView``'s own binding is
+        // the one that puts this sheet up, over the player where the person is
+        // looking.
+        .sheet(item: Binding(
+            get: { savedFile },
+            // Dismissing it is what deletes the copy
+            // (``SaveToDeviceModel/taken()``): the person has the file they
+            // asked for, and this app does not keep a second copy of the
+            // household's video.
+            set: { if $0 == nil { videos?.saves.taken() } }
+        )) { saved in
+            FileShareSheet(url: saved.url)
+        }
         .fullScreenCover(item: Binding(
             get: { videos?.feed },
             // Only when the feed is still open: the close button calls
@@ -135,6 +199,35 @@ struct VideosView: View {
             if let videos, let posters {
                 VideoFeedView(open: open, videos: videos, posters: posters, model: model)
             }
+        }
+    }
+
+    // MARK: - a save this screen owns
+
+    /// The finished copy a share sheet can be put up for, or nil.
+    ///
+    /// Nil while the feed is open on purpose: see the `.sheet` above.
+    private var savedFile: VideosSavedFile? {
+        guard let videos, videos.feed == nil else { return nil }
+        guard case .ready(let url, let name) = videos.saves.state else { return nil }
+        return VideosSavedFile(url: url, name: name)
+    }
+
+    /// A save in flight, said on the page, with the **stop** on it.
+    ///
+    /// ``FilesView/saving(_:)`` is the same four lines for the same reason: a
+    /// multi-gigabyte transfer with no percentage and no way out is a phone
+    /// stuck on a mistake. Only the `fetching` state draws here — `idle` has
+    /// no row of its own (a save starts from the feed's options sheet),
+    /// `ready` is the share sheet above and `failed` is the toast.
+    @ViewBuilder
+    private func saving(_ videos: VideosModel) -> some View {
+        if case .fetching = videos.saves.state {
+            SaveToDeviceButton(
+                state: videos.saves.state,
+                onTap: {},
+                onCancel: { videos.saves.cancel() }
+            )
         }
     }
 

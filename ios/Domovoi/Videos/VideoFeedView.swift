@@ -249,6 +249,15 @@ struct VideoFeedView: View {
             // than clearing both: a swipe-down that reset everything would
             // throw away a save in flight behind the sheet.
             //
+            // **There is a second way out of this sheet, and it is not here.**
+            // The person can also dismiss the whole cover, at which point this
+            // binding, this view and its `.onChange` are all gone. That half
+            // is ``VideosView``'s: the model is the screen's, and the screen
+            // draws the percentage, the stop, the share sheet and the toast
+            // for exactly that case. This comment used to reason about the
+            // swipe only, which is how a save that outlived the player came to
+            // be unreachable (REVIEW-2 finding 2).
+            //
             // **The options sheet is closed with the share sheet.** It is
             // still open underneath — `save(_:)` leaves it there on purpose,
             // because it is where the percentage and the stop are drawn — so
