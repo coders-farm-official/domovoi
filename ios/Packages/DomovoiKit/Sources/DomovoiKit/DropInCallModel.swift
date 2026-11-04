@@ -491,10 +491,15 @@ public func dropInSocketURL(
     return url
 }
 
-/// One path component or query value, percent-escaped. Room ids are
-/// `[a-z0-9_]` on the server, but the id in hand came off a payload.
+/// One path component or query value, percent-escaped.
+///
+/// Room ids are `[a-z0-9_]` on the server and this phone's device id carries
+/// a hyphen, so the set is ``VideoPath/safe`` — the unreserved characters,
+/// which leaves both alone and still escapes `&`, `=`, `#`, `+`, `/`, `\` and
+/// a space. `.alphanumerics` alone would send `front%5Froom`, which is a room
+/// the house does not have.
 private func dropInEsc(_ text: String) -> String {
-    text.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? text
+    text.addingPercentEncoding(withAllowedCharacters: VideoPath.safe) ?? text
 }
 
 // ---------------------------------------------------------------------------

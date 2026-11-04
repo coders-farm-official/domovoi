@@ -181,7 +181,7 @@ final class DropInCallModelTests: XCTestCase {
             room: "kitchen",
             phoneID: "ios-7f3a"
         )
-        XCTAssertEqual(url, "ws://10.0.0.42:6370/v1/dropin/kitchen?phone_id=ios7f3a")
+        XCTAssertEqual(url, "ws://10.0.0.42:6370/v1/dropin/kitchen?phone_id=ios-7f3a")
     }
 
     /// An `https` house is a `wss` socket (`DropinCallClient.kt:150`), and a
@@ -237,7 +237,7 @@ final class DropInCallModelTests: XCTestCase {
         )
         XCTAssertEqual(
             rig.transport.address,
-            "ws://10.0.0.42:6370/v1/dropin/kitchen?phone_id=ios7f3a"
+            "ws://10.0.0.42:6370/v1/dropin/kitchen?phone_id=ios-7f3a"
         )
     }
 
@@ -710,9 +710,14 @@ final class DropInCallModelTests: XCTestCase {
     /// drop-in call — for the length of an animation.
     func testPoppingARoomDoesNotStopTheModel() async {
         let (model, _) = roomsRig()
-        model.hold()                                      // the roster
-        model.hold()                                      // the room screen
+        // The push, in full: the roster appears, the room screen appears on
+        // top of it, and the roster's `onDisappear` fires behind it.
+        model.hold()
+        model.hold()
+        model.release()
+        XCTAssertEqual(model.holderCount, 1)
 
+        // The pop, in the order where the count passes through zero.
         model.release()                                   // the room screen went
         model.hold()                                      // the roster came back
         for _ in 0..<8 { await Task.yield() }
