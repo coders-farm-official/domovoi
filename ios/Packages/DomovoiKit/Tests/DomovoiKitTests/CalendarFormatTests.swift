@@ -61,8 +61,12 @@ final class CalendarFormatTests: XCTestCase {
     }
 
     /// With no `ends_at` the range is the start twice, through
-    /// ``calendarEndMs(_:)`` — which is why the views only draw it when
+    /// ``calendarBlockEndMs(_:)`` — which is why the views only draw it when
     /// `ends_at` is there.
+    ///
+    /// Through the **block** end and not ``calendarEndMs(_:)``, which since
+    /// answer 17 invents an hour for the agenda's floor: this is the case that
+    /// fails if that hour ever reaches a clock.
     func testARangeWithNoEndRepeatsTheStart() {
         let open = CalendarEntry(id: 2, title: "all afternoon", startsAt: "2026-11-07T19:00:00+00:00")
         XCTAssertEqual("7:00pm – 7:00pm", calendarRange(open, in: TimeZone(secondsFromGMT: 0)!))
@@ -186,10 +190,19 @@ final class CalendarFormatTests: XCTestCase {
 
     // MARK: - the view words
 
-    /// The toggle's words are the Kotlin's `CalView.label`s, and **week is not
-    /// among them** (DECISIONS §3). The order is the toggle's order.
-    func testTheToggleOffersAgendaDayMonthInThatOrder() {
-        XCTAssertEqual(["agenda", "day", "month"], CalendarViewMode.allCases.map(\.label))
-        XCTAssertNil(CalendarViewMode(rawValue: "week"))
+    /// The toggle's words are the Kotlin's `CalView.label`s, **week among
+    /// them** since Kamron's answer 14. The order is the toggle's order.
+    ///
+    /// It used to assert that `week` was not a case at all (DECISIONS §3,
+    /// which asked whether the week was wanted as a grouped list rather than
+    /// as Android's grid). Answer 14: "build the week view (agenda rows under
+    /// seven day headers)", so it is here — between `day` and `month`, where
+    /// its span puts it.
+    func testTheToggleOffersAgendaDayWeekMonthInThatOrder() {
+        XCTAssertEqual(
+            ["agenda", "day", "week", "month"],
+            CalendarViewMode.allCases.map(\.label)
+        )
+        XCTAssertEqual(.week, CalendarViewMode(rawValue: "week"))
     }
 }

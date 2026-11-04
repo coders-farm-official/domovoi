@@ -145,12 +145,24 @@ final class CalendarRulesTests: XCTestCase {
     }
 
     /// The agenda's floor is the anchor's midnight measured against the
-    /// event's **end**, and the end of an open-ended event is its start.
+    /// event's **end**, and an open-ended event's end is **an hour after it
+    /// starts**.
     ///
-    /// The 23:30 row is the discriminating one: under Android's rule its end
-    /// is 23:30 and it drops; under Home's `eventEndMs` it would run to 00:30
-    /// and stay. DECISIONS §8.
-    func testTheAgendaFloorUsesTheEndAndAnOpenEndedEventEndsWhenItStarts() {
+    /// ### Why this case turned over
+    ///
+    /// It used to assert `[1, 3]`: the 23:30 row with no `ends_at` ended at
+    /// 23:30 under Android's `endLocal()` and dropped out of the 4th's
+    /// agenda. **Kamron's answer 17 (2026-11-03): "yes: match Home, keep an
+    /// open-ended event on screen for an hour."** Under Home's `eventEndMs`
+    /// that row runs to 00:30 on the 4th, so it stays — and row 2 is the
+    /// discriminating one in both directions: it is the only row here whose
+    /// verdict the rule change moves.
+    ///
+    /// Row 2 keeps its 23:30 start, so it still **groups under the 3rd**
+    /// (``calendarAgendaSections(_:todayMs:in:)`` keys on the local start
+    /// date): "on screen for an hour" is about being drawn at all, not about
+    /// being moved to another day.
+    func testTheAgendaFloorGivesAnOpenEndedEventTheHourHomeGivesIt() {
         let events = [
             local(1, "2026-11-03T22:00:00-06:00", to: "2026-11-04T01:00:00-06:00"),
             local(2, "2026-11-03T23:30:00-06:00"),
@@ -160,9 +172,25 @@ final class CalendarRulesTests: XCTestCase {
             mode: .agenda, anchor: day(2026, 11, 4), events: events, in: chicago
         )
         XCTAssertEqual(
-            [1, 3],
+            [1, 2, 3],
             shown.map(\.id),
-            "an event still running at midnight stays; an open-ended one from last night does not"
+            "answer 17: an open-ended 23:30 runs to 00:30 and is still on the 4th's agenda"
+        )
+        XCTAssertEqual(
+            CalendarDay(year: 2026, month: 11, day: 3),
+            calendarAgendaSections(shown, todayMs: 0, in: chicago).first?.day,
+            "it is kept, not moved: its group is still the 3rd"
+        )
+
+        // **And an hour is all it gets.** Row 2's invented end is 00:30 on
+        // the 4th, so the 5th's agenda keeps nothing here — a rule that had
+        // quietly become "keep an open-ended event for ever" fails this, and
+        // so would one that gave it a day.
+        XCTAssertTrue(
+            calendarVisibleEvents(
+                mode: .agenda, anchor: day(2026, 11, 5), events: events, in: chicago
+            ).isEmpty,
+            "an hour is an hour: nothing from the 3rd or the 4th reaches the 5th"
         )
     }
 
@@ -276,6 +304,11 @@ final class CalendarRulesTests: XCTestCase {
         XCTAssertEqual(calendarGridHours * 60 - 20, placed.offsetMinutes)
         XCTAssertEqual(20, placed.heightMinutes)
 
+        // Through ``calendarBlockEndMs(_:)``, which still falls back to the
+        // start. ``calendarEndMs(_:)`` gives this row an hour since answer
+        // 17, and the hour is the AGENDA's floor: a grid that measured a
+        // block with it would draw `night walk` three times the height the
+        // house asked for.
         let openInside = local(12, "2026-11-04T14:00:00-06:00")
         XCTAssertEqual(
             20,
@@ -297,7 +330,10 @@ final class CalendarRulesTests: XCTestCase {
         let anchor = day(2026, 11, 4)
         let todayMs = anchor.startMs(in: chicago)
 
-        for mode in [CalendarViewMode.month, .day, .agenda] {
+        // **Every** mode, from `allCases`, so a view added later cannot be
+        // left out of this one: the week was, until answer 14 added it and
+        // this loop was still a hand-written list of three.
+        for mode in CalendarViewMode.allCases {
             let visible = calendarVisibleEvents(
                 mode: mode, anchor: anchor, events: [real, junk], in: chicago
             )

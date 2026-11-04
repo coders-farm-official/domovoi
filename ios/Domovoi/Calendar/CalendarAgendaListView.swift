@@ -100,12 +100,18 @@ struct CalendarAgendaRowView: View {
         calendarClock(ms: calendarStartMs(entry), timeZone: calendar.zone)
     }
 
-    /// The end, only when there is one: ``calendarEndMs(_:)`` falls back to
-    /// the start, so an open-ended event would otherwise draw its own start
+    /// The end, only when there is one: ``calendarBlockEndMs(_:)`` falls back
+    /// to the start, so an open-ended event would otherwise draw its own start
     /// twice (`:393`).
+    ///
+    /// The **block** end and not ``calendarEndMs(_:)``, which since Kamron's
+    /// answer 17 gives an event with no end an hour. The `endsAt != nil`
+    /// guard is not enough on its own: a non-nil `ends_at` that will not
+    /// parse falls through it, and through the window's rule it would be
+    /// drawn as `3:00pm – 4:00pm` — an hour this row invented.
     private var endClock: String? {
         guard entry.endsAt != nil else { return nil }
-        return calendarClock(ms: calendarEndMs(entry), timeZone: calendar.zone)
+        return calendarClock(ms: calendarBlockEndMs(entry), timeZone: calendar.zone)
     }
 
     private var place: String? {

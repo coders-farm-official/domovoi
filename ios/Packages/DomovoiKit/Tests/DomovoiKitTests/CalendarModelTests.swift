@@ -62,6 +62,9 @@ final class CalendarModelTests: XCTestCase {
         /// would see nothing.
         let seen = Shared<[String]>([])
 
+        /// Every GET's query string, in order.
+        let asked = Shared<[String]>([])
+
         static func row(
             _ id: Int64,
             _ title: String,
@@ -92,6 +95,14 @@ final class CalendarModelTests: XCTestCase {
                     return .json((try? TestIdentity.real.healthBody(challenge: challenge)) ?? "{}")
                 }
                 self.seen.mutate { $0.append("\(method) \(parts.path)") }
+                // The query, separately: these cases assert on paths, and
+                // since answer 16 the read carries a window that
+                // ``CalendarWindowTests`` is the file for. Recorded rather
+                // than folded into ``seen`` so the path assertions here stay
+                // about paths.
+                if method == "GET" {
+                    self.asked.mutate { $0.append(url.query ?? "") }
+                }
                 switch method {
                 case "GET":
                     guard self.readStatus.current == 200 else {
@@ -100,6 +111,10 @@ final class CalendarModelTests: XCTestCase {
                             status: self.readStatus.current
                         )
                     }
+                    // **Every row, whatever the window.** This rig is about
+                    // the model's states and its three writes; the window is
+                    // honoured by the rig in ``CalendarWindowTests``, which is
+                    // where the read's bounds are the thing under test.
                     return .json("[\(self.rows.current.joined(separator: ","))]")
                 case "POST":
                     guard self.writeStatus.current == 200 else {
@@ -182,18 +197,39 @@ final class CalendarModelTests: XCTestCase {
         await settleUntil({ model.events.answered }, "the calendar read")
     }
 
+    /// Wait for the read of whatever range the model is now on.
+    ///
+    /// Needed since answer 16 and not before: a view change or a chevron now
+    /// asks the server for its own window, so `emptyText` and `visible` are
+    /// not facts about the new range until that read lands
+    /// (``CalendarModel/rangePending``). A case that asserted straight after
+    /// `show(_:)` would be reading the previous range's page.
+    private func onRange(_ model: CalendarModel) async {
+        await settleUntil({ !model.rangePending }, "the read for the new range")
+    }
+
     // MARK: - the read
 
-    /// **One read, no parameters** (`CalendarScreen.kt:84`, DECISIONS §7): the
-    /// server's own default is the first 500 by `starts_at`, and every view's
-    /// window is cut client-side, so a chevron costs no round trip.
-    func testTheScreenMakesOneUnparameterisedRead() async {
+    /// **One read, bounded to the agenda's window** — Kamron's answer 16.
+    ///
+    /// It used to be one read with **no parameters** at all
+    /// (`CalendarScreen.kt:84`, DECISIONS §7), relying on the server's default
+    /// first 500 by `starts_at` with every view's window cut client-side. The
+    /// bounds themselves are ``CalendarWindowTests``; what this pins is that
+    /// the opening read is still exactly **one** request to this route, and
+    /// that it now carries a `start`.
+    func testTheScreenMakesOneBoundedReadWhenItOpens() async {
         let (model, house, _, _) = rig()
         await started(model)
         XCTAssertEqual(["GET /api/calendar/events"], house.seen.current)
-        XCTAssertEqual(4, model.all.count)
-        XCTAssertEqual("4 events · the household's calendar", model.subtitle)
         XCTAssertEqual(1, model.events.fetches)
+        XCTAssertEqual(1, house.asked.current.count)
+        XCTAssertTrue(
+            house.asked.current[0].contains("start="),
+            "the opening read is unbounded again: \(house.asked.current[0])"
+        )
+        XCTAssertEqual(4, model.all.count)
+        XCTAssertEqual("4 events in view · the household's calendar", model.subtitle)
     }
 
     /// The push is the one string the server actually sends:
@@ -252,11 +288,24 @@ final class CalendarModelTests: XCTestCase {
         XCTAssertEqual(CalendarStrings.emptyAgendaTitle, model.emptyText?.title)
         XCTAssertEqual(CalendarStrings.emptyAgendaBody, model.emptyText?.body)
 
-        model.mode = .month
+        model.show(.month)
+        await onRange(model)
         XCTAssertEqual(CalendarStrings.emptyRangeTitle, model.emptyText?.title)
         XCTAssertEqual("tap new event to add one for month", model.emptyText?.body)
 
-        model.mode = .day
+        model.show(.week)
+        await onRange(model)
+        XCTAssertEqual(
+            "tap new event to add one for week",
+            model.emptyText?.body,
+            "the week uses the range wording and its own word (answer 14)"
+        )
+
+        // No `onRange`: the page in hand is still the **month grid's** — the
+        // week asked for nothing either, being inside it — and the 4th is
+        // inside that grid too, so ``CalendarPage/serves(_:)`` answers both
+        // with no request at all.
+        model.show(.day)
         XCTAssertEqual(
             "tap new event to add one for wed, nov 4",
             model.emptyText?.body,
@@ -270,7 +319,8 @@ final class CalendarModelTests: XCTestCase {
     func testSteppingToAnEmptyMonthSaysNothingInThisRange() async {
         let (model, _, _, _) = rig()
         await started(model)
-        model.mode = .month
+        model.show(.month)
+        await onRange(model)
         XCTAssertNil(model.emptyText, "november has four events")
         XCTAssertEqual("november 2026", model.rangeLabel)
 
@@ -278,6 +328,7 @@ final class CalendarModelTests: XCTestCase {
         XCTAssertEqual("december 2026", model.rangeLabel)
         model.step(1)
         XCTAssertEqual("january 2027", model.rangeLabel)
+        await onRange(model)
         XCTAssertEqual(CalendarStrings.emptyRangeTitle, model.emptyText?.title)
     }
 
@@ -293,7 +344,7 @@ final class CalendarModelTests: XCTestCase {
         model.goToToday()
         XCTAssertEqual("from wed, nov 4", model.rangeLabel)
 
-        model.mode = .day
+        model.show(.day)
         model.step(-1)
         XCTAssertEqual("tuesday, november 3", model.rangeLabel)
         model.goToToday()
@@ -305,7 +356,8 @@ final class CalendarModelTests: XCTestCase {
     func testAMonthCellsTapOpensThatDayInDayView() async {
         let (model, _, _, _) = rig()
         await started(model)
-        model.mode = .month
+        model.show(.month)
+        await onRange(model)
         model.pickDay(CalendarDay(year: 2026, month: 11, day: 7))
         XCTAssertEqual(CalendarViewMode.day, model.mode)
         XCTAssertEqual("saturday, november 7", model.rangeLabel)
