@@ -23,17 +23,23 @@ import UIKit
 /// ### The ink
 ///
 /// `--fg-muted` from `web/static/colors_and_type.css` — the same token every
-/// muted line in both apps already uses, which the app target carries as
-/// ``Color/fgMuted`` (`ios/Domovoi/DomovoiApp.swift:277-298`, where the
-/// conversion from the stylesheet's `oklch` is written out). Its contrast, in
-/// the four places a hint is drawn:
+/// muted line in both apps already uses. **This is where its sRGB is written
+/// out**, once: the app target's ``Color/fgMuted`` is built from ``ink``
+/// rather than from a second copy of the same literals (review 1, N2), and
+/// the conversion from the stylesheet's `oklch` is the comment on each
+/// constant below. Its contrast, in the four places a hint is drawn:
 ///
 /// | hint on | ratio |
 /// |---|---|
-/// | white (`.roundedBorder`'s interior), light | **7.44:1** (measured, `DomovoiApp.swift:288`) |
+/// | white (`.roundedBorder`'s interior), light | **7.44:1** (measured, `LaunchUITests` 2026-10-28) |
 /// | `secondarySystemBackground` `#F2F2F7`, light | **6.67:1** (arithmetic, WCAG, from the token's own sRGB) |
-/// | the dark canvas | **7.88:1** (measured, `DomovoiApp.swift:288`) |
-/// | `secondarySystemBackground` `#1C1C1E`, dark | **7.72:1** (arithmetic, as above) |
+/// | the dark canvas | **7.88:1** (measured, as above) |
+/// | `secondarySystemBackground` `#1C1C1E`, dark | **6.86:1** (arithmetic, as above) |
+///
+/// That last row said **7.72:1** until `ShellFoldTests` recomputed it: the
+/// number had been written down and read by nothing, which is the whole of
+/// review 1's S6 in one line. 6.67 is still the worst of the four, so nothing
+/// else in this file moves.
 ///
 /// All four are over the 4.5:1 body text needs. The two arithmetic rows are
 /// arithmetic and say so: `fgMuted` was measured against the **white** canvas,
@@ -63,18 +69,41 @@ public enum HintInk {
     /// `oklch(0.72 0.008 80)` as sRGB: `--fg-muted`, dark.
     public static let dark = (red: 0.6555, green: 0.6434, blue: 0.6238)
 
-    /// The worst of the four ratios in this type's table, which is the one a
-    /// case should assert against: a hint drawn on the app's own field
-    /// background in light mode.
-    public static let worstMeasuredRatio = 6.67
+    /// The worst of the four ratios in this type's table: a hint drawn on the
+    /// app's own field background (`secondarySystemBackground`) in light mode.
+    ///
+    /// **Arithmetic, and the name says so now.** It was
+    /// `worstMeasuredRatio`, which claimed a reading for a number this file's
+    /// own table labels as computed (review 1, N1) — and nothing read it:
+    /// the UI case carries its own 4.5 floor, because strings and numbers in
+    /// `StubHouseUITests` are spelt out rather than imported. `ShellFoldTests`
+    /// is the caller it now has: it recomputes WCAG's ratio from ``light``
+    /// against `#F2F2F7` and fails if this number is not what the ink gives.
+    public static let worstArithmeticRatio = 6.67
+
+    /// The surface ``worstArithmeticRatio`` is computed against —
+    /// `secondarySystemBackground` in light mode, which is what every
+    /// hand-drawn field in this app sits on (`MusicView.swift:698`). Here so
+    /// that the test recomputing the ratio uses the same paper this file
+    /// claims rather than one of its own.
+    public static let appFieldPaperLight = (red: 0.9490, green: 0.9490, blue: 0.9686)
+
+    /// `secondarySystemBackground` in dark mode, `#1C1C1E` — the other
+    /// arithmetic row of the table above, and the one whose number was wrong.
+    public static let appFieldPaperDark = (red: 0.1098, green: 0.1098, blue: 0.1176)
+
+    /// The dark half of ``worstArithmeticRatio``'s row: the ink on
+    /// ``appFieldPaperDark``. Recomputed by `ShellFoldTests`, like the other.
+    public static let darkArithmeticRatio = 6.86
 
     #if canImport(UIKit)
-    /// The ink itself, for the appearance proxy — which takes a `UIColor` and
-    /// not a `Color`, so this is the form the one caller needs.
+    /// The ink itself: ``Color/fgMuted``, and what the hint appearance proxy
+    /// takes — a proxy wants a `UIColor`, not a `Color`, which is why the
+    /// token's one spelling lives in this package.
     ///
-    /// Dynamic, like ``Color/fgMuted``: a hint has to follow the theme the
-    /// rest of the field's text follows, and a static colour here would be a
-    /// near-black hint on the dark canvas.
+    /// Dynamic, like every colour in this app: a hint has to follow the theme
+    /// the rest of the field's text follows, and a static colour here would be
+    /// a near-black hint on the dark canvas.
     public static let ink = UIColor { traits in
         let rgb = traits.userInterfaceStyle == .dark ? dark : light
         return UIColor(

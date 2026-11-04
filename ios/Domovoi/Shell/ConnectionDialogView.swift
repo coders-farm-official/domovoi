@@ -411,10 +411,10 @@ private struct ServerRow: View {
 ///
 /// Three things are deliberate:
 ///
-///  * **`Color.clear` is the whole body outside the cover.** The host has to
-///    stay in the hierarchy for the presentation to live, and it must draw and
-///    measure nothing: a call site puts this in a `ZStack` beside the screen,
-///    not in place of it.
+///  * **Outside the cover the host draws nothing** (``hostOfNothing``). It has
+///    to stay in the hierarchy for the presentation to live, and it must draw
+///    and measure nothing: a call site puts this in a `ZStack` beside the
+///    screen, not in place of it.
 ///  * **No `.presentationBackground(.clear)`.** A transparent full-screen
 ///    cover is the one case UIKit does *not* take the presenter's views out of
 ///    the window for, so it would hand back the hole this change closes, and
@@ -430,35 +430,103 @@ private struct ServerRow: View {
 /// the call site's own condition is the binding, and nothing inside the cover
 /// can dismiss it behind the call site's back — a swipe cannot dismiss a
 /// `fullScreenCover` either.
+///
+/// ### A presentation that does not arrive draws the card anyway
+///
+/// Review 1's must finding, and it is a real one: `AlertsHintLifecycle`
+/// presents ``AlertsPermissionCardView`` in a `fullScreenCover` of its own
+/// (`AlertsHintRowView.swift:273`) and that view's whole body is a
+/// `DialogCard`, so the Alerts card is a cover **inside** a cover. If SwiftUI
+/// drops an inner presentation requested during the outer transition, the
+/// outer cover is left showing this host — and a host that drew nothing, over
+/// an opaque presentation background, is a blank screen with no control on it
+/// and no dismiss gesture.
+///
+/// So the host is not unconditionally nothing. ``coverAppeared`` is set by the
+/// cover's own content, and if it has not been set by the time ``lostAfter``
+/// has passed, the card is drawn **inline** — the exact shape every one of
+/// these seven call sites shipped before answer 6. The failure mode that
+/// cannot happen any more is the dead end: whatever becomes of the
+/// presentation, the card and its buttons are on the screen.
+///
+/// It is a deadline and not a cleverer test because "did the presentation
+/// arrive" is a question about time: nothing in SwiftUI reports a dropped
+/// presentation, and `@Environment(\.isPresented)` answers true for a pushed
+/// `NavigationStack` destination as well as a sheet, which is where
+/// `RouteScreen.swift:273`'s card lives. Normal presentations take about a
+/// third of a second, so a second and a half is quiet in every case that
+/// works, and in the one that does not it is the difference between a card
+/// late and an app a person has to kill.
+///
+/// **This does not make the Alerts fix optional.** One line in
+/// `AlertsHintRowView.body` ends the nesting itself, that file is not this
+/// unit's, and
+/// `design-notes/ios/batch-2026-11-03/shell/DECISIONS.md` §1 says it blocks
+/// the merge. This is the guard under it, not a replacement for it.
 struct DialogCard<Content: View>: View {
 
     @ViewBuilder let content: Content
 
+    /// Set by the cover's own content the first time it appears. State, not a
+    /// binding: the question is about this host's presentation and nothing
+    /// outside it has an answer.
+    @State private var coverAppeared = false
+
+    /// Set when the deadline passed with no cover. Kept separately from
+    /// ``coverAppeared`` so a cover that arrives late still takes the screen —
+    /// it is opaque and on top — rather than racing one flag.
+    @State private var presentationLost = false
+
+    /// How long the presentation gets before the card is drawn inline.
+    private static var lostAfter: UInt64 { 1_500_000_000 }
+
     var body: some View {
+        ZStack {
+            hostOfNothing
+            if presentationLost && !coverAppeared { card }
+        }
+        .fullScreenCover(isPresented: .constant(true)) {
+            card.onAppear { coverAppeared = true }
+        }
+        .task {
+            try? await Task.sleep(nanoseconds: Self.lostAfter)
+            // A cancelled sleep means the dialog closed while we waited, and
+            // writing state into a view that is going away is how a SwiftUI
+            // warning becomes a habit.
+            guard !Task.isCancelled else { return }
+            if !coverAppeared { presentationLost = true }
+        }
+    }
+
+    /// The host: it takes no hits and says nothing, so the `ZStack` a call
+    /// site puts this in is the screen plus a presentation.
+    private var hostOfNothing: some View {
         Color.clear
-            // A host, not a view: it takes no hits and says nothing, so the
-            // `ZStack` it sits in is the screen plus a presentation.
             .allowsHitTesting(false)
             .accessibilityHidden(true)
-            .fullScreenCover(isPresented: .constant(true)) {
-                ZStack {
-                    Color.black.opacity(0.35)
-                        .ignoresSafeArea()
-                        .accessibilityHidden(true)
-                    ScrollView {
-                        content
-                            .padding(20)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(.background, in: RoundedRectangle(cornerRadius: 14))
-                            .padding(20)
-                    }
-                    // **The reason this type exists rather than a `ZStack` at
-                    // each call site.** Every dialog in the app gets the trait
-                    // — and now the presentation — from here, so a new one
-                    // cannot be added without them.
-                    .accessibilityAddTraits(.isModal)
-                }
+    }
+
+    /// The card itself — the cover's content, and the inline fallback. One
+    /// property rather than two copies, so the thing a person sees cannot
+    /// differ between the path that works and the path that catches it.
+    private var card: some View {
+        ZStack {
+            Color.black.opacity(0.35)
+                .ignoresSafeArea()
+                .accessibilityHidden(true)
+            ScrollView {
+                content
+                    .padding(20)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(.background, in: RoundedRectangle(cornerRadius: 14))
+                    .padding(20)
             }
+            // **The reason this type exists rather than a `ZStack` at each
+            // call site.** Every dialog in the app gets the trait — and now
+            // the presentation — from here, so a new one cannot be added
+            // without them.
+            .accessibilityAddTraits(.isModal)
+        }
     }
 }
 

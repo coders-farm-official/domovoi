@@ -422,11 +422,18 @@ struct ShellScrollAwayChrome: ViewModifier {
     let pill: ShellPill?
     let onPill: () -> Void
 
+    /// False only for ``AuditStrip/topBar``, the diagnostic variant whose job
+    /// is the shell **without its header**. Below the accessibility sizes that
+    /// variant drops ``ShellTopBar``; above them the header is this title and
+    /// this toolbar item, so without this the variant was identical to the
+    /// control at AX5 and the bisect lost it (review 1, N5).
+    var drawn = true
+
     @Environment(\.dynamicTypeSize) private var typeSize
 
     @ViewBuilder
     func body(content: Content) -> some View {
-        if typeSize.isAccessibilitySize {
+        if drawn && typeSize.isAccessibilitySize {
             content
                 .navigationTitle(crumb.trimmingCharacters(in: .whitespaces))
                 .navigationBarTitleDisplayMode(.large)
@@ -450,8 +457,11 @@ extension View {
     func shellScrollAwayChrome(
         crumb: String,
         pill: ShellPill?,
-        onPill: @escaping () -> Void
+        onPill: @escaping () -> Void,
+        drawn: Bool = true
     ) -> some View {
-        modifier(ShellScrollAwayChrome(crumb: crumb, pill: pill, onPill: onPill))
+        modifier(
+            ShellScrollAwayChrome(crumb: crumb, pill: pill, onPill: onPill, drawn: drawn)
+        )
     }
 }

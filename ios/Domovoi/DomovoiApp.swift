@@ -145,12 +145,35 @@ struct DomovoiApp: App {
     /// shape this app uses wherever the audit failed a single line — by
     /// `UITextView`.
     ///
-    /// **It recolours labels inside a field, not the field's own text.** A
-    /// SwiftUI field's typed text is not a `UILabel`, so the only `UILabel` in
-    /// there is the placeholder. If a future SwiftUI draws something else as a
-    /// contained label, it gets the muted ink too — which is the ink the rest
-    /// of the app's secondary text is in, so the failure mode is "correct but
-    /// unasked for" rather than "unreadable".
+    /// ### What this could recolour besides the hint, and what reads it
+    ///
+    /// An appearance proxy cannot be narrowed to a placeholder: it says
+    /// "every `UILabel` inside one of these", and **what else is a `UILabel`
+    /// in there is UIKit's business, not something this file can assert**.
+    /// `UITextField` has historically drawn its own text through
+    /// `UITextFieldLabel`, a `UILabel` subclass; if it still does on the
+    /// train's iOS, this turns typed text `fgMuted` as well, in all 39 files.
+    /// An earlier version of this comment argued that it could not — a claim
+    /// about a private view tree with no reading behind it, which is the
+    /// shape of reasoning this track's ledger says to treat as a review
+    /// target (review 1, S3).
+    ///
+    /// So it is measured instead, by `testShell_TheHintInkIsReadable` in
+    /// `ios/DomovoiUITests/StubHouseUITests+Shell.swift`, three readings:
+    ///
+    ///  * an **empty** single-line field, whose darkest pixel is the hint —
+    ///    about 6.7:1 against this ink and about 1.7:1 against Apple's grey;
+    ///  * the same field with a word **typed** into it, whose darkest pixel is
+    ///    the typed glyph — the primary ink reads near 20:1 on white and this
+    ///    muted one would read about 7, so a floor of 10 tells them apart;
+    ///  * Music's field at AX5, where it becomes `axis: .vertical` and is a
+    ///    `UITextView` (`MusicView.swift:686-688`) — the other class this
+    ///    proxy names, and the size a hint matters most at.
+    ///
+    /// If the typed reading ever fails, the fix is not this proxy with a
+    /// narrower class: it is `TextField(…, prompt: Text(hint).foregroundColor(…))`
+    /// at the call sites, which is SwiftUI's own way of colouring a prompt and
+    /// costs an edit in each of the 39 files.
     private static func drawHintsInTheMutedInk() {
         UILabel.appearance(whenContainedInInstancesOf: [UITextField.self])
             .textColor = HintInk.ink
@@ -332,11 +355,14 @@ extension Color {
     /// I1 replaces this with a real asset catalogue generated from the CSS,
     /// as plan 1.1 describes; one colour written out by hand is enough for a
     /// screen with three labels on it.
-    static let fgMuted = Color(UIColor { traits in
-        traits.userInterfaceStyle == .dark
-            ? UIColor(red: 0.6555, green: 0.6434, blue: 0.6238, alpha: 1)   // oklch(0.72 0.008 80)
-            : UIColor(red: 0.3458, green: 0.3323, blue: 0.3104, alpha: 1)   // oklch(0.45 0.01 80)
-    })
+    ///
+    /// **The sRGB lives in ``HintInk`` and nowhere else.** Answer 65 needed
+    /// this token as a `UIColor` for an appearance proxy, which meant writing
+    /// it out in `DomovoiKit` as well; two copies of one token's literals is
+    /// how a token drifts (review 1, N2), so this is that colour rather than a
+    /// second spelling of it. ``HintInk``'s own doc comment carries the
+    /// conversion from the stylesheet's `oklch` and the four measured ratios.
+    static let fgMuted = Color(HintInk.ink)
 
     /// `--brand`: Domovoi's one accent, amber.
     ///
