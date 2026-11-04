@@ -270,6 +270,31 @@ final class MusicEngineAdapterTests: XCTestCase {
         if case .refused = refused {} else { XCTFail("a refusal must stay a refusal: \(refused)") }
     }
 
+    // MARK: - the model before an engine reaches it
+
+    /// With **no engine registered** nothing is offered and nothing is
+    /// claimed.
+    ///
+    /// The arm every Music screen passes through: ``MusicLocalQueueModel`` is
+    /// built in ``MusicView``'s `.task` and handed an engine on the same
+    /// appearance, so for one turn of the loop it has none — and on a shell
+    /// whose ``ShellModel/player`` is nil (a build with no audio engine) it
+    /// never gets one. `MusicMoreModelTests` has the rest of this arm and is
+    /// not this unit's file to add to; what is here is the pair D46 added,
+    /// because a `playHere` that returned true with nothing behind it would
+    /// put a toast on screen for audio that never started.
+    func testWithNoEngineNothingMayPlayHereAndNothingIsClaimed() {
+        let model = MusicLocalQueueModel(deviceID: "phone-1")
+        XCTAssertFalse(model.hasEngine)
+        XCTAssertFalse(model.mayPlayHere, "no engine, so no `play on this device` either")
+        XCTAssertFalse(
+            model.playHere([LibraryTrack(id: 4, title: "transmission")]),
+            "a play with no engine hands nothing over and says so"
+        )
+        XCTAssertNil(model.takeToast(), "and it does not claim to have started anything")
+        XCTAssertTrue(model.queue.isEmpty)
+    }
+
     /// A plan is the same five numbers under both names, and `castable` reads
     /// the same on each — the planner's gate, so a mismatch would offer a cast
     /// menu over a queue nothing in which can go.

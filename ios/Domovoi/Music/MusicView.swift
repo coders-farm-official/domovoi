@@ -94,16 +94,15 @@ struct MusicView: View {
     /// This phone's own queue, over whatever engine is registered.
     ///
     /// **The engine is registered since the 2026-11-03 batch** (D46/D49):
-    /// ``PlayerModelMusicEngine`` over ``ShellModel/player``, the app's one
-    /// player. This note said the engine's item would land "as one `use(_:)`
-    /// call and nothing here is written from scratch", and that is the shape
-    /// of it — see the `.task` below.
+    /// ``PlayerModelMusicEngine`` over ``ShellModel/player``, handed in by the
+    /// `.task` below — which is the one `use(_:)` call this note said the
+    /// engine's item would land as.
     ///
-    /// ``MusicLocalQueueModel/hasEngine`` is still false, and the `player` tab
-    /// still absent from the bar, on a phone with **no device id**:
-    /// ``ShellModel/player`` is nil for one, because the player writes a
-    /// listening position per device. Not greyed, not empty — absent, which
-    /// is what ``MusicTab/shown(hasPlayer:)`` was built to do.
+    /// Absent, not greyed, where there is no player at all: a **build with no
+    /// audio engine** and a shell built with no `deviceSelf`. Not "a phone
+    /// that has no device id" — one is minted locally on first launch
+    /// (`DeviceRegistry.swift:390-404`), which is the false cause review 2 of
+    /// that batch took out of four other comments.
     @State private var player: MusicLocalQueueModel?
 
     /// One room-lyrics model per room card, kept across redraws so that the
@@ -195,11 +194,10 @@ struct MusicView: View {
                         MusicStatsView(music: music)
                     case .player:
                         // Reachable since D46: the `.task` below registers
-                        // ``PlayerModelMusicEngine`` over the app's one
-                        // player, so ``MusicTab/shown(hasPlayer:)`` offers
-                        // this tab. It stays out of the bar on a phone with
-                        // no device id, and `tab` can only hold what the bar
-                        // offered.
+                        // ``PlayerModelMusicEngine``, so
+                        // ``MusicTab/shown(hasPlayer:)`` offers this tab. It
+                        // stays out of the bar where there is no player, and
+                        // `tab` can only hold what the bar offered.
                         if let player {
                             MusicPlayerTabView(
                                 player: player,
@@ -233,18 +231,13 @@ struct MusicView: View {
             }
             // **The engine, asked for on every appearance** (D46/D49).
             //
-            // `model.player` is the app's one player and **reading it is what
-            // builds it** — which is why this is in a `.task` and never in a
-            // `body`: the player is built on first use and never at launch,
-            // because a `.playback` session activated at launch stops
-            // whatever the person was already listening to. Nil (a phone with
-            // no device id) leaves ``MusicLocalQueueModel/hasEngine`` false
-            // and the `player` tab out of the bar.
-            //
-            // Re-asked rather than built once, for the case a phone that had
-            // no device id when this screen first appeared has introduced
-            // itself since; `use(_:)` replaces the engine, and the queue it
-            // reads lives on the player, so nothing is lost by re-adapting.
+            // In a `.task` and never in a `body` because **reading
+            // `model.player` is what builds it**, and the player activates a
+            // `.playback` session — one built at launch stops whatever the
+            // person was already listening to. Re-asked rather than built
+            // once, as the other four screens of that item do: `use(_:)`
+            // replaces the engine, the queue it reads lives on the player, so
+            // re-adapting loses nothing.
             if let made = model.player {
                 player?.use(PlayerModelMusicEngine(made))
             }

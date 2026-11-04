@@ -43,6 +43,19 @@ enum BookTimeout {
     /// loop would turn a `work` that never finishes into a run that hangs
     /// forever rather than one that fails, and a hung train is worse evidence
     /// than a red one.
+    ///
+    /// ### Test-only API in a shipping file, and what holds it
+    ///
+    /// Nothing in the app calls this: every caller is a test rig, and it
+    /// lives here rather than beside them for the reason above — so that the
+    /// next rig finds it. Its own rules are measured in `BookTimeoutTests`,
+    /// which is where review 3 of the 2026-11-03 batch asked for them: the
+    /// case this helper fixed is intermittent **by nature**, so reverting
+    /// this body to `{ _ in }` made `AudiobooksModelTests` red only 2 of 6
+    /// runs. A guard that fires a third of the time is one the next reader
+    /// deletes, so `BookTimeoutTests` asserts the two things that fail every
+    /// time instead: that a `work` which only yields beats the bound, and
+    /// that this sleep does not return until it is cancelled.
     static func heldShut(yields: Int = 50_000) -> @Sendable (Int64) async throws -> Void {
         { _ in
             for _ in 0..<yields {

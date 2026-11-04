@@ -1181,23 +1181,12 @@ final class MusicMoreModelTests: XCTestCase {
 
     // MARK: - the player tab's seam
 
-    /// With no engine the tab is reachable from nowhere, and **nothing claims
-    /// playback**.
-    ///
-    /// This case used to end "the assertion that goes away with the Player
-    /// item's engine". It does not go away: ``PlayerModelMusicEngine`` conforms
-    /// now, but `MusicLocalQueueModel` is built before any engine is
-    /// registered and is handed one by ``MusicView`` on each appearance, so
-    /// the no-engine arm is the shape every Music screen passes through.
-    ///
-    /// It is **not** "the live description of a phone with no device id", as
-    /// this note said until review 2 of the 2026-11-03 batch: that state is a
-    /// build with no audio engine and nothing a person holds
-    /// (``ShellModel/player``). `mayPlayHere` is the one line added here.
+    /// Nothing conforms to ``MusicMorePlayerEngine`` on this branch, so the
+    /// tab is reachable from nowhere — and **nothing claims playback**. This
+    /// is the assertion that goes away with the Player item's engine.
     func testWithNoEngineNothingIsOfferedAndNothingCanBeCast() {
         let model = MusicLocalQueueModel(deviceID: phone)
         XCTAssertFalse(model.hasEngine)
-        XCTAssertFalse(model.mayPlayHere, "no engine, so no `play on this device` either")
         XCTAssertTrue(model.isEmpty)
         XCTAssertTrue(model.queue.isEmpty)
         XCTAssertFalse(model.mayCast)
@@ -1207,11 +1196,6 @@ final class MusicMoreModelTests: XCTestCase {
         XCTAssertEqual(MusicCastPlan.nothing, model.castPlan())
         XCTAssertFalse(model.cast(to: "office"))
         XCTAssertFalse(model.tapped(0))
-        XCTAssertFalse(
-            model.playHere([LibraryTrack(id: 4, title: "transmission")]),
-            "a play with no engine hands nothing over and says so"
-        )
-        XCTAssertNil(model.takeToast(), "and it does not claim to have started anything")
     }
 
     /// The body a cast would send, stated here because the engine itself is a

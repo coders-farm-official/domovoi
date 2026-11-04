@@ -201,10 +201,9 @@ final class PodcastModelsTests: XCTestCase {
         XCTAssertEqual("— · failed", failed.metaLine)
     }
 
-    /// D48 (2026-11-03): both phones now say `1 chapter`, so this pins the
+    /// D48 (2026-11-03): both phones say `1 chapter` now, so this pins the
     /// fix rather than the infelicity it used to pin.
-    /// ``PodcastStrings/chapterCount(_:)`` is the one line that does it.
-    func testOneChapterSaysOneChapter() {
+    func testOneChapterSaysChaptersOnBothPhones() {
         let one = PodcastEpisode(
             id: 1, durationSec: 120, hasFile: true,
             chapters: [PodcastChapter(title: "only", startSec: 0)]
@@ -556,19 +555,11 @@ final class PodcastModelsTests: XCTestCase {
             PodcastStrings.unsubscribeBody("The Kitchen Table")
         )
         XCTAssertEqual("failed: 404: not found", PodcastStrings.unsubscribeFailed("404: not found"))
-        // Neither app's screen can cast an episode to a **room**, so the
-        // subtitle has never named one. What it names is the phone, and that
-        // sentence has now been true twice and wrong once in between: it
-        // said `played on this phone` until train S004, where it was a
-        // promise the screen had no control for (nothing in the app owned a
-        // `PlayerModel`); it was changed to name the dashboard; and the
-        // 2026-11-03 batch put an owner on `ShellModel` and a play control on
-        // every downloadable row, so it names the phone again.
-        //
-        // The pair of them is the assertion, not just the live one: a merge
-        // that brought the dashboard wording back beside a play button would
-        // be the screen contradicting itself, and `inTheDashboard` is gone
-        // from this type altogether so it cannot come back quietly.
+        // It said `played on this phone` until train S004, where that was a
+        // promise the screen had no control for; the 2026-11-03 batch put an
+        // owner on `ShellModel` and a play control on every downloadable row,
+        // so it says it again. Casting an episode to a **room** is still
+        // neither app's, and the subtitle has never named one.
         XCTAssertEqual(
             "subscriptions + episodes, played on this phone",
             PodcastStrings.subtitle
