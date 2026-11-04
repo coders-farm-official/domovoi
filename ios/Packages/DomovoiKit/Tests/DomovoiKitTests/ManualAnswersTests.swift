@@ -552,6 +552,168 @@ final class ManualAnswersTests: XCTestCase {
         }
     }
 
+    // MARK: - answer 30 on the way up: every write of `place` is an arrival
+
+    /// A model with the document above actually served, which is what
+    /// ``ManualModel/go(_:)`` needs: four of its five branches consult `doc`,
+    /// and with none the function can only land on Start here.
+    private func servedRig() -> ManualModel {
+        let server = "http://10.0.0.42:6369"
+        StubURLProtocol.reset()
+        StubURLProtocol.dispatch { request in
+            let parts = request.url.flatMap {
+                URLComponents(url: $0, resolvingAgainstBaseURL: false)
+            }
+            let path = parts?.path ?? ""
+            if path == "/api/health" {
+                let challenge = (parts?.queryItems ?? []).first { $0.name == "challenge" }?.value
+                return .json((try? TestIdentity.real.healthBody(challenge: challenge)) ?? "{}")
+            }
+            if path == manualPath { return .json(manualGoDocument) }
+            return .json("{}")
+        }
+        let store = InMemoryShellStore(serverURL: server, token: "household-abc")
+        store.trustServer(server, identity: TestIdentity.real.pin)
+        let container = AppContainer(
+            store: store,
+            vault: TokenVault(items: InMemoryKeychain()),
+            lock: HouseholdLock(),
+            clock: { 0 },
+            configuration: StubURLProtocol.session(timeout: 5)
+        )
+        let seen = RouteVisibility(
+            capabilities: Capabilities(features: ["ai": true]),
+            sharedScreen: false,
+            phoneCanChat: false
+        )
+        return ManualModel(in: container, visibility: { seen }, cache: ManualCacheBox())
+    }
+
+    private func settle(
+        until done: @MainActor () -> Bool,
+        _ what: String = "the document",
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async {
+        for _ in 0..<settleYieldLimit {
+            if done() { return }
+            await Task.yield()
+        }
+        XCTFail("\(what) never settled", file: file, line: line)
+    }
+
+    /// **``ManualModel/go(_:)`` is four of the five ways up, and each one has
+    /// to count its arrival.**
+    ///
+    /// ``ManualModel/land(on:)`` exists because a counter maintained at three
+    /// of four write sites is worse than none - and
+    /// ``testArrivingAtALevelAgainIsANewArrival`` pinned the three that are
+    /// *not* `go`: `open(levels:)`, `up()` and `restore(saved:)`. A review's
+    /// negative control then reverted all five branches of `go` to write
+    /// `place` directly and the whole suite stayed green, which is the same
+    /// gap restated: every pop this app actually performs goes through `go`.
+    ///
+    ///  * the `Domovoi` crumb, `go("map")` (`ManualView.swift:694`);
+    ///  * the topic crumb from a piece, `go(topic.id)` (`:697`);
+    ///  * a piece's eyebrow, `go(piece.topic)` (`ManualPageView.swift:172`);
+    ///  * the map's hub node, `node.opens` (`ManualMapView.swift:380`,
+    ///    Android's `onClick = { go("map") }`, `ManualScreen.kt:612`).
+    ///
+    /// Only `zoom out` (`ManualView.swift:705`) is `up()`. Each of the four is
+    /// a **pop**, which leaves the level below mounted - exactly the shape the
+    /// arrival counter was added for - so `go` not counting means answer 30's
+    /// re-scramble dies on four of the five ways up and survives on one, with
+    /// nothing red.
+    ///
+    /// Every branch of the function is driven, because the sabotage was
+    /// per-branch: a revert of one arm is as green as a revert of all five.
+    func testEveryBranchOfGoCountsItsArrival() async {
+        let model = servedRig()
+        model.start()
+        await settle(until: { model.doc != nil })
+        XCTAssertEqual(.start, model.place, "the manual opens on Start here")
+
+        // `"map"`: the hub node and the first crumb.
+        model.go("map")
+        XCTAssertEqual(.map, model.place)
+        XCTAssertEqual(1, model.arrivals(of: .map), "`go(map)` is an arrival at the map")
+
+        // A topic id: down into a cluster.
+        model.go("rooms-and-devices")
+        XCTAssertEqual(.topic("rooms-and-devices"), model.place)
+        XCTAssertEqual(1, model.arrivals(of: .topic("rooms-and-devices")))
+        XCTAssertEqual(
+            1, model.arrivals(of: .map),
+            "pushing a cluster must not count an arrival at the map it covers"
+        )
+
+        // And the way back: the crumb, not `up()`. This is the assertion the
+        // uncaught sabotage failed to fail.
+        model.go("map")
+        XCTAssertEqual(.map, model.place)
+        XCTAssertEqual(
+            2, model.arrivals(of: .map),
+            "the `Domovoi` crumb is a pop, and a pop that does not count its "
+                + "arrival re-shows a map whose names settled minutes ago - "
+                + "answer 30 on the way up, dead at four of five sites"
+        )
+
+        // A piece id: the deepest level.
+        model.go("pi-room")
+        XCTAssertEqual(.piece("pi-room"), model.place)
+        XCTAssertEqual(1, model.arrivals(of: .piece("pi-room")))
+
+        // A piece's eyebrow: `go(piece.topic)`, the second way up.
+        model.go("rooms-and-devices")
+        XCTAssertEqual(.topic("rooms-and-devices"), model.place)
+        XCTAssertEqual(
+            2, model.arrivals(of: .topic("rooms-and-devices")),
+            "a piece's eyebrow is a pop to its cluster, and that cluster has "
+                + "been mounted the whole time the piece was on top of it"
+        )
+
+        // An alias resolves, and the arrival is counted at the level the
+        // screen actually shows - not at the alias.
+        model.go("pl-alias")
+        XCTAssertEqual(.piece("playlists"), model.place, "an alias opens what it points at")
+        XCTAssertEqual(1, model.arrivals(of: .piece("playlists")))
+        XCTAssertEqual(
+            0, model.arrivals(of: .piece("pl-alias")),
+            "the alias is not a level: a count against it would key a stage "
+                + "nothing ever draws"
+        )
+
+        // An id this document has not got: Start here, and that is an arrival
+        // too, because it is where the screen goes.
+        model.go("no-such-thing")
+        XCTAssertEqual(.start, model.place)
+        XCTAssertEqual(1, model.arrivals(of: .start))
+
+        // Through `go` as well, staying put is not a move: Android's unchanged
+        // `levelKey` is no move either.
+        model.go("no-such-thing")
+        XCTAssertEqual(
+            1, model.arrivals(of: .start),
+            "`go` to the level already on screen must be the same no-op the "
+                + "stack's own repeated path writes are"
+        )
+        model.stop()
+        StubURLProtocol.reset()
+
+        // The fifth branch, which needs no document: with nothing loaded `go`
+        // can only mean Start here, and it still goes through the funnel.
+        let blind = rig()
+        blind.open(levels: [.map])
+        XCTAssertEqual(.map, blind.place)
+        blind.go("map")
+        XCTAssertEqual(.start, blind.place, "with no document there is nowhere else to go")
+        XCTAssertEqual(
+            1, blind.arrivals(of: .start),
+            "the no-document branch is a write of `place` like any other"
+        )
+        blind.stop()
+    }
+
     // MARK: - answer 31: the float's periods and phases
 
     /// `5.5 + (i % 4) * 0.9` seconds, phased by `i * 0.7` (`bob`,
@@ -590,4 +752,79 @@ final class ManualAnswersTests: XCTestCase {
             )
         }
     }
+
+    /// **Review 2's S3, as the arithmetic a test can reach.**
+    ///
+    /// Three of the four gates on a node's bob are decisions rather than
+    /// layout, and the one that is iOS's own - a level the stack has
+    /// **covered** holds still - shipped wrong and was found by a review
+    /// rather than by a case, because it lived in a ternary inside a
+    /// `@ViewBuilder`. It is
+    /// ``manualNodeFloatPeriod(at:reduceMotion:floatOn:onTop:)`` now, and
+    /// `ManualMapStage` passes its `isOnTop` into it.
+    ///
+    /// What is still train-only, and is written up as such: whether writing
+    /// `floating` with a `nil` animation actually *cancels* the
+    /// `repeatForever` already attached to the offset. This pins the value the
+    /// view is handed, which is the half that can be wrong silently.
+    func testOnlyTheLevelOnTopOfTheStackBobs() {
+        for index in 0..<24 {
+            let moving = manualNodeFloatPeriod(
+                at: index, reduceMotion: false, floatOn: true, onTop: true
+            )
+            XCTAssertEqual(
+                manualFloatPeriod(at: index), moving, accuracy: 1e-9,
+                "the stage on top bobs at Android's own period"
+            )
+            // Not vacuous: the "on top" arm has to be a real period, or every
+            // assertion below would hold of a float that never ran at all.
+            XCTAssertGreaterThan(moving, 5.0, "card \(index) would not bob at all")
+
+            XCTAssertEqual(
+                0,
+                manualNodeFloatPeriod(
+                    at: index, reduceMotion: true, floatOn: true, onTop: true
+                ),
+                "Reduce Motion is still, as Android's own `bob` is"
+            )
+            XCTAssertEqual(
+                0,
+                manualNodeFloatPeriod(
+                    at: index, reduceMotion: false, floatOn: false, onTop: true
+                ),
+                "`-domovoi-manual-float-off` is still"
+            )
+            XCTAssertEqual(
+                0,
+                manualNodeFloatPeriod(
+                    at: index, reduceMotion: false, floatOn: true, onTop: false
+                ),
+                "a covered level is still - the stack keeps it mounted, and "
+                    + "three stages' worth of `repeatForever` behind two "
+                    + "covered screens is not what answer 31 was costed at"
+            )
+        }
+    }
 }
+
+/// A document with the three kinds of id ``ManualModel/go(_:)`` resolves - a
+/// topic, a piece, and a piece that is an **alias** of another - plus the
+/// centre's own topic, so every branch of that function can be driven.
+///
+/// Small on purpose: these cases assert where `go` *lands* and whether the
+/// arrival was counted, and nothing about layout, search or visibility. The
+/// larger seeded document lives in `ManualModelTests.swift`, file-private to
+/// it; duplicating a trimmed one here is cheaper than widening that file's
+/// surface, and this file is new, so it collides with nothing.
+private let manualGoDocument = """
+{"schema":"domovoi-manual/1",
+ "centre":{"id":"domovoi","title":"Domovoi","opens":"how-it-works"},
+ "start":{"title":"Start here"},
+ "topics":[{"id":"how-it-works","title":"How it works","pieces":["what-it-is"]},
+           {"id":"rooms-and-devices","title":"Rooms and devices","pieces":["pi-room"]},
+           {"id":"music-and-media","title":"Music and media","pieces":["playlists","pl-alias"]}],
+ "pieces":[{"id":"what-it-is","topic":"how-it-works","title":"What it is"},
+           {"id":"pi-room","topic":"rooms-and-devices","title":"A Raspberry Pi room"},
+           {"id":"playlists","topic":"music-and-media","title":"Playlists"},
+           {"id":"pl-alias","topic":"music-and-media","title":"Lists","alias_of":"playlists"}]}
+"""

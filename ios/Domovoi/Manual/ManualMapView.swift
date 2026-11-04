@@ -358,18 +358,22 @@ struct ManualMapStage: View {
                         height: nh,
                         levelKey: levelKey,
                         reduceMotion: reduceMotion,
-                        // `5.5 + (i % 4) * 0.9` seconds (`:562`). Zero is
-                        // still, which is what Reduce Motion asks for, what
-                        // ``ManualFloatClock`` asks for while a UI case is
-                        // driving this screen — and what a **covered** level
-                        // gets: the stack keeps every level below the one on
-                        // screen mounted, and three stages' worth of
-                        // `repeatForever` behind two covered screens is not
-                        // what answer 31 was costed at
-                        // (``wires(_:size:)``).
-                        floatPeriod: reduceMotion || !ManualFloatClock.on || !isOnTop
-                            ? 0
-                            : manualFloatPeriod(at: at),
+                        // `5.5 + (i % 4) * 0.9` seconds (`:562`), or zero
+                        // — Reduce Motion, a UI case that turned the float
+                        // off, or a level the stack has **covered**. All
+                        // three gates and the reason for each are in
+                        // ``manualNodeFloatPeriod(at:reduceMotion:floatOn:onTop:)``,
+                        // in DomovoiKit rather than in this ternary because
+                        // the one that is iOS's own — only the top stage
+                        // animates (``wires(_:size:)``) — is review 2's S3,
+                        // and a decision no test could reach is how it came
+                        // to ship broken.
+                        floatPeriod: manualNodeFloatPeriod(
+                            at: at,
+                            reduceMotion: reduceMotion,
+                            floatOn: ManualFloatClock.on,
+                            onTop: isOnTop
+                        ),
                         // Android phases the sine by `i * 0.7` seconds
                         // (`:563`). Here it is a one-shot delay on a
                         // repeating animation, so the wrap in
@@ -736,7 +740,9 @@ struct ManualMapNode: View {
 // MARK: - the name that scrambles into place
 
 /// How fast a name scrambles: nine frames, 24 ms apart (`ScrambleText`,
-/// `:688` — `steps = 8`, `delay(24)`), so 216 ms in all.
+/// `:688` — `steps = 8`, `delay(24)`), so 216 ms of retyping — after
+/// ``leadIn``, which is the transition the level arrives on and the one thing
+/// here that has no Android counterpart.
 ///
 /// The alphabet and the per-frame arithmetic are **not** here. They are
 /// ``manualScrambleGlyphs`` and
@@ -751,6 +757,20 @@ enum ManualScrambleClock {
 
     /// 24 ms, unless a DEBUG launch argument slows it down.
     static var frame: Duration { .milliseconds(frameMS) }
+
+    /// How long **frame 0** is held before the name retypes itself: the
+    /// length of the push or the pop the level arrives on.
+    ///
+    /// 350 ms is a `UINavigationController`'s own transition, measured for
+    /// this screen in `StubHouseUITests+Manual.swift`'s `manualGone(_:)` —
+    /// "a pop takes about 350 ms to animate". Android needs no such thing
+    /// (`focus` changes inside one composition, `ManualScreen.kt:593`, with
+    /// every node on screen throughout); a stack does, because 216 ms of
+    /// retyping started at the moment of the pop is spent entirely while the
+    /// stage is sliding. **Not** scaled by the frame knob below: it is a
+    /// transition, not a frame, and a case that asked for slow frames still
+    /// wants the real transition.
+    static let leadIn: Duration = .milliseconds(350)
 
     /// Whether a case asked for a slow scramble. The only state in which a
     /// node publishes ``ManualMapNode/scrambleState``.
@@ -912,9 +932,42 @@ struct ManualScrambleName: View {
     ///
     /// The loop is written **here** rather than in DomovoiKit because it is
     /// the timing; the arithmetic inside it is in DomovoiKit because it is the
-    /// behaviour. `try?` and a cancellation check, not `do`/`catch`: a
-    /// cancelled sleep must leave the loop, and the real name comes back on
-    /// screen whichever way it left.
+    /// behaviour.
+    ///
+    /// ### A cancelled scramble writes nothing
+    ///
+    /// `try?` and then `guard !Task.isCancelled else { return }` — a **return**
+    /// and not a `break` that falls through to the tail, which is what review 3
+    /// found. Before S2, a cancellation meant the level had changed and a
+    /// *new* stage was being built, so the stale task's two tail writes landed
+    /// on a view that was going away and the real name came back on the new
+    /// one. S2 changed that premise on purpose: ``ManualMapStage/levelKey``
+    /// now changes **in place** on a mounted node, so the cancelled task and
+    /// the one that replaced it share this view's `glyphs` and `scrambling`.
+    /// The cancelled one resumes from the throwing `Task.sleep` as its own
+    /// main-actor continuation, so a tail that ran would blank the live name
+    /// for a frame and — worse — publish ``ManualMapNode/scrambleState`` as
+    /// `"settled"` while the replacement was mid-scramble, which is the value
+    /// a UI case reads. Reachable by pushing into a cluster and popping back
+    /// inside one scramble. Nothing is left stuck `true` by returning early:
+    /// `.task(id:)` cancels on an id change, which starts the replacement that
+    /// sets it, or on the view going away, which takes the state with it.
+    ///
+    /// ### Frame 0 is held for the length of the transition
+    ///
+    /// Android's names scramble "as the level opens" with no transition at
+    /// all: `focus` changes inside one composition (`ManualScreen.kt:593`) and
+    /// every node is on screen throughout. Here a level is a stack entry, and
+    /// a push or a pop takes about **350 ms** (measured in
+    /// `StubHouseUITests+Manual.swift`'s `manualGone(_:)`) against a scramble
+    /// that ships at 216 ms — so the straight port spent the whole ornament
+    /// while the stage was still sliding, which is review 3's F3 and the
+    /// second way for an effect Kamron called "meant to impress" to be
+    /// invisible. Holding **frame 0** for ``ManualScrambleClock/leadIn`` is
+    /// the cheapest honest fix and keeps the shape: the level arrives already
+    /// scrambled, and the nine frames of retyping then run where somebody can
+    /// see them. It is a delay on the *first* frame only, so the retype itself
+    /// is Android's 216 ms, unchanged.
     ///
     /// `@MainActor` and not nonisolated: it writes `@State` and a `@Binding`,
     /// and a nonisolated `async` method of a view that does that is the one
@@ -936,8 +989,10 @@ struct ManualScrambleName: View {
                 // alphabet next. `#` is in the alphabet.
                 manualScrambleGlyphs.randomElement() ?? "#"
             }
-            try? await Task.sleep(for: ManualScrambleClock.frame)
-            if Task.isCancelled { break }
+            try? await Task.sleep(
+                for: frame == 0 ? ManualScrambleClock.leadIn : ManualScrambleClock.frame
+            )
+            guard !Task.isCancelled else { return }
         }
         glyphs = ""
         scrambling = false

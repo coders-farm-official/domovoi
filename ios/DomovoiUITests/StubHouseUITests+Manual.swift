@@ -512,8 +512,9 @@ extension StubHouseUITests {
     @MainActor
     func testManual_GoingBackUpALevelScramblesTheNamesAgain() throws {
         control("reset-fixtures", "{}", port: 6601, what: "the manual fixture's seed")
-        // 600 ms a frame: 5.4 s a level, which is the slack a case needs to
-        // be inside an effect that ships at 216 ms.
+        // 600 ms a frame: 4.8 s of retyping after the 350 ms lead-in, which
+        // is the slack a case needs to be inside an effect that ships at
+        // 216 ms.
         let app = manualLaunch(scrambleMS: 600)
 
         // From Start here, so the map's nodes are built by the tap below and
@@ -543,11 +544,26 @@ extension StubHouseUITests {
         topic.tap()
         let out = app.buttons[StubManual.zoomOut].firstMatch
         XCTAssertTrue(out.waitForExistence(timeout: 15), "the topic's cluster never opened")
-        XCTAssertTrue(
-            manualValue(centre, is: "settled", timeout: 5),
-            "pushing a cluster re-scrambled the covered map underneath it — "
-                + "the effect would be over before anybody came back to see it"
-        )
+        // **Whether this is a claim at all depends on the tree, so it is
+        // written as the implication and not as a wait.** A
+        // `UINavigationController` removes the disappeared view controller's
+        // view once a push completes, so a covered stage's elements are
+        // normally *absent* — and `manualValue` would then poll a
+        // non-existent element and time out, failing this case for a reason
+        // that has nothing to do with the claim (review 3's F4). What is true
+        // either way is the implication: if the covered map is still in the
+        // tree, it must still read `"settled"`. The negative itself —
+        // pushing a cluster does not count an arrival at the level underneath
+        // it, so the covered stage never restarts — is pinned where it can be
+        // asserted, at the package layer, in
+        // `ManualAnswersTests.testArrivingAtALevelAgainIsANewArrival`.
+        if centre.exists {
+            XCTAssertEqual(
+                "settled", centre.value as? String,
+                "pushing a cluster re-scrambled the covered map underneath it — "
+                    + "the effect would be over before anybody came back to see it"
+            )
+        }
         evidence(app, "manual-up-a-level-before")
 
         // And back up, which is the half the stack ate.

@@ -765,6 +765,39 @@ public func manualFloatPeriod(at index: Int) -> Double {
     5.5 + Double(index % 4) * 0.9
 }
 
+/// The period a node actually bobs at, **gates and all** — what
+/// `ManualMapView`'s `nodes(_:shown:nodeWidth:nodeHeight:)` hands each card.
+///
+/// It lives here rather than inside the view's `ternary` because three of the
+/// four gates are decisions, not layout, and a decision with no test is how
+/// review 2's S3 came to ship:
+///
+///  * **Reduce Motion** is still, which is Android's own first line
+///    (`bob`, `ManualScreen.kt:560`, `if (reduce || id !in shown) return 0f`);
+///  * ``ManualFloatClock`` off is still — `-domovoi-manual-float-off`, so a UI
+///    case can drive a map that is holding position;
+///  * a **covered** level is still, and that one is iOS-only. Android fades
+///    every node of every level in and out of **one** composition, so there is
+///    no such thing as a covered node to animate; answer 32 put the levels on
+///    a `NavigationStack`, which keeps each level below the one on screen
+///    *mounted*, and three stages' worth of `repeatForever` behind two covered
+///    screens is not what answer 31 was costed at
+///    (``ManualMapStage/wires(_:size:)``).
+///
+/// Zero is a still card and **not** "no card": the view's zero arm pins the
+/// offset at the geometry's own position, because a `floating` that flips
+/// unanimated would otherwise leave every node five points above where the map
+/// put it.
+public func manualNodeFloatPeriod(
+    at index: Int,
+    reduceMotion: Bool,
+    floatOn: Bool,
+    onTop: Bool
+) -> Double {
+    guard !reduceMotion, floatOn, onTop else { return 0 }
+    return manualFloatPeriod(at: index)
+}
+
 /// How far into its bob a card starts — Android's `i * 0.7` seconds
 /// (`:563`), **wrapped at eight**.
 ///
