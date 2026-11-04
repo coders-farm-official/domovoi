@@ -507,9 +507,11 @@ final class ManualAnswersTests: XCTestCase {
             [0, 2, 4, 6, 8, 10, 12, 14, 15],
             (0...manualScrambleSteps).map(settledCount),
             "the settle is not Android's. Its float comparison gives "
-                + "0/2/4/6/8/10/12/14/15; a truncation gives "
-                + "0/1/3/5/7/9/11/13/15 — one character behind at frames 1 "
-                + "through 7"
+                + "0/2/4/6/8/10/12/14/15; the truncation this replaced reads "
+                + "0/1/3/6/8/9/11/13/15 here — it settles one character "
+                + "fewer at frames 1 to 7, and this measurement sees the "
+                + "space at index 5 matching itself either way, which is "
+                + "why its frames 3 and 4 do not lag"
         )
 
         // The property behind the sequence, for any name and any frame: a
