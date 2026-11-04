@@ -481,28 +481,72 @@ final class TransferUploadTests: XCTestCase {
         )
     }
 
-    /// The progress callback reports real numbers from a real transport.
+    /// **Both delegates forward the progress they are given**, which is the
+    /// other half of what nothing exercised.
     ///
     /// Not arithmetic — ``transferPercent(sent:of:)`` is tested above — but
-    /// that the callback is **wired to the delegate at all**: a
-    /// `didSendBodyData` that stopped forwarding would leave every ring
-    /// indeterminate and nothing else in the project would notice.
-    func testTheUploadReportsProgressFromTheTransport() async throws {
-        StubURLProtocol.enqueue(.json("{}"))
-        let ticks = Shared<[Int64]>([])
-        let file = try temporaryFile(Data(repeating: 0x61, count: 512 * 1024))
-        _ = try await makeClient().uploadFile(
-            method: "POST",
-            path: "/api/files/upload-stream",
-            fileURL: file,
-            contentType: "application/octet-stream",
-            onProgress: { sent, _ in ticks.mutate { $0.append(sent) } }
+    /// that the callback is wired to the delegate at all: a
+    /// `didSendBodyData` or `didWriteData` that stopped forwarding would
+    /// leave every ring indeterminate and nothing else in the project would
+    /// notice.
+    ///
+    /// **Called directly rather than through a request**, measured here
+    /// 2026-11-03: a `URLProtocol` stub answers out of `startLoading`, and
+    /// the loading system reports no `didSendBodyData` for it at all — a case
+    /// that uploaded half a mebibyte through ``StubURLProtocol`` and waited
+    /// for a tick got none, so it would have failed whether or not the
+    /// forwarding was there. The numbers from a real socket are the UI
+    /// cases' to assert (`testTransfers_ABigPhoneFileGoesThroughTheStreamedDoor`
+    /// watches the drawn percentage against the stub house); what is left for
+    /// a package test is the two lines of forwarding, and this is them. The
+    /// tasks below are never resumed and reach nothing.
+    func testBothTransferDelegatesForwardTheProgressTheyAreGiven() throws {
+        let configuration = StubURLProtocol.session()
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+        let url = URL(string: "\(server)/api/files/upload-stream")!
+
+        let sent = Shared<[Int64]>([])
+        let send = TransferSendDelegate(
+            hops: redirects(from: url),
+            onProgress: { bytes, _ in sent.mutate { $0.append(bytes) } }
         )
-        XCTAssertFalse(ticks.current.isEmpty, "the transport reported nothing: the ring cannot move")
+        send.urlSession(
+            session,
+            task: session.dataTask(with: url),
+            didSendBodyData: 1024,
+            totalBytesSent: 4096,
+            totalBytesExpectedToSend: 8192
+        )
         XCTAssertEqual(
-            512 * 1024, ticks.current.last,
-            "the last tick is the whole file"
+            [4096], sent.current,
+            "the ring is drawn from totalBytesSent, never from the size of one chunk"
         )
+
+        let written = Shared<[Int64]>([])
+        let receive = TransferReceiveDelegate(
+            hops: redirects(from: url),
+            destination: try temporaryDirectory().appendingPathComponent("film.mkv"),
+            onProgress: { bytes, _ in written.mutate { $0.append(bytes) } }
+        )
+        receive.urlSession(
+            session,
+            downloadTask: session.downloadTask(with: url),
+            didWriteData: 2048,
+            totalBytesWritten: 6144,
+            totalBytesExpectedToWrite: 8192
+        )
+        XCTAssertEqual([6144], written.current)
+    }
+
+    /// A ``RedirectDelegate`` for a request to the active server, built the
+    /// way `RedirectDelegateTests` builds one.
+    private func redirects(from url: URL) -> RedirectDelegate {
+        var request = URLRequest(url: url)
+        request.setValue("household-abc", forHTTPHeaderField: deviceTokenHeader)
+        return RedirectDelegate(start: request, wsUpgrade: false) { _ in
+            .send(token: "household-abc", server: self.server)
+        }
     }
 }
 
