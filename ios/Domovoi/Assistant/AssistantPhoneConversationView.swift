@@ -32,6 +32,11 @@ struct AssistantPhoneConversationView: View {
 
     @State private var typed = ""
 
+    /// The index of the row that was at the top of the window when "show
+    /// earlier" was tapped, waiting for the page above it to be drawn — see
+    /// ``showEarlier(hidden:)``.
+    @State private var earlierPin: Int?
+
     @Environment(\.dynamicTypeSize) private var typeSize
 
     /// The place this conversation is in, for its header row to say (D63).
@@ -337,7 +342,7 @@ struct AssistantPhoneConversationView: View {
                         // screen changes until a chat is fifty messages long.
                         let page = phone.transcriptPage
                         let hidden = page.hidden
-                        if hidden > 0 { showEarlier(hidden: hidden, pinning: scroller) }
+                        if hidden > 0 { showEarlier(hidden: hidden) }
                         // Identity is the **position**, not
                         // ``AssistantMessage/id``: that id is a fresh `UUID` made
                         // at decode time and the live reply is built anew on every
@@ -408,6 +413,25 @@ struct AssistantPhoneConversationView: View {
                 guard last >= 0 else { return }
                 scroller.scrollTo(last)
             }
+            // **The "show earlier" pin, applied to the content that has the
+            // page in it** — see ``showEarlier(hidden:)``. The house's
+            // conversation had the same shape and train I003 measured what it
+            // costs there: a request answered inside the tap lands on the old
+            // window, and the fifty bubbles the same update inserts above it
+            // then push the pinned row 4,449 points down the screen. The key
+            // is ``ChatTranscriptWindow/pinned`` and not `transcriptPage`'s
+            // `hidden`: the window's pin is a stored `Int?` that moves only
+            // when somebody grows the window, while `hidden` is read off a
+            // rebuilt copy of the whole transcript and walks down by one on
+            // every append. This expression is evaluated on every redraw of a
+            // streaming reply, which is the cost D64 exists to avoid. It
+            // cannot fight the follow above either: that is keyed on ``tail``,
+            // which a growth leaves alone.
+            .onChange(of: phone.transcriptWindow.pinned) { _, _ in
+                guard let pin = earlierPin else { return }
+                earlierPin = nil
+                scroller.scrollTo(pin, anchor: .top)
+            }
             // Named so a case can drag **this** scroll view. The shell's phone
             // bar is a `ScrollView` too (the customisable strip along the
             // bottom), and on train S008 a measurement that reached for
@@ -438,15 +462,16 @@ struct AssistantPhoneConversationView: View {
     /// certainly longer (there are more than fifty messages, or this control
     /// is not drawn).
     @ViewBuilder
-    private func showEarlier(hidden: Int, pinning scroller: ScrollViewProxy) -> some View {
+    private func showEarlier(hidden: Int) -> some View {
         HomeLink(ChatStrings.showEarlier) {
             // The id of the row at the top of the window, read **before** it
             // grows. The identity here is the message's position
             // (``transcript`` says why it is not its `id`), and the first
-            // drawn position is the number hidden above it.
-            let top = hidden
+            // drawn position is the number hidden above it. It is parked
+            // rather than spent here: the scroll is asked for by the
+            // `.onChange` in ``transcript``, once the page above it exists.
+            earlierPin = hidden
             phone.showEarlier()
-            scroller.scrollTo(top, anchor: .top)
         }
         .accessibilityLabel(ChatStrings.showEarlierNote(hidden: hidden))
         .frame(maxWidth: .infinity, alignment: .center)

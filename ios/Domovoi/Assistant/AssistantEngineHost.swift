@@ -85,15 +85,37 @@ enum AssistantStoreSeam {
 
     static let flag = "-domovoi-phone-chats"
 
+    /// **Once per process, and not once per build of the view.**
+    ///
+    /// This is a wipe, and the only thing that used to stop it running twice
+    /// was ``AssistantPlaceSwitch``'s `if phone == nil` — a `@State` that is
+    /// gone the moment anything above Chat gives the screen a new identity.
+    /// Apple's Dynamic Type audit does exactly that: it cycles the content
+    /// size category across the accessibility boundary, the shell's header
+    /// modifier swaps `_ConditionalContent` branches on that boundary, the
+    /// whole route is rebuilt with `phone` back at nil, and the second call
+    /// deleted the chat the case had just written. Train I003's
+    /// `testAssistant_Audit` ended on a list that said `no chats yet`, forty
+    /// seconds after sending a message into the chat it was auditing.
+    ///
+    /// Reading the flag again is harmless; emptying a directory of the
+    /// person's conversations a second time is not. So the wipe is bound to
+    /// the process, which is what "at launch" meant all along.
+    private nonisolated(unsafe) static var done = false
+
     /// Empties the store when the launch said `wipe`, and empties it and
-    /// writes one finished exchange when it said `seed`. Called once, before
-    /// the place's model reads the directory.
+    /// writes one finished exchange when it said `seed`. Called before the
+    /// place's model reads the directory, and does its work **only the first
+    /// time** — see ``done``.
     static func wipeIfAsked(_ arguments: [String] = ProcessInfo.processInfo.arguments) {
+        guard !done else { return }
         guard let at = arguments.firstIndex(of: flag), at + 1 < arguments.count else { return }
         switch arguments[at + 1] {
         case "wipe":
+            done = true
             _ = AssistantConversationStore().clearAll()
         case "seed":
+            done = true
             _ = AssistantConversationStore().clearAll()
             seedOneExchange()
         default:
