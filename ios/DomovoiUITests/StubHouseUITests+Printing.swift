@@ -99,17 +99,144 @@ extension StubHouseUITests {
     /// a plain `VStack`, so it has no collection view at all. And not
     /// `exists`: the panel's cards are **not** lazy, so every card exists from
     /// the first frame and the thing a tap needs is hittability.
+    ///
+    /// ### It was fourteen `app.swipeUp()`s, and that is what train I004 lost
+    ///
+    /// `testPrinting_WhichOneIsItOnlyWhereTheServerSaysSo` failed on "the
+    /// identify button is unreachable" with the button **in the tree the
+    /// failure printed**, at `{{30.0, -561.3}, {136.0, 44.0}}` — 561 points
+    /// *above* the top of a scroll view whose own indicator read `value: 100%`.
+    /// The first tree in the same log has it at `{{30.0, 772.7}, {136.0, 44.0}}`
+    /// with the indicator at `0%`: 44 points below the scroll view's bottom
+    /// edge at y = 770, and behind the phone bar. It needed about 50 points of
+    /// scroll and it got the whole 1290.
+    ///
+    /// A bare `swipeUp()` is a **flick**: it carries momentum, and on this
+    /// panel one of them runs the content to its end stop. The loop then spent
+    /// its remaining thirteen iterations swiping a scroll view that was already
+    /// at the bottom, and the `where` clause — which does stop the loop the
+    /// moment the element is hittable — never got a frame in which it was.
+    /// Nothing about the app changed; the panel grew by a card (the look's
+    /// found rows arrive by themselves, `testPrinting_LookForPrintersAddsOnlyWhatIsNotAdded`
+    /// says why) until one flick was more than the whole remaining scroll.
+    ///
+    /// So this no longer flicks. It **measures** and drags: each round reads
+    /// where the element is and where the readable band is, and moves the
+    /// content by that difference with ``printingDrag(_:by:)``, a held drag
+    /// that ends stationary and so takes no velocity. Because the move is
+    /// signed it works in both directions — an element above the fold comes
+    /// back down, which fourteen `swipeUp`s could never do — and because it
+    /// converges on the band's middle it stops rather than bouncing off an end
+    /// stop. The per-round geometry is printed, so a failure next train says
+    /// which way it was going and how far.
+    ///
+    /// `flicks` keeps its name and its meaning: the number of rounds.
     @MainActor
     func printingScrollToHittable(_ app: XCUIApplication, _ element: XCUIElement, flicks: Int = 14) -> Bool {
-        for _ in 0..<flicks where !(element.exists && element.isHittable) {
-            app.swipeUp()
-        }
-        if !(element.exists && element.isHittable) {
-            print("=== \(flicks) FLICKS AND STILL NOT HITTABLE — tree follows ===")
+        guard element.exists else {
+            print("=== NOT IN THE TREE AT ALL, SO NOT A SCROLL — tree follows ===")
             print(app.debugDescription)
             return false
         }
-        return true
+        var trace: [String] = []
+        for round in 1...flicks {
+            if element.isHittable { return true }
+            let box = element.frame
+            guard let page = printingPageHolding(app, box) else {
+                trace.append("round \(round): no scroll view to drag")
+                break
+            }
+            // The navigation bar is translucent and **hit-tests**: an element
+            // under it exists, is in the picture as a blur, and is not
+            // hittable. So the readable band starts at the bar's bottom edge,
+            // not at the scroll view's top.
+            let bar = app.navigationBars.firstMatch
+            let top = max(page.frame.minY, bar.exists ? bar.frame.maxY : page.frame.minY)
+            let bottom = page.frame.maxY
+            guard bottom - top > box.height + 8 else {
+                trace.append(
+                    "round \(round): the band \(top)…\(bottom) cannot hold a "
+                        + "\(box.height)-point element"
+                )
+                break
+            }
+            let move = box.midY - (top + bottom) / 2
+            trace.append(
+                "round \(round): element \(box.minY)…\(box.maxY), band \(top)…\(bottom), "
+                    + "moving \(move)"
+            )
+            // Already where it should be and still not hittable: something is
+            // over it, which is not a scroll's to fix and is a different
+            // finding. Stop and print, rather than drag on the spot.
+            //
+            // Eight points, not one: ``printingDrag(_:by:)`` has a 24-point
+            // floor (below a scroll view's pan slop a drag is a long press),
+            // so asking it for two points moves the page twenty-four and the
+            // loop would oscillate about the band's middle for ever.
+            guard abs(move) > 8 else { break }
+            printingDrag(page, by: move)
+        }
+        if element.isHittable { return true }
+        print("=== \(flicks) MEASURED DRAGS AND STILL NOT HITTABLE ===")
+        for line in trace { print("    \(line)") }
+        print(app.debugDescription)
+        return false
+    }
+
+    /// The scroll view the element's box falls inside, or the tallest one.
+    ///
+    /// Containment first, because this file drives **sheets**: with the Print
+    /// sheet up, the tallest scroll view in the tree is the Files list behind
+    /// it, and dragging that would scroll the wrong page while the sheet's own
+    /// row stayed exactly where it was.
+    @MainActor
+    func printingPageHolding(_ app: XCUIApplication, _ box: CGRect) -> XCUIElement? {
+        let pages = app.scrollViews.allElementsBoundByIndex.filter { $0.frame.height > 0 }
+        return pages.first(where: { $0.frame.insetBy(dx: -1, dy: -1).contains(box) })
+            ?? pages.max(by: { $0.frame.height < $1.frame.height })
+    }
+
+    /// Move a scroll view's content by `points` (positive scrolls further down
+    /// the page), with no momentum.
+    ///
+    /// **The four-argument `press` is the whole method.** The two-argument
+    /// `press(forDuration:thenDragTo:)` is a press followed by a *flick* —
+    /// XCTest's own log says "with velocity of 500.00 pixels per second, and
+    /// then hold for 0.0 seconds" — and train R002 measured a drag asked for
+    /// 143 points moving a page by 294. `withVelocity: .slow` plus
+    /// `thenHoldForDuration` ends the gesture stationary, so the content stops
+    /// where the finger did. The measurement and the two cases it cost are in
+    /// ``musicMoreDrag(_:by:vertical:)``'s doc comment; this is the same
+    /// correction, made here before this helper could repeat it.
+    ///
+    /// The other three numbers are that method's too, for the same reasons: at
+    /// least 24 points of travel (less than a scroll view's pan slop is not a
+    /// pan at all, it is a long press on whatever is under the finger), at most
+    /// 80% of the scroller's height (the whole gesture has to stay inside it),
+    /// and the finger starts near the edge it is travelling away from.
+    ///
+    /// The drag runs down the **left margin**, `dx: 0.03`. Every control on
+    /// this panel starts at x = 16 or x = 30, so a finger at x ≈ 12 hit-tests
+    /// to the scroll view itself rather than holding a button for 0.4 seconds.
+    @MainActor
+    func printingDrag(_ page: XCUIElement, by points: CGFloat) {
+        let height = page.frame.height
+        guard height > 40, points != 0 else { return }
+        // The finger travels the opposite way to the content.
+        let wanted = -points
+        let leastTravel: CGFloat = 24
+        let asked = abs(wanted) < leastTravel
+            ? (wanted < 0 ? -leastTravel : leastTravel)
+            : wanted
+        let travel = max(-height * 0.8, min(height * 0.8, asked))
+        let near: CGFloat = travel < 0 ? 0.9 : 0.1
+        let from = page.coordinate(withNormalizedOffset: CGVector(dx: 0.03, dy: near))
+        from.press(
+            forDuration: 0.4,
+            thenDragTo: from.withOffset(CGVector(dx: 0, dy: travel)),
+            withVelocity: .slow,
+            thenHoldForDuration: 0.4
+        )
     }
 
     /// Scroll the panel back to its very top, so **nothing is under the

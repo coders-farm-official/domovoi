@@ -639,6 +639,33 @@ extension StubHouseUITests {
     /// Read the screenshots in `att/` before believing a named finding. Twice
     /// on this track the picture attributed a failure two tree diffs could
     /// not — and once, above, it refuted one of mine.
+    ///
+    /// ### Train I004's red, and where it was placed
+    ///
+    /// The bare run returned one `Contrast failed … | element: nil` and no cut
+    /// text leaf to allow it against, so it failed — which is exactly what the
+    /// previous round tightened the allowance to make happen ("an unknown to
+    /// report, not an allowance"). The report has now been read, and the
+    /// finding was placed without another bisect, from two numbers in the same
+    /// train's logs:
+    ///
+    ///  * `About & updates` went through the **identical** shell in the same
+    ///    train, composed and bare, and returned **no contrast finding of any
+    ///    kind** in either run (8 findings and 4, all Dynamic Type). App
+    ///    layout returned 3 and 1. Same bars, same `Settings` heading, same
+    ///    subtitle: the difference is the panel.
+    ///  * The bare tree holds `label: '4'` at `{{30.0, 513.5}, {7.7, 14.3}}` —
+    ///    the frame I002 named when this very finding last carried an element.
+    ///
+    /// So it is the phone-bar row's ordinal, and
+    /// `SystemSettingsLayoutPanel.swift`'s `name` now draws that one leaf in
+    /// `Color.primary`, which is the step the previous round wrote down for
+    /// "if `4` is flagged again". **No allowance moved**: the bare run is
+    /// still allowed nothing, and the composed run is still allowed one
+    /// anonymous contrast per straddling text leaf, counted from the tree. If
+    /// the finding returns, the ordinal is eliminated rather than suspected,
+    /// and the `SMALL ::` lines ``systemSettingsAudit(_:_:allowingLeavesCutByTheScrollEdge:)``
+    /// now prints name the leaves left to look at.
     @MainActor
     func testSystemSettings_AppLayoutPassesApplesAccessibilityAudit() throws {
         guard #available(iOS 17.0, *) else { return }
@@ -800,6 +827,23 @@ extension StubHouseUITests {
             return false
         }
         for line in unexplained { print("AUDIT \(name) REST :: \(line)") }
+        // **The suspect list, printed only when there is something to pin on
+        // it.** An anonymous `Contrast failed` carries no frame, so the run it
+        // appears in says nothing about which leaf it came from, and I002's
+        // one named instance (`4`, at `(30, 513.5, 7.7, 14.3)`) is the only
+        // attribution this screen has ever had. Apple samples an element's
+        // pixels and clusters them, so the leaves it can mis-cluster are the
+        // small ones: a 14-point line has few pixels and a large share of them
+        // antialiased. Printing every short leaf with its frame means the next
+        // train that goes red here can be read against this one without
+        // another bisect — and after `SystemSettingsLayoutPanel`'s ordinal
+        // went to `Color.primary`, the first thing to check is whether the
+        // ordinals are still on this list at all.
+        if unexplained.contains(where: { $0.hasSuffix("| element: nil") }) {
+            let small = app.staticTexts.allElementsBoundByIndex
+                .filter { !$0.label.isEmpty && $0.frame.height > 0 && $0.frame.height <= 16 }
+            for leaf in small { print("AUDIT \(name) SMALL :: \(Self.oneLine(leaf))") }
+        }
         return (floor, unexplained, header.count)
     }
 

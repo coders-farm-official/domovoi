@@ -431,9 +431,50 @@ private struct SystemSettingsBarRow: View {
             // read it. If `4` is flagged again, the next step is
             // `Color.primary` for the ordinal alone — never a change to the
             // token, and never a weight whose effect cannot be measured.
+            //
+            // ### It was flagged again in train I004, and this is that step
+            //
+            // `testSystemSettings_AppLayoutPassesApplesAccessibilityAudit`
+            // went red on one `Contrast failed … | element: nil` in the
+            // **bare** run — the panel with the shell header stripped, where
+            // the measured allowance is zero because no text leaf straddles
+            // the scroll edge.
+            //
+            // Two measurements from that train put it on this line, and both
+            // are in the run's own log:
+            //
+            //  * **It is this panel's, not the chrome's.** The same train
+            //    audited `About & updates` through the identical shell, twice:
+            //    `systemsettings-about` returned 8 findings and
+            //    `systemsettings-about-nobar` 4, and **not one of the twelve
+            //    was a contrast finding**. App layout returned 3 contrast
+            //    findings composed and 1 bare. Same navigation bar, same phone
+            //    bar, same `Settings` heading and subtitle; different panel.
+            //  * **The frame is this line's, to the decimal.** I002 named `4`
+            //    at `(30, 513.5, 7.7, 14.3)`, and I004's bare tree holds
+            //    `StaticText … {{30.0, 513.5}, {7.7, 14.3}}, label: '4'` —
+            //    this `Text`, at the same place, in a panel whose geometry had
+            //    not moved.
+            //
+            // Why `4` and not `1`, `2`, `3`, at one ink and one size: Apple's
+            // audit samples the element's pixels and clusters them. A
+            // 7.7 x 14.3-point `4` is two diagonals and a bar, so most of its
+            // coverage is antialiased mid-tone — a blend of `fgMuted` and the
+            // card, which reads worse than either. `1` is a single stem and
+            // `2`/`3` are curves with heavier stems. That is why Review 4 was
+            // right that the pixels did not vary across a pass and a fail:
+            // what varies is which glyph the sampler had to average.
+            //
+            // So the ordinal alone goes to `Color.primary`, exactly as written
+            // above. `fgMuted` is untouched here (the glyph beside it keeps
+            // it, and so does ``ShellStrings/alwaysFirst``) and untouched
+            // everywhere else. Near-black leaves no mid-tone blend that can
+            // fall under 4.5:1, so if this finding comes back the ordinal is
+            // eliminated rather than suspected again — which is the point of
+            // changing one leaf and nothing else.
             Text("\(index + 1)")
                 .font(.caption.monospaced())
-                .foregroundStyle(Color.fgMuted)
+                .foregroundStyle(Color.primary)
                 .frame(minWidth: indexWidth, alignment: .leading)
             Image(systemName: route.systemImage)
                 .foregroundStyle(Color.fgMuted)

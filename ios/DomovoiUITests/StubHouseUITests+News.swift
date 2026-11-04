@@ -43,10 +43,10 @@ extension StubHouseUITests {
     /// the *heading* comes from the roster, so waiting on a story would make
     /// every case in this file also a test of the items read — and report a
     /// failed items read as "News never drew".
-    /// - Parameter watchingTheProcess: poll `app.state` once a second while
-    ///   waiting for the heading and print the wall-clock instant it first
-    ///   stops being `.runningForeground`, with the seconds since the launch
-    ///   returned. **Off by default**, and passed only by
+    /// - Parameter watchingTheProcess: poll `app.state` four times a second
+    ///   while waiting for the heading and print the wall-clock instant it
+    ///   first stops being `.runningForeground`, with the seconds since the
+    ///   launch returned. **Off by default**, and passed only by
     ///   ``testNews_PassesApplesAccessibilityAudit()``: it is a diagnostic
     ///   for the one case that keeps losing its process, and a per-second
     ///   poll in all thirteen would cost the run for nothing.
@@ -58,6 +58,12 @@ extension StubHouseUITests {
     ///   was wrong". It changes no assertion: the heading is still waited for
     ///   to the same 40 seconds, and a process that dies is still reported
     ///   by the wait, not by this.
+    ///
+    ///   **It did line them up, in train I004, and the answer cost this
+    ///   diagnostic its own shape** — see the comment inside, under
+    ///   `app.state` on a sleep. It no longer asks the tree once a second,
+    ///   because a failed one-second predicate is a whole-tree snapshot and
+    ///   the process died inside the fourth of them.
     @MainActor
     func openNews(
         _ mode: String = StubHouseUITests.ordinaryTypeSize,
@@ -76,18 +82,52 @@ extension StubHouseUITests {
             return (app, heading.waitForExistence(timeout: 40))
         }
 
-        // One second at a time to the same 40, so the poll itself is what
-        // notices the death rather than the 40-second wait reporting it
-        // afterwards with no instant attached.
+        // **`app.state` on a sleep, and no tree query until the window the
+        // process dies in has passed.**
+        //
+        // This was `heading.waitForExistence(timeout: 1)` forty times, and
+        // train I004's trace of the Simulator's unified log says that loop was
+        // the exposure. A *failed* one-second predicate is not cheap: XCTest
+        // captures the element's debug description and then a **whole-tree
+        // accessibility snapshot** for failure triage. The I004 log shows four
+        // of those passes in 1.7 seconds — `Capturing element debug
+        // description` at t = 4.78 and t = 6.22, `Requesting snapshot of
+        // accessibility hierarchy` at t = 4.97 and t = 8.25 — and the app was
+        // killed with SIGSEGV on its main thread **4 ms into the fourth**,
+        // five elements deep. Not an uncaught ObjC exception (SIGABRT, and
+        // `Terminating app due to uncaught exception` has zero hits in the
+        // whole 31-million-line log), not a Swift trap, not SIGKILL, not
+        // jetsam, not a watchdog, and no crash report was written anywhere.
+        // Attribution of that signal to a root cause is **not** established —
+        // see this unit's REPORT.md — but the queries are this file's and the
+        // crash lands inside one, so this file stops making forty of them.
+        //
+        // What replaces them keeps the diagnostic whole. `app.state` takes no
+        // snapshot and is safe after the process has gone, so the death is
+        // still timestamped to within a quarter-second — better than the
+        // second this had. The tree is asked at most once a second, and
+        // **not at all for the first eight seconds**: every death this case
+        // has had came at Running Foreground + 4.9 s (I004), + 10.0 s (I001),
+        // + 10.2 s (I002) and + 10.1 to 10.6 s (R005), while every process
+        // that survives finds `news-person-heading` at RF + 12.1 s. So the
+        // window in which it dies now contains no query of this file's at all,
+        // and the window in which the heading can actually appear is covered.
+        //
+        // A `.exists` rather than another `waitForExistence`: the same one
+        // query, without the debug-description-and-hierarchy capture a failed
+        // predicate adds. The 40-second budget and the `landed` contract are
+        // unchanged.
         let began = Date()
         let stamp = ISO8601DateFormatter()
         stamp.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         print("NEWS-WATCH launch returned at \(stamp.string(from: began))")
-        for _ in 0..<40 {
+        let quietFor: TimeInterval = 8
+        var lastAsked = Date.distantPast
+        while Date().timeIntervalSince(began) < 40 {
             // **The state before the query, every time.** A query resolved
             // against a process that has gone is what raises `Failed to
             // resolve query: Application … is not running`, so asking the
-            // tree first would throw on the very second this is here to
+            // tree first would throw on the very moment this is here to
             // timestamp.
             guard app.state == .runningForeground else {
                 print(
@@ -103,13 +143,18 @@ extension StubHouseUITests {
                 // for. The caller fails on `landed`, as it always has.
                 return (app, false)
             }
-            if heading.waitForExistence(timeout: 1) {
-                print(
-                    "NEWS-WATCH heading at \(stamp.string(from: Date())), "
-                        + "+\(Date().timeIntervalSince(began))s"
-                )
-                return (app, true)
+            let elapsed = Date().timeIntervalSince(began)
+            if elapsed >= quietFor, Date().timeIntervalSince(lastAsked) >= 1 {
+                lastAsked = Date()
+                if heading.exists {
+                    print(
+                        "NEWS-WATCH heading at \(stamp.string(from: Date())), "
+                            + "+\(Date().timeIntervalSince(began))s"
+                    )
+                    return (app, true)
+                }
             }
+            usleep(250_000)
         }
         print("NEWS-WATCH no heading in 40s, and the app never left the foreground")
         return (app, false)
@@ -924,7 +969,9 @@ extension StubHouseUITests {
         //   survives finds `news-person-heading` at RF + 12.1s. The deaths
         //   come 1.5 to 2 seconds *before* the seeded push, so no News code
         //   has run. R004's process 3 is the exception at RF + 12.6s, after
-        //   News had drawn, so it is not one fixed clock.
+        //   News had drawn, so it is not one fixed clock. **I004 moved it
+        //   again: RF + 4.93s**, seven seconds before the push, so "RF + 10"
+        //   is not a constant and nothing should be read off it.
         // * **"External SIGKILL" is not established.** An uncaught ObjC
         //   exception kills the app at once and writes no crash report
         //   either — the `ordinaryTypeSize` note in `StubHouseUITests.swift`
@@ -932,6 +979,40 @@ extension StubHouseUITests {
         //   missing crash report fit that as well as a kill from outside,
         //   which means **the cause may be in the app**, on Home's path.
         //
+        // **Train I004 read the Simulator's unified log, which is what the
+        // `NEWS-WATCH` print was added for, and the signal is settled.** It is
+        // `SIGSEGV` — signal 11, `termination reported by launchd (2, 11, 11)`
+        // — on the **main thread**, four milliseconds into the fourth
+        // whole-tree XCTest accessibility query of the process, five elements
+        // deep. Every competing hypothesis in the paragraphs above is ruled
+        // out by a zero-hit grep over all 31 million lines: no
+        // `Terminating app due to uncaught exception` (that is SIGABRT), no
+        // `Fatal error` or `EXC_BREAKPOINT` (a Swift trap), no SIGKILL, no
+        // jetsam, no watchdog, no RunningBoard termination with a reason, and
+        // `ReportCrash` never ran — which is why no crash report was ever
+        // found. The error this case reports (`app.screenshot()` inside
+        // ``evidence(_:_:)``) is two seconds downstream of a process that was
+        // already gone.
+        //
+        // What is **not** settled is why a pure-Swift app segfaults inside
+        // Apple's own in-process query. `ios/Domovoi` holds exactly one unsafe
+        // construct (`SystemSettings/SystemSettingsDiagnosticsReader.swift`'s
+        // sysctl `withUnsafeBytes`, on no path this case touches): no
+        // `Unmanaged`, no `unsafeBitCast`, no `assumingMemoryBound`, no
+        // `unowned`. So there is no app frame to name and nothing here is
+        // changed for one. Two things were done instead, and both are
+        // reductions in exposure rather than fixes:
+        //
+        //  * **this file's own forty tree snapshots are gone** — see
+        //    ``openNews(_:port:delay:watchingTheProcess:)``, whose per-second
+        //    failed predicate was making four whole-tree passes in 1.7
+        //    seconds, the fourth of which is the one that died;
+        //  * **the shell's `needs attention` rows and room cards each build
+        //    two nested elements with the same label**, which is about 30% of
+        //    the tree that walk was traversing, and is a VoiceOver defect in
+        //    its own right. `ios/Domovoi/Home/` is in no unit's `owns` list
+        //    this batch, so it is routed in this unit's REPORT.md under
+        //    `for_others` with the file and line numbers, not edited here.
         // Nothing here is changed for it, because there is nothing honest to
         // change yet: no assertion of this case has run when it dies. What
         // was added is a **measurement** — `watchingTheProcess: true` on the
