@@ -119,12 +119,21 @@ struct HomeAnnounceView: View {
         // The placeholder vanishes the moment anything is typed, so it cannot
         // be the label.
         .accessibilityLabel(HomeAnnounceStrings.announceInEveryRoom)
-        // `imeOptions = Send`. The submit is the same closure as the button,
-        // so the no-op branches toast there too
-        // (``announceAttempt(message:onlineCount:sending:)``) rather than
-        // doing nothing.
-        .onSubmit(onSend)
-        .submitLabel(.send)
+        // **No `onSubmit` and no `submitLabel(.send)`**, though Android's
+        // `imeOptions = Send` has both.
+        //
+        // `axis: .vertical` above makes this a multi-line field, and a
+        // multi-line field's Return key puts in a newline: `onSubmit` never
+        // fires. So the pair said `send` on the keyboard's key and sent
+        // nothing — a person who typed an announcement and pressed the key
+        // labelled `send` lost it, with nothing on screen to say so. Measured
+        // on a Simulator on 2026-11-02 against the Chat composer, which
+        // carried the identical pair: the house logged no request at all and
+        // the field grew by a line.
+        //
+        // The key now says `return` and does what it says. ``send`` below is
+        // the control that announces, and it is on screen at every width.
+        // Android can have both because its field is not multi-line.
     }
 
     /// A megaphone alone on a phone, the megaphone plus `send` on a wide pane.
