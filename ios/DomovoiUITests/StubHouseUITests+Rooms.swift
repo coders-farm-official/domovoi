@@ -554,6 +554,27 @@ extension StubHouseUITests {
         return Int(digits) ?? -1
     }
 
+    /// Wait until the house has counted **more than** `n` microphone frames,
+    /// and answer the count it reached.
+    ///
+    /// A frame is 30 ms, so "some have arrived" is true within a moment of a
+    /// call going live — but not necessarily in the same instant the sheet
+    /// says `live`, and a read that happened to land first would make a case
+    /// about a working call fail for a reason that is not the case's. The
+    /// poll is the honest shape: it is the growth that is being asserted, and
+    /// a port where nothing travels still fails, on the deadline.
+    @MainActor
+    func roomsFramesPast(_ n: Int, timeout: Double = 20) -> Int {
+        var last = -1
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            last = roomsFrameCount()
+            if last > n { return last }
+            usleep(400_000)
+        }
+        return last
+    }
+
     // MARK: - the roster
 
     /// The Settings slot is filled, and the roster decoded.
@@ -1519,7 +1540,7 @@ extension StubHouseUITests {
             roomsWaitFor(app, RoomsStringsUnderTest.livePrefix, timeout: 30),
             "the call never went live"
         )
-        let before = roomsFrameCount()
+        let before = roomsFramesPast(0)
         XCTAssertGreaterThan(before, 0, "the call is live and nothing has left this phone")
 
         // The room now reports the call — this very call.
@@ -1572,7 +1593,7 @@ extension StubHouseUITests {
         // measurement that separates "the sheet is still drawn" from "the
         // call is still up".
         XCTAssertGreaterThan(
-            roomsFrameCount(),
+            roomsFramesPast(before),
             before,
             "no microphone frame reached the house after the roster moved, so "
                 + "the sheet is drawn over a call that is no longer running"
