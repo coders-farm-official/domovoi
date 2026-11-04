@@ -73,8 +73,15 @@ public enum AudiobooksStrings {
     public static func readBy(_ narrator: String) -> String { "read by \(narrator)" }
 
     /// The meta line's chapter count (`AudiobooksScreen.kt:314`,
-    /// `BookPage.kt:163`).
-    public static func chapterCount(_ count: Int) -> String { "\(count) chapters" }
+    /// `BookPage.kt:163`), **pluralised**.
+    ///
+    /// D48, Kamron 2026-11-03: "yes: fix `1 chapters` to `1 chapter` on both
+    /// apps." Android interpolates `"${chapters.size} chapters"` with no
+    /// singular form, so a one-chapter book read `1 chapters` on both phones.
+    /// The Android half is the android unit's.
+    public static func chapterCount(_ count: Int) -> String {
+        "\(count) \(count == 1 ? "chapter" : "chapters")"
+    }
 
     /// `BookPage.kt:217`.
     public static let chaptersLabel = "chapters"

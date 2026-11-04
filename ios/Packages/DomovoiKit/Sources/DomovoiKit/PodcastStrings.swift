@@ -168,10 +168,25 @@ public enum PodcastStrings {
     /// An episode the feed titled nothing (`PodcastsEpisodes.kt:230`).
     public static let untitledEpisode = "episode"
 
-    /// The meta line's chapter noun. Android has no singular form, so a
-    /// one-chapter episode reads `1 chapters` on both phones; see
-    /// ``PodcastEpisode/metaLine``.
+    /// The meta line's chapter noun, plural.
     public static let chapters = "chapters"
+
+    /// The meta line's chapter count, **pluralised**.
+    ///
+    /// D48, Kamron 2026-11-03: "yes: fix `1 chapters` to `1 chapter` on both
+    /// apps." Android had no singular form (`PodcastsEpisodes.kt:245`
+    /// interpolates `"${it.chapters.size} chapters"`), so a one-chapter
+    /// episode read `1 chapters` on both phones and a test here pinned the
+    /// infelicity on purpose. The Android half is the android unit's; this is
+    /// the iOS half.
+    ///
+    /// `stringsdict` is not used for it: the app ships one language, the rule
+    /// is "one is singular", and a plural table for two forms is a file to
+    /// keep in step for nothing. If the app is ever localised this is the one
+    /// line that moves.
+    public static func chapterCount(_ count: Int) -> String {
+        "\(count) \(count == 1 ? "chapter" : chapters)"
+    }
 
     /// `Unsubscribe from "<title or feed>"? Downloaded episodes are removed.`
     /// (`PodcastsEpisodes.kt:198`).

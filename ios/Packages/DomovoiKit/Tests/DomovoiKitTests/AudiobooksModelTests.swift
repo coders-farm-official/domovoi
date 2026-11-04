@@ -828,7 +828,7 @@ final class AudiobooksModelTests: XCTestCase {
         XCTAssertEqual(9, model.books.count)
         XCTAssertEqual("showing 9 of 9 books", model.countText)
         XCTAssertEqual("book 3", model.books[3].displayTitle)
-        XCTAssertEqual("10:12:00 · 1 chapters · 1 KB", model.meta(model.books[3]))
+        XCTAssertEqual("10:12:00 · 1 chapter · 1 KB", model.meta(model.books[3]))
         XCTAssertNil(model.emptyNote)
     }
 
@@ -1211,7 +1211,7 @@ final class AudiobooksModelTests: XCTestCase {
 
         XCTAssertEqual(3672, page.placeSec)
         XCTAssertEqual("read by Ganymede Quill", page.narratorLine)
-        XCTAssertEqual("10:12:00 · 1 KB · 1 chapters", page.metaLine)
+        XCTAssertEqual("10:12:00 · 1 KB · 1 chapter", page.metaLine)
         XCTAssertEqual("your place: 1:01:12 of 10:12:00 · 10%", page.placeText)
         XCTAssertEqual("resume", page.playWord)
         XCTAssertEqual(["One"], page.chapters.map { $0.title })

@@ -29,9 +29,17 @@ import Synchronization
 ///   ``connected`` is false, which is also the state an unpaired phone is
 ///   permanently in on Android — its socket is refused — so the reachability
 ///   probe is the only evidence either phone has in that state.
-/// - **The player, the container guard's banner, the sidebar badge counts.**
-///   Later batches; ``ShellChrome`` takes the container banner as a
-///   parameter so the batch that has one has somewhere to put it.
+/// - **The container guard's banner and the sidebar badge counts.** Later
+///   batches; ``ShellChrome`` takes the container banner as a parameter so
+///   the batch that has one has somewhere to put it.
+///
+/// ### What arrived in this batch
+///
+/// **The player** (``player``). It is here and not on ``AppContainer``
+/// because ``PlayerModel`` is `@MainActor` and `AppContainer` is `Sendable`
+/// and not main-actor isolated, so a player cannot be a stored property of
+/// it. This object is already handed to every screen as `model:`, which is
+/// the other half of what the owner has to be.
 @MainActor
 @Observable
 public final class ShellModel {
@@ -216,10 +224,18 @@ public final class ShellModel {
     ///   - deviceSelf: what this install calls itself, for the device
     ///     register. Nil means nothing can send one, and
     ///     ``registerSender`` is then nil — see its note.
+    ///   - listeners: this phone's "listening as" record. A test hands one
+    ///     over a ``SavedStateBox``.
+    ///   - player: how a player is built, for a test and for a platform with
+    ///     no audio engine. Left out, it is ``systemPlayer(_:_:)`` — the real
+    ///     AVFoundation one on iOS and nil everywhere else, and "everywhere
+    ///     else" includes the macOS this package's tests build for.
     public init(
         container: AppContainer,
         phoneCanChat: Bool = false,
         deviceSelf: (@Sendable () -> DeviceSelf)? = nil,
+        listeners: PlayerListenerStore? = nil,
+        player: ShellPlayerBuilder? = nil,
         probe: (@Sendable () async -> Bool)? = nil,
         clock: @Sendable @escaping () -> Int64 = TokenHealth.monotonicMs,
         wait: @Sendable @escaping (Int64) async throws -> Void = { try await Task.sleep(for: .milliseconds($0)) },
@@ -228,6 +244,8 @@ public final class ShellModel {
         self.container = container
         self.phoneCanChat = phoneCanChat
         self.deviceSelf = deviceSelf
+        self.listeners = listeners ?? PlayerListenerStore()
+        self.buildPlayer = player ?? ShellModel.systemPlayer
         self.inputs = container.shellInputs()
         self.clock = clock
         self.tick = tick
@@ -820,6 +838,11 @@ public final class ShellModel {
     public func refresh() {
         inputs = container.shellInputs()
         takePendingRoute()
+        // Before the reads below: this is where an address change arrives, and
+        // a player still stamped with the last house would save the next ten
+        // seconds of a book to a server that has never heard of it
+        // ([[read-after-await-wrong-key]] in its simplest form).
+        playerServerChanged()
         updateReachability()
         updateWaitTick()
         container.socket.serverChanged()
@@ -1034,6 +1057,142 @@ public final class ShellModel {
         sharedAnswer = answer
         sharedAnswerFor = server ?? container.store.serverURL
         _ = navigation.capabilitiesChanged(visibility)
+    }
+
+    // MARK: - the phone's own player (D49 / D2)
+
+    /// The one ``PlayerModel`` in the app, or nil on a build that has no
+    /// audio engine.
+    ///
+    /// Kamron, 2026-11-03 (answer 2 / 49): one shared player, "as the next
+    /// batch". Android holds it on its own container — `app.player`,
+    /// `AppContainer.kt:95`, reached by `BookPlay.kt:19`, `StationPlay.kt:71`,
+    /// `PlayerTab.kt` and the phone-media screens alike — so that Podcasts,
+    /// Audiobooks, Stations, Music and PhoneMedia **share one player rather
+    /// than one each**. Two players would be two things heard at once, which
+    /// is the bug ``PlayerModel/play(_:startAt:resumeSec:speed:)``'s own
+    /// `leaveRoom` exists for.
+    ///
+    /// ### Why here and not on ``AppContainer``
+    ///
+    /// ``PlayerModel`` is `@MainActor`; ``AppContainer`` is `Sendable` and not
+    /// main-actor isolated, so a `@MainActor` player cannot be one of its
+    /// stored properties. This object is `@MainActor`, lives for the shell and
+    /// is already handed to every screen as `model:` — which is the whole of
+    /// what an owner has to be.
+    ///
+    /// ### Built on first use, never at launch
+    ///
+    /// ``PlayerAudioSessionControl`` says it in as many words: an app that
+    /// activates a `.playback` session at launch **stops whatever the person
+    /// was already listening to** (`PlayerAudioSession.swift:11-18`). So
+    /// nothing is built until something asks — the first `play`, or a screen
+    /// asking whether it may draw a play control. `AVAudioSession` is touched
+    /// only by ``PlayerModel/play(_:startAt:resumeSec:speed:)`` itself, so
+    /// merely building one is silent; building it at launch anyway would put
+    /// an `MPRemoteCommandCenter` handler and four `NotificationCenter`
+    /// observers in place for a player nobody asked for.
+    ///
+    /// ### Why the storage is `@ObservationIgnored`
+    ///
+    /// A view body reads this. A tracked write inside a body evaluation is
+    /// SwiftUI's "Modifying state during view update", so the two fields the
+    /// lazy build touches are outside observation. Nothing needs to observe
+    /// *the player slot*; everything observes the player's own `@Observable`
+    /// state, which is what changes when it plays.
+    public var player: PlayerModel? {
+        if let heldPlayer { return heldPlayer }
+        guard let deviceID, !ServerCredentials.isBlank(deviceID) else {
+            // No device id, no player. Every position it would save is a slot
+            // the server keys by device (`audiobooks.py:599-604`), and a
+            // player built with an empty id writes every listener's place into
+            // one row belonging to nobody. Nil means no play control is drawn
+            // at all, which is the honest answer to a phone that has not
+            // introduced itself.
+            return nil
+        }
+        guard let made = buildPlayer(container, deviceID) else { return nil }
+        playerBuilds += 1
+        heldPlayer = made
+        // The scope is settled **before** anything can be queued, so the
+        // first item is stamped with the house it came from.
+        let scope = playerScope
+        playerServer = scope
+        made.serverChanged(to: scope)
+        made.listenerPersonID = listeners.personID
+        return made
+    }
+
+    /// Whether a player exists **without building one**.
+    ///
+    /// For a test, and for anything that wants to say "nothing is playing"
+    /// without the asking being what starts a player. Reading ``player``
+    /// builds one; reading this never does.
+    public var playerIsBuilt: Bool { heldPlayer != nil }
+
+    /// How many players this shell has built. One, for the life of a shell —
+    /// `PlayerOwnerTests` is the thing that says so.
+    public private(set) var playerBuilds = 0
+
+    @ObservationIgnored private var heldPlayer: PlayerModel?
+    @ObservationIgnored private var playerServer: PlayerServerScope?
+
+    private let buildPlayer: ShellPlayerBuilder
+
+    /// Which house the app talks to now, as the player's own scope type.
+    ///
+    /// Read off the **store** and not off ``inputs``: `inputs` is a snapshot
+    /// taken at the last ``refresh()`` and can lag the store by one switch,
+    /// and the client reads the store — so the store is what a request was
+    /// actually aimed at. The same reason ``register()`` reads it there.
+    private var playerScope: PlayerServerScope {
+        let url = container.store.serverURL
+        let pin = IdentityGate.pinKey(url).flatMap { container.store.pinFor($0) }
+        return PlayerServerScope.of(serverURL: url, pin: pin)
+    }
+
+    /// Tell the player the house moved, if there is one.
+    ///
+    /// **Told, not torn down**, which is the whole reason
+    /// ``PlayerModel/serverChanged(to:)`` exists: it drops whatever came from
+    /// the old server out of the queue, ends a cast to one of its rooms
+    /// *without a word to the new server*, and **leaves the phone's own songs
+    /// playing**. Tearing the player down here would stop a song that lives on
+    /// the handset because the phone changed house, which is nothing to do
+    /// with it. What *is* torn down is everything of the old house: that is
+    /// `dropServerMedia()`, inside the player.
+    ///
+    /// Called from ``refresh()``, which is where every address change already
+    /// arrives, and a no-op when the house has not moved.
+    private func playerServerChanged() {
+        guard let heldPlayer else { return }
+        let now = playerScope
+        // The same house at a new address, or an identity pinned since: the
+        // scope is merged so the two spellings stay one house
+        // (``PlayerServerScope/merge(_:)``) and the queue is kept.
+        playerServer = playerServer.map { $0.isSameServer(as: now) ? $0.merge(now) : now } ?? now
+        heldPlayer.serverChanged(to: now)
+    }
+
+    /// Who the house's resume positions are saved under, on this phone.
+    ///
+    /// Kamron, 2026-11-03 (answer 11): "yes, match Android: build the
+    /// 'listening as' picker". ``PlayerListenerStore`` is this phone's own
+    /// record of it, exactly as `prefs.listenerPersonId` is on Android
+    /// (`Prefs.kt:115`) — **one value for the install**, not one per house,
+    /// which is Android's shape.
+    public let listeners: PlayerListenerStore
+
+    /// The listener changed in Settings: the player saves under the new
+    /// person from here on.
+    ///
+    /// Only ever **forward**: a place already written under the old person
+    /// stays theirs. That is the server's own model — the row is keyed by
+    /// (device, person), `spoken_audio.py:145-147` — and moving rows between
+    /// people is not something a picker may do behind somebody's back.
+    public func listenerChanged(to personID: String?) {
+        listeners.set(personID)
+        heldPlayer?.listenerPersonID = personID
     }
 
     /// Tear the loop down: the shell is going away.

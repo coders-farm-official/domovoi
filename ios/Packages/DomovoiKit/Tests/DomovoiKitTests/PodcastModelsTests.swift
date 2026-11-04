@@ -201,15 +201,15 @@ final class PodcastModelsTests: XCTestCase {
         XCTAssertEqual("— · failed", failed.metaLine)
     }
 
-    /// Android has no singular form, so both phones say `1 chapters`. Pinned
-    /// so that "fixing" it on one side alone fails a test and sends the reader
-    /// to ``PodcastEpisode/metaLine``'s comment.
-    func testOneChapterSaysChaptersOnBothPhones() {
+    /// D48 (2026-11-03): both phones now say `1 chapter`, so this pins the
+    /// fix rather than the infelicity it used to pin.
+    /// ``PodcastStrings/chapterCount(_:)`` is the one line that does it.
+    func testOneChapterSaysOneChapter() {
         let one = PodcastEpisode(
             id: 1, durationSec: 120, hasFile: true,
             chapters: [PodcastChapter(title: "only", startSec: 0)]
         )
-        XCTAssertEqual("2:00 · 1 chapters", one.metaLine)
+        XCTAssertEqual("2:00 · 1 chapter", one.metaLine)
     }
 
     func testAnEpisodeWithNoTitleIsCalledEpisode() throws {

@@ -81,6 +81,48 @@ import UIKit
 //
 // ===========================================================================
 
+/// How ``ShellModel`` builds the app's one player.
+///
+/// A closure rather than a line in ``ShellModel/player``, for two reasons that
+/// are both about this project rather than about architecture. The three
+/// AVFoundation parts a real player needs — ``AVQueueAudioEngine``,
+/// ``AVAudioSessionControl``, ``MPNowPlayingPublisher`` — are all behind
+/// `#if os(iOS)`, and this package's tests build for **macOS**, where none of
+/// them exists. And a test of the owner has to be able to count the players
+/// that were built, which it cannot do through a type it can also not
+/// construct.
+///
+/// Returns nil for a platform with no engine; see
+/// ``ShellModel/systemPlayer(_:_:)``.
+public typealias ShellPlayerBuilder = @MainActor (AppContainer, String) -> PlayerModel?
+
+extension ShellModel {
+
+    /// The real player: `AVQueuePlayer` behind an `AVAudioSession` with the
+    /// lock screen wired up — and **nil on any platform but iOS**, which is
+    /// the macOS this package's tests run on.
+    ///
+    /// `spokenAudio: true`: `.timeDomain` time-stretching rather than
+    /// `.spectral`, and never `.varispeed`, which is the one that makes a
+    /// narrator sound like a chipmunk (`PlayerAudioEngine.swift:132-136`).
+    /// One player serves songs and books alike, and a book is the case that
+    /// flag was written for; the engine reads it per `setRate`, so a song
+    /// played at 1.0 is unaffected either way.
+    public static func systemPlayer(_ container: AppContainer, _ deviceID: String) -> PlayerModel? {
+        #if os(iOS)
+        return PlayerModel(
+            client: container.client,
+            deviceID: deviceID,
+            engine: AVQueueAudioEngine(spokenAudio: true),
+            session: AVAudioSessionControl(),
+            nowPlaying: MPNowPlayingPublisher()
+        )
+        #else
+        return nil
+        #endif
+    }
+}
+
 /// A clock the tests can move. Only the sleep timer and the lyrics anchor need
 /// one, and both are wrong in a way nobody notices if they read the wall clock
 /// in a test that takes 40 ms.

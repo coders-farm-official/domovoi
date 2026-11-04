@@ -235,17 +235,17 @@ public struct PodcastEpisode: PagedRow, Identifiable, Equatable, Sendable {
     /// the download status **only when there is no file**.
     ///
     /// Android writes `"${chapters.size} chapters"` with no singular form, so
-    /// a one-chapter episode reads `1 chapters` on both phones. Ported as-is
-    /// rather than fixed on one side: two apps disagreeing about the words
-    /// under the same episode is worse than one shared infelicity, and a fix
-    /// belongs in both at once.
+    /// a one-chapter episode read `1 chapters` on both phones. **Fixed in
+    /// both at once**, 2026-11-03 (D48, and the Android half is the android
+    /// unit's): ``PodcastStrings/chapterCount(_:)`` pluralises, so this reads
+    /// `1 chapter`.
     ///
     /// A **computed property, not a line in the row view**: it is the one
     /// place `has_file` and `download_status` are read together, and the
     /// whole point of the row's play control is that those two agree.
     public var metaLine: String {
         var out = fmtDur(durationSec)
-        if !chapters.isEmpty { out += " · \(chapters.count) \(PodcastStrings.chapters)" }
+        if !chapters.isEmpty { out += " · " + PodcastStrings.chapterCount(chapters.count) }
         if !hasFile, let status = downloadStatus,
            !status.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             out += " · \(status)"

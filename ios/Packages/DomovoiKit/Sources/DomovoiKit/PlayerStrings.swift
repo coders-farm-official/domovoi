@@ -3,11 +3,11 @@ import Foundation
 /// Every word the player says, transcribed from the Kotlin, each with the file
 /// and line it came from — the shape ``ChatStrings`` and ``FileStrings`` have.
 ///
-/// This item draws nothing (MAP §7.3), so every one of these reaches a person
-/// through a consumer's toast or a sentence the lock screen shows. They are
-/// built **here** and never in a view: a view that assembles "casting to
-/// office" out of parts can claim playback that is not happening, which is the
-/// bug `CastOutcome` was written to stop (`CastPlan.kt:232`).
+/// Every one of these reaches a person through a screen's control, a toast or
+/// a sentence the lock screen shows. They are built **here** and never in a
+/// view: a view that assembles "casting to office" out of parts can claim
+/// playback that is not happening, which is the bug `CastOutcome` was written
+/// to stop (`CastPlan.kt:232`).
 ///
 /// Anything that had to change is marked **iOS-only** and recorded in
 /// `design-notes/ios/overnight/player/IOS-ONLY-STRINGS.md` with its reason.
@@ -186,4 +186,60 @@ public enum PlayerStrings {
     /// `MicArbiter.kt:84`'s fallback, when the holder let go between the
     /// refusal and the throw.
     public static let micInUse = "the microphone is in use"
+
+    // MARK: - "play on this phone" (D46, 2026-11-03)
+
+    /// What every screen's play control says.
+    ///
+    /// Android's own word, everywhere: `Button(onClick = onPlay) { Text("play") }`
+    /// (`AudiobooksScreen.kt:325`, `BookPage.kt:178`), the row glyph's
+    /// `contentDescription = "play"` (`PodcastsEpisodes.kt:229`) and the
+    /// station row's (`StationsScreen.kt`). One word, so a person moving
+    /// between the two apps reads the same thing.
+    public static let play = "play"
+
+    /// The VoiceOver label for a glyph-only play control, which has to say
+    /// **what** it plays — a list of fifty-seven episodes read as "play,
+    /// play, play" is a list with no information in it.
+    ///
+    /// **iOS-only**: Android's `contentDescription` is the bare word because
+    /// TalkBack reads the row's text with it; an `accessibilityElement`
+    /// combining a row on iOS takes the button's label instead, so the name
+    /// has to be in it. IOS-ONLY-STRINGS.md.
+    public static func playNamed(_ what: String) -> String { "play \(what)" }
+
+    /// A row whose file the house has not got. The control is **absent**, not
+    /// greyed: Android disables it (`PodcastsEpisodes.kt:223`), and this
+    /// project's rule is that a control which cannot do what it says is not
+    /// drawn at all.
+    public static let noFileYet = "the house has not got this one yet"
+
+    // MARK: - §6.5 "Listening as" (`ConnectionPanel.kt:350-378`)
+
+    /// The card's title (`ConnectionPanel.kt:352`).
+    public static let listeningAsCard = "Listening as"
+
+    /// The card's subtitle, word for word (`ConnectionPanel.kt:353-355`).
+    public static let listeningAsCardSub =
+        "Podcast and audiobook resume positions sync to this person — pick "
+        + "yourself to share progress with the rooms; leave it on this device "
+        + "to keep it local."
+
+    /// The dropdown's null row (`ConnectionPanel.kt:338`, `:367`).
+    public static let listenerThisDevice = "me (this device)"
+
+    /// The hint chip on Podcasts and Audiobooks
+    /// (`AudiobooksScreen.kt:343`, `PodcastsScreen.kt:310`).
+    ///
+    /// `"listening as ${name ?: "…"}"` — the ellipsis is what it says while
+    /// the people list is still on its way, and the chip is **not drawn at
+    /// all** when no listener is set (`val id = listenerId ?: return`).
+    public static func listeningAsChip(_ name: String?) -> String {
+        "listening as \(name ?? "…")"
+    }
+
+    /// The card's own failure (`ConnectionPanel.kt:359`).
+    public static func couldNotLoadPeople(_ why: String) -> String {
+        "couldn't load people: \(why)"
+    }
 }
