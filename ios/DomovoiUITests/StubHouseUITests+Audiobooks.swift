@@ -1231,10 +1231,51 @@ extension StubHouseUITests {
             [], afterSplit.rest.filter(Self.audiobooksAnonymousInaccessibleText),
             "the page draws text it does not expose even with no question over it"
         )
+        // ### And the one class the uncovered half found the first time it
+        // ### ever ran (train I004)
+        //
+        // I003 never got here — it failed earlier, on a `play`/`resume` it
+        // could not find — so I004 is the first run of this second audit.
+        // It came back with one finding that is not a type size: `Contrast
+        // failed` naming `12:24:06` at `(309.33, 807.33, 59.67, 14.33)`.
+        //
+        // That is **Chapter 8's** duration, and the page's scroll view is
+        // `{{0.0, 185.3}, {393.0, 584.7}}` — a foot at `770.0`. The whole
+        // row (`{{16.0, 791.3}, {361.0, 44.0}}`) is built and clipped
+        // entirely away: `audiobooks-62-book-page-audit-answered.png` shows
+        // the list ending at Chapter 7 with the phone bar under it, and
+        // Chapter 8 nowhere on the screen. Apple graded colours of pixels
+        // the page never drew. The discriminator is in the same audit:
+        // chapters 1–7's durations are the same `Text` in the same style
+        // (``AudiobookChapterRow``) **inside** the viewport, and every one
+        // of them reports a type-size finding and no contrast one.
+        //
+        // So a contrast finding whose element is wholly at or below the
+        // page's own foot is taken out, by that measurement and not by a
+        // belief, and nothing else is: one that **straddles** the foot has
+        // pixels on screen and still fails here, which is narrower than the
+        // rule `testStations_AuditFindsNothingNew` carries for the same
+        // class. The foot is read off the app, never pinned as a number.
+        let pageFoot = app.scrollViews.allElementsBoundByIndex
+            .max(by: { $0.frame.height < $1.frame.height })?
+            .frame.maxY
+        var clippedAway: [String] = []
+        let leftOver = afterSplit.rest.filter { line in
+            if line.hasPrefix("Dynamic Type font sizes") { return false }
+            if line.hasPrefix("Contrast"), let foot = pageFoot,
+               let box = Self.frame(in: line), box.minY >= foot - 0.5 {
+                clippedAway.append(line)
+                return false
+            }
+            return true
+        }
+        for line in clippedAway {
+            print("AUDIOBOOKS AUDIT (ANSWERED) below the page's foot \(pageFoot ?? -1): \(line)")
+        }
         XCTAssertEqual(
-            [],
-            afterSplit.rest.filter { !$0.hasPrefix("Dynamic Type font sizes") },
-            "a book's page with nothing over it has an audit finding of its own:\n"
+            [], leftOver,
+            "a book's page with nothing over it has an audit finding of its own "
+                + "(page foot \(pageFoot.map { "\($0)" } ?? "not found")):\n"
                 + afterSplit.rest.joined(separator: "\n")
         )
     }

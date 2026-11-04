@@ -1747,7 +1747,7 @@ extension StubHouseUITests {
         let tab = try auditIssues(app, "musicmore-playlists-tab")
         let onTab = Self.floorAndRest(tab)
         evidence(app, "musicmore-170-audit-tab")
-        let tabLeft = musicMoreUnexplained(onTab.rest, in: app)
+        let tabLeft = musicMoreUnexplained(onTab.rest, in: app, underTheSwitch: true)
         XCTAssertEqual(
             [], tabLeft,
             "the playlists tab has findings beyond the known floor of \(onTab.floor) "
@@ -1758,7 +1758,12 @@ extension StubHouseUITests {
         let sheet = try auditIssues(app, "musicmore-playlist-sheet")
         let onSheet = Self.floorAndRest(sheet)
         evidence(app, "musicmore-171-audit-sheet")
-        let sheetLeft = musicMoreUnexplained(onSheet.rest, in: app)
+        // `underTheSwitch: false`: the playlist sheet is presented **over**
+        // the switch, not under it, so nothing of the sheet's own is hidden
+        // behind the pill — and raising the band here would forgive a
+        // finding naming a row *behind* the sheet, which is the one thing
+        // this half is for.
+        let sheetLeft = musicMoreUnexplained(onSheet.rest, in: app, underTheSwitch: false)
         XCTAssertEqual(
             [], sheetLeft,
             "the playlist sheet has findings beyond the known floor of \(onSheet.floor) "
@@ -1777,8 +1782,16 @@ extension StubHouseUITests {
     /// an icon-only control with no label, a finding naming an element
     /// *behind* the sheet (which is how a non-modal sheet reports) — is
     /// returned and fails the case.
+    ///
+    /// `underTheSwitch` says whether the phone-source switch is drawn over
+    /// the page this call is classifying — true for the screen, false for a
+    /// sheet, which is presented above it. See rule 2.
     @MainActor
-    func musicMoreUnexplained(_ rest: [String], in app: XCUIApplication) -> [String] {
+    func musicMoreUnexplained(
+        _ rest: [String],
+        in app: XCUIApplication,
+        underTheSwitch: Bool
+    ) -> [String] {
         // The outer scroll view: the tallest on screen. The others are the
         // tab strip, lying on its side, and the phone bar. Kept as the
         // **element**, not just its frame: rule 2 needs to know what is
@@ -1790,6 +1803,58 @@ extension StubHouseUITests {
         // subtree, not one per finding.
         let pageContent = page?.descendants(matching: .any)
             .allElementsBoundByIndex.map(\.frame) ?? []
+
+        // **The page's visible band, which stopped being its frame in the
+        // 2026-11-03 batch.** `PhoneSourceSwitchView`'s row moved from the
+        // first child of a `VStack` to a `.safeAreaInset(edge: .top)` laid
+        // over the two sides (`PhoneSourceSwitchView.swift:127`, answer 29),
+        // so the scroll view now reaches up **under** the switch and its
+        // content scrolls behind an opaque pill.
+        //
+        // Train I004's tree: the page is `{{0.0, 93.3}, {393.0, 676.7}}`
+        // where I001's was `{{0.0, 197.3}, …}`, and the switch sits at
+        // `{{15.5, 144.8}, {362.0, 45.0}}` as the scroll view's **sibling**.
+        // Three leaves of the parlour card that the switch covers —
+        // `parlour` (140.0), `playing in parlour` (172.3) and
+        // `Veldrassen Overture` (188.7, its upper half under the pill) —
+        // were "wholly inside the page" by frame, so rule 2 never reached
+        // them and the case went red on colours Apple had read off the pill.
+        // `musicmore-170-audit-tab.png` is the attribution: not one of the
+        // three is legible in it. The discriminators are one card down and
+        // reported by nobody — `playing in cellar` (415.3) and
+        // `Vantersk Night Radio` (431.7), the same two strings in the same
+        // two inks, fully on screen.
+        //
+        // So the clip is the page's frame with the inset taken off its top,
+        // read off the app by the switch's own identifiers and never pinned
+        // as a number. Only a switch that overlaps the page's **top** counts
+        // (within 120 points of it), so a control that happens to sit in the
+        // middle of a page cannot shrink the band.
+        var switchBand: CGFloat?
+        if underTheSwitch, !pageBox.isNull {
+            switchBand = app.buttons
+                .matching(NSPredicate(
+                    format: "identifier == %@ OR identifier == %@",
+                    MusicMoreUnderTest.phoneSourceServer,
+                    MusicMoreUnderTest.phoneSourceDevice
+                ))
+                .allElementsBoundByIndex
+                .map(\.frame)
+                .filter { $0.maxY > pageBox.minY && $0.minY < pageBox.minY + 120 }
+                .map(\.maxY)
+                .max()
+        }
+        let visibleBox = switchBand.map { foot -> CGRect in
+            let top = max(pageBox.minY, foot)
+            return CGRect(
+                x: pageBox.minX, y: top,
+                width: pageBox.width, height: pageBox.maxY - top
+            )
+        } ?? pageBox
+        print(
+            "MUSICMORE AUDIT page=\(pageBox) switch foot="
+                + (switchBand.map { "\($0)" } ?? "none") + " visible=\(visibleBox)"
+        )
 
         return rest.filter { line in
             // 1. A Dynamic Type headline **with** an element. The four tab
@@ -1842,9 +1907,14 @@ extension StubHouseUITests {
             //    whose frame ends a third of a point outside the page's left
             //    or right edge is a rounding difference and not a row with no
             //    pixels. Two-axis `contains` would forgive it.
+            //
+            //    **I004 is why the seat is `visibleBox` and not `pageBox`.**
+            //    See the band computed above: the page's frame now runs up
+            //    under the phone-source switch, so "inside the frame" and
+            //    "drawn" stopped being the same thing.
             if line.hasPrefix("Contrast failed"), let box = Self.frame(in: line),
-               !pageBox.isNull,
-               !self.musicMoreInside(box, pageBox, vertical: true),
+               !visibleBox.isNull,
+               !self.musicMoreInside(box, visibleBox, vertical: true),
                Self.musicMoreIsPageContent(box, pageContent) {
                 return false
             }
@@ -1960,6 +2030,13 @@ enum MusicMoreUnderTest {
     /// identifier is the only stable handle on it — its label is the house's
     /// address.
     static let phoneSourceServer = "phone-source-server"
+
+    /// The switch's other segment (`PhoneSourceSwitchView.swift:171`). Here
+    /// for the same reason as its sibling, and used for one more: the two
+    /// together are the top inset laid over Music's page, which is what
+    /// ``StubHouseUITests/musicMoreUnexplained(_:in:underTheSwitch:)``
+    /// subtracts to get the band of the page that is actually drawn.
+    static let phoneSourceDevice = "phone-source-device"
 
     // the playlists
     static let favorites = "Favorites"

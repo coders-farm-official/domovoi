@@ -997,11 +997,12 @@ extension StubHouseUITests {
                 + "was mid-flight"
         )
 
-        // The shell's navigation bar, before. It folds its large title away
-        // on a scroll and the audit scrolls, so the whole page rides up with
-        // it — see the assertion below. The **frame**, because what is
-        // compared afterwards is the gap between the bar's bottom edge and
-        // the foot card, not two heights read at two different moments.
+        // The shell's navigation bar, before. It used to fold its large
+        // title away on a scroll, and the audit scrolls — see the assertion
+        // below, where I004's numbers say it no longer does. Read as the
+        // **frame** and not the height: the gap between its bottom edge and
+        // the foot card is what the failure message subtracts, and two
+        // heights read at two moments cannot be subtracted from one another.
         let barBefore = app.navigationBars.firstMatch.frame
 
         let found = try auditIssues(app, "podcasts-grid")
@@ -1042,10 +1043,25 @@ extension StubHouseUITests {
         // moves the card and not the bar. Both are read after the bar has
         // stopped moving (``podcastsSettledNavigationBar(_:)``).
         //
-        // So the claim is made exactly rather than loosened: the foot may
-        // ride up with the bar, and may not move relative to it by so much
-        // as a point. S007's run moved the content offset 463 points under
-        // the audit, which fails this.
+        // ### And train I004 measured the fold away again (2026-11-04)
+        //
+        // The gap was a prediction standing in for a measurement, and it let
+        // the foot card move 52 points during the very audit that graded its
+        // colours. I004 ran this case with the shell's stale-bar fix in
+        // (`ShellChromeViews.swift:546-558`, `RESIDUAL-AUDIT.md` §1) and
+        // printed:
+        //
+        //     PODCASTS AUDIT bar 43.999999999999986->43.999999999999986
+        //       foot 544.0->544.0 gap 406.6666666666667->406.6666666666667
+        //
+        // The bar does not move on this screen any more and neither does the
+        // card. So the claim goes back to the strict one it was before: the
+        // foot card is in the **same place**, not merely the same distance
+        // under a bar that may itself have moved. `barBefore`/`barAfter` are
+        // still read and still printed, because they are what the failure
+        // message needs to say *why* a future move happened — a fold moves
+        // both, a scroll moves only the card. S007's run moved the content
+        // offset 463 points under the audit, which fails this.
         let barAfter = Self.podcastsSettledNavigationBar(app)
         let after = foot.frame
         let gapBefore = before.minY - barBefore.maxY
@@ -1055,17 +1071,15 @@ extension StubHouseUITests {
                 + " foot \(before.minY)->\(after.minY) gap \(gapBefore)->\(gapAfter)"
         )
         XCTAssertEqual(
-            gapBefore, gapAfter, accuracy: 1,
-            "the foot card sat \(gapBefore) points under the navigation bar before "
-                + "Apple's audit and \(gapAfter) after it, so the grid scrolled while "
-                + "the audit read its colours and they are a list mid-flight (train "
-                + "S007). The bar itself went \(barBefore.height) to \(barAfter.height), "
-                + "which moves the card and not this number."
-        )
-        XCTAssertEqual(
-            before.size, after.size,
-            "the foot card changed size during the audit, so the page was still "
-                + "laying out when its colours were read"
+            before, after,
+            "the foot card was at \(before) before Apple's audit and \(after) "
+                + "after it, so the page moved while the audit read its colours "
+                + "and they are a list mid-flight (train S007). The bar went "
+                + "\(barBefore.height) to \(barAfter.height) and the gap under it "
+                + "\(gapBefore) to \(gapAfter): an equal gap with an unequal frame "
+                + "is the large title folding away and taking the page with it "
+                + "(train I003), which the shell's own case asserts; an unequal "
+                + "gap is a scroll."
         )
 
         let unexplained = rest.filter { line in
