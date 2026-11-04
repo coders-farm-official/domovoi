@@ -679,6 +679,22 @@ extension StubHouseUITests {
     /// Its chapter rows are **plain text rather than buttons** for the same
     /// reason: a tap that silently did nothing is the same lie in a smaller
     /// control, and a chapter list is still worth reading.
+    ///
+    /// ### And `save to device` **is** drawn
+    ///
+    /// The two controls are decided by different questions, which is the half
+    /// this case gained in the 2026-11-03 batch (D46/D47). `play` needs parts
+    /// and an engine; the save needs neither — a folder book arrives as the
+    /// zip the server builds (`audiobooks.py:353-418`), and keeping a file is
+    /// worth doing on a phone that cannot play it. A case that asserted
+    /// *nothing* was offered here would pass just as well over a screen that
+    /// had lost the save, so both are named.
+    ///
+    /// What is **not** asserted: what `/api/audiobooks/{id}/download` answers
+    /// for a folder book whose `files` name nothing. The control is honest
+    /// about what it does — it fetches and hands over — and a failed fetch
+    /// says so in a toast; whether this particular book zips is the server's
+    /// question and `fixtures/audiobooks.py` does not claim an answer to it.
     @MainActor
     func testAudiobooks_ABookWithNoPlayableFilesDrawsWithoutAPlayControl() throws {
         let (app, landed) = openAudiobooks()
@@ -705,6 +721,13 @@ extension StubHouseUITests {
         XCTAssertFalse(
             app.buttons[StubAudiobooks.sabrielPart].exists,
             "a chapter row is a button on a book nothing can play"
+        )
+        // The save, which answers a different question from the play.
+        XCTAssertTrue(
+            app.buttons[StubAudiobooks.saveControl].exists,
+            "a book with nothing playable offers no `\(StubAudiobooks.saveControl)` "
+                + "either — keeping the file needs no engine, and the absence "
+                + "assertions above would pass over a lost save control"
         )
     }
 
@@ -923,26 +946,51 @@ extension StubHouseUITests {
     /// No control anywhere on this screen offers something this app has not
     /// got.
     ///
-    /// Six wordings, each one a control Android draws and this port left out:
-    /// the upload (`AudiobooksScreen.kt:197`), the save and its three
-    /// siblings (`BookPage.kt:175-212`), `remove from server (admin)`
-    /// (`:226`), the `listening as` chip (`:205`) and a room to cast to —
-    /// which neither app has, because a cast sends library track ids and a
-    /// book has no library id (`CastPlan.kt:7-26`).
+    /// Four wordings, each one a control Android draws and this port left
+    /// out: the upload (`AudiobooksScreen.kt:197`), the phone **shelf**'s
+    /// `remove from phone` (`BookPage.kt:175-212`), `remove from server
+    /// (admin)` (`:226`) and a room to cast to — which neither app has,
+    /// because a cast sends library track ids and a book has no library id
+    /// (`CastPlan.kt:7-26`).
+    ///
+    /// It was six. The save and the `listening as` chip came off in the
+    /// 2026-11-03 batch because they exist now, and
+    /// ``StubAudiobooks/absentControls`` says which and why. This case gained
+    /// the other half of that: the save control **is** on a book's page, and
+    /// the chip is absent for the reason it is designed to be — no listener
+    /// picked — rather than for want of a picker.
     ///
     /// Spelt out here rather than imported, like every other string this file
     /// matches on: a query that silently followed a renamed constant would
-    /// stop testing what it claims to. When one of these starts to exist —
-    /// PhoneMedia's save, a listener picker — whoever adds it moves the
-    /// assertion into their own file, which is the point.
+    /// stop testing what it claims to.
     @MainActor
     func testAudiobooks_NoControlPromisesWhatThisAppCannotDo() throws {
         let (app, landed) = openAudiobooks()
         XCTAssertTrue(landed, "the audiobooks list never answered")
 
         assertNothingOffers(app, where: "the library")
+
+        // The chip is hidden, and **this is the design** (D11): a phone that
+        // has never picked a listener shows nothing at all, which is
+        // Android's `val id = listenerId ?: return`. A chip reading
+        // "listening as nobody" is the thing this asserts against.
+        XCTAssertTrue(StubAudiobooks.houseHasNoListener)
+        XCTAssertFalse(
+            containing(app, StubAudiobooks.listenerChip).exists,
+            "the library drew a listening-as chip with no listener picked"
+        )
+
         XCTAssertTrue(openBook(app, StubAudiobooks.dune), "Dune's page never drew")
         assertNothingOffers(app, where: "a book's page")
+
+        // And the one that **is** there. Asserted in the same case as the
+        // absences, so a merge that lost the save button fails here rather
+        // than quietly shrinking what this file claims.
+        XCTAssertTrue(
+            containing(app, StubAudiobooks.saveControl).exists,
+            "a book's page has no `save to device` — D47 built it and "
+                + "AudiobookDetailView draws it beside `play`"
+        )
         evidence(app, "audiobooks-50-no-false-controls")
     }
 
@@ -1529,14 +1577,41 @@ enum StubAudiobooks {
 
     /// Controls Android draws and this port left out. Each one is a sentence
     /// this app has no backing for.
+    ///
+    /// **Two came off the list in the 2026-11-03 batch**, and both for the
+    /// same reason: they exist now.
+    ///
+    /// * `save to phone` — D47 built the one-off save, and ``saveControl``
+    ///   below is the words it really carries. It was never the right string
+    ///   anyway: the button says `save to device`, so this entry would have
+    ///   gone on passing beside a save button that was right there, which is
+    ///   an absence assertion that had quietly stopped testing anything.
+    /// * `listening as` — D11 built the chip. It is hidden when no listener
+    ///   has been picked, which is the stub house's own state, so it is
+    ///   checked by ``listenerChip`` with that precondition stated rather
+    ///   than asserted absent for a reason that is no longer true.
+    ///
+    /// `remove from phone` stays: the phone's **shelf** (a managed library of
+    /// saved books with a discard) is still the PhoneMedia item's, and one
+    /// save to the share sheet is not it.
     static let absentControls = [
         "add audiobooks to the server",
-        "save to phone",
         "remove from phone",
         "remove from server",
-        "listening as",
         "play in a room",
     ]
+
+    /// What the save control really says (`TransferStrings.saveToDevice`),
+    /// spelt out here like every other string this file matches on.
+    static let saveControl = "save to device"
+
+    /// The chip's prefix (`PlayerStrings.listeningAsChip(_:)`).
+    static let listenerChip = "listening as"
+
+    /// The stub house has **no listener picked**, which is a phone that has
+    /// never been to Settings → Phones & browsers. The chip is hidden
+    /// entirely in that state, which is Android's own `?: return`.
+    static let houseHasNoListener = true
 
     /// The screen's heading, which is the first thing the list draws and the
     /// mark the Dynamic Type case scrolls back up to before it measures.

@@ -1,34 +1,36 @@
 import XCTest
 
-/// What a Simulator can say about the **player** on this branch.
+/// What a Simulator can say about the **player**.
 ///
-/// The player is infrastructure: `PlayerModel` and the fifteen rule files
-/// around it are new, and **not one of them is reachable from a screen yet**.
-/// Podcasts, Audiobooks, Stations, PhoneMedia and MusicMore merge this branch
-/// and build the surfaces that drive it; until they do there is no Player
-/// screen to open, to audit, or to measure at an accessibility type size.
-///
-/// So this file is deliberately three cases, and
-/// `design-notes/ios/overnight/player/MAP.md` §7.6 says why each one is the
-/// only kind of answer a Simulator can add to the package tests:
+/// The player is infrastructure — `PlayerModel` and the fifteen rule files
+/// around it — and it has **no screen of its own**. D49 put one instance on
+/// ``ShellModel`` and D46 put the controls that drive it on five screens, so
+/// what each of those screens offers is asserted in that screen's own file:
+/// `StubHouseUITests+Podcasts`, `+Audiobooks`, `+Stations`, `+PhoneMedia` and
+/// `+MusicMore`. This file holds the three things that belong to **none** of
+/// them, and `design-notes/ios/overnight/player/MAP.md` §7.6 says why each is
+/// the only kind of answer a Simulator can add to the package tests:
 ///
 /// 1. **The app still works with the player linked in.** A new file in
 ///    `DomovoiKit` that registers a `NotificationCenter` observer, configures
 ///    `AVAudioSession`, or publishes to `MPNowPlayingInfoCenter` at the wrong
 ///    moment breaks *video* — and no package test can see that, because
 ///    `swift test` builds for macOS, where the whole `#if os(iOS)` half of
-///    this item does not exist. The video feed is the only thing in the app
-///    today that drives `AVFoundation`, so it is the canary.
-/// 2. **Nothing offers phone playback yet.** An assertion that the surface is
-///    still absent, so the branch that adds it adds it on purpose.
+///    this item does not exist.
+/// 2. **The player is built on first use and never at launch**, and there is
+///    **no screen of its own**. The second half of what was
+///    `testPlayer_NothingInTheAppOffersPhonePlaybackYet`: a Player tab, or any
+///    harness screen, is still a thing that must not exist (Kamron's answer
+///    46: no harness screen, the real buttons are what prove the player), and
+///    laziness is measurable from the outside because an audio session
+///    activated at launch stops whatever the person was already listening to.
 /// 3. **The fixture really serves audio.** `fixtures/player.py` generates a
-///    WAV and answers `Range:`. If it did not, every case the five merging
-///    branches write against it would fail for a reason none of them owns.
+///    WAV and answers `Range:`. If it did not, every case the five screens
+///    write against it would fail for a reason none of them owns.
 ///
 /// What is **not** here: an accessibility audit and a Dynamic Type growth
-/// measurement. Both need a screen. Writing them against Home or Videos would
-/// re-measure what ``StubHouseUITests`` already measures and attribute it to
-/// the player, which is worse than not writing them.
+/// measurement. Both need a screen, and the player has none; the five screens
+/// that drive it each audit and measure their own.
 extension StubHouseUITests {
 
     // MARK: - 1. the player must not break what already plays
@@ -50,9 +52,12 @@ extension StubHouseUITests {
     /// green.
     ///
     /// `PlayerModel.activateSession` is written so it cannot do this: the
-    /// session is configured on the **first play and never at launch**, and
-    /// nothing on this branch calls `play`. This case is what makes that a
-    /// measured fact rather than a sentence in a comment.
+    /// session is configured on the **first play and never at launch**. The
+    /// player itself is not even built until something asks for it
+    /// (``ShellModel/player``), and opening Videos asks for nothing. This case
+    /// is what makes that a measured fact rather than a sentence in a comment
+    /// — and it matters more now than when it was written, because five
+    /// screens do call `play`.
     @MainActor
     func testPlayer_TheVideoFeedStillPlaysWithThePlayerLinkedIn() throws {
         let (app, landed) = openVideos()
@@ -80,22 +85,32 @@ extension StubHouseUITests {
         )
     }
 
-    // MARK: - 2. and it must not have grown a surface by accident
+    // MARK: - 2. and it must not have grown a surface of its own
 
-    /// Nothing in the app offers to play audio on the phone yet.
+    /// The player has **no screen and no tab**, and is not built at launch.
     ///
-    /// Two halves. The phone bar is still the four tabs it was — `home`,
-    /// `music`, `videos`, `chat` — and no tab of its own has appeared for the
-    /// player. And no control on Home says it will play on this phone.
+    /// This case was `testPlayer_NothingInTheAppOffersPhonePlaybackYet` and it
+    /// had two halves. The first — no Player tab, no `Now playing` tab — is
+    /// unchanged and is now the owner's decision rather than a gap: Kamron's
+    /// answer 46 was *"no harness screen; the real play buttons are added in
+    /// this same work, and that is what proves the player"*, so a screen of
+    /// its own appearing is a regression and this is where it is caught.
+    ///
+    /// The second half asserted that nothing anywhere offered `play on this
+    /// phone`. Five screens do now, and each asserts its own; what is
+    /// asserted here instead is **Home**, which is the screen the app opens
+    /// on: it must still offer nothing of the kind, because the player must
+    /// not be built — let alone activate an audio session — because somebody
+    /// launched the app. `PlayerAudioSession.swift:11-18` is the reason:
+    /// a `.playback` session activated at launch stops whatever the person was
+    /// already listening to.
     ///
     /// The wordings below are the ones `PlayerStrings` holds and the five
-    /// merging branches will draw. They are spelt out here rather than
-    /// imported, like every other string this file matches on: a query that
-    /// silently followed a renamed constant would stop testing what it claims
-    /// to. When one of them starts to exist this case fails, and whoever
-    /// added it moves the assertion into their own file — which is the point.
+    /// screens draw. They are spelt out here rather than imported, like every
+    /// other string this file matches on: a query that silently followed a
+    /// renamed constant would stop testing what it claims to.
     @MainActor
-    func testPlayer_NothingInTheAppOffersPhonePlaybackYet() throws {
+    func testPlayer_TheAppOpensOnHomeWithNoPlayerScreenAndNoPlayer() throws {
         // The Chat tab is gated on the household's AI switch
         // (`chatAvailable(_:phoneCanChat:)` — `phoneCanChat` is `false` on
         // iOS, so the tab follows `features.ai` alone), and that switch is a
@@ -129,18 +144,79 @@ extension StubHouseUITests {
             )
         }
 
-        // A control that would play audio on this phone, by the words it
-        // would carry. `PlayerStrings` has no sentence of its own for the
-        // offer yet; these are what the five branches' menus will say.
-        for offer in ["play on this phone", "play here"] {
+        // **On Home**, and only on Home. The five screens that drive the
+        // player each draw their own control and assert it in their own file;
+        // Home drives nothing, so a play offer here means the player is being
+        // built on launch — which is the audio session activated under
+        // whatever the person was already listening to.
+        //
+        // `play on this device` is the wording MusicMore's playlist sheet
+        // uses and `play <name>` is the row controls'; `play here` is nobody's
+        // and is kept because a screen that grew one would be a screen
+        // nothing in this batch decided.
+        for offer in ["play on this phone", "play on this device", "play here"] {
             let found = app.descendants(matching: .button)
                 .matching(NSPredicate(format: "label CONTAINS[c] %@", offer))
                 .firstMatch
             XCTAssertFalse(
                 found.exists,
-                "something offers \"\(offer)\" and no screen on this branch "
-                    + "drives PlayerModel — a control that cannot do what it "
-                    + "says is the one thing this project will not ship"
+                "Home offers \"\(offer)\" — the player must not be reachable "
+                    + "from the screen the app opens on, because reading it is "
+                    + "what builds it and the first play is what takes the "
+                    + "audio session"
+            )
+        }
+
+        // Still on Home, and still there: a launch that activated a session
+        // and lost it would show up as the app going away.
+        XCTAssertEqual(
+            XCUIApplication.State.runningForeground, app.state,
+            "the app did not survive a launch with the player linked in — "
+                + StubHouseUITests.stateName(app.state)
+        )
+    }
+
+    /// There is no `-player-harness` screen, and no other hidden way in.
+    ///
+    /// Kamron's answer 46 in as many words: *"No, lets wait until real
+    /// buttons are added, they should be added here in the overall work we're
+    /// doing here to publish a usable app"*. A harness screen is the thing
+    /// this unit was asked **not** to build, so its absence is asserted the
+    /// way every other decision in this file is — with the reason beside it
+    /// — rather than left to a reader's memory of a conversation.
+    ///
+    /// It is checked by **launching with the argument**, not by reading the
+    /// source: a flag the app ignores is the only honest proof that nothing
+    /// reads it. The app must come up on Home exactly as it does without it.
+    ///
+    /// The app is built here rather than through ``launch(mode:paired:server:port:strip:push:pushDelay:)``
+    /// because that helper takes no extra arguments and lives in a file this
+    /// unit does not own. The three arguments below are the ones it would
+    /// pass for a paired phone against the stub house, and nothing else.
+    @MainActor
+    func testPlayer_ThereIsNoHiddenHarnessScreen() throws {
+        resetChatHouse()
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-domovoi-server", "127.0.0.1:6601",
+            "-domovoi-token", Self.token,
+            "-UIPreferredContentSizeCategoryName", Self.ordinaryTypeSize,
+            // The flag nothing may read.
+            "-player-harness", "1",
+        ]
+        app.launch()
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 30))
+        XCTAssertTrue(
+            houseName(in: app).waitForExistence(timeout: 20),
+            "the app did not open on Home with -player-harness, which means "
+                + "something read it — tree follows\n" + app.debugDescription
+        )
+        evidence(app, "player-21-no-harness-screen")
+        for word in ["Player harness", "player harness", "Harness"] {
+            XCTAssertFalse(
+                containing(app, word).exists,
+                "a harness screen answered \"\(word)\", and answer 46 said the "
+                    + "real buttons are what prove the player"
             )
         }
     }
@@ -209,6 +285,176 @@ extension StubHouseUITests {
         )
     }
 
+    // MARK: - 4. who the house's places are saved under
+
+    /// The person picker in **Settings → Phones & browsers** records a
+    /// listener, and the chip on Podcasts then names them.
+    ///
+    /// D11, and the one surface of it a package test cannot reach.
+    /// `PhonesAndBrowsersTests` drive ``PlayerListenerStore`` and
+    /// ``PlayerListenerModel`` directly and `PlayerServerPositionsTests` hold
+    /// the `person_id` on the query and the body; what none of them can say
+    /// is that the picker in Settings and the chip on a *different screen*
+    /// are reading the same record. They are two views over one install-wide
+    /// store (`prefs.listenerPersonId`, `Prefs.kt:115`), and a second store
+    /// built somewhere by accident would leave every package test passing
+    /// while the chip stayed silent.
+    ///
+    /// ### Three launches, on purpose
+    ///
+    /// The record is in `UserDefaults` under ``PlayerListenerStore/key`` and
+    /// **not** in the shell's blob, so it is one of the very few things that
+    /// survives a relaunch even under `-domovoi-server` (which otherwise puts
+    /// the shell on an `InMemoryShellStore`, `DomovoiApp.swift:95-115`). That
+    /// is what makes the second launch worth making — a chip drawn from a
+    /// value the first launch left behind is the whole claim — and it is also
+    /// why the third launch exists: every other case in this suite asserts
+    /// the chip is **absent**, which is true only of a phone that has never
+    /// picked anybody. Leaving Chevy picked would redden Podcasts and
+    /// Audiobooks from here to the end of the run, so this case puts the
+    /// install back and **asserts that it did**.
+    ///
+    /// ### Why Chevy
+    ///
+    /// `fixtures/people.py` seeds four — `Kamron`, `Chevy`, `Alex` and
+    /// `alex ` — and Chevy is the only one of them that appears nowhere else
+    /// in this app's chrome. `Kamron` is the house's own name in other
+    /// fixtures and the two Alexes are a deliberate duplicate-name pair, so
+    /// either would make a `label CONTAINS` query ambiguous.
+    @MainActor
+    func testPlayer_ThePersonPickerNamesTheListenerOnPodcasts() throws {
+        // 1. Settings: pick a person.
+        let settings = launch(push: "Settings")
+        XCTAssertTrue(
+            reachPhonesAndBrowsersFromSettings(settings),
+            "never reached Settings → Phones & browsers, so the picker could "
+                + "not be opened"
+        )
+        let picker = settings.buttons[PlayerListenerUnderTest.card]
+        XCTAssertTrue(
+            picker.waitForExistence(timeout: 20),
+            "the panel draws no `\(PlayerListenerUnderTest.card)` picker — tree "
+                + "follows\n" + settings.debugDescription
+        )
+        // The slot a phone that has never been asked is in, read off the
+        // picker's **value** rather than its label: the label is the card's
+        // name and never changes, so asserting it would pass over any pick.
+        XCTAssertEqual(
+            PlayerListenerUnderTest.thisDevice, picker.value as? String,
+            "a fresh install does not read `\(PlayerListenerUnderTest.thisDevice)` — "
+                + "either an earlier case left a listener picked, or the nil row "
+                + "is not first (`listenerOptions`)"
+        )
+        picker.tap()
+        let chevy = settings.buttons[PlayerListenerUnderTest.chevy]
+        XCTAssertTrue(
+            chevy.waitForExistence(timeout: 15),
+            "the dropdown does not offer `\(PlayerListenerUnderTest.chevy)`, so "
+                + "either /api/people did not answer or the card drew its "
+                + "failure sentence — tree follows\n" + settings.debugDescription
+        )
+        chevy.tap()
+        XCTAssertEqual(
+            PlayerListenerUnderTest.chevy, picker.value as? String,
+            "the picker still reads `\(picker.value as? String ?? "nothing")` after "
+                + "a pick — the write did not land, or the card is not reading "
+                + "the store back"
+        )
+        XCTAssertTrue(
+            containing(settings, PlayerListenerUnderTest.pickedChevy)
+                .waitForExistence(timeout: 15),
+            "nothing said who this phone now saves under (`ConnectionPanel.kt:369-372`)"
+        )
+        evidence(settings, "player-30-listening-as-chevy")
+        settings.terminate()
+
+        // 2. Podcasts, on a **fresh launch**: the chip names them.
+        let (podcasts, landed) = openPodcasts()
+        XCTAssertTrue(landed, "Podcasts never drew, so the chip cannot be read")
+        XCTAssertTrue(
+            containing(podcasts, PlayerListenerUnderTest.chipChevy)
+                .waitForExistence(timeout: 25),
+            "Podcasts draws no `\(PlayerListenerUnderTest.chipChevy)` chip after a "
+                + "listener was picked in Settings — the two surfaces are not "
+                + "reading one store — tree follows\n" + podcasts.debugDescription
+        )
+        evidence(podcasts, "player-31-chip-names-chevy")
+        podcasts.terminate()
+
+        // 3. Put the install back, and say so if it did not go back: every
+        //    other case in this suite is written against a phone with no
+        //    listener picked.
+        let back = launch(push: "Settings")
+        XCTAssertTrue(
+            reachPhonesAndBrowsersFromSettings(back),
+            "the listener is still `\(PlayerListenerUnderTest.chevy)` and Settings "
+                + "could not be reached to put it back — the Podcasts and "
+                + "Audiobooks chip cases will fail after this one"
+        )
+        let again = back.buttons[PlayerListenerUnderTest.card]
+        XCTAssertTrue(again.waitForExistence(timeout: 20), "the picker is gone")
+        XCTAssertEqual(
+            PlayerListenerUnderTest.chevy, again.value as? String,
+            "the picker does not read `\(PlayerListenerUnderTest.chevy)` on a new "
+                + "launch — the choice did not survive, which is the thing the "
+                + "chip above was supposed to prove"
+        )
+        again.tap()
+        let me = back.buttons[PlayerListenerUnderTest.thisDevice]
+        XCTAssertTrue(
+            me.waitForExistence(timeout: 15),
+            "the dropdown has no `\(PlayerListenerUnderTest.thisDevice)` row to go "
+                + "back to — tree follows\n" + back.debugDescription
+        )
+        me.tap()
+        XCTAssertEqual(
+            PlayerListenerUnderTest.thisDevice, again.value as? String,
+            "the listener was left on a person, and every chip-absent case after "
+                + "this one will fail for that reason and not their own"
+        )
+    }
+
+    /// Get to **Settings → Phones & browsers** on a **paired** phone.
+    ///
+    /// ``reachPhonesAndBrowsers(_:)`` is the unpaired way in and cannot serve
+    /// here: an unpaired phone's `/api/people` is `require_device_read`
+    /// (`people.py:87`, and the fixture serves the refusal), so the card
+    /// would draw ``PlayerStrings/couldNotLoadPeople(_:)`` and there would be
+    /// nobody to pick. This is the same two taps
+    /// ``systemSettingsReach(_:group:section:)`` makes, spelt out here
+    /// because `Phones & browsers` is not one of its `Section` cases and that
+    /// file belongs to another unit.
+    ///
+    /// Through `-domovoi-audit-push Settings` and **not** Home's everything
+    /// grid, for that file's reason: the Settings tile is thirteen tiles down
+    /// a screen that scrolls, and a tap on an element XCUITest says exists
+    /// but has not scrolled into view lands on whatever is at that
+    /// coordinate.
+    @MainActor
+    func reachPhonesAndBrowsersFromSettings(_ app: XCUIApplication) -> Bool {
+        let group = app.buttons[PlayerListenerUnderTest.roomsAndDevices]
+        guard group.waitForExistence(timeout: 30) else {
+            print("SETTINGS INDEX NOT REACHED — tree follows")
+            print(app.debugDescription)
+            return false
+        }
+        group.tap()
+        let section = app.buttons[PlayerListenerUnderTest.phonesAndBrowsers]
+        guard section.waitForExistence(timeout: 20) else {
+            print("`Rooms & devices` HAS NO `Phones & browsers` — tree follows")
+            print(app.debugDescription)
+            return false
+        }
+        section.tap()
+        guard app.staticTexts[ShellStringsUnderTest.householdToken]
+            .waitForExistence(timeout: 20) else {
+            print("PHONES & BROWSERS DREW NO TOKEN CARD — tree follows")
+            print(app.debugDescription)
+            return false
+        }
+        return true
+    }
+
     /// A plain GET of the stub house, with **no device token**.
     ///
     /// ``control(_:_:port:what:)`` sends one and is a POST; these routes are
@@ -250,4 +496,35 @@ extension StubHouseUITests {
     static func ascii(_ bytes: some Sequence<UInt8>) -> String {
         String(decoding: Array(bytes), as: UTF8.self)
     }
+}
+
+/// The words `testPlayer_ThePersonPickerNamesTheListenerOnPodcasts` matches
+/// on, spelt out rather than imported like every other string in this file: a
+/// query that silently followed a renamed constant would stop testing what it
+/// claims to.
+enum PlayerListenerUnderTest {
+
+    /// ``PlayerStrings/listeningAsCard``, which is both the card's title and
+    /// the picker's accessibility label.
+    static let card = "Listening as"
+
+    /// ``PlayerStrings/listenerThisDevice`` — the nil row, and the picker's
+    /// value for a phone that has never been asked.
+    static let thisDevice = "me (this device)"
+
+    /// `fixtures/people.py`'s second person, chosen because the name appears
+    /// nowhere else in the app's chrome.
+    static let chevy = "Chevy"
+
+    /// ``ShellStrings/listeningAs(_:)`` for them.
+    static let pickedChevy = "listening as Chevy"
+
+    /// ``PlayerStrings/listeningAsChip(_:)`` for them, which is the same
+    /// sentence — matched on a different screen, which is the point.
+    static let chipChevy = "listening as Chevy"
+
+    /// The Settings index's group and section
+    /// (`SettingsSections.swift:88`).
+    static let roomsAndDevices = "Rooms & devices"
+    static let phonesAndBrowsers = "Phones & browsers"
 }

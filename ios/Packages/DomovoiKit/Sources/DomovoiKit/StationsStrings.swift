@@ -23,8 +23,11 @@ public enum StationsStrings {
         "\(favorites) favorited · \(recent) recent · tap a station to play it"
     }
 
-    /// The subtitle of a build that **cannot play anything**, which is this
-    /// branch until the `player` item's witness reaches the route slot.
+    /// The subtitle of a build that **cannot play anything**, which since the
+    /// 2026-11-03 batch is a phone with no device id and nothing else:
+    /// ``ShellModel/player`` is nil for one, so `StationsPhonePlayback`
+    /// answers false and the whole screen goes back to drawing no play
+    /// affordance.
     ///
     /// **iOS-only.** Android's sentence ends `· tap a station to play it`,
     /// and a screen whose rows do not play must not say that: it is the one
@@ -36,13 +39,21 @@ public enum StationsStrings {
         "\(favorites) favorited · \(recent) recent"
     }
 
-    /// Said once, where the play controls would be, when this build has no
-    /// audio engine (``StationsPlayback/canPlay``).
+    /// Said once, where the play controls would be, on a phone with no player
+    /// (``StationsPlayback/canPlay``).
     ///
     /// **iOS-only**, for the same reason as ``subtitleWithoutPlaying(favorites:recent:)``:
     /// no play affordance is drawn at all, and a page that silently lacked
     /// one would read as a screen that had failed rather than one that is
     /// honest about what it does. Everything else on it works.
+    ///
+    /// **"isn't built yet" is the wrong half of this sentence now** and is
+    /// kept on purpose: D46 built it, and what a person on this screen needs
+    /// to know is that it will not play *here*, not why. Rewording it is a
+    /// change to a line a Simulator case matches on exactly, and the case for
+    /// the state it describes (a phone with no device id) is not one the
+    /// stub house can reach yet — the stub house claims a device id as part
+    /// of pairing. Written down in the player unit's DECISIONS.
     public static let playingIsNotBuiltYet =
         "playing on this phone isn't built yet — favoriting, sampling and detections all work"
 

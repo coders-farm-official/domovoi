@@ -104,11 +104,15 @@ extension StubHouseUITests {
     /// The app's own words, spelt out for the same reason.
     enum StationsWords {
         static let title = "Stations"
-        /// **Without** Android's `· tap a station to play it`, which a build
-        /// that cannot play must not say.
-        static let subtitle = "23 favorited · 3 recent"
-        static let subtitleAfterAStar = "24 favorited · 3 recent"
-        static let subtitleAfterTwoStars = "25 favorited · 3 recent"
+        /// **With** Android's `· tap a station to play it` since D46: the
+        /// rows play on this phone, so the one instruction on the page is
+        /// true. A phone with no device id still gets the shorter sentence
+        /// (``StationsStrings/subtitleWithoutPlaying(favorites:recent:)``),
+        /// which is a state the stub house cannot reach — it claims a device
+        /// id as part of pairing.
+        static let subtitle = "23 favorited · 3 recent · tap a station to play it"
+        static let subtitleAfterAStar = "24 favorited · 3 recent · tap a station to play it"
+        static let subtitleAfterTwoStars = "25 favorited · 3 recent · tap a station to play it"
         static let subtitleAfterAForget = "22 favorited · 3 recent"
         static let playingTail = "tap a station to play it"
         static let noPlayback =
@@ -456,63 +460,61 @@ extension StubHouseUITests {
         )
     }
 
-    // MARK: - 3. nothing offers to play
+    // MARK: - 3. a tap plays it, here
 
-    /// This build has no audio engine, so **nothing on the screen offers to
-    /// play anything** — and the screen says so rather than leaving a page of
-    /// dead rows.
+    /// A station plays **on this phone**, and the screen says so where it
+    /// used to apologise.
     ///
-    /// Three halves, and the third is the one that matters: the house's own
-    /// request log must hold **no `POST /play`** after the rows have been
-    /// tapped. That POST stamps a station into Recent, so a silent button's
-    /// one visible effect would be a history entry for something nobody
-    /// heard.
+    /// This case was `testStations_NothingOffersToPlayAndTheScreenSaysWhy`,
+    /// and it was the measured fact that this screen drew no play affordance
+    /// anywhere. D46 landed `StationsPhonePlayback` over
+    /// ``ShellModel/player``, so it is inverted rather than deleted — every
+    /// assertion in it is the opposite of what it was, which is what the old
+    /// comment ("whoever moves it there rewrites it") asked for.
     ///
-    /// When the `player` item's witness reaches the route slot this case
-    /// fails, and whoever moves it there rewrites it — that is the point of
-    /// asserting an absence with a sentence beside it.
+    /// Three halves, and the third is still the one that matters: the house's
+    /// own request log must now hold **exactly one `POST /play`** after one
+    /// row has been tapped. That POST is what stamps a station into Recent,
+    /// and the model sends it *before* it hands the row to the player — so
+    /// one tap is one history entry and one stream, not two of either.
     @MainActor
-    func testStations_NothingOffersToPlayAndTheScreenSaysWhy() throws {
+    func testStations_TappingAStationPlaysItOnThisPhone() throws {
         let (app, landed) = openStations()
         XCTAssertTrue(landed, "Stations never drew its subtitle")
 
-        XCTAssertTrue(
-            app.staticTexts[StationsWords.noPlayback].exists,
-            "the screen draws no play control and says nothing about it, which reads "
-                + "as a screen that failed rather than one that is honest"
-        )
-        // Android's subtitle ends `· tap a station to play it`. The one
-        // instruction on the page must not be one that does nothing.
         XCTAssertFalse(
-            containing(app, StationsWords.playingTail).exists,
-            "the subtitle still tells somebody to tap a station to play it"
+            app.staticTexts[StationsWords.noPlayback].exists,
+            "the screen still says playing here isn't built, over rows that play"
         )
-        for offer in ["play here", "play on this phone"] {
-            XCTAssertFalse(
-                app.descendants(matching: .button)
-                    .matching(NSPredicate(format: "label CONTAINS[c] %@", offer))
-                    .firstMatch.exists,
-                "something offers \"\(offer)\" and this branch has no engine behind it"
-            )
-        }
+        // Android's subtitle ends `· tap a station to play it`, and now that
+        // is true, the page says it. `landed` already matched the whole
+        // sentence; this names the tail so a failure says which half went.
+        XCTAssertTrue(
+            containing(app, StationsWords.playingTail).exists,
+            "the subtitle dropped the one instruction on the page"
+        )
 
-        // Tap a row's body — twice, on two rows, one a favourite and one a
-        // Recent row, because the two are different views.
-        //
-        // Not the host-local catalogue hit that even a build WITH an engine
-        // must refuse: with no engine, `whyNotPlayable` is nil for every row
-        // (that sentence is about a station, and here nothing can play at
-        // all), so the per-station refusal has nothing to draw and nothing
-        // to assert. `StationsModelTests.testAnUnplayableStationSaysWhyAndSendsNothing`
-        // covers the rule itself.
+        // One row, not two. The old case tapped a favourite and a Recent row
+        // to prove neither did anything; now that each one starts a stream,
+        // two taps would be two streams and the second would stop the first
+        // — and `/play` would have been sent twice, which is what the count
+        // below is checking.
         containing(app, StubStations.firstFavourite).tap()
-        containing(app, StubStations.playedOnly).tap()
-        evidence(app, "stations-12-nothing-plays")
+        evidence(app, "stations-12-a-tap-plays-here")
 
         let sent = stationsSent()
         XCTAssertEqual(
-            0, (sent["play"] ?? []).count,
-            "the house was sent POST /play by a build that cannot play a sound: \(sent)"
+            1, (sent["play"] ?? []).count,
+            "one tap on a playable row must be exactly one POST /play: \(sent)"
+        )
+        XCTAssertTrue(
+            "\(sent["play"] ?? [])".contains(StubStations.firstFavourite),
+            "the house was told to play something other than the row that was tapped: \(sent)"
+        )
+        XCTAssertEqual(
+            XCUIApplication.State.runningForeground, app.state,
+            "the app went away while a station started — "
+                + StubHouseUITests.stateName(app.state)
         )
     }
 
@@ -1118,7 +1120,10 @@ extension StubHouseUITests {
         // a minimum height.
         let above =
             [StubStations.pluginName, StationsWords.title, StationsWords.subtitle,
-             StationsWords.noPlayback, StationsWords.importIsAnAdminJob,
+             // `noPlayback` was here. It is not drawn any more (D46: the
+             // rows play), and a leaf list that named it would fail on an
+             // element that is correctly absent.
+             StationsWords.importIsAnAdminJob,
              StationsWords.tagsLabel]
         let below =
             [StationsWords.recent, StationsWords.lastThree,

@@ -345,8 +345,18 @@ public enum MusicMoreStrings {
 
     /// `PlayerTab.kt:169-171`, both lines.
     public static let nothingQueued = "nothing queued"
+
+    /// What to do about an empty queue.
+    ///
+    /// **It names the playlists tab, not the library tab.** It said "from the
+    /// library tab" while nothing anywhere could queue to this phone, and the
+    /// 2026-11-03 batch made that the one wrong word on the screen: the
+    /// control that queues to the handset is `play on this device` in a
+    /// playlist's sheet (D46), and the library row's sheet still casts to a
+    /// room only. A note pointing at a tab with no such control is the same
+    /// misleading instruction as a button that does nothing.
     public static let nothingQueuedNote =
-        "play a library track on this device from the library tab to start"
+        "open a playlist and play it on this device to start"
 
     public static func queueHeader(_ count: Int) -> String { "queue · \(count)" }
     public static let saveAsPlaylist = "save as playlist"

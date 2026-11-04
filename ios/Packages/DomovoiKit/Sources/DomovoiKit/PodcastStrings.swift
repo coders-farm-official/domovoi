@@ -26,15 +26,18 @@ public enum PodcastStrings {
     /// in a room at all. The claim is dropped rather than carried over:
     /// DECISIONS.md, "No play to a room".
     ///
-    /// **`played on this phone` was a second, worse claim**, and it shipped
-    /// on train S004. It said the one thing this screen is built not to do:
-    /// nothing in this app owns a ``PlayerModel``, so no episode plays here
-    /// either (``PodcastsView``, "What is not"). A subtitle that promises
-    /// playback over a screen with no play control is the misleading-control
-    /// rule failing one level up from a control, so the sentence now names
-    /// the place that *can* play an episode — the same place
-    /// ``PodcastStrings/inTheDashboard`` names, in the same words.
-    public static let subtitle = "subscriptions + episodes, listened to in the dashboard"
+    /// **`played on this phone` is the claim again**, and this time it is
+    /// true.
+    ///
+    /// It shipped on train S004 and was wrong then: nothing in the app owned
+    /// a ``PlayerModel``, so a subtitle promising playback over a screen with
+    /// no play control was the misleading-control rule failing one level up
+    /// from a control. It was changed to name the dashboard. D49 gave the app
+    /// an owner (``ShellModel/player``) and D46 put the button on every
+    /// downloadable row, so the sentence names this phone again — and
+    /// `inTheDashboard`, which pointed the reader away, is deleted rather
+    /// than left to contradict it.
+    public static let subtitle = "subscriptions + episodes, played on this phone"
 
     /// `PodcastsScreen.kt:134`.
     public static let pollNow = "poll now"

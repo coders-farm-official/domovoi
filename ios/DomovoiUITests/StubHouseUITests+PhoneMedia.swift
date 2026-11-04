@@ -529,12 +529,18 @@ extension StubHouseUITests {
         let app = phoneLaunch(push: "Music")
         XCTAssertTrue(phoneSwitchToDevice(app, waitingFor: StubPhoneMedia.phoneTrackWord))
 
-        // **Exactly one** upload control on this page, which is itself the
-        // assertion: the folder row has none, and the 200 MB row has none
-        // because it is over the ceiling.
+        // **Exactly two**, which is itself the assertion: both audio rows
+        // offer an upload and the folder row does not.
+        //
+        // It was one, when the 200 MB row was over a 64 MiB ceiling. The
+        // transfers unit's streaming upload took that ceiling out (D43) and
+        // ``PhoneUploadModel/offersUpload(_:)`` is `!item.isDir` now, so the
+        // big row has a control like any other — and `boundBy: 0` is still
+        // `quenlo lullaby.mp3`, which is what the toast below is about: the
+        // list draws `Trips`, then `quenlo`, then `grendalf`.
         XCTAssertEqual(
-            phoneUploadControls(app).count, 1,
-            "the device side of Music should offer one upload — the one row under the cap"
+            phoneUploadControls(app).count, 2,
+            "the device side of Music should offer an upload on each of its two tracks"
         )
         phoneUploadControls(app).element(boundBy: 0).tap()
 
@@ -683,8 +689,9 @@ extension StubHouseUITests {
         phoneReset()
         let app = phoneLaunch(push: "Music")
         XCTAssertTrue(phoneSwitchToDevice(app, waitingFor: StubPhoneMedia.phoneTrackWord))
+        // Two since the ceiling went (D43): both tracks offer an upload.
         XCTAssertEqual(
-            phoneUploadControls(app).count, 1,
+            phoneUploadControls(app).count, 2,
             "the page has to open unblocked, or the refusal below is not a change"
         )
 
@@ -749,31 +756,97 @@ extension StubHouseUITests {
         )
     }
 
-    /// A row over the ceiling has **no upload control** and a line saying how
-    /// big it is (``PhoneUploadModel/cap``, and ``FileSaveModel``'s own
-    /// pattern the other way round).
+    /// There is **no ceiling** any more, so a 200 MB row has an upload control
+    /// like any other and says nothing about its size.
     ///
-    /// A cap enforced only inside `upload()` would be a button that always
-    /// fails, which is what this asserts is not there.
+    /// This case was `testPhoneMedia_AFileOverTheCapHasNoUploadControl`, and
+    /// it was right: a cap enforced only inside `upload()` would have been a
+    /// button that always failed. The transfers unit's streaming upload
+    /// removed the cap (D43), this unit took the two unreachable
+    /// `PhoneUploadTooBigNote` branches out, and the view went with them — so
+    /// every assertion here is inverted rather than the case deleted. What it
+    /// guards now is the other direction: a ceiling reintroduced anywhere
+    /// would make the note come back or the count drop, and both are failures
+    /// below.
     @MainActor
-    func testPhoneMedia_AFileOverTheCapHasNoUploadControl() throws {
+    func testPhoneMedia_EveryFileHasAnUploadControlNow() throws {
         phoneReset()
         let app = phoneLaunch(push: "Music")
         XCTAssertTrue(phoneSwitchToDevice(app, waitingFor: StubPhoneMedia.phoneTrackWord))
 
-        let note = startingWith(app, StubPhoneMedia.tooBigPrefix)
-        let drawn = note.waitForExistence(timeout: 30)
-        evidence(app, "phonemedia-over-the-cap")
-        XCTAssertTrue(drawn, "the 200 MB row did not say why it has no upload")
-        // The row under the cap keeps its control; the one over it has none.
-        // One, not zero and not two: that is the whole claim.
-        XCTAssertEqual(
-            phoneUploadControls(app).count, 1,
-            "the row over the ceiling was given an upload button that would always fail"
-        )
         XCTAssertTrue(
-            containing(app, StubPhoneMedia.phoneBigFileWord).exists,
-            "the oversized row is not even listed, so the note above belongs to nothing"
+            containing(app, StubPhoneMedia.phoneBigFileWord).waitForExistence(timeout: 30),
+            "the 200 MB row is not listed, so what follows is about nothing"
+        )
+        evidence(app, "phonemedia-no-ceiling")
+        XCTAssertFalse(
+            startingWith(app, StubPhoneMedia.tooBigPrefix).exists,
+            "a row says it is too big to upload, over a control that would now upload it"
+        )
+        // Two, not one: the folder row has none and both tracks have one.
+        XCTAssertEqual(
+            phoneUploadControls(app).count, 2,
+            "the 200 MB row lost its upload button — a ceiling has come back"
+        )
+    }
+
+    // MARK: - playing a phone track on the phone
+
+    /// A phone track **offers to play on the handset** (D46), and a folder and
+    /// a document do not.
+    ///
+    /// Android plays a window of the neighbouring tracks
+    /// (`LocalMediaScreens.kt:158-166`) and so does this now: the row is a
+    /// `Button` with ``PlayerStrings/play`` as its hint, built by
+    /// ``PhoneDeviceMusicView``'s own `tap(_:_:)` over
+    /// ``PhoneMediaListModel/playQueue(around:)``.
+    ///
+    /// ### Why it does not tap
+    ///
+    /// The seeded phone library's rows carry an `origin` of
+    /// `/fake/Recordings/<name>` and **no file is written there**:
+    /// ``PhoneMemorySource`` materialises a real file only for the names in
+    /// its `sized` set, and only for an upload (`fileURL(of:)`). So a tap
+    /// would hand `AVPlayer` a URL with nothing behind it, and the case would
+    /// measure the fixture rather than the app. The affordance is what this
+    /// unit added and the affordance is what this asserts; the queue
+    /// arithmetic behind it is nine cases in `PhonePlayQueueTests`, and the
+    /// fixture gap is written down in the player unit's DECISIONS with the
+    /// one change that would close it.
+    ///
+    /// The foot note is the other half: ``PhoneMediaStrings/noPhonePlayerYet``
+    /// is for a phone with **no device id**, and the stub house claims one as
+    /// part of pairing — so on this screen it must not be drawn at all. A
+    /// line explaining an absence under controls that are present is worse
+    /// than no line.
+    @MainActor
+    func testPhoneMedia_APhoneTrackOffersToPlayOnThisPhone() throws {
+        phoneReset()
+        let app = phoneLaunch(push: "Music")
+        XCTAssertTrue(phoneSwitchToDevice(app, waitingFor: StubPhoneMedia.phoneTrackWord))
+        evidence(app, "phonemedia-play-on-this-phone")
+
+        let track = app.buttons.matching(
+            NSPredicate(format: "label CONTAINS %@", StubPhoneMedia.phoneTrackWord)
+        ).firstMatch
+        XCTAssertTrue(
+            track.waitForExistence(timeout: 30),
+            "the track row is not a button, so nothing on it plays — tree follows\n"
+                + app.debugDescription
+        )
+        XCTAssertFalse(
+            startingWith(app, StubPhoneMedia.noPhonePlayerPrefix).exists,
+            "the page still says a phone track does not play here, under rows that do"
+        )
+        // The folder is a button too (it opens), and the document is not a
+        // button at all — ``PhoneMediaRowView`` draws a row with no tap as a
+        // row rather than as a dead button. The device side of Music lists
+        // audio only, so the document is not here to check; the folder is.
+        XCTAssertTrue(
+            app.buttons.matching(
+                NSPredicate(format: "label CONTAINS %@", StubPhoneMedia.phoneFolder)
+            ).firstMatch.exists,
+            "the folder row stopped being a button, so the way down is gone"
         )
     }
 
@@ -1011,7 +1084,11 @@ extension StubHouseUITests {
     /// decides whether those thirteen findings were defects. Five code sites
     /// cover all thirteen: ``PhoneMediaRowView``'s title (`.subheadline`) and
     /// its meta and duration (`.caption`), ``PhoneDeviceChrome``'s count line
-    /// and ``PhoneUploadTooBigNote``. A folder's name is the sixth, and it is
+    /// and the too-big note. (That note is **gone** since the 2026-11-03
+    /// batch — D43 removed the ceiling and this unit removed its two
+    /// branches — so one of the thirteen leaves is no longer drawn. The
+    /// count is not pinned here, which is the whole point of classifying by
+    /// signature.) A folder's name is the sixth, and it is
     /// the row title drawn inside a `Button` rather than a combined row —
     /// worth its own measurement because the wrapper differs.
     ///
@@ -1233,7 +1310,22 @@ enum StubPhoneMedia {
     static let uploadRefusedPrefix = "upload refused"
     /// A prefix of `PhoneMediaStrings.tooBigToUpload(_:)`, matched as a
     /// prefix so the byte formatting is not this case's business.
+    ///
+    /// **Nothing in the app draws this any more** (D43 took the ceiling out),
+    /// and it is kept because that is now what a case asserts: the string
+    /// still exists for a file the **server** refuses, which is a different
+    /// and live rule, so the only way to catch a ceiling creeping back is to
+    /// go on looking for these words.
     static let tooBigPrefix = "too big to upload from a phone"
+
+    /// A prefix of ``PhoneMediaStrings/noPhonePlayerYet``, which is drawn
+    /// only on a phone with no device id — a state the stub house cannot
+    /// reach, because it claims one as part of pairing. So on every screen
+    /// these cases open, this must be absent.
+    static let noPhonePlayerPrefix = "a phone track plays here once"
+
+    /// The seeded library's one folder (``PhoneDeviceSources/seeded``).
+    static let phoneFolder = "Trips"
     /// A fragment of the refused card's blocked tail
     /// (`PhoneMediaStrings.blockedTail`), short enough to be a legal query.
     static let adminLiftsTheBlock = "An admin lifts the block"

@@ -556,12 +556,21 @@ final class PodcastModelsTests: XCTestCase {
             PodcastStrings.unsubscribeBody("The Kitchen Table")
         )
         XCTAssertEqual("failed: 404: not found", PodcastStrings.unsubscribeFailed("404: not found"))
-        // iOS-only twice over: neither app's screen can cast an episode to a
-        // room, and this one cannot play one on the phone either - nothing in
-        // the app owns a `PlayerModel`. It said `played on this phone` until
-        // train S004, which is a promise the screen has no control for.
+        // Neither app's screen can cast an episode to a **room**, so the
+        // subtitle has never named one. What it names is the phone, and that
+        // sentence has now been true twice and wrong once in between: it
+        // said `played on this phone` until train S004, where it was a
+        // promise the screen had no control for (nothing in the app owned a
+        // `PlayerModel`); it was changed to name the dashboard; and the
+        // 2026-11-03 batch put an owner on `ShellModel` and a play control on
+        // every downloadable row, so it names the phone again.
+        //
+        // The pair of them is the assertion, not just the live one: a merge
+        // that brought the dashboard wording back beside a play button would
+        // be the screen contradicting itself, and `inTheDashboard` is gone
+        // from this type altogether so it cannot come back quietly.
         XCTAssertEqual(
-            "subscriptions + episodes, listened to in the dashboard",
+            "subscriptions + episodes, played on this phone",
             PodcastStrings.subtitle
         )
     }

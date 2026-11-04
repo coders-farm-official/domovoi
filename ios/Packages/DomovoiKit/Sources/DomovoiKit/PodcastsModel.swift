@@ -14,36 +14,37 @@ import Observation
 /// showing, and whether a sheet may close over a write still in flight are
 /// all **decisions**, and a view cannot be asked whether it got them right.
 ///
-/// ### What this does not do, and why there is no control for it
+/// ### What the 2026-11-03 batch added
 ///
-/// **Playing an episode**, the resume prompt, and the resume position
-/// read/write. `wf/ios-n-player` is merged and its engine *can* take a
-/// remote-URL episode — but **nothing in the app owns a ``PlayerModel``**:
-/// it is on neither ``AppContainer`` nor ``ShellModel``, and putting it there
-/// is a change to shared infrastructure this branch must not make. A player
-/// this screen built for itself would be destroyed when somebody left
-/// Podcasts, so the play control, the resume dialog and the position
-/// read/write are left out entirely — not drawn disabled, not stubbed
-/// (DECISIONS.md, "Phone playback has an engine and no owner").
-/// ``PodcastPath/audio(episodeID:download:)``, ``PodcastPosition``,
-/// ``PodcastPath/savePositionBody(deviceID:personID:positionSec:speed:)`` and
-/// ``PodcastRules/offersResume(positionSec:)`` are the seam, and
-/// **nothing in this model calls them**.
+/// **Playing an episode**, the resume prompt and the resume position. The
+/// seam was written and nothing called it, because nothing in the app owned a
+/// ``PlayerModel``. D49 put one on ``ShellModel`` — lazily, and iOS-only —
+/// and ``player`` here is handed it by ``PodcastsView``. So
+/// ``PodcastPath/audio(episodeID:download:)``, ``PodcastPosition`` and
+/// ``PodcastRules/offersResume(positionSec:)`` are all live, and ``play(_:)``
+/// is what reads the place and asks before it drops somebody into the middle
+/// of a programme.
+///
+/// **Saving an episode to the device** (D47), through
+/// ``SaveToDeviceModel``'s streaming save: no size on the row to check, and
+/// nothing to check it against now that the 64 MiB ceiling is gone.
+///
+/// **The listener.** ``PlayerListenerStore`` holds who is listening (D11) and
+/// the person reaches every position query, so a place is no longer recorded
+/// against the server's unidentified listener unless that is what was chosen.
+///
+/// ### What this still does not do, and why there is no control for it
 ///
 /// **Playing to a room.** Neither app can: a room plays library track ids
 /// through `POST /api/music/play-tracks` and an episode has none
 /// (`CastPlan.kt:10-20, 70-77`), and no server route plays an episode in a
 /// room — that exists only through voice, in the core's own MPD path. The
-/// header subtitle is reworded accordingly (``PodcastStrings/subtitle``).
+/// header subtitle names this phone instead (``PodcastStrings/subtitle``).
 ///
-/// **Saving an episode to the device.** No download manager on iOS, a 64 MiB
-/// ceiling on the one save path there is, and **no size on the row** to check
-/// it against. ``PodcastStrings/inTheDashboard`` is what the screen
-/// says instead.
-///
-/// **The "listening as *name*" pill.** This app stores no listener person, so
-/// `person_id` is simply absent from every position query — and absent is a
-/// different key from empty on the server.
+/// **Play on a phone with no device id.** ``ShellModel/player`` is nil for
+/// one, ``canPlay(_:)`` is false, and no control is drawn — not greyed. The
+/// player writes a listening position per device and cannot own a server slot
+/// without one.
 ///
 /// **Pull to refresh does not poll the feeds.** ``reload()`` re-reads the
 /// list; ``poll()`` is the only thing that fetches the internet, which is
