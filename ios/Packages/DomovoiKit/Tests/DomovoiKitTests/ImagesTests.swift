@@ -6,13 +6,24 @@ import XCTest
 /// lands when the house changed while it was in flight.
 ///
 /// The Image Generation plugin is **not in this repository** — it mounts its
-/// own router under `/api/plugins/imagegen` (`plugin_host.py:531`) and
-/// `docs/API_REFERENCE.md:1625-1630` gives no table for it — so every shape
-/// below is Android's `ImagesScreen.kt:76-125`, transcribed, and these tests
-/// are the only specification either platform has for them: `ImagesScreen.kt`
-/// is a composable and Android's JVM suite is unit-only, so nothing over
-/// there tests the lane filter, the two wrapper keys or the meta line's
-/// "both or neither".
+/// own router under `/api/plugins/imagegen` (`plugin_host.py:531`) — so every
+/// shape below was Android's `ImagesScreen.kt:76-125`, transcribed, and these
+/// tests are the only specification either platform has for them:
+/// `ImagesScreen.kt` is a composable and Android's JVM suite is unit-only, so
+/// nothing over there tests the lane filter, the two wrapper keys or the meta
+/// line's "both or neither".
+///
+/// **The shapes are now verified against the plugin's own code**
+/// (`domovoi-project/domovoi-plugin-imagegen`, Kamron's answers 6 and 25,
+/// 2026-11-03), and the JSON below is the server's: one serialiser `_job_row`
+/// (`domovoi_plugin_imagegen/web.py:114-127`) over the columns of
+/// `migrations/V001__imagegen_schema.sql`. Two values in it were invented and
+/// are corrected — `kind` was `txt2img` where the column is `CHECK`-ed to
+/// `generate` or `pull`, and a finished `status` was `completed` where the
+/// five allowed words are `pending`, `running`, `done`, `failed`,
+/// `cancelled`. Both fell through ``ImagesJobStatus/other(_:)`` and drew
+/// their own word, so no behaviour changes; what changes is that these tests
+/// now describe a server that exists.
 @MainActor
 final class ImagesTests: XCTestCase {
 
@@ -42,24 +53,29 @@ final class ImagesTests: XCTestCase {
     /// the row that discriminates: it must not reach the lane.
     private let jobsJSON = """
     {"jobs":[
-    {"id":11,"kind":"txt2img","model":"sdxl-turbo","prompt":"a lighthouse in fog",
-     "status":"running","pct":42,"status_text":"sampling step 7 of 20"},
-    {"id":12,"kind":"txt2img","model":"sdxl-turbo","prompt":"a brass orrery",
-     "status":"failed","error":"the engine ran out of memory"},
-    {"id":13,"kind":"txt2img","model":"sd15","prompt":"a quiet harbour",
-     "status":"completed","result":{"images":["harbour-1.png"]}}]}
+    {"id":11,"kind":"generate","model":"sdxl-turbo","prompt":"a lighthouse in fog",
+     "status":"running","pct":42,"status_text":"sampling step 7 of 20",
+     "requested_at":"2026-11-02T01:00:11.004+00:00","completed_at":null},
+    {"id":12,"kind":"generate","model":"sdxl-turbo","prompt":"a brass orrery",
+     "status":"failed","error":"the engine ran out of memory",
+     "requested_at":"2026-11-02T00:58:02.100+00:00",
+     "completed_at":"2026-11-02T00:58:31.700+00:00"},
+    {"id":13,"kind":"generate","model":"sd15","prompt":"a quiet harbour",
+     "status":"done","result":{"images":["harbour-1.png"]}}]}
     """
 
     /// One row with four images and full params, one with a width and no
     /// height — the branch at `ImagesScreen.kt:387`.
     private let historyJSON = """
     {"history":[
-    {"id":9,"kind":"txt2img","model":"sdxl-turbo","prompt":"an orchard at dusk",
-     "params":{"width":1024,"height":1024,"steps":28,"seed":773451},
-     "status":"completed","completed_at":"2026-11-02T01:02:03Z",
+    {"id":9,"kind":"generate","model":"sdxl-turbo","prompt":"an orchard at dusk",
+     "params":{"width":1024,"height":1024,"steps":28,"seed":773451,"negative":""},
+     "status":"done","completed_at":"2026-11-02T01:02:03Z",
+     "requested_at":"2026-11-02T01:01:40.220+00:00",
      "result":{"images":["orchard-1.png","orchard-2.png","orchard-3.png","orchard-4.png"]}},
-    {"id":8,"kind":"txt2img","model":"sd15","prompt":"a tram in the rain",
-     "params":{"width":512},"status":"completed","result":{"images":[]}}]}
+    {"id":8,"kind":"generate","model":"sd15","prompt":"a tram in the rain",
+     "params":{"width":512},"status":"done","result":{"images":[]}}],
+    "more":false}
     """
 
     private func decode<T: Decodable>(_ type: T.Type, _ json: String) throws -> T {
@@ -81,8 +97,10 @@ final class ImagesTests: XCTestCase {
         let jobs = try decode(ImagesJobList.self, jobsJSON).jobs
         let running = jobs[0]
         XCTAssertEqual(11, running.id)
-        // Decoded and deliberately never drawn (DECISIONS §3.1.5).
-        XCTAssertEqual("txt2img", running.kind)
+        // Decoded and deliberately never drawn — and `generate` is one of
+        // the two words the column allows (the other is `pull`, which is a
+        // model download and never reaches this screen's lane).
+        XCTAssertEqual("generate", running.kind)
         XCTAssertEqual("sdxl-turbo", running.model)
         XCTAssertEqual("a lighthouse in fog", running.prompt)
         XCTAssertEqual(.running, running.status)
@@ -180,8 +198,15 @@ final class ImagesTests: XCTestCase {
             ("pending", true, true),
             ("running", true, true),
             ("failed", false, true),
-            ("completed", false, false),
+            // The server's fifth and fourth words. `done` replaces
+            // `completed`, which no version of the plugin has ever sent:
+            // the `CHECK` allows `pending`, `running`, `done`, `failed`,
+            // `cancelled` and nothing else.
+            ("done", false, false),
             ("cancelled", false, false),
+            // And a word from outside the constraint still draws itself,
+            // because a migration may widen it.
+            ("queued-elsewhere", false, false),
         ]
         for (word, active, lane) in table {
             let status = ImagesJobStatus(word)
@@ -238,6 +263,87 @@ final class ImagesTests: XCTestCase {
             ImagesStrings.tile(position: 1).contains("of"),
             "a tile's label counts the tiles, which is not the number of pictures"
         )
+    }
+
+    /// **Kamron's answer 27**: a card with more pictures than tiles says so.
+    ///
+    /// The row with four images says `4 images, showing 3`; the row with one
+    /// says nothing at all. Both halves, because a sentence drawn on every
+    /// card would read `1 images, showing 1` on most of them.
+    func testACardWithMorePicturesThanTilesCountsThem() throws {
+        let rows = try decode(ImagesHistoryList.self, historyJSON).history
+        let four = rows[0]
+        XCTAssertTrue(four.hasMoreImagesThanTiles)
+        XCTAssertEqual(
+            "4 images, showing 3",
+            ImagesStrings.moreImages(total: four.imageNames.count, shown: four.tileNames.count),
+            "his words, verbatim (answer 27)"
+        )
+
+        // The row with an empty `images` array, and one with exactly three:
+        // neither has anything to say.
+        XCTAssertFalse(rows[1].hasMoreImagesThanTiles)
+        let exactlyThree = try decode(ImagesJob.self, #"{"result":{"images":["a.png","b.png","c.png"]}}"#)
+        XCTAssertEqual(3, exactlyThree.tileNames.count)
+        XCTAssertFalse(
+            exactlyThree.hasMoreImagesThanTiles,
+            "three of three is not `3 images, showing 3`"
+        )
+        XCTAssertFalse(ImagesJob().hasMoreImagesThanTiles, "and a row with no images is silent")
+    }
+
+    // MARK: - the shapes, against the plugin's own code
+
+    /// The two values this file used to invent, and the three fields the
+    /// server sends that nothing here reads.
+    ///
+    /// Verified against `domovoi-plugin-imagegen` (answers 6 and 25): `kind`
+    /// is `CHECK`-ed to `generate`/`pull` and `status` to five words
+    /// (`migrations/V001__imagegen_schema.sql`), and `_job_row`
+    /// (`web.py:114-127`) also serves `requested_at`, while `params` carries
+    /// `negative` (`:383-389`) and `…/history` carries `more` (`:649`).
+    ///
+    /// This case is what fails if a later pass "tidies" one of those three
+    /// out of the fixtures on the belief that the server does not send it, or
+    /// adds a decoder for one without a screen to draw it.
+    func testTheServersOwnExtraFieldsAreCarriedAndIgnored() throws {
+        // `requested_at` and `params.negative` are in the seed above, and a
+        // row carrying them decodes exactly as before: an unknown key is not
+        // an error for a hand-written `decodeIfPresent` decoder, which is the
+        // promise ``ImagesModels``' header makes about a plugin shipping a
+        // new field.
+        let row = try decode(ImagesHistoryList.self, historyJSON).history[0]
+        XCTAssertEqual(773_451, row.params?.seed)
+        XCTAssertEqual(28, row.params?.steps)
+        XCTAssertEqual("generate", row.kind)
+        XCTAssertEqual("done", row.statusWord)
+        XCTAssertFalse(row.status.inLane, "`done` is history, not the lane")
+
+        // And `more` beside the `history` key changes nothing about the
+        // wrapper.
+        XCTAssertEqual(2, try decode(ImagesHistoryList.self, historyJSON).history.count)
+
+        // A whole-engine-state answer to `…/models`, which is what the route
+        // actually sends (`web.py:270-288` over `engine.py:177-205`) and what
+        // the stub house now serves: sixteen keys beside `models`, three of
+        // them read.
+        let fat = try decode(ImagesGenState.self, """
+        {"installed":true,"running":true,"desired_running":true,"autostart":true,
+         "url":"http://127.0.0.1:8188","url_error":null,
+         "pinned_revision":"v0.3.45 (1b5f2c9d0e7a)","gpu_index":0,
+         "engine_dir":"/e","models_dir":"/m","output_dir":"/o",
+         "output_in_pictures":true,"git_available":true,
+         "install":{"running":false,"stage":"done","status_text":"installed",
+                    "error":null,"pct":100},
+         "core_online":true,"engine_online":true,
+         "models":[{"id":"z-image-turbo","label":"Z-Image-Turbo","installed":true,
+                    "recommended":true,"partial":false,"description":"6B distilled",
+                    "license":"Apache-2.0","speed":"fast","est_vram_gb":13,
+                    "download_gb":20.5,"default_size":[1024,1024]}]}
+        """)
+        XCTAssertTrue(fat.ready, "the two fields the engine line reads are top-level")
+        XCTAssertEqual(["z-image-turbo"], fat.installedModels.map(\.id))
+        XCTAssertEqual("Z-Image-Turbo  ·  recommended", fat.installedModels[0].menuLabel)
     }
 
     /// `:273`'s plural, at the three counts that matter: none, Kotlin's one
@@ -814,15 +920,18 @@ final class ImagesTests: XCTestCase {
         // `fixtures/images.py:151-196`.
         let fixtureJobs = """
         {"jobs":[
-        {"id":7,"kind":"txt2img","model":"sdxl-turbo","prompt":"a brass orrery on a velvet desk",
-         "params":{"width":1024,"height":1024,"steps":28,"seed":41},
-         "status":"running","pct":42,"status_text":"sampling step 7 of 20"},
-        {"id":8,"kind":"txt2img","model":"flux-schnell","prompt":"a cathedral of folded paper",
-         "params":{"width":512,"height":512,"steps":4,"seed":9001},
-         "status":"failed","error":"the engine ran out of memory"},
-        {"id":9,"kind":"txt2img","model":"sdxl-turbo","prompt":"a quicksilver tide at dusk",
-         "params":{"width":768,"height":768,"steps":20,"seed":5},
-         "status":"completed","pct":100,"result":{"images":["tide-01.png"]}}]}
+        {"id":7,"kind":"generate","model":"sdxl-turbo","prompt":"a brass orrery on a velvet desk",
+         "params":{"width":1024,"height":1024,"steps":28,"seed":41,"negative":""},
+         "status":"running","pct":42,"status_text":"sampling step 7 of 20",
+         "requested_at":"2026-11-03T09:14:02.511+00:00","completed_at":null},
+        {"id":8,"kind":"generate","model":"flux-schnell","prompt":"a cathedral of folded paper",
+         "params":{"width":512,"height":512,"steps":4,"seed":9001,"negative":""},
+         "status":"failed","error":"the engine ran out of memory",
+         "requested_at":"2026-11-03T09:11:40.002+00:00",
+         "completed_at":"2026-11-03T09:12:08.774+00:00"},
+        {"id":9,"kind":"generate","model":"sdxl-turbo","prompt":"a quicksilver tide at dusk",
+         "params":{"width":768,"height":768,"steps":20,"seed":5,"negative":""},
+         "status":"done","pct":100,"result":{"images":["tide-01.png"]}}]}
         """
         let jobs = try decode(ImagesJobList.self, fixtureJobs).jobs
         XCTAssertEqual(3, jobs.count, "the fixture's three rows, or this test is about something else")
@@ -833,7 +942,7 @@ final class ImagesTests: XCTestCase {
         XCTAssertEqual([7, 8], lane.map(\.id), "the lane is the two that are still happening")
         XCTAssertFalse(
             lane.contains { ($0.prompt ?? "").contains("quicksilver") },
-            "a completed job reached the lane"
+            "a finished job reached the lane"
         )
         // And the word is still the discriminator the UI case leans on: it
         // must be in exactly one row of the fixture, the one that must not be
@@ -847,18 +956,33 @@ final class ImagesTests: XCTestCase {
         // `fixtures/images.py:199-247`.
         let fixtureHistory = """
         {"history":[
-        {"id":21,"kind":"txt2img","model":"sdxl-turbo",
+        {"id":21,"kind":"generate","model":"sdxl-turbo",
          "prompt":"a kingfisher on a frozen reed",
-         "params":{"width":1024,"height":1024,"steps":28,"seed":773451},
-         "status":"completed","pct":100,
+         "params":{"width":1024,"height":1024,"steps":28,"seed":773451,"negative":""},
+         "status":"done","pct":100,
          "result":{"images":["kingfisher 01.png","kingfisher-02.png","kingfisher-03.png","kingfisher-04.png"]}},
-        {"id":22,"kind":"txt2img","model":"flux-schnell",
+        {"id":22,"kind":"generate","model":"flux-schnell",
          "prompt":"a tin robot watering a window box",
-         "params":{"width":512,"height":null,"steps":4,"seed":null},
-         "status":"completed","pct":100,"result":{"images":["robot-01.png"]}}]}
+         "params":{"width":512,"height":null,"steps":4,"seed":null,"negative":""},
+         "status":"done","pct":100,"result":{"images":["robot-01.png"]}}],
+        "more":false}
         """
         let history = try decode(ImagesHistoryList.self, fixtureHistory).history
         XCTAssertEqual([21, 22], history.map(\.id))
+
+        // **Answer 27, against the fixture.** Row 21 is the four-image row
+        // and row 22 the one-image row, so the seed itself has to keep
+        // driving both halves of the sentence — a seed trimmed to three
+        // images would make the UI case that asserts `4 images, showing 3`
+        // vacuous without failing anywhere else.
+        XCTAssertTrue(history[0].hasMoreImagesThanTiles)
+        XCTAssertEqual(
+            "4 images, showing 3",
+            ImagesStrings.moreImages(
+                total: history[0].imageNames.count, shown: history[0].tileNames.count
+            )
+        )
+        XCTAssertFalse(history[1].hasMoreImagesThanTiles)
 
         // **Breakage 2** — a size drawn from a width alone, so row 22 read
         // `flux-schnell · 512 × 0 · 4 steps`. The exact sabotaged string is

@@ -60,11 +60,24 @@ extension StubHouseUITests {
         static let failedPrompt = "a cathedral of folded paper"
         static let failedError = "the engine ran out of memory"
 
-        /// **The discriminating row.** `completed` is not `pending`,
-        /// `running` or `failed`, so `laneJobs` (`:180-183`) must not hold
-        /// it, and `quicksilver` is in no other row in the fixture — so the
-        /// word being anywhere on screen means the lane filter was widened.
+        /// **The discriminating row.** `done` is not `pending`, `running`
+        /// or `failed`, so `laneJobs` (`:180-183`) must not hold it, and
+        /// `quicksilver` is in no other row in the fixture — so the word
+        /// being anywhere on screen means the lane filter was widened.
+        ///
+        /// The fixture's word for that row was `completed` until 2026-11-03,
+        /// when the routes were verified against the plugin's own code: the
+        /// column is `CHECK`-ed to `pending`, `running`, `done`, `failed`,
+        /// `cancelled` (`migrations/V001__imagegen_schema.sql`) and
+        /// `completed` is a word no version of the plugin has ever sent.
         static let completedNotInLane = "quicksilver"
+
+        /// That row's status pill, which must not be on screen either.
+        ///
+        /// Its own constant, because the word has to be the fixture's: this
+        /// assertion is worthless against a word the house never sends, and
+        /// it was `completed` for four trains.
+        static let doneStatusWord = "done"
 
         /// History row 21: four images, full params, a prompt that wraps.
         static let historyPromptWord = "kingfisher"
@@ -124,6 +137,11 @@ extension StubHouseUITests {
         /// ``ImagesStrings/tile(position:)`` — a tile's label since the audit
         /// rejected the file name as one.
         static func tile(position: Int) -> String { "picture \(position)" }
+        /// ``ImagesStrings/moreImages(total:shown:)`` — Kamron's answer 27,
+        /// his wording. Spelt out here rather than built from the fixture's
+        /// counts: a helper that computed `4` and `3` from the same seed the
+        /// card reads would agree with the card however wrong both were.
+        static let fourImagesShowingThree = "4 images, showing 3"
         /// The page's scroll view, named in `ImagesView.swift` so that
         /// ``imagesPage(_:)`` can pick it out from the shell's phone bar at
         /// any type size. Not a word anybody reads — an identifier.
@@ -622,18 +640,18 @@ extension StubHouseUITests {
         // filter were widened to every job, the completed one would be here.
         XCTAssertFalse(
             containing(app, StubImages.completedNotInLane).exists,
-            "a completed job is in the live lane"
+            "a finished job is in the live lane"
         )
         // **The pill, as well as the prompt.** The word above is the row's
         // title; this is the row's *status*, and the fixture has no other
-        // `completed` job in `…/jobs` — so a lane that drew the pill without
-        // the prompt (a card that fell back to `model`) is caught too. The
+        // `done` job in `…/jobs` — so a lane that drew the pill without the
+        // prompt (a card that fell back to `model`) is caught too. The
         // history cards below draw no status pill at all
         // (`ImagesScreen.kt:380-430`), which is what makes the word
         // discriminating on this screen rather than everywhere.
         XCTAssertFalse(
-            app.staticTexts["completed"].exists,
-            "a `completed` pill is on screen, so the lane filter took every job"
+            app.staticTexts[StubImages.doneStatusWord].exists,
+            "a `done` pill is on screen, so the lane filter took every job"
         )
     }
 
@@ -826,6 +844,30 @@ extension StubHouseUITests {
             3,
             kingfisherTiles.count,
             "the card draws \(kingfisherTiles.count) tiles of four, and Android draws three"
+        )
+        // **And it says so** (Kamron's answer 27). Three tiles of four was
+        // Android's shape and it was also the whole of what a person could
+        // find out: the fourth picture was neither drawn nor mentioned. The
+        // sentence is this card's, in his words, and it is asserted on the
+        // same card as the count above so the two cannot drift.
+        XCTAssertTrue(
+            app.staticTexts[ImagesWords.fourImagesShowingThree].exists,
+            "the card draws three of four pictures and does not say so"
+        )
+        // Row 22 has one image, and a card with nothing to say says nothing:
+        // `1 images, showing 1` on every other card is the failure this
+        // half catches. `robot` is row 22's word and no other row's.
+        let oneImageRow = containing(app, StubImages.widthOnlyPrompt)
+        XCTAssertTrue(
+            imagesScrollUntilBuilt(app, oneImageRow),
+            "the one-image history row never built"
+        )
+        XCTAssertEqual(
+            1,
+            app.staticTexts.matching(
+                NSPredicate(format: "label ENDSWITH %@", "images, showing 3")
+            ).count,
+            "the sentence is on more than one card, so it is not asking the count"
         )
     }
 
