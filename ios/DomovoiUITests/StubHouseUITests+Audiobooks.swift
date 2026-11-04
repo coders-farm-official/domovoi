@@ -1250,20 +1250,42 @@ extension StubHouseUITests {
         // (``AudiobookChapterRow``) **inside** the viewport, and every one
         // of them reports a type-size finding and no contrast one.
         //
-        // So a contrast finding whose element is wholly at or below the
-        // page's own foot is taken out, by that measurement and not by a
-        // belief, and nothing else is: one that **straddles** the foot has
-        // pixels on screen and still fails here, which is narrower than the
-        // rule `testStations_AuditFindsNothingNew` carries for the same
-        // class. The foot is read off the app, never pinned as a number.
-        let pageFoot = app.scrollViews.allElementsBoundByIndex
-            .max(by: { $0.frame.height < $1.frame.height })?
-            .frame.maxY
+        // So a contrast finding is taken out only when **both** of these
+        // hold, each read off the app and neither pinned as a number:
+        //
+        // * its element is wholly at or below the page's own foot, so it has
+        //   no pixels inside the page's clip; and
+        // * its frame is the frame of a **descendant** of that scroll view
+        //   (``musicMoreIsPageContent(_:_:)``, the same frame-match
+        //   discriminator `testMusicMore_AuditThePlaylistsTab` uses).
+        //
+        // The second condition is what keeps the rule to clipped page
+        // content. Position alone is not enough: the phone bar's buttons
+        // (`{{0.0, 774.0}, {98.3, 44.0}}` and along) are drawn wholly below
+        // this foot, and so can the shell's toast (`AppShellView.swift:35`,
+        // an `.overlay(alignment: .bottom)`). Neither is inside the page's
+        // subtree, and a contrast failure on either is a real defect on
+        // pixels that are on screen. In I004's tree Chapter
+        // 8's duration `{{309.3, 807.3}, {59.7, 14.3}}` is inside the scroll
+        // view's subtree, so that finding meets both conditions.
+        //
+        // A finding that **straddles** the foot is not covered by this rule
+        // and still fails here. This is a different rule from the one
+        // `testStations_AuditFindsNothingNew` carries, which forgives only
+        // straddlers: the two do not overlap, and neither is a narrowing of
+        // the other.
+        let page = app.scrollViews.allElementsBoundByIndex
+            .max(by: { $0.frame.height < $1.frame.height })
+        let pageFoot = page?.frame.maxY
+        // One snapshot of the page's subtree, read before the filter.
+        let pageContent = page?.descendants(matching: .any)
+            .allElementsBoundByIndex.map(\.frame) ?? []
         var clippedAway: [String] = []
         let leftOver = afterSplit.rest.filter { line in
             if line.hasPrefix("Dynamic Type font sizes") { return false }
             if line.hasPrefix("Contrast"), let foot = pageFoot,
-               let box = Self.frame(in: line), box.minY >= foot - 0.5 {
+               let box = Self.frame(in: line), box.minY >= foot - 0.5,
+               Self.musicMoreIsPageContent(box, pageContent) {
                 clippedAway.append(line)
                 return false
             }
