@@ -107,7 +107,18 @@ public enum MusicMoreStrings {
     public static let shuffleHere = "shuffle on this device"
 
     /// The section label over the two phone buttons.
-    public static let playHereLabel = "play on this phone"
+    ///
+    /// **`this device`, not `this phone`.** It said "play on this phone" and
+    /// stood over two buttons reading `play on this device` and `shuffle on
+    /// this device` — a label and its own controls disagreeing about what
+    /// the thing is called. Android's word is `device`
+    /// (`MusicScreen.kt:583`: *playing "X" on this device*), so that is the
+    /// Android-faithful half of the pair to keep (BATCH-RULES §4: take the
+    /// Android-faithful choice and log it rather than stopping to ask). The
+    /// unit's REPORT and DECISIONS carried this as a wording question for
+    /// Kamron in the first pass; it is settled here, and he can still prefer
+    /// `phone` — in which case it is these three constants, not one.
+    public static let playHereLabel = "play on this device"
 
     /// What a start on this phone says (`MusicScreen.kt:583`).
     ///

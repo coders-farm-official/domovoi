@@ -251,8 +251,10 @@ final class MusicStatsAndSheetTests: XCTestCase {
     /// `allCases` — the MusicMore batch added `playlists` and `player`, and
     /// since the 2026-11-03 batch both ship: ``PlayerModelMusicEngine``
     /// conforms to ``MusicMorePlayerEngine``, so `hasPlayer` is true wherever
-    /// ``ShellModel/player`` is. It stays **false on a phone with no device
-    /// id**, which is what the first assertion is now about.
+    /// ``ShellModel/player`` is. It stays false where that is nil — a build
+    /// with no audio engine, and not a phone that has not joined a house, as
+    /// this note said until review 2 of the 2026-11-03 batch — which is what
+    /// the first assertion is about.
     func testTheTabsAreTheOnesThatHaveSomethingBehindThem() {
         XCTAssertEqual([.library, .queue, .playlists, .stats], MusicTab.shown(hasPlayer: false))
         XCTAssertEqual(

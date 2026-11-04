@@ -151,8 +151,10 @@ extension StubHouseUITests {
         // whatever the person was already listening to.
         //
         // `play on this device` is the wording MusicMore's playlist sheet
-        // uses and `play <name>` is the row controls'; `play here` is nobody's
-        // and is kept because a screen that grew one would be a screen
+        // uses — its section label and both its buttons, since the fix pass
+        // of 2026-11-04 made them agree — and `play <name>` is the row
+        // controls'. `play here` and `play on this phone` are nobody's, and
+        // both are kept because a screen that grew one would be a screen
         // nothing in this batch decided.
         for offer in ["play on this phone", "play on this device", "play here"] {
             let found = app.descendants(matching: .button)

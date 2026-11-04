@@ -51,7 +51,7 @@ struct MusicPlaylistSheet: View {
 
     /// This phone's own queue, or nil on a build with no player.
     ///
-    /// Nil leaves out the `play on this phone` section entirely — not
+    /// Nil leaves out the `play on this device` section entirely — not
     /// greyed, absent — which is what a build with no audio engine gets
     /// (``MusicLocalQueueModel/mayPlayHere``, and ``ShellModel/player`` for
     /// which states those are: not a phone that has not joined a house).
