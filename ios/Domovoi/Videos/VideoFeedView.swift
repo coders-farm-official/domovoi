@@ -248,9 +248,23 @@ struct VideoFeedView: View {
             // Closing is **per case**, read from what is actually open rather
             // than clearing both: a swipe-down that reset everything would
             // throw away a save in flight behind the sheet.
+            //
+            // **The options sheet is closed with the share sheet.** It is
+            // still open underneath — `save(_:)` leaves it there on purpose,
+            // because it is where the percentage and the stop are drawn — so
+            // taking the file and returning would leave `feed?.sheet` set to
+            // `.options`, the getter would run again and the options sheet
+            // would pop back up over the player the moment the person
+            // finished sharing (REVIEW-1 finding 5). Android closes its sheet
+            // on the tap instead (`VideoFeed.kt:459`); here it closes when
+            // the thing it was drawing is done with.
             set: { next in
                 guard next == nil else { return }
-                if case .ready = videos.saves.state { return videos.saves.taken() }
+                if case .ready = videos.saves.state {
+                    videos.saves.taken()
+                    feed?.closeSheet()
+                    return
+                }
                 feed?.closeSheet()
             }
         )

@@ -32,8 +32,13 @@ final class SaveToDeviceModelTests: XCTestCase {
         XCTAssertEqual("film.mkv", name)
         XCTAssertEqual("a film", (try? String(contentsOf: url, encoding: .utf8)))
         XCTAssertEqual(
-            FileSaveModel.spool, url.deletingLastPathComponent().lastPathComponent,
-            "the copy goes in the save's own directory, which is emptied on the way in"
+            model.slot, url.deletingLastPathComponent().lastPathComponent,
+            "the copy goes in THIS saver's own directory, not in a shared one"
+        )
+        XCTAssertEqual(
+            FileSaveModel.spool,
+            url.deletingLastPathComponent().deletingLastPathComponent().lastPathComponent,
+            "and that directory is inside the spool"
         )
 
         model.taken()
@@ -271,15 +276,15 @@ final class SaveToDeviceModelTests: XCTestCase {
     /// — or an app that was killed mid-save. Either way the next save is what
     /// clears it.
     func testASaveEmptiesTheSpoolOnTheWayIn() async throws {
-        let spool = try FileSaveModel.emptySpool()
-        let stray = spool.appendingPathComponent("left over from last time.mkv", isDirectory: false)
-        try Data(count: 4096).write(to: stray, options: .atomic)
-        XCTAssertTrue(FileManager.default.fileExists(atPath: stray.path))
-
         let model = SaveToDeviceModel(fetch: { _, into, _ in
             try Data("x".utf8).write(to: into, options: .atomic)
             return into
         })
+        let spool = try FileSaveModel.emptySpool(slot: model.slot)
+        let stray = spool.appendingPathComponent("left over from last time.mkv", isDirectory: false)
+        try Data(count: 4096).write(to: stray, options: .atomic)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: stray.path))
+
         model.save(path: "/api/files/download?path=b.mp3", named: "b.mp3")
         await settle({ if case .ready = model.state { return true } else { return false } }, "the file")
         XCTAssertFalse(
@@ -287,6 +292,91 @@ final class SaveToDeviceModelTests: XCTestCase {
             "a file from an earlier save is still in the spool"
         )
         model.taken()
+    }
+
+    /// **Two savers do not clear each other's directory.**
+    ///
+    /// REVIEW-1 finding 1, and the shape of the bug it is about: `emptySpool`
+    /// deleted one `domovoi-saved` at the start of **every** save, while
+    /// ``FilesModel`` holds a saver and ``VideosModel`` holds another and a
+    /// `TabView` keeps both alive. Switching tabs and tapping save therefore
+    /// removed the directory the first screen's half-finished download was
+    /// pointed at: `didFinishDownloadingTo`'s move threw, `downloadFile`
+    /// turned that into ``TransferStrings/couldNotWrite`` and Files told the
+    /// person to check the storage on a phone with plenty of it.
+    ///
+    /// Driven from **inside** the first save's round trip, which is the only
+    /// position the bug exists in: the second save is started while the first
+    /// one is waiting, and then the first one is let through and asked
+    /// whether its destination survived.
+    func testTwoSaversDoNotClearEachOthersSpool() async throws {
+        let held = Gate()
+        let films = SaveToDeviceModel(fetch: { _, into, _ in
+            // The destination's directory is read **after** the wait, as the
+            // real transport reads it: `URLSession` moves the finished file
+            // into place when the body has arrived, not when the task was
+            // made.
+            await held.wait()
+            guard FileManager.default.fileExists(atPath: into.deletingLastPathComponent().path) else {
+                // What the platform does: no directory, no move. The wording
+                // is the client's own for a failed move.
+                throw DomovoiError.unreachable(TransferStrings.couldNotWrite)
+            }
+            try Data("a film".utf8).write(to: into, options: .atomic)
+            return into
+        })
+        let videos = SaveToDeviceModel(fetch: { _, into, _ in
+            try Data("a clip".utf8).write(to: into, options: .atomic)
+            return into
+        })
+        XCTAssertNotEqual(films.slot, videos.slot, "two savers were given one directory")
+
+        films.save(path: "/api/files/download?path=film.mkv", named: "film.mkv")
+        // The other screen, mid-flight. This is the tap that used to break
+        // the save above.
+        videos.save(path: "/api/videos/stream?id=7&download=1", named: "a clip.mp4")
+        await settle({ if case .ready = videos.state { return true } else { return false } },
+                     "the second screen's file")
+
+        held.open()
+        await settle({ if case .ready = films.state { return true } else { return false } },
+                     "the first screen's file")
+        guard case .ready(let film, _) = films.state else {
+            return XCTFail("the first save failed: \(films.state)")
+        }
+        XCTAssertEqual("a film", (try? String(contentsOf: film, encoding: .utf8)))
+        guard case .ready(let clip, _) = videos.state else { return XCTFail("not ready") }
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: clip.path),
+            "the second screen's finished file was deleted by the first screen's save"
+        )
+        films.taken()
+        videos.taken()
+    }
+
+    /// A failed write says it **once**.
+    ///
+    /// ``DomovoiClient/downloadFile(path:into:trackPairing:onProgress:)``
+    /// throws ``TransferStrings/couldNotWrite``, which is already a whole
+    /// sentence about saving; wrapping it in
+    /// ``TransferStrings/couldNotSave(_:)`` read "couldn't save: couldn't
+    /// write it onto this phone — check your storage" (REVIEW-1 note 10).
+    /// Every other failure is still wrapped, which the second half asserts.
+    func testAFailedWriteIsNotSaidTwice() async {
+        let model = SaveToDeviceModel(fetch: { _, _, _ in
+            throw DomovoiError.unreachable(TransferStrings.couldNotWrite)
+        })
+        model.save(path: "/api/files/download?path=film.mkv", named: "film.mkv")
+        await settle({ if case .failed = model.state { return true } else { return false } }, "the refusal")
+        XCTAssertEqual(.failed(TransferStrings.couldNotWrite), model.state)
+
+        let other = SaveToDeviceModel(fetch: { _, _, _ in
+            throw DomovoiError.noServer
+        })
+        other.save(path: "/api/files/download?path=film.mkv", named: "film.mkv")
+        await settle({ if case .failed = other.state { return true } else { return false } }, "the refusal")
+        guard case .failed(let why) = other.state else { return XCTFail("not failed") }
+        XCTAssertTrue(why.hasPrefix("couldn't save: "), "an ordinary failure lost its lead-in: \(why)")
     }
 
     // MARK: - the helpers

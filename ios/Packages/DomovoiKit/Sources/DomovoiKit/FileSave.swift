@@ -34,9 +34,20 @@ public final class FileSaveModel {
 
     /// Where saved copies are written before the person is handed one.
     ///
-    /// The app's own temporary directory: iOS empties it, and
-    /// ``emptySpool()`` empties it on the way in so that one file is in
-    /// flight at a time and nothing accumulates.
+    /// The app's own temporary directory, which iOS empties. **One directory
+    /// per saver** underneath it (``spoolDirectory(slot:)``), because there
+    /// is more than one saver: ``FilesModel`` holds one, ``VideosModel``
+    /// holds another, and the player unit's rows add two more. They live at
+    /// the same time — a `TabView` keeps both screens' models alive — so a
+    /// single directory emptied on the way in would mean a save started on
+    /// one screen deleting the destination of a save in flight on another.
+    /// That is review finding 1 of REVIEW-1: it surfaced as "couldn't save:
+    /// couldn't write it onto this phone — check your storage" about a phone
+    /// with plenty of storage, because the missing directory failed the move
+    /// in `didFinishDownloadingTo`.
+    ///
+    /// `PhoneUploadSpool` was given its own directory for exactly this reason
+    /// one file over (``PhoneMediaSource``), and this is the same answer.
     public static let spool = "domovoi-saved"
 
     /// One state for every screen that saves, so the shared control
@@ -128,22 +139,39 @@ public final class FileSaveModel {
         return String(trimmed.map { $0 == ":" || $0 == "\0" ? "_" : $0 })
     }
 
-    /// The spool, emptied. One file is in flight at a time.
+    /// One saver's own directory inside the spool. It may not exist yet.
+    ///
+    /// Taking the directory and emptying it are two functions on purpose: a
+    /// test that plants a stray file to watch it swept needs to know where to
+    /// plant it without sweeping anything first.
+    public static func spoolDirectory(slot: String) -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent(Self.spool, isDirectory: true)
+            .appendingPathComponent(slot, isDirectory: true)
+    }
+
+    /// One saver's directory, emptied. That saver has one file in flight at a
+    /// time; **another saver's directory is not touched**, which is the whole
+    /// point of the slot (see the note on ``spool``).
     ///
     /// Separated from ``write(_:named:)`` because the streaming path needs
     /// the **directory** before the bytes exist: `downloadFile` is handed a
     /// destination inside it and the system moves the finished file there.
     @discardableResult
-    public static func emptySpool() throws -> URL {
-        let spool = FileManager.default.temporaryDirectory
-            .appendingPathComponent(Self.spool, isDirectory: true)
+    public static func emptySpool(slot: String) throws -> URL {
+        let spool = spoolDirectory(slot: slot)
         try? FileManager.default.removeItem(at: spool)
         try FileManager.default.createDirectory(at: spool, withIntermediateDirectories: true)
         return spool
     }
 
+    /// The slot ``write(_:named:)`` uses — a name no ``SaveToDeviceModel``
+    /// can be given, since those are numbered.
+    static let writtenSlot = "written"
+
     static func write(_ bytes: Data, named name: String) throws -> URL {
-        let url = try emptySpool().appendingPathComponent(name, isDirectory: false)
+        let url = try emptySpool(slot: writtenSlot)
+            .appendingPathComponent(name, isDirectory: false)
         try bytes.write(to: url, options: .atomic)
         return url
     }

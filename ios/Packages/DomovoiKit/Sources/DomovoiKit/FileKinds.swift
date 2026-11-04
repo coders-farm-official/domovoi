@@ -16,7 +16,7 @@ import Foundation
 /// editor, the text editor, the image viewer or another app. This app has no
 /// editors — editing documents is the dashboard's job and no iOS screen in
 /// this batch writes a file — so the question it answers is a different one
-/// (``FileKinds/action(for:in:saveCap:)``), with four answers of its own, and
+/// (``FileKinds/action(for:in:)``), with four answers of its own, and
 /// one of them is "there is no control for this". A port that kept the
 /// Kotlin's four names would have had to make two of them lie.
 public enum FileKinds {

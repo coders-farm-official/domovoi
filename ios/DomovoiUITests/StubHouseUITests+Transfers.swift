@@ -279,6 +279,150 @@ extension StubHouseUITests {
                       "the video was fetched and never offered")
         evidence(app, "48-feed-video-saved")
         dismissShareSheet(app)
+
+        // **And the options sheet does not come back.** The sheet was left
+        // open under the share sheet on purpose (it is where the percentage
+        // and the stop are drawn), so dismissing the share sheet used to
+        // re-present it over the player: the binding took the file and
+        // returned, the feed's own `sheet` was still `.options`, and the
+        // getter ran again (REVIEW-1 finding 5). Android closes its sheet on
+        // the tap (`VideoFeed.kt:459`).
+        let options = app.buttons["save to device"]
+        XCTAssertTrue(
+            waitForAbsence(options, timeout: 15),
+            "the options sheet re-presented itself as soon as the share sheet was dismissed"
+        )
+        evidence(app, "48-feed-after-sharing")
+    }
+
+    /// **The save from the Files viewer**, which is the third of the four
+    /// call sites and had no case of its own.
+    ///
+    /// `logo.svg` is an image the phone cannot decode, so the viewer draws
+    /// ``FileStrings/notAPicture`` and offers the one way out that does work
+    /// (`FileViewers.swift`'s `notAPicture`). That branch is wired to the
+    /// same ``SaveToDeviceModel`` the row tap uses, and nothing drove it
+    /// until now: `testAPictureIsShownAndAnSvgSaysItCannotBe` asserts the
+    /// control **exists**, and this one taps it.
+    @MainActor
+    func testTransfers_APictureThisPhoneCannotShowIsSavedFromTheViewer() throws {
+        transfersReset()
+        let (app, landed) = openFiles()
+        XCTAssertTrue(landed, "the folder never answered")
+        XCTAssertTrue(pickLibrary(app, "Documents"), "the library picker never opened")
+
+        let svg = app.buttons["logo.svg"]
+        XCTAssertTrue(svg.waitForExistence(timeout: 20), "Documents never listed")
+        svg.tap()
+        XCTAssertTrue(
+            app.staticTexts["not a picture this phone can show"].waitForExistence(timeout: 20),
+            "the viewer never said it could not draw this one"
+        )
+        let save = app.buttons["save to device"]
+        XCTAssertTrue(save.waitForExistence(timeout: 10), "the viewer offers no way out")
+        save.tap()
+
+        // The viewer closes and the share sheet is the completion — that
+        // order matters, because two sheets cannot both be up and a save
+        // stranded behind the viewer would be a file left in the container.
+        XCTAssertTrue(shareSheetAppeared(app, "a save from the picture viewer"),
+                      "the viewer's save fetched the file and never offered it")
+        evidence(app, "56-files-viewer-saved")
+        dismissShareSheet(app)
+    }
+
+    /// **The save from the document reader**, the fourth call site.
+    ///
+    /// `weird.txt` is a document the house refuses to decode — a 415 with
+    /// `binary` as its reason, which is the real route's own answer
+    /// (`documents.py:871`) — so the reader draws the refusal and the save
+    /// beneath it (`FileViewers.swift`'s `refusal`). The same control, the
+    /// same model, a different screen.
+    @MainActor
+    func testTransfers_ADocumentThisPhoneCannotShowIsSavedFromTheReader() throws {
+        transfersReset()
+        let (app, landed) = openFiles()
+        XCTAssertTrue(landed, "the folder never answered")
+        XCTAssertTrue(pickLibrary(app, "Documents"), "the library picker never opened")
+
+        let document = app.buttons["weird.txt"]
+        XCTAssertTrue(document.waitForExistence(timeout: 20), "Documents never listed")
+        document.tap()
+        // The server's reason in the app's words
+        // (``FileStrings/notShowable(_:)`` for `binary`).
+        let refused = app.staticTexts["not a text file"]
+        XCTAssertTrue(
+            refused.waitForExistence(timeout: 20),
+            "the reader never said why it could not show this one"
+        )
+        let save = app.buttons["save to device"]
+        XCTAssertTrue(save.waitForExistence(timeout: 10), "the reader offers no way out")
+        save.tap()
+
+        XCTAssertTrue(shareSheetAppeared(app, "a save from the document reader"),
+                      "the reader's save fetched the file and never offered it")
+        evidence(app, "56-files-reader-saved")
+        dismissShareSheet(app)
+    }
+
+    // MARK: - D66, measured
+
+    /// **A long tile name really wraps at an accessibility size.**
+    ///
+    /// This is the measurement REVIEW-1 finding 7 asked for. D66 made the
+    /// grid's caption `.lineLimit(dynamicTypeSize.isAccessibilitySize ? nil
+    /// : 2)` (`VideosView.swift:277`), and the only thing that had been
+    /// measured about it was that the caption grows with the type size —
+    /// which a single line does too. So nothing said whether the wrap
+    /// happened, and `testTheVideosGridAudits` was left to find out by
+    /// failing.
+    ///
+    /// The claim that discriminates: **at an accessibility size the longer
+    /// title is taller than the shorter one.** With a two-line ceiling both
+    /// are capped at two lines and the heights are equal; with no ceiling the
+    /// twenty-character name takes more lines than the fourteen-character one
+    /// and is strictly taller. Put the `lineLimit(2)` back and this case
+    /// fails.
+    ///
+    /// `AccessibilityM` rather than AX5: it is the **smallest** size at which
+    /// `isAccessibilitySize` is true, so the rule under test is on while the
+    /// grid still fits enough on a screen for both tiles to be reached. At
+    /// AX5 the count line alone is 105 points tall and finding a particular
+    /// second tile is forty flicks of luck
+    /// (``testTheVideosGridTextGrowsAtAX5`` says so at length).
+    @MainActor
+    func testTransfers_ALongVideoNameWrapsRatherThanClippingAtAnAccessibilitySize() throws {
+        let short = "a long one.mp4"
+        let long = "01 she said \"no\".mp4"
+        let (app, _) = openVideos("UICTContentSizeCategoryAccessibilityM")
+
+        // Both captions, taken as they appear while the page is flicked: a
+        // lazy grid's foot is unbuilt rather than off screen, and at an
+        // accessibility size the second tile may be the far side of a tall
+        // header.
+        var seen: [String: CGFloat] = [:]
+        for flick in 0...20 {
+            for label in [short, long] where seen[label] == nil {
+                let text = app.staticTexts[label].firstMatch
+                if text.exists { seen[label] = text.frame.height }
+            }
+            if flick == 0 { evidence(app, "66-videos-grid-accessibility-size") }
+            if seen.count == 2 { break }
+            phoneSourceFlick(app)
+        }
+        for (label, height) in seen.sorted(by: { $0.key < $1.key }) {
+            print("WRAP [AccessibilityM] \(label) height=\(height)")
+        }
+        guard let shortHeight = seen[short], let longHeight = seen[long] else {
+            print("=== BOTH CAPTIONS NOT FOUND (\(seen)) — tree follows ===")
+            print(app.debugDescription)
+            return XCTFail("the two captions could not be measured, so this proved nothing")
+        }
+        XCTAssertGreaterThan(
+            longHeight, shortHeight,
+            "the two captions are the same height at an accessibility size, which is what a "
+                + "two-line ceiling does: the longer name is being clipped, not wrapped"
+        )
     }
 
     // MARK: - uploading
@@ -356,6 +500,24 @@ extension StubHouseUITests {
         let reported = counting.waitForExistence(timeout: 60)
         evidence(app, "phonemedia-big-upload-percent")
         XCTAssertTrue(reported, "a 200 MiB upload never reported a percentage")
+
+        // **And a sighted person can see it.** The assertion above is the
+        // button's accessibility label, and for a while that was the only
+        // place the number existed — the row drew a spinner and no digits
+        // anywhere (REVIEW-1 finding 3). The drawn number is its own element,
+        // found by identifier so that this cannot match the label it is
+        // beside.
+        let drawn = app.staticTexts
+            .matching(identifier: "transfers-upload-percent")
+            .firstMatch
+        XCTAssertTrue(
+            drawn.waitForExistence(timeout: 60),
+            "the percentage is in the accessibility label and nowhere on the screen"
+        )
+        XCTAssertTrue(
+            drawn.label.hasSuffix("%"),
+            "the drawn number is not a percentage: \(drawn.label)"
+        )
 
         let done = startingWith(app, "uploaded \"grendalf huge raw.wav\" to Documents")
         let finished = done.waitForExistence(timeout: 180)

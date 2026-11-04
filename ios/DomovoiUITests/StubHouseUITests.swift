@@ -2198,12 +2198,13 @@ final class StubHouseUITests: XCTestCase {
     /// measurement contradicts, and a contrast finding the scroll view's own
     /// bottom edge cuts in half. Everything else is a defect to fix.
     ///
-    /// It was three until D66. The third classified a `Text clipped`
-    /// prediction against a poster tile's caption as the design, on the
-    /// grounds that two lines was the limit at every type size; the caption
-    /// wraps at accessibility sizes now, so that argument no longer holds and
-    /// the branch is gone. The reasoning, and what its removal costs, are at
-    /// the place it stood.
+    /// The third classifies a `Text clipped` prediction against a poster
+    /// tile's caption. It was removed when D66 landed and is back, reworded:
+    /// what D66 changed is what happens at **accessibility** sizes, and this
+    /// case runs at `large`, where two lines is still the design. What
+    /// settles it is a measurement rather than an argument —
+    /// `testTransfers_ALongVideoNameWrapsRatherThanClippingAtAnAccessibilitySize`
+    /// (REVIEW-1 finding 7).
     @MainActor
     @available(iOS 17.0, *)
     func testTheVideosGridAudits() throws {
@@ -2252,41 +2253,52 @@ final class StubHouseUITests: XCTestCase {
                box.minY < bottom, box.maxY > bottom {
                 return false
             }
-            // **There is no `Text clipped` branch here any more** (D66).
+            // A `Text clipped` prediction against a poster tile's
+            // caption, which at **this** size is the design.
             //
-            // One used to sit at this exact spot, classifying a `Text
-            // clipped` prediction against a poster tile's caption as the
-            // design: the caption was `.lineLimit(2)` at every type size, two
-            // lines was more generous than Android's one
-            // (`VideosScreen.kt:293`), and the tile's own accessibility label
-            // carried the whole title, so nothing was lost to a reader who
-            // could not see it. The branch's own comment admitted the
-            // headline was "not even a stable function of the element's
-            // geometry" — train R004 raised it against `01 she said
+            // The caption is `.lineLimit(2)` at ordinary sizes, which is more
+            // generous than Android's one line (`VideosScreen.kt:293`), and
+            // the tile itself is a button whose accessibility label carries
+            // the whole title — so a third line's worth of name is not lost
+            // to anybody, it is one tap away and it is already spoken.
+            //
+            // ### Why this branch went away and came back
+            //
+            // It was removed when D66 landed, on the grounds that "two lines
+            // is the design at every type size" had stopped being true:
+            // `VideosView` now reads
+            // `.lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 2)`.
+            // That was right about the argument and wrong about the case —
+            // this case runs at `large`, where the limit is still two lines,
+            // so all the removal did was arrange for a legitimate finding to
+            // come back as a red with no explanation attached (REVIEW-1
+            // finding 7). The wording above is the narrower claim, which is
+            // the true one: two lines is the design **here**, and where it is
+            // not, the names wrap.
+            //
+            // And that half is now measured rather than asserted:
+            // `testTransfers_ALongVideoNameWrapsRatherThanClippingAtAnAccessibilitySize`
+            // compares the fourteen- and twenty-character captions at an
+            // accessibility size and fails if they come back the same height,
+            // which is what a two-line ceiling does. A classification that
+            // rests on a measurement somewhere else is the only kind this
+            // project keeps ([[reasoning-that-hides-a-bug]]).
+            //
+            // The headline itself is still not a stable function of the
+            // element's geometry — train R004 raised it against `01 she said
             // "no".mp4` and train I001 did not raise it against the same leaf
-            // at the same width one strip lower.
+            // at the same width one strip lower — so this is written as "if
+            // it is raised", never as "it is raised".
             //
-            // Kamron asked for the tile's name to **wrap** at accessibility
-            // sizes, and `VideosView` now reads
-            // `.lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 2)`. A
-            // caption that runs to as many lines as it needs where the text
-            // is large is a different claim from "two lines is the design at
-            // every size", and the old branch argued the second one. It is
-            // gone rather than reworded, because a classification resting on
-            // an unstable headline and a superseded argument is the kind of
-            // comment this project treats as a review target rather than as
-            // evidence ([[reasoning-that-hides-a-bug]]).
-            //
-            // **What this costs, written down rather than discovered.** This
-            // case runs at `large`, where the limit is still two lines, so
-            // the audit may raise that prediction again — and the case will
-            // then fail instead of explaining it. That is the intended
-            // trade: the next run looks at the finding against a design that
-            // wraps where it matters, rather than at an argument from before
-            // it did. The branch's text is kept verbatim in
-            // `design-notes/ios/batch-2026-11-03/transfers/DECISIONS.md`, so
-            // putting it back is one paste if the finding returns and is
-            // still the design.
+            // The condition is the argument: the finding names an element
+            // whose whole label is also a BUTTON's on this screen, which is
+            // the poster tile the caption belongs to. The count line and the
+            // headings are static text and nothing else, so they are not
+            // excused by this.
+            if line.hasPrefix("Text clipped"), let said = label(in: line),
+               app.buttons[said].exists {
+                return false
+            }
             return true
         }
         XCTAssertEqual(

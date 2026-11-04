@@ -207,7 +207,13 @@ final class FileSaveAndViewTests: XCTestCase {
     func testTheCopyLandsInTheSpool() throws {
         let url = try FileSaveModel.write(Data("abc".utf8), named: "a song.mp3")
         XCTAssertEqual("a song.mp3", url.lastPathComponent)
-        XCTAssertEqual(FileSaveModel.spool, url.deletingLastPathComponent().lastPathComponent)
+        // Inside the spool, in a slot of its own: every saver gets one so
+        // that two of them never clear each other's directory (the note on
+        // ``FileSaveModel/spool``).
+        XCTAssertEqual(
+            FileSaveModel.spool,
+            url.deletingLastPathComponent().deletingLastPathComponent().lastPathComponent
+        )
         XCTAssertEqual("abc", try String(contentsOf: url, encoding: .utf8))
         try? FileManager.default.removeItem(at: url)
     }

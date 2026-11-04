@@ -5,7 +5,7 @@ import SwiftUI
 ///
 /// `ui/screens/local/DeviceUpload.kt:323`'s `UploadRowButton`.
 ///
-/// ### The percentage, which is real now (D43)
+/// ### The percentage, which is real now and is on the screen (D43)
 ///
 /// Android streams the body and reports whole percent as it writes
 /// (`PhoneUpload.kt:52`). This app could not: `DomovoiClient.raw` takes
@@ -16,6 +16,23 @@ import SwiftUI
 /// so the ring is **determinate** when the number is known and indeterminate
 /// only when it is not — and ``PhoneMediaStrings/uploadingLabel(_:)``, which
 /// always took a percent for Android's sake, now gets one.
+///
+/// **And the number is drawn.** Two things were wrong when this file was
+/// first written (REVIEW-1 finding 3): the "determinate" ring was
+/// `ProgressView(value:).progressViewStyle(.circular)`, which on iOS ignores
+/// the fraction and draws the indeterminate spinner; and the percentage
+/// existed only in the button's accessibility label, so a sighted person saw
+/// a spinner and no number — while Android puts whole percent in a
+/// notification this app has none of. The ring is
+/// ``TransferProgressRing`` now, and ``TransferStrings/percent(_:)`` sits
+/// beside it.
+///
+/// VoiceOver therefore hears the number twice: once in the button's label
+/// (Android's own sentence, kept word for word) and once from the text. That
+/// is the trade taken on purpose — a number only VoiceOver can reach is
+/// worse than a number read twice — and the text is a **separate** element
+/// rather than a hidden one so that a UI case can tell the two apart
+/// (`testTransfers_ABigPhoneFileGoesThroughTheStreamedDoor` asserts both).
 ///
 /// ### What is not drawn, and why
 ///
@@ -34,12 +51,55 @@ struct PhoneUploadRowButton: View {
     let state: PhoneUploadButtonState
     let onTap: () -> Void
 
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
     /// The 48-point box Android draws (`DeviceUpload.kt:324`), scaled: an
     /// icon-only control sized in fixed points is the thing that stops
     /// growing when everything around it does.
     @ScaledMetric(relativeTo: .body) private var box: CGFloat = 48
 
+    /// The identifier the UI case finds the drawn number by. A query for the
+    /// percentage would otherwise match the button's own label and pass
+    /// whether or not anything was on the screen.
+    static let percentID = "transfers-upload-percent"
+
     var body: some View {
+        // The number next to the ring while one is known, and nothing but the
+        // control otherwise. A row at ordinary sizes and a column at
+        // accessibility ones (the standing rule): "100%" at AX5 is wider than
+        // the control it belongs to.
+        if case .busy(let percent) = state, let percent {
+            if dynamicTypeSize.isAccessibilitySize {
+                VStack(alignment: .trailing, spacing: 2) {
+                    percentText(percent)
+                    control
+                }
+            } else {
+                HStack(spacing: 4) {
+                    percentText(percent)
+                    control
+                }
+            }
+        } else {
+            control
+        }
+    }
+
+    private func percentText(_ percent: Int) -> some View {
+        Text(TransferStrings.percent(percent))
+            .font(.caption)
+            // So "9%" and "100%" do not shuffle the ring sideways on every
+            // chunk.
+            .monospacedDigit()
+            .foregroundStyle(Color.fgMuted)
+            // The row's own canvas is the list's, which is what `fgMuted` was
+            // measured against; the refused card below uses `primary` because
+            // its fill is not.
+            .fixedSize()
+            .accessibilityIdentifier(Self.percentID)
+    }
+
+    private var control: some View {
         Button(action: onTap) {
             face
                 .frame(width: box, height: box)
@@ -74,10 +134,11 @@ struct PhoneUploadRowButton: View {
             // indeterminate when it did not — a ring pinned at 0 reads as a
             // stall, which is what `ProgressView(value: 0)` would draw for
             // the first chunk of a gigabyte.
+            //
+            // The determinate one is ``TransferProgressRing``: see the note
+            // on the type for why `ProgressView(value:)` was not one.
             if let percent {
-                ProgressView(value: Double(percent) / 100)
-                    .progressViewStyle(.circular)
-                    .accessibilityHidden(true)
+                TransferProgressRing(share: Double(percent) / 100, diameter: box * 0.55)
             } else {
                 ProgressView()
                     .progressViewStyle(.circular)

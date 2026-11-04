@@ -12,6 +12,13 @@ import XCTest
 /// a percentage does at its three edges.
 final class TransferUploadTests: XCTestCase {
 
+    override func setUp() {
+        super.setUp()
+        // The socket cases below share one recorder with every other file
+        // that uses it. Reset, as `DomovoiClientTests` does.
+        StubURLProtocol.reset()
+    }
+
     // MARK: - the file a source hands over
 
     /// A source that answers bytes and nothing else gets the **default**
@@ -261,6 +268,250 @@ final class TransferUploadTests: XCTestCase {
         XCTAssertEqual(
             0, transferPercent(sent: 1, of: 8 * 1024 * 1024 * 1024),
             "the first chunk of an eight-gigabyte file is 0%, not a rounding error"
+        )
+    }
+
+    // MARK: - the two tails, against a socket that records what left
+
+    /// **Why this section exists.** REVIEW-1 finding 2: nothing in the
+    /// repository exercised ``DomovoiClient/uploadFile(method:path:fileURL:contentType:trackPairing:onProgress:)``
+    /// or ``DomovoiClient/downloadFile(path:into:trackPairing:onProgress:)``
+    /// at all, so deleting the `X-Requested-With` header from either left the
+    /// whole suite green while every phone upload would have 403'd against
+    /// the real door (`/api/files/upload-stream` is `require_device` **and**
+    /// `require_requested_with`, `web/backend/api/files.py:1189-1193`). The
+    /// same gap left both delegates' redirect forwarding, the streamed
+    /// `noteTokenHealth` and the bounded refusal-body read unexercised.
+    ///
+    /// ``StubURLProtocol`` reaches no network, as everywhere else on this
+    /// track, and it records what *left* the phone rather than only what came
+    /// back — which is the only position from which a missing header is
+    /// visible.
+    private var server: String { "http://10.0.0.9:6369" }
+
+    private func makeClient(health: TokenHealth? = nil) -> DomovoiClient {
+        DomovoiClient(
+            book: .fixed(server: server, token: "household-abc"),
+            gate: AdmitsAnyServer(),
+            health: health,
+            lock: HouseholdLock(),
+            configuration: StubURLProtocol.session()
+        )
+    }
+
+    /// A file on disk with `bytes` in it, in a directory deleted when the
+    /// case ends.
+    private func temporaryFile(_ bytes: Data, named name: String = "clip.mov") throws -> URL {
+        let file = try temporaryDirectory().appendingPathComponent(name, isDirectory: false)
+        try bytes.write(to: file, options: .atomic)
+        return file
+    }
+
+    private func temporaryDirectory() throws -> URL {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("transfer-tests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        return directory
+    }
+
+    /// `XCTAssertThrowsError` has no async form; `DomovoiClientTests` uses the
+    /// same shape.
+    private func failure<T>(_ body: () async throws -> T) async -> DomovoiError? {
+        do {
+            _ = try await body()
+            return nil
+        } catch let error as DomovoiError {
+            return error
+        } catch {
+            XCTFail("not a DomovoiError: \(error)")
+            return nil
+        }
+    }
+
+    /// **The header the real door requires, and the body that really streamed.**
+    ///
+    /// Four claims about one request: the identity header the route checks,
+    /// the household token, the content type the caller chose, and the file's
+    /// own bytes arriving as the body (`URLSession` hands a `URLProtocol` the
+    /// upload as a stream, which ``StubURLProtocol`` reads back — see the note
+    /// on its `body(of:)`).
+    func testTheStreamedUploadCarriesTheHeadersTheRealDoorRequires() async throws {
+        StubURLProtocol.enqueue(.json(#"{"saved":["clip.mov"]}"#))
+        let sent = Data("a clip, longer than nothing".utf8)
+        let file = try temporaryFile(sent)
+        let answer = try await makeClient().uploadFile(
+            method: "POST",
+            path: "/api/files/upload-stream?library_id=core%3Adocuments",
+            fileURL: file,
+            contentType: "video/quicktime"
+        )
+
+        XCTAssertEqual(1, StubURLProtocol.requestCount)
+        XCTAssertEqual(
+            "DomovoiApp", StubURLProtocol.header("X-Requested-With", at: 0),
+            "without this header the real upload-stream route refuses every phone upload"
+        )
+        XCTAssertEqual(
+            "household-abc", StubURLProtocol.header(deviceTokenHeader, at: 0),
+            "the streamed tail goes through prepare(), so it is paired like every other request"
+        )
+        XCTAssertEqual("video/quicktime", StubURLProtocol.header("Content-Type", at: 0))
+        XCTAssertEqual("POST", StubURLProtocol.recorded[0].httpMethod)
+        XCTAssertEqual(
+            sent, StubURLProtocol.recorded[0].httpBody,
+            "the body is the FILE: a request that sent nothing would pass every other assertion here"
+        )
+        XCTAssertEqual(#"{"saved":["clip.mov"]}"#, String(decoding: answer, as: UTF8.self))
+    }
+
+    /// The same two headers on the save, which the same route rules cover,
+    /// and the file where the caller asked for it.
+    func testTheStreamedSaveCarriesTheHeadersAndWritesWhereItWasAsked() async throws {
+        StubURLProtocol.enqueue(.json("the film's bytes"))
+        let into = try temporaryDirectory().appendingPathComponent("film.mkv", isDirectory: false)
+        let landed = try await makeClient()
+            .downloadFile(path: "/api/files/download?path=film.mkv", into: into)
+
+        XCTAssertEqual("DomovoiApp", StubURLProtocol.header("X-Requested-With", at: 0))
+        XCTAssertEqual("household-abc", StubURLProtocol.header(deviceTokenHeader, at: 0))
+        XCTAssertEqual(into, landed)
+        XCTAssertEqual("the film's bytes", try String(contentsOf: landed, encoding: .utf8))
+    }
+
+    /// **The upload's redirect forwarding.** A hop to another host goes out
+    /// bare.
+    ///
+    /// This is the assertion that fails if ``TransferSendDelegate``'s
+    /// `willPerformHTTPRedirection` stops forwarding to `RedirectDelegate`'s
+    /// `followUp(response:)`: with no delegate method at all the platform
+    /// follows the hop by itself and **copies the headers across**, so the
+    /// household token would reach whatever host the answer named. Security
+    /// round 3 found that on both apps.
+    func testAnUploadRedirectedToAnotherHostDoesNotCarryTheToken() async throws {
+        StubURLProtocol.enqueue(
+            .moved(302, to: "http://10.0.0.10:6369/grab.mov"),
+            .json("{}")
+        )
+        let file = try temporaryFile(Data("a clip".utf8))
+        _ = try await makeClient().uploadFile(
+            method: "POST",
+            path: "/api/files/upload-stream",
+            fileURL: file,
+            contentType: "video/quicktime"
+        )
+        XCTAssertEqual(2, StubURLProtocol.requestCount)
+        XCTAssertEqual("household-abc", StubURLProtocol.header(deviceTokenHeader, at: 0))
+        XCTAssertNil(
+            StubURLProtocol.header(deviceTokenHeader, at: 1),
+            "the host it was sent on to sees no token"
+        )
+    }
+
+    /// **The save's redirect forwarding**, and the cleartext rule with it: a
+    /// hop to a public plain-HTTP host is refused before anything connects,
+    /// and no half-file is left under the name the person would be handed.
+    func testASaveRedirectedToAPublicPlainHostIsRefusedAndLeavesNoFile() async throws {
+        StubURLProtocol.enqueue(.moved(302, to: "http://203.0.113.5/grab.mkv"))
+        let into = try temporaryDirectory().appendingPathComponent("film.mkv", isDirectory: false)
+        let error = await failure {
+            try await makeClient().downloadFile(path: "/api/files/download?path=film.mkv", into: into)
+        }
+        XCTAssertEqual(error, .notPermitted(CleartextPolicy.refusalMessage("203.0.113.5")))
+        XCTAssertEqual(1, StubURLProtocol.requestCount, "nothing reached the host it named")
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: into.path),
+            "a refused save left a file where the share sheet would have read one"
+        )
+    }
+
+    /// A refused save reads its reason out of the body, tells the health
+    /// observer, and leaves nothing behind.
+    ///
+    /// The body of a download is written to disk like any other, so a refusal
+    /// is a file and not a `Data`: a prefix of it is read for the message and
+    /// the file is dropped.
+    func testARefusedSaveSaysWhyWithoutKeepingTheFile() async throws {
+        StubURLProtocol.enqueue(
+            .json(#"{"detail":"X-Device-Token or admin session required"}"#, status: 401)
+        )
+        let health = TokenHealth()
+        let client = makeClient(health: health)
+        let into = try temporaryDirectory().appendingPathComponent("film.mkv", isDirectory: false)
+        let error = await failure {
+            try await client.downloadFile(path: "/api/files/download?path=film.mkv", into: into)
+        }
+        guard case .refused(let refusal) = error else {
+            return XCTFail("not refused: \(String(describing: error))")
+        }
+        XCTAssertEqual(401, refusal.status)
+        XCTAssertTrue(refusal.deviceTokenRequired, "the reason was read out of the body")
+        XCTAssertTrue(client.pairingRequired)
+        XCTAssertTrue(
+            health.isRejected(server),
+            "the streamed tail observes token health like every other request"
+        )
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: into.path),
+            "the refusal's own body was left on disk as if it were the person's file"
+        )
+    }
+
+    /// A refusal **longer** than the bound is read only as far as the bound.
+    ///
+    /// A hostile or broken server answering with a megabyte of body must not
+    /// put that megabyte into a sentence — the same rule, and the same
+    /// number, as the events tail.
+    func testAVastRefusalBodyIsReadOnlyAsFarAsTheBound() async throws {
+        let limit = DomovoiClient.refusalBodyLimit
+        StubURLProtocol.enqueue(
+            Answered.vast(status: 403, bytes: limit * 4)
+        )
+        let into = try temporaryDirectory().appendingPathComponent("film.mkv", isDirectory: false)
+        let error = await failure {
+            try await makeClient().downloadFile(path: "/api/files/download?path=film.mkv", into: into)
+        }
+        guard case .refused(let refusal) = error else {
+            return XCTFail("not refused: \(String(describing: error))")
+        }
+        XCTAssertEqual(403, refusal.status)
+        XCTAssertLessThan(
+            refusal.message.count, limit * 2,
+            "the whole body became the sentence"
+        )
+    }
+
+    /// The progress callback reports real numbers from a real transport.
+    ///
+    /// Not arithmetic — ``transferPercent(sent:of:)`` is tested above — but
+    /// that the callback is **wired to the delegate at all**: a
+    /// `didSendBodyData` that stopped forwarding would leave every ring
+    /// indeterminate and nothing else in the project would notice.
+    func testTheUploadReportsProgressFromTheTransport() async throws {
+        StubURLProtocol.enqueue(.json("{}"))
+        let ticks = Shared<[Int64]>([])
+        let file = try temporaryFile(Data(repeating: 0x61, count: 512 * 1024))
+        _ = try await makeClient().uploadFile(
+            method: "POST",
+            path: "/api/files/upload-stream",
+            fileURL: file,
+            contentType: "application/octet-stream",
+            onProgress: { sent, _ in ticks.mutate { $0.append(sent) } }
+        )
+        XCTAssertFalse(ticks.current.isEmpty, "the transport reported nothing: the ring cannot move")
+        XCTAssertEqual(
+            512 * 1024, ticks.current.last,
+            "the last tick is the whole file"
+        )
+    }
+}
+
+/// A long refusal body, built without writing the string twice.
+private enum Answered {
+    static func vast(status: Int, bytes: Int) -> StubURLProtocol.Answer {
+        StubURLProtocol.Answer(
+            status: status,
+            body: Data(("{\"detail\":\"" + String(repeating: "x", count: bytes) + "\"}").utf8)
         )
     }
 }

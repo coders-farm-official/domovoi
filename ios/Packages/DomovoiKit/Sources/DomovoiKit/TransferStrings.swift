@@ -54,9 +54,18 @@ public enum TransferStrings {
 
     // MARK: - the upload side
 
-    // Nothing. The upload's own percentage is
-    // ``PhoneMediaStrings/uploadingLabel(_:)`` — `uploading 42%` — which is
-    // where every other word on the phone-media rows lives and is what the
-    // 48-point row's control reads out. A second wording for the same number
-    // here would be two sentences for one state.
+    /// The number on its own, for a control with no room for a sentence.
+    ///
+    /// The phone-media row's upload is a 48-point box with a ring in it, and
+    /// until REVIEW-1 finding 3 the percentage existed **only** in that
+    /// button's accessibility label (``PhoneMediaStrings/uploadingLabel(_:)``,
+    /// which is Android's `contentDescription`, `DeviceUpload.kt:326`) — so a
+    /// sighted person saw a moving ring and no number anywhere, while Android
+    /// shows whole percent in its upload notification (`PhoneUpload.kt:52`)
+    /// and this app has no notification to show one in. There is nowhere on a
+    /// 48-point box for a sentence, so this is the number and nothing else;
+    /// the sentence stays in the label, which is what VoiceOver reads.
+    ///
+    /// Whole percent, as everywhere else in this unit.
+    public static func percent(_ percent: Int) -> String { "\(percent)%" }
 }

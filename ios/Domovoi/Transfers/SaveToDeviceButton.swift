@@ -84,11 +84,17 @@ struct SaveToDeviceButton: View {
         HStack(spacing: 8) {
             // Determinate when the total is known, which is the whole point
             // of the progress callback; indeterminate otherwise, because a
-            // bar pinned at 0 reads as a stall.
+            // ring pinned at 0 reads as a stall.
+            //
+            // ``TransferProgressRing`` and **not** `ProgressView(value:)`:
+            // with `.progressViewStyle(.circular)` that one ignores the
+            // fraction on iOS and draws the indeterminate spinner, so this
+            // ring and the upload row's were the same spinner the old code
+            // drew while both comments claimed otherwise (REVIEW-1 finding
+            // 3). The percentage in `said` was right either way, which is
+            // why nothing here failed.
             if let share {
-                ProgressView(value: share)
-                    .progressViewStyle(.circular)
-                    .frame(width: glyphWidth, height: glyphWidth)
+                TransferProgressRing(share: share, diameter: glyphWidth)
             } else {
                 ProgressView()
                     .frame(width: glyphWidth, height: glyphWidth)

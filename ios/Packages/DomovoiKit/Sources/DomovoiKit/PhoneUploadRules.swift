@@ -280,10 +280,13 @@ public enum PhoneMediaError: Error, Equatable, Sendable {
     /// is in iCloud and not downloaded, the file was deleted since the page
     /// was listed.
     case unreadable(name: String)
-    /// Over ``PhoneUploadModel/cap``. Nothing should be able to ask for this
-    /// — no control is drawn on such a row — so it is a refusal rather than a
-    /// request, exactly as ``FileSaveModel/save(_:from:)`` treats its own
-    /// ceiling.
+    /// Over the ceiling the app used to draw, and **unreachable since
+    /// D43**: there is no such ceiling any more, so nothing throws this and
+    /// no control is drawn on such a row. It is still defined because its
+    /// two call sites belong to files this unit may not edit; the report's
+    /// "Needs a shared change" says what goes with it. (The reference to
+    /// `PhoneUploadModel.cap` that stood here pointed at a deleted symbol —
+    /// REVIEW-1 note 9.)
     case tooBig(name: String, size: Int64)
 }
 

@@ -17,8 +17,9 @@ import Observation
 ///   which writes them to disk as they arrive. **Nothing proportional to the
 ///   file is in memory**, which is what D47 asked for and what removes the
 ///   64 MiB ceiling ``FileSaveModel`` used to draw.
-/// * The copy is written into ``FileSaveModel/spool``, which is emptied on
-///   the way in, so one file is in flight at a time and nothing accumulates.
+/// * The copy is written into this model's own directory inside
+///   ``FileSaveModel/spool`` (``slot``), which is emptied on the way in, so
+///   one file is in flight at a time and nothing accumulates.
 /// * ``taken()`` deletes it. The person already has the one they asked for,
 ///   and an app that leaves copies in a directory iOS clears "at some point"
 ///   is an app holding a gigabyte of somebody's documents.
@@ -67,6 +68,35 @@ public final class SaveToDeviceModel {
 
     public private(set) var state: State = .idle
 
+    /// This model's own directory inside ``FileSaveModel/spool``.
+    ///
+    /// **There is more than one saver**, and that is the whole reason this
+    /// exists: Files holds one, Videos holds another and the player unit's
+    /// rows add two more, all alive at once behind a `TabView`. With one
+    /// directory for all of them, a save started on one screen emptied the
+    /// directory holding the destination of a save in flight on another — so
+    /// `didFinishDownloadingTo`'s `moveItem` threw and the first screen said
+    /// "couldn't save: couldn't write it onto this phone — check your
+    /// storage" about a phone with plenty of storage. The reverse order
+    /// deleted a finished file while its share sheet was up.
+    ///
+    /// The "one file in flight at a time" invariant below is **per model**,
+    /// which is what made that look safe; the directory it was asserted about
+    /// was shared. Found by REVIEW-1 finding 1, pinned by
+    /// `testTwoSaversDoNotClearEachOthersSpool`.
+    public let slot: String
+
+    /// Slots are numbered rather than random so that a relaunch reuses the
+    /// same names: a copy left behind by a previous launch is then swept by
+    /// the next save in that slot, instead of sitting in `tmp` under a name
+    /// nothing will ever look at again.
+    private static var slots = 0
+
+    private static func nextSlot() -> String {
+        slots += 1
+        return "s\(slots)"
+    }
+
     /// Which server the file in flight belongs to. See the note on the type.
     private var epoch = 0
 
@@ -87,21 +117,27 @@ public final class SaveToDeviceModel {
         _ onProgress: @Sendable @escaping (Int64, Int64) -> Void
     ) async throws -> URL
 
+    /// - Parameter slot: which directory inside the spool is this model's.
+    ///   Left out everywhere in the app: the next number is taken, which is
+    ///   what keeps two savers apart. A test passes one to say *the same*
+    ///   directory twice on purpose.
     public init(
         fetch: @Sendable @escaping (
             _ path: String,
             _ into: URL,
             _ onProgress: @Sendable @escaping (Int64, Int64) -> Void
-        ) async throws -> URL
+        ) async throws -> URL,
+        slot: String? = nil
     ) {
         self.fetch = fetch
+        self.slot = slot ?? Self.nextSlot()
     }
 
-    public convenience init(in container: AppContainer) {
+    public convenience init(in container: AppContainer, slot: String? = nil) {
         let client = container.client
         self.init(fetch: { path, into, onProgress in
             try await client.downloadFile(path: path, into: into, onProgress: onProgress)
-        })
+        }, slot: slot)
     }
 
     // MARK: - the tap
@@ -140,6 +176,10 @@ public final class SaveToDeviceModel {
         let name = named
         let where_ = path
         let box = TransferProgressBox()
+        // This model's directory, captured with everything else before the
+        // `await`. Nothing else writes into it, so the save below cannot be
+        // the thing that broke another screen's save.
+        let mySlot = slot
         // The progress closure runs on a `URLSession` thread, so it puts the
         // numbers in a lock and hops to the main actor to draw them. It reads
         // `mine`, never the model's `epoch`: a tick that lands after a server
@@ -161,7 +201,7 @@ public final class SaveToDeviceModel {
         }
         running = Task { @MainActor [weak self] in
             do {
-                let spool = try FileSaveModel.emptySpool()
+                let spool = try FileSaveModel.emptySpool(slot: mySlot)
                 let into = spool.appendingPathComponent(name, isDirectory: false)
                 let url = try await read(where_, into, onProgress)
                 // `Task.isCancelled` as well as the epoch, and a file to
@@ -185,9 +225,26 @@ public final class SaveToDeviceModel {
                     self.state = .idle
                     return
                 }
-                self.state = .failed(TransferStrings.couldNotSave(FilesModel.why(error)))
+                self.state = .failed(Self.failure(error))
             }
         }
+    }
+
+    /// What a failed save says.
+    ///
+    /// ``TransferStrings/couldNotSave(_:)`` in front of ``FilesModel/why(_:)``
+    /// for every ordinary failure — the same sentence a failed read on these
+    /// screens gets — **except** for the one message this unit's own transfer
+    /// throws, which is already a whole sentence about saving: wrapping it
+    /// read "couldn't save: couldn't write it onto this phone — check your
+    /// storage", which says it twice (REVIEW-1 note 10). That one is passed
+    /// through as it is.
+    static func failure(_ error: any Error) -> String {
+        if case .unreachable(let why)? = error as? DomovoiError,
+           why == TransferStrings.couldNotWrite {
+            return why
+        }
+        return TransferStrings.couldNotSave(FilesModel.why(error))
     }
 
     /// Stop the transfer the person started.
