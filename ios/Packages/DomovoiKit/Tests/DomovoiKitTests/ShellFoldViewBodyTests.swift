@@ -61,6 +61,11 @@ final class ShellFoldViewBodyTests: XCTestCase {
         return url
     }()
 
+    /// **Spelt `ShellFoldViewBodyTests.` and not `Self.` at the three call
+    /// sites below.** `XCTestCase` is a class, so `Self` is covariant and
+    /// Swift refuses it in a *stored* property's initializer: `error:
+    /// covariant 'Self' type cannot be referenced from a stored property
+    /// initializer`. Inside a function body, as here, `Self` is fine.
     private static func source(_ relativePath: String) -> String {
         let url = Self.repositoryRoot.appendingPathComponent(relativePath)
         return (try? String(contentsOf: url, encoding: .utf8)) ?? ""
@@ -68,18 +73,18 @@ final class ShellFoldViewBodyTests: XCTestCase {
 
     /// `ios/Domovoi/Shell/WorkspaceView.swift`'s code, comments and string
     /// literals removed.
-    private static let workspace = Self.code(
-        in: Self.source("ios/Domovoi/Shell/WorkspaceView.swift")
+    private static let workspace = ShellFoldViewBodyTests.code(
+        in: ShellFoldViewBodyTests.source("ios/Domovoi/Shell/WorkspaceView.swift")
     )
 
     /// `ios/Domovoi/Shell/ShellChromeViews.swift`'s code, likewise.
-    private static let chrome = Self.code(
-        in: Self.source("ios/Domovoi/Shell/ShellChromeViews.swift")
+    private static let chrome = ShellFoldViewBodyTests.code(
+        in: ShellFoldViewBodyTests.source("ios/Domovoi/Shell/ShellChromeViews.swift")
     )
 
     /// `ios/Domovoi/Shell/LocalShellView.swift`'s code, likewise.
-    private static let localShell = Self.code(
-        in: Self.source("ios/Domovoi/Shell/LocalShellView.swift")
+    private static let localShell = ShellFoldViewBodyTests.code(
+        in: ShellFoldViewBodyTests.source("ios/Domovoi/Shell/LocalShellView.swift")
     )
 
     /// The three, by the name a failure message should print.
