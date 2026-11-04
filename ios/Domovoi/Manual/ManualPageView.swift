@@ -542,6 +542,57 @@ enum ManualTextScale: Equatable {
     var mono: Font { .system(style, design: .monospaced) }
 }
 
+extension Color {
+
+    /// The wash under an inline `code` or pill **run** — Android's
+    /// `background = c.sunken` (`ManualScreen.kt:872`), and **Kamron's answer
+    /// 34**, "tinted background on code spans".
+    ///
+    /// ### Opaque, and that is the whole point
+    ///
+    /// Android's inline washes are translucencies (`warnSoft` is amber at
+    /// α=0.12, `idleSoft` grey at α=0.14) and `sunken` is the one that is not.
+    /// A translucency has **no contrast ratio**: it resolves against whatever
+    /// the run happens to be drawn over — a card, the canvas, a bordered table
+    /// cell — so "4.5:1" could not be said about it truthfully, which is the
+    /// reason the first port left the wash out altogether and said so in the
+    /// run's own comment. This is `--sunken` from
+    /// `web/static/colors_and_type.css:138` ("table header, code blocks"),
+    /// written out opaque in both themes from
+    /// ``manualCodeWashLight``/``manualCodeWashDark``, so the numbers below are
+    /// computed rather than hoped for — ``manualContrastRatio(_:_:)`` is the
+    /// function, and these are its answers for every ink the manual draws a
+    /// run in:
+    ///
+    /// | run's ink | light (`#F5F3F0`) | dark (`#100E0B`) |
+    /// |---|---|---|
+    /// | `Color.primary` — a `p`, a list item, a table's first cell | **18.96:1** | **19.27:1** |
+    /// | ``Color/fgMuted`` — a note, a table's second cell, `preview`/`plugin` | **6.72:1** | **7.77:1** |
+    /// | ``Color/warnInk`` — the `{admin}` pill | **5.17:1** | **10.08:1** |
+    ///
+    /// Body text needs 4.5:1 and the weakest pairing is 5.17:1. The wash
+    /// itself is 1.11:1 against the card it sits on, which is deliberate and
+    /// not a defect: it is a tint, and nothing is *only* said by it — the
+    /// monospaced face already tells code from prose and a pill's word is its
+    /// own label.
+    ///
+    /// ### Why it is not `secondarySystemBackground`
+    ///
+    /// ``ManualPill`` — a pill that is its own view — takes that one, and it
+    /// is opaque too. This is the dashboard's own code-block token instead, so
+    /// an inline run on an iPhone is washed the same colour as the same run on
+    /// the dashboard and on Android.
+    static let manualCodeWash = Color(UIColor { traits in
+        let wash = traits.userInterfaceStyle == .dark ? manualCodeWashDark : manualCodeWashLight
+        return UIColor(
+            red: CGFloat(wash.red),
+            green: CGFloat(wash.green),
+            blue: CGFloat(wash.blue),
+            alpha: 1
+        )
+    })
+}
+
 /// The manual's inline markup, drawn (`ManualText`, `ManualScreen.kt:861`).
 ///
 /// ### A `route:` link the app cannot open is plain text
@@ -587,12 +638,17 @@ struct ManualRichText: View {
             run.font = scale.font.italic()
             return run
         case .code(let text):
-            // Monospace **without** the sunken wash Android gives it: an
-            // inline background inside a `Text` is a colour Apple's contrast
-            // audit cannot attribute to the run that owns it, and the
-            // typeface already tells code from prose. Recorded in DECISIONS.
+            // Monospace **and** the sunken wash, as Android has it
+            // (`withStyle(SpanStyle(fontFamily = MonoFamily, background =
+            // c.sunken))`, `ManualScreen.kt:872`) — answer 34.
+            //
+            // The wash is an **opaque** token, not a translucency:
+            // ``Color/manualCodeWash`` carries the arithmetic, and the reason
+            // the first port had no inline background at all was that a
+            // see-through one has no ratio to state.
             var run = AttributedString(text)
             run.font = scale.mono
+            run.backgroundColor = Color.manualCodeWash
             return run
         case .wake:
             var run = AttributedString(
@@ -601,9 +657,22 @@ struct ManualRichText: View {
             run.font = scale.font.weight(.semibold)
             return run
         case .tag(let name):
+            // A pill inside a sentence: the Kotlin's `" $label "` with a
+            // background (`:881`), so the wash has a space of air either side
+            // of the word.
+            //
+            // **One wash for all three names, where Android tints each.** Its
+            // `{admin}` is amber at 12% and `{preview}`/`{plugin}` grey at
+            // 14%, and both are translucencies — see
+            // ``Color/manualCodeWash``. The tone is carried by the ink, which
+            // is the rule ``ManualPill`` already follows on this very screen
+            // (one opaque surface, ``Color/warnInk`` or ``Color/fgMuted`` over
+            // it), and `admin` stays the only one in amber. Logged in
+            // DECISIONS.
             var run = AttributedString(" \(word(of: name)) ")
             run.font = .system(.caption2)
             run.foregroundColor = name == "admin" ? Color.warnInk : Color.fgMuted
+            run.backgroundColor = Color.manualCodeWash
             return run
         case .link(let text, let kind, let target):
             guard manual.linkIsLive(kind: kind, target: target),
@@ -673,10 +742,14 @@ struct ManualChecklistView: View {
         switch done {
         case true: return ManualStrings.checkDone
         case false: return ManualStrings.checkNotYet
-        // `doc.label("checklist_unknown")` is read with **no** fallback on
-        // Android (`:1017`), so a document without the key leaves this empty.
-        // Ported as it stands and raised in DECISIONS rather than quietly
-        // improved.
+        // The document's own wording, and `can't tell from here` when a server
+        // older than the key cannot supply it (answer 33). The fallback is
+        // **named**, not inlined here: the words are
+        // ``ManualStrings/Fallback/checklistUnknown``, where the reason they
+        // are no longer the empty string is written down, and the generator
+        // already ships the key (`build_manual.py:361`), so this arm is the
+        // old-server path only. Android reads the same key with no fallback
+        // (`:1016`); that half is the android unit's.
         default: return doc.label("checklist_unknown", fallback: ManualStrings.Fallback.checklistUnknown)
         }
     }

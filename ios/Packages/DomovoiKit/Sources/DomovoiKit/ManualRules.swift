@@ -605,3 +605,70 @@ public func manualRouteOpens(_ route: ManualRoute, _ visibility: RouteVisibility
     guard let screen = Route(rawValue: name) else { return true }
     return screen.visibleWith(visibility)
 }
+
+// MARK: - the inline wash, as numbers
+
+/// One **opaque** sRGB colour, as the three components a contrast ratio is
+/// computed from.
+///
+/// It exists so the wash under an inline `code` run can be *stated*: the view
+/// builds its `Color` from these numbers and
+/// ``manualContrastRatio(_:_:)`` computes the ratios the doc comment claims,
+/// so the claim and the pixels cannot drift apart. A `Color` cannot do that —
+/// `Color.fgMuted` and friends live in the app target, and a translucency over
+/// an unknown parent has no ratio at all, which is why there is no `alpha`
+/// here.
+public struct ManualWash: Equatable, Sendable {
+
+    public let red: Double
+    public let green: Double
+    public let blue: Double
+
+    public init(red: Double, green: Double, blue: Double) {
+        self.red = red
+        self.green = green
+        self.blue = blue
+    }
+
+    /// From the hex the token is written as in
+    /// `android/.../ui/theme/Color.kt` and
+    /// `web/static/colors_and_type.css`.
+    public init(hex: UInt32) {
+        self.init(
+            red: Double((hex >> 16) & 0xFF) / 255,
+            green: Double((hex >> 8) & 0xFF) / 255,
+            blue: Double(hex & 0xFF) / 255
+        )
+    }
+}
+
+/// `--sunken` in the light theme (`#F5F3F0`, `Color.kt:49`) — "table header,
+/// code blocks" in the stylesheet's own words
+/// (`web/static/colors_and_type.css:138`), which is exactly what an inline
+/// `code` run is.
+public let manualCodeWashLight = ManualWash(hex: 0xF5F3F0)
+
+/// `--sunken` in the dark theme (`#100E0B`, `Color.kt:77`).
+public let manualCodeWashDark = ManualWash(hex: 0x100E0B)
+
+/// WCAG 2.1 relative luminance.
+public func manualRelativeLuminance(_ wash: ManualWash) -> Double {
+    func channel(_ value: Double) -> Double {
+        value <= 0.04045 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
+    }
+    return 0.2126 * channel(wash.red)
+        + 0.7152 * channel(wash.green)
+        + 0.0722 * channel(wash.blue)
+}
+
+/// The WCAG contrast ratio between two opaque colours, lighter over darker.
+///
+/// Body text needs 4.5:1. Every pairing the manual draws on
+/// ``manualCodeWashLight``/``manualCodeWashDark`` is listed in
+/// `ManualPageView.swift`'s `Color.manualCodeWash`, and this is the function
+/// those numbers come out of.
+public func manualContrastRatio(_ one: ManualWash, _ other: ManualWash) -> Double {
+    let a = manualRelativeLuminance(one)
+    let b = manualRelativeLuminance(other)
+    return (max(a, b) + 0.05) / (min(a, b) + 0.05)
+}

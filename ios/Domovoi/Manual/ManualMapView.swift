@@ -8,11 +8,12 @@ import SwiftUI
 // Two levels — the centre with its ring of topics, and one topic's cluster of
 // pieces — and a camera that moves between them.
 //
-// **The arithmetic is ported line for line**; what is not ported is the
-// ornament. `ScrambleText` (`:683`) and the infinite `bob()` (`:570`) are
-// left out, with the reasons in ``ManualView``'s doc comment and in
-// `design-notes/ios/overnight/manual/DECISIONS.md`. The zoom stays, at the
-// Kotlin's 280 ms, and is a cut under Reduce Motion.
+// **The arithmetic is ported line for line**, and so is the ornament, as of
+// Kamron's answers 30 and 31: the name scrambles into place
+// (``ManualScrambleName``) and the cards float (``ManualMapNode``'s
+// `floatPeriod`). Both stop under Reduce Motion, as the Kotlin's `reduce`
+// branches do, and so does the 280 ms zoom. What is **not** ported is the
+// wires following the float — see ``ManualMapStage/wires(_:size:)``.
 // ---------------------------------------------------------------------------
 
 /// A world position and the scale the thing at it is drawn at — `Pos`
@@ -234,8 +235,16 @@ struct ManualMapStage: View {
             .map { ("h:\(focus.id)", "p:\($0)") }
     }
 
-    /// The dashed cubic wires (`:567`). A `Canvas`, drawn once per level
-    /// rather than once per frame: nothing on this map moves on its own.
+    /// The dashed cubic wires (`:567`). A `Canvas`, drawn **once per level**
+    /// where Android redraws it on every frame of the float
+    /// (`drawPath` inside the `InfiniteTransition`'s read, `:569`).
+    ///
+    /// So a wire's ends do not rise and fall with the two cards they join. It
+    /// is the one piece of the float that is given up, deliberately: a canvas
+    /// rebuilt 60 times a second for as long as the map is open is the battery
+    /// cost answer 31 was not worth, and a wire runs centre to centre between
+    /// two ~104-point cards, so the part of it that would move is the part
+    /// covered by the cards.
     ///
     /// Hidden from VoiceOver — it is a drawing of the links the nodes beside
     /// it already are.
@@ -303,15 +312,38 @@ struct ManualMapStage: View {
         ZStack(alignment: .topLeading) {
             ForEach(geo.order.filter { shown.contains($0) }, id: \.self) { id in
                 if let pos = geo.at[id], let node = node(of: id) {
-                    ManualMapNode(node: node, height: nh) { manual.go(node.opens) }
-                        .frame(width: nw)
-                        .scaleEffect(pos.s)
-                        .offset(x: pos.x - nw / 2, y: pos.y - nh / 2)
-                        .transition(.opacity)
+                    // The card's own index in the **whole** geometry, not in
+                    // the drawn slice: Android's `ids.indexOf(id)` over
+                    // `geo.keys` (`:558`), so a node bobs to the same rhythm
+                    // whichever level it is seen on.
+                    let at = geo.order.firstIndex(of: id) ?? 0
+                    ManualMapNode(
+                        node: node,
+                        height: nh,
+                        levelKey: levelKey,
+                        reduceMotion: reduceMotion,
+                        // `5.5 + (i % 4) * 0.9` seconds (`:561`). Zero is
+                        // still, which is what Reduce Motion asks for.
+                        floatPeriod: reduceMotion ? 0 : 5.5 + Double(at % 4) * 0.9,
+                        // Android phases the sine by `i * 0.7` seconds
+                        // (`:562`); a `delay` on a repeating animation is the
+                        // same idea, spent once at the start.
+                        floatPhase: Double(at % 8) * 0.7
+                    ) {
+                        manual.go(node.opens)
+                    }
+                    .frame(width: nw)
+                    .scaleEffect(pos.s)
+                    .offset(x: pos.x - nw / 2, y: pos.y - nh / 2)
+                    .transition(.opacity)
                 }
             }
         }
     }
+
+    /// Which level is on screen, for the scramble's `.task(id:)` — the
+    /// Kotlin's `levelKey` (`:620`).
+    private var levelKey: String { focus?.id ?? "map" }
 
     /// What a key in ``ManualMapGeo`` draws (`:603`).
     private func node(of id: String) -> ManualMapNodeContent? {
@@ -367,19 +399,39 @@ struct ManualMapNodeContent: Equatable {
 
 /// One card on the map (`MapNode`, `ManualScreen.kt:641`).
 ///
-/// The name is drawn **straight**: Android scrambles it into place over nine
-/// frames (`ScrambleText`, `:683`), which changes an accessibility value
-/// eight times for ornament and draws a glyph run wider than the name inside
-/// a node that has a height. See DECISIONS.md.
+/// The name **scrambles into place** as its level opens
+/// (``ManualScrambleName``) — answer 30 — and the card floats
+/// (``float``) — answer 31. Both are ornament and both stop under Reduce
+/// Motion.
 struct ManualMapNode: View {
 
     let node: ManualMapNodeContent
     let height: CGFloat
+
+    /// Which level this card belongs to, so the name scrambles again each
+    /// time a level opens and not on every redraw — the Kotlin's `levelKey`
+    /// (`:620`, passed to `MapNode` at `:637`).
+    let levelKey: String
+
+    /// Whether this person asked for less movement: no scramble, no float.
+    let reduceMotion: Bool
+
+    /// How long one bob takes, and how far into it this card starts
+    /// (`bob`, `:559`: `5.5 + (i % 4) * 0.9` seconds, phased by `i * 0.7`).
+    /// Zero period means the card is still.
+    let floatPeriod: Double
+    let floatPhase: Double
+
     let action: () -> Void
 
     /// The glyph's width is scaled, never a fixed `frame(width:)` — the
     /// standing rule, and the icon sits beside a name that grows.
     @ScaledMetric(relativeTo: .body) private var glyph: CGFloat = 15
+
+    /// Flipped once, in `onAppear`, so the repeating animation below has a
+    /// value change to animate — ``PrinterStatusDot``'s shape, which is this
+    /// app's one other thing that never stops moving.
+    @State private var floating = false
 
     var body: some View {
         Button(action: action) {
@@ -409,10 +461,11 @@ struct ManualMapNode: View {
                     // everywhere, and the node's height is a `minHeight` over
                     // a `@ScaledMetric`, so the card grows to hold the lines
                     // and the stage grows with it.
-                    Text(node.title)
-                        .font(.system(.footnote, design: .monospaced).weight(.semibold))
-                        .multilineTextAlignment(.leading)
-                        .fixedSize(horizontal: false, vertical: true)
+                    ManualScrambleName(
+                        text: node.title,
+                        levelKey: levelKey,
+                        reduceMotion: reduceMotion
+                    )
                 }
                 if !node.subtitle.isEmpty || !node.tags.isEmpty {
                     Text(secondLine)
@@ -447,24 +500,196 @@ struct ManualMapNode: View {
         // The Kotlin's `contentDescription = listOfNotNull(title, sub)
         // .joinToString(": ")` (`:650`), so a node reads as one thing rather
         // than as two labels and a pair of pills.
+        //
+        // **This is also what keeps the scramble out of VoiceOver's way.** The
+        // label is the node's real name, set here on the control, and
+        // ``ManualScrambleName`` labels its own `Text` with the real name too:
+        // the drawn glyphs are never anybody's accessibility label, so a case
+        // that reaches a node by its name reaches it mid-scramble exactly as
+        // it does at rest (``testManual_ANodeIsNamedWhileItsNameScrambles``).
         .accessibilityLabel(
             node.subtitle.isEmpty ? node.title : "\(node.title): \(node.subtitle)"
         )
+        // ---- the float (`bob`, `ManualScreen.kt:559`), answer 31.
+        //
+        // ±5 points, and **5 here comes out as 5 × the node's scale** on
+        // screen: the caller applies `scaleEffect(pos.s)` outside this view,
+        // which is Android's `bob(...) * (geo[id]?.s ?: 1f)` reached by
+        // another road.
+        //
+        // One `repeatForever` animation per card and **no per-frame redraw**:
+        // the offset is handed to the render server once and animated there,
+        // where Android drives an `InfiniteTransition` whose float the
+        // `Canvas` reads, redrawing every wire 60 times a second. That is the
+        // "battery sink" half of this decision, and the half that is given
+        // up for it is that the wires do **not** follow: they are still drawn
+        // once per level (see ``ManualMapStage/wires(_:size:)``). Almost all
+        // of a wire is behind the two cards it joins — they are ~104 points
+        // tall and it runs centre to centre — so what moves is hidden and what
+        // shows does not move.
+        //
+        // Nothing moves under Reduce Motion: the caller passes a zero period,
+        // and `nil` animation is the same cut the 280 ms zoom takes.
+        // A still card sits **exactly** where the geometry put it: the zero
+        // arm is not decoration. Without it, `floating` flipping with no
+        // animation would leave every node 5 points above its own position
+        // under Reduce Motion.
+        .offset(y: floatPeriod <= 0 ? 0 : (floating ? -5 : 5))
+        .animation(
+            floatPeriod <= 0
+                ? nil
+                : .easeInOut(duration: floatPeriod)
+                    .delay(floatPhase)
+                    .repeatForever(autoreverses: true),
+            value: floating
+        )
+        .onAppear { floating = true }
     }
 
     /// The subtitle with the `preview` and `plugin` words folded into it
-    /// (`:660`).
+    /// (`:660`), each washed as the Kotlin washes them
+    /// (`SpanStyle(background = c.idleSoft)`, `:668`).
     ///
-    /// Words rather than inline washes: Android gives them a background
-    /// inside an `AnnotatedString`, and an inline background in a `Text` is a
-    /// colour Apple's contrast audit cannot attribute to the run that owns
-    /// it. Both words are also the accessibility label's, so nothing is lost
-    /// to VoiceOver.
-    private var secondLine: String {
-        var parts: [String] = []
-        if !node.subtitle.isEmpty { parts.append(node.subtitle) }
-        parts.append(contentsOf: node.tags)
-        return parts.joined(separator: "  ")
+    /// The wash is ``Color/manualCodeWash`` — the same opaque token the pills
+    /// inside a page's prose take, so the two words look the same wherever
+    /// this screen draws them. `fgMuted` on it is **6.72:1** light and
+    /// **7.77:1** dark. It used to be plain text, because a translucent
+    /// inline background has no ratio to state; an opaque one does.
+    private var secondLine: AttributedString {
+        var out = AttributedString()
+        if !node.subtitle.isEmpty { out += AttributedString(node.subtitle) }
+        for tag in node.tags {
+            if !out.characters.isEmpty { out += AttributedString("  ") }
+            var run = AttributedString(" \(tag) ")
+            run.backgroundColor = Color.manualCodeWash
+            out += run
+        }
+        return out
+    }
+}
+
+// MARK: - the name that scrambles into place
+
+/// The alphabet a scrambling name is drawn from (`GLYPHS`,
+/// `ManualScreen.kt:169`), character for character.
+///
+/// Every one of them is a single ASCII glyph, which is what makes the effect
+/// safe here: see ``ManualScrambleName``.
+let manualScrambleGlyphs = Array("ABCDEFGHKMNPRSTVXZ0123456789#%&*/<>")
+
+/// How fast a name scrambles: nine frames, 24 ms apart (`ScrambleText`,
+/// `:688` — `steps = 8`, `delay(24)`), so 216 ms in all.
+enum ManualScrambleClock {
+
+    static let steps = 8
+
+    /// 24 ms, unless a DEBUG launch argument slows it down.
+    static var frame: Duration { .milliseconds(frameMS) }
+
+    /// `-domovoi-manual-scramble <ms>`: a UI case cannot assert anything
+    /// about a 216 ms effect it will never be inside, so it can ask for a
+    /// frame it has time to look at. Read **once**, and only in DEBUG, which
+    /// is ``AuditStrip``'s rule for the same kind of knob; in a build that
+    /// could ship this is always 24.
+    private static let frameMS: Int = {
+        #if DEBUG
+        let args = ProcessInfo.processInfo.arguments
+        if let at = args.firstIndex(of: "-domovoi-manual-scramble"),
+           at + 1 < args.count,
+           let ms = Int(args[at + 1]),
+           ms > 0, ms <= 5_000 {
+            return ms
+        }
+        #endif
+        return 24
+    }()
+}
+
+/// A node's name, retyped from the glyph alphabet as its level opens
+/// (`ScrambleText`, `ManualScreen.kt:683`) — **answer 30**, "bring the
+/// scramble back (it is meant to impress), leaving the accessibility label
+/// alone".
+///
+/// ### Only the drawn glyphs change
+///
+/// The effect is `redacted`-style: it replaces characters in the **string
+/// being drawn** and nothing else. Two things make that safe, and they are the
+/// two objections the first port left it out over:
+///
+///  * **VoiceOver never reads gibberish.** The accessibility label of this
+///    `Text` is the real name, and the label of the control it sits in is
+///    `"<title>: <subtitle>"` set on the ``ManualMapNode`` button, so the
+///    scrambled run is not any element's label for a single frame. Android's
+///    scramble *is* its node's text, which is why its `contentDescription`
+///    being set at `:650` is the thing that saves it there too — but here it
+///    is said twice, because a case that reaches a node by its name
+///    (``manualNode``, every map case in this item) must not be racing an
+///    animation.
+///  * **The glyph run is exactly as wide as the name.** The name is drawn
+///    monospaced (`.system(.footnote, design: .monospaced)`), every glyph in
+///    ``manualScrambleGlyphs`` is one ASCII character, spaces are left where
+///    they are, and the scrambled string has the same character count as the
+///    real one — so it occupies the same advance, wraps at the same place, and
+///    the card cannot change height while it runs. That was the other reason
+///    it was dropped: in a proportional face a run of `#%&*` *is* wider than
+///    the name, and a node whose height is a `minHeight` would have grown
+///    under it.
+///
+/// Under Reduce Motion the name is drawn straight — the same cut the 280 ms
+/// zoom takes (``ManualMapStage``), and Android's own `reduce` branch
+/// (`:686`).
+struct ManualScrambleName: View {
+
+    let text: String
+    let levelKey: String
+    let reduceMotion: Bool
+
+    /// What is on screen. Empty until the first frame, and empty means the
+    /// real name: a node must never draw blank, not even for one frame.
+    @State private var shown = ""
+
+    var body: some View {
+        Text(shown.isEmpty ? text : shown)
+            .font(.system(.footnote, design: .monospaced).weight(.semibold))
+            .multilineTextAlignment(.leading)
+            .fixedSize(horizontal: false, vertical: true)
+            // The real name, always — see this view's note.
+            .accessibilityLabel(text)
+            // `LaunchedEffect(key, text)` (`:685`): the name scrambles again
+            // when the level changes, and when the document changes under it,
+            // and at no other time. A `.task(id:)` is cancelled and restarted
+            // on exactly those two.
+            .task(id: "\(levelKey)\u{1}\(text)") { await scramble() }
+    }
+
+    private func scramble() async {
+        guard !reduceMotion else {
+            shown = text
+            return
+        }
+        let letters = Array(text)
+        let steps = ManualScrambleClock.steps
+        for frame in 0...steps {
+            // `i < frame / steps * length` (`:692`): the name settles from
+            // the left, a slice at a time.
+            let settled = Int(Double(frame) / Double(steps) * Double(letters.count))
+            shown = String(
+                letters.enumerated().map { at, letter in
+                    at < settled || letter == " "
+                        ? letter
+                        : (manualScrambleGlyphs.randomElement() ?? letter)
+                }
+            )
+            do {
+                try await Task.sleep(for: ManualScrambleClock.frame)
+            } catch {
+                // Cancelled — the level closed or the document changed. The
+                // real name is restored below either way, so a cancelled
+                // scramble never leaves glyphs on screen.
+                break
+            }
+        }
+        shown = text
     }
 }
 
