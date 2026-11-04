@@ -20,6 +20,14 @@ import SwiftUI
 /// ("tear the call down if this UI ever leaves composition",
 /// `PhoneDropinCall.kt:124-127`) one layer up.
 ///
+/// What the model cannot save is `showing`, which is this view's: the row
+/// losing its **identity** takes the sheet down with it, and on this screen
+/// the one state change that happens under a live call is the roster
+/// reporting the call. That is why ``RoomsOverviewView`` draws this row once,
+/// outside its state switch, and the whole argument is in that property's
+/// doc comment. A tab change does take the sheet away, and that is Android
+/// too — its dialog's `onDispose` hangs up for the same reason.
+///
 /// ### What is not here, and why there is no control for it
 ///
 /// * **No `start` for a call between two rooms.** Kamron, answers 5 and 53:
@@ -53,11 +61,13 @@ struct RoomsDropInRow: View {
     /// enable term plus this one.
     ///
     /// **It is not `!busy` on its own, which review round 1 found.** That
-    /// reads only *this phone's* call, and the row is drawn in the `.inCall`
-    /// branch as well — so a room already in a drop-in with another peer
-    /// offered a live button whose every press can only get `target_busy`
-    /// (`domovoi/phone_dropin.py:78-79`). The rule and the whole argument for
-    /// it are in DomovoiKit, where a case can reach them.
+    /// reads only *this phone's* call, and this row is drawn for every state
+    /// of the room (``RoomsOverviewView``'s drop-in note: once, outside the
+    /// switch, as Android composes it outside its `when`) — so a room already
+    /// in a drop-in with another peer offered a live button whose every press
+    /// can only get `target_busy` (`domovoi/phone_dropin.py:78-79`). The rule
+    /// and the whole argument for it are in DomovoiKit, where a case can
+    /// reach them.
     private var canDropIn: Bool { roomsPhoneDropInEnabled(room, callIsBusy: busy) }
 
     var body: some View {
@@ -75,9 +85,13 @@ struct RoomsDropInRow: View {
         .tint(Color.brandInk)
         // Unavailable rather than absent, because the room is on screen and
         // the reason is on it: the status pill two lines up for a room that
-        // is not connected (`target_offline`, `phone_dropin.py:80-81`), and
-        // the `in call with X` line directly above for a room that is busy
-        // with somebody else (`target_busy`, `:78-79`).
+        // is not connected (`target_offline`, `phone_dropin.py:80-81`), the
+        // `in call with X` line directly above for a room that is busy with
+        // somebody else (`target_busy`, `:78-79`), and
+        // ``RoomsStrings/noAecMic`` directly above for a microphone that
+        // cannot do two-way audio at all (`target_no_aec`, `:84-85`).
+        // Android's own button is drawn and disabled in all three
+        // (`PhoneDropinCall.kt:81`, composed at `SatOverviewTab.kt:564`).
         .disabled(!canDropIn)
         .sheet(isPresented: $showing, onDismiss: hangUp) {
             if let call {

@@ -360,11 +360,12 @@ public func roomsDropInState(_ room: RoomsSatellite) -> RoomsDropInState {
 /// The core answers `target_busy` for a room that is already in a drop-in
 /// with somebody else (`domovoi/phone_dropin.py:78-79`), so a button offered
 /// then can only fail — Kamron's no-misleading-controls rule exactly. Review
-/// round 1 found this drawn enabled: the row is deliberately present in the
-/// `.inCall` branch (so the roster reporting *this* call a second after it
-/// starts cannot unmount the sheet, ``RoomsOverviewView``'s note), and the
-/// only term gating it read this phone's own call state, which says nothing
-/// about a call between the room and a third party.
+/// round 1 found this drawn enabled: the row is deliberately drawn for every
+/// state of the room — once, outside the state switch, so that the roster
+/// reporting *this* call a second after it starts cannot unmount the sheet
+/// (``RoomsOverviewView``'s drop-in note) — and the only term gating it read
+/// this phone's own call state, which says nothing about a call between the
+/// room and a third party.
 ///
 /// ### Why `callIsBusy` is in here as well, and Android has no equivalent
 ///
@@ -375,11 +376,12 @@ public func roomsDropInState(_ room: RoomsSatellite) -> RoomsDropInState {
 /// roster row, and whether this phone is in a call at all
 /// (``DropInCallModel/State/isBusy``).
 ///
-/// `fullDuplex` is asked although ``roomsDropInState(_:)`` already draws
-/// nothing for a `.noAec` room: the `.inCall` branch is reached for a room
-/// with no echo-cancelling array too (a peer is checked first), and a room
-/// that cannot do two-way audio gets `target_no_aec`
-/// (`phone_dropin.py:84-85`).
+/// `fullDuplex` is asked rather than left to ``roomsDropInState(_:)``, and it
+/// has to be: the row is drawn in the `.noAec` state as well (Android
+/// composes its button after the `!s.full_duplex` arm too,
+/// `SatOverviewTab.kt:564`), and a room that cannot do two-way audio gets
+/// `target_no_aec` (`phone_dropin.py:84-85`). The `.inCall` state is reached
+/// for such a room too, since a peer is checked first.
 public func roomsPhoneDropInEnabled(_ room: RoomsSatellite, callIsBusy: Bool) -> Bool {
     room.online && room.fullDuplex && room.inCallWith == nil && !callIsBusy
 }

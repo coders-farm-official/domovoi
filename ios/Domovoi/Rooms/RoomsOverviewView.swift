@@ -363,36 +363,52 @@ struct RoomsOverviewView: View {
     // MARK: - drop in (`DropInSection`, `SatOverviewTab.kt:467`)
 
     /// The state, `hang up` when there is a call, one line saying where a
-    /// call between two *rooms* is started, and — for a room that can do
-    /// drop-in at all — "drop in from this phone".
+    /// call between two *rooms* is started, and — always, whatever the state
+    /// — "drop in from this phone".
     ///
-    /// ### Why the row is drawn for the `inCall` state too
+    /// ### Why the row is drawn ONCE, outside the switch
     ///
-    /// It is not, and that is the difference from Android, which composes
-    /// `PhoneDropinRow` **unconditionally** and says why in a comment worth
-    /// quoting in full (`SatOverviewTab.kt:559-564`): "Always composed —
-    /// gating on in_call_with would unmount the active call dialog the
-    /// instant the room reports it's in a call (which is this very call), and
-    /// the dialog's onDispose hangs up, killing the call on connect."
+    /// Because Android draws it once, outside the `when`, and says why in a
+    /// comment worth quoting in full (`SatOverviewTab.kt:559-564`): "Always
+    /// composed — gating on in_call_with would unmount the active call
+    /// dialog the instant the room reports it's in a call (which is this very
+    /// call), and the dialog's onDispose hangs up, killing the call on
+    /// connect. The button self-disables during any call; the dialog stays up
+    /// until the user hangs up."
     ///
-    /// That is a real hazard and this screen avoids it a different way: the
-    /// call sheet is presented by ``RoomsDropInRow``, which is drawn in the
-    /// `.inCall` branch as well as the `.idle` one — the branch decides what
-    /// the row's **button** says, not whether the row exists. So the roster
-    /// reporting `in_call_with` a second later changes a label and unmounts
-    /// nothing.
+    /// **Drawing it inside two branches of the switch is not the same thing**,
+    /// which review round 2 found and the version of this comment it found
+    /// got wrong. Branches of a `switch` inside a `@ViewBuilder` are distinct
+    /// structural identities, so crossing from `.idle` to `.inCall` destroys
+    /// the `.idle` row and builds a new one — and ``RoomsDropInRow``'s
+    /// `@State showing` belongs to that identity, so the sheet goes with it.
+    /// The roster really does cross that branch while this phone's own call is
+    /// live: `domovoi/phone_dropin.py:144-147` puts the phone's call into
+    /// `active_dropins`, `web/backend/api/satellites.py:2011-2018` computes
+    /// `in_call_with` from exactly that list, and
+    /// ``roomsDropInState(_:)`` answers `.inCall` the moment it is non-nil.
+    /// Either outcome is a bug: `onDismiss` fires and hangs the call up on
+    /// connect, or it does not and there is a live microphone in somebody's
+    /// kitchen with no sheet, no elapsed time and no `mute`.
     ///
-    /// **The row's own gate is Android's, term for term**, and it has to be:
-    /// drawing the row in both branches means `in_call_with` cannot gate
-    /// whether it exists, so it gates whether the button is available.
+    /// One position in this `VStack` is one identity, so the row survives
+    /// every state the room goes through.
+    ///
+    /// ### Including `.noAec`, which is also Android
+    ///
+    /// `PhoneDropinRow` is composed after the `when`'s `!s.full_duplex` arm as
+    /// well, so a room with no echo-cancelling array draws the button
+    /// **disabled** on both phones. That is not a control that cannot do what
+    /// it says — it is unavailable, and the sentence saying why
+    /// (``RoomsStrings/noAecMic``) is the line directly above it.
+    ///
+    /// **The row's own gate is Android's, term for term**:
     /// ``roomsPhoneDropInEnabled(_:callIsBusy:)`` is
     /// `s.online && s.full_duplex && s.in_call_with == null`
     /// (`PhoneDropinCall.kt:81`) plus this phone's own call state, which the
-    /// roster lags by a second. Review round 1 found the version of this
-    /// comment that claimed `disabled(busy)` was Android's gate "by another
-    /// route": it was not — it read only this phone's call, so a room already
-    /// in a drop-in with a third party offered a button that could only get
-    /// `target_busy`.
+    /// roster lags by a second. Review round 1 found the version that gated
+    /// only on this phone's call: a room already in a drop-in with a third
+    /// party offered a button whose every press could only get `target_busy`.
     @ViewBuilder
     private var dropIn: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -416,13 +432,11 @@ struct RoomsOverviewView: View {
                     .font(.footnote)
                     .foregroundStyle(Color.fgMuted)
                     .fixedSize(horizontal: false, vertical: true)
-                RoomsDropInRow(shell: shell, model: model, room: room)
             case .noAec:
-                // A fact about the hardware, not a refusal of this phone's:
-                // this room cannot do drop-in at all, so there is no control
-                // here either. The core would answer `target_no_aec`
-                // (`phone_dropin.py:84-85`), and a button that always got
-                // that is the one the rule forbids.
+                // A fact about the hardware: the core would answer
+                // `target_no_aec` (`phone_dropin.py:84-85`), so this is the
+                // reason the row below is unavailable, written where it can
+                // be read. Android draws the same pair.
                 Text(RoomsStrings.noAecMic)
                     .font(.footnote)
                     .foregroundStyle(Color.fgMuted)
@@ -432,8 +446,9 @@ struct RoomsOverviewView: View {
                     .font(.footnote)
                     .foregroundStyle(Color.fgMuted)
                     .fixedSize(horizontal: false, vertical: true)
-                RoomsDropInRow(shell: shell, model: model, room: room)
             }
+            // Outside the switch, and that is the whole point — see above.
+            RoomsDropInRow(shell: shell, model: model, room: room)
         }
     }
 

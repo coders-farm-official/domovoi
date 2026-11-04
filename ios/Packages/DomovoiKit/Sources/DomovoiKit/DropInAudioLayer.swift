@@ -177,8 +177,20 @@ public final class DropInAudioEngine: DropInAudio, @unchecked Sendable {
     /// here is the fix: ``stop()`` clears `running` **before** it detaches, so
     /// a ``play(_:)`` that gets this lock afterwards bails on `running`, and
     /// one that already holds it finishes scheduling before the detach can
-    /// start. Nothing ever holds this and then asks for ``lock`` in the other
-    /// direction: ``stop()`` has released ``lock`` before it comes here.
+    /// start.
+    ///
+    /// ### The ordering rule, which review round 2 found the hole in
+    ///
+    /// **This lock is the outer one.** Whoever wants both takes ``playLock``
+    /// first and ``lock`` second, and nobody takes ``playLock`` while holding
+    /// ``lock``. ``play(_:)`` does that already; ``start()`` now does too, and
+    /// round 2 found why it has to: it attached and `play()`ed the node under
+    /// ``lock`` alone, so a call begun while a hang-up was between `lock`'s
+    /// release and the detach attached a node the teardown was about to take
+    /// away. Taking ``playLock`` *inside* ``lock`` there would have inverted
+    /// the order against ``play(_:)`` and deadlocked instead, which is why
+    /// ``start()`` takes this one first and holds both for its whole body.
+    /// ``stop()`` holds neither when it comes here.
     private let playLock = NSLock()
 
     private let engine = AVAudioEngine()
@@ -199,6 +211,13 @@ public final class DropInAudioEngine: DropInAudio, @unchecked Sendable {
     public init() {}
 
     public func start(onFrame: @escaping @Sendable (Data) -> Void) throws {
+        // ``playLock`` OUTSIDE ``lock``, for the whole of this: the attach and
+        // the `play()` below touch the node ``stop()`` detaches, and the
+        // ordering rule is on ``playLock``. Held across `engine.start()`,
+        // which only blocks a concurrent ``play(_:)`` — and a frame that
+        // arrives before the engine is up has nothing to be scheduled onto.
+        playLock.lock()
+        defer { playLock.unlock() }
         lock.lock()
         defer { lock.unlock() }
         guard !running else { return }
@@ -239,6 +258,10 @@ public final class DropInAudioEngine: DropInAudio, @unchecked Sendable {
             engine.prepare()
             try engine.start()
         } catch {
+            // `removeTap` under ``lock`` is safe HERE and nowhere else: a tap
+            // block only runs while the engine is running, and this is the
+            // path where it never started — so there is none in flight to
+            // wait for. ``stop()`` has to do it the other way round.
             input.removeTap(onBus: 0)
             engine.detach(player)
             self.converter = nil
@@ -328,7 +351,8 @@ public final class DropInAudioEngine: DropInAudio, @unchecked Sendable {
         converter = nil
         lock.unlock()
         // `running` is already false, so a ``play(_:)`` that takes
-        // ``playLock`` from here on schedules nothing.
+        // ``playLock`` from here on schedules nothing, and a ``start()`` that
+        // takes it will find the node detached and attach it afresh.
         engine.inputNode.removeTap(onBus: 0)
         // **Not under ``lock``**: `removeTap` waits for an in-flight tap
         // block, and that block takes ``lock``.

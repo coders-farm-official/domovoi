@@ -493,6 +493,26 @@ extension StubHouseUITests {
         return false
     }
 
+    /// The other direction: wait until nothing on screen carries `text`.
+    ///
+    /// **Why a wait and not one `XCTAssertFalse`.** Review round 2 found both
+    /// drop-in cases ending on `app.buttons[dropInFromThisPhone].firstMatch`,
+    /// which is the row **behind** the sheet (NIGHT-RULES §5) — so they
+    /// passed whether the sheet had gone or not. The sheet's own line is what
+    /// discriminates, and a sheet dismisses with an animation, so its absence
+    /// has to be given the same patience its arrival gets.
+    @MainActor
+    func roomsWaitGone(_ app: XCUIApplication, _ text: String, timeout: Double = 20) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if !containing(app, text).exists { return true }
+            usleep(150_000)
+        }
+        print("=== “\(text)” NEVER WENT AWAY — tree follows ===")
+        print(app.debugDescription)
+        return false
+    }
+
     /// Read one of the fixture's own readback routes, as text.
     ///
     /// ``control(_:_:port:what:)`` posts and asserts a 200; this is the other
@@ -512,6 +532,26 @@ extension StubHouseUITests {
         wait(for: [answered], timeout: 15)
         print("ASK \(route) -> \(said)")
         return said
+    }
+
+    /// `dropin_seen.frames` as a number, from the same readback
+    /// ``roomsAsk(_:port:)`` returns as text.
+    ///
+    /// Read rather than asserted-on-as-text because the one thing a case
+    /// needs from it is **growth**: "more frames arrived after X than before
+    /// it" is the only statement that separates a drawn sheet from a running
+    /// call, and it cannot be made by looking for a substring. Parsed by
+    /// hand, not through `JSONDecoder`, to keep this file free of a type for
+    /// one integer; −1 when the key is missing, so a broken readback fails a
+    /// comparison instead of passing one.
+    @MainActor
+    func roomsFrameCount(port: Int = 6601) -> Int {
+        let said = roomsAsk("rooms-dropin", port: port)
+        guard let at = said.range(of: "\"frames\":") else { return -1 }
+        let digits = said[at.upperBound...]
+            .drop(while: { $0 == " " })
+            .prefix(while: { $0.isNumber })
+        return Int(digits) ?? -1
     }
 
     // MARK: - the roster
@@ -1311,6 +1351,14 @@ extension StubHouseUITests {
         XCTAssertTrue(hangUp.exists, "a live call cannot be ended in one tap")
         hangUp.tap()
         evidence(app, "rooms-27-dropin-ended")
+        // **The sheet went away**, which is a different statement from "the
+        // row behind it is there": review round 2 found this case closing on
+        // the row, which exists throughout. The sheet's own line is the only
+        // thing that says the presentation is down.
+        XCTAssertTrue(
+            roomsWaitGone(app, RoomsStringsUnderTest.twoWayAudioKitchen),
+            "`hang up` left the call sheet on screen"
+        )
         // The house was **told**, rather than the socket being dropped: the
         // room's end of a call that is merely abandoned stays open until the
         // core's silence timeout.
@@ -1358,6 +1406,11 @@ extension StubHouseUITests {
         let close = app.buttons[RoomsStringsUnderTest.close].firstMatch
         XCTAssertTrue(close.waitForExistence(timeout: 10), "the failed call cannot be dismissed")
         close.tap()
+        // Gone, not merely "the row is there" — see ``roomsWaitGone``.
+        XCTAssertTrue(
+            roomsWaitGone(app, RoomsStringsUnderTest.micRefused),
+            "`close` left the refusal on screen"
+        )
         XCTAssertTrue(
             drop.waitForExistence(timeout: 20),
             "closing the failed call did not come back to the room"
@@ -1415,6 +1468,128 @@ extension StubHouseUITests {
         XCTAssertTrue(
             app.buttons[RoomsStringsUnderTest.hangUp].firstMatch.exists,
             "a room in a call offers no `hang up`"
+        )
+    }
+
+    /// **The call survives the room reporting it** — review round 2's must
+    /// finding, which no case could see.
+    ///
+    /// A phone's drop-in shows up in the roster about a second after it
+    /// starts: `domovoi/phone_dropin.py:144-147` puts the call into
+    /// `active_dropins` and `web/backend/api/satellites.py:2011-2018` derives
+    /// `in_call_with` from exactly that list. So the drop-in section crosses
+    /// from ``RoomsDropInState/idle`` to ``RoomsDropInState/inCall`` **while
+    /// this phone's own sheet is up**, and that is the one state change the
+    /// call has to live through. Android says so in the comment this port is
+    /// built on ("gating on in_call_with would unmount the active call dialog
+    /// the instant the room reports it's in a call — which is this very
+    /// call", `SatOverviewTab.kt:559-563`); round 2 found this app drawing
+    /// the row inside two branches of a `switch`, which is two structural
+    /// identities and so the same unmount by another name.
+    ///
+    /// ### How the roster is made to move, since the fixture's is static
+    ///
+    /// `POST /api/_test/rooms-roster {"how": "in-call"}` is read on **every**
+    /// roster request (`fixtures/rooms.py`, `_roster`), so arming it mid-call
+    /// changes what the next read answers; the house pushes
+    /// `satellites.wifi.changed` every three seconds
+    /// (`stubhouse.py:2010-2017`) and that is one of
+    /// ``RoomsModel/rosterEvents``, so the next read is a few seconds away
+    /// with nothing to tap. The flip is then undone, so the branch is crossed
+    /// **both ways** under one sheet — and so that the `hang up` at the end is
+    /// unambiguous: while the roster says `in call with study` there are two
+    /// buttons with that label on screen, the room's and the sheet's.
+    ///
+    /// What discriminates: the sheet's own line, which is drawn nowhere else,
+    /// and the house's frame count, which only grows while the socket is
+    /// open. A port that unmounts the sheet fails on the line; one that keeps
+    /// a sheet whose call was hung up on connect fails on the count.
+    @MainActor
+    func testRooms_TheCallSurvivesTheRoomReportingIt() throws {
+        let app = roomsOpen(roster: "full-duplex", micSeam: "pump")
+        XCTAssertTrue(roomsOpenRoom(app, "kitchen"), "the kitchen card did not open")
+        let drop = app.buttons[RoomsStringsUnderTest.dropInFromThisPhone].firstMatch
+        XCTAssertTrue(drop.waitForExistence(timeout: 20), "no drop-in control to press")
+        drop.tap()
+        XCTAssertTrue(
+            roomsWaitFor(app, RoomsStringsUnderTest.twoWayAudioKitchen, timeout: 30),
+            "tapping `drop in from this phone` opened no call"
+        )
+        XCTAssertTrue(
+            roomsWaitFor(app, RoomsStringsUnderTest.livePrefix, timeout: 30),
+            "the call never went live"
+        )
+        let before = roomsFrameCount()
+        XCTAssertGreaterThan(before, 0, "the call is live and nothing has left this phone")
+
+        // The room now reports the call — this very call.
+        control(
+            "rooms-roster",
+            "{\"how\": \"in-call\"}",
+            port: 6601,
+            what: "a roster that reports this phone's own call"
+        )
+        XCTAssertTrue(
+            roomsWaitFor(app, RoomsStringsUnderTest.inCallWithStudy, timeout: 40),
+            "the roster never reported the call, so this case proved nothing "
+                + "— the state socket's push is what re-reads it"
+        )
+        evidence(app, "rooms-30-dropin-roster-flipped")
+        // The sheet is still the thing in front, and the call is still on.
+        XCTAssertTrue(
+            containing(app, RoomsStringsUnderTest.twoWayAudioKitchen).exists,
+            "the roster reporting this phone's own call took the call sheet "
+                + "down — the row is drawn in more than one branch again"
+        )
+        XCTAssertTrue(
+            containing(app, RoomsStringsUnderTest.livePrefix).exists,
+            "the call stopped being live when the room reported it"
+        )
+        let seen = roomsAsk("rooms-dropin")
+        XCTAssertFalse(
+            seen.contains("\"ended\": true"),
+            "`dropin_end` went to the house because the roster reported the "
+                + "call — Android's \"killing the call on connect\": \(seen)"
+        )
+
+        // And back: the room stops reporting it, which crosses the branch the
+        // other way under the same sheet.
+        control(
+            "rooms-roster",
+            "{\"how\": \"full-duplex\"}",
+            port: 6601,
+            what: "a roster that no longer reports the call"
+        )
+        XCTAssertTrue(
+            roomsWaitGone(app, RoomsStringsUnderTest.inCallWithStudy, timeout: 40),
+            "the roster never stopped reporting the call"
+        )
+        XCTAssertTrue(
+            containing(app, RoomsStringsUnderTest.twoWayAudioKitchen).exists,
+            "the room stopping reporting the call took the sheet down"
+        )
+        // The frames kept travelling across both crossings, which is the
+        // measurement that separates "the sheet is still drawn" from "the
+        // call is still up".
+        XCTAssertGreaterThan(
+            roomsFrameCount(),
+            before,
+            "no microphone frame reached the house after the roster moved, so "
+                + "the sheet is drawn over a call that is no longer running"
+        )
+
+        // One `hang up` on screen now, and it is the sheet's.
+        let hangUp = app.buttons[RoomsStringsUnderTest.hangUp].firstMatch
+        XCTAssertTrue(hangUp.waitForExistence(timeout: 20), "the live call cannot be ended")
+        hangUp.tap()
+        XCTAssertTrue(
+            roomsWaitGone(app, RoomsStringsUnderTest.twoWayAudioKitchen),
+            "`hang up` left the call sheet on screen"
+        )
+        let after = roomsAsk("rooms-dropin")
+        XCTAssertTrue(
+            after.contains("\"ended\": true"),
+            "hanging up did not send `dropin_end` to the house: \(after)"
         )
     }
 
