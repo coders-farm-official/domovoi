@@ -7,7 +7,7 @@ import XCTest
 /// ### Why this file exists
 ///
 /// The batch that built those answers added six pieces of pure logic to
-/// DomovoiKit — the level chain a swipe-back pops, the checklist's third-state
+/// DomovoiKit — the level chain answer 32 needs, the checklist's third-state
 /// fallback, the contrast arithmetic under the inline wash, the scramble's
 /// settle, the float's periods and phases — and tested none of it, because the
 /// unit's ownership list did not include this directory. A review's negative
@@ -16,8 +16,17 @@ import XCTest
 ///
 ///  * `ManualStrings.Fallback.checklistUnknown` back to `""` — answer 33 dead,
 ///    the third-state circle unlabelled on an older server;
-///  * `ManualModel.levels` returning `[]` always — answer 32 dead, the inner
-///    stack never pushes, so a swipe-back always leaves the manual;
+///  * `ManualModel.levels` returning `[]` always — the chain answer 32 needs,
+///    broken. **Read this one carefully**: when the sabotage was written the
+///    chain was the path of a `NavigationStack` of the manual's own, so
+///    breaking it killed the swipe-back. Train I003 then showed that that
+///    stack took the route's screen away in all twenty UI cases, and the fix
+///    (`fx-manual`) removed it. So **a swipe-back leaves the manual either
+///    way now**, this chain has no caller in the app
+///    (`ManualModel.levels`' own doc comment says so), and what this test
+///    still pins is the arithmetic the shared change will bind — not a
+///    behaviour of the shipping screen. Nothing here is evidence that the
+///    gesture goes up a level; it does not;
 ///  * `manualRelativeLuminance` without its gamma expansion — every contrast
 ///    ratio the wash's doc comment states silently wrong.
 ///
@@ -55,14 +64,16 @@ final class ManualAnswersTests: XCTestCase {
         return ManualModel(in: container, visibility: { seen }, cache: ManualCacheBox())
     }
 
-    /// The chain the manual's own `NavigationStack` is given, and what a pop
-    /// writes back.
+    /// The chain a `NavigationStack` of the manual's own would be given, and
+    /// what a pop would write back.
     ///
-    /// **This is the case the sabotage `levels -> []` fails.** Nothing else
-    /// does: the screen reads `levels` through a `Binding`, so a chain that is
-    /// always empty makes a stack that never pushes — a swipe-back then pops
-    /// the route and leaves the manual, which is the behaviour answer 32
-    /// replaced, and no package test could see it.
+    /// **This is the case the sabotage `levels -> []` fails**, and after
+    /// `fx-manual` it is the *only* thing that would fail: no view binds
+    /// `levels` any more, so an always-empty chain is invisible on screen.
+    /// That is the point of keeping the test — the arithmetic is what the
+    /// shared change will bind, and this is all that holds it honest in the
+    /// meantime. It says nothing about the swipe-back, which leaves the
+    /// manual today (``ManualModel/up()``).
     func testTheLevelChainIsWhatTheStackPushesAndPops() {
         let model = rig()
 
@@ -106,7 +117,12 @@ final class ManualAnswersTests: XCTestCase {
         model.stop()
     }
 
-    /// `zoom out` and the swipe-back are the same move.
+    /// Every way up is one step of the same walk.
+    ///
+    /// `zoom out`, a tap on a crumb and — when the shared change lands — a
+    /// pop through ``ManualModel/open(levels:)`` all have to agree; on
+    /// Android the system back is a fourth caller of the same `up()`
+    /// (`ManualScreen.kt:315`), which is the gesture iOS does not have yet.
     ///
     /// ``ManualModel/up()`` is one step of the same walk ``ManualModel/levels``
     /// takes, which is the whole reason `parent(of:)` was factored out of it:
@@ -144,10 +160,14 @@ final class ManualAnswersTests: XCTestCase {
     /// Android re-scrambles every node on every level change because its
     /// `levelKey` lives in one composition (`ManualScreen.kt:593`) and
     /// `focus` changing re-fires every `LaunchedEffect(key, text)` (`:686`)
-    /// — `zoom out` and the system back included. Answer 32 put the levels on
-    /// a `NavigationStack`, which keeps the covered level **mounted**: the
-    /// pop re-shows a stage whose scramble finished long ago and restarts no
-    /// task, so each level scrambled exactly once for the life of the screen.
+    /// — `zoom out` and the system back included. iOS does not get that for
+    /// free: two sibling clusters are the **same** arm of ``ManualView``'s
+    /// `@ViewBuilder` switch with a different `focus`, so SwiftUI reuses the
+    /// stage, and a stage re-shown with its scramble finished long ago
+    /// restarts no task. Each level would scramble exactly once for the life
+    /// of the screen. (Answer 32's `NavigationStack` made it worse again by
+    /// keeping the covered level mounted; that stack is gone — train I003,
+    /// `fx-manual` — and this counter is needed either way.)
     ///
     /// ``ManualMapStage/levelKey`` is `"<level>#<arrival>"`, so this counter
     /// is the whole mechanism. The two properties it has to have:
@@ -173,7 +193,7 @@ final class ManualAnswersTests: XCTestCase {
                 + "top of it and be settled again by the time it was seen"
         )
 
-        // Back up, which is the half the stack ate.
+        // Back up, which is the half a reused stage eats.
         model.up()
         XCTAssertEqual(.map, model.place)
         XCTAssertEqual(
@@ -183,19 +203,23 @@ final class ManualAnswersTests: XCTestCase {
                 + "on the way down only"
         )
 
-        // And a pop written back through the stack's binding is the same move.
+        // And a level opened through the chain — what a stack's binding would
+        // write back on a pop — is the same move.
         model.open(levels: [.map, .topic("rooms-and-devices")])
         model.open(levels: [.map])
         XCTAssertEqual(
             3, model.arrivals(of: .map),
-            "a swipe-back pops through `open(levels:)`, and the gesture and "
-                + "`zoom out` cannot be allowed to disagree"
+            "`open(levels:)` and `up()` land on the same level, and the two "
+                + "ways down to it cannot be allowed to disagree about the "
+                + "arrival"
         )
 
-        // Staying put is not an arrival. A `NavigationStack` writes its path
-        // back more than once for one gesture, and every write that lands on
-        // the level already on screen must be a no-op — otherwise a stage
-        // re-scrambles for a pop that did not happen.
+        // Staying put is not an arrival. A `NavigationStack` binding writes
+        // its path back more than once for one gesture, so every write that
+        // lands on the level already on screen must be a no-op — otherwise a
+        // stage re-scrambles for a pop that did not happen. Nothing drives
+        // `open(levels:)` from a binding today; the no-op is a property of
+        // the chain the shared change will bind.
         model.open(levels: [.map])
         XCTAssertEqual(
             3, model.arrivals(of: .map),

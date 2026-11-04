@@ -776,13 +776,16 @@ public func manualFloatPeriod(at index: Int) -> Double {
 ///    (`bob`, `ManualScreen.kt:560`, `if (reduce || id !in shown) return 0f`);
 ///  * ``ManualFloatClock`` off is still — `-domovoi-manual-float-off`, so a UI
 ///    case can drive a map that is holding position;
-///  * a **covered** level is still, and that one is iOS-only. Android fades
-///    every node of every level in and out of **one** composition, so there is
-///    no such thing as a covered node to animate; answer 32 put the levels on
-///    a `NavigationStack`, which keeps each level below the one on screen
-///    *mounted*, and three stages' worth of `repeatForever` behind two covered
-///    screens is not what answer 31 was costed at
-///    (``ManualMapStage/wires(_:size:)``).
+///  * a level that is **not the one on screen** is still, and that one is
+///    iOS-only. Android fades every node of every level in and out of **one**
+///    composition, so it has no such level to animate. Here the manual's
+///    levels were an inner `NavigationStack` for one batch, which kept each
+///    level below the one on screen *mounted* — three stages' worth of
+///    `repeatForever` behind two covered screens, which is not what answer 31
+///    was costed at (``ManualMapStage/wires(_:size:)``). That stack is gone
+///    (`ManualView.ready(_:cached:_:)`) and `onTop` is `true` for the level
+///    on screen, so the gate costs nothing and is what keeps the cost one
+///    stage's if a second one is ever mounted again.
 ///
 /// Zero is a still card and **not** "no card": the view's zero arm pins the
 /// offset at the geometry's own position, because a `floating` that flips
