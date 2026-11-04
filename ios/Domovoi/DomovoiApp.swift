@@ -518,8 +518,9 @@ extension Color {
     ///
     /// **This is an ink, not a fill.** A destructive button filled with it
     /// draws its own label at 3.08:1 in dark mode, which is why
-    /// `DropInCallSheet` shipped `.bordered` with `.tint(Color.errInk)`; the
-    /// fill is ``Color/danger`` with ``Color/dangerFg`` on it. The note is
+    /// `DropInCallSheet` shipped `.bordered` with `.tint(Color.errInk)` until
+    /// the pair existed; the fill is ``Color/danger`` with ``Color/dangerFg``
+    /// on it, and that is what that button uses now. The note is
     /// here because there is no `Color.err` or `Color.errFill` to grep for —
     /// the stylesheet calls the pair `--danger`, so this target does too, and
     /// anyone looking for Android's `colors.err` lands on this token first.
@@ -542,12 +543,12 @@ extension Color {
     /// Android's white (white on the dark fill is 2.99:1), and why it is two
     /// tokens.
     ///
-    /// **It has no caller yet**, which is written down rather than left to be
-    /// discovered: the one caller is `ios/Domovoi/Rooms/DropInCallSheet.swift`
-    /// — the rooms unit's file, still `.bordered` with `.tint(Color.errInk)` —
-    /// and the exact edit is in
-    /// `design-notes/ios/batch-2026-11-03/shell/DECISIONS.md` §3b. If rooms
-    /// declines, these two and ``DangerInk`` go.
+    /// Its one caller is `ios/Domovoi/DropIn/DropInCallSheet.swift`'s `leave`
+    /// button — `.borderedProminent` with `.tint(Color.danger)` and the label
+    /// in ``Color/dangerFg``, which is Android's filled `hang up`
+    /// (`PhoneDropinCall.kt:180-183`). It had none on `wf/ios-b-shell`,
+    /// because that file was the rooms unit's; the call site was typed on the
+    /// batch's integration branch (shell's DECISIONS §3b, `INTEGRATION.md`).
     static let danger = Color(DangerInk.fill)
 
     /// `--danger-fg`: the text drawn **on** ``Color/danger``, the same way
@@ -557,6 +558,17 @@ extension Color {
     /// the dark theme's bright one (**6.53:1**). Never `.white` on both: that
     /// is the 2.99:1 the pair exists to avoid. Both numbers are
     /// ``DangerInk``'s, and recomputed there.
+    ///
+    /// **This declaration was missing.** The doc comment shipped on
+    /// `wf/ios-b-shell` with no `static let` under it, and three other notes
+    /// — ``Color/errInk``'s, ``Color/danger``'s and ``DangerInk``'s — all
+    /// pointed at it by name. Nothing caught it because the token had no
+    /// caller: `swift build` on the package never compiles this file, and
+    /// `night/appcheck.sh`, which type-checks the app target, answered
+    /// "DomovoiKit did not build" for every unit of the batch until its
+    /// `-Xcc -isysroot` was fixed. The first thing it said once it ran was
+    /// `type 'Color' has no member 'dangerFg'`.
+    static let dangerFg = Color(DangerInk.text)
 }
 
 #Preview {
