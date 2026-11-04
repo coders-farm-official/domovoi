@@ -28,7 +28,10 @@ import Foundation
 ///
 /// Three sentences are this port's own and are marked **iOS-only** below;
 /// `design-notes/ios/overnight/calendar/IOS-ONLY-STRINGS.md` holds the reason
-/// for each.
+/// for each, and
+/// `design-notes/ios/batch-2026-11-03/calendar/IOS-ONLY-STRINGS.md` for the
+/// two the answers of 2026-11-03 added (the subtitle's `in view`, and
+/// ``nothingOnThisDay``).
 public enum CalendarStrings {
 
     // MARK: - the page
