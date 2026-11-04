@@ -46,11 +46,17 @@ import UIKit
 /// and this project has been caught before assuming a token measured on one
 /// surface holds on another.
 ///
-/// ### Why a token here and an appearance proxy there
+/// ### Why a token here and the mechanism there
 ///
 /// There are 39 files with a `TextField` in them and no batch owns 39 files,
-/// so the override is one UIKit appearance proxy in ``DomovoiApp``'s
-/// initialiser rather than 39 call sites. **The hint stays the field's own
+/// so the override is installed once from ``DomovoiApp``'s initialiser rather
+/// than at 39 call sites. It was an appearance proxy
+/// (`UILabel.appearance(whenContainedInInstancesOf: [UITextField.self])`)
+/// until train I004 measured the hint at **1.72:1** with the proxy in —
+/// `UIColor.placeholderText` to the integer, so the proxy reached nothing,
+/// because `UITextField` colours its own placeholder label and an explicit set
+/// beats a proxy. `ShellHintInkAppearance` is the mechanism now and carries
+/// the readings. **The hint stays the field's own
 /// `prompt`** — `XCUIElement.placeholderValue` keeps working, which cases
 /// read, and VoiceOver keeps the one element it had. The alternative, an
 /// overlay `Text` in place of the placeholder, is what
@@ -97,9 +103,10 @@ public enum HintInk {
     public static let darkArithmeticRatio = 6.86
 
     #if canImport(UIKit)
-    /// The ink itself: ``Color/fgMuted``, and what the hint appearance proxy
-    /// takes — a proxy wants a `UIColor`, not a `Color`, which is why the
-    /// token's one spelling lives in this package.
+    /// The ink itself: ``Color/fgMuted``, and what `ShellHintInkAppearance`
+    /// puts in the placeholder's `NSAttributedString` — an attribute wants a
+    /// `UIColor`, not a `Color`, which is why the token's one spelling lives
+    /// in this package.
     ///
     /// (``DangerInk`` below is the second token this file carries, for the
     /// same reason: a number written down and read by nothing is how a token

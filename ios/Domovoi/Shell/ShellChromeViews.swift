@@ -556,6 +556,52 @@ struct ShellScrollAwayChrome: ViewModifier {
         return content
             .navigationTitle(Text(verbatim: title ?? ""))
             .navigationBarTitleDisplayMode(title == nil ? .inline : .large)
+            // **The back button's word, at the accessibility sizes only** —
+            // train I004's one unattributed finding, and a defect in its own
+            // right. A value, not a branch: see the note above about what a
+            // `ViewBuilder` `if` around `content` costs.
+            //
+            // `UINavigationBar` caps the font of its back-button title: at
+            // AX5 `home` is drawn at roughly the ordinary 17 points beside a
+            // page whose body text is near 50, which is both unreadable at
+            // the size the person asked for and what Apple's audit reports as
+            // `Text clipped`. It cannot be styled up — the bar owns that
+            // font — so the word comes off and the chevron, which VoiceOver
+            // still announces as `Back`, stays. Android's top bar is a bare
+            // arrow (`AppShell.kt:1021`), so this is also the faithful shape.
+            //
+            // ### How that finding was attributed, since the audit could not
+            //
+            // `performAccessibilityAudit` returned one `Text clipped` whose
+            // element would not resolve (`| element: nil`) on every pushed
+            // screen at AX5 and on no root. The back button is the only thing
+            // a pushed screen has here that a root does not, and the UILabel
+            // inside a `UIBarButtonItem` is not an accessibility element of
+            // its own — which is exactly why the audit could name it and
+            // XCUITest could not. Train I004, five readings, one train:
+            //
+            //  * pushed at AX5, one `Text clipped` each —
+            //    `testShell_TheHeaderScrollsAwayOnAPushedScreen`
+            //    (`shell-settings-ax5-audited`, floor 3 rest 1),
+            //    `testTheAX5WordingIsTheSameBarFindings` (`ax5-none`, Music),
+            //    `testWhetherTheEightAreSizesRatherThanElements`
+            //    (`sizes-AX5`, Phones & browsers: `dynamic=3 total=4`);
+            //  * a root at AX5, none — `testShell_TheHeaderScrollsAwayOnHome`
+            //    (`shell-home-ax5-audited`, floor 6 rest 1, and that one rest
+            //    is a named contrast finding on Home's own card) and
+            //    `testShell_TheHeaderScrollsAwayOnTheLocalShell`
+            //    (`shell-local-ax5-audited`, floor 0 rest 0);
+            //  * the same pushed screen at `S` and at `large`, none —
+            //    `SIZES SUMMARY S=8 large=8 AX5=3`, where only the AX5 run
+            //    carries a fourth, clipped finding.
+            //
+            // Roots have the large title and the toolbar pill too, so both of
+            // those are eliminated by the same readings.
+            .navigationBarBackButtonDisplayMode(
+                ShellBackButtonWord.isDrawn(
+                    isAccessibilitySize: typeSize.isAccessibilitySize
+                ) ? .default : .minimal
+            )
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     // **`title != nil` is load-bearing here, and was not

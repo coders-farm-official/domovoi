@@ -124,132 +124,38 @@ struct DomovoiApp: App {
     /// Apple's placeholder grey, overridden for every `TextField` in the app
     /// (owner answer 65).
     ///
-    /// ``HintInk`` carries the colour and the four measured ratios. The short
-    /// of it: SwiftUI draws a field's hint in `UIColor.placeholderText`, which
-    /// train S004's screenshot measures at **1.72:1** on the field's interior,
-    /// and `--fg-muted` is 7.44:1 on white — the ink every other muted line in
-    /// the app already uses, and the one Android's `OutlinedTextField` hints
-    /// are drawn in.
+    /// ``HintInk`` carries the colour and the four measured ratios;
+    /// ``ShellHintInkAppearance`` carries the mechanism, the train I004
+    /// readings that condemned the mechanism this used to be, and what it
+    /// would be replaced by.
     ///
-    /// ### Why an appearance proxy, of all things
+    /// The short of it: SwiftUI hands the field a plain `placeholder` and
+    /// UIKit draws it in `UIColor.placeholderText`, which I004 measured at
+    /// **1.72:1** on white and **1.70:1** on the app's own field background.
+    /// `--fg-muted` is 7.44:1 on white — the ink every other muted line in the
+    /// app already uses, and the one Android's `OutlinedTextField` hints are
+    /// drawn in.
     ///
-    /// There is no SwiftUI API for a placeholder's colour, and there are **39
-    /// files** with a `TextField` in them. One proxy here reaches all of them,
-    /// including the ones no batch has written yet, and it leaves the hint as
-    /// the field's own `prompt`: `XCUIElement.placeholderValue` keeps working
-    /// for the cases that read it, and VoiceOver keeps one element where an
-    /// overlay would give it two with the same words.
+    /// **This was two `UILabel.appearance(whenContainedInInstancesOf:)` lines
+    /// and they reached nothing**, which is why the mechanism moved out of
+    /// this file rather than being narrowed inside it: both of I004's readings
+    /// came back as `UIColor.placeholderText` to the integer, because
+    /// `UITextField` sets its placeholder label's colour itself and an
+    /// explicit set beats an appearance proxy. A paragraph of this comment
+    /// used to argue about which private `UILabel` subclass the proxy might
+    /// reach; the measurement is that it reached none of them.
     ///
-    /// ### The vertical-axis fields, and what is NOT known about them
-    ///
-    /// The proxy names two classes. The single-line leg is settled: a plain
-    /// `TextField` is a `UITextField`, the hint is its `placeholder`, and
-    /// `XCUIElement.placeholderValue` reads it back — a case does.
-    ///
-    /// The `axis: .vertical` leg is **not settled, and this comment used to
-    /// claim it was** (review 2's must finding: it asserted the field is
-    /// "backed by `UITextView`" while the UI case asserted a `UITextView` has
-    /// no placeholder of its own, and both cannot be true of the same hint).
-    /// What is actually known:
-    ///
-    ///  * The scope, counted line by line rather than quoted: `grep -rn
-    ///    "axis: .vertical" ios/Domovoi/` returns **38 lines in 21 files**,
-    ///    and **21 of those lines are comments** (this one included)
-    ///    explaining the rule about `submitLabel`. The fields are **17, in 15
-    ///    files** — the multi-line shape this app uses wherever the audit
-    ///    failed a single line — and only
-    ///    `Calendar/CalendarEventEditorView.swift` has more than one (three).
-    ///    Six of the 21 files are comment-only: this one,
-    ///    `Printing/PrintSheetView.swift`,
-    ///    `PhoneMedia/PhoneDeviceChrome.swift`,
-    ///    `MusicMore/MusicAddToPlaylistSheet.swift` (whose own comment says
-    ///    "which this is not"), `People/PersonMemoryTabView.swift` and
-    ///    `News/NewsTopicsView.swift`. None of the 15 is this unit's.
-    ///    (Review 2 reported 36 in 20 and the first fix pass 24 in 18, both
-    ///    from a grep that was not split into code and comment; the per-file
-    ///    list in DECISIONS §3a was wrong with it. The conclusion is the same
-    ///    and the numbers were not.)
-    ///
-    ///    **This 17 is not the 39 below.** The 39 is files with *any*
-    ///    `TextField`, which is the proxy's reach; the 17 is the vertical-axis
-    ///    subset, which is this leg's fallback cost. Two populations, two
-    ///    numbers, and a sentence saying so because a reader meeting them
-    ///    forty lines apart read them as one figure that had drifted.
-    ///  * Which view SwiftUI builds for them, and whether the prompt inside it
-    ///    is a `UILabel` the proxy can reach or something SwiftUI draws
-    ///    itself, is UIKit's business. **This file cannot assert it**, and
-    ///    the same shape of reasoning — a sentence about a private view tree
-    ///    with no reading behind it — is what review 1's S3 struck out of this
-    ///    comment the first time.
-    ///  * `UITextView` is named in the proxy because it costs nothing if it is
-    ///    the wrong class and covers the leg if it is the right one.
-    ///
-    /// So the leg is **measured, not argued**:
-    /// `testShell_TheHintInkIsReadableOnAVerticalField` opens Music at AX5,
-    /// where its field becomes `axis: .vertical` (`MusicView.swift:688`),
-    /// and reads the hint's own pixels. Apple's grey measures about 1.7:1
-    /// there and this ink about 6.7:1, so that case is the answer either way.
-    ///
-    /// **If it fails, the fix is not a narrower class here.** It is
-    /// `TextField(…, prompt: Text(hint).foregroundColor(Color.fgMuted))` at
-    /// those 17 call sites, which is SwiftUI's own way of colouring a prompt,
-    /// keeps the hint the field's prompt, and costs an edit in 15 files this
-    /// unit does not own. That instruction is in
-    /// `design-notes/ios/batch-2026-11-03/shell/DECISIONS.md` under "Needs a
-    /// shared change" so that the train's fixer has it in hand and does not
-    /// have to re-derive it from a doc comment.
-    ///
-    /// ### What this could recolour besides the hint, and what reads it
-    ///
-    /// An appearance proxy cannot be narrowed to a placeholder: it says
-    /// "every `UILabel` inside one of these", and **what else is a `UILabel`
-    /// in there is UIKit's business, not something this file can assert**.
-    /// `UITextField` has historically drawn its own text through
-    /// `UITextFieldLabel`, a `UILabel` subclass; if it still does on the
-    /// train's iOS, this turns typed text `fgMuted` as well, in all **39
-    /// files with a `TextField`** — the proxy's whole reach, and not the 17
-    /// vertical-axis fields counted in the section above.
-    ///
-    /// An earlier version of this comment argued that it could not — a claim
-    /// about a private view tree with no reading behind it, which is the
-    /// shape of reasoning this track's ledger says to treat as a review
-    /// target (review 1, S3).
-    ///
-    /// So it is measured instead, by `testShell_TheHintInkIsReadable` in
-    /// `ios/DomovoiUITests/StubHouseUITests+Shell.swift`, three readings:
-    ///
-    ///  * an **empty** single-line field, whose darkest pixel is the hint —
-    ///    about 6.7:1 against this ink and about 1.7:1 against Apple's grey;
-    ///  * the same field with a word **typed** into it, whose darkest pixel is
-    ///    the typed glyph — the primary ink reads near 20:1 on white and this
-    ///    muted one would read about 7, so a floor of 10 tells them apart;
-    ///  * Music's field at AX5, where it becomes `axis: .vertical`
-    ///    (`MusicView.swift:688`) — **the leg whose backing class this file
-    ///    does not assert**, four paragraphs up, and the size a hint matters
-    ///    most at. The reading is the answer either way: if the proxy reaches
-    ///    that field the ink measures about 6.7:1 there, and if it does not,
-    ///    about 1.7:1 and DECISIONS §3a is the fallback. (This bullet said
-    ///    "and is a `UITextView`" until the second fix pass — the exact
-    ///    sentence the paragraphs above withdraw, left standing thirty-five
-    ///    lines below them, so one doc comment contradicted itself.)
-    ///
-    /// If the typed reading ever fails, the fix is not this proxy with a
-    /// narrower class: it is `TextField(…, prompt: Text(hint).foregroundColor(…))`
-    /// at the call sites, which is SwiftUI's own way of colouring a prompt and
-    /// costs an edit in each of the 39 files with a `TextField` — the whole
-    /// reach, because a typed-text regression is not confined to the
-    /// vertical-axis subset.
+    /// It stays a function here, called from ``init()``, because the one
+    /// thing that *is* this file's business is the **when**: before a view
+    /// exists, so that no field is built through the old path.
     private static func drawHintsInTheMutedInk() {
-        UILabel.appearance(whenContainedInInstancesOf: [UITextField.self])
-            .textColor = HintInk.ink
-        UILabel.appearance(whenContainedInInstancesOf: [UITextView.self])
-            .textColor = HintInk.ink
+        ShellHintInkAppearance.install()
     }
 
     init() {
-        // Before anything is built, let alone drawn: an appearance proxy is
-        // read when a view is created, so a window already on screen would
-        // keep the grey.
+        // Before anything is built, let alone drawn: a field takes its hint
+        // through the setter when it is created, so a field already on screen
+        // would keep the grey.
         Self.drawHintsInTheMutedInk()
         // **One vault, handed to both.** Two `TokenVault()`s would reach the
         // same Keychain items — same service, same accounts — so this is not

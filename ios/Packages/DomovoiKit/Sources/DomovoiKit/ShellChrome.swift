@@ -337,6 +337,40 @@ public enum ShellHeaderFold: String, Equatable, Sendable, CaseIterable {
     }
 }
 
+/// Whether a pushed screen's back button draws the **word** beside its
+/// chevron, or only the chevron.
+///
+/// ### The reading, and why it is a rule rather than a line in a view
+///
+/// A `UINavigationBar` caps the font of its back-button title. At AX5 the
+/// word is drawn at roughly the ordinary 17 points beside a page whose body
+/// text is near 50 — a control labelled in a size the person did not ask for,
+/// which is the owner's no-misleading-controls rule applied to type rather
+/// than to function. Apple's audit reports it as `Text clipped`, and it was the one
+/// finding train I004 could not attribute on any pushed screen at AX5:
+/// `issue.element` would not resolve, because the label inside a
+/// `UIBarButtonItem` is not an accessibility element of its own.
+///
+/// The attribution is in `ShellScrollAwayChrome.body`, where the answer is
+/// applied, with the five I004 readings that eliminate the large title and
+/// the toolbar pill (roots carry both at AX5 and audit clean of it).
+///
+/// It lives here for the reason ``ShellHeaderFold`` does: `pkgtest.sh` builds
+/// this package and nothing else, so a rule written here has a reading on a
+/// machine with no Simulator, and a view body that stops asking it fails
+/// `ShellBackButtonWordTests`. It is deliberately **not** a case of
+/// ``ShellHeaderFold``: that type's three cases are about the header, and
+/// `AuditStrip.topBar` takes the header away at every size while the back
+/// button's word is wrong only at the accessibility ones.
+public enum ShellBackButtonWord {
+
+    /// - Parameter isAccessibilitySize: `dynamicTypeSize.isAccessibilitySize`.
+    /// - Returns: true where the word is drawn beside the chevron.
+    public static func isDrawn(isAccessibilitySize: Bool) -> Bool {
+        !isAccessibilitySize
+    }
+}
+
 /// Whether a ``DialogCard`` draws itself inline because its presentation never
 /// arrived — owner answer 6's guard, as a value.
 ///

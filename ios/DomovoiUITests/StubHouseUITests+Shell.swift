@@ -91,10 +91,23 @@ extension StubHouseUITests {
 
         /// What a **typed** glyph must clear, which is a different question
         /// from the hint's floor: the primary ink reads near 20:1 on a white
-        /// field and the muted ink about 7, so a reading under this means the
-        /// appearance proxy in `DomovoiApp.init` recoloured the field's own
-        /// text and not only its placeholder (review 1, S3).
+        /// field and the muted ink about 7, so a reading under this means
+        /// `ShellHintInkAppearance` recoloured the field's own text and not
+        /// only its placeholder (review 1, S3).
         static let typedInkFloor = 10.0
+
+        /// How wide a pushed screen's back control may be at AX5 once it has
+        /// stopped drawing the word beside its chevron.
+        ///
+        /// **86.3 is what it measured with the word** — train I004,
+        /// `att/testTheAX5WordingIsTheSameBarFindings/41-ax5-none-tree…`:
+        /// `Button, {{0.0, 53.7}, {86.3, 44.0}}, label: 'home'` inside a
+        /// 117-point `NavigationBar`. A chevron on its own is the bar's
+        /// leading inset plus one glyph, well under half of that. 65 points
+        /// is between the two with room on both sides, because the glyph's
+        /// own size at AX5 is UIKit's business and not something this file
+        /// has measured.
+        static let minimalBackControlWidth: CGFloat = 65
 
         /// The two plugins the stub house's manifest publishes
         /// (`fixtures/images.py`'s and `fixtures/stations.py`'s `PLUGIN`),
@@ -210,6 +223,92 @@ extension StubHouseUITests {
                 + "`\(StubShell.settingsTitle)` — the stack's root is titled "
                 + "after the open route, so the control for leaving Settings is "
                 + "named Settings and VoiceOver says `back to settings`"
+        )
+    }
+
+    /// At AX5 a pushed screen's back control is **a chevron and no word**, and
+    /// it still goes back.
+    ///
+    /// ### The defect, and how it was attributed
+    ///
+    /// `UINavigationBar` caps the font of its back-button title. At AX5 the
+    /// word is drawn at roughly the ordinary 17 points beside a page whose
+    /// body text is near 50 — a control labelled in a size the person did not
+    /// ask for. Apple's audit reports it as `Text clipped`, and in train I004
+    /// it was the **one finding the audit could not attribute**: the label
+    /// inside a `UIBarButtonItem` is not an accessibility element of its own,
+    /// so `issue.element` would not resolve and the line arrived as
+    /// `| element: nil`.
+    ///
+    /// Five I004 readings place it, and nothing in the app had to change to
+    /// take them: pushed at AX5 carries exactly one such finding
+    /// (`shell-settings-ax5-audited` floor 3 rest 1, `ax5-none` on Music,
+    /// `sizes-AX5` on Phones & browsers), a **root** at AX5 carries none
+    /// (`shell-home-ax5-audited`, whose one rest names Home's own card;
+    /// `shell-local-ax5-audited`, floor 0 rest 0), and the same pushed screen
+    /// at `S` and `large` carries none (`SIZES SUMMARY S=8 large=8 AX5=3`,
+    /// where only the AX5 run has a fourth, clipped finding). A root draws the
+    /// large title and the toolbar pill too, so both of those are out.
+    ///
+    /// ### What this asserts, and what it cannot
+    ///
+    /// The width, because that is where the word is: the same control measured
+    /// **86.3 points** with it
+    /// (`att/testTheAX5WordingIsTheSameBarFindings/41-ax5-none-tree…`) and a
+    /// chevron alone is the bar's leading inset plus one glyph. And that it
+    /// still works, because a back control that has lost its word and its job
+    /// would pass a width reading.
+    ///
+    /// It says nothing about the ordinary sizes, where the word is drawn and
+    /// should be: that half is `ShellBackButtonWordTests`, which reads the
+    /// rule and the one line of `ShellScrollAwayChrome.body` that applies it.
+    @MainActor
+    func testShell_TheBackButtonDropsItsWordAtTheLargestTypeSize() throws {
+        let app = launch(mode: StubShell.ax5, push: "Settings", pushDelay: Self.pushDelay)
+        XCTAssertTrue(
+            app.navigationBars.staticTexts[StubShell.settingsTitle]
+                .waitForExistence(timeout: 40),
+            "Settings never drew its navigation title at AX5 — the seeded push "
+                + "did not land, so there is no back control to measure"
+        )
+        evidence(app, "shell-back-ax5")
+
+        // **The leftmost control in the bar, not `firstMatch`.** The bar also
+        // carries the toolbar pill, and `firstMatch` is tree order rather
+        // than a promise about which end of the bar a control is at.
+        let controls = app.navigationBars.buttons.allElementsBoundByIndex
+            .filter { $0.exists }
+        guard let back = controls.min(by: { $0.frame.minX < $1.frame.minX }) else {
+            XCTFail("the pushed Settings screen's navigation bar has no controls at all")
+            return
+        }
+        print(
+            "SHELL [shell-back-ax5] back control \(back.frame), label "
+                + "`\(back.label)`, of \(controls.count) in the bar"
+        )
+        XCTAssertLessThan(
+            back.frame.width,
+            StubShell.minimalBackControlWidth,
+            "the back control is \(Int(back.frame.width)) points wide at AX5, over "
+                + "the \(Int(StubShell.minimalBackControlWidth))-point allowance. It "
+                + "measured 86.3 with its word in train I004, so this is the word "
+                + "back: `ShellScrollAwayChrome.body` is not applying "
+                + "`navigationBarBackButtonDisplayMode(.minimal)` at the "
+                + "accessibility sizes, and Apple's audit will report it as an "
+                + "unattributable `Text clipped` on every pushed screen again"
+        )
+        XCTAssertTrue(
+            back.isHittable,
+            "the back control at \(back.frame) is not hittable — a chevron with no "
+                + "word is still the only way out of a pushed screen without a "
+                + "swipe"
+        )
+        back.tap()
+        XCTAssertTrue(
+            app.navigationBars.staticTexts[StubShell.homeTitle]
+                .waitForExistence(timeout: 20),
+            "tapping the back control at AX5 did not land on the stack's root — "
+                + "the word came off the control and its job went with it"
         )
     }
 
@@ -840,7 +939,17 @@ extension StubHouseUITests {
                 + "attached picture to attribute it.** A row of Home's or "
                 + "Videos' belongs to that unit, and this allowance grows by "
                 + "that signature and no other; the large title or the toolbar "
-                + "pill is this unit's and is the defect reading 6 is for."
+                + "pill is this unit's and is the defect reading 6 is for. "
+                + "ONE of these has already been attributed and fixed: a "
+                + "`Text clipped` on a pushed screen at AX5 is the back "
+                + "button's word, which `UINavigationBar` draws at about 17 "
+                + "points whatever size is asked for and which is not an "
+                + "accessibility element of its own — so the audit names it "
+                + "and XCUITest cannot. It came off in `ShellScrollAwayChrome` "
+                + "(`navigationBarBackButtonDisplayMode`) and "
+                + "`testShell_TheBackButtonDropsItsWordAtTheLargestTypeSize` "
+                + "holds it; if that case is red too, this line is the same "
+                + "defect and not a second one."
         )
     }
 

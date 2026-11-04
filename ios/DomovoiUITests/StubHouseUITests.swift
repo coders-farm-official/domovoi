@@ -1181,14 +1181,16 @@ final class StubHouseUITests: XCTestCase {
             //
             //  * `Voice` and `System` are the Settings **index**'s group
             //    buttons: this screen is pushed over that index and the tree
-            //    attached by this very case holds neither of them. They are
-            //    real findings **on the index**, where
+            //    attached by this very case holds neither of them. This
+            //    comment used to call them "real findings on the index" and
+            //    route them to that screen's owner, naming
             //    `testPlayer_TheListeningAsCardAudits` and
-            //    `testWhetherTheEightAreSizesRatherThanElements` also flag
-            //    them; `fx-shell/REPORT.md` routes them to that screen's
-            //    owner. This case is not the place they get fixed, and it is
-            //    not the place they get hidden either — the `elsewhere` lines
-            //    below are printed every run.
+            //    `testWhetherTheEightAreSizesRatherThanElements` as the cases
+            //    that flag them. **Neither does** (the residual audit's §6.1
+            //    read both: the first filters `split.rest` down to findings
+            //    naming its own card, the second prints and asserts only a
+            //    count), and the routing was not needed anyway — see the
+            //    assertion below, where I004's measurement is.
             //  * The index's subtitle was reported at y=241.67 where that
             //    same tree has it at **189.7**: the audit measured it 52
             //    points *below* where the tree has it, because the audit was
@@ -1207,6 +1209,49 @@ final class StubHouseUITests: XCTestCase {
                         + "not hold this element there: \(line)"
                 )
             }
+            // **`elsewhere` is asserted, not only printed** — the residual
+            // audit's §6.1, answered with a measurement rather than with
+            // routing.
+            //
+            // The comment above routed `Voice` and `System` to the Settings
+            // index's owner and left the two lines as a `print`, and the
+            // residual pass was right that a defect whose only report is a
+            // `print` is a defect nobody is holding — the two cases it named
+            // as holders turned out not to assert on them.
+            //
+            // They did not need a holder: **all four of I003's findings here
+            // were the stale folded bar, and all four are gone in I004.**
+            // I003's pairing audit returned `domovoi / settings` at
+            // `(16.0, 141.0, 7.33, 40.67)` — the squeezed title itself — plus
+            // the index's subtitle at y=241.67 where the tree had it at 189.7,
+            // `Voice` at y=315.67 and `System` at y=406.67: one defect, four
+            // readings, every frame 52 points below where the tree holds it,
+            // which is a large-title row. With ``ShellScrollAwayChrome``'s fix
+            // in, I004's `AUDIT [pairing]` lines are **eight floor findings and
+            // nothing else**, and `label='Voice'` does not appear in any of the
+            // 434 logs of that train.
+            //
+            // So the honest shape is an assertion with nothing to swallow: if
+            // those two ever come back, this case reds and the picture is
+            // attached, instead of a line scrolling past in a log. The cost is
+            // that a genuine finding on a built-but-scrolled-off row of this
+            // screen also reds here — which is the right direction, and the
+            // message says where to look.
+            XCTAssertEqual(
+                elsewhere,
+                [],
+                "Apple's audit named \(elsewhere.count) element(s) the "
+                    + "accessibility tree does not hold where it says: "
+                    + elsewhere.joined(separator: " / ")
+                    + ". In train I003 this was four readings of ONE defect — "
+                    + "the shell's folded navigation title, with the Settings "
+                    + "index behind this screen reported 52 points low — and "
+                    + "I004 returned none of them with that fixed. So this is "
+                    + "either that defect back or a finding on a row of this "
+                    + "screen that is built and scrolled off; **read the "
+                    + "attached picture and the tree**, and do not widen this "
+                    + "assertion without one of the two."
+            )
             XCTAssertTrue(
                 rest.isEmpty,
                 "Apple's audit has findings against the pairing screen beyond the "
@@ -2360,6 +2405,18 @@ final class StubHouseUITests: XCTestCase {
                     "[\(Self.auditInstrumentRevision)] a pushed screen at AX5 with `\(variant)` stripped has findings "
                         + "outside the floor, in the chrome rather than in the "
                         + "destination: " + ours.joined(separator: " / ")
+                        + " — if that is an anonymous `Text clipped`, it is the "
+                        + "back button's word, and it has an owner: "
+                        + "`UINavigationBar` caps that label's font, the label "
+                        + "is not an accessibility element of its own (so the "
+                        + "audit names it and XCUITest resolves nil), and "
+                        + "`ShellScrollAwayChrome` takes the word off at the "
+                        + "accessibility sizes. I004 placed it by elimination — "
+                        + "one per pushed screen at AX5 (here, "
+                        + "`shell-settings-ax5-audited`, `sizes-AX5`), none on a "
+                        + "root at AX5 (`shell-home-ax5-audited`, "
+                        + "`shell-local-ax5-audited`), none at `S` or `large` "
+                        + "(`SIZES SUMMARY S=8 large=8 AX5=3`)."
                 )
             }
             app.terminate()
