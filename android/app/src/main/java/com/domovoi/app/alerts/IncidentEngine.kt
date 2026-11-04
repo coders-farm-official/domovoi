@@ -234,6 +234,12 @@ class IncidentEngine(
                 keepList -> Unit
                 summary is Read.Ok && summary.value != null ->
                     _state.value = IncidentState(key, IncidentTier.OPEN, loaded = true, summary = summary.value)
+                // Answered, with nothing to say: a refusal (an unpaired
+                // phone's 401/403), a body neither read could be made sense
+                // of, or a server older than the guard. `loaded` says only
+                // that the server answered — NOT that anything was checked,
+                // so a reader must not take NONE for "all is well" (D24:
+                // Health's guardCheck used to, and showed a green tick).
                 summary is Read.Ok || summary is Read.Answered ->
                     _state.value = IncidentState(key, IncidentTier.NONE, loaded = true)
                 current == null -> _state.value = IncidentState(serverKey = key)

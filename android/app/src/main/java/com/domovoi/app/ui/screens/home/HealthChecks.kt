@@ -232,7 +232,15 @@ internal fun healthChecks(
 internal fun guardCheck(state: IncidentState?): HealthCheck {
     val c = HealthCheck("containers", HealthPart.Containers, "Domovoi containers", Tone.Ok,
         "every container Domovoi expects looks right", order = 0)
-    if (state == null || !state.loaded) return c.copy(tone = Tone.Idle, text = UNREAD)
+    // `loaded` means the server ANSWERED, which is not the same as having
+    // been checked: an unpaired phone's 401/403 and a server too old to have
+    // the guard both answer, and both land on IncidentTier.NONE with nothing
+    // to show (IncidentEngine.kt refresh()). A green "every container
+    // Domovoi expects looks right" for either is a tick nobody earned
+    // (D7/D24, owner 2026-11-03: `not checked yet` on both apps).
+    if (state == null || !state.loaded || state.tier == IncidentTier.NONE) {
+        return c.copy(tone = Tone.Idle, text = UNREAD)
+    }
     val banner = shellBanner(state, shared = false)
     if (!banner.show) return c
     val tone = if (banner.tone == BannerTone.WARN) Tone.Warn else Tone.Err
