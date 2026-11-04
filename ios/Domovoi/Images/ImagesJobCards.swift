@@ -217,6 +217,9 @@ struct ImagesHistoryCard: View {
     private var content: some View {
         VStack(alignment: .leading, spacing: 10) {
             thumbnails
+            // Between the strip and the prompt, where it reads as a caption
+            // on the pictures rather than as part of what made them.
+            if job.hasMoreImagesThanTiles { moreImages }
             text
             HStack {
                 Spacer(minLength: 8)
@@ -225,13 +228,35 @@ struct ImagesHistoryCard: View {
         }
     }
 
+    /// `4 images, showing 3` — Kamron's answer 27, and his wording
+    /// (``ImagesStrings/moreImages(total:shown:)``, IOS-ONLY-STRINGS §9).
+    ///
+    /// Drawn only when the generation holds more pictures than the three
+    /// tiles above it, which is the condition
+    /// ``ImagesJob/hasMoreImagesThanTiles`` asks. **A sentence and not a
+    /// control**: the fourth picture has no route this card could open, so a
+    /// `+1 more` tap target would be a button that does nothing. Counting it
+    /// out loud is the honest half of that, and it is what the delete
+    /// confirmation has always done (``ImagesStrings/deleteBody(images:)``
+    /// counts every image, not the tiles).
+    private var moreImages: some View {
+        Text(ImagesStrings.moreImages(total: job.imageNames.count, shown: job.tileNames.count))
+            .font(.caption)
+            // The same token the meta line under it uses, measured on this
+            // card: a second muted ink here would be two greys on one card.
+            .foregroundStyle(Color.fgMuted)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     /// `names.take(3)` (`:398`) — ``ImagesJob/tileNames``.
     ///
-    /// **A fourth picture is not drawn and not counted anywhere on the card.**
-    /// Android shows three and says nothing, and a `+1 more` affordance would
-    /// open nothing. The delete confirmation still counts every image,
-    /// because that is what is being deleted (``ImagesStrings/deleteBody(images:)``).
-    /// DECISIONS, "A fourth generated image is not shown, and not counted".
+    /// **A fourth picture is still not drawn, and it is now counted**:
+    /// Android shows three and says nothing, and Kamron's answer 27 is that
+    /// the card says `4 images, showing 3` — ``moreImages``, just below the
+    /// strip. No `+1 more` affordance, because it would open nothing. The
+    /// delete confirmation counts every image too, because that is what is
+    /// being deleted (``ImagesStrings/deleteBody(images:)``).
     private var thumbnails: some View {
         // **Android's cap, and Android's own scrolling.** The strip is a
         // `LazyRow` with `Modifier.weight(1f, fill = false)` against the text
@@ -316,10 +341,14 @@ struct ImagesHistoryCard: View {
 /// or an image box given a fixed `frame(width:)` does not grow with the type
 /// size, which is rule §3 and a finding this track has already had.
 ///
-/// The bytes come through ``VideoPosterStore`` and never `AsyncImage`:
-/// `…/file/{name}` is a device-tier route and `AsyncImage` makes its own
-/// unauthenticated request, which 401s every time. The store's own doc has
-/// the whole reason.
+/// The bytes come through ``VideoPosterStore`` and never `AsyncImage`. This
+/// used to say `…/file/{name}` is device-tier and `AsyncImage` would 401;
+/// **verification says the route is open** (`web.py:699`, no gate —
+/// ``ImagesPaths/file(_:)``), so that was not the reason. The real ones are
+/// the store's own, and they stand: one fetch per name shared by every row
+/// that asks for it, a cache that survives a lazy row being torn down and
+/// rebuilt, and the standing rule that a lazy row owns no request. The store's
+/// doc has them.
 struct ImagesTile: View {
 
     let name: String

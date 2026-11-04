@@ -183,12 +183,27 @@ struct MusicLyricsPanelView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .frame(maxHeight: Self.minHeight * 2)
-            // A scroll by hand turns following off; the chip turns it back
-            // on. `onScrollPhaseChange` is only read for the person's own
-            // gesture — `.interacting` — because the programmatic scroll
-            // below would otherwise switch itself off.
+            // A drag turns following off; it comes back four seconds after
+            // the drag ends, or at once from the chip (answer 35).
+            //
+            // **The view reports the phase and owns nothing.** The timer is
+            // ``MusicRoomLyricsModel/handReleased()``'s, in a model that
+            // outlives this `ScrollView`, because a `Task` started here dies
+            // with the panel and a lazy row never holds one (NIGHT-RULES §3).
+            //
+            // `.interacting` is the one phase that means a finger is on the
+            // list, which is Android's `DragInteraction.Start`
+            // (`LyricsPanel.kt:472`); every other phase — `.decelerating`
+            // after a flick, `.animating` from the panel's own `scrollTo`
+            // below, `.idle` — is its `Stop`. The model refuses a release
+            // that follows no pause, so the programmatic scroll cannot start
+            // a resume for a drag that never happened.
             .onScrollPhaseChange { _, phase in
-                if phase == .interacting { lyrics.scrolledByHand() }
+                if phase == .interacting {
+                    lyrics.handPaused()
+                } else {
+                    lyrics.handReleased()
+                }
             }
             .onChange(of: lyrics.activeIndex) { _, now in
                 guard lyrics.following, now >= 0 else { return }

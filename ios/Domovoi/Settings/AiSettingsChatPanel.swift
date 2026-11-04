@@ -148,16 +148,24 @@ struct AiSettingsChatPanel: View {
             // passes, so the fix is the style, not the colour.
             .buttonStyle(AiSettingsOutlinedButtonStyle())
             .frame(minHeight: 44)
-            // **An identifier, not a label.** Every row's button reads
-            // `warn again` — Android's wording (`:71`), and not mine to
-            // change — so a query by label cannot say which row it found,
-            // and nor can a VoiceOver user. The identifier is invisible to a
-            // person and carries the key the button writes, so a UI case can
-            // name the row it means and still be testing the binding. The
-            // announcement itself is a real defect inherited from Android and
-            // is logged as a wording question in DECISIONS §12 rather than
-            // reworded here.
+            // **An identifier AND a label, and they carry different things.**
+            //
+            // Every row's button *draws* `warn again` — Android's wording
+            // (`:71`), and still not mine to change. The identifier carries
+            // the **key** the button writes, is invisible to a person, and is
+            // how a UI case names the row it means while still testing the
+            // binding (`testAiSettings_WarnAgainClearsOneKindAndLeavesTheOther`
+            // reaches for it).
+            //
+            // The label carries the **word**, because an identifier is not
+            // read out: DECISIONS §12 logged a list of identical buttons as a
+            // real defect inherited from Android, and Kamron's answer 2 is
+            // yes, announce the kind — `warn again, scanned pages`
+            // (``AiSettingsStrings/warnAgainAbout(_:)``, IOS-ONLY-STRINGS §13).
+            // The drawn word is untouched, so nothing a sighted person reads
+            // changes and no case that matches the button by its label breaks.
             .accessibilityIdentifier("aisettings-warn-again-\(kind.key)")
+            .accessibilityLabel(AiSettingsStrings.warnAgainAbout(kind.word))
 
         if dynamicTypeSize.isAccessibilitySize {
             VStack(alignment: .leading, spacing: 4) {

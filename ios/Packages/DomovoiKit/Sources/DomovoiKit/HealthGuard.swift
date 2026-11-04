@@ -150,13 +150,19 @@ public struct HealthGuardSnapshot: Equatable, Sendable {
 ///    inverted version silently downgrades a working phone on one dropped
 ///    packet, and the words it would then show (`pair this phone to see what
 ///    Domovoi watches`) are false about it.
-/// 2. **`summary .ok(nil) | .answered` is `loaded`** — a 404 from both routes
-///    is a server older than the guard, and `loaded` with a hidden banner
-///    makes ``guardCheck(_:)`` **green**: `every container Domovoi expects
-///    looks right`, for something nobody checked.
-///    `HealthChecks.swift:196-208` already records that as an Android finding
-///    and DECISIONS asks the owner about it; it is ported as it is so the two
-///    apps cannot disagree about whether a house is healthy.
+/// 2. **`summary .ok(nil) | .answered` is `loaded`, with tier `none`** — a
+///    404 from both routes is a server older than the guard. The branch is
+///    still Android's to the field: the route answered, so `loaded`; this
+///    phone was told nothing about any container, so the tier is `none`.
+///
+///    What changed on 2026-11-03 is what the **check** makes of it. `loaded`
+///    with a hidden banner used to read `every container Domovoi expects
+///    looks right` — green, for something nobody checked — and Kamron's
+///    answers 7 and 24 are `not checked yet` on both apps. So
+///    ``guardCheck(_:)`` asks ``ContainerGuardState/checkedSomething``
+///    (`loaded && tier != .none`) and this state now reads grey. The engine
+///    is not diverged from; the sentence drawn over it is, and the Android
+///    half of the same answer is the android unit's.
 ///
 /// - Parameter previous: what this **same server** last showed, or nil. The
 ///   caller is responsible for the "same server" part — see

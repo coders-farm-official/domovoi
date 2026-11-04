@@ -4,17 +4,25 @@ import Foundation
 /// plugin's own surface, `/api/plugins/imagegen`.
 ///
 /// Ported field for field from `ui/screens/images/ImagesScreen.kt:76-125`,
-/// and **only** from there. The plugin is not in this repository: `plugins/`
-/// holds `radio/` only, the plugin mounts its own router under
-/// `/api/plugins/{slug}` (`web/backend/plugin_host.py:531`), core's
-/// `web/backend/api/images.py` is a different surface entirely (thumb/raw over
-/// the Files libraries, as its own docstring says at `:17-22`), and
+/// because the plugin is not in this repository: `plugins/` holds `radio/`
+/// only, the plugin mounts its own router under `/api/plugins/{slug}`
+/// (`web/backend/plugin_host.py:531`), core's `web/backend/api/images.py` is a
+/// different surface entirely (thumb/raw over the Files libraries, as its own
+/// docstring says at `:17-22`), and
 /// `domovoi/db/migrations/V008__drop_image_jobs.sql` is the migration that
-/// *removed* the core's job table. So none of these shapes can be checked
-/// against server code tonight, Android's client is the whole specification,
-/// and nothing here is invented — see
-/// `design-notes/ios/overnight/images/DECISIONS.md`,
-/// "Seven routes that no server code in this repo describes".
+/// *removed* the core's job table.
+///
+/// **Every shape here is now verified against the plugin's own code**
+/// (Kamron's answers 6 and 25, 2026-11-03):
+/// `domovoi-project/domovoi-plugin-imagegen`, which is read-only to this
+/// batch. The row the three reads share is `_job_row`
+/// (`domovoi_plugin_imagegen/web.py:114-127`) over the columns `_JOB_COLS`
+/// names (`:71-74`), and the table is
+/// `migrations/V001__imagegen_schema.sql`. Each type below says what matched
+/// and what the server has that this does not; the pass is written up in
+/// `design-notes/ios/batch-2026-11-03/screens/REPORT.md`, and the one thing
+/// it changed is not a shape — three of the seven routes need an admin
+/// session (``ImagesPaths``).
 ///
 /// **Every field decodes with `decodeIfPresent ?? default`**, hand written,
 /// as ``Capabilities`` does at `Capabilities.swift:65-77` and for its stated
@@ -27,6 +35,20 @@ import Foundation
 // MARK: - the models the engine offers
 
 /// One generation model — `ImagesScreen.kt:79`.
+///
+/// **Verified** against the `/models` route (`web.py:270-288`): the entries
+/// are the curated catalog (`image_model_catalog.json`) with `workflow`
+/// stripped and three fields computed. `id`, `label` and `recommended` are
+/// the catalog's own; `installed` is `bool(files) and every file present`
+/// (`:276-281`).
+///
+/// Four fields the server sends and this does not read, every one of them
+/// because no Android view draws it: `partial` (some of a model's files on
+/// disk — the download-in-progress state the dashboard shows), `description`,
+/// `license`, `speed`, `est_vram_gb`, `download_gb` and `default_size`.
+/// `partial` is the interesting one and it is in DECISIONS: a half-downloaded
+/// model is not offered by either app, which is right, and neither says that
+/// is what it is.
 public struct ImagesGenModel: Equatable, Sendable, Decodable, Identifiable {
     public let id: String
     public let label: String
@@ -123,6 +145,17 @@ public struct ImagesGenState: Equatable, Sendable, Decodable {
 /// Every field is optional on the wire and **the app never sends any of
 /// them**: `POST …/generate` carries `model` and `prompt` only
 /// (`ImagesScreen.kt:162-165`), and these come back from the server.
+///
+/// **Verified**: the route writes `params` itself, as
+/// `{"width", "height", "steps", "seed", "negative"}` (`web.py:383-389`),
+/// into a `JSONB` column. So all four read here are real, and `steps` is
+/// genuinely nullable — it is `body.steps or wf.get("steps")`, and a workflow
+/// with no `steps` leaves it null.
+///
+/// **`negative` is the fifth, and it is not read.** It is the negative prompt,
+/// always present and `""` for anything either app asked for, because neither
+/// sends one. Drawing it would be a line that says nothing on every row a
+/// phone can make; DECISIONS.
 public struct ImagesJobParams: Equatable, Sendable, Decodable {
     public let width: Int?
     public let height: Int?
@@ -154,6 +187,12 @@ public struct ImagesJobParams: Equatable, Sendable, Decodable {
 }
 
 /// What a finished generation produced — `ImagesScreen.kt:94`.
+///
+/// **Verified**: the generation runner writes `result={"images": names}` and
+/// nothing else (`web.py:439-442`), where each name is the bare file name of
+/// an image it wrote into the output folder (`:430-435`). `/history` then
+/// replaces the array with the subset whose files still exist (`:640-646`),
+/// so a name that reaches this app is a name `…/file/{name}` will serve.
 public struct ImagesJobResult: Equatable, Sendable, Decodable {
     public let images: [String]
 
@@ -175,10 +214,24 @@ public struct ImagesJobResult: Equatable, Sendable, Decodable {
 ///
 /// Android compares `status` to four literals and nothing else — `"pending"`
 /// and `"running"` (`:329`, `:181-183`), `"failed"` (`:182`, `:335`), and
-/// everything else falls through to the idle tone (`:336`). The vocabulary is
-/// the plugin's and it is open, so ``other(_:)`` carries the raw word: the
-/// pill draws `job.status` verbatim (`:334`), and a status this app has never
-/// heard of must still render **its own word**, not "other".
+/// everything else falls through to the idle tone (`:336`). So ``other(_:)``
+/// carries the raw word: the pill draws `job.status` verbatim (`:334`), and a
+/// status this app has not heard of must still render **its own word**, not
+/// "other".
+///
+/// **Verified, and the vocabulary turns out to be closed**: five words, by a
+/// `CHECK` constraint — `pending`, `running`, `done`, `failed`, `cancelled`
+/// (`migrations/V001__imagegen_schema.sql`,
+/// `generation_jobs_status_chk`). ``other(_:)`` is kept anyway, because a
+/// later migration widening that constraint must not take the screen down
+/// for a word the pill could simply have drawn.
+///
+/// One consequence worth naming: `cancelled` is the fifth word and `/jobs`
+/// **returns** a cancelled generation for five minutes (`web.py:330-332`),
+/// while ``inLane`` keeps only the active ones and `failed`. So a job
+/// cancelled from this phone leaves the lane at once rather than sitting
+/// there greyed out. That is Android's filter (`:180-183`), to the line, and
+/// it is the behaviour either app shows.
 ///
 /// The two predicates live here rather than in three places, which is what
 /// they were in the Kotlin.
@@ -222,6 +275,21 @@ public enum ImagesJobStatus: Equatable, Sendable {
 
 /// One generation — a live job or a history row, which are the same shape on
 /// the wire. `ImagesScreen.kt:97`.
+///
+/// **Verified field for field against `_job_row` (`web.py:114-127`)**, which
+/// is the one function both reads build their rows with — so "the same shape
+/// on the wire" is not an inference from Android, it is one serialiser. Every
+/// one of the eleven keys decoded below is in it, with the types this
+/// decodes: `id` an `int` from a `BIGINT` identity column, `pct` an `int` or
+/// null (`CHECK 0..100`), `params` and `result` `JSONB`, and the two
+/// timestamps `.isoformat()` of `TIMESTAMPTZ` columns, so they carry an
+/// offset.
+///
+/// **`requested_at` is the twelfth key and is not decoded.** It is when the
+/// row was inserted, it is `NOT NULL`, and it is what `/jobs` orders by. No
+/// Android view draws it and nothing here needs it — but it is the field a
+/// history card would want if a date were ever drawn (see ``metaLine``), so
+/// it is named rather than left for someone to rediscover.
 public struct ImagesJob: Equatable, Sendable, Decodable, Identifiable {
 
     /// Kotlin `Long` (`:98`).
@@ -303,10 +371,23 @@ public struct ImagesJob: Equatable, Sendable, Decodable, Identifiable {
     public var imageNames: [String] { result?.images ?? [] }
 
     /// The tiles a history card draws — **at most three**
-    /// (`ImagesScreen.kt:398`). A fourth image is not drawn and not counted:
-    /// see DECISIONS, "A fourth generated image is not shown, and not
-    /// counted". No "+1 more" affordance, because it would open nothing.
+    /// (`ImagesScreen.kt:398`).
     public var tileNames: [String] { Array(imageNames.prefix(3)) }
+
+    /// Whether this generation made more pictures than its card can show.
+    ///
+    /// Android shows three and says nothing, so a fourth picture was neither
+    /// drawn nor mentioned. Kamron's answer 27 is that the card says so in
+    /// words — ``ImagesStrings/moreImages(total:shown:)``, `4 images,
+    /// showing 3`. There is still no "+1 more" **control**, because there is
+    /// no route to open one with: the picture sheet takes a file name and the
+    /// card only knows the three it drew. A sentence is honest; a tap target
+    /// that opened nothing would be the control [[no-misleading-controls]]
+    /// forbids.
+    ///
+    /// Asked of the two arrays rather than of a count, so a change to
+    /// ``tileNames``' cap cannot leave this saying the wrong thing.
+    public var hasMoreImagesThanTiles: Bool { imageNames.count > tileNames.count }
 
     /// The history card's monospace meta line — `ImagesScreen.kt:385-390`.
     ///
@@ -318,11 +399,16 @@ public struct ImagesJob: Equatable, Sendable, Decodable, Identifiable {
     ///   therefore leads with the separator on both platforms. Dropping it
     ///   here would be a silent divergence in the one line a person reads to
     ///   find out what made a picture;
-    /// * `kind` and `completed_at` are decoded (the shape is the server's) and
-    ///   **not drawn**, because no Android view draws either one and inventing
-    ///   a date format for a field whose timezone convention nothing in this
-    ///   repository describes is how `[[verify-against-reality]]` entries get
-    ///   written.
+    /// * `kind` and `completed_at` are decoded and **not drawn**. They were
+    ///   taken on Android's word; they are now **verified** — `kind` is a
+    ///   `NOT NULL` column constrained to `generate` or `pull`
+    ///   (`generation_jobs_kind_chk`) and `completed_at` is a nullable
+    ///   `TIMESTAMPTZ` that `_iso` serialises with its offset
+    ///   (`web.py:110-112`). Neither is drawn because no Android view draws
+    ///   either one. `completed_at` could now be formatted honestly, since
+    ///   the offset settles the timezone question that stopped it; whether a
+    ///   history card should carry a date is a design question nobody has
+    ///   asked, and it is in DECISIONS rather than taken here.
     public var metaLine: String {
         var parts: [String] = [model]
         if let params {
@@ -344,6 +430,9 @@ public struct ImagesJob: Equatable, Sendable, Decodable, Identifiable {
 /// three of Home's four reads decoded to nothing for a week because a wrapper
 /// was read as an array, and "decoded to nothing" looks on screen like "no
 /// data yet".
+///
+/// **Verified**: `return {"jobs": [_job_row(r) for r in rows.all()]}`
+/// (`web.py:337`). The key is `jobs` and there is nothing beside it.
 public struct ImagesJobList: Equatable, Sendable, Decodable {
     public let jobs: [ImagesJob]
 
@@ -362,6 +451,13 @@ public struct ImagesJobList: Equatable, Sendable, Decodable {
 }
 
 /// `GET …/history` — a wrapper over `history` (`ImagesScreen.kt:123`).
+///
+/// **Verified**: `return {"history": out, "more": len(rows) == limit}`
+/// (`web.py:649`). The key is `history`, and **`more` is a second key this
+/// does not decode** — the paging flag a "show earlier" control would read.
+/// Neither app has one (the route is asked with no `limit`, so this is the
+/// newest 24), and decoding a field nothing uses is how a reader comes to
+/// believe paging exists. ``ImagesPaths/history`` carries the whole note.
 public struct ImagesHistoryList: Equatable, Sendable, Decodable {
     public let history: [ImagesJob]
 

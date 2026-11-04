@@ -52,6 +52,24 @@ public enum AiSettingsStrings {
     /// `ChatSettingsPanel.kt:71`, one per silenced kind.
     public static let warnAgain = "warn again"
 
+    /// What VoiceOver says for one of those buttons — **iOS-only**, asked for
+    /// by Kamron (answer 2, 2026-11-03): `warn again, scanned pages`.
+    ///
+    /// The **drawn** label stays ``warnAgain``, Android's word for word. The
+    /// announcement adds the kind, because every row's button says the same
+    /// three words and a list of identical buttons is what a screen-reader
+    /// user is otherwise given — there is no way to tell which row's button
+    /// is in hand, and the button's own identifier is invisible to a person.
+    /// IOS-ONLY-STRINGS §13. (Android's half of the same answer is the
+    /// android unit's.)
+    ///
+    /// The kind's own word, not its key, so an older build's unknown kind
+    /// announces whatever ``AiSettingsHeadsUpKinds/word(for:)`` falls through
+    /// to rather than nothing.
+    public static func warnAgainAbout(_ word: String) -> String {
+        "\(warnAgain), \(word)"
+    }
+
     /// `ChatSettingsPanel.kt:77` — the link to the manual.
     public static let manualLink = "what Domovoi is good and not so good at"
 

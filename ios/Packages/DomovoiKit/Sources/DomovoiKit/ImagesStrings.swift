@@ -116,6 +116,23 @@ public enum ImagesStrings {
     /// be a count of the tiles claiming to be a count of the pictures.
     public static func tile(position: Int) -> String { "picture \(position)" }
 
+    /// **iOS-only**, asked for by Kamron (answer 27, 2026-11-03): a card with
+    /// more pictures than it shows says so.
+    ///
+    /// Android draws three tiles and says nothing, so a four-image generation
+    /// looks exactly like a three-image one and the fourth picture is
+    /// unreachable *and* unmentioned. His words, verbatim:
+    /// `4 images, showing 3`. IOS-ONLY-STRINGS §9.
+    ///
+    /// **Drawn only when there is something to say** — the card calls this
+    /// only for `total > shown` (``ImagesJob/hasMoreImagesThanTiles``), which
+    /// with ``ImagesJob/tileNames``' cap of three means `total` is 4 or more.
+    /// So the plural is always right and there is no singular form to get
+    /// wrong; a `1 images, showing 1` is unreachable rather than unhandled.
+    public static func moreImages(total: Int, shown: Int) -> String {
+        "\(total) images, showing \(shown)"
+    }
+
     /// `ImagesScreen.kt:277`.
     public static let deleteTitle = "delete generation"
 

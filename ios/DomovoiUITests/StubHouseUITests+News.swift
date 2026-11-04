@@ -1155,6 +1155,17 @@ extension StubHouseUITests {
     // the chip row now fails this case, and ``newsChipRowIsOneElement``
     // pins the shape the fix depends on so a regression cannot quietly bring
     // the findings back as "the known five".
+    //
+    // **And the classification is not coming back, because its cause is
+    // gone.** `newsChipArtefact(_:)` was deleted when the five findings were
+    // fixed in the app (round 3, above). Kamron's answer 39 then took the
+    // avatar bubble out of the chip altogether, which removes the last thing
+    // in this row the auditor could sample and misattribute: a filled circle
+    // inside a capsule was two overlapping fills under one 113 x 44
+    // rectangle, and that sampling is what the whole four-train story was
+    // about. A pill whose only content is one `Text` has nothing left to
+    // classify. If a `Contrast failed` appears in this row again it is a real
+    // one, and it fails this case — there is no exclusion left to widen.
 
     /// A `Contrast failed` against an element the page's own scroll view has
     /// **clipped away** — past its bottom edge or above its top one.

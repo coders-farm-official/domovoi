@@ -72,19 +72,71 @@ final class HealthGuardTests: XCTestCase {
     }
 
     /// Both routes 404: a server older than the container guard. `loaded`,
-    /// tier none — **and that is what makes ``guardCheck(_:)`` green for
-    /// something nobody checked**, which is ported as it is and asked about
-    /// in DECISIONS rather than diverged from.
-    func testAServerWithNoGuardIsLoadedAndEmpty() async {
+    /// tier none — and **`not checked yet`**, never green (Kamron's answers 7
+    /// and 24).
+    ///
+    /// The engine's branch is unchanged and still Android's: a route answered
+    /// (`loaded`) and said nothing about any container (`tier == .none`).
+    /// What changed is the check over it —
+    /// ``ContainerGuardState/checkedSomething`` — and this is the case that
+    /// used to pin the collapse the other way round, asserting
+    /// `containersFine` for a house with no guard at all.
+    func testAServerWithNoGuardIsLoadedAndSaysNotCheckedYet() async {
         let result = await outcome(
             household: .answered(status: 404), summary: .answered(status: 404)
         )
         XCTAssertEqual(.none, result.tier)
-        XCTAssertTrue(result.loaded)
-        XCTAssertEqual(
-            HealthStrings.containersFine, guardCheck(result.guardState).text,
-            "the collapse this records: green for a house with no guard at all"
+        XCTAssertTrue(result.loaded, "the routes answered; the engine's branch is Android's")
+        XCTAssertFalse(
+            result.guardState.checkedSomething,
+            "`loaded` with no tier is a route answering, not a container being checked"
         )
+        XCTAssertEqual(
+            HealthStrings.unread, guardCheck(result.guardState).text,
+            "a server with no container guard reads `not checked yet`, not green"
+        )
+        XCTAssertEqual(.idle, guardCheck(result.guardState).tone, "grey, and not a problem")
+        XCTAssertFalse(guardCheck(result.guardState).problem)
+    }
+
+    /// The other half of answer 24: a read the guard **refused** is not a
+    /// green tick either.
+    ///
+    /// `household .answered(401 | 403)` with a summary that answers nothing
+    /// of its own — which is an unpaired phone against a server whose open
+    /// summary is also gone — lands on tier none and `loaded`, the same state
+    /// a 404 does. Asserted separately from the 404 because the two reach it
+    /// by different branches of ``healthGuardOutcome(household:previous:summary:)``
+    /// and a future change could move one without the other.
+    func testARefusedReadAlsoSaysNotCheckedYet() async {
+        for status in [401, 403] {
+            let result = await outcome(
+                household: .answered(status: status), summary: .answered(status: status)
+            )
+            XCTAssertEqual(.none, result.tier, "\(status)")
+            XCTAssertTrue(result.loaded, "\(status): the route answered")
+            XCTAssertEqual(
+                HealthStrings.unread, guardCheck(result.guardState).text,
+                "\(status): a refused read must not read as every container being fine"
+            )
+            XCTAssertEqual(.idle, guardCheck(result.guardState).tone, "\(status)")
+        }
+    }
+
+    /// And the rule is not "never green": a tier means a verdict, and a
+    /// verdict with a hidden banner is still `every container Domovoi expects
+    /// looks right`.
+    ///
+    /// Here so that the fix for answer 24 cannot be satisfied by a check that
+    /// has simply stopped going green — which is the way this class of fix
+    /// usually goes wrong.
+    func testAVerdictWithNothingWrongIsStillGreen() async {
+        let result = await outcome(
+            household: .ok(HealthIncidentsPayload()), summary: .failed
+        )
+        XCTAssertEqual(.household, result.tier)
+        XCTAssertTrue(result.guardState.checkedSomething)
+        XCTAssertEqual(HealthStrings.containersFine, guardCheck(result.guardState).text)
         XCTAssertEqual(.ok, guardCheck(result.guardState).tone)
     }
 

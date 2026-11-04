@@ -193,19 +193,36 @@ public struct AttentionRow: Equatable, Sendable, Identifiable {
 /// problem, so Home draws no container row. That is honest about an app that
 /// does not make the read.
 ///
-/// ### A green tick this type can produce for something nobody checked
+/// ### The green tick for something nobody checked, and the fix (answer 24)
 ///
-/// `guardCheck` reads `state.loaded` and then `banner.show`, so a `loaded`
-/// state whose banner is hidden is **green**: `every container Domovoi
-/// expects looks right`. On Android that state is reachable without anything
-/// having been checked — `IncidentEngine.kt:238` sets
+/// `guardCheck` used to read `state.loaded` and then `banner.show`, so a
+/// `loaded` state whose banner was hidden was **green**: `every container
+/// Domovoi expects looks right`. That state is reachable without anything
+/// having been checked, on both apps: `IncidentEngine.kt:238` sets
 /// `IncidentState(key, IncidentTier.NONE, loaded = true)` when the summary
 /// read merely *answered*, which includes an unpaired phone's 401/403 and a
-/// server too old to have the guard. The checks are faithful here and the
-/// collapse is the engine's, so it is reported as an Android finding rather
-/// than diverged from; what iOS must not do is build the engine and repeat
-/// it. ``bannerShows`` and ``tier`` are separate fields for that reason: a
-/// future read that was refused has to be able to say so.
+/// server too old to have the guard, and ``healthGuardOutcome(household:previous:summary:)``
+/// ports that branch faithfully (`HealthGuard.swift`).
+///
+/// Kamron's answers 7 and 24, 2026-11-03: `not checked yet` on both apps. So
+/// the green arm now asks ``checkedSomething`` rather than `loaded`, which is
+/// `loaded && tier != .none` — **a read answered, and what it answered was a
+/// verdict about containers.**
+///
+/// That is one line, and it is deliberately derived from the two fields this
+/// type already carries rather than being a third flag a caller sets. A flag
+/// is what collapsed: `loaded` means "something came back", the check read it
+/// as "the containers were checked", and the gap between those two sentences
+/// is the whole defect. A tier cannot be faked by accident — `.household`
+/// means the detail was served and `.open` means a summary was, and both of
+/// those are verdicts — so porting Android's engine later cannot repeat the
+/// collapse by passing the wrong `Bool`. The same rule is the Android half's
+/// one line (`ui/screens/home/HealthChecks.kt:234`), which is the android
+/// unit's.
+///
+/// ``bannerShows`` and ``tier`` stay separate fields for the related reason:
+/// a read that was refused has to be able to say so without saying the
+/// banner is up.
 public struct ContainerGuardState: Equatable, Sendable {
 
     /// How much this phone may see (`IncidentTier`,
@@ -256,6 +273,22 @@ public struct ContainerGuardState: Equatable, Sendable {
         self.incidentIDs = incidentIDs
         self.incidentSummaries = incidentSummaries
     }
+
+    /// Whether the containers were **checked**, as against merely answered
+    /// about — the one question ``guardCheck(_:)``'s green arm may ask.
+    ///
+    /// `loaded` alone is not that question. It means "a route came back", and
+    /// a route comes back for a server with no container guard at all (404 on
+    /// both reads) and for a phone the guard refuses (401/403 on the detail,
+    /// nothing on the summary). In both of those `tier` is ``Tier/none``:
+    /// this phone was told nothing about any container. `.open` means a
+    /// summary was served and `.household` means the detail was, and each of
+    /// those is a verdict — so the pair of fields already distinguishes the
+    /// two cases that `loaded` ran together.
+    ///
+    /// Derived, and not a stored flag, so that a caller cannot be the thing
+    /// that gets it wrong. Kamron's answers 7 and 24.
+    public var checkedSomething: Bool { loaded && tier != .none }
 }
 
 // MARK: - every check this app can make
@@ -560,12 +593,24 @@ public func healthChecks(
 /// ``HealthStrings/tampering``; several failures, `N Domovoi containers need
 /// attention`; one, **its own words** with a trailing `.` trimmed and the
 /// first character lower-cased.
+///
+/// **One divergence from `HealthChecks.kt:234`, and it is Kamron's answer
+/// 24**: the grey arm asks ``ContainerGuardState/checkedSomething`` rather
+/// than `loaded`, so a server with no container guard — and a phone the guard
+/// refuses — reads `not checked yet` instead of green. The whole of it is
+/// written up on ``ContainerGuardState``; the Android half of the same answer
+/// is the android unit's, which is why this says so here rather than quietly
+/// being a different function.
 public func guardCheck(_ state: ContainerGuardState?) -> HealthCheck {
     let c = HealthCheck(
         key: "containers", part: .containers, label: "Domovoi containers",
         tone: .ok, text: HealthStrings.containersFine, order: 0
     )
-    guard let state, state.loaded else { return c.with(tone: .idle, text: HealthStrings.unread) }
+    // `checkedSomething`, not `loaded`: green is for containers that were
+    // looked at, and a route answering is not a look.
+    guard let state, state.checkedSomething else {
+        return c.with(tone: .idle, text: HealthStrings.unread)
+    }
     guard state.bannerShows else { return c }
     let tone: HealthTone = state.bannerTone == .warn ? .warn : .err
     let text: String

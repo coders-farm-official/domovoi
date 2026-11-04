@@ -24,15 +24,34 @@ import Observation
 /// which is not drawn without an engine. See
 /// `overnight/musicmore/DECISIONS.md`.
 ///
+/// ### The 4-second automatic resume after a drag (answer 35)
+///
+/// Android pauses following on a drag and brings it back four seconds after
+/// the drag **ends** — `DragInteraction.Start` cancels any pending resume and
+/// pauses, `Stop`/`Cancel` starts a fresh `delay(FOLLOW_PAUSE_MS)`
+/// (`LyricsPanel.kt:468-485`, `FOLLOW_PAUSE_MS = 4_000` at `:118`). It was
+/// left out for one round on the reasoning that SwiftUI has no
+/// drag-interaction stream and a timer started from a scroll phase would
+/// guess at the gesture. Kamron's answer 35, 2026-11-03: `resume following on
+/// the 4-second timer`.
+///
+/// It is built here, in the model, and the view only **reports the phase** —
+/// ``handPaused()`` and ``handReleased()``. Two reasons, and the second is
+/// the standing rule: a `ScrollView`'s phase handler lives in a view that is
+/// torn down with the panel, and a lazy row never holds a `Task`
+/// (NIGHT-RULES §3). A `Task` the model owns is cancelled by ``stop()`` with
+/// everything else.
+///
+/// **It cannot yank the panel while a finger is down.** The timer is started
+/// by ``handReleased()`` and by nothing else, and ``handPaused()`` cancels
+/// whatever is pending — which is Android's own pair of branches, mapped onto
+/// `onScrollPhaseChange`: `.interacting` is the finger, anything else is not.
+/// So a drag held for a minute starts no timer, and a drag that ends starts
+/// exactly one. The ``follow()`` chip stays (Android ships it too) and is
+/// still the immediate way back.
+///
 /// ### What is not, and why there is no control for it
 ///
-/// * **The 4-second automatic resume after a drag** (`LyricsPanel.kt:468-485`).
-///   Android reads `listState.interactionSource.interactions` to tell a
-///   person's drag from its own programmatic scroll; SwiftUI has no
-///   drag-interaction stream for a `ScrollView`. A timer started from a scroll
-///   phase guesses at the gesture, and guessing wrong yanks the list out from
-///   under someone's finger. ``follow()`` — Android's `follow` chip, which it
-///   also ships — is the way back.
 /// * **Seeking from a tap on a line.** Rooms cannot seek
 ///   (`LyricsPanel.kt:461`: local and seekable only). There is no route, so
 ///   there is no tap target on a room-followed panel.
@@ -46,6 +65,10 @@ public final class MusicRoomLyricsModel {
     /// screen. 100 ms is the same order and is enough: ``MusicLyricsMath/leadMs``
     /// is 150, so a line can never be more than a frame late because of this.
     public static let republishMs: Int64 = 100
+
+    /// How long after a drag ends before following comes back —
+    /// `FOLLOW_PAUSE_MS` (`LyricsPanel.kt:118`), to the millisecond.
+    public static let followResumeMs: Int64 = 4_000
 
     /// The pushes a lyrics surface listens for (`LyricsPanel.kt:121`, `:223`).
     public static let events: Set<String> = ["lyrics.changed", "music.now_playing.changed"]
@@ -91,6 +114,25 @@ public final class MusicRoomLyricsModel {
 
     private var loop: Task<Void, Never>?
     private var reading: Task<Void, Never>?
+
+    /// The pending 4-second resume, or nil.
+    ///
+    /// At most one, ever: every path that starts it cancels it first, which is
+    /// what Android's single `resume: Job?` does. Two in flight would be two
+    /// resumes racing, and the one that fired second would turn following on
+    /// again after a later drag had turned it off.
+    private var resume: Task<Void, Never>?
+
+    /// Whether a finger is on the list right now.
+    ///
+    /// Kept so that a release can only ever follow a pause: a phase handler
+    /// that reports `.decelerating` without an `.interacting` before it (a
+    /// programmatic scroll settling, which is what the panel's own
+    /// `scrollTo` produces) must not start a resume for a drag that never
+    /// happened — and must certainly not turn following *on* while it is
+    /// already on.
+    private var handDown = false
+
     private var onScreen = false
 
     public init(
@@ -181,6 +223,11 @@ public final class MusicRoomLyricsModel {
         onScreen = false
         loop?.cancel(); loop = nil
         reading?.cancel(); reading = nil
+        // The resume is a `Task` this model owns, so it goes with the others:
+        // a panel that is gone must not come back four seconds later and
+        // publish a position into it.
+        resume?.cancel(); resume = nil
+        handDown = false
     }
 
     /// A push arrived. The room's reading is re-asked for either of the two —
@@ -195,6 +242,9 @@ public final class MusicRoomLyricsModel {
     /// including the track id, which the next reading supplies.
     public func serverChanged() {
         reading?.cancel(); reading = nil
+        // The drag was on the old house's words, so its resume is too.
+        resume?.cancel(); resume = nil
+        handDown = false
         trackID = nil
         result = nil
         anchor = nil
@@ -214,16 +264,73 @@ public final class MusicRoomLyricsModel {
         guard wanted != trackID else { return }
         trackID = wanted
         result = nil
+        // A new song's words start at the top and follow from there, so the
+        // pause a drag on the old song's words left behind goes with it —
+        // along with the resume that would have fired into it.
+        resume?.cancel(); resume = nil
+        handDown = false
         following = true
         if onScreen, wanted != nil { read() }
     }
 
-    /// Someone scrolled the list: stop pulling it back.
-    public func scrolledByHand() { following = false }
+    /// Someone is dragging the list: stop pulling it back, and cancel any
+    /// resume that was already counting down — `DragInteraction.Start`
+    /// (`LyricsPanel.kt:472-475`).
+    ///
+    /// Idempotent, because `onScrollPhaseChange` reports `.interacting` once
+    /// per gesture but a second gesture may begin before the first one's
+    /// resume has fired.
+    public func handPaused() {
+        handDown = true
+        resume?.cancel()
+        resume = nil
+        following = false
+    }
+
+    /// Kept under its old name for the one thing it meant: a scroll by hand
+    /// pauses following.
+    ///
+    /// Everything that called it now calls ``handPaused()`` directly; this is
+    /// here so that a caller outside this package (or a test written against
+    /// the old shape) does not silently lose the pause.
+    public func scrolledByHand() { handPaused() }
+
+    /// The drag ended: start the one 4-second resume —
+    /// `DragInteraction.Stop`/`Cancel` (`LyricsPanel.kt:476-483`).
+    ///
+    /// **Only from a drag.** A phase change with no drag behind it is the
+    /// panel's own `scrollTo` settling, and starting a timer for that would
+    /// turn following on from a scroll the panel itself asked for.
+    ///
+    /// The `Task` is the model's, not a row's (NIGHT-RULES §3), and it checks
+    /// three things after the sleep that it could not check before it: that it
+    /// was not cancelled, that the panel is still on screen, and that no new
+    /// drag has begun. Without the last one a finger that came back down
+    /// inside the four seconds would still have the list pulled out from
+    /// under it — ``handPaused()`` cancels this task, and the check is the
+    /// belt to that brace.
+    public func handReleased() {
+        guard handDown else { return }
+        handDown = false
+        resume?.cancel()
+        let sleeper = wait
+        resume = Task { @MainActor [weak self] in
+            try? await sleeper(Self.followResumeMs)
+            guard !Task.isCancelled, let self, self.onScreen, !self.handDown else { return }
+            self.following = true
+            self.republish()
+        }
+    }
 
     /// The `follow` chip: back to the active line at once
-    /// (`LyricsPanel.kt:604`).
+    /// (`LyricsPanel.kt:604`). **Kept** — Android ships the chip as well as
+    /// the timer, and four seconds is a long time to watch a list not move.
+    ///
+    /// It also cancels the pending resume, so the chip and the timer cannot
+    /// both turn following on and republish twice.
     public func follow() {
+        resume?.cancel()
+        resume = nil
         following = true
         republish()
     }

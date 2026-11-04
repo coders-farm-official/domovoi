@@ -47,30 +47,34 @@ struct ImagesComposer: View {
     /// (`ChatConversationView.swift:205-214`). Android has no `imeAction`
     /// here either, so there is nothing to port.
     ///
-    /// **The hint is drawn here rather than handed to `TextField`.** SwiftUI
-    /// renders a field's own placeholder in `UIColor.placeholderText`, which
-    /// measures **1.72:1** against the field's white interior on the audit's
-    /// own screenshot (train S004) — under Apple's 4.5:1 and under every
-    /// other piece of text on this screen, the lowest of which is 5.07:1.
-    /// **This was not the audit's `Contrast failed`.** It was offered as the
-    /// explanation for it, this overlay replaced the placeholder, and the
-    /// finding came back unchanged on the next train — the culprit was the
-    /// disabled `generate` button at 1.47:1 (``ImagesGenerateButtonStyle``).
-    /// The overlay stays because the measurement that justifies it stands on
-    /// its own: 1.72:1 is text nobody can read, whether or not an audit that
-    /// cannot name a placeholder ever reports it. There is no API to recolour it, so the
-    /// hint is an overlay in ``Color/fgMuted`` — 7.43:1 on white, the token
-    /// every other muted line on this screen already uses. Android's
-    /// `OutlinedTextField` placeholder is `onSurfaceVariant`, a proper muted
-    /// ink rather than a near-white one, so this is also the faithful colour.
+    /// **The hint is `TextField`'s own placeholder again** (D65, 2026-11-03).
     ///
-    /// The overlay is `accessibilityHidden` and takes no hits: the field
-    /// keeps the same `accessibilityLabel`, and a second element carrying the
-    /// same words would be a duplicate for VoiceOver and for every case that
-    /// reaches for the field by that label.
+    /// It was an overlay in ``Color/fgMuted`` for one round, on a real
+    /// measurement: SwiftUI renders a field's own placeholder in
+    /// `UIColor.placeholderText`, which measures **1.72:1** against the
+    /// field's white interior on the audit's own screenshot (train S004) —
+    /// under Apple's 4.5:1 and under every other piece of text on this
+    /// screen, the lowest of which is 5.07:1. It was never the audit's
+    /// `Contrast failed`, though: the overlay replaced the placeholder, the
+    /// finding came back unchanged on the next train, and the culprit was the
+    /// disabled `generate` button at 1.47:1 (``ImagesGenerateButtonStyle``,
+    /// which is the fix that stayed).
+    ///
+    /// Kamron's answer to 65 is to **override the placeholder grey app-wide**,
+    /// so the measurement is now answered in the shell for every field in the
+    /// app rather than here for one. An overlay on top of that would be the
+    /// second mechanism, and it costs something this one cannot afford: a
+    /// field drawing its hint as a sibling `Text` has an **empty**
+    /// `placeholderValue`, so XCUITest can no longer read the hint at all —
+    /// which is the very thing D65 says has to stay readable. One screen
+    /// opting out of an app-wide colour decision is also how two fields come
+    /// to disagree about what a hint looks like.
     private var prompt: some View {
+        // The placeholder is handed to `TextField`, which is what puts it in
+        // `placeholderValue` for a UI case and in the field's own accessible
+        // description.
         TextField(
-            "",
+            ImagesStrings.promptPlaceholder,
             text: Binding(get: { images.prompt }, set: { images.prompt = $0 }),
             axis: .vertical
         )
@@ -80,27 +84,11 @@ struct ImagesComposer: View {
         // rejects it everywhere, because it makes text smaller for the person
         // who asked for bigger.
         .lineLimit(3...)
-        // The placeholder is not a label: it disappears the moment there is a
-        // prompt, and a field VoiceOver cannot name while it has content is
-        // a field nobody can find again.
+        // Kept from the overlay round, and not redundant: a placeholder
+        // disappears the moment there is a prompt, and a field VoiceOver
+        // cannot name while it has content is a field nobody can find again.
+        // It is also what every case on this screen reaches the field by.
         .accessibilityLabel(ImagesStrings.promptPlaceholder)
-        // After the style, so the overlay is laid out over the field at its
-        // bordered size rather than at the bare one.
-        .overlay(alignment: .topLeading) {
-            if images.prompt.isEmpty {
-                Text(ImagesStrings.promptPlaceholder)
-                    .foregroundStyle(Color.fgMuted)
-                    // It wraps at an accessibility size like every other line
-                    // on this screen, rather than being squeezed flat.
-                    .fixedSize(horizontal: false, vertical: true)
-                    // `.roundedBorder`'s own content insets, so the hint sits
-                    // where the caret will.
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 7)
-                    .allowsHitTesting(false)
-                    .accessibilityHidden(true)
-            }
-        }
     }
 
     /// `Button` with the `AutoAwesome` glyph and the word (`:229-242`).
