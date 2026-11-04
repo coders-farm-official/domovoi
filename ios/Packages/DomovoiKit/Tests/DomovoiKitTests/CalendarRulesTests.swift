@@ -182,15 +182,15 @@ final class CalendarRulesTests: XCTestCase {
             "it is kept, not moved: its group is still the 3rd"
         )
 
-        // **And an hour is all it gets.** The same row against the 5th's
-        // agenda is a day and a half past its invented end, so a rule that
-        // had quietly become "keep an open-ended event for ever" fails here.
-        XCTAssertEqual(
-            [3],
+        // **And an hour is all it gets.** Row 2's invented end is 00:30 on
+        // the 4th, so the 5th's agenda keeps nothing here — a rule that had
+        // quietly become "keep an open-ended event for ever" fails this, and
+        // so would one that gave it a day.
+        XCTAssertTrue(
             calendarVisibleEvents(
                 mode: .agenda, anchor: day(2026, 11, 5), events: events, in: chicago
-            ).map(\.id),
-            "nothing from the 3rd survives to the 5th"
+            ).isEmpty,
+            "an hour is an hour: nothing from the 3rd or the 4th reaches the 5th"
         )
     }
 

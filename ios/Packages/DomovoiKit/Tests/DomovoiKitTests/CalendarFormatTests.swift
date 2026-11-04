@@ -190,10 +190,19 @@ final class CalendarFormatTests: XCTestCase {
 
     // MARK: - the view words
 
-    /// The toggle's words are the Kotlin's `CalView.label`s, and **week is not
-    /// among them** (DECISIONS §3). The order is the toggle's order.
-    func testTheToggleOffersAgendaDayMonthInThatOrder() {
-        XCTAssertEqual(["agenda", "day", "month"], CalendarViewMode.allCases.map(\.label))
-        XCTAssertNil(CalendarViewMode(rawValue: "week"))
+    /// The toggle's words are the Kotlin's `CalView.label`s, **week among
+    /// them** since Kamron's answer 14. The order is the toggle's order.
+    ///
+    /// It used to assert that `week` was not a case at all (DECISIONS §3,
+    /// which asked whether the week was wanted as a grouped list rather than
+    /// as Android's grid). Answer 14: "build the week view (agenda rows under
+    /// seven day headers)", so it is here — between `day` and `month`, where
+    /// its span puts it.
+    func testTheToggleOffersAgendaDayWeekMonthInThatOrder() {
+        XCTAssertEqual(
+            ["agenda", "day", "week", "month"],
+            CalendarViewMode.allCases.map(\.label)
+        )
+        XCTAssertEqual(.week, CalendarViewMode(rawValue: "week"))
     }
 }

@@ -580,10 +580,13 @@ final class CalendarWindowTests: XCTestCase {
             model.all.contains { $0.title == "autumn fete" },
             "november's held reply won: october's rows were never drawn"
         )
+        // October's 42-cell grid runs sunday 27 september to sunday 8
+        // november, so it spills into november and draws its first week too.
+        // `choir practice` on the 20th is the row outside it.
         XCTAssertEqual(
-            [5],
+            [5, 1, 2],
             model.visible.map(\.id),
-            "october's grid shows the fete and nothing else of these five"
+            "october's grid is drawing the wrong range"
         )
     }
 
