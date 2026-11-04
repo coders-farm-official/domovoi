@@ -58,6 +58,28 @@ extension StubHouseUITests {
         control("save-pace", "{\"pause_ms\":\(ms)}", port: port, what: "the save pace")
     }
 
+    /// Hold the streamed upload door open for `ms` **after** the body has
+    /// arrived (`fixtures/transfers.py`'s `delay_ms`).
+    ///
+    /// The upload's answer to `savePace`, and needed for the same reason: a
+    /// body that goes up in under a second is an upload no XCUITest query can
+    /// catch in flight, and a case about the ring, the percentage or a second
+    /// tap would then be deciding on the Simulator's mood. Train I003's
+    /// `testTransfers_ABigPhoneFileGoesThroughTheStreamedDoor` failed exactly
+    /// there: two hundred mebibytes of sparse file went through loopback
+    /// between the tap and the first poll, and the case read "never reported
+    /// a percentage" from a row that had already finished.
+    ///
+    /// Unlike a save, there is no pacing of the body itself: the house drains
+    /// it as fast as the socket brings it (`stubhouse.py`'s `_read_body`), so
+    /// the window this opens is **after** the last byte — which is where the
+    /// percentage has reached 100 and is still a number the transport
+    /// reported, drawn by the control, not a constant.
+    @MainActor
+    func uploadHold(_ ms: Int, port: Int = 6601) {
+        control("transfers", "{\"delay_ms\":\(ms)}", port: port, what: "the upload hold")
+    }
+
     /// Every streamed upload the house has taken, newest last.
     ///
     /// A GET, so it cannot go through ``control(_:_:port:what:)``, which
@@ -145,11 +167,18 @@ extension StubHouseUITests {
         // screenshots sat inside that window. A save that won that race failed
         // this case with "the save never reported a percentage — the bar is
         // indeterminate", which reads as the feature being broken
-        // (REVIEW-2's fourth finding). 60 ms is ~6.6 s, which is what
-        // `testTransfers_ASaveCanBeStopped` picked for the same reason, and
-        // the percentage assertion below now says out loud when it lost the
-        // race rather than blaming the app.
-        savePace(60)
+        // (REVIEW-2's fourth finding).
+        //
+        // **120 ms, not 60.** 60 ms is ~6.6 s, and three XCUITest queries and
+        // three `evidence()` screenshots sit inside that window, each of them
+        // seconds on a loaded Mac. Train I003 never measured it here (the tap
+        // opened a text editor instead of saving — the row's editor gate,
+        // fixed with this), and
+        // `testTransfers_ASaveOutlivesTheSheetAndThePlayerItWasStartedFrom`
+        // lost exactly that race at 60 ms with fewer queries in its way. 120 ms
+        // is ~13 s; the percentage assertion below still says out loud when it
+        // lost the race rather than blaming the app.
+        savePace(120)
         let (app, landed) = openFiles()
         XCTAssertTrue(landed, "the folder never answered")
         XCTAssertTrue(pickLibrary(app, "Documents"), "the library picker never opened")
@@ -167,6 +196,15 @@ extension StubHouseUITests {
             .firstMatch
         let started = saving.waitForExistence(timeout: 20)
         evidence(app, "56-files-saving-a-film")
+        // The one other thing this tap has been seen to do, named rather than
+        // left for somebody to find in a screenshot: in train I003 it opened
+        // the plain-text EDITOR over four gigabytes of video, because
+        // `DocumentsKinds.editor` is the server route's catch-all and the row
+        // asked it straight. `FileKinds.opensAnEditor` is the gate now.
+        XCTAssertFalse(
+            app.navigationBars["film.mkv"].exists,
+            "tapping a four-gigabyte video opened a document editor over it instead of saving"
+        )
         XCTAssertTrue(started, "a four-gigabyte row was tapped and nothing said it was saving")
         XCTAssertTrue(
             app.buttons["stop saving"].exists,
@@ -344,8 +382,18 @@ extension StubHouseUITests {
     @MainActor
     func testTransfers_ASaveOutlivesTheSheetAndThePlayerItWasStartedFrom() throws {
         transfersReset()
-        // Long enough that the save is still running after four gestures.
-        savePace(60)
+        // **Long enough that the save is still running after four gestures**,
+        // and 150 ms rather than 60. `BIG_SAVE_BYTES` in 56 KiB chunks is 110
+        // of them, so 60 ms is 6.6 seconds — and train I003 measured what
+        // this case does with that window: the save started at t=20.0 and the
+        // stop was asked for at t=28.2, eight seconds later, because a long
+        // press, a drag, a close and two waits sit in between. The screenshot
+        // taken half a second earlier shows `saving "a long one.mp4"… 99%`
+        // with its stop beside it, and the tree taken after it shows neither:
+        // the case failed on the last tick of a save that worked. 150 ms is
+        // ~16 s, which leaves the same assertions eight seconds of margin,
+        // and the share sheet still arrives inside `shareSheetAppeared`'s 30.
+        savePace(150)
         let (app, landed) = openVideos()
         XCTAssertTrue(landed, "the videos list never answered")
         app.buttons["a long one.mp4"].firstMatch.tap()
@@ -445,13 +493,27 @@ extension StubHouseUITests {
         dismissShareSheet(app)
     }
 
-    /// **The save from the document reader**, the fourth call site.
+    /// **The save from the document editor's refusal**, the fourth call site.
     ///
     /// `weird.txt` is a document the house refuses to decode — a 415 with
     /// `binary` as its reason, which is the real route's own answer
-    /// (`documents.py:871`) — so the reader draws the refusal and the save
-    /// beneath it (`FileViewers.swift`'s `refusal`). The same control, the
-    /// same model, a different screen.
+    /// (`documents.py:871`) — and the screen that says so now is the **text
+    /// editor**, not the read-only reader.
+    ///
+    /// ### What changed under this case, and why it is not loosened
+    ///
+    /// It was written against ``FileTextSheet``, whose refusal says
+    /// `not a text file` (``FileStrings/notShowable(_:)``). Owner answers 21
+    /// and 22 put the Documents editors in the app, so a `doc-text` row opens
+    /// an editor and the reader is never reached (`FilesView.swift`'s header
+    /// says so at length). The editor refuses the same file with the
+    /// server's own sentence — ``DocumentsStrings/cannotPreview(_:reason:)``,
+    /// which is Android's wording (`DocumentsEditor.kt:325`) — and draws the
+    /// same `save to device` under it (`DocumentsTextEditorView.refusal`),
+    /// asked of the same ``FilesModel/offersSave(_:)``. So the claim is
+    /// unchanged — a file the phone cannot show is still offered the way out
+    /// that works, through ``SaveToDeviceModel`` — and only the screen
+    /// drawing it has moved. Train I003 is where the old wording failed.
     @MainActor
     func testTransfers_ADocumentThisPhoneCannotShowIsSavedFromTheReader() throws {
         transfersReset()
@@ -462,19 +524,25 @@ extension StubHouseUITests {
         let document = app.buttons["weird.txt"]
         XCTAssertTrue(document.waitForExistence(timeout: 20), "Documents never listed")
         document.tap()
-        // The server's reason in the app's words
-        // (``FileStrings/notShowable(_:)`` for `binary`).
-        let refused = app.staticTexts["not a text file"]
+        // The server's reason in the app's words, naming the file:
+        // `Can't preview weird.txt as text — it looks binary.`
+        let refused = app.staticTexts["Can't preview weird.txt as text — it looks binary."]
         XCTAssertTrue(
             refused.waitForExistence(timeout: 20),
-            "the reader never said why it could not show this one"
+            "the editor never said why it could not show this one"
+        )
+        // And it is a refusal, not an editor pretending: the Save the editor
+        // draws over a file it really opened is not there.
+        XCTAssertFalse(
+            app.buttons["save"].exists,
+            "a file the house calls binary was opened for editing anyway"
         )
         let save = app.buttons["save to device"]
-        XCTAssertTrue(save.waitForExistence(timeout: 10), "the reader offers no way out")
+        XCTAssertTrue(save.waitForExistence(timeout: 10), "the refusal offers no way out")
         save.tap()
 
-        XCTAssertTrue(shareSheetAppeared(app, "a save from the document reader"),
-                      "the reader's save fetched the file and never offered it")
+        XCTAssertTrue(shareSheetAppeared(app, "a save from the document editor's refusal"),
+                      "the refusal's save fetched the file and never offered it")
         evidence(app, "56-files-reader-saved")
         dismissShareSheet(app)
     }
@@ -587,10 +655,30 @@ extension StubHouseUITests {
     ///    query rather than in a multipart envelope. The byte count is the
     ///    socket's, which is the only number in this project that can tell a
     ///    streamed upload from a truncated one.
+    ///
+    /// ### Where it lands, and why it is Music
+    ///
+    /// A `.wav` is `audio`, and the device Files page's target is `.pick` —
+    /// "the default library for the file's kind" on this phone
+    /// (``phoneDefaultHomeLibrary``, `PhoneFiles.kt:259`), which for audio is
+    /// `core:music`. This case first asserted `core:documents`, which is
+    /// where a file of no particular kind goes; train I003 never got that
+    /// far. The door is the same either way — a library id in a query string
+    /// — and `_writable_library` lets a device write `core:music`
+    /// (`ADMIN_WRITE_LIBRARY_IDS` is empty, `files.py:154`), which is the one
+    /// thing the brief asked to verify before sending anything there.
+    ///
+    /// ### Why the door is held open
+    ///
+    /// See ``uploadHold(_:port:)``. Two hundred mebibytes of sparse file
+    /// crossed loopback faster than the first query, so every assertion about
+    /// the ring was being read from a row that had already finished.
     @MainActor
     func testTransfers_ABigPhoneFileGoesThroughTheStreamedDoor() throws {
         phoneReset()
         transfersReset()
+        // After the reset, which puts the fixture back to answering at once.
+        uploadHold(6000)
         let app = phoneLaunch(push: "Files")
         XCTAssertTrue(
             phoneSwitchToDevice(app, waitingFor: StubPhoneMedia.phoneBigFileWord),
@@ -626,9 +714,21 @@ extension StubHouseUITests {
         }
         wanted.tap()
 
-        // The ring says a number. `uploadingLabel(_:)` is `uploading 42%`
-        // once a percentage has arrived and plain `uploading` until then, so
-        // this is the assertion that the progress callback reaches the row.
+        // **Busy first, counting second.** `uploadingLabel(_:)` is plain
+        // `uploading` until a percentage has arrived and `uploading 42%`
+        // after, so the two claims — the row knows an upload is running, and
+        // the progress callback reaches it — are two different failures and
+        // the next train should not have to tell them apart from one
+        // sentence. (Train I003 could not: it read "never reported a
+        // percentage" off a row whose upload had already finished.)
+        let busy = app.buttons
+            .matching(NSPredicate(format: "label BEGINSWITH %@", "uploading"))
+            .firstMatch
+        XCTAssertTrue(
+            busy.waitForExistence(timeout: 60),
+            "the row never said it was uploading at all, with the house holding the door open"
+        )
+
         let counting = app.buttons
             .matching(NSPredicate(
                 format: "label BEGINSWITH %@ AND label CONTAINS %@", "uploading", "%"
@@ -656,7 +756,7 @@ extension StubHouseUITests {
             "the drawn number is not a percentage: \(drawn.label)"
         )
 
-        let done = startingWith(app, "uploaded \"grendalf huge raw.wav\" to Documents")
+        let done = startingWith(app, "uploaded \"grendalf huge raw.wav\" to Music")
         let finished = done.waitForExistence(timeout: 180)
         evidence(app, "phonemedia-big-upload-done")
         XCTAssertTrue(finished, "the 200 MiB upload never finished")
@@ -665,7 +765,7 @@ extension StubHouseUITests {
         XCTAssertEqual(1, taken.count, "the house took something other than one file")
         let first = taken.first ?? [:]
         XCTAssertEqual("grendalf huge raw.wav", first["rel_path"] as? String)
-        XCTAssertEqual("core:documents", first["library_id"] as? String)
+        XCTAssertEqual("core:music", first["library_id"] as? String)
         XCTAssertEqual("", first["path"] as? String, "the library's root is an empty path, still sent")
         XCTAssertEqual(
             200 * 1024 * 1024, first["bytes"] as? Int,

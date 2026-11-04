@@ -80,8 +80,15 @@ struct FileRowView: View {
 
     /// Whether this row opens a document editor. One question, asked once —
     /// the tap and the hint must never disagree about it.
+    ///
+    /// ``FileKinds/opensAnEditor(_:in:)`` and not
+    /// ``DocumentsKinds/editor(for:in:)`` straight: that table's last line is
+    /// the server route's catch-all, so it answered "the text editor" for
+    /// every unrecognised extension in Documents — `film.mkv` opened in a
+    /// text editor with a Save over four gigabytes of video, while this row's
+    /// own menu said its tap was a save (train I003).
     private var edits: Bool {
-        onEdit != nil && DocumentsKinds.editor(for: entry, in: files.selectedID) != nil
+        onEdit != nil && FileKinds.opensAnEditor(entry, in: files.selectedID)
     }
 
     private func tap() {
