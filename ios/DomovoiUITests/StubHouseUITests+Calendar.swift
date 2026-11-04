@@ -370,20 +370,34 @@ extension StubHouseUITests {
 
     /// `title is required`, and that nothing was sent.
     ///
-    /// The subtitle is the witness that no request went: it counts the whole
-    /// list (`CalendarScreen.kt:145`), so a POST that slipped past the
-    /// validation would make it read `14 events` after the refresh. The
-    /// editor must also still be open — a dialog that closed on a refusal
-    /// would have thrown the draft away.
+    /// The subtitle is the witness that no request went: it counts the rows
+    /// in view (`CalendarScreen.kt:145`, and
+    /// ``CalendarStrings/subtitle(count:)``), so a POST that slipped past the
+    /// validation would make it count one more after the refresh. The editor
+    /// must also still be open — a dialog that closed on a refusal would
+    /// have thrown the draft away.
+    ///
+    /// **The count is read off the screen rather than pinned.** It used to be
+    /// the literal `13 events · the household's calendar`, which worked while
+    /// the read was the whole house. Since answer 16 it is the visible
+    /// range's count, and the agenda's own window depends on the hour the
+    /// train runs at (its floor is midnight, and the seed's `bin collection`
+    /// is two hours back) — a pinned number would have been a number for one
+    /// time of day. What this case is actually about is that the count does
+    /// **not change**, which is what is asserted.
     @MainActor
     func testCalendar_BlankTitleIsRefused() throws {
         let (app, landed) = openCalendar()
         XCTAssertTrue(landed, "the agenda never drew a row")
+        let subtitle = app.staticTexts
+            .matching(NSPredicate(format: "label ENDSWITH %@", CalendarWords.subtitleTail))
+            .firstMatch
         XCTAssertTrue(
-            app.staticTexts[CalendarWords.thirteenEvents].exists,
-            "the header does not count the seeded thirteen — the subtitle counts "
-                + "the whole list, so this is what any later count is measured against"
+            subtitle.exists,
+            "the header does not count what is in view — this is what any later "
+                + "count is measured against"
         )
+        let counted = subtitle.label
 
         app.buttons[CalendarWords.newEvent].tap()
         XCTAssertTrue(
@@ -407,8 +421,8 @@ extension StubHouseUITests {
 
         app.buttons[CalendarWords.cancel].tap()
         XCTAssertTrue(
-            app.staticTexts[CalendarWords.thirteenEvents].waitForExistence(timeout: 15),
-            "the list grew although the save was refused"
+            app.staticTexts[counted].waitForExistence(timeout: 15),
+            "the list grew although the save was refused: it was \(counted)"
         )
     }
 
@@ -887,15 +901,22 @@ extension StubHouseUITests {
         /// the fixture's wall clock, so neither can be matched exactly.
         func heights(_ app: XCUIApplication) -> [String: CGFloat] {
             var out: [String: CGFloat] = [:]
+            // Built with arguments rather than as format strings with the
+            // value inside quotes: the subtitle's tail carries an apostrophe
+            // (`household's`) and a single-quoted `NSPredicate` literal
+            // containing one does not parse.
             for (leaf, predicate) in [
-                ("title", "label == 'Calendar'"),
-                ("subtitle", "label BEGINSWITH '13 events'"),
-                ("new-event", "label == 'new event'"),
-                ("day-head", "label == 'today'"),
-                ("day-date", "label == '\(calendarISODay(0))'"),
+                ("title", NSPredicate(format: "label == %@", "Calendar")),
+                // Matched by its **tail**, not by `13 events`: since answer
+                // 16 the number is the visible range's count, and the
+                // agenda's window depends on the hour the train runs at.
+                ("subtitle", NSPredicate(format: "label ENDSWITH %@", CalendarWords.subtitleTail)),
+                ("new-event", NSPredicate(format: "label == %@", "new event")),
+                ("day-head", NSPredicate(format: "label == %@", "today")),
+                ("day-date", NSPredicate(format: "label == %@", calendarISODay(0))),
             ] {
                 let found = app.descendants(matching: .any)
-                    .matching(NSPredicate(format: predicate))
+                    .matching(predicate)
                     .firstMatch
                 if found.exists { out[leaf] = found.frame.height }
             }
@@ -1211,8 +1232,15 @@ enum CalendarWords {
     /// sixty-second bucket this case could swipe straight past.
     static let syncedTwoHours = "synced 2h ago"
 
-    /// The seeded list's own size, which the header counts in full.
-    static let thirteenEvents = "13 events · the household's calendar"
+    /// The tail of the subtitle, which is all of it that does not depend on
+    /// what is in view.
+    ///
+    /// It used to be the whole sentence with the seeded `13` in it. Since
+    /// Kamron's answer 16 the read is a window per view, so the number is the
+    /// visible range's and the sentence says `in view`
+    /// (``CalendarStrings/subtitle(count:)``) — and the agenda's window
+    /// depends on the hour the train runs at.
+    static let subtitleTail = "in view · the household's calendar"
 
     /// The accessibility value of the one cell with four events on it.
     static let fourEvents = "4 events"
