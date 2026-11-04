@@ -16,6 +16,33 @@ import SwiftUI
 /// over both would make the near-end guard the wrapper's job rather than the
 /// screen's.
 
+/// The three device pages' own scroll views, by identifier.
+///
+/// **A handle that does not unbuild.** A UI case that has to scroll one of
+/// these lists had no fixed way to name it: the only query that found the
+/// right `ScrollView` was `scrollViews.containing(the page's subtitle)`, and
+/// that subtitle is a `LazyVStack` child which unbuilds the moment it scrolls
+/// off — so the second gesture had nothing to send a swipe to, and the case
+/// that needed one worked out two coordinates from the frame instead and
+/// pressed-and-dragged between them. That reached 14% of the travel it asked
+/// for (I002, train S009), because a press-and-drag that starts on a row is a
+/// gesture the row may take.
+///
+/// With a handle the case can re-resolve the list on every gesture and use
+/// `XCUIElement.swipeUp()`, which is the platform's own scroll inside that
+/// element's frame. The parked side of the switch keeps its own `ScrollView`
+/// in the tree at the same frame, so an identifier is also the only thing
+/// that tells the two apart.
+///
+/// Identifiers and not labels: these carry no label, and giving a scroll view
+/// one would put a line in front of VoiceOver that names a container rather
+/// than anything a person can act on.
+enum PhoneDeviceLists {
+    static let music = "phone-device-music-list"
+    static let videos = "phone-device-videos-list"
+    static let files = "phone-device-files-list"
+}
+
 /// A device page's title and subtitle.
 struct PhoneDeviceHeader: View {
 

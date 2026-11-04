@@ -358,8 +358,8 @@ struct MusicView: View {
                         detail: detail,
                         covers: covers,
                         rooms: music.castRooms,
-                        // D46: the sheet's `play on this phone` section, which
-                        // is absent when this is nil.
+                        // D46: the sheet's `this device` section, which is
+                        // absent when this is nil.
                         player: player
                     )
                 }

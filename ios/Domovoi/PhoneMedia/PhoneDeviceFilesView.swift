@@ -76,6 +76,10 @@ struct PhoneDeviceFilesView: View {
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        // A handle that survives the list scrolling: the subtitle a case
+        // used to find this `ScrollView` by is a `LazyVStack` child and
+        // unbuilds (``PhoneDeviceLists``).
+        .accessibilityIdentifier(PhoneDeviceLists.files)
         .modifier(PhoneDeviceLifecycle(
             page: .files,
             model: model,

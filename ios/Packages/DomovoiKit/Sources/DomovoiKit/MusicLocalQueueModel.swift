@@ -173,8 +173,12 @@ public final class MusicLocalQueueModel {
     /// Whether anything on this phone can be played at all.
     ///
     /// An engine, and nothing else: a library track needs no room, no cast
-    /// plan and no position slot of its own. False is a phone with no device
-    /// id, where ``ShellModel/player`` is nil — and a `play on this device`
+    /// plan and no position slot of its own. False is a build with no audio
+    /// engine, or a shell built with no `deviceSelf`, where
+    /// ``ShellModel/player`` is nil — **not** "a phone with no device id", as
+    /// this line said until review 3 of the 2026-11-03 batch: the id is
+    /// minted locally on first launch (`DeviceRegistry.swift:390-404`), so no
+    /// phone is ever in that state. A `play on this device`
     /// button with nothing behind it is the control
     /// [[no-misleading-controls]] forbids, so every caller draws nothing
     /// rather than a disabled button.

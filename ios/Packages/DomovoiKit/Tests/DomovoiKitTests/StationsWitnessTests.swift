@@ -294,7 +294,11 @@ final class StationsWitnessTests: XCTestCase {
         model.use(silent)
         park.release.set(true)
 
-        await settleUntil({ !tapped.played.current.isEmpty }, "the play")
+        // Either witness, so a broken capture fails on the assertion below
+        // rather than spending twenty thousand yields finding out that the
+        // one it should have reached was never touched.
+        await settleUntil({ !tapped.played.current.isEmpty || !silent.played.current.isEmpty },
+                          "the play landing on one witness or the other")
         XCTAssertFalse(park.ranOut.current, "the park timed out, so this asserts nothing")
         XCTAssertEqual([savedID], tapped.played.current)
         XCTAssertTrue(

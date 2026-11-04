@@ -151,11 +151,13 @@ extension StubHouseUITests {
         // whatever the person was already listening to.
         //
         // `play on this device` is the wording MusicMore's playlist sheet
-        // uses — its section label and both its buttons, since the fix pass
-        // of 2026-11-04 made them agree — and `play <name>` is the row
-        // controls'. `play here` and `play on this phone` are nobody's, and
-        // both are kept because a screen that grew one would be a screen
-        // nothing in this batch decided.
+        // uses for its button, and `play <name>` is the row controls'. The
+        // sheet's section label is neither: it is `this device`, the thing
+        // rather than the verb, because a heading identical to the button
+        // under it gives VoiceOver the same sentence twice
+        // (``MusicMoreStrings/playHereLabel``). `play here` and `play on this
+        // phone` are nobody's, and both are kept because a screen that grew
+        // one would be a screen nothing in this batch decided.
         for offer in ["play on this phone", "play on this device", "play here"] {
             let found = app.descendants(matching: .button)
                 .matching(NSPredicate(format: "label CONTAINS[c] %@", offer))

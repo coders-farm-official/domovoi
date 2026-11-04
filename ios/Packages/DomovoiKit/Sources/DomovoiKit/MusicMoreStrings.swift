@@ -108,17 +108,24 @@ public enum MusicMoreStrings {
 
     /// The section label over the two phone buttons.
     ///
-    /// **`this device`, not `this phone`.** It said "play on this phone" and
-    /// stood over two buttons reading `play on this device` and `shuffle on
-    /// this device` — a label and its own controls disagreeing about what
-    /// the thing is called. Android's word is `device`
-    /// (`MusicScreen.kt:583`: *playing "X" on this device*), so that is the
-    /// Android-faithful half of the pair to keep (BATCH-RULES §4: take the
-    /// Android-faithful choice and log it rather than stopping to ask). The
-    /// unit's REPORT and DECISIONS carried this as a wording question for
-    /// Kamron in the first pass; it is settled here, and he can still prefer
-    /// `phone` — in which case it is these three constants, not one.
-    public static let playHereLabel = "play on this device"
+    /// **`this device`: the thing, not the verb.** Three wordings have stood
+    /// here. It was `play on this phone`, which disagreed with its own two
+    /// buttons about what the handset is called; the fix pass made it `play
+    /// on this device`, which agreed with them **exactly** — the same
+    /// sentence as the button directly beneath it, so VoiceOver read it
+    /// twice and the sheet had two elements with one label, which is the trap
+    /// this track has already paid for ([[audit-reports-one-issue]]: two
+    /// controls sharing a label). This is the third: Android's own word for
+    /// the handset where it labels one, `Text("this device")`
+    /// (`ui/screens/music/PlayerTab.kt:408`) — `device` as
+    /// `MusicScreen.kt:583` has it, and no repeat of either button.
+    ///
+    /// Android has no heading over its phone controls at all, so this is
+    /// iOS-only (IOS-ONLY-STRINGS §7) and the alternative was to draw none:
+    /// the buttons do say where they play. It is kept because it is what
+    /// separates them from the room chips under them, and a sighted reader
+    /// has nothing else to read the grouping from.
+    public static let playHereLabel = "this device"
 
     /// What a start on this phone says (`MusicScreen.kt:583`).
     ///
