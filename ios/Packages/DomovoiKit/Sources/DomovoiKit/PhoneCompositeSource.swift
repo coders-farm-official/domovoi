@@ -64,6 +64,18 @@ public struct PhoneCompositeSource: PhoneMediaReading {
         return try await part.bytes(of: item)
     }
 
+    /// Routed, like everything else. **It has to be forwarded explicitly:**
+    /// `fileURL(of:)` has a default implementation in a protocol extension,
+    /// so without this line the composite would quietly take the default and
+    /// spool every phone video through memory — the exact cost D43 removed,
+    /// hidden behind a method that compiles and works.
+    public func fileURL(of item: PhoneMediaItem) async throws -> PhoneUploadFile {
+        guard let part = await owner(of: item.libraryID) else {
+            throw PhoneMediaError.unreadable(name: item.name)
+        }
+        return try await part.fileURL(of: item)
+    }
+
     private func owner(of libraryID: String) async -> (any PhoneMediaReading)? {
         for part in parts {
             if await part.libraries().contains(where: { $0.id == libraryID }) { return part }
@@ -114,5 +126,11 @@ public final class PhoneSwappableSource: PhoneMediaReading, @unchecked Sendable 
 
     public func bytes(of item: PhoneMediaItem) async throws -> Data {
         try await current.bytes(of: item)
+    }
+
+    /// Forwarded for ``PhoneCompositeSource/fileURL(of:)``'s reason: a
+    /// protocol extension's default would silently win here.
+    public func fileURL(of item: PhoneMediaItem) async throws -> PhoneUploadFile {
+        try await current.fileURL(of: item)
     }
 }

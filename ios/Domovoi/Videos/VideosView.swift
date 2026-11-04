@@ -20,24 +20,37 @@ import SwiftUI
 /// puts the video you ended on back in the middle of the grid. "rescan
 /// videos" in the header re-walks the folders.
 ///
+/// ### Save to device, which is drawn now (D47)
+///
+/// The long-press sheet has `save to device`, ported from Android's
+/// `FeedAction(Icons.Outlined.Download, "save to device")`
+/// (`VideoFeed.kt:459`, handler at `VideosScreen.kt:216`). It goes through
+/// ``SaveToDeviceModel``, which streams the bytes to a file and hands the
+/// person the share sheet — iOS has no public Downloads folder for Android's
+/// `DownloadManager` to write into, so the share sheet is what "save to
+/// device" means here.
+///
+/// It asks for the video with `download=1` (``VideoPath/stream(_:download:)``),
+/// which is the same request Android makes, and the household token rides in
+/// the **header**: a save is this app's own request, not `AVPlayer`'s, so
+/// none of ``VideoStream``'s token-in-a-URL reasoning applies to it.
+///
 /// ### What is not, and why there is no control for it
 ///
-/// **Save to device** and **share**. Both need a file out of the app — the
-/// Photos library or a document picker — and both are their own piece of
-/// work; Android's sheet has them because `DownloadManager` and
-/// `ACTION_SEND` are one call each there. Sharing a *server* video is also
-/// the one thing this app must not do casually: on iOS the stream URL
-/// carries the household token (``VideoStream``), so handing it to another
-/// app would hand over the token. ``FeedVideo/shareable`` is the flag that
-/// says a video may be shared, it is false for every server video, and the
-/// control is not drawn at all.
+/// **Share.** Sharing a *server* video is the one thing this app must not do
+/// casually: on iOS the stream URL carries the household token
+/// (``VideoStream``), so handing it to another app would hand over the token.
+/// ``FeedVideo/shareable`` is the flag that says a video may be shared, it is
+/// false for every server video, and the control is not drawn at all. (A
+/// person who wants to send one saves it first and shares the **file**, which
+/// carries no token — that is what the new control is for.)
 ///
 /// **Upload**, which is Android's "your device" page, and the phone's own
 /// videos in the local shell. Both wait on the phone-media milestone.
 ///
-/// So the long-press sheet has three actions rather than six. The rule they
-/// are left out under is the owner's standing one: a control that cannot do
-/// what it says is not drawn ([[no-misleading-controls]]).
+/// So the long-press sheet has four actions rather than six. The rule the
+/// last two are left out under is the owner's standing one: a control that
+/// cannot do what it says is not drawn ([[no-misleading-controls]]).
 ///
 /// ### The grid is lazy and a tile holds nothing
 ///
@@ -62,6 +75,9 @@ struct VideosView: View {
     /// The grid's scroll position, so a closing feed can put its video back
     /// in the middle.
     @State private var centred: String?
+
+    /// Read for D66: a tile's name wraps fully at accessibility sizes.
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
         ScrollViewReader { scroller in
@@ -250,7 +266,15 @@ struct VideosView: View {
             }
             Text(tile.video.displayTitle)
                 .font(.caption)
-                .lineLimit(2)
+                // **Two lines normally, as many as it takes at accessibility
+                // sizes** (D66, Kamron: "let video tile names wrap at
+                // accessibility sizes"). Android shows one line at every size
+                // and ellipsises (`VideosScreen.kt:293`); at AX5 two lines
+                // here were 102 points and a 20-character name still lost its
+                // tail, which is a tile nobody who needs big text can read.
+                // A wrapped name makes the tile about 2.5x taller than its
+                // picture, which is the trade he took.
+                .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 2)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .id(tile.video.id)

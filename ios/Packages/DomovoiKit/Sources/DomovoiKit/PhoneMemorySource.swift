@@ -41,6 +41,18 @@ public struct PhoneMemorySource: PhoneMediaReading {
     /// deleted since the page was listed is in.
     private let bytes: [String: Data]
 
+    /// Row ids whose ``fileURL(of:)`` materialises a file of the row's **own
+    /// stated size** instead of writing ``bytes``.
+    ///
+    /// This is how a UI case uploads something over the old 64 MiB ceiling
+    /// without a 200 MiB literal in the app binary or 200 MiB of a
+    /// Simulator's memory: the file is created by setting its length, so it
+    /// is sparse on APFS and costs no disk until something writes into it,
+    /// and `URLSession` then streams its (zero) bytes at full speed. A case
+    /// that asserts the house received the right NUMBER of bytes is the point
+    /// of it; nothing asserts what they are.
+    private let sized: Set<String>
+
     /// A library and a folder inside it.
     public struct Place: Hashable, Sendable {
         public let libraryID: String
@@ -55,11 +67,13 @@ public struct PhoneMemorySource: PhoneMediaReading {
         shelves: [FileLibrary],
         rows: [Place: [PhoneMediaItem]],
         bytes: [String: Data] = [:],
+        sized: Set<String> = [],
         unreadable: Set<String> = []
     ) {
         self.shelves = shelves
         self.rows = rows
         self.bytes = bytes
+        self.sized = sized
         self.unreadable = unreadable
     }
 
@@ -87,5 +101,30 @@ public struct PhoneMemorySource: PhoneMediaReading {
             throw PhoneMediaError.unreadable(name: item.name)
         }
         return found
+    }
+
+    /// A real file, so a UI case can drive a real streamed upload.
+    ///
+    /// A row named in ``sized`` gets a file of exactly its stated size, made
+    /// by setting the length rather than by writing bytes; anything else
+    /// falls through to the default, which spools ``bytes``.
+    public func fileURL(of item: PhoneMediaItem) async throws -> PhoneUploadFile {
+        guard sized.contains(item.id), let size = item.sizeBytes, size >= 0 else {
+            let bytes = try await self.bytes(of: item)
+            let url = PhoneUploadSpool.fileURL(in: try PhoneUploadSpool.directory(), for: item.name)
+            try bytes.write(to: url, options: .atomic)
+            return .spooled(url)
+        }
+        let url = PhoneUploadSpool.fileURL(in: try PhoneUploadSpool.directory(), for: item.name)
+        guard FileManager.default.createFile(atPath: url.path, contents: nil),
+              let handle = try? FileHandle(forWritingTo: url)
+        else { throw PhoneMediaError.unreadable(name: item.name) }
+        defer { try? handle.close() }
+        do {
+            try handle.truncate(atOffset: UInt64(size))
+        } catch {
+            throw PhoneMediaError.unreadable(name: item.name)
+        }
+        return .spooled(url)
     }
 }

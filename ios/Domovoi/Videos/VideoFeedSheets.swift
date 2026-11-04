@@ -13,6 +13,11 @@ struct VideoFeedSheetView: View {
     let feed: VideoFeedModel
     let engine: FeedEngine
 
+    /// `save to device` (`VideoFeed.kt:459`). The caller does the lookup from
+    /// a ``FeedVideo`` to the row and closes the sheet, because the row is
+    /// the feed view's to find.
+    let onSave: (FeedVideo) -> Void
+
     var body: some View {
         NavigationStack {
             content
@@ -49,12 +54,12 @@ struct VideoFeedSheetView: View {
 
     // MARK: - the actions
 
-    /// Three, not Android's six.
+    /// Four, not Android's six.
     ///
-    /// `save to device`, `upload` and `share` are not drawn — ``VideosView``
-    /// says why, and the short version for `share` is that on iOS the stream
-    /// URL carries the household token, so sharing a server video would share
-    /// the token.
+    /// `upload` and `share` are not drawn — ``VideosView`` says why, and the
+    /// short version for `share` is that on iOS the stream URL carries the
+    /// household token, so sharing a server video would share the token.
+    /// `save to device` **is** drawn, since D47.
     private var options: some View {
         List {
             Button {
@@ -73,6 +78,22 @@ struct VideoFeedSheetView: View {
                 feed.closeSheet()
             } label: {
                 Label(VideoStrings.playFromBeginning, systemImage: "arrow.counterclockwise")
+            }
+            // `FeedAction(Icons.Outlined.Download, "save to device")`
+            // (`VideoFeed.kt:459`), in the place Android puts it: after "play
+            // from beginning" and before the two this app does not draw.
+            //
+            // **`showing`, not `loaded`.** The sheet is about the video on
+            // screen — the one whose title is in the navigation bar — and a
+            // fling that moved the page while the sheet was open moved the
+            // title too. Nothing is drawn when there is no video, which is
+            // the state a feed emptied underneath its own sheet is in.
+            if let video = feed.showing {
+                Button {
+                    onSave(video)
+                } label: {
+                    Label(TransferStrings.saveToDevice, systemImage: "square.and.arrow.down")
+                }
             }
         }
         .listStyle(.plain)

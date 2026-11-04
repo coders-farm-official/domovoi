@@ -30,12 +30,11 @@ import UIKit
 /// * **No size on a row.** `PHAssetResource` has no public byte count — the
 ///   only way to one is `value(forKey: "fileSize")`, which is private API and
 ///   is not shipping in this app. So ``PhoneMediaItem/sizeBytes`` is nil for
-///   every asset, an Upload control **is** drawn, and the 64 MiB ceiling is
-///   applied to the bytes themselves inside
-///   ``PhoneUploadModel/upload(_:to:)`` — its own documented floor. A row is
-///   therefore the one place in this item where "too big" is found out on a
-///   tap rather than before one, and the reason is that the phone will not
-///   say beforehand.
+///   every asset and the meta line says nothing about size. It used to
+///   matter, because a 64 MiB ceiling had to be applied to the bytes after
+///   they arrived; since D43 there is no ceiling, so a missing size costs a
+///   line of meta and nothing else. The server's own 8 GiB refusal
+///   (`files.py:1049`) names the size when it happens.
 /// * **Nothing is written or deleted.** Saving **into** Photos is
 ///   ``PhoneSaveToPhotosModel``'s, which asks for the narrower add-only
 ///   permission; this source only reads.
@@ -267,6 +266,61 @@ struct PhonePhotosSource: PhoneMediaReading {
                 }
             )
         }
+    }
+
+    /// The asset, written **straight to a file** — what a streamed upload
+    /// sends (D43).
+    ///
+    /// `PHAssetResourceManager.writeData(for:toFile:options:)` is the whole
+    /// point: it writes the resource to the path it is given, so a
+    /// four-gigabyte video never passes through this app's memory the way
+    /// ``bytes(of:)``'s chunk-accumulating sink makes it.
+    ///
+    /// `isNetworkAccessAllowed`, for ``bytes(of:)``'s reason: an asset that
+    /// lives in iCloud has no local bytes at all and the alternative is an
+    /// upload that fails on every photo somebody has optimised storage for.
+    ///
+    /// **No `PHAsset` crosses an `await`**, the rule in this file's header:
+    /// the fetch and the resource lookup are synchronous and only the
+    /// resource — which `writeData` takes — reaches the continuation.
+    ///
+    /// The file is this app's own copy, so it is ``PhoneUploadFile/spooled(_:)``:
+    /// deleted when the upload is finished with it. There is no security
+    /// scope here — a photo-library asset is reached through PhotoKit, not
+    /// through a bookmark.
+    func fileURL(of item: PhoneMediaItem) async throws -> PhoneUploadFile {
+        guard case .asset(let identifier) = item.origin else {
+            throw PhoneMediaError.unreadable(name: item.name)
+        }
+        let assets = PHAsset.fetchAssets(withLocalIdentifiers: [identifier], options: nil)
+        guard let asset = assets.firstObject,
+              let resource = PHAssetResource.assetResources(for: asset).first
+        else { throw PhoneMediaError.unreadable(name: item.name) }
+
+        let options = PHAssetResourceRequestOptions()
+        options.isNetworkAccessAllowed = true
+        let name = item.name
+        let url = PhoneUploadSpool.fileURL(in: try PhoneUploadSpool.directory(), for: name)
+        // `writeData` refuses a path that already exists ("file already
+        // exists"), and the random stem makes that all but impossible — so
+        // this is the floor under it rather than the path.
+        try? FileManager.default.removeItem(at: url)
+        try await withCheckedThrowingContinuation { (resume: CheckedContinuation<Void, any Error>) in
+            PHAssetResourceManager.default().writeData(
+                for: resource,
+                toFile: url,
+                options: options,
+                completionHandler: { error in
+                    if error != nil {
+                        try? FileManager.default.removeItem(at: url)
+                        resume.resume(throwing: PhoneMediaError.unreadable(name: name))
+                    } else {
+                        resume.resume(returning: ())
+                    }
+                }
+            )
+        }
+        return .spooled(url)
     }
 }
 

@@ -107,6 +107,15 @@ public final class VideosModel {
 
     public private(set) var toast: String?
 
+    /// Saving a video onto this phone (D47).
+    ///
+    /// Held by the **screen** and not by the feed or its sheet: a save
+    /// outlives the sheet it was started from, and a sheet that owned it
+    /// would cancel a gigabyte halfway through when it closed. Android has
+    /// no equivalent because `DownloadManager` outlives the whole app
+    /// (`VideosScreen.kt:216`).
+    public let saves: SaveToDeviceModel
+
     private var debounce: Task<Void, Never>?
 
     public init(
@@ -120,6 +129,7 @@ public final class VideosModel {
         self.deviceID = deviceID
         self.wait = wait
         self.list = Self.pager(filter: "", in: container, totals: totalsBox)
+        self.saves = SaveToDeviceModel(in: container)
 
         let client = container.client
         let who = deviceID
@@ -429,6 +439,24 @@ public final class VideosModel {
         list.reload(fresh: true)
     }
 
+    /// Save `video` onto this phone (`VideosScreen.kt:216`'s `saveToDevice`).
+    ///
+    /// `download=1`, which is the same request Android makes
+    /// (`VideosScreen.kt:222`'s `streamPath(v, download = true)`), and the
+    /// name hardened exactly as a Files row's is — Android calls
+    /// `DeviceDownloads.safeName(v.name, fallback = "video")` for the same
+    /// reason: the name comes from the server.
+    ///
+    /// Nothing is said here. The view watches ``saves`` — a finished save
+    /// puts the share sheet up and a failed one goes to the shell's toast,
+    /// which is where a sentence about a save has to live to outlive the
+    /// screen.
+    public func saveToDevice(_ video: VideoRow) {
+        let fallback = FileSaveModel.safeName(VideoStrings.unnamedVideo)
+        let name = video.name.isEmpty ? fallback : FileSaveModel.safeName(video.name)
+        saves.save(path: VideoPath.stream(video, download: true), named: name)
+    }
+
     public func setToast(_ said: String?) {
         toast = said
     }
@@ -461,6 +489,10 @@ public final class VideosModel {
         totals = [:]
         list.serverChanged()
         recent.serverChanged()
+        // A video half-fetched from the house that has gone must not be
+        // handed over as this one's: a library id and a path are both
+        // reusable ([[read-after-await-wrong-key]]).
+        saves.serverChanged()
     }
 
     public func stop() {

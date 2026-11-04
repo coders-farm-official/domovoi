@@ -1,22 +1,60 @@
 import Foundation
 import Observation
 
-/// The two upload doors (`net/PhoneUpload.kt:41`, `:44`).
+/// The upload doors (`net/PhoneUpload.kt:41`, `:44`) — and the streamed one
+/// D43 moved onto.
 public enum PhoneUploadPath {
 
     /// Lands in `MUSIC_DIR/uploads` and is **indexed at once**
     /// (`music.py:607`). `/api/files/upload` into `core:music` would ask the
     /// core's admin-only sweep and index nothing, which is why the Music page
-    /// has a door of its own (`PhoneUpload.kt:36`).
+    /// has a door of its own (`PhoneUpload.kt:36`) — and the reason the Music
+    /// page is still the one upload here that carries a multipart body (see
+    /// ``PhoneMultipart/spool(fields:fileField:fileName:mime:file:boundary:to:)``).
     public static let music = "/api/music/library/upload"
 
-    /// A library id and a folder (`files.py:866`). Its `device_id` is
-    /// **required** and typed 3–64, so a phone with no registered id cannot
-    /// use this door at all — see ``PhoneUploadModel/upload(_:to:)``.
+    /// A library id and a folder (`files.py:866`). The multipart door, kept
+    /// for nothing now — ``streamed(libraryID:folder:name:deviceID:)`` is what
+    /// a file or a video goes through — and left here because the path is the
+    /// Kotlin's and a reader comparing the two files should find it.
     public static let files = "/api/files/upload"
+
+    /// **The streamed door** (`files.py:1189`): the body IS the file, there
+    /// is no multipart, and the server writes it to disk a chunk at a time as
+    /// it arrives (`files.py:1036-1048`). Its ceiling is
+    /// `MAX_UPLOAD_FILE_BYTES` — 8 GiB (`files.py:1049`) — against the
+    /// 64 MiB this app used to allow.
+    ///
+    /// - Parameters:
+    ///   - folder: the folder on screen, which must already exist. `""` is
+    ///     the library's root.
+    ///   - name: the file's place **under** that folder, which for a phone
+    ///     upload is just its name: this app never sends a tree, so there is
+    ///     one segment and no folder to make.
+    ///   - deviceID: required and typed 3–64 on this route, so a phone with
+    ///     no registered id cannot use it — refused by name in
+    ///     ``PhoneUploadModel/upload(_:to:)`` rather than as a 422.
+    ///
+    /// `on_conflict` is left at its default, `keep_both`, which is what
+    /// `/api/files/upload` has always done (`files.py:1216`'s docstring says
+    /// so) — so this change does not quietly start replacing people's files.
+    /// `reindex` is left at its default too: one file per request and one
+    /// reindex after it, because there is no batch here to end with
+    /// `/upload-done`.
+    public static func streamed(
+        libraryID: String,
+        folder: String,
+        name: String,
+        deviceID: String
+    ) -> String {
+        "/api/files/upload-stream?library_id=\(FilePath.esc(libraryID))"
+            + "&rel_path=\(FilePath.esc(name))"
+            + "&path=\(FilePath.esc(folder))"
+            + "&device_id=\(FilePath.esc(deviceID))"
+    }
 }
 
-/// Sending one file from this phone to the house.
+/// Sending one file from this phone to the house, **of any size**.
 ///
 /// `ui/screens/local/DeviceUpload.kt:221-319`'s `DeviceUploader`, with
 /// `net/PhoneUpload.kt:175`'s `PhoneUploads` folded in — on Android those are
@@ -27,39 +65,47 @@ public enum PhoneUploadPath {
 /// one is cancelled mid-file (the standing rule; it cost a real bug on this
 /// track).
 ///
+/// ### What D43 changed
+///
+/// This file used to read the whole file with `source.bytes(of:)`, build a
+/// multipart body around it in memory, and POST it through
+/// ``DomovoiClient/raw(method:path:body:contentType:trackPairing:timeout:)``
+/// — so a 64 MiB ceiling, a row over it with no upload control, and "backing
+/// up phone videos to the house" not working for most phone videos. Now:
+///
+/// * A file or a video is sent to ``PhoneUploadPath/streamed(libraryID:folder:name:deviceID:)``
+///   with **the file as the body**, off disk, through
+///   ``DomovoiClient/uploadFile(method:path:fileURL:contentType:trackPairing:onProgress:)``.
+///   Nothing proportional to the file is in this app's memory.
+/// * A **track** still goes through the Music door, because that is the only
+///   one that indexes it where a phone can see it — with its multipart
+///   envelope written to a file rather than built in memory
+///   (``PhoneMultipart/spool(fields:fileField:fileName:mime:file:boundary:to:)``,
+///   which explains the trade).
+/// * The bytes come from ``PhoneMediaReading/fileURL(of:)``, which hands back
+///   a file **and what to do when the upload is finished with it** — the
+///   security scope a picked folder's file needs held open, or the copy to
+///   delete.
+/// * ``PhoneUploadButtonState/busy(percent:)`` finally carries a number.
+///
 /// ### What is not, and why there is no control for it
 ///
-/// * **No byte-level progress.** Android streams the bytes and reports whole
-///   percent as it goes (`PhoneUpload.kt:52`); here the body is built in
-///   memory and handed to ``DomovoiClient/raw(method:path:body:contentType:trackPairing:timeout:)``,
-///   which reports nothing until it answers. So the ring is indeterminate,
-///   ``PhoneUploadButtonState/busy(percent:)`` is always built with `nil`
-///   here, and there is no "47%" that would be a guess. The percent is kept
-///   in the ported rule because the rule is shared with Android's and because
-///   `/api/files/upload-stream` is the item that will fill it in.
-/// * **Nothing over ``cap``.** 64 MiB, the same number and the same reasoning
-///   as ``FileSaveModel/cap``: `raw` takes `body: Data`, so the file plus its
-///   multipart copy are both in memory. A row over it is drawn with **no
-///   upload control** and a line saying how big it is
-///   (``PhoneMediaStrings/tooBigToUpload(_:)``); the refusal here is the
-///   floor under that, not the thing a person is meant to meet.
+/// * **No background upload.** A backup that runs while the phone is in
+///   somebody's pocket wants a background `URLSession`, which is its own
+///   session, its own out-of-client delegate and a relaunch path. It is
+///   written down in `design-notes/ios/batch-2026-11-03/transfers/DECISIONS.md`
+///   rather than half-built: an upload runs while the app is open, which is
+///   what the row says.
+/// * **No pause and resume.** `/upload-stream` has no range or offset
+///   (`files.py:1189`), so there is nothing to resume to. A cancelled upload
+///   leaves nothing on the server — it writes to a hidden part-file and
+///   renames it only when complete (`files.py:1254`).
+/// * **Nothing over 8 GiB**, which is the server's ceiling and not this
+///   app's: it answers 413 with its own sentence, naming the size, and
+///   ``phoneUploadFailureText(_:_:)`` shows it.
 @MainActor
 @Observable
 public final class PhoneUploadModel {
-
-    /// The largest file this app will post. See "What is not" above.
-    ///
-    /// The literal, not ``FileSaveModel/cap`` itself: that one is a static of
-    /// a `@MainActor` type, so reading it to initialise this one would be a
-    /// main-actor read from a non-isolated initialiser. The **number** and
-    /// the reasoning are the same deliberately — both are `Data` through
-    /// `raw` — and a test asserts the two are equal, so they cannot drift.
-    ///
-    /// `nonisolated`, because a row's own "is this too big to offer a control
-    /// for" question is asked from wherever a row is built — including inside
-    /// the `@Sendable` closures that read the bytes — and a `@MainActor`
-    /// type's static would be main-actor isolated like everything else on it.
-    public nonisolated static let cap: Int64 = 64 * 1024 * 1024
 
     public let kind: PhoneUploadKind
 
@@ -73,22 +119,23 @@ public final class PhoneUploadModel {
     public private(set) var toast: String?
 
     /// Bytes already in hand, for a file that came from a picker rather than
-    /// from a list.
+    /// from a list — **spooled to disk the moment they arrive**.
     ///
     /// PHPicker and the document picker both run **out of process** and hand
-    /// over the bytes themselves — there is no asset and no durable file URL
+    /// over the bytes themselves; there is no asset and no durable file URL
     /// to read later, and the document picker's security scope is closed by
-    /// the time any `await` returns. So those bytes are parked here and
-    /// ``upload(_:to:)`` takes them in place of calling ``read``.
-    ///
-    /// Dropped in ``finish(_:_:_:)``, so a picked file is not held in memory
-    /// after its upload has answered.
-    private var picked: [String: Data] = [:]
+    /// the time any `await` returns. So those bytes are written to a file of
+    /// this app's own here and the `Data` is let go of at once — which is the
+    /// difference between holding a picked 50 MiB video for the life of the
+    /// screen and holding nothing.
+    private var picked: [String: URL] = [:]
 
-    /// The rows whose file is on its way, by ``PhoneUploadKey``.
+    /// The rows whose file is on its way, by ``PhoneUploadKey``, and how far
+    /// each has got.
     ///
-    /// A set and not a map of percents: nothing can report one (above).
-    private var running: Set<String> = []
+    /// A map and not the set it used to be: nothing could report a percent
+    /// when the body was built in memory, and now everything can.
+    private var running: [String: Int?] = [:]
 
     /// Which house an in-flight upload belongs to.
     ///
@@ -100,35 +147,35 @@ public final class PhoneUploadModel {
     private var epoch = 0
 
     private let deviceID: String?
-    private let send: @Sendable (_ path: String, _ body: Data, _ contentType: String) async throws -> Data
-    private let read: @Sendable (PhoneMediaItem) async throws -> Data
+    private let send: PhoneUploadSend
+    private let file: @Sendable (PhoneMediaItem) async throws -> PhoneUploadFile
     private let newBoundary: @Sendable () -> String
 
     /// - Parameters:
     ///   - status: the write-status read. Built by the convenience
     ///     initialiser from a container, or by a test from its own base.
-    ///   - read: the phone's bytes. ``PhoneMediaReading/bytes(of:)``, or a
+    ///   - file: the phone's file. ``PhoneMediaReading/fileURL(of:)``, or a
     ///     test's.
-    ///   - send: the POST. Separated from ``DomovoiClient`` so the body this
-    ///     model builds can be asserted byte for byte.
+    ///   - send: the POST. Separated from ``DomovoiClient`` so a test can
+    ///     read the file that was sent and the progress that was reported.
     public init(
         kind: PhoneUploadKind,
         status: ApiRead<PhoneServerWriteStatus>,
         deviceID: String?,
-        read: @Sendable @escaping (PhoneMediaItem) async throws -> Data,
-        send: @Sendable @escaping (_ path: String, _ body: Data, _ contentType: String) async throws -> Data,
+        file: @Sendable @escaping (PhoneMediaItem) async throws -> PhoneUploadFile,
+        send: @escaping PhoneUploadSend,
         boundary: @Sendable @escaping () -> String = { PhoneMultipart.boundary() }
     ) {
         self.kind = kind
         self.status = status
         self.deviceID = deviceID
-        self.read = read
+        self.file = file
         self.send = send
         self.newBoundary = boundary
     }
 
     /// The model a screen builds: the status read keyed to `container`'s
-    /// address, and the client's own POST.
+    /// address, and the client's own streamed POST.
     public convenience init(
         kind: PhoneUploadKind,
         in container: AppContainer,
@@ -148,20 +195,20 @@ public final class PhoneUploadModel {
             kind: kind,
             status: read,
             deviceID: deviceID,
-            read: { try await source.bytes(of: $0) },
-            send: { path, body, contentType in
-                // Ninety seconds: a 64 MiB file over a slow link is worth
-                // waiting for, and the client's default is tuned for a
-                // screen's reads. `raw` sends `X-Requested-With` on every
-                // request (`DomovoiClient.swift:619`), which is what
-                // `/api/files/upload`'s CSRF guard requires
-                // (`csrf_guard.py:34`).
-                try await client.raw(
+            file: { try await source.fileURL(of: $0) },
+            send: { path, body, contentType, onProgress in
+                // **No timeout.** The old multipart POST passed 90 s because
+                // it was waiting on one answer for a body it had already
+                // built; a streamed upload of a multi-gigabyte video is a
+                // journey, and `uploadFile` deliberately sets no ceiling on
+                // the whole of one (see its note). A stalled upload is still
+                // caught, by the session's 60 s between arrivals.
+                try await client.uploadFile(
                     method: "POST",
                     path: path,
-                    body: body,
+                    fileURL: body,
                     contentType: contentType,
-                    timeout: 90
+                    onProgress: onProgress
                 )
             }
         )
@@ -175,22 +222,23 @@ public final class PhoneUploadModel {
     /// The card above the list, when there is one (`DeviceUpload.kt:230`).
     public var refused: (reason: String, blocked: Bool)? { target?.refusal }
 
-    /// `DeviceUpload.kt:232`.
+    /// `DeviceUpload.kt:232`, with the percent the streamed upload reports.
     public func state(for key: String) -> PhoneUploadButtonState {
-        phoneUploadButtonState(target: target, inFlight: running.contains(key), percent: nil)
+        phoneUploadButtonState(
+            target: target,
+            inFlight: running.keys.contains(key),
+            percent: running[key] ?? nil
+        )
     }
 
-    /// Whether this row gets an upload control at all. A row over the cap
-    /// gets none — the owner's rule, and the reason the cap is checked here
-    /// rather than only inside ``upload(_:to:)``.
-    public func offersUpload(_ item: PhoneMediaItem) -> Bool {
-        !item.isDir && !isTooBig(item)
-    }
-
-    public func isTooBig(_ item: PhoneMediaItem) -> Bool {
-        guard let size = item.sizeBytes else { return false }
-        return size > Self.cap
-    }
+    /// Whether this row gets an upload control at all.
+    ///
+    /// **Every file does, since D43.** It used to also ask
+    /// `!isTooBig(item)`, and a row over 64 MiB got a line saying how big it
+    /// was instead of a control. There is no ceiling in this app any more:
+    /// the server's is 8 GiB and it says so itself, with the size in the
+    /// sentence, which is a refusal nobody needs a client-side guess for.
+    public func offersUpload(_ item: PhoneMediaItem) -> Bool { !item.isDir }
 
     /// The screen appeared.
     public func start() { status.refresh() }
@@ -199,7 +247,8 @@ public final class PhoneUploadModel {
     public func serverChanged() {
         epoch += 1
         running.removeAll()
-        // The bytes of a pick belonged to the house that has gone.
+        // The file a pick spooled belonged to the house that has gone.
+        for url in picked.values { try? FileManager.default.removeItem(at: url) }
         picked.removeAll()
         toast = nil
     }
@@ -249,14 +298,13 @@ public final class PhoneUploadModel {
     ///
     /// The one upload in this item that is **not** a row: PHPicker and the
     /// document picker are the two doors that need no permission at all
-    /// (``PhonePickToSendView``), and what they hand over is `Data`.
+    /// (``PhonePickToSendView``), and what they hand over is `Data`. It is
+    /// written straight to a file here, so the rest of this model has one
+    /// shape to deal with and nothing holds a picked video in memory.
     ///
-    /// A picked file over ``cap`` gets the refusal as a **toast** rather than
-    /// a missing control, which is the one place this item departs from "a
-    /// control that cannot do what it says is not drawn": the picker *is* the
-    /// control, nothing is known about the file until after the pick, and a
-    /// pick that produced silence would be worse than one that says the file
-    /// is too big.
+    /// A pick this app cannot write to its own temporary directory is said
+    /// out loud rather than dropped: the picker *is* the control, so a pick
+    /// that produced silence would be worse than one that explains itself.
     public func uploadPicked(name: String, bytes: Data, kind itemKind: PhoneMediaKind) {
         let item = PhoneMediaItem(
             // The size is in the key, so picking a different file of the same
@@ -268,7 +316,14 @@ public final class PhoneUploadModel {
             sizeBytes: Int64(bytes.count),
             origin: .file(URL(fileURLWithPath: "/picked/\(name)"))
         )
-        picked[item.id] = bytes
+        do {
+            let url = PhoneUploadSpool.fileURL(in: try PhoneUploadSpool.directory(), for: name)
+            try bytes.write(to: url, options: .atomic)
+            picked[item.id] = url
+        } catch {
+            toast = phoneUploadFailureText(name, PhoneMediaError.unreadable(name: name))
+            return
+        }
         upload(item)
     }
 
@@ -281,68 +336,59 @@ public final class PhoneUploadModel {
     /// posted and two.
     ///
     /// **Every path out of here either starts an upload or says something**,
-    /// and every one of them lets go of a picked file's bytes: a silent
-    /// return left a tap that did nothing (the owner's no-misleading-controls
-    /// rule) and held a 50 MiB video for the life of the screen.
+    /// and every one of them lets go of a picked file: a silent return left a
+    /// tap that did nothing (the owner's no-misleading-controls rule) and a
+    /// spooled copy nobody would ever delete.
     public func upload(_ item: PhoneMediaItem, to dest: PhoneUploadDest? = nil) {
-        guard gate() else {
-            picked.removeValue(forKey: item.id)
-            return
-        }
+        guard gate() else { return dropPick(item.id) }
         guard let to = dest ?? destination(for: item) else {
             // Reachable: `.pick` with no readable library list. The rules now
             // refuse that case before the button is drawn
             // (``phoneUploadTarget(_:_:)``), so this is the floor under it
             // rather than the path — and it names the reason either way.
-            picked.removeValue(forKey: item.id)
+            dropPick(item.id)
             toast = PhoneMediaStrings.couldNotReadLibraries(status.data?.error)
             return
         }
         let key = PhoneUploadKey.of(item, kind)
-        if let size = item.sizeBytes, size > Self.cap {
-            // No control is drawn on such a ROW, so this is a floor — but it
-            // is the real path for a PICKED file, whose size is not known
-            // until after the pick (``uploadPicked(name:bytes:kind:)``), so
-            // the bytes are let go of here too rather than held for an
-            // upload that will never run.
-            picked.removeValue(forKey: item.id)
-            toast = PhoneMediaStrings.tooBigToUpload(size)
-            return
-        }
-        guard !running.contains(key) else {
-            // The running upload captured its own bytes before its `await`,
-            // so this copy is nobody's and must not be held: the key is the
-            // row's ORIGIN, which for a pick is `/picked/<name>` with no
+        guard running[key] == nil else {
+            // The running upload took its own file before its `await`, so
+            // this pick is nobody's and must not be left on disk: the key is
+            // the row's ORIGIN, which for a pick is `/picked/<name>` with no
             // size in it, so a second pick of a same-named file of a
             // different size lands here under an id of its own.
-            picked.removeValue(forKey: item.id)
+            dropPick(item.id)
             toast = PhoneMediaStrings.alreadyUploading(item.name)
             return
         }
         // The Files door's `device_id` is required and typed 3–64
-        // (`files.py:866`); without one the request is a 422 the person can
-        // do nothing about, so it is refused here, named.
-        var path = PhoneUploadPath.files
-        var fields: [(name: String, value: String)] = []
+        // (`files.py:866`, and `:1199` on the streamed one); without one the
+        // request is a 422 the person can do nothing about, so it is refused
+        // here, named.
+        let plan: PhoneUploadRequest
         switch to {
         case .musicLibrary:
-            path = PhoneUploadPath.music
             // Optional on this door (`music.py:607`), so an unregistered
-            // phone may still upload a track — and the Files block is applied
-            // by the server before anything is written (`music.py:644`).
-            if let deviceID, !deviceID.isEmpty { fields = [(name: "device_id", value: deviceID)] }
+            // phone may still upload a track — and the Files write block is
+            // applied by the server before anything is written
+            // (`music.py:644`).
+            let fields: [(name: String, value: String)] = (deviceID?.isEmpty == false)
+                ? [(name: "device_id", value: deviceID!)]
+                : []
+            plan = .multipart(path: PhoneUploadPath.music, fields: fields)
         case .library(let id, _, let folder):
             guard let deviceID, deviceID.count >= 3 else {
                 toast = FileStrings.noDeviceID
-                return
+                return dropPick(item.id)
             }
-            fields = [
-                (name: "library_id", value: id),
-                (name: "path", value: folder),
-                (name: "device_id", value: deviceID),
-            ]
+            plan = .stream(path: PhoneUploadPath.streamed(
+                libraryID: id,
+                folder: folder,
+                name: PhoneMultipart.safePartName(item.name),
+                deviceID: deviceID
+            ))
         }
-        running.insert(key)
+        running[key] = nil
         toast = PhoneMediaStrings.uploadingTo(item.name, to.whereItLands)
 
         // Captured BEFORE the await, every one of them: which house this is
@@ -351,48 +397,77 @@ public final class PhoneUploadModel {
         // warned about.
         let mine = epoch
         let name = item.name
-        // Captured before the `await` with everything else: a picked file's
-        // bytes belong to the pick that started this upload.
         let inHand = picked[item.id]
         let rowID = item.id
         let boundary = newBoundary()
-        let bytesOf = read
+        let fileOf = self.file
         let post = send
         let row = item
         Task { @MainActor [weak self] in
+            // The file, and what to do with it afterwards. **One `release`
+            // per `fileURL(of:)`, on every path out**, which is why it is a
+            // local and not something a `defer` deep in a branch owns: a
+            // security scope left open is a grant this app keeps for ever,
+            // and a spooled copy never released is somebody's video sitting
+            // in the container until iOS feels like clearing it.
+            var handed: PhoneUploadFile?
+            var envelope: URL?
+            func letGo() {
+                handed?.release()
+                handed = nil
+                if let envelope { try? FileManager.default.removeItem(at: envelope) }
+                envelope = nil
+            }
             do {
-                // Not `inHand ?? bytesOf(row)`: `??`'s right side is an
-                // AUTOCLOSURE, and an `async` call cannot go in one.
-                let bytes: Data
+                let sending: URL
                 if let inHand {
-                    bytes = inHand
+                    // A pick is already a file of this app's own, so there is
+                    // nothing to scope and nothing to copy; it is deleted by
+                    // `finish`, under its row id.
+                    sending = inHand
                 } else {
-                    bytes = try await bytesOf(row)
+                    let got = try await fileOf(row)
+                    handed = got
+                    sending = got.url
                 }
-                // Read through the optional rather than unwrapping `self`:
-                // `guard let self` once per scope is all Swift allows, and
-                // the one after the POST is the one that must not be dropped.
-                // Nothing is posted to a house the person has left.
-                guard self?.epoch == mine else { return }
-                guard Int64(bytes.count) <= Self.cap else {
-                    throw PhoneMediaError.tooBig(name: name, size: Int64(bytes.count))
+                guard self?.epoch == mine else { return letGo() }
+                let answer: Data
+                switch plan {
+                case .stream(let path):
+                    answer = try await Self.run(
+                        post, path, sending, row.mimeType, key, mine, self
+                    )
+                case .multipart(let path, let fields):
+                    let spool = PhoneUploadSpool.fileURL(
+                        in: try PhoneUploadSpool.directory(),
+                        for: "\(name).multipart"
+                    )
+                    try PhoneMultipart.spool(
+                        fields: fields,
+                        fileName: name,
+                        mime: row.mimeType,
+                        file: sending,
+                        boundary: boundary,
+                        to: spool
+                    )
+                    envelope = spool
+                    guard self?.epoch == mine else { return letGo() }
+                    answer = try await Self.run(
+                        post, path, spool, PhoneMultipart.contentType(boundary: boundary),
+                        key, mine, self
+                    )
                 }
-                let body = PhoneMultipart.body(
-                    fields: fields,
-                    fileName: name,
-                    mime: row.mimeType,
-                    bytes: bytes,
-                    boundary: boundary
-                )
-                let answer = try await post(path, body, PhoneMultipart.contentType(boundary: boundary))
+                letGo()
                 guard let self, mine == self.epoch else { return }
                 let reply = (try? JSONDecoder().decode(PhoneUploadReply.self, from: answer))
                     ?? PhoneUploadReply(saved: 0)
                 self.finish(key, mine, phoneUploadDoneText(name, to, reply), picked: rowID)
             } catch is CancellationError {
+                letGo()
                 guard let self, mine == self.epoch else { return }
                 self.finish(key, mine, nil, picked: rowID)
             } catch {
+                letGo()
                 guard let self, mine == self.epoch else { return }
                 self.finish(key, mine, phoneUploadFailureText(name, error), picked: rowID)
                 // A refusal the button did not know about — blocked since the
@@ -407,12 +482,54 @@ public final class PhoneUploadModel {
     /// changed under it.
     private func finish(_ key: String, _ mine: Int, _ said: String?, picked id: String?) {
         guard mine == epoch else { return }
-        running.remove(key)
-        // A picked file's bytes are not kept after its upload has answered.
-        // The row's own id, passed down — never parsed back out of the
-        // upload key, which is a different string with its own prefix.
-        if let id { picked.removeValue(forKey: id) }
+        running.removeValue(forKey: key)
+        // A picked file's spooled copy is not kept after its upload has
+        // answered. The row's own id, passed down — never parsed back out of
+        // the upload key, which is a different string with its own prefix.
+        if let id { dropPick(id) }
         if let said { toast = said }
+    }
+
+    /// Forget a pick and delete the file it spooled. Safe for an id that is
+    /// not a pick, which is every row.
+    private func dropPick(_ id: String) {
+        guard let url = picked.removeValue(forKey: id) else { return }
+        try? FileManager.default.removeItem(at: url)
+    }
+
+    /// How far `key`'s upload has got, from a `URLSession` thread's numbers.
+    ///
+    /// `mine` and not the model's own `epoch`: a tick that lands after the
+    /// app has moved house must not move a new house's ring.
+    private func note(_ key: String, _ mine: Int, sent: Int64, of total: Int64) {
+        guard mine == epoch, running.keys.contains(key) else { return }
+        running[key] = transferPercent(sent: sent, of: total)
+    }
+
+    // MARK: - the request
+
+    /// Make the request and answer with its body.
+    ///
+    /// Static, so the `Task` above holds nothing but what it captured, and
+    /// **it returns the body** rather than putting it anywhere: three rows
+    /// can be uploading at once, so a shared place to leave the last answer
+    /// in would hand one row's reply to another ("uploaded … to Documents"
+    /// under a file that failed).
+    private static func run(
+        _ post: PhoneUploadSend,
+        _ path: String,
+        _ body: URL,
+        _ contentType: String,
+        _ key: String,
+        _ mine: Int,
+        _ model: PhoneUploadModel?
+    ) async throws -> Data {
+        try await post(path, body, contentType) { sent, total in
+            // The callback is on a `URLSession` thread; the ring is on the
+            // main actor. `mine` goes with it, so a tick from the house the
+            // app has left moves nothing.
+            Task { @MainActor in model?.note(key, mine, sent: sent, of: total) }
+        }
     }
 
     // MARK: - the status read
@@ -460,4 +577,26 @@ public final class PhoneUploadModel {
             error: error
         )
     }
+}
+
+/// The POST, as this model needs it: a path, a **file**, its type, and
+/// somewhere to report progress.
+///
+/// A named type because the signature has four parameters and one of them is
+/// a closure, and an inline one of those in three places is three chances to
+/// get the order wrong.
+public typealias PhoneUploadSend = @Sendable (
+    _ path: String,
+    _ fileURL: URL,
+    _ contentType: String,
+    _ onProgress: @Sendable (Int64, Int64) -> Void
+) async throws -> Data
+
+/// Which door an upload is going through, decided before the `Task` starts.
+private enum PhoneUploadRequest: Sendable {
+    /// `/api/files/upload-stream`: the body is the file.
+    case stream(path: String)
+    /// `/api/music/library/upload`: the body is an envelope around the file,
+    /// written to disk (``PhoneMultipart/spool(fields:fileField:fileName:mime:file:boundary:to:)``).
+    case multipart(path: String, fields: [(name: String, value: String)])
 }

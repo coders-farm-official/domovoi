@@ -220,7 +220,131 @@ public protocol PhoneMediaReading: Sendable {
     /// when the phone will not hand them over, which is Android's
     /// `FileNotFoundException` **before anything is sent**
     /// (`PhoneUpload.kt:157`).
+    ///
+    /// **Not what an upload uses any more** (D43). It is kept because the
+    /// pickers hand over `Data` and nothing else, because the Photos save
+    /// path reads it, and because the default ``fileURL(of:)`` below is built
+    /// on it for a source that has nothing better. An upload goes through
+    /// `fileURL(of:)`.
     func bytes(of item: PhoneMediaItem) async throws -> Data
+
+    /// A file on disk holding `item`, for a **streamed** upload.
+    ///
+    /// This is what D43 needed: `URLSession.upload(for:fromFile:)` reads the
+    /// body off disk as it sends it, so a four-gigabyte video goes up with a
+    /// megabyte of this app's memory in it rather than four gigabytes — which
+    /// is what removed the 64 MiB ceiling the rows used to draw.
+    ///
+    /// The default implementation spools ``bytes(of:)`` to a file, which is
+    /// correct but holds the whole file once on the way through. **Override
+    /// it wherever the phone can do better**: ``PhoneFolderSource`` has the
+    /// file on disk already and hands back its own URL, and
+    /// `PhonePhotosSource` asks PhotoKit to write the asset straight to a
+    /// file (`PHAssetResourceManager.writeData(for:toFile:options:)`).
+    ///
+    /// ### Why it answers a value and not a URL
+    ///
+    /// The brief asked for `-> URL`, and a URL on its own is not enough to be
+    /// correct here: a picked folder's file is readable only inside
+    /// `startAccessingSecurityScopedResource()`/`stop…`, and `URLSession`
+    /// reads the file **after** this function has returned, for as long as
+    /// the upload lasts. A bare URL would therefore have worked on the first
+    /// small test file (the scope is often still open) and failed on a real
+    /// one — the kind of bug whose comment explains why it is safe
+    /// ([[reasoning-that-hides-a-bug]]). So the source hands back the URL
+    /// **and** what to call when the upload is done: stop the scope, delete
+    /// the spooled copy, or nothing at all.
+    func fileURL(of item: PhoneMediaItem) async throws -> PhoneUploadFile
+}
+
+/// A file an upload may read until it says it is finished.
+///
+/// ``PhoneUploadFile/release`` is called exactly once, by whoever asked for
+/// the file, on **every** path out of the upload — success, failure, a
+/// cancel, and a house that changed underneath it. What it does is the
+/// source's business: stop a security scope, delete a spooled copy, or
+/// nothing.
+public struct PhoneUploadFile: Sendable {
+
+    /// Where the bytes are. Readable until ``release`` is called.
+    public let url: URL
+
+    /// Called once, when the upload has finished with the file.
+    public let release: @Sendable () -> Void
+
+    public init(url: URL, release: @Sendable @escaping () -> Void = {}) {
+        self.url = url
+        self.release = release
+    }
+
+    /// A file already on disk that outlives the upload and needs nothing
+    /// doing to it.
+    public static func asItIs(_ url: URL) -> PhoneUploadFile {
+        PhoneUploadFile(url: url)
+    }
+
+    /// A copy this app made: deleted when the upload is done.
+    public static func spooled(_ url: URL) -> PhoneUploadFile {
+        PhoneUploadFile(url: url) { try? FileManager.default.removeItem(at: url) }
+    }
+}
+
+/// Where this app writes a copy of a phone file it could not upload in place.
+///
+/// Its own directory, not ``FileSaveModel/spool``: that one is emptied on the
+/// way into **every** save, so a save started while an upload was running
+/// would have deleted the file being sent. Two transfers in opposite
+/// directions get two directories.
+public enum PhoneUploadSpool {
+
+    public static let name = "domovoi-upload"
+
+    /// The directory, made if it is not there. **Not emptied**: an upload is
+    /// not "one at a time" the way a save is — three rows may be on their way
+    /// at once — so each file is deleted by its own
+    /// ``PhoneUploadFile/release``.
+    public static func directory() throws -> URL {
+        let spool = FileManager.default.temporaryDirectory
+            .appendingPathComponent(name, isDirectory: true)
+        try FileManager.default.createDirectory(at: spool, withIntermediateDirectories: true)
+        return spool
+    }
+
+    /// A name no other upload in flight is using, and that nothing a phone or
+    /// a server said can point anywhere: the random stem is this app's, and
+    /// only the **extension** comes from the file's name.
+    ///
+    /// The extension is kept because `URLSession` tells the server nothing
+    /// about the body's name — the name goes in the query or the multipart
+    /// header — but a `.mov` on disk is what makes a spooled file openable
+    /// if anything ever has to look at one.
+    public static func fileURL(in directory: URL, for name: String) -> URL {
+        let suffix = FileKinds.ext(of: name)
+        let stem = UUID().uuidString
+        return directory.appendingPathComponent(
+            suffix.isEmpty ? stem : "\(stem).\(suffix)",
+            isDirectory: false
+        )
+    }
+}
+
+extension PhoneMediaReading {
+
+    /// ``PhoneMediaReading/fileURL(of:)``'s default: read the bytes and write
+    /// them to a file of this app's own.
+    ///
+    /// Correct for every source and ideal for none — the bytes pass through
+    /// memory once. The two sources that can avoid it override it.
+    public func fileURL(of item: PhoneMediaItem) async throws -> PhoneUploadFile {
+        let bytes = try await self.bytes(of: item)
+        let url = PhoneUploadSpool.fileURL(in: try PhoneUploadSpool.directory(), for: item.name)
+        do {
+            try bytes.write(to: url, options: .atomic)
+        } catch {
+            throw PhoneMediaError.unreadable(name: item.name)
+        }
+        return .spooled(url)
+    }
 }
 
 /// `LocalMedia.kt:162`'s `pageOf`, which is the half of it that is not
@@ -390,5 +514,42 @@ public struct PhoneFolderSource: PhoneMediaReading {
             throw PhoneMediaError.unreadable(name: item.name)
         }
         return bytes
+    }
+
+    /// The file itself, with the folder's security scope **held open for the
+    /// upload** (D43).
+    ///
+    /// No copy at all: the bytes are already on disk where the person put
+    /// them, so a four-gigabyte video goes up without this app writing a
+    /// second one.
+    ///
+    /// The scope is the whole subtlety. `startAccessingSecurityScopedResource()`
+    /// is a balanced pair and the grant is on the **tree**, not the file, so
+    /// it is taken on the folder's root here and released by
+    /// ``PhoneUploadFile/release`` when the upload has finished — not by a
+    /// `defer`, which is what ``bytes(of:)`` above can use because it reads
+    /// the bytes before it returns and this does not. A `defer` here would
+    /// have closed the scope while `URLSession` was still reading, and
+    /// `PhoneUploadModel` is the only thing that knows when the upload is
+    /// over.
+    ///
+    /// A root that no longer resolves answers ``PhoneMediaError/unreadable(name:)``
+    /// before anything is sent, which is the same place `bytes(of:)` says it.
+    public func fileURL(of item: PhoneMediaItem) async throws -> PhoneUploadFile {
+        guard case .file(let url) = item.origin else {
+            throw PhoneMediaError.unreadable(name: item.name)
+        }
+        guard let root = folders
+            .first(where: { PhoneFolderList.libraryID(of: $0) == item.libraryID })
+            .flatMap(resolve)
+        else { throw PhoneMediaError.unreadable(name: item.name) }
+        let scoped = root.startAccessingSecurityScopedResource()
+        guard FileManager.default.isReadableFile(atPath: url.path) else {
+            if scoped { root.stopAccessingSecurityScopedResource() }
+            throw PhoneMediaError.unreadable(name: item.name)
+        }
+        return PhoneUploadFile(url: url) {
+            if scoped { root.stopAccessingSecurityScopedResource() }
+        }
     }
 }

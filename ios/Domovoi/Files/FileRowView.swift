@@ -92,13 +92,12 @@ struct FileRowView: View {
         }
     }
 
-    /// Nil when tapping the row would do nothing — the one case
-    /// (``FileKinds/FileAction/tooBig(_:)``) where ``FilesModel/tapped(_:)``
-    /// deliberately has no answer.
+    /// What tapping the row does. **Never nil any more**, and kept optional
+    /// because the callers below take an optional: the one case that had no
+    /// answer was `tooBig`, and since D47 every file can be saved whatever
+    /// its size.
     private var tappable: FileKinds.FileAction? {
-        let action = files.action(for: entry)
-        if case .tooBig = action { return nil }
-        return action
+        files.action(for: entry)
     }
 
     private var face: some View {
@@ -117,21 +116,15 @@ struct FileRowView: View {
                     .foregroundStyle(Color.fgMuted)
                     .fixedSize(horizontal: false, vertical: true)
                     .multilineTextAlignment(.leading)
-                if case .tooBig(let size) = files.action(for: entry) {
-                    Text(FileStrings.tooBigToSave(size))
-                        .font(.caption)
-                        .foregroundStyle(Color.fgMuted)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .multilineTextAlignment(.leading)
-                }
                 // **The server's "save it as PDF first" sentence goes HERE,
                 // not in the `Menu`.** A `Text` inside SwiftUI's `Menu` is
                 // silently dropped — the trap this screen already learned
                 // once over its missing Delete (`FilesView.swift:436-445`) —
                 // so a sentence in there would have shipped as a line nobody
-                // ever saw. This is the one place on the row that already
-                // says "this file can't do the thing" in prose, beside
-                // `tooBigToSave`.
+                // ever saw. This is the one place on the row that says "this
+                // file can't do the thing" in prose, and since D47 it is the
+                // only such sentence left: `tooBigToSave` used to sit beside
+                // it and there is no ceiling to say any more.
                 if case .pdfFirst(let said) = printOffer {
                     Text(said)
                         .font(.caption)

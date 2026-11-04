@@ -5,20 +5,30 @@ import SwiftUI
 ///
 /// `ui/screens/local/DeviceUpload.kt:323`'s `UploadRowButton`.
 ///
+/// ### The percentage, which is real now (D43)
+///
+/// Android streams the body and reports whole percent as it writes
+/// (`PhoneUpload.kt:52`). This app could not: `DomovoiClient.raw` takes
+/// `body: Data` and says nothing until it answers, so the ring was
+/// indeterminate and ``PhoneUploadButtonState/busy(percent:)`` was always
+/// built with `nil`. The streamed upload reports bytes as they go
+/// (``DomovoiClient/uploadFile(method:path:fileURL:contentType:trackPairing:onProgress:)``),
+/// so the ring is **determinate** when the number is known and indeterminate
+/// only when it is not — and ``PhoneMediaStrings/uploadingLabel(_:)``, which
+/// always took a percent for Android's sake, now gets one.
+///
 /// ### What is not drawn, and why
 ///
-/// * **A row over ``PhoneUploadModel/cap``** gets no button at all — the
-///   caller asks ``PhoneUploadModel/offersUpload(_:)`` first and draws
-///   ``PhoneUploadTooBigNote`` instead. A button that would fail on every tap
-///   is the control the owner's rule forbids ([[no-misleading-controls]]).
-/// * **A percentage.** Android streams the body and reports whole percent as
-///   it writes (`PhoneUpload.kt:52`); `DomovoiClient.raw` takes `body: Data`
-///   and reports nothing until it answers, so the ring is indeterminate and
-///   ``PhoneUploadButtonState/busy(percent:)`` is always built with `nil`
-///   here. A guessed number would read as progress and move on nothing.
-///   ``PhoneMediaStrings/uploadingLabel(_:)`` still takes the percent,
-///   because the rule is shared with Android's and
-///   `/api/files/upload-stream` is the item that will fill it in.
+/// * **A folder.** The caller asks ``PhoneUploadModel/offersUpload(_:)``
+///   first, which is false only for a directory: this app cannot send a tree
+///   and the server's streamed door takes one file per request
+///   (`files.py:1189`).
+/// * **A cancel.** A save can be stopped (``SaveToDeviceModel/cancel()``) and
+///   an upload cannot, which is the one asymmetry in this unit. The row's
+///   control is a 48-point box with a ring in it — there is nowhere on it for
+///   a second control — and a tap on the ring already means "say what is
+///   happening" (`DeviceUpload.kt:338`). It is in DECISIONS.md as a thing to
+///   put somewhere, not as a thing that is handled.
 struct PhoneUploadRowButton: View {
 
     let state: PhoneUploadButtonState
@@ -53,15 +63,26 @@ struct PhoneUploadRowButton: View {
 
     @ViewBuilder private var face: some View {
         switch state {
-        case .busy:
+        case .busy(let percent):
             // The ring, and the only moving thing in the row. Hidden from
             // VoiceOver because the **button** carries the words Android
             // gives the ring (`DeviceUpload.kt:326`): a label on a view
             // inside a hidden-by-combination button is read by nothing, and
             // this file shipped one for an hour.
-            ProgressView()
-                .progressViewStyle(.circular)
-                .accessibilityHidden(true)
+            //
+            // Determinate when the upload reported a number and
+            // indeterminate when it did not — a ring pinned at 0 reads as a
+            // stall, which is what `ProgressView(value: 0)` would draw for
+            // the first chunk of a gigabyte.
+            if let percent {
+                ProgressView(value: Double(percent) / 100)
+                    .progressViewStyle(.circular)
+                    .accessibilityHidden(true)
+            } else {
+                ProgressView()
+                    .progressViewStyle(.circular)
+                    .accessibilityHidden(true)
+            }
         case .ready:
             Image(systemName: "arrow.up.circle")
                 .font(.title3)
@@ -126,9 +147,15 @@ struct PhoneUploadRefusedCard: View {
 
 /// What a row too big to upload says instead of having a control.
 ///
-/// ``FileSaveModel``'s own pattern the other way round (`FileSave.swift:28`):
-/// the ceiling is stated on the row, in bytes, and the dashboard is named as
-/// the place where there is no ceiling.
+/// **Unreachable since D43**, and left defined on purpose. There is no
+/// ceiling in this app any more — ``PhoneUploadModel/offersUpload(_:)`` is
+/// true for every file — so nothing draws this. Its two call sites
+/// (`PhoneMediaRowView.swift:98`, `PhoneDeviceVideosView.swift:245`) belong
+/// to the player unit's files, which this unit may not edit, and a branch
+/// calling a view that no longer exists is a branch that does not compile.
+/// So the view stays until that unit takes the call sites out; it is noted in
+/// `design-notes/ios/batch-2026-11-03/transfers/DECISIONS.md` under "Needs a
+/// shared change".
 struct PhoneUploadTooBigNote: View {
 
     let size: Int64?

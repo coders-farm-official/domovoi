@@ -198,14 +198,68 @@ struct VideoFeedView: View {
             try? await Task.sleep(for: .milliseconds(650))
             feed?.flashFaded()
         }
-        .sheet(item: Binding(
-            get: { feed?.sheet },
-            set: { if $0 == nil { feed?.closeSheet() } }
-        )) { which in
-            if let feed {
-                VideoFeedSheetView(which: which, feed: feed, engine: engine)
+        // A save that failed is a toast, and the state goes back to idle with
+        // it: the share sheet is for a file that exists. The **shell's**
+        // toast, because a sentence about a save outlives this cover.
+        .onChange(of: videos.saves.state) { _, state in
+            guard case .failed(let why) = state else { return }
+            model.showToast(why)
+            videos.saves.taken()
+        }
+        // **One `.sheet`, over two sources.** ``FilesView`` learned this the
+        // hard way and wrote it down: several `.sheet` modifiers on one view
+        // do not reliably coexist in SwiftUI — the last one attached wins and
+        // the others silently never present. The feed's own three sheets and
+        // the share sheet a finished save puts up are therefore one binding.
+        //
+        // A finished save comes **first**, as it does on Files: the copy is
+        // deleted when its sheet is dismissed, so a save stranded behind an
+        // options sheet somebody left open is a file left in the container
+        // for the next launch to find.
+        .sheet(item: openSheet) { slot in
+            switch slot {
+            case .feed(let which):
+                if let feed {
+                    VideoFeedSheetView(which: which, feed: feed, engine: engine) { entry in
+                        save(entry)
+                    }
+                }
+            case .share(let url, _):
+                FileShareSheet(url: url)
             }
         }
+    }
+
+    /// The one sheet that is up, from the two places that can ask for one.
+    private var openSheet: Binding<FeedSheetSlot?> {
+        Binding(
+            get: {
+                if case .ready(let url, let name) = videos.saves.state {
+                    return .share(url, name)
+                }
+                if let which = feed?.sheet { return .feed(which) }
+                return nil
+            },
+            // Closing is **per case**, read from what is actually open rather
+            // than clearing both: a swipe-down that reset everything would
+            // throw away a save in flight behind the sheet.
+            set: { next in
+                guard next == nil else { return }
+                if case .ready = videos.saves.state { return videos.saves.taken() }
+                feed?.closeSheet()
+            }
+        )
+    }
+
+    /// `save to device` on the options sheet (`VideoFeed.kt:459`).
+    ///
+    /// The **row**, not the feed entry: the save needs the library id and the
+    /// path, and a ``FeedVideo`` carries neither — the same lookup
+    /// ``build()``'s position save makes, by the same key.
+    private func save(_ entry: FeedVideo) {
+        guard let row = open.videos.first(where: { $0.id == entry.key }) else { return }
+        videos.saveToDevice(row)
+        feed?.closeSheet()
     }
 
     // MARK: - building it
@@ -561,5 +615,24 @@ struct FeedMessage: View {
         .padding(20)
         .background(.black.opacity(0.6), in: .rect(cornerRadius: 12))
         .padding(.horizontal, 24)
+    }
+}
+
+/// Which sheet the feed has up: one of its own, or a finished save's share
+/// sheet.
+///
+/// `Identifiable` because `.sheet(item:)` takes one, and the id distinguishes
+/// the **cases** rather than their payloads: a share sheet replacing another
+/// share sheet cannot happen (one save at a time) and an options sheet
+/// replacing a details sheet already goes through the model.
+enum FeedSheetSlot: Identifiable, Equatable {
+    case feed(VideoFeedSheet)
+    case share(URL, String)
+
+    var id: String {
+        switch self {
+        case .feed(let which): return "feed:\(which.id)"
+        case .share: return "share"
+        }
     }
 }

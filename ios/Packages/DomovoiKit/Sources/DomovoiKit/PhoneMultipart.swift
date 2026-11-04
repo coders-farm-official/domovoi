@@ -51,8 +51,32 @@ public enum PhoneMultipart {
         bytes: Data,
         boundary: String
     ) -> Data {
+        var out = head(fields: fields, fileField: fileField, fileName: fileName, mime: mime, boundary: boundary)
+        out.append(bytes)
+        out.append(tail(boundary: boundary))
+        return out
+    }
+
+    /// `\r\n`, named once. A missing one of these is the 422 with no clue in
+    /// it that this file's doc comment is about.
+    static let crlf = "\r\n"
+
+    /// Everything before the file's bytes: the form fields, then the file
+    /// part's own headers.
+    ///
+    /// Extracted so ``body(fields:fileField:fileName:mime:bytes:boundary:)``
+    /// and ``spool(fields:fileField:fileName:mime:file:boundary:to:)`` cannot
+    /// drift. Two copies of nine exact bytes is how one of them ends up
+    /// wrong, and the one that would have been wrong is the streaming one —
+    /// the path with no test that reads the body back.
+    static func head(
+        fields: [(name: String, value: String)],
+        fileField: String,
+        fileName: String,
+        mime: String,
+        boundary: String
+    ) -> Data {
         var out = Data()
-        let crlf = "\r\n"
         for field in fields {
             out.append(Data("--\(boundary)\(crlf)".utf8))
             out.append(Data("Content-Disposition: form-data; name=\"\(safePartName(field.name))\"\(crlf)\(crlf)".utf8))
@@ -64,11 +88,82 @@ public enum PhoneMultipart {
             "Content-Disposition: form-data; name=\"\(safePartName(fileField))\"; filename=\"\(safePartName(fileName))\"\(crlf)".utf8
         ))
         out.append(Data("Content-Type: \(safeHeaderValue(mime))\(crlf)\(crlf)".utf8))
-        out.append(bytes)
-        out.append(Data(crlf.utf8))
-        // The closing delimiter is the boundary with `--` on BOTH ends.
-        out.append(Data("--\(boundary)--\(crlf)".utf8))
         return out
+    }
+
+    /// Everything after them. The closing delimiter is the boundary with
+    /// `--` on **both** ends.
+    static func tail(boundary: String) -> Data {
+        Data("\(crlf)--\(boundary)--\(crlf)".utf8)
+    }
+
+    /// The same body, written to a **file**, with the file part streamed in
+    /// off disk.
+    ///
+    /// ### Why the Music door still needs a multipart body at all
+    ///
+    /// D43 moved uploads onto `/api/files/upload-stream`, whose body IS the
+    /// file (`web/backend/api/files.py:1036`) — no envelope, nothing in
+    /// memory. The Music page cannot use it. `/upload-stream` into
+    /// `core:music` would land the track in the library and then ask the
+    /// core's **admin-only** sweep to index it (`files.py:1250`'s
+    /// `_trigger_reindex`, which proxies `/v1/admin/library/reindex` with the
+    /// caller's own credentials); from a phone, which holds a device token
+    /// and no admin session, that call fails and the track is invisible until
+    /// the indexer's next startup sweep. `/api/music/library/upload` indexes
+    /// it on the spot (`music.py:607`), which is the reason the Music page
+    /// has a door of its own (`PhoneUpload.kt:36`) — so the door stays, and
+    /// what changes is where its body lives.
+    ///
+    /// So: the envelope is written to `out`, the file's bytes are copied in a
+    /// chunk at a time, and the closing delimiter is appended. The app holds
+    /// one chunk, never the file. It costs one copy on **disk** for a music
+    /// track, which is a few megabytes and the honest price of immediate
+    /// indexing.
+    ///
+    /// - Parameters:
+    ///   - file: the file to send. Read with a `FileHandle`, so a four-
+    ///     gigabyte one would work here too — nothing in this function is
+    ///     about size.
+    ///   - out: where the body is written. Replaced if it is there.
+    /// - Returns: the body's length in bytes, which is what a caller needs to
+    ///   report progress against.
+    @discardableResult
+    public static func spool(
+        fields: [(name: String, value: String)],
+        fileField: String = "files",
+        fileName: String,
+        mime: String,
+        file: URL,
+        boundary: String,
+        to out: URL
+    ) throws -> Int64 {
+        let prologue = head(
+            fields: fields, fileField: fileField,
+            fileName: fileName, mime: mime, boundary: boundary
+        )
+        let epilogue = tail(boundary: boundary)
+
+        try? FileManager.default.removeItem(at: out)
+        guard FileManager.default.createFile(atPath: out.path, contents: nil),
+              let sink = try? FileHandle(forWritingTo: out)
+        else { throw PhoneMediaError.unreadable(name: fileName) }
+        defer { try? sink.close() }
+        let source = try FileHandle(forReadingFrom: file)
+        defer { try? source.close() }
+
+        try sink.write(contentsOf: prologue)
+        var copied = 0
+        // A megabyte at a time, the number `/upload-stream` writes with
+        // (`UPLOAD_CHUNK_BYTES`, `files.py:1012`). `read(upToCount:)` answers
+        // nil **or** an empty `Data` at the end of a file depending on the
+        // platform's mood, so both end the loop.
+        while let chunk = try source.read(upToCount: 1024 * 1024), !chunk.isEmpty {
+            try sink.write(contentsOf: chunk)
+            copied += chunk.count
+        }
+        try sink.write(contentsOf: epilogue)
+        return Int64(prologue.count + copied + epilogue.count)
     }
 
     /// A name or filename that cannot break out of its own header line.

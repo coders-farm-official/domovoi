@@ -444,16 +444,21 @@ struct FilesView: View {
     /// A save in flight, said on the page rather than in a toast: it is about
     /// to put a sheet up, and a toast that had already faded would leave the
     /// sheet unexplained.
+    ///
+    /// The shared control since D47 (`SaveToDeviceButton`), which is where
+    /// the percentage and the **stop** live: a multi-gigabyte save with no
+    /// way out is a phone stuck on a mistake. Only the fetching state is
+    /// drawn here — `idle` has no row of its own on this page (a save is
+    /// started from a row or a menu) and `ready`/`failed` are the sheet and
+    /// the toast above.
     @ViewBuilder
     private func saving(_ files: FilesModel) -> some View {
-        if case .fetching(let name) = files.saves.state {
-            HStack(spacing: 8) {
-                ProgressView()
-                Text(FileStrings.saving(name))
-                    .font(.footnote)
-                    .foregroundStyle(Color.fgMuted)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+        if case .fetching = files.saves.state {
+            SaveToDeviceButton(
+                state: files.saves.state,
+                onTap: {},
+                onCancel: { files.saves.cancel() }
+            )
         }
     }
 

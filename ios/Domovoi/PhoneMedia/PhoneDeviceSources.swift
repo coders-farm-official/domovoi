@@ -124,9 +124,11 @@ enum PhoneMediaFake {
             .init(libraryID): [
                 item("Trips", kind: .folder, isDir: true, size: nil),
                 item("quenlo lullaby.mp3", kind: .audio, size: 3 * 1024 * 1024, duration: 214),
-                // Over ``PhoneUploadModel/cap``, so its row has **no upload
-                // control** and a line saying how big it is. 200 MiB, which
-                // no other row is near.
+                // **Well over the 64 MiB this app used to refuse** (D43), so
+                // a case can drive a real streamed upload of a real file of
+                // that size. 200 MiB, which no other row is near. Named in
+                // ``sized`` below, so its file is made by setting a length
+                // rather than by writing 200 MiB of anything.
                 item("grendalf huge raw.wav", kind: .audio, size: 200 * 1024 * 1024, duration: 3607),
                 item("zarbis dune ride.mp4", kind: .video, size: 8 * 1024 * 1024, duration: 42),
                 item("marsden notes.txt", kind: .docText, size: 2048),
@@ -135,18 +137,18 @@ enum PhoneMediaFake {
                 item("brevik hilltop.mp4", path: "Trips", kind: .video, size: 5 * 1024 * 1024, duration: 19)
             ],
         ],
-        // Real bytes for everything the cases upload. `grendalf huge raw.wav`
-        // deliberately has **small** bytes: nothing should be able to reach
-        // its upload at all — no control is drawn — and if something does,
-        // the ceiling must refuse it on the row's stated size rather than on
-        // what came back, which is what ``PhoneUploadModel/isTooBig(_:)``
-        // asks.
+        // Real bytes for everything the cases upload.
         bytes: Dictionary(
             uniqueKeysWithValues: [
-                "quenlo lullaby.mp3", "grendalf huge raw.wav", "zarbis dune ride.mp4",
+                "quenlo lullaby.mp3", "zarbis dune ride.mp4",
                 "marsden notes.txt", "Trips/brevik hilltop.mp4",
             ].map { ($0, Data("\($0) bytes".utf8)) }
-        )
+        ),
+        // The one row whose file is made at its **stated** size: 200 MiB of
+        // sparse nothing, so `testTransfers_*` sends 200 MiB through the real
+        // streamed path without a 200 MiB literal in the binary or 200 MiB of
+        // a Simulator's memory. See ``PhoneMemorySource/sized``.
+        sized: ["grendalf huge raw.wav"]
     )
 
     /// A folder with nothing in it: the empty state, which is a different

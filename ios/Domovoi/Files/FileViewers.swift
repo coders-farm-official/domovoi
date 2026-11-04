@@ -89,10 +89,10 @@ struct FileTextSheet: View {
                 .font(.footnote)
                 .foregroundStyle(Color.fgMuted)
                 .fixedSize(horizontal: false, vertical: true)
-            // The way out this app does have, offered only where it works:
-            // `offersSave` is false for a file over the save cap, and a
-            // "save it to this device" link that refused would be exactly the
-            // control this screen is built not to draw.
+            // The way out this app does have. `offersSave` is still asked
+            // rather than assumed — it is false when the TAP already saves
+            // the file, one row one save — but it is no longer about size:
+            // since D47 a file of any size can be saved from here.
             if files.offersSave(entry) {
                 HomeLink(FileStrings.verbSave) {
                     files.doneReading()
