@@ -1159,7 +1159,36 @@ extension StubHouseUITests {
                         // thing this pass exists to catch.
                         allowingLeavesCutByAnEdge: false
                     )
-                    app.buttons["news-remove-cancel"].tap()
+                    // **The dialog has to still be there to be dismissed**,
+                    // and in train I003 it was not: `news-remove-ask` was on
+                    // screen for `news-12-audited-dialog`, the audit took two
+                    // seconds, and `news-remove-cancel` was gone by the tap —
+                    // with the page behind it *un*hidden and its rows intact,
+                    // so the detail model had not been torn down and nothing
+                    // in `NewsPersonModel` clears `confirmingRemoval` without
+                    // also tearing it down. The view above this screen was
+                    // rebuilt, which is the same instability that put
+                    // `testPrinting_PanelAudit` and the About audit back on
+                    // the Settings index inside one case.
+                    //
+                    // An unguarded `tap()` reports that as "Failed to tap",
+                    // which says nothing about what happened. This is **not**
+                    // an allowance: the mishap list is asserted empty, so the
+                    // case is still red — it is red with the reason in it,
+                    // and with the tree beside it.
+                    let cancel = app.buttons["news-remove-cancel"]
+                    if cancel.exists {
+                        cancel.tap()
+                    } else {
+                        evidence(app, "news-12-dialog-vanished")
+                        mishaps.append(
+                            "the remove confirmation went away during its own audit — "
+                                + "news-remove-ask still on screen: "
+                                + "\(newsElement(app, "news-remove-ask").exists), the page "
+                                + "behind it still drawing its rows: "
+                                + "\(app.buttons["news-remove-topic-tech"].exists)"
+                        )
+                    }
                 } else {
                     mishaps.append("the remove confirmation never came up")
                 }
