@@ -3203,53 +3203,62 @@ final class StubHouseUITests: XCTestCase {
         )
     }
 
-    /// A document opens in the reader, which says on its face that it cannot
-    /// write.
+    /// **No document row opens the read-only reader any more**, and the
+    /// line it used to draw is nowhere on the screen.
     ///
-    /// ### Not `notes.md` any more (train I001)
+    /// ### What this case was, and why it is this now
     ///
-    /// This case failed the integration run with "the reader never opened",
-    /// and the app was right. The Documents item **deliberately reversed**
-    /// this screen's "writing is the dashboard's job": Android has the
-    /// editors, the save routes are device tier and not admin
-    /// (`files.py:523`), so a phone really can write, and the old note was
-    /// about a batch that had not built them rather than about a refusal
-    /// (`overnight/documents/DECISIONS.md`, "Files writes after all" — which
-    /// also names this case as the one line the item could not change
-    /// itself). Tapping `notes.md` therefore opens the markdown editor now.
+    /// It was `testADocumentReadsAndTheReaderSaysItIsReadOnly`, and it has
+    /// been chasing a shrinking reader for two trains. Train I001 moved it
+    /// off `notes.md`, which had just started opening the markdown editor;
+    /// train I003 failed it again with "the reader never opened", on
+    /// `Letter to the council` this time, and the app was right once more —
+    /// owner answer 21 built the WebView host, so a formatted document and a
+    /// Word file open in the dashboard's own editor too.
     ///
-    /// The reader has not gone anywhere, and the read-only line is still true
-    /// of exactly the files that reach it: a formatted document and a Word
-    /// file, for which the editor is the dashboard's own WebView and is not
-    /// ported. So this taps `Letter to the council` — a formatted document,
-    /// whose row shows no extension (``FileKinds/displayName(of:isDir:)``) —
-    /// and asserts the same two things it always did, plus the absence of a
-    /// save the reader cannot do.
+    /// Nothing is left. ``FileTextSheet`` opens on ``FilesModel/reading``,
+    /// which only ``FileKinds/FileAction/read`` sets — a `doc-text` row in
+    /// Documents — and every one of those now opens an editor instead. So
+    /// the claim is **reversed and measured** rather than retargeted a third
+    /// time: a Files row reaches an editor, the sentence the reader drew
+    /// (``FileStrings/readOnly``) is drawn nowhere, and the day somebody
+    /// wires a row back to the reader this says so.
+    ///
+    /// It does not duplicate `testDocuments_AFormattedDocumentOpensInTheEditor`
+    /// or `testDocuments_MarkdownComesFromTheDocumentRoute`: those are about
+    /// what each editor does with the file. This is about which screen a
+    /// **Files row** reaches, which is Files' own routing and is the thing
+    /// that changed under it.
     @MainActor
-    func testADocumentReadsAndTheReaderSaysItIsReadOnly() throws {
+    func testNoDocumentRowOpensTheOldReadOnlyReader() throws {
         let (app, landed) = openFiles()
         XCTAssertTrue(landed, "the folder never answered")
         XCTAssertTrue(pickLibrary(app, "Documents"), "the library picker never opened")
 
+        let readOnly = app.staticTexts["read-only — editing is on the dashboard"]
+
+        // A formatted document: the dashboard's own editor, in a WebView.
         let letter = app.buttons["Letter to the council"]
         XCTAssertTrue(letter.waitForExistence(timeout: 20), "Documents never listed")
         letter.tap()
-        let readOnly = app.staticTexts["read-only — editing is on the dashboard"]
-        XCTAssertTrue(readOnly.waitForExistence(timeout: 20), "the reader never opened")
-        evidence(app, "53-files-document")
-        // ``containing(_:_:)`` and not `app.staticTexts.containing(…)`: that
-        // overload matches an element by its **descendants**, and the
-        // reader's body is one leaf `Text` with no children. The helper
-        // matches the element's own label, across every type, because the
-        // body is a monospaced `Text` whose label is the whole file.
         XCTAssertTrue(
-            containing(app, "Dear sir or madam").exists,
-            "the document's own text is not on screen"
+            app.staticTexts["document"].waitForExistence(timeout: 30),
+            "a formatted document did not reach the web editor"
         )
-        // The half of "read-only" that is a control and not a sentence: a
-        // reader offering a save it cannot do is the misleading control this
-        // screen's whole shape is about.
-        XCTAssertFalse(app.buttons["save"].exists, "the reader is offering a save it cannot do")
+        evidence(app, "53-files-document")
+        XCTAssertFalse(readOnly.exists, "the read-only reader opened over a document the app edits")
+        app.buttons["close"].firstMatch.tap()
+
+        // And a markdown file: the native editor, with its own pill.
+        let notes = app.buttons["notes.md"]
+        XCTAssertTrue(notes.waitForExistence(timeout: 20), "back to the list")
+        notes.tap()
+        XCTAssertTrue(
+            app.staticTexts["markdown"].waitForExistence(timeout: 30),
+            "a markdown file did not reach the markdown editor"
+        )
+        XCTAssertFalse(readOnly.exists, "the read-only reader opened over a file the app edits")
+        evidence(app, "53-files-markdown-not-the-reader")
     }
 
     /// A picture opens in the viewer; an SVG says what it is instead of

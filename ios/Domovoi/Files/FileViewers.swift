@@ -8,6 +8,17 @@ import UIKit
 /// three editors; this app has none, writing a document is the dashboard's
 /// job, and the one thing this must not do is look like an editor that
 /// silently fails to save ([[no-misleading-controls]]).
+///
+/// **Nothing reaches it today.** That paragraph was written before the
+/// Documents editors landed (owner answers 21 and 22). A row opens this sheet
+/// only through ``FileKinds/FileAction/read``, which is a `doc-text` file in
+/// the Documents library, and ``FileKinds/opensAnEditor(_:in:)`` is true for
+/// every one of those — so the editor takes the tap first and this view is
+/// unreachable. It is kept rather than deleted because the action it hangs
+/// off is still read elsewhere (``FilesModel/offersSave(_:)``), and because
+/// the next library that serves text this app may not write would want it
+/// back. Said out loud here rather than left as a comment describing a path
+/// nobody can take: `batch-2026-11-03/fx-transfers/REPORT.md`.
 struct FileTextSheet: View {
 
     let entry: FileEntry

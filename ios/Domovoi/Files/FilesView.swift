@@ -50,10 +50,20 @@ import SwiftUI
 /// above said the opposite and were true when they were written: the
 /// Documents item of the 2026-11-03 batch built the WebView host, so
 /// ``DocumentsEditorKind`` resolves `.html`, `.htm` and `.docx` to `.web`
-/// and `+ New → Document` has somewhere to open after all. The reader's
-/// "read-only — editing is on the dashboard" line stays true of exactly the
-/// files that still reach it. See `batch-2026-11-03/documents/REPORT.md`,
-/// which asked for these two lines from whoever owned this file next.
+/// and `+ New → Document` has somewhere to open after all. See
+/// `batch-2026-11-03/documents/REPORT.md`, which asked for these two lines
+/// from whoever owned this file next.
+///
+/// **And no row reaches the read-only reader any more.** ``FileTextSheet``
+/// opens on ``FilesModel/reading``, which only ``FileKinds/FileAction/read``
+/// sets — a `doc-text` file in Documents — and every one of those now opens
+/// an editor instead: `.md` the markdown one, `.html` the WebView host,
+/// everything else the plain-text one. The sheet and the action are left in
+/// place because the action is still what says this row's tap is a read
+/// (``FilesModel/offersSave(_:)`` asks it, and that is what draws `save to
+/// device` under an editor's refusal), but the VIEW is unreachable today and
+/// is written down as such in `batch-2026-11-03/fx-transfers/REPORT.md`
+/// rather than left looking like a path somebody could take.
 ///
 /// **Printing and scanning are here now.** A printable row offers `Print`
 /// (``PrintSheetView``) and Documents' header offers `scan`
@@ -210,7 +220,12 @@ struct FilesView: View {
             // fallback is ``FilesModel/tapped(_:)``, which is what
             // ``FileRowView/tap()`` reaches for the same file: for a `.xls`,
             // the save sheet.
-            if let cover = DocumentsEditorCover(for: made, in: files.selectedID) {
+            // ``FileKinds/opensAnEditor(_:in:)`` first, for the reason
+            // ``FileRowView/edits`` asks it: "exactly as tapping its row
+            // would" has to include the row's own gate, or `+ New` would open
+            // an editor on a name a row would hand to the save instead.
+            if FileKinds.opensAnEditor(made, in: files.selectedID),
+               let cover = DocumentsEditorCover(for: made, in: files.selectedID) {
                 editing = cover
             } else {
                 files.tapped(made)

@@ -175,6 +175,38 @@ public enum FileKinds {
         return .save
     }
 
+    /// Whether tapping this row opens one of the app's document editors
+    /// instead of doing ``action(for:in:)``.
+    ///
+    /// **Android's `openWith` (`FileKinds.kt:88`), not the server's
+    /// `_doc_category`.** ``DocumentsKinds/editor(for:in:)`` is a port of
+    /// `documents.py:207`, whose last line is a **catch-all**: an extension
+    /// it does not recognise is `text`, because `GET /api/documents/text`
+    /// decides for itself whether the bytes are text. That is the right
+    /// answer for the route and the wrong one for a row: it made every file
+    /// in the Documents library open the plain-text editor, a 4 GB `film.mkv`
+    /// included — a Save button over a video, and a tap whose own menu said
+    /// it was a save (`testAFileFarOverTheOldCapIsAnOrdinaryRow` asserts that
+    /// menu, and passed while the tap opened an editor). Android routes the
+    /// same question by the entry's **kind**: `doc-text` goes to the text
+    /// editor and everything else — audio, video, `other` — does not open in
+    /// the app at all.
+    ///
+    /// So: the sheet editors (`.xlsx`, `.csv`) and the document editors
+    /// (`.md`, `.html`, `.htm`, `.docx`) are named extensions and are taken
+    /// as they are; the text editor, which is the catch-all, is allowed only
+    /// where the server itself called the file `doc-text`. The row's tap then
+    /// falls back to ``action(for:in:)``, which for a `film.mkv` is the save
+    /// it always said it was.
+    ///
+    /// The library gate, the folder gate and the table itself stay where they
+    /// are: this adds one question to them and does not repeat any of them.
+    public static func opensAnEditor(_ entry: FileEntry, in libraryID: String?) -> Bool {
+        guard let editor = DocumentsKinds.editor(for: entry, in: libraryID) else { return false }
+        guard editor == .text else { return true }
+        return entry.kind == "doc-text"
+    }
+
     /// The word for what the tap does, which is the row's accessibility
     /// action and the first line of its menu.
     ///
