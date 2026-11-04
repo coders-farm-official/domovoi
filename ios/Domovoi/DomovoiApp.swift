@@ -8,18 +8,25 @@ import SwiftUI
 /// dependency-injection framework: a small graph, built once, in an order a
 /// reader can check — and the order is ``AppContainer``'s own documentation.
 ///
-/// ### The store is in memory, and that is the one thing to know here
+/// ### The store remembers now, and that is the one thing to know here
 ///
-/// ``InMemoryShellStore`` is still the only ``ShellStore`` there is, so **the
-/// saved server does not survive a launch**. Part 1 left the persisted store
-/// to the batch that has something to write (the picker and Settings → App
-/// layout, part 3's), and a half-ported settings store is worse than none.
+/// ``SavedShellStore`` is what this app builds: the server, the trust, the
+/// known-server rows, the pins, the refusals and the "this phone" choice are
+/// read from `UserDefaults` in its `init`, and the household tokens from the
+/// Keychain.
 ///
-/// What that means on a Simulator today: every launch is a fresh install with
-/// no server, which is §2.11's first row — the local shell with a `connect`
-/// pill, no banner, and nothing opening by itself. That is the right screen
-/// for that state, and it is the only state this build can reach without a
-/// picker. The other states are reachable in the previews beside each view.
+/// **It used to be ``InMemoryShellStore``, on every launch**, which is how
+/// the first build on Kamron's own iPhone forgot its server the moment the app
+/// was force-quit — and ``TokenVault`` had no caller at all, so the token did
+/// not survive either, whatever the comment here used to imply. Part 1 left
+/// the persisted store to "the batch that has something to write"; parts 2
+/// and 3 wrote the picker, the trust dialogs and the pairing screens and
+/// never came back for it. That is the shape of defect this track has a name
+/// for: shipped, but not where it is read.
+///
+/// A fresh install is still §2.11's first row — the local shell with a
+/// `connect` pill, no banner, and nothing opening by itself — because that is
+/// what an empty store says, not because there is nowhere to keep an answer.
 ///
 /// ### Room mode is not here
 ///
@@ -33,6 +40,12 @@ import SwiftUI
 struct DomovoiApp: App {
 
     private let model: ShellModel
+
+    /// The alerts' process-wide half — the three engines, the notification
+    /// delegate and the hint row's model (``AlertsAppWiring``, overnight
+    /// `alerts`). Everything it does is in that file; this is the property
+    /// that keeps it alive for the process.
+    private let alerts: AlertsAppWiring
 
     /// A server and token handed in on the command line, for a UI test.
     ///
@@ -76,7 +89,16 @@ struct DomovoiApp: App {
     /// why this reads `ProcessInfo` rather than `UserDefaults`: a launch
     /// argument lives for one process, where a default would persist and
     /// could outlive the test that set it.
-    private static func seededStore() -> InMemoryShellStore {
+    ///
+    /// **A seeded launch gets the in-memory store, and that is deliberate.**
+    /// Now that the ordinary path saves, a stub-house run that used
+    /// ``SavedShellStore`` would write the stub's address into the
+    /// Simulator's defaults and hand it to the next test — and read back
+    /// whatever the previous one left. The seam that keeps a launch argument
+    /// from outliving its process is worth nothing if the store it seeds
+    /// outlives it instead. So: seeded ⇒ nothing is kept; otherwise ⇒
+    /// everything is.
+    private static func store(vault: TokenVault) -> any ShellStore {
         #if DEBUG
         let arguments = ProcessInfo.processInfo.arguments
         func value(after flag: String) -> String? {
@@ -95,11 +117,17 @@ struct DomovoiApp: App {
             return InMemoryShellStore(serverURL: url, token: value(after: "-domovoi-token"))
         }
         #endif
-        return InMemoryShellStore()
+        return SavedShellStore(vault: vault)
     }
 
     init() {
-        let container = AppContainer(store: Self.seededStore())
+        // **One vault, handed to both.** Two `TokenVault()`s would reach the
+        // same Keychain items — same service, same accounts — so this is not
+        // a correctness fix; it is so that "where do the tokens live" has one
+        // answer at the one place that builds the graph, and so that a test
+        // or a future seam can replace it in one line rather than two.
+        let vault = TokenVault()
+        let container = AppContainer(store: Self.store(vault: vault), vault: vault)
         // The device id, and the two things only UIKit can answer. Read HERE,
         // on the main actor, once: ``DeviceSelf`` exists so that a `Sendable`
         // closure running anywhere never reads `UIDevice`, which
@@ -134,6 +162,11 @@ struct DomovoiApp: App {
         // the app makes and not something a container does to whoever builds
         // one.
         container.start()
+        // After `container.start()`, because the alerts' first act is a read
+        // through the container's client, and `DomovoiApplication.onCreate`
+        // starts them beside the socket in the same order
+        // (`TimerAlerts.kt:97`).
+        alerts = AlertsAppWiring(container: container)
     }
 
     var body: some Scene {
@@ -161,6 +194,24 @@ struct DomovoiApp: App {
                 // ``Color/brandFg`` on the ink would be 3.08:1 — the fill
                 // role and the text role are two tokens for a reason.
                 .tint(Color.brandInk)
+                // The alerts' hint: the model goes into the environment for
+                // Home's timers card to draw a row from, and the lifecycle
+                // re-reads this phone's notification status on every return
+                // to the foreground (`HomeScreen.kt:241-247`).
+                //
+                // **On the app's root rather than Home's**, which is the one
+                // place this departs from DECISIONS §2's hook 2. Home's root
+                // is `HomeView.swift`, and the modifier carries the explain
+                // card's overlay: a dialog that belongs to a screen inside a
+                // tab is a dialog a tab switch can take away mid-sentence,
+                // and `.accessibilityHidden` behind the scrim then covers
+                // the tab bar too — which is what `.isModal` promises and
+                // what the other `DialogCard` in the app had to be given by
+                // hand (`RouteScreen.swift:196-203`). The read is a status
+                // read and never a prompt, so doing it once at launch asks
+                // nothing of anybody.
+                .environment(\.alertsHintModel, alerts.hint)
+                .alertsHintLifecycle(alerts.hint)
         }
     }
 }

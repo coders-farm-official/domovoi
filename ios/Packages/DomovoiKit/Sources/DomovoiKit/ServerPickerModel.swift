@@ -45,7 +45,8 @@ public final class ServerPickerModel {
 
     /// What the picker has in its hand about the LAN. **Nil until a sweep has
     /// finished**, which is the difference between "nothing answered" and
-    /// "nothing was asked" (``serverPickerNotice(outcome:scanning:rowsEmpty:port:)``).
+    /// "nothing was asked"
+    /// (``serverPickerNotice(outcome:scanning:rowsEmpty:localNetworkHasAnswered:port:)``).
     public private(set) var outcome: SweepOutcome?
 
     public private(set) var progress = ServerScanProgress()
@@ -130,7 +131,12 @@ public final class ServerPickerModel {
     }
 
     public var notice: ServerPickerNotice {
-        serverPickerNotice(outcome: outcome, scanning: isScanning, rowsEmpty: rows.isEmpty)
+        serverPickerNotice(
+            outcome: outcome,
+            scanning: isScanning,
+            rowsEmpty: rows.isEmpty,
+            localNetworkHasAnswered: store.localNetworkHasAnswered
+        )
     }
 
     /// `add`, or `checking…` while a typed address is being probed.
@@ -217,6 +223,13 @@ public final class ServerPickerModel {
             }
             model.found = result.servers
             model.outcome = result
+            // A dashboard answered, so a local connection was allowed: the
+            // Local Network permission is settled for this install and the
+            // next empty sweep is entitled to ask about the web backend
+            // (``ShellStore/noteLocalNetworkAnswered()``). Written **before**
+            // the outcome is read by anything, so the notice this sweep
+            // produces is already the right one.
+            if !result.servers.isEmpty { model.store.noteLocalNetworkAnswered() }
             model.progress.finish()
         }
     }
@@ -258,6 +271,10 @@ public final class ServerPickerModel {
                 manualError = message
                 return .noAnswer(message: message)
             }
+            // A typed address that reached a dashboard proves the same
+            // thing a sweep hit does, and it is the way out of a refused
+            // permission that this line used to be the only sign of.
+            store.noteLocalNetworkAnswered()
             // Straight into the gate, carrying the identity the probe saw at
             // this moment — which is what a yes pins (A6-03).
             _ = gate.select(url: hit.url, name: hit.name, identity: hit.identity)
