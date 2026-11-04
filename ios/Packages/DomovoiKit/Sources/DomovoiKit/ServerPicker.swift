@@ -13,15 +13,17 @@ import Foundation
 /// What the picker may say when the list is empty, which is **a statement of
 /// fact about what the app actually did** and not a mood.
 ///
-/// Four facts, and they are not interchangeable (`IOS-ONLY-STRINGS.md` §3):
-/// 254 addresses were probed and none answered; the phone is not on a LAN so
-/// nothing was probed; the phone is on a LAN with no address of its own so
-/// nothing was probed; the Local Network permission was refused so nothing
-/// could answer. Saying any one of them about any other of them is a control
-/// claiming something it did not do, which the owner has ruled out by name
+/// Five facts, and they are not interchangeable (`IOS-ONLY-STRINGS.md` §3):
+/// 254 addresses were probed and none answered; the same, on an install where
+/// nothing has **ever** answered, so Apple's Local Network prompt is still an
+/// explanation and the house is not; the phone is not on a LAN so nothing was
+/// probed; the phone is on a LAN with no address of its own so nothing was
+/// probed; the Local Network permission was refused so nothing could answer.
+/// Saying any one of them about any other of them is a control claiming
+/// something it did not do, which the owner has ruled out by name
 /// ([[no-misleading-controls]]).
 ///
-/// ``nothing`` is the fifth state and the default: the panel has not swept
+/// ``nothing`` is the sixth state and the default: the panel has not swept
 /// yet, so it has no fact to report and says nothing at all. Android's
 /// condition is the same one (`scan.scanned`), reached differently.
 public enum ServerPickerNotice: Equatable, Sendable {
@@ -29,8 +31,24 @@ public enum ServerPickerNotice: Equatable, Sendable {
     /// Nothing to say: no sweep has finished, or one found something.
     case nothing
 
-    /// `total` addresses were probed on `port` and none answered.
+    /// `total` addresses were probed on `port` and none answered, on an
+    /// install where something has answered before — so the local network
+    /// works and this really is about the house.
     case nothingAnswered(port: Int)
+
+    /// The same sweep, on an install where **nothing has ever answered**
+    /// (``ShellStore/localNetworkHasAnswered``).
+    ///
+    /// The difference is not pedantry, it is which of two things the person
+    /// is told to go and look at. iOS asks about Local Network access on the
+    /// first local connection, and the panel's own opening sweep is usually
+    /// that connection: every probe fails while the alert is up, the sweep
+    /// ends `.swept` with nothing found, and there is **no API that says
+    /// whether the permission was granted** (TN3179) — ``localNetworkDenied``
+    /// can only be reached when `NWPath` reports it, which it does not during
+    /// that window. So the one thing this state must not do is send someone
+    /// to restart a web backend that was answering all along.
+    case nothingAnsweredYet(port: Int)
 
     /// Not on Wi-Fi or Ethernet. **Nothing was probed.**
     case notOnWifi
@@ -47,6 +65,7 @@ public enum ServerPickerNotice: Equatable, Sendable {
         switch self {
         case .nothing: return nil
         case .nothingAnswered(let port): return ShellStrings.nothingAnswered(port: port)
+        case .nothingAnsweredYet(let port): return IOSOnlyStrings.nothingAnsweredYet(port: port)
         case .notOnWifi: return ShellStrings.notOnWifi
         case .noAddressYet: return IOSOnlyStrings.noAddressYet
         case .localNetworkDenied: return IOSOnlyStrings.localNetworkDenied
@@ -60,7 +79,13 @@ public enum ServerPickerNotice: Equatable, Sendable {
     public var isWarning: Bool {
         switch self {
         case .notOnWifi, .noAddressYet, .localNetworkDenied: return true
-        case .nothing, .nothingAnswered: return false
+        // ``nothingAnsweredYet`` is quiet, which is a decision and not an
+        // oversight: it names something the person can act on, so by the rule
+        // above it would be loud — but the app does not **know** the
+        // permission is off, and a warn glyph for a house whose backend is
+        // genuinely down over-claims in the other direction. The sentence
+        // hedges; the colour must not contradict it.
+        case .nothing, .nothingAnswered, .nothingAnsweredYet: return false
         }
     }
 
@@ -81,15 +106,16 @@ public enum ServerPickerNotice: Equatable, Sendable {
     public var offersTheSettingsButton: Bool { false }
 }
 
-/// Which of the five ``ServerPickerNotice``s this panel is entitled to show.
+/// Which of the six ``ServerPickerNotice``s this panel is entitled to show.
 ///
-/// **Three of the four facts are about the sweep and one is about the list**,
-/// and that is why `rowsEmpty` gates only one branch. "Not on wifi", "no
-/// address yet" and "local network access is off" are all true, and all worth
-/// saying, with a saved server sitting in the list the person can still tap —
-/// Android draws its own off-LAN line above the list for exactly that reason.
-/// "Nothing answered on port 6369" is the only one that is a claim about the
-/// list, and with a row in it nothing failed to be found.
+/// **Three of the five facts are about the sweep and two are about the
+/// list**, and that is why `rowsEmpty` gates only one branch. "Not on wifi",
+/// "no address yet" and "local network access is off" are all true, and all
+/// worth saying, with a saved server sitting in the list the person can still
+/// tap — Android draws its own off-LAN line above the list for exactly that
+/// reason. "Nothing answered on port 6369", in either of its two wordings, is
+/// the only one that is a claim about the list, and with a row in it nothing
+/// failed to be found.
 ///
 /// Collapsing Android's two placements into one answer is deliberate: there,
 /// an off-LAN rescan with an empty list draws the off-LAN line **and** the
@@ -102,18 +128,30 @@ public enum ServerPickerNotice: Equatable, Sendable {
 ///   - scanning: whether one is running now. A sweep in flight has not
 ///     failed to find anything yet.
 ///   - rowsEmpty: whether the list the person is looking at is empty.
+///   - localNetworkHasAnswered: whether anything on the local network has
+///     ever answered this install (``ShellStore/localNetworkHasAnswered``).
+///     **No default**, deliberately: it is the difference between telling
+///     someone their server is down and telling them to let the app on the
+///     network, and a caller that had not thought about which install it was
+///     talking about is how the wrong one shipped.
 public func serverPickerNotice(
     outcome: SweepOutcome?,
     scanning: Bool,
     rowsEmpty: Bool,
+    localNetworkHasAnswered: Bool,
     port: Int = Discovery.defaultPort
 ) -> ServerPickerNotice {
     guard !scanning, let outcome else { return .nothing }
     switch outcome {
     case .swept:
         // The one case where the addresses really were asked and really were
-        // silent — and the only one the list's own emptiness decides.
-        return rowsEmpty ? .nothingAnswered(port: port) : .nothing
+        // silent — and the only one the list's own emptiness decides. Which
+        // of the two wordings it gets is the only thing install history
+        // changes anywhere in this function.
+        guard rowsEmpty else { return .nothing }
+        return localNetworkHasAnswered
+            ? .nothingAnswered(port: port)
+            : .nothingAnsweredYet(port: port)
     case .notOnLan:
         return .notOnWifi
     case .noLocalNetwork:

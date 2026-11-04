@@ -41,7 +41,9 @@ struct LocalShellView: View {
             }
             TabView(selection: $model.localSelection) {
                 ForEach(model.localShellTabs, id: \.self) { route in
-                    ScreenPlaceholder(route: route, onThisPhone: true)
+                    // The phone's own media, with **no uploader** — there is
+                    // no server to send anything to (``LocalPhoneScreen``).
+                    LocalPhoneScreen(model: model, route: route)
                         .tabItem {
                             Label(route.label.lowercased(), systemImage: route.systemImage)
                         }
