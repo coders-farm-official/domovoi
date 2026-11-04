@@ -55,6 +55,11 @@ struct HomeTimersView: View {
     /// (`alpha 0.7`, `HomeSections.kt:460`).
     let onlineRooms: Set<String>
 
+    /// **Whether the rooms read landed at all**, which `onlineRooms` cannot
+    /// say: empty means "every room is offline" and "nobody could ask" alike,
+    /// and the dim is only right for the first. See ``dimForOfflineRoom(_:)``.
+    let roomsKnown: Bool
+
     /// `+N more` has been tapped. `@State` in ``HomeView``, as Android's
     /// `rememberSaveable` is in the screen, and it never collapses again.
     let expanded: Bool
@@ -180,9 +185,34 @@ struct HomeTimersView: View {
                 // `alpha 0.7` when the room is not online
                 // (`HomeSections.kt:460`): the timer is still running, but the
                 // room it will ring in is not there to ring.
+                //
+                // **Only when the rooms read landed.** `fgMuted` is 6.60:1 on
+                // this card and about 3.0:1 at `.opacity(0.7)`, so the dim is
+                // below the contrast floor — and when `/api/satellites` fails
+                // every timer's room is "not online" merely because nobody
+                // could ask. The audit found exactly that: the `rooms-down`
+                // house was the only one of seven states to report a contrast
+                // failure, reproducibly, and its rooms read is the only thing
+                // it has that the clean states do not (2026-10-30).
+                //
+                // Unknown is not offline. The same mistake, in the other
+                // direction, is one of the thirteen defects this port found in
+                // the shipping Android app: a green tick for a health read
+                // that never happened.
                 .foregroundStyle(Color.fgMuted)
-                .opacity(roomIsOnline(timer) ? 1 : 0.7)
+                .opacity(dimForOfflineRoom(timer) ? 0.7 : 1)
         }
+    }
+
+    /// Whether to dim this timer's room: only when the rooms read landed
+    /// **and** said the room is not online.
+    ///
+    /// With no rooms to compare against, `roomIsOnline` is false for every
+    /// timer in the house, which is how a failed read became an unreadable
+    /// label. See the contrast note at the call site.
+    private func dimForOfflineRoom(_ timer: HomeTimer) -> Bool {
+        guard roomsKnown else { return false }
+        return !roomIsOnline(timer)
     }
 
     /// A timer with no room is not a timer whose room is offline, so the
