@@ -89,8 +89,17 @@ public enum ManualLevelStack {
     ///
     /// It is a cap and not only a description: the mounting recurses, and a
     /// chain that was somehow longer than this (a document whose piece
-    /// parented itself, which ``ManualModel/parent(of:)`` cannot produce and
-    /// ``ManualModel/levels`` caps anyway) would recurse with it.
+    /// parented itself, which ``ManualModel/parent(of:)`` cannot produce)
+    /// would recurse with it.
+    ///
+    /// **``ManualModel/levels`` caps itself at this number and not at its
+    /// own.** It read `chain.count < 4` for one commit, which is unreachable
+    /// today — `parent(of:)` is a three-step walk — and silent in the wrong
+    /// direction if it ever stopped being: a fourth level would be *drawn* by
+    /// the depth-3 host, because ``level(at:in:)`` would hand it one, and
+    /// never be presentable, because ``presentsDeeper(at:in:)`` refuses past
+    /// the cap. Nothing would fail; a level would simply be unreachable by
+    /// the gesture. Review round 1's finding 4.
     public static let maxDepth = 3
 
     /// The level the screen at this depth draws, or nil when the chain is
@@ -876,11 +885,15 @@ public final class ManualModel {
     ///
     /// The walk is bounded: the four levels are a chain, ``parent(of:)``
     /// reaches `.start` in at most three steps, and the count is capped so a
-    /// future level that parented itself could not spin here.
+    /// future level that parented itself could not spin here. The cap is
+    /// ``ManualLevelStack/maxDepth`` and not a number written out beside it,
+    /// so that the longest chain this can return is the deepest screen the
+    /// mounting will present — see that property for what the two disagreeing
+    /// would cost.
     public var levels: [ManualPlace] {
         var chain: [ManualPlace] = []
         var at = place
-        while at != .start, chain.count < 4 {
+        while at != .start, chain.count < ManualLevelStack.maxDepth {
             chain.append(at)
             at = parent(of: at)
         }

@@ -395,10 +395,12 @@ extension StubHouseUITests {
     ///    route. Between `6d071463` and the commit that added this case back,
     ///    the gesture popped the route like every other screen's and the
     ///    manual was replaced by Home;
-    ///  * the cluster's own node is there — so the level it landed on is the
-    ///    piece's topic and not, say, Start here. (The topic's nodes alone
-    ///    cannot say it: the cluster is the screen underneath the piece and
-    ///    its nodes exist either way.)
+    ///  * a **sibling piece's** node is there — so the level it landed on is
+    ///    the piece's own cluster and not the map or Start here. That node
+    ///    discriminates: the map draws topic nodes only, and
+    ///    `the-plugins` is a piece of `rooms-and-devices` beside `pi-room`
+    ///    (`design-notes/ios/stubhouse/fixtures/manual.py:240`), so it is on
+    ///    screen at the cluster and at no other level.
     ///
     /// **This case stood here before and was deleted**, with the inner
     /// `NavigationStack` train I003 measured (twenty reds,
@@ -461,6 +463,14 @@ extension StubHouseUITests {
     /// route would also take the map off screen, so "the map is gone" is not
     /// the claim. The claim is **what is there instead** — Start here's own
     /// title, which Home does not draw.
+    ///
+    /// The second assertion then says the map really went, and it reads the
+    /// centre **node**. That leans on one thing worth writing down: the
+    /// centre crumb carries the same words and is not an element of the same
+    /// kind at this level (``ManualCrumbs`` draws `link: topic != nil`, so on
+    /// the map the centre is a `Text`, and ``manualNode(_:_:)`` matches a
+    /// button). The day that crumb becomes a link at the map level, this line
+    /// is a false red and the thing to change is the query, not the screen.
     @MainActor
     func testManual_ASwipeFromTheMapGoesBackToStartHere() throws {
         control("reset-fixtures", "{}", port: 6601, what: "the manual fixture's seed")
@@ -533,6 +543,69 @@ extension StubHouseUITests {
         evidence(app, "manual-swipe-ax5-left-the-manual")
     }
 
+    /// **Review round 1's finding 3**: the phone bar still works from a
+    /// pushed level, and nothing of the manual is left on top of what it
+    /// opens.
+    ///
+    /// A level is presented on the **shell's** stack, and the phone bar is
+    /// drawn outside that stack (`WorkspaceView.swift:82`) so it is tappable
+    /// from every depth. Its tabs append a `Route` to the same path
+    /// (`ShellChromeViews.swift:277` → ``ShellNavigation``), which asks
+    /// SwiftUI to hold a route pushed *underneath* three presentations that
+    /// hang off the screen below it — a shape nobody here has measured, whose
+    /// worst case is the most ordinary exit in the app visibly doing nothing.
+    /// ``ManualLevelHost/isTopRoute`` is the guard, and this is the case that
+    /// reads it.
+    ///
+    /// Music, because it is the one pushed route a case in this file can
+    /// reach in one tap and recognise without any fixture of its own: the
+    /// claim is ``ShellTopBar``'s crumb, which is rebuilt from the open
+    /// route. Then the piece's page must be **gone**, because a level left
+    /// presented over the route that was just pushed is the other half of the
+    /// same bug.
+    ///
+    /// If it fails, the two reds mean different things: no `music` crumb is
+    /// the push being swallowed, and `next: What plugins add` still on screen
+    /// is a level the gate did not take down.
+    @MainActor
+    func testManual_ThePhoneBarWorksFromAPushedLevel() throws {
+        control("reset-fixtures", "{}", port: 6601, what: "the manual fixture's seed")
+        let app = manualLaunch()
+
+        XCTAssertTrue(
+            manualOpenTopic(app, topic: StubManual.roomsTopic),
+            "the map never opened the topic's cluster"
+        )
+        let piece = manualNode(app, StubManual.piRoom)
+        XCTAssertTrue(piece.waitForExistence(timeout: 15), "the cluster drew no piece node")
+        piece.tap()
+        let footer = app.buttons[StubManual.nextPlugins].firstMatch
+        XCTAssertTrue(footer.waitForExistence(timeout: 15), "the piece's page never opened")
+        evidence(app, "manual-phone-bar-on-the-piece")
+
+        let tab = app.buttons[ShellStringsUnderTest.musicTab].firstMatch
+        XCTAssertTrue(
+            tab.waitForExistence(timeout: 15),
+            "the phone bar has no Music tab while a manual level is pushed — "
+                + "if the bar is gone from the screen, that is the finding, "
+                + "not this tab"
+        )
+        tab.tap()
+
+        XCTAssertTrue(
+            app.staticTexts[ShellStringsUnderTest.musicCrumb].waitForExistence(timeout: 15),
+            "the phone bar's Music tab did nothing from a pushed manual "
+                + "level: the route went onto a path that still had the "
+                + "manual's levels presented off it"
+        )
+        evidence(app, "manual-phone-bar-opened-music")
+        XCTAssertTrue(
+            manualGone(footer),
+            "the piece's page is still on screen over Music, so a level of "
+                + "the manual was left presented on top of the route that was "
+                + "just pushed"
+        )
+    }
 
     /// A swipe back from **Start here** leaves the manual.
     ///

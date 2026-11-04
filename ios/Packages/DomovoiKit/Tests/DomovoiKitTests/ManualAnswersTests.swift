@@ -203,6 +203,64 @@ final class ManualAnswersTests: XCTestCase {
         )
     }
 
+    /// **The two caps agree, and this is what their disagreeing would cost.**
+    ///
+    /// Review round 1's finding 4. ``ManualModel/levels`` capped its walk at
+    /// four while ``ManualLevelStack/maxDepth`` is three, and the doc comment
+    /// on the cap claimed the two were the same number. It was unreachable —
+    /// ``ManualModel/parent(of:)`` is a three-step walk — and it would have
+    /// failed *silently* in the wrong direction, which is the half worth a
+    /// case: a fourth entry is a level the depth-3 host would **draw**,
+    /// because ``ManualLevelStack/level(at:in:)`` hands it one, and that no
+    /// gesture could reach, because ``ManualLevelStack/presentsDeeper(at:in:)``
+    /// stops at the cap. Nothing would be red; a level would simply never be
+    /// presentable.
+    ///
+    /// The first half is the arithmetic of that gap, written down so it stays
+    /// a known shape. The second is the invariant that now closes it: every
+    /// depth the chain reaches is a depth the mounting presents.
+    func testNoLevelIsDeeperThanTheStackWillPresent() async {
+        let overlong: [ManualPlace] = [.map, .topic("a"), .piece("b"), .piece("c")]
+        XCTAssertNotNil(
+            ManualLevelStack.level(at: ManualLevelStack.maxDepth + 1, in: overlong),
+            "a chain longer than the cap still hands the host past it a level "
+                + "to draw — which is why the chain is capped where the "
+                + "mounting is, and not one deeper"
+        )
+        XCTAssertFalse(
+            ManualLevelStack.presentsDeeper(at: ManualLevelStack.maxDepth, in: overlong),
+            "and nothing would ever present that level"
+        )
+
+        // The deepest place a real document has: a piece inside a topic,
+        // which is why this needs a served rig
+        // (``testASwipeBackGoesUpExactlyOneLevel`` has the reason).
+        let model = servedRig()
+        model.start()
+        await settle(until: { model.doc != nil })
+
+        model.go("pi-room")
+        let chain = model.levels
+        XCTAssertEqual(
+            ManualLevelStack.maxDepth, chain.count,
+            "a piece's page is the deepest the manual goes, and the cap is "
+                + "the length of that chain — if this is short the walk is "
+                + "capped tighter than the document, and a level is gone"
+        )
+        for depth in 0..<chain.count {
+            XCTAssertTrue(
+                ManualLevelStack.presentsDeeper(at: depth, in: chain),
+                "the screen at depth \(depth) does not present the one above "
+                    + "it, so the level at \(depth + 1) is drawn by nothing"
+            )
+        }
+        XCTAssertEqual(
+            model.place, ManualLevelStack.level(at: chain.count, in: chain),
+            "the deepest screen of the chain has to draw where the person is"
+        )
+        model.stop()
+    }
+
     /// A swipe back goes up **one** level, from every level, and off the top
     /// of the manual from Start here — Kamron's answer 32, and Android's
     /// `BackHandler(enabled = at != "start") { up() }` (`ManualScreen.kt:315`).

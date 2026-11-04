@@ -81,6 +81,20 @@ struct ManualView: View {
 
     @State private var manual: ManualModel?
 
+    /// This screen's hold on ``ManualModel``: it starts the reads and its
+    /// `deinit` stops them.
+    ///
+    /// **`@State`, so it is this view's identity and not this view's
+    /// visibility** — ``ManualScreenHold``'s whole doc comment, and review
+    /// round 1 of answer 32's must. A level is a pushed screen now, so the
+    /// `onDisappear { manual?.stop() }` that used to sit below fired when the
+    /// map went up and stopped the very reads the pages above it draw. A
+    /// covered screen keeps its `@State` and a popped one does not, so the
+    /// object in that storage is the one thing in SwiftUI that can tell a
+    /// cover from a destruction. `hold == nil` is also the guard that makes a
+    /// repeated `onAppear` do nothing.
+    @State private var hold: ManualScreenHold?
+
     /// `at` in a `rememberSaveable` (`ManualScreen.kt:290`) — the same
     /// promise `@SceneStorage` makes: it survives a process death and dies
     /// with the app's removal. The string is ``ManualPlace/saved``.
@@ -115,17 +129,66 @@ struct ManualView: View {
         // has one. The visibility closure is read **each time a link is
         // judged**, not captured once, so a capability that arrives after
         // this screen opened is taken into account.
-        .task {
+        //
+        // **The start and the stop are ``ManualScreenHold``'s, not this
+        // callback's**, which is review round 1's must on answer 32. The
+        // pair that stood here — `.task { … start() }` and
+        // `onDisappear { stop() }` — is not symmetric and its second half is
+        // not even about the right event: `.task` runs once per view
+        // identity, which a pushed level does not end, while `onDisappear`
+        // arrives for a **cover** as well as for a pop. So opening the map
+        // stopped the document load and all six live reads, and nothing
+        // restarted them — on a screen whose piece pages, two levels up,
+        // are what draw them. ``ManualScreenHold`` has the measurement and
+        // the dozen sibling files that made it.
+        //
+        // `onAppear` and not `.task`, for ``RoomsView``'s reason (its D56):
+        // the hold is built where a repeated appearance can be guarded
+        // against by what it finds, and `hold == nil` is that guard.
+        .onAppear {
             if manual == nil {
                 manual = ManualModel(in: model.container, visibility: { [model] in model.visibility })
                 manual?.restore(saved: savedPlace)
             }
-            manual?.start()
+            guard hold == nil, let manual else { return }
+            hold = ManualScreenHold(manual)
         }
-        .onDisappear { manual?.stop() }
         .onChange(of: manual?.place) { _, place in
             guard let place else { return }
             savedPlace = place.saved
+        }
+        // **The levels come off the stack when the manual stops being the
+        // route on top of it.** The gate itself is declarative and lives in
+        // ``ManualLevelHost/deeperIsShown`` (``isTopRoute``); this is the
+        // other half, the model's own place, so that nothing is left asking
+        // to be pushed again the moment the manual is uncovered.
+        //
+        // Review round 1's finding 3: a level is presented on the **shell's**
+        // stack, and four other things append to that same stack from
+        // outside this screen — the phone bar, which is drawn outside the
+        // stack and so is tappable from a pushed level
+        // (`ShellChromeViews.swift:277`), a notification tap
+        // (``NavigationState/takeRouteFromOutside(_:)``), a capability that
+        // went away (``NavigationState/capabilitiesChanged(_:)``, which
+        // empties the path), and the manual's own `route:` links. The first
+        // build of this answer guarded only the last of those, inside
+        // ``act(_:in:)``; a route held underneath presentations that hang off
+        // the screen below it is a shape nobody here has measured, and the
+        // phone bar is the most ordinary way out of this screen there is. So
+        // the guard is at the seam instead, where it covers all four.
+        //
+        // The cost, unchanged and still Kamron's call (DECISIONS, D32B):
+        // leaving the manual while deep lands on Start here on the way back,
+        // where Android comes back to the piece. It is the gate alone that
+        // would be Android-faithful — the levels would re-push on the way
+        // back — and re-pushing three screens onto a stack that is popping
+        // another route off it is a shape nothing here can measure either.
+        // Reading `.manual` and not `canGoBack`: the manual is never the
+        // stack's root (`startRoute` is `.home`), so it is the route on top
+        // exactly while nothing is above it.
+        .onChange(of: model.navigation.route) { _, route in
+            guard route != .manual, let manual else { return }
+            zoomOutOfTheManual(manual)
         }
         // Every `[text](route:…)`, `(node:…)` and `(doc:…)` in the document
         // arrives here: a span's link is a URL this file minted
@@ -253,9 +316,29 @@ struct ManualView: View {
             // nothing in this repository can run a `NavigationStack` outside
             // a Simulator, so the first real check of the push is the next
             // train.
-            ManualLevelHost(doc: doc, manual: manual, cached: cached, depth: 0)
+            ManualLevelHost(
+                doc: doc,
+                manual: manual,
+                cached: cached,
+                depth: 0,
+                isTopRoute: isTopRoute
+            )
         }
     }
+
+    /// Whether the manual is the route on **top** of the shell's stack.
+    ///
+    /// Read in `body` so that a change to it rebuilds this screen, which is
+    /// what makes ``ManualLevelHost/deeperIsShown`` a gate rather than a
+    /// reaction: the push of another route and the dismissal of the manual's
+    /// levels then resolve in **one** update. The `onChange` beside it is the
+    /// model's half of the same seam; both halves are review round 1's
+    /// finding 3 and the comment there has the four callers it covers.
+    ///
+    /// `startRoute` is `.home` (`Route.swift:95`), so the manual is always a
+    /// pushed route and `path.last == .manual` is exactly "nothing is above
+    /// me".
+    private var isTopRoute: Bool { model.navigation.route == .manual }
 
     @ViewBuilder private func page(_ manual: ManualModel) -> some View {
         if let load = manual.load {
@@ -342,14 +425,23 @@ struct ManualView: View {
             // visibly does nothing, which is the one thing Kamron's
             // no-misleading-controls rule will not have.
             //
-            // Both writes are in one event, so SwiftUI resolves one new
-            // stack (`[.manual, <route>]`, no presentations) rather than a
-            // pop followed by a push.
+            // **This is not the guard, it is the early one.** The guard is at
+            // the seam: the levels are presented only while the manual is the
+            // route on top (``ManualLevelHost/deeperIsShown``), and `body`'s
+            // `onChange` on the open route collapses the model to match.
+            // That covers the phone bar, a notification tap and a capability
+            // reset, which this line never could — review round 1's finding
+            // 3. Kept all the same, because for the two links this screen
+            // owns both writes land in **one** event, so SwiftUI resolves one
+            // new stack (`[.manual, <route>]`, no presentations) rather than
+            // a push whose presentations come down a step later.
             //
             // The cost is that coming back lands on Start here where
             // Android comes back to the piece: `@SceneStorage` mirrors
             // ``ManualModel/place``, and this moves it. It is in this
-            // item's DECISIONS as Kamron's call.
+            // item's DECISIONS as Kamron's call (D32B), and it is now the
+            // cost of leaving the manual while deep by **any** route, not
+            // only by a link.
             zoomOutOfTheManual(manual)
             model.navigate(route)
         case .settingsTab(let tab):
@@ -368,8 +460,15 @@ struct ManualView: View {
     /// Put the manual back on Start here, so that nothing of it is left
     /// pushed on the shell's stack when another route goes on top.
     ///
-    /// Only for the two links that push a route. `.web(…)` opens Safari and
-    /// `.nothing` does nothing, and neither touches the stack.
+    /// Two callers: the two links that push a route — `.web(…)` opens Safari
+    /// and `.nothing` does nothing, so neither touches the stack — and
+    /// `body`'s `onChange` on the open route, which is the same thing noticed
+    /// at the seam for every other way out of this screen.
+    ///
+    /// The `levels.isEmpty` guard is what keeps it from reaching the ordinary
+    /// exit: a swipe or a back tap from **Start here** leaves the manual with
+    /// nothing pushed, and the place a previous visit saved must survive
+    /// that. It only ever moves a manual that was left while deep.
     private func zoomOutOfTheManual(_ manual: ManualModel) {
         guard !manual.levels.isEmpty else { return }
         manual.go("start")
@@ -533,6 +632,21 @@ struct ManualLevelView: View {
 ///    search result asks for (Start here to a piece is three screens at
 ///    once) — then the deepest host that did mount draws the piece, so the
 ///    page is right and only the depth of the stack is short.
+///
+/// The question is asked **once per push**, when ``presentsDeeper`` turns
+/// true, and is never re-asked while that push stands (``deeperDrew``,
+/// ``waitForTheScreenAbove()``). The first build asked it again on every
+/// change to the chain, and a buried host cannot have it answered — its child
+/// is already mounted and does not fire `onAppear` a second time — so at two
+/// levels deep every host below the top fell into this branch 700 ms after
+/// every move: a state write on a covered screen, which re-declares that
+/// screen's own `navigationDestination`, which is the family of thing I003
+/// measured unwinding a push. A guard that reproduces what it guards against
+/// is worse than none, and this is review round 1's finding 2.
+///
+/// So a *working* push never reaches the late state at any depth. If a train
+/// shows a map in the tree where a cluster should be, the fallback really is
+/// what drew it, and the chain really was short.
 struct ManualLevelHost: View {
 
     let doc: ManualDoc
@@ -542,11 +656,38 @@ struct ManualLevelHost: View {
     /// `0` is the route's screen; `1` the map, `2` a cluster, `3` a piece.
     let depth: Int
 
-    /// What this host tells the host below it: whether it is on screen. Depth
-    /// 0 is told by nobody, so it defaults to a closure that does nothing.
-    var onDrawn: (Bool) -> Void = { _ in }
+    /// Whether the manual is still the route on top of the shell's stack.
+    ///
+    /// **A level is presented only while it is.** The shell's stack is
+    /// appended to from outside this screen — the phone bar, a notification
+    /// tap, a capability that went away — and a route pushed *underneath*
+    /// presentations that hang off the screen below it is a shape nobody here
+    /// has measured. ``ManualView/isTopRoute`` has the four callers and the
+    /// seam's other half; this is the gate, and it is declarative so the push
+    /// and the dismissal resolve in one update.
+    let isTopRoute: Bool
 
-    /// Whether the screen this host presents has reported itself drawn.
+    /// What this host tells the host below it: that it has drawn. Depth 0 is
+    /// told by nobody, so it defaults to a closure that does nothing.
+    ///
+    /// **One direction only.** It used to carry `false` from `onDisappear`
+    /// as well, and that is the callback a pushed screen fires on the screen
+    /// it *covers*: at two levels deep every buried host was told its child
+    /// had gone, fell into the late branch below 700 ms later, and wrote
+    /// state — which rebuilds a covered screen's body and re-declares its
+    /// own `navigationDestination`, the family of thing train I003 measured
+    /// unwinding a push. The guard against repeating I003 was the likeliest
+    /// cause of one, on a timer. Review round 1's finding 2.
+    var onDrawn: () -> Void = {}
+
+    /// Whether the screen this host presents has **ever** drawn while it has
+    /// been presented.
+    ///
+    /// Not "is it on screen": nothing in SwiftUI can answer that from here,
+    /// for the reason on ``onDrawn``. It is reset where the presentation
+    /// itself ends — ``waitForTheScreenAbove()`` — so the question "did my
+    /// push land" is asked exactly once per push and never again while that
+    /// push stands.
     @State private var deeperDrew = false
 
     /// Whether the screen this host presents was asked for and never came —
@@ -563,8 +704,10 @@ struct ManualLevelHost: View {
 
     private var chain: [ManualPlace] { manual.levels }
 
+    /// Whether this host presents a deeper screen **now**: the chain's
+    /// arithmetic, and the manual still being the route on top.
     private var presentsDeeper: Bool {
-        ManualLevelStack.presentsDeeper(at: depth, in: chain)
+        isTopRoute && ManualLevelStack.presentsDeeper(at: depth, in: chain)
     }
 
     /// The level this host is the screen for, while the chain still reaches it.
@@ -584,16 +727,21 @@ struct ManualLevelHost: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .onAppear {
-            onDrawn(true)
+            onDrawn()
             if let own { lastOwn = own }
         }
-        .onDisappear { onDrawn(false) }
         .onChange(of: own) { _, now in
             if let now { lastOwn = now }
         }
-        // Keyed on the chain, so it restarts on every move and the "late"
-        // verdict is never carried over from the move before it.
-        .task(id: chain.map(\.saved).joined(separator: ">")) { await waitForTheScreenAbove() }
+        // **Keyed on the presentation and not on the chain.** One push, one
+        // question: it restarts when this host starts presenting a deeper
+        // screen and when it stops, and a move that only makes the chain
+        // *longer* above this host does not re-ask a question this host has
+        // already had answered. Keying it on the chain is what let a buried
+        // host re-ask, never be answered (its child was already mounted and
+        // does not fire `onAppear` twice) and fall into the late branch —
+        // review round 1's finding 2.
+        .task(id: presentsDeeper) { await waitForTheScreenAbove() }
         .navigationDestination(isPresented: deeperIsShown) { deeper }
     }
 
@@ -603,11 +751,19 @@ struct ManualLevelHost: View {
     ///
     /// The setter runs for a tap on the navigation bar's back button and for
     /// the leading-edge swipe alike — one gesture, one control, one way up.
+    ///
+    /// It is read as "the person dismissed this screen", so it is answered
+    /// only while the manual is the route on top: a dismissal that is
+    /// ``isTopRoute`` going false is the gate closing under a route pushed
+    /// over the whole manual, and ``ManualView``'s `onChange` is already
+    /// collapsing the model for that. Without the guard the two would both
+    /// write, in an order nothing here fixes, and a stack left half-cut
+    /// re-pushes a level on the way back.
     private var deeperIsShown: Binding<Bool> {
         Binding(
             get: { presentsDeeper },
             set: { presented in
-                guard !presented else { return }
+                guard !presented, isTopRoute else { return }
                 manual.pop(to: depth)
             }
         )
@@ -626,7 +782,8 @@ struct ManualLevelHost: View {
                     manual: manual,
                     cached: cached,
                     depth: depth + 1,
-                    onDrawn: { drew in deeperDrew = drew }
+                    isTopRoute: isTopRoute,
+                    onDrawn: { deeperDrew = true }
                 )
             )
         }
@@ -639,9 +796,24 @@ struct ManualLevelHost: View {
     /// working push never reaches the write; it is short enough that a build
     /// where the push does nothing still answers a tap inside the time a
     /// person waits for a screen.
+    ///
+    /// Run from `.task(id: presentsDeeper)`, so this is also the one place
+    /// the two flags are cleared: a presentation that has ended is a question
+    /// the next push gets to ask again, and `onDisappear` — the only other
+    /// candidate — cannot tell a presentation ending from this screen being
+    /// covered by the next one.
     private func waitForTheScreenAbove() async {
-        deeperIsLate = false
-        guard presentsDeeper, !deeperDrew else { return }
+        // Each write is guarded on the value changing: a `@State` write is a
+        // body rebuild, and this host may be a covered screen when the
+        // presentation ends under it (the manual losing the top of the stack
+        // is one way), where a rebuild is exactly what finding 2 was about.
+        guard presentsDeeper else {
+            if deeperDrew { deeperDrew = false }
+            if deeperIsLate { deeperIsLate = false }
+            return
+        }
+        guard !deeperDrew else { return }
+        if deeperIsLate { deeperIsLate = false }
         try? await Task.sleep(for: .milliseconds(700))
         guard !Task.isCancelled, presentsDeeper, !deeperDrew else { return }
         deeperIsLate = true

@@ -283,7 +283,19 @@ struct ManualMapStage: View {
     /// one floats: `isOnTop` is a comparison against ``ManualModel/place``,
     /// so the covered stages hold their cards still and there is one set of
     /// `repeatForever` offsets on screen, which is what this decision was
-    /// costed against. For one commit — `6d071463` to this one — the gate was
+    /// costed against.
+    ///
+    /// That holds because a covered host draws the level it **owns** and not
+    /// the open one. It did not for one commit: ``ManualLevelHost``'s late
+    /// fallback could fire on a buried host, whose `shown` then became
+    /// `manual.place`, and a buried stage that believes it is on top is two
+    /// or three sets of offsets — the one thing this paragraph says cannot
+    /// happen. The fallback is now asked once per push and a working push
+    /// never reaches it (review round 1's finding 2). Honest limit: UIKit
+    /// taking a covered screen's view out of the window is what makes being
+    /// wrong about this cheap, not this comment.
+    ///
+    /// For one commit — `6d071463` to the one before this — the gate was
     /// constant `true` because one level was mounted at a time; it is load
     /// bearing again. The wires never followed in any case.
     ///
