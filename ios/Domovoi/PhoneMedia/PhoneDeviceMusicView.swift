@@ -7,23 +7,39 @@ import SwiftUI
 /// `:136`'s `LocalMusicList`, and `YourDevice.kt:262`'s
 /// `YourDeviceMusic()`.
 ///
+/// ### Playing arrived in the 2026-11-03 batch
+///
+/// A tap on a track plays it on the handset, with the neighbouring tracks
+/// behind it (``PhoneMediaListModel/playQueue(around:)``), on the app's one
+/// player (``ShellModel/player``) — lock screen, Now Playing and all.
+///
+/// **In the local shell too**, which review 2 of the 2026-11-03 batch
+/// corrected: this file said a phone with no server had no device id and so
+/// no player, and all three clauses in the middle were wrong. The id is
+/// minted locally on first launch (`DeviceRegistry.swift:391-403`),
+/// `AppShellView` hands the local shell the same ``ShellModel``, and
+/// ``PlayerModel`` plays a `file://` track without a server
+/// (`resolve(_:)`). The foot note that explained the absence is deleted with
+/// the premise it rested on.
+///
 /// ### What is not, and why there is no control for it
 ///
 /// * **The phone's own songs are not read at all.** Android lists every track
 ///   on the device from `MediaStore.Audio` (`LocalMedia.kt:59`). That needs
-///   `MPMediaQuery` and `NSAppleMusicUsageDescription`, and two independent
-///   things make the rows useless: there is no handset audio engine in this
-///   app, so nothing would play one, and an `MPMediaItem` that is
-///   DRM-protected has `assetURL == nil`, so nothing could upload one
-///   either. A list where neither control works is exactly what the owner's
-///   rule forbids ([[no-misleading-controls]]), so the permission is **not**
-///   asked for and this side is the folders instead — readable, uploadable,
-///   and honest about not playing here. DECISIONS asks Kamron whether he
-///   wants the read-only list anyway.
-/// * **No play.** ``PhoneMediaStrings/noPhonePlayerYet`` says so at the foot
-///   of the list, once, rather than a disabled arrow on every row.
+///   `MPMediaQuery` and `NSAppleMusicUsageDescription`, and an `MPMediaItem`
+///   that is DRM-protected has `assetURL == nil` — so neither `AVPlayer` nor
+///   the uploader can open one, and a list of rows where both controls fail is
+///   what the owner's rule forbids ([[no-misleading-controls]]). The
+///   permission is **not** asked for and this side is the picked folders
+///   instead, which are readable, uploadable and now playable. DECISIONS asks
+///   Kamron whether he wants the read-only list anyway.
+///
+///   (Until the 2026-11-03 batch there was a second reason — no handset
+///   engine at all. That one is gone: D46 put `play` on these rows.)
 /// * **No queue, no favourites, no "play on a room".** Those are the server's
 ///   library's, and a phone file is not in it until it has been uploaded.
+///   What a tap does here is start the phone's own player on the phone's own
+///   file, which is Android's behaviour too (`LocalMediaScreens.kt:158`).
 struct PhoneDeviceMusicView: View {
 
     let model: ShellModel
@@ -33,6 +49,14 @@ struct PhoneDeviceMusicView: View {
 
     @State private var device: PhoneDevicePage?
     @State private var visible = false
+
+    /// The app's one player, or nil on a build with no audio engine.
+    ///
+    /// Held in `@State` and taken in a `.task`, never read from `body`:
+    /// reading ``ShellModel/player`` is what **builds** it, and a build during
+    /// a view update is the shape SwiftUI complains about. It is also how
+    /// ``PodcastsView`` does it.
+    @State private var player: PlayerModel?
 
     var body: some View {
         ScrollView {
@@ -56,24 +80,26 @@ struct PhoneDeviceMusicView: View {
                             item: item,
                             meta: device.list.meta(for: item),
                             uploads: device.uploads,
-                            // A folder opens; a track does not play here.
-                            onTap: item.isDir ? { device.list.enter(item) } : nil
+                            onTap: tap(item, device)
                         )
                     }
-                    // Said once, at the foot, because it is about the whole
-                    // side and not about a row.
-                    if !device.list.rows.state.items.isEmpty {
-                        Text(PhoneMediaStrings.noPhonePlayerYet)
-                            .font(.caption)
-                            .foregroundStyle(Color.fgMuted)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .padding(.top, 8)
-                    }
+                    // A foot note saying "a phone track plays here once this
+                    // phone has joined a domovoi" stood here and is gone
+                    // (review 2): the player is not keyed to pairing, so the
+                    // note was drawn in no state a person reaches and was
+                    // wrong about why. `player` is still taken in the `.task`
+                    // below because `tap(_:_:)` needs it; when it is nil the
+                    // rows get no tap and the page says nothing, which is the
+                    // honest shape of a build with no audio engine.
                 }
             }
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        // A handle that survives the list scrolling: the subtitle a case
+        // used to find this `ScrollView` by is a `LazyVStack` child and
+        // unbuilds (``PhoneDeviceLists``).
+        .accessibilityIdentifier(PhoneDeviceLists.music)
         .modifier(PhoneDeviceLifecycle(
             page: .music,
             model: model,
@@ -81,6 +107,48 @@ struct PhoneDeviceMusicView: View {
             device: $device,
             visible: $visible
         ))
+        .task { player = model.player }
+        // A move brings a different scope with it, and the shell re-points
+        // the player it holds rather than rebuilding it
+        // (``ShellModel/serverChanged()``) — so this takes the slot again
+        // rather than trusting the one read on the first appearance.
+        .onChange(of: model.inputs.serverURL) { _, _ in
+            guard visible else { return }
+            player = model.player
+        }
+    }
+
+    /// What tapping a row does, or nil when a tap would do nothing.
+    ///
+    /// A folder opens. A track plays **on this phone**, as Android's does
+    /// (`LocalMediaScreens.kt:158-166`): the queue is the playable rows in
+    /// this folder, the index is the tapped one, and the player cuts the
+    /// window. Nil for a track when there is no player, and a row with no tap
+    /// is drawn as a row rather than as a dead button
+    /// (``PhoneMediaRowView/onTap``).
+    ///
+    /// The queue is built **in the closure**, when the tap happens, not when
+    /// the row is drawn: a lazy list would otherwise map every visible row's
+    /// whole folder into `PlayerItem`s on every scroll.
+    ///
+    /// Which is also why the row can be **gone** by the time the closure runs:
+    /// the folder is re-read while the list is on screen. ``PhoneMediaListModel/playQueue(around:)``
+    /// answers nil for that, and this says so rather than starting whatever is
+    /// now at the top of the folder — a different song from the one under the
+    /// thumb.
+    private func tap(_ item: PhoneMediaItem, _ device: PhoneDevicePage) -> (() -> Void)? {
+        if item.isDir { return { device.list.enter(item) } }
+        guard let player, device.list.canPlay(item) else { return nil }
+        return {
+            guard let queue = device.list.playQueue(around: item) else {
+                model.showToast(PhoneMediaStrings.thatTrackIsGone)
+                return
+            }
+            // The paused room, if this phone was casting, is named by
+            // ``PlayerModel/say`` in the shell's toast once the room has
+            // answered the pause — not here, where the answer has not arrived.
+            _ = player.play(queue.items, startAt: queue.index)
+        }
     }
 }
 

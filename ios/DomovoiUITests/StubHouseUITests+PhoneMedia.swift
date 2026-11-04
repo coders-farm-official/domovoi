@@ -356,9 +356,72 @@ extension StubHouseUITests {
     /// Never `app.swipeUp()`, whose gesture starts in the middle of the
     /// window — which at AX5 **is the pill**, so it scrolls nothing at all.
     /// That is half of why these cases found nothing.
+    ///
+    /// ### `identifier`, since review 3 of the 2026-11-03 batch
+    ///
+    /// ``documentsFolderScroll(_:)`` picks the full-width scroll view with the
+    /// smallest `minY`, which is a heuristic over a screen that has **two**:
+    /// the parked side of the switch keeps its own at the same frame. Given a
+    /// device page's identifier (`PhoneDeviceLists` in the app, spelt out in
+    /// ``StubPhoneMedia``) this takes that one and the heuristic is out of it.
+    ///
+    /// A case that scrolls a device list calls this rather than building a
+    /// gesture of its own. The AX5 growth case did build one — two
+    /// coordinates and a press-and-drag — and reached 12% of the travel it
+    /// asked for, because a press-and-drag that begins on a row is a gesture
+    /// the row may take. One copy of how a page under the switch is scrolled,
+    /// as the comment above this one says.
+    /// Where every built `staticText` is, by label — one snapshot of the
+    /// tree, for a case that wants to know whether a flick **moved** the page.
+    ///
+    /// Beside ``phoneSourceFlick(_:_:)`` because that is what it is for: two
+    /// rounds of the AX5 growth case swiped into a wall and reported a layout
+    /// finding, because nothing measured the travel. A case that reads this
+    /// before and after each flick prints a number the next round can argue
+    /// from, and can stop when the page stops moving.
     @MainActor
-    func phoneSourceFlick(_ app: XCUIApplication) {
-        documentsFolderScroll(app)?.swipeUp(velocity: .slow)
+    func phoneTextPlaces(_ app: XCUIApplication) -> [String: CGFloat] {
+        var out: [String: CGFloat] = [:]
+        for text in app.staticTexts.allElementsBoundByIndex {
+            let name = text.label
+            guard !name.isEmpty, out[name] == nil else { continue }
+            out[name] = text.frame.minY
+        }
+        return out
+    }
+
+    /// How far the page moved between two readings: the biggest shift of
+    /// anything in both.
+    ///
+    /// Nil when they share nothing, which means the viewport turned over
+    /// completely — movement by any reading. Zero means nothing moved at all,
+    /// and twice over means the page will not move again: the foot of the
+    /// list, or a gesture that never reached it.
+    @MainActor
+    func phoneMovement(_ before: [String: CGFloat], _ after: [String: CGFloat]) -> CGFloat? {
+        var shift: CGFloat = 0
+        var common = 0
+        for (name, was) in before {
+            guard let now = after[name] else { continue }
+            common += 1
+            shift = max(shift, abs(was - now))
+        }
+        return common == 0 ? nil : shift
+    }
+
+    @MainActor
+    func phoneSourceFlick(_ app: XCUIApplication, _ identifier: String? = nil) {
+        guard let identifier else {
+            documentsFolderScroll(app)?.swipeUp(velocity: .slow)
+            return
+        }
+        let list = app.scrollViews[identifier].firstMatch
+        guard list.exists else {
+            print("=== NO SCROLL VIEW `\(identifier)` TO FLICK — tree follows ===")
+            print(app.debugDescription)
+            return
+        }
+        list.swipeUp(velocity: .slow)
     }
 
     // MARK: - the switch
@@ -529,12 +592,18 @@ extension StubHouseUITests {
         let app = phoneLaunch(push: "Music")
         XCTAssertTrue(phoneSwitchToDevice(app, waitingFor: StubPhoneMedia.phoneTrackWord))
 
-        // **Exactly one** upload control on this page, which is itself the
-        // assertion: the folder row has none, and the 200 MB row has none
-        // because it is over the ceiling.
+        // **Exactly two**, which is itself the assertion: both audio rows
+        // offer an upload and the folder row does not.
+        //
+        // It was one, when the 200 MB row was over a 64 MiB ceiling. The
+        // transfers unit's streaming upload took that ceiling out (D43) and
+        // ``PhoneUploadModel/offersUpload(_:)`` is `!item.isDir` now, so the
+        // big row has a control like any other — and `boundBy: 0` is still
+        // `quenlo lullaby.mp3`, which is what the toast below is about: the
+        // list draws `Trips`, then `quenlo`, then `grendalf`.
         XCTAssertEqual(
-            phoneUploadControls(app).count, 1,
-            "the device side of Music should offer one upload — the one row under the cap"
+            phoneUploadControls(app).count, 2,
+            "the device side of Music should offer an upload on each of its two tracks"
         )
         phoneUploadControls(app).element(boundBy: 0).tap()
 
@@ -683,8 +752,9 @@ extension StubHouseUITests {
         phoneReset()
         let app = phoneLaunch(push: "Music")
         XCTAssertTrue(phoneSwitchToDevice(app, waitingFor: StubPhoneMedia.phoneTrackWord))
+        // Two since the ceiling went (D43): both tracks offer an upload.
         XCTAssertEqual(
-            phoneUploadControls(app).count, 1,
+            phoneUploadControls(app).count, 2,
             "the page has to open unblocked, or the refusal below is not a change"
         )
 
@@ -749,31 +819,96 @@ extension StubHouseUITests {
         )
     }
 
-    /// A row over the ceiling has **no upload control** and a line saying how
-    /// big it is (``PhoneUploadModel/cap``, and ``FileSaveModel``'s own
-    /// pattern the other way round).
+    /// There is **no ceiling** any more, so a 200 MB row has an upload control
+    /// like any other and says nothing about its size.
     ///
-    /// A cap enforced only inside `upload()` would be a button that always
-    /// fails, which is what this asserts is not there.
+    /// This case was `testPhoneMedia_AFileOverTheCapHasNoUploadControl`, and
+    /// it was right: a cap enforced only inside `upload()` would have been a
+    /// button that always failed. The transfers unit's streaming upload
+    /// removed the cap (D43), this unit took the two unreachable
+    /// `PhoneUploadTooBigNote` branches out, and the view went with them — so
+    /// every assertion here is inverted rather than the case deleted. What it
+    /// guards now is the other direction: a ceiling reintroduced anywhere
+    /// would make the note come back or the count drop, and both are failures
+    /// below.
     @MainActor
-    func testPhoneMedia_AFileOverTheCapHasNoUploadControl() throws {
+    func testPhoneMedia_EveryFileHasAnUploadControlNow() throws {
         phoneReset()
         let app = phoneLaunch(push: "Music")
         XCTAssertTrue(phoneSwitchToDevice(app, waitingFor: StubPhoneMedia.phoneTrackWord))
 
-        let note = startingWith(app, StubPhoneMedia.tooBigPrefix)
-        let drawn = note.waitForExistence(timeout: 30)
-        evidence(app, "phonemedia-over-the-cap")
-        XCTAssertTrue(drawn, "the 200 MB row did not say why it has no upload")
-        // The row under the cap keeps its control; the one over it has none.
-        // One, not zero and not two: that is the whole claim.
-        XCTAssertEqual(
-            phoneUploadControls(app).count, 1,
-            "the row over the ceiling was given an upload button that would always fail"
-        )
         XCTAssertTrue(
-            containing(app, StubPhoneMedia.phoneBigFileWord).exists,
-            "the oversized row is not even listed, so the note above belongs to nothing"
+            containing(app, StubPhoneMedia.phoneBigFileWord).waitForExistence(timeout: 30),
+            "the 200 MB row is not listed, so what follows is about nothing"
+        )
+        evidence(app, "phonemedia-no-ceiling")
+        XCTAssertFalse(
+            startingWith(app, StubPhoneMedia.tooBigPrefix).exists,
+            "a row says it is too big to upload, over a control that would now upload it"
+        )
+        // Two, not one: the folder row has none and both tracks have one.
+        XCTAssertEqual(
+            phoneUploadControls(app).count, 2,
+            "the 200 MB row lost its upload button — a ceiling has come back"
+        )
+    }
+
+    // MARK: - playing a phone track on the phone
+
+    /// A phone track **offers to play on the handset** (D46), and a folder and
+    /// a document do not.
+    ///
+    /// Android plays a window of the neighbouring tracks
+    /// (`LocalMediaScreens.kt:158-166`) and so does this now: the row is a
+    /// `Button` with ``PlayerStrings/play`` as its hint, built by
+    /// ``PhoneDeviceMusicView``'s own `tap(_:_:)` over
+    /// ``PhoneMediaListModel/playQueue(around:)``.
+    ///
+    /// ### Why it does not tap
+    ///
+    /// The seeded phone library's rows carry an `origin` of
+    /// `/fake/Recordings/<name>` and **no file is written there**:
+    /// ``PhoneMemorySource`` materialises a real file only for the names in
+    /// its `sized` set, and only for an upload (`fileURL(of:)`). So a tap
+    /// would hand `AVPlayer` a URL with nothing behind it, and the case would
+    /// measure the fixture rather than the app. The affordance is what this
+    /// unit added and the affordance is what this asserts; the queue
+    /// arithmetic behind it is nine cases in `PhonePlayQueueTests`, and the
+    /// fixture gap is written down in the player unit's DECISIONS with the
+    /// one change that would close it.
+    ///
+    /// **No foot-note half any more.** This case also asserted that
+    /// `PhoneMediaStrings.noPhonePlayerYet` was absent, on the story that it
+    /// was drawn for a phone with no device id and the stub house claims one
+    /// as part of pairing. Review 2 of the 2026-11-03 batch measured that
+    /// premise false — the id is minted locally on first launch — so the
+    /// sentence is deleted from the app and the assertion with it: a query
+    /// for words no build contains can only ever pass. What discriminates is
+    /// the assertion above, that the row IS a button with a play hint.
+    @MainActor
+    func testPhoneMedia_APhoneTrackOffersToPlayOnThisPhone() throws {
+        phoneReset()
+        let app = phoneLaunch(push: "Music")
+        XCTAssertTrue(phoneSwitchToDevice(app, waitingFor: StubPhoneMedia.phoneTrackWord))
+        evidence(app, "phonemedia-play-on-this-phone")
+
+        let track = app.buttons.matching(
+            NSPredicate(format: "label CONTAINS %@", StubPhoneMedia.phoneTrackWord)
+        ).firstMatch
+        XCTAssertTrue(
+            track.waitForExistence(timeout: 30),
+            "the track row is not a button, so nothing on it plays — tree follows\n"
+                + app.debugDescription
+        )
+        // The folder is a button too (it opens), and the document is not a
+        // button at all — ``PhoneMediaRowView`` draws a row with no tap as a
+        // row rather than as a dead button. The device side of Music lists
+        // audio only, so the document is not here to check; the folder is.
+        XCTAssertTrue(
+            app.buttons.matching(
+                NSPredicate(format: "label CONTAINS %@", StubPhoneMedia.phoneFolder)
+            ).firstMatch.exists,
+            "the folder row stopped being a button, so the way down is gone"
         )
     }
 
@@ -976,6 +1111,18 @@ extension StubHouseUITests {
     /// The floor is printed rather than pinned: the device page carries both
     /// anonymous and named findings of that headline, and a pinned total is
     /// what let a new contrast finding in unnoticed once already.
+    ///
+    /// ### What train I002 reported, and why it was right
+    ///
+    /// `Text clipped` against `quenlo lullaby.mp3`, which is not the headline
+    /// this case excuses and so failed it — correctly. The row's name had
+    /// 79.0 points of width and 406.7 of height in a 361-point row at AX5:
+    /// one character per line, under a scaled 40-point glyph column and a
+    /// scaled 48-point upload box. ``PhoneMediaRowView`` lays the row out as
+    /// a column at an accessibility size now, so the prediction stops at the
+    /// source rather than being added to an excuse list. Nothing here
+    /// changed for it; ``testPhoneMedia_TheDeviceSideTextGrowsAtAX5`` is
+    /// where the widths are pinned.
     @MainActor
     @available(iOS 17.0, *)
     func testPhoneMedia_TheDeviceSideHasNoAuditFindings() throws {
@@ -1008,23 +1155,49 @@ extension StubHouseUITests {
     /// at `large` and at AX5.
     ///
     /// The companion to the classification above, and the test that actually
-    /// decides whether those thirteen findings were defects. Five code sites
-    /// cover all thirteen: ``PhoneMediaRowView``'s title (`.subheadline`) and
-    /// its meta and duration (`.caption`), ``PhoneDeviceChrome``'s count line
-    /// and ``PhoneUploadTooBigNote``. A folder's name is the sixth, and it is
-    /// the row title drawn inside a `Button` rather than a combined row —
-    /// worth its own measurement because the wrapper differs.
+    /// decides whether those findings were defects. Four code sites cover
+    /// them: ``PhoneMediaRowView``'s title (`.subheadline`) and its meta and
+    /// duration (`.caption`), and ``PhoneDeviceChrome``'s count line. A
+    /// folder's name is a fifth and the video row's name a sixth — both are
+    /// row titles drawn inside a `Button` rather than inside a combined row,
+    /// and the wrapper is worth its own measurement.
+    ///
+    /// ### What train I002 found, and what this case got wrong about it
+    ///
+    /// I002 reported `Text clipped` against `quenlo lullaby.mp3` and this
+    /// case passed anyway. **It was a real defect and this case was the
+    /// reason nobody saw it**, in two ways, both now closed:
+    ///
+    /// 1. **It measured heights only.** At AX5 the title had 79.0 points of
+    ///    width and 406.7 of height in a 361-point row (R005's figures): one
+    ///    character per line, which is exactly the ratio a height-only check
+    ///    reads as healthy growth. Widths are recorded too now, and the AX5
+    ///    assertions are a floor on the title's width, a ceiling on its
+    ///    height in lines, and a floor on the meta's width.
+    /// 2. **`compared >= 2` let it pass having measured the wrong two.** In
+    ///    I002 the twenty-four drags left the device list at 14% and only
+    ///    `count` and `Trips` were ever built, neither of which is squeezed.
+    ///    `quenlo lullaby.mp3` and `zarbis dune ride.mp4` are **required**
+    ///    leaves now, at both sizes, and a run that cannot reach one prints
+    ///    the tree and fails.
+    ///
+    /// The fix measured is ``PhoneMediaRowView``'s: at an accessibility size
+    /// the row is a column, the glyph is above the name and the meta and
+    /// duration stack, so the name has the row's width.
+    ///
+    /// The `too-big` leaf is **gone** with the note it matched — D43 removed
+    /// the ceiling and this unit removed its two branches — and the zarbis
+    /// title takes its place in the list.
     ///
     /// Matched on `.staticTexts` rather than `.any`, which is this file's
-    /// habit elsewhere: every one of the thirteen was reported as `type=48`,
+    /// habit elsewhere: every one of the findings was reported as `type=48`,
     /// and an `.any` query would take the enclosing row or button — a
     /// different element from the one the audit flagged, and one that grows
     /// for its own reasons.
     ///
-    /// A leaf that cannot be found is skipped, not failed, because the fake
-    /// library's foot is unbuilt at AX5; the case fails instead if fewer than
-    /// two leaves could be compared, so it can never pass by measuring
-    /// nothing.
+    /// A leaf that is not required and cannot be found is skipped rather
+    /// than failed; the required ones can never be skipped, which is what
+    /// stops this passing on a measurement of nothing.
     ///
     /// ### Why it no longer waits for a row, and no longer swipes the app
     ///
@@ -1043,9 +1216,10 @@ extension StubHouseUITests {
     ///    launch chrome takes the top 300 points and the switch becomes a
     ///    column, so the window's centre lands **on the switch** and the
     ///    list never moved. The swipe goes to the device page's own
-    ///    `ScrollView`, picked by the header it contains (the server side's
-    ///    `ScrollView` is still in the tree at the same frame, holding its
-    ///    place across the switch, so `.firstMatch` alone would take either).
+    ///    `ScrollView`, which carries an identifier of its own since round
+    ///    three (the server side's `ScrollView` is still in the tree at the
+    ///    same frame, holding its place across the switch, so `.firstMatch`
+    ///    alone would take either).
     ///
     /// Each leaf's height is recorded the **first flick it is built on** and
     /// never overwritten, rather than reading all six once at the end. At
@@ -1059,50 +1233,107 @@ extension StubHouseUITests {
             ("row-title", "label == 'quenlo lullaby.mp3'"),
             ("row-meta", "label BEGINSWITH '3.0 MB · '"),
             ("row-duration", "label == '3:34'"),
+            // A **row** of the Files list, like the three above it — this
+            // page is drawn by `PhoneMediaRowView` from end to end, so the
+            // video's own tile is not here and is not measured by this case.
+            // `PhoneVideoTile` has its own, below:
+            // `testPhoneMedia_TheDeviceVideoTileGrowsAtAX5`. (Review 3 of the
+            // 2026-11-03 batch: "both wrappers are covered" covered one of
+            // them twice.)
+            ("row-video-title", "label == 'zarbis dune ride.mp4'"),
             ("folder-name", "label == 'Trips'"),
             ("count", "label BEGINSWITH 'showing 5 of'"),
-            ("too-big", "label BEGINSWITH 'too big to upload from a phone'"),
         ]
+        // The two squeezed titles and the one-line folder name they are
+        // measured against. A run that cannot build all three measured
+        // nothing about the defect I002 found and must say so.
+        let required = ["row-title", "row-video-title", "folder-name"]
 
-        /// Flick the device list to its foot, taking each leaf's height the
+        /// Scroll the device list to its foot, taking each leaf's FRAME the
         /// first time it exists.
         ///
-        /// The drag is two **coordinates**, not `list.swipeUp()`, and they
-        /// are worked out once from the list's frame before the first flick.
-        /// An `XCUIElement` is re-resolved on every use, and the only handle
-        /// on this `ScrollView` is the header it contains — a header that is
-        /// in a `LazyVStack` and unbuilds the moment it scrolls off, so the
-        /// second flick would have had nothing to send a swipe to.
-        func heights(_ app: XCUIApplication, _ frame: CGRect) -> [String: CGFloat] {
-            let origin = app.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
-            let from = origin.withOffset(
-                CGVector(dx: frame.midX, dy: frame.maxY - 16)
-            )
-            let to = origin.withOffset(
-                CGVector(dx: frame.midX, dy: frame.minY + 16)
-            )
-            var out: [String: CGFloat] = [:]
-            // A press-then-drag, not a flick: a flick's momentum carries it
-            // over rows, and at AX5 a row stepped over is a leaf that was
-            // never built and so never measured. It also moves only the drag
-            // distance, hence a count this high — at AX5 the viewport is
-            // under 180 points and the device list's content is 2995.
-            let flicks = 24
-            for flick in 0...flicks {
+        /// ### The gesture, diagnosed rather than turned up
+        ///
+        /// Two rounds of this case could not reach the rows at AX5. Round one
+        /// pressed 0.1s and dragged 24 times; round two pressed 0.3s and
+        /// dragged 40, and review 3 said — rightly — that nothing had
+        /// explained the missing travel: I002 measured 24 drags of a
+        /// theoretical ~148 points each moving the list 420 points of 2995,
+        /// which is 12% of what was asked for. Forty drags at the same loss
+        /// reaches no further, and a **longer** press is if anything worse:
+        /// a press-and-drag that begins on a row is a gesture the row may
+        /// take.
+        ///
+        /// So the gesture is this file's own ``phoneSourceFlick(_:_:)`` now —
+        /// `swipeUp(velocity: .slow)` **on the list**, which scrolls inside
+        /// that element's frame, re-resolved every flick — and the list
+        /// is found by `PhoneDeviceLists.files` in the app, an identifier
+        /// added for this case. The hand-built drag existed only because
+        /// there was no stable handle: the one query that found this
+        /// `ScrollView` matched the subtitle inside it, which is a
+        /// `LazyVStack` child and unbuilds the moment it scrolls off, so the
+        /// second gesture had nothing to send a swipe to. With a handle the
+        /// element is re-resolved per swipe and the query cannot go stale.
+        ///
+        /// ### And it measures its own travel
+        ///
+        /// Each swipe is followed by a reading of **every** built text's
+        /// position, which gives two things no previous round had: how far
+        /// the list actually moved (printed, so the next round argues from a
+        /// number), and whether it moved **at all**. Two swipes that move
+        /// nothing is the foot of the list — or a gesture that does not
+        /// reach it — and either way the case stops there and says which,
+        /// instead of swiping forty times into a wall and then blaming the
+        /// app's layout for a leaf that was never built.
+        func leafFrames(_ app: XCUIApplication, _ label: String) -> [String: CGRect] {
+            var out: [String: CGRect] = [:]
+            var travel: [Int] = []
+            var still = 0
+            var used = 0
+            let swipes = 40
+            for swipe in 0...swipes {
                 for (leaf, predicate) in leaves where out[leaf] == nil {
                     let found = app.staticTexts
                         .matching(NSPredicate(format: predicate))
                         .firstMatch
-                    if found.exists { out[leaf] = found.frame.height }
+                    if found.exists { out[leaf] = found.frame }
                 }
-                if out.count == leaves.count { break }
-                if flick < flicks { from.press(forDuration: 0.1, thenDragTo: to) }
+                used = swipe
+                if required.allSatisfy({ out[$0] != nil }) { break }
+                if swipe == swipes { break }
+                guard app.scrollViews[StubPhoneMedia.deviceFilesList].firstMatch.exists else {
+                    print("=== PHONEMEDIA SCALE [\(label)] THE LIST IS GONE at swipe \(swipe) ===")
+                    break
+                }
+                let before = phoneTextPlaces(app)
+                // This file's one copy of how a page under the switch is
+                // scrolled, now that it can be told which page:
+                // `.swipeUp(velocity: .slow)` on the list, re-resolved every
+                // flick. Not a full-velocity flick — momentum carries the
+                // page over rows, and at AX5 a row stepped over is a leaf
+                // that was never built and so never measured.
+                phoneSourceFlick(app, StubPhoneMedia.deviceFilesList)
+                let after = phoneTextPlaces(app)
+                let step = phoneMovement(before, after)
+                travel.append(Int(step ?? -1))
+                // `nil` is a viewport with nothing in common, which is
+                // movement; 0 twice over is a list that will not move again.
+                if step == 0 { still += 1 } else { still = 0 }
+                if still == 2 {
+                    print("=== PHONEMEDIA SCALE [\(label)] THE LIST STOPPED MOVING after"
+                          + " \(swipe + 1) swipes — at its foot, or the swipe does not reach"
+                          + " it. travel=\(travel) built=\(out.keys.sorted()) ===")
+                    break
+                }
             }
+            print("PHONEMEDIA SCALE [\(label)] swipes=\(used) travel=\(travel)"
+                  + " built=\(out.keys.sorted())")
             return out
         }
 
         phoneReset()
-        var measured: [String: [String: CGFloat]] = [:]
+        var measured: [String: [String: CGRect]] = [:]
+        var rowWidth: [String: CGFloat] = [:]
         for (label, mode) in [
             ("large", Self.ordinaryTypeSize),
             ("AX5", "UICTContentSizeCategoryAccessibilityXXXL"),
@@ -1112,42 +1343,197 @@ extension StubHouseUITests {
                 phoneSwitchToDeviceHeader(app, waitingFor: StubPhoneMedia.phoneFilesSubtitle),
                 "the device side never drew at \(label)"
             )
-            let list = app.scrollViews
-                .containing(
-                    NSPredicate(format: "label == %@", StubPhoneMedia.phoneFilesSubtitle)
-                )
-                .firstMatch
+            // By identifier (`PhoneDeviceLists.files` in the app), not by the
+            // subtitle it contains: the parked server side keeps its own
+            // `ScrollView` in the tree at the same frame, so the two are
+            // told apart by this and by nothing else.
+            let list = app.scrollViews[StubPhoneMedia.deviceFilesList].firstMatch
             XCTAssertTrue(
                 list.waitForExistence(timeout: 15),
-                "the device page's list is not a scroll view at \(label)"
+                "the device page's list has no `\(StubPhoneMedia.deviceFilesList)` at \(label)"
             )
-            let here = heights(app, list.frame)
+            let band = list.frame
+            // The row's own width: the list less the `LazyVStack`'s 16-point
+            // padding on each side (``PhoneDeviceBody``). About 361 on the
+            // iPhone the trains run.
+            rowWidth[label] = band.width - 32
+            let here = leafFrames(app, label)
             evidence(app, "phonemedia-scale-\(label)")
             measured[label] = here
-            for (leaf, height) in here.sorted(by: { $0.key < $1.key }) {
-                print("PHONEMEDIA SCALE [\(label)] \(leaf) height=\(height)")
+            for (leaf, frame) in here.sorted(by: { $0.key < $1.key }) {
+                print("PHONEMEDIA SCALE [\(label)] \(leaf) w=\(frame.width) h=\(frame.height)")
             }
+            // The tree, not a sentence about what is missing: a required leaf
+            // that was never built is a case that measured nothing, and the
+            // only useful evidence is what IS there.
+            let missing = required.filter { here[$0] == nil }
+            if !missing.isEmpty {
+                print("=== PHONEMEDIA SCALE [\(label)] NEVER BUILT \(missing) — tree follows ===")
+                print(app.debugDescription)
+            }
+            XCTAssertEqual(
+                [], missing,
+                "at \(label) the list never reached \(missing) — the squeeze is on those rows,"
+                    + " so a run without them proves nothing (I002 passed on count and Trips alone)"
+            )
             app.terminate()
         }
 
         let small = measured["large"] ?? [:]
         let big = measured["AX5"] ?? [:]
-        var compared = 0
         var stuck: [String] = []
-        for (leaf, height) in small.sorted(by: { $0.key < $1.key }) {
+        for (leaf, frame) in small.sorted(by: { $0.key < $1.key }) {
             guard let grown = big[leaf] else { continue }
-            compared += 1
             // 1.8 is the factor `testTheFilesListTextGrowsAtAX5` settled on
             // over the same two text styles: `large` to AX5 is about three
             // times the line height, and a leaf that wrapped already at
             // `large` grows by less than its font does.
-            if grown < height * 1.8 { stuck.append("\(leaf) \(height)->\(grown)") }
+            if grown.height < frame.height * 1.8 {
+                stuck.append("\(leaf) \(frame.height)->\(grown.height)")
+            }
         }
         XCTAssertEqual([], stuck, "a leaf Apple flagged really does not scale")
+
+        // ---- the shape of the AX5 row, which height alone cannot see -----
+        let inner = rowWidth["AX5"] ?? 0
+        XCTAssertGreaterThan(inner, 0, "the AX5 list had no width")
+        for leaf in ["row-title", "row-video-title"] {
+            let box = try XCTUnwrap(big[leaf], "\(leaf) was required and is not here")
+            XCTAssertGreaterThanOrEqual(
+                box.width, inner * 0.75,
+                "\(leaf) is \(box.width) wide in a \(inner)-point row: the trailing boxes are"
+                    + " still taking the name's width (I002 measured 79.0)"
+            )
+        }
+        let line = try XCTUnwrap(big["folder-name"]).height
+        let title = try XCTUnwrap(big["row-title"]).height
+        XCTAssertLessThanOrEqual(
+            title, line * 3,
+            "the title is \(title) points against a \(line)-point line, so it is wrapping to"
+                + " four lines or more — 406.7 was one character per line in I002"
+        )
+        if let meta = big["row-meta"] {
+            XCTAssertGreaterThan(
+                meta.width, 150,
+                "the meta line is \(meta.width) wide, which is the one-character-per-line"
+                    + " shape (36.3 in R005)"
+            )
+        }
+    }
+
+    /// The **tile's** caption grows too, which is the other wrapper the I002
+    /// fix changed.
+    ///
+    /// `PhoneVideoTile` got the same `AnyLayout` treatment as
+    /// `PhoneMediaRowView` — the caption and the upload box become a column
+    /// at an accessibility size, and the caption takes the tile's width
+    /// instead of what the upload box leaves it. Review 3 of the 2026-11-03
+    /// batch found that change measured by nothing: the leaf the row case
+    /// calls the video's is a **row** of the device Files list, and the
+    /// Videos tab was never opened at an accessibility size by any case at
+    /// all.
+    ///
+    /// So this is the Videos tab, at the same two sizes, over the one tile
+    /// the fake has at the library root (`zarbis dune ride.mp4`, 42 seconds).
+    /// Two leaves, because two is what a tile has: the name and the duration
+    /// under it.
+    ///
+    /// Short by design next to its sibling: there is one tile and it is the
+    /// first thing under the top matter, so reaching it is a swipe or two
+    /// rather than the length of a list. It borrows that case's measured
+    /// flick — ``phoneSourceFlick(_:_:)`` on the Videos list by identifier,
+    /// with ``phoneTextPlaces(_:)`` either side of it — and its own `1.8`
+    /// factor, which is what `testTheFilesListTextGrowsAtAX5` settled on over
+    /// the same two text styles.
+    @MainActor
+    func testPhoneMedia_TheDeviceVideoTileGrowsAtAX5() throws {
+        let leaves = [
+            ("tile-title", "label == 'zarbis dune ride.mp4'"),
+            ("tile-duration", "label == '0:42'"),
+        ]
+
+        phoneReset()
+        var measured: [String: [String: CGRect]] = [:]
+        var tileWidth: [String: CGFloat] = [:]
+        for (label, mode) in [
+            ("large", Self.ordinaryTypeSize),
+            ("AX5", "UICTContentSizeCategoryAccessibilityXXXL"),
+        ] {
+            let app = phoneLaunch(push: "Videos", mode: mode)
+            // The header, not a tile: at AX5 the grid is below the fold and
+            // unbuilt, which is the distinction
+            // ``phoneSwitchToDeviceHeader(_:waitingFor:)`` exists for.
+            XCTAssertTrue(
+                phoneSwitchToDeviceHeader(app, waitingFor: StubPhoneMedia.phoneVideosSubtitle),
+                "the device side of Videos never drew at \(label)"
+            )
+            let list = app.scrollViews[StubPhoneMedia.deviceVideosList].firstMatch
+            XCTAssertTrue(
+                list.waitForExistence(timeout: 15),
+                "the device Videos page has no `\(StubPhoneMedia.deviceVideosList)` at \(label)"
+            )
+            tileWidth[label] = list.frame.width - 32
+
+            var here: [String: CGRect] = [:]
+            var travel: [Int] = []
+            var still = 0
+            for swipe in 0...12 {
+                for (leaf, predicate) in leaves where here[leaf] == nil {
+                    let found = app.staticTexts
+                        .matching(NSPredicate(format: predicate))
+                        .firstMatch
+                    if found.exists { here[leaf] = found.frame }
+                }
+                if here["tile-title"] != nil { break }
+                if swipe == 12 { break }
+                let before = phoneTextPlaces(app)
+                phoneSourceFlick(app, StubPhoneMedia.deviceVideosList)
+                let after = phoneTextPlaces(app)
+                let step = phoneMovement(before, after)
+                travel.append(Int(step ?? -1))
+                // Two flicks that move nothing is the foot of the grid, or a
+                // gesture that never reached it — either way, stop and let
+                // the assertion below print the tree.
+                if step == 0 { still += 1 } else { still = 0 }
+                if still == 2 { break }
+            }
+            print("PHONEMEDIA TILE [\(label)] travel=\(travel) built=\(here.keys.sorted())")
+            evidence(app, "phonemedia-tile-\(label)")
+            if here["tile-title"] == nil {
+                print("=== PHONEMEDIA TILE [\(label)] NO TILE CAPTION — tree follows ===")
+                print(app.debugDescription)
+            }
+            XCTAssertNotNil(
+                here["tile-title"],
+                "the one tile's caption never drew at \(label), so nothing about"
+                    + " `PhoneVideoTile` was measured"
+            )
+            measured[label] = here
+            app.terminate()
+        }
+
+        let small = measured["large"] ?? [:]
+        let big = measured["AX5"] ?? [:]
+        var stuck: [String] = []
+        for (leaf, frame) in small.sorted(by: { $0.key < $1.key }) {
+            guard let grown = big[leaf] else { continue }
+            if grown.height < frame.height * 1.8 {
+                stuck.append("\(leaf) \(frame.height)->\(grown.height)")
+            }
+        }
+        XCTAssertEqual([], stuck, "a tile caption that does not scale with the type size")
+
+        // And the shape: at an accessibility size the caption has the tile,
+        // not the sliver the upload box leaves beside it. This is the
+        // assertion the row case makes about `nameMaxWidth` and the one
+        // `captionMaxWidth` exists for.
+        let inner = tileWidth["AX5"] ?? 0
+        XCTAssertGreaterThan(inner, 0, "the AX5 Videos list had no width")
+        let caption = try XCTUnwrap(big["tile-title"])
         XCTAssertGreaterThanOrEqual(
-            compared,
-            2,
-            "nothing could be compared, so this proved nothing: \(small) / \(big)"
+            caption.width, inner * 0.75,
+            "the tile's name is \(caption.width) wide in a \(inner)-point tile: the upload"
+                + " box is still taking the caption's width at AX5"
         )
     }
 }
@@ -1179,6 +1565,18 @@ enum StubPhoneMedia {
     /// Labelled with whichever side is current, so an identifier is the only
     /// stable handle on it too.
     static let collapsedSwitch = "phone-source-switch"
+    /// The device pages' own scroll views, by `PhoneDeviceLists` in the app
+    /// (`ios/Domovoi/PhoneMedia/PhoneDeviceChrome.swift`). Spelt out here
+    /// like every other identifier this file matches on: the UI test target
+    /// cannot see the app's types at all, and a query that silently followed
+    /// a renamed constant would stop testing what it claims to.
+    ///
+    /// They exist for one reason: a case that scrolls one of these lists had
+    /// no handle on it that survives the list scrolling — see
+    /// `testPhoneMedia_TheDeviceSideTextGrowsAtAX5`.
+    static let deviceFilesList = "phone-device-files-list"
+    static let deviceVideosList = "phone-device-videos-list"
+    static let deviceMusicList = "phone-device-music-list"
     /// Enough of the stub house's address to find it and not enough to depend
     /// on a truncated label (`phoneLaunch` passes `127.0.0.1:6601`).
     static let serverAddressStem = "127.0.0.1"
@@ -1200,7 +1598,9 @@ enum StubPhoneMedia {
     static let phoneTrackWord = "quenlo"
     /// The 8 MB video, which is the one video tile.
     static let phoneVideo = "zarbis"
-    /// The 200 MB row, which must be listed and must have **no** control.
+    /// The 200 MB row. It must be listed and, since D43 took the ceiling
+    /// out, it must have an upload control like any other
+    /// (``testPhoneMedia_EveryFileHasAnUploadControlNow()``).
     static let phoneBigFileWord = "grendalf"
 
     // ---- the server's rows, which the phone's side must not show --------
@@ -1233,7 +1633,16 @@ enum StubPhoneMedia {
     static let uploadRefusedPrefix = "upload refused"
     /// A prefix of `PhoneMediaStrings.tooBigToUpload(_:)`, matched as a
     /// prefix so the byte formatting is not this case's business.
+    ///
+    /// **Nothing in the app draws this any more** (D43 took the ceiling out),
+    /// and it is kept because that is now what a case asserts: the string
+    /// still exists for a file the **server** refuses, which is a different
+    /// and live rule, so the only way to catch a ceiling creeping back is to
+    /// go on looking for these words.
     static let tooBigPrefix = "too big to upload from a phone"
+
+    /// The seeded library's one folder (``PhoneDeviceSources/seeded``).
+    static let phoneFolder = "Trips"
     /// A fragment of the refused card's blocked tail
     /// (`PhoneMediaStrings.blockedTail`), short enough to be a legal query.
     static let adminLiftsTheBlock = "An admin lifts the block"
@@ -1245,6 +1654,10 @@ enum StubPhoneMedia {
     /// line, and the first thing on it that is drawn at every type size.
     /// Spelt out here, like every other string this file matches on.
     static let phoneFilesSubtitle = "on this phone — folders you add, and your photos"
+    /// `PhoneMediaStrings.deviceVideosSubtitle` — the device Videos page's
+    /// second line, and the first thing on it that is drawn at every type
+    /// size.
+    static let phoneVideosSubtitle = "on this device — upload sends a video to the server"
     static let noMusicOnDevice = "no music on this device"
     static let downloadsLandHere = "downloads from a domovoi land in Downloads/Domovoi"
     static let noLongerReadable = "no longer readable"

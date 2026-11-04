@@ -35,16 +35,24 @@ import SwiftUI
 /// "fcc running: 0 new, 0 updated" about a job that has not begun (MAP §8.1,
 /// reported, not fixed — `android/` is out of bounds).
 ///
-/// **Playing anything, until the `player` item's witness reaches the route
-/// slot.** ``StationsPlayback`` is the seam and this branch passes
-/// ``StationsNoPlayback``, so **no play affordance is drawn at all**: no row
-/// that plays, no play glyph, no `play here`. Said once on the page
-/// (``StationsModel/playbackNote``), and the subtitle drops Android's
-/// `· tap a station to play it` with it — the one instruction on the screen
-/// must not be one that does nothing. ``StationsModel/play(_:)`` sends
-/// nothing either, because `POST /play` stamps the station into Recent: the
-/// one visible effect of a silent button would be a history entry for
-/// something nobody heard.
+/// **Nothing, on the playback front, any more.** ``StationsPlayback`` was
+/// the seam and the branch passed ``StationsNoPlayback``, so no play
+/// affordance was drawn at all. D46 (Kamron's answer 46: "the real play
+/// buttons are added in this same work") filled it:
+/// ``StationsPhonePlayback`` is the witness the route slot passes now, over
+/// ``ShellModel/player``, and every affordance the screen already knew how to
+/// draw appears — the rows that play, the play glyph, `play here`.
+/// The subtitle's `· tap a station to play it` is true again.
+///
+/// The witness answers false only on a build with **no audio engine** —
+/// ``ShellModel/player`` is nil there and in a test's shell, and nowhere a
+/// person can get to: the device id it is keyed to is minted locally on first
+/// launch (`DeviceRegistry.swift:391-403`), not handed out by a house. The
+/// screen still draws no play affordance at all in that state, which is what
+/// it was built to do, and it no longer says a sentence about why — review 2
+/// of the 2026-11-03 batch deleted `playbackNote` and
+/// `StationsStrings.playingNeedsAHouse` with it, because an explanation of a
+/// cause that does not exist is worse than the silence.
 ///
 /// **Pages.** Android's `prev` / `next` footers, its `page n / m` line, its
 /// "nothing on this page" empty and the effect that steps back a page when
@@ -103,6 +111,16 @@ struct StationsView: View {
             if stations == nil {
                 stations = StationsModel(in: model.container, playback: playback)
             }
+            // **Re-pointed on every appearance**, not only on the first one.
+            // The witness the route slot handed in was built from
+            // ``ShellModel/player`` at the instant this view's body ran; a
+            // model built on one visit would otherwise hold that answer for
+            // the life of the screen. The case that matters is a shell that
+            // had no player when Stations first drew and has one now — the
+            // same reason ``PhoneDeviceMusicView`` takes its player in a
+            // `.task` and ``AudiobooksView`` calls
+            // `AudiobooksPhonePlayer.over(_:_:)` twice.
+            stations?.use(playback)
             stations?.start()
         }
         .onAppear { visible = true }
@@ -120,6 +138,10 @@ struct StationsView: View {
         }
         .onChange(of: model.inputs.serverURL) { _, _ in
             guard visible else { return }
+            // The witness first: a move brings a different device id and a
+            // different scope with it, and the player the shell hands back is
+            // the one the next tap must reach.
+            stations?.use(playback)
             stations?.serverChanged()
         }
         // One sheet, keyed on the station — `.sheet(item:)` rebuilds on a
@@ -170,12 +192,6 @@ struct StationsView: View {
                     .font(.footnote)
                     .foregroundStyle(Color.fgMuted)
                     .fixedSize(horizontal: false, vertical: true)
-                if let note = stations.playbackNote {
-                    Text(note)
-                        .font(.footnote)
-                        .foregroundStyle(Color.fgMuted)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
             }
             // Where Android's `import fcc fm` button is, saying where the
             // import happens instead of being a button that 401s.
@@ -331,5 +347,54 @@ struct StationsView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, 8)
+    }
+}
+
+/// The app's one player, as this screen's seam.
+///
+/// `app.player.playItems(listOf(PlayItem.fromStation(...)))`
+/// (`StationPlay.kt:71`) — one line on Android, because its player is on its
+/// container. Here the owner is ``ShellModel/player`` (D49) and this is the
+/// adapter, which is what the route slot's comment said the merge would be:
+/// *"This one argument is the whole of what the merge that brings phone audio
+/// changes here."*
+///
+/// A `struct` and not a class: ``StationsPlayback`` is `Sendable`, and a
+/// main-actor-isolated class is `Sendable` — so holding the player in a value
+/// is the shape that satisfies both without an `@unchecked`.
+///
+/// ``canPlay`` is false for a nil player, and the screen then draws no play
+/// affordance anywhere. ``StationsModel/play(_:)`` checks it before it POSTs
+/// `/play`, which matters: that route stamps the station into Recent, so a
+/// silent button's one visible effect would be a history entry for something
+/// nobody heard.
+struct StationsPhonePlayback: StationsPlayback {
+
+    let player: PlayerModel?
+
+    var canPlay: Bool { player != nil }
+
+    /// Hand the row to the player as a live stream.
+    ///
+    /// ``PlayerItem/fromStation(id:name:)`` builds it: the artist line is the
+    /// literal `"live radio"` and `seekable` is **false**, so the model
+    /// refuses a seek and the lock screen's scrubber is disabled — a live
+    /// stream has no place to seek to. Its `src` is
+    /// `/api/plugins/radio/stations/{id}/stream`, the same relay
+    /// ``StationsRules/stream(_:)`` names, which resolves a **row id** rather
+    /// than a URL so the server can refuse a house-local address and relay
+    /// bytes the phone cannot reach itself.
+    ///
+    /// The row is always one the server has stamped: the model POSTs `/play`
+    /// first and hands on the row that answered, which is how a directory hit
+    /// that was never saved gets an id.
+    /// The return — the room this play here paused — is discarded on
+    /// purpose: ``PlayerModel/say`` is what names it, once the room has
+    /// answered the pause, and it arrives in the shell's toast. A sentence
+    /// composed here would have to claim the pause landed before the room had
+    /// said so, which is the thing `MusicScreen.kt:567-570` is careful about.
+    @MainActor
+    func play(station: StationsRow) {
+        _ = player?.play([PlayerItem.fromStation(id: Int64(station.id), name: station.name)])
     }
 }

@@ -23,28 +23,26 @@ public enum StationsStrings {
         "\(favorites) favorited · \(recent) recent · tap a station to play it"
     }
 
-    /// The subtitle of a build that **cannot play anything**, which is this
-    /// branch until the `player` item's witness reaches the route slot.
+    /// The subtitle of a build that **cannot play anything**, which since
+    /// review 2 of the 2026-11-03 batch means a build with no audio engine
+    /// and nothing else — ``ShellModel/player`` is nil only there (and in a
+    /// test's shell), never on a phone a person is holding.
     ///
     /// **iOS-only.** Android's sentence ends `· tap a station to play it`,
     /// and a screen whose rows do not play must not say that: it is the one
     /// instruction on the page, and following it would do nothing. The two
-    /// counts are unchanged, and ``playingIsNotBuiltYet`` says what is
-    /// missing rather than leaving the omission to be guessed at
-    /// ([[no-misleading-controls]]).
+    /// counts are unchanged.
+    ///
+    /// **Nothing is said about the absence any more.** `playingNeedsAHouse`
+    /// stood here and told the person a station would play "once this phone
+    /// has joined a domovoi" — which was false about its own cause (the
+    /// device id is minted locally, `DeviceRegistry.swift:391-403`) and about
+    /// a state no phone reaches. A sentence nobody can see explaining a cause
+    /// that does not exist is worse than the silence: the screen simply draws
+    /// no play affordance, which is what ``StationsPlayback`` is for.
     public static func subtitleWithoutPlaying(favorites: Int, recent: Int) -> String {
         "\(favorites) favorited · \(recent) recent"
     }
-
-    /// Said once, where the play controls would be, when this build has no
-    /// audio engine (``StationsPlayback/canPlay``).
-    ///
-    /// **iOS-only**, for the same reason as ``subtitleWithoutPlaying(favorites:recent:)``:
-    /// no play affordance is drawn at all, and a page that silently lacked
-    /// one would read as a screen that had failed rather than one that is
-    /// honest about what it does. Everything else on it works.
-    public static let playingIsNotBuiltYet =
-        "playing on this phone isn't built yet — favoriting, sampling and detections all work"
 
     /// Where Android draws `import fcc fm` (`StationsScreen.kt:191`).
     ///

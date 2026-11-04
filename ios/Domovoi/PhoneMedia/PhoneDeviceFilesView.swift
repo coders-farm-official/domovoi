@@ -76,6 +76,10 @@ struct PhoneDeviceFilesView: View {
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        // A handle that survives the list scrolling: the subtitle a case
+        // used to find this `ScrollView` by is a `LazyVStack` child and
+        // unbuilds (``PhoneDeviceLists``).
+        .accessibilityIdentifier(PhoneDeviceLists.files)
         .modifier(PhoneDeviceLifecycle(
             page: .files,
             model: model,
@@ -94,8 +98,16 @@ struct PhoneDeviceFilesView: View {
     /// a picture is looked at, and **everything else has no tap** — a
     /// document is not read here (the reader is
     /// ``FilesView``'s, over the server's `/api/documents/text` route, and a
-    /// phone file is not on the server), and audio does not play. Those rows
-    /// are drawn as rows and not as dead buttons.
+    /// phone file is not on the server). Those rows are drawn as rows and not
+    /// as dead buttons.
+    ///
+    /// **Audio is deliberately among them**, even though the phone can play it
+    /// since D46. Android's `PhoneFiles.kt` has no play either — only
+    /// `LocalMusicScreen` does — and the reason holds on both: a tap in a
+    /// file browser opens the thing, and starting a queue of "the playable
+    /// rows around this one" out of a mixed folder of documents, photographs
+    /// and one `.m4a` is a queue nobody asked for. The device side of Music is
+    /// where a folder is a list of tracks.
     private func tap(_ item: PhoneMediaItem, _ device: PhoneDevicePage) -> (() -> Void)? {
         if item.isDir { return { device.list.enter(item) } }
         if item.kind == .image { return { looking = item } }

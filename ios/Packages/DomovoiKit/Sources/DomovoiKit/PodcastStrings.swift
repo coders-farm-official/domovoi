@@ -26,15 +26,18 @@ public enum PodcastStrings {
     /// in a room at all. The claim is dropped rather than carried over:
     /// DECISIONS.md, "No play to a room".
     ///
-    /// **`played on this phone` was a second, worse claim**, and it shipped
-    /// on train S004. It said the one thing this screen is built not to do:
-    /// nothing in this app owns a ``PlayerModel``, so no episode plays here
-    /// either (``PodcastsView``, "What is not"). A subtitle that promises
-    /// playback over a screen with no play control is the misleading-control
-    /// rule failing one level up from a control, so the sentence now names
-    /// the place that *can* play an episode — the same place
-    /// ``PodcastStrings/inTheDashboard`` names, in the same words.
-    public static let subtitle = "subscriptions + episodes, listened to in the dashboard"
+    /// **`played on this phone` is the claim again**, and this time it is
+    /// true.
+    ///
+    /// It shipped on train S004 and was wrong then: nothing in the app owned
+    /// a ``PlayerModel``, so a subtitle promising playback over a screen with
+    /// no play control was the misleading-control rule failing one level up
+    /// from a control. It was changed to name the dashboard. D49 gave the app
+    /// an owner (``ShellModel/player``) and D46 put the button on every
+    /// downloadable row, so the sentence names this phone again — and
+    /// `inTheDashboard`, which pointed the reader away, is deleted rather
+    /// than left to contradict it.
+    public static let subtitle = "subscriptions + episodes, played on this phone"
 
     /// `PodcastsScreen.kt:134`.
     public static let pollNow = "poll now"
@@ -168,10 +171,25 @@ public enum PodcastStrings {
     /// An episode the feed titled nothing (`PodcastsEpisodes.kt:230`).
     public static let untitledEpisode = "episode"
 
-    /// The meta line's chapter noun. Android has no singular form, so a
-    /// one-chapter episode reads `1 chapters` on both phones; see
-    /// ``PodcastEpisode/metaLine``.
+    /// The meta line's chapter noun, plural.
     public static let chapters = "chapters"
+
+    /// The meta line's chapter count, **pluralised**.
+    ///
+    /// D48, Kamron 2026-11-03: "yes: fix `1 chapters` to `1 chapter` on both
+    /// apps." Android had no singular form (`PodcastsEpisodes.kt:245`
+    /// interpolates `"${it.chapters.size} chapters"`), so a one-chapter
+    /// episode read `1 chapters` on both phones and a test here pinned the
+    /// infelicity on purpose. The Android half is the android unit's; this is
+    /// the iOS half.
+    ///
+    /// `stringsdict` is not used for it: the app ships one language, the rule
+    /// is "one is singular", and a plural table for two forms is a file to
+    /// keep in step for nothing. If the app is ever localised this is the one
+    /// line that moves.
+    public static func chapterCount(_ count: Int) -> String {
+        "\(count) \(count == 1 ? "chapter" : chapters)"
+    }
 
     /// `Unsubscribe from "<title or feed>"? Downloaded episodes are removed.`
     /// (`PodcastsEpisodes.kt:198`).
@@ -209,25 +227,6 @@ public enum PodcastStrings {
     /// (the removal was not confirmed) rather than guessing at a cause.
     public static let notConfirmed = "the server did not confirm the removal"
 
-    /// Where an episode is listened to and saved from, since this app draws
-    /// neither control.
-    ///
-    /// **iOS-only**, and one sentence rather than two because the two
-    /// omissions have one answer: the dashboard. Said at the foot of the
-    /// episodes list, where somebody would go looking for a play button.
-    ///
-    /// **Saving**: iOS has no download manager, and the app's only save path
-    /// pulls a whole file into memory with a 64 MiB ceiling
-    /// (`FileSave.swift:40-48`) while an episode row carries **no size** at
-    /// all to check it against (`podcasts.py:311-317`).
-    ///
-    /// **Playing**: the engine exists on this branch
-    /// (``PlayerItem/fromEpisode(id:title:show:durationSec:artwork:chapters:)``)
-    /// and nothing in the app owns one, so a screen that made its own would
-    /// stop playing the moment somebody left Podcasts. DECISIONS.md,
-    /// "Phone playback has an engine and no owner".
-    public static let inTheDashboard = "playing or saving an episode is done in the dashboard"
-
     // MARK: - subscribing
 
     /// `PodcastsSubscribe.kt:110`.
@@ -253,25 +252,25 @@ public enum PodcastStrings {
     // MARK: - playing, when a screen may own the engine
 
     /// The play button's VoiceOver label (`PodcastsEpisodes.kt:229`).
-    ///
-    /// **Nothing draws it.** See ``youWereAt(_:)`` below for the whole
-    /// reason: the engine merged, and there is nowhere for one to live.
     public static let play = "play"
+
+    // `resumeTitle(_:)` was here: an identity function over the episode's
+    // title, for the resume alert's own title. It had no caller — the alert
+    // passes `podcasts.resuming?.title` straight in
+    // (`PodcastEpisodesSheet.swift`) — and a function that returns its
+    // argument is not a string table entry, it is a comment. The reason it
+    // existed is worth keeping, so here it is: Android's dialog has **no**
+    // title (`PodcastsScreen.kt:316`), and an iOS `alert` without one draws
+    // its message as the title in a smaller face, so the episode's name is
+    // the title here. That is in IOS-ONLY-STRINGS.md.
 
     /// The resume prompt's words (`PodcastsScreen.kt:316-343`).
     ///
-    /// **Nothing draws these.** `wf/ios-n-player`'s engine *can* take a
-    /// remote-URL episode — ``PlayerItem/fromEpisode(id:title:show:durationSec:artwork:chapters:)``
-    /// builds exactly the item this screen would hand it — but nothing in the
-    /// app **owns** a ``PlayerModel``: it is not on ``AppContainer`` or
-    /// ``ShellModel``, and adding it there is a change to shared
-    /// infrastructure this branch must not make (NIGHT-RULES §2). A player
-    /// built by this screen would be destroyed when somebody left Podcasts,
-    /// which is a play button that stops playing — DECISIONS.md, "Phone
-    /// playback has an engine and no owner".
-    ///
-    /// They are transcribed because the words are Android's and whoever wires
-    /// the owner must not invent them.
+    /// Drawn by the `.alert` in `PodcastEpisodesSheet` since the 2026-11-03
+    /// batch — **not** by a `PodcastResumeDialog`, which this comment named
+    /// and which does not exist. The owner of the player is
+    /// ``ShellModel/player`` (D49), so an episode plays here and a saved place
+    /// is something to be asked about.
     public static func youWereAt(_ position: String) -> String {
         "You were at \(position)."
     }

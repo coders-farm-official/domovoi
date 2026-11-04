@@ -14,28 +14,41 @@ import SwiftUI
 /// The show's cover, name and author; `unsubscribe` and `close`; a search
 /// over the episode titles that goes to the **server** (`?q=`, title only —
 /// unlike the shows search, which also covers the author and the feed URL);
-/// the episodes a page at a time, newest first; and the destructive confirm.
+/// the episodes a page at a time, newest first; the destructive confirm; and
+/// on every row the house has the audio for, **`play`** and **`save to this
+/// device`** — the two controls Android draws (`PodcastsEpisodes.kt:183`,
+/// `:258`).
+///
+/// ### A row with no file draws neither control
+///
+/// Android draws `play` always and *disables* it (`:223`). Here it is absent:
+/// a control that cannot do what it says is not drawn, and the meta line
+/// already says `· pending` or `· failed` where the button would be, which is
+/// the answer to "why can I not play this". The save is absent for the same
+/// row and the same reason — there is no file to save.
 ///
 /// ### What is not, and why there is no control for it
 ///
-/// **The play button**, which Android draws on every row and *disables*
-/// unless the house has the file (`:223`). There is no play control here at
-/// all — not because of `has_file` but because nothing in this app owns an
-/// audio engine to play into (``PodcastsView``'s doc comment has the whole
-/// reason). The meta line still says `· pending` or `· failed` where the
-/// button would be, which is the answer to "why can I not play this", and
-/// ``PodcastStrings/inTheDashboard``, under the show's name, says where
-/// listening is done (``whereListeningHappens`` — it was at the foot until
-/// train S004 proved nobody reaches the foot of a lazy list).
-///
-/// **`save to this device`**, for the reason in ``PodcastStrings/inTheDashboard``:
-/// an episode row carries no size and the app's only save path has a 64 MiB
-/// ceiling.
+/// **Playing to a room.** No server route plays an episode in a room; see
+/// ``PodcastsView``'s doc comment.
 struct PodcastEpisodesSheet: View {
 
     let show: PodcastShow
     let podcasts: PodcastsModel
     let art: PodcastArtStore
+
+    /// The household, for the "listening as" chip under the show's name.
+    /// Nil before the screen's `.task` has run.
+    let listeners: PlayerListenerModel?
+
+    /// The one save in flight. **The screen's**, not a row's: a lazy row is
+    /// recycled as it scrolls and a transfer held on one is cancelled
+    /// mid-file.
+    let saves: SaveToDeviceModel?
+
+    /// A failed save, said in the shell's toast — a sentence about a save has
+    /// to outlive this sheet, and it does.
+    let onTrouble: (String) -> Void
 
     /// 56 points, as Android's 56 dp header art (`PodcastsEpisodes.kt:143`),
     /// and scaled for the same reason the card's is.
@@ -48,7 +61,8 @@ struct PodcastEpisodesSheet: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
                     heading
-                    whereListeningHappens
+                    listeningAsChip
+                    saving
                     unsubscribeTrouble
                     searchField
                     list
@@ -111,6 +125,49 @@ struct PodcastEpisodesSheet: View {
             }
         } message: { asked in
             Text(PodcastStrings.unsubscribeBody(asked.displayTitle))
+        }
+        // The saved place, as Android asks it (`PodcastsScreen.kt:316-343`).
+        // An `alert` over this sheet rather than another sheet: two sheets
+        // cannot both be up, and the unsubscribe confirm above is already an
+        // alert for the same reason.
+        .alert(
+            podcasts.resuming?.title ?? PodcastStrings.resume,
+            isPresented: Binding(
+                get: { podcasts.resuming != nil },
+                set: { if !$0 { podcasts.cancelResume() } }
+            ),
+            presenting: podcasts.resuming
+            // `{ _ in }`, not `{ asked in … }`: the three buttons act on the
+            // model, which holds the ask itself, so the builder has no use for
+            // the value. It ended in a bare `_ = asked` to silence the unused
+            // binding, which put a non-view statement at the end of a
+            // `ViewBuilder` — legal, and a thing the next reader has to stop
+            // and work out.
+        ) { _ in
+            Button(PodcastStrings.resume) { podcasts.resume() }
+            Button(PodcastStrings.startOver) { podcasts.startOver() }
+            Button(PodcastStrings.cancel, role: .cancel) { podcasts.cancelResume() }
+        } message: { asked in
+            Text(asked.said)
+        }
+        // The file is here: hand it over. ``SaveToDeviceModel/taken()``
+        // deletes the copy, because an app that leaves them in a directory
+        // iOS clears "at some point" is an app holding somebody's gigabyte.
+        .sheet(isPresented: Binding(
+            get: { if case .ready = saves?.state { return true } else { return false } },
+            set: { if !$0 { saves?.taken() } }
+        )) {
+            if case .ready(let url, _) = saves?.state {
+                FileShareSheet(url: url)
+            }
+        }
+        // A failed save goes to the shell's toast, which outlives this sheet
+        // — ``FilesView`` and ``VideoFeedView`` both do the same.
+        .onChange(of: saves?.state) { _, state in
+            if case .failed(let why) = state {
+                onTrouble(why)
+                saves?.taken()
+            }
         }
     }
 
@@ -200,7 +257,16 @@ struct PodcastEpisodesSheet: View {
                     .accessibilityLabel(PodcastStrings.episodesNoun)
             }
             ForEach(Array(episodes.state.items.enumerated()), id: \.element.id) { index, episode in
-                PodcastEpisodeRow(episode: episode)
+                PodcastEpisodeRow(
+                    episode: episode,
+                    // Both answered by a model, never by the row: whether a
+                    // play control is drawn is ``PodcastsModel/canPlay(_:)``
+                    // (the house has the file **and** this phone has a
+                    // player), and the save is offered for the same rows.
+                    canPlay: podcasts.canPlay(episode),
+                    onPlay: { podcasts.play(episode) },
+                    onSave: saves == nil || !episode.canPlay ? nil : { save(episode) }
+                )
                     .onAppear {
                         // The guarded question, never a bare "the last row
                         // appeared" — and the **list's** threshold, because
@@ -232,26 +298,57 @@ struct PodcastEpisodesSheet: View {
         }
     }
 
-    /// Where listening and saving happen, said **under the show's name** and
-    /// above the list.
+    /// Android's hint chip, under the show's name
+    /// (`PodcastsScreen.kt:300-311`), and **nothing at all** when nobody has
+    /// been picked. It is here as well as on the grid behind this sheet
+    /// because this is where a resume position is actually set, and whose
+    /// position it is matters here.
     ///
-    /// In a `Text` rather than a disabled button, for the reason this whole
-    /// screen exists on: a greyed-out play control is the exact thing it is
-    /// built not to draw.
+    /// Near the top and not at the foot, which is where this file's sentence
+    /// about listening used to be until train S004: a `LazyVStack`'s foot is
+    /// not built until it is scrolled to, so on a list of fifty-seven
+    /// episodes it is nowhere.
+    @ViewBuilder
+    private var listeningAsChip: some View {
+        if let listeners, listeners.showsChip {
+            Text(listeners.chip)
+                .font(.caption)
+                .foregroundStyle(Color.brandInk)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 10)
+                .frame(minHeight: 28)
+                .background(.quaternary.opacity(0.3), in: Capsule())
+        }
+    }
+
+    /// A save in flight, said on the sheet rather than in a toast: it is
+    /// about to put a share sheet up, and a toast that had already faded
+    /// would leave that unexplained. ``FilesView`` draws its own the same way
+    /// and for the same reason.
+    @ViewBuilder
+    private var saving: some View {
+        if let saves, case .fetching = saves.state {
+            SaveToDeviceButton(
+                state: saves.state,
+                onTap: {},
+                onCancel: { saves.cancel() }
+            )
+        }
+    }
+
+    /// Fetch this episode's audio as an attachment.
     ///
-    /// It was at the **foot** of the episodes list until train S004, which is
-    /// where ``FilesView`` says its missing delete — and on a list of
-    /// fifty-seven lazy rows that is nowhere. The case that asked for it found
-    /// no such text in the tree, because a `LazyVStack`'s foot is not built
-    /// until it is scrolled to, and a person looking for the play control they
-    /// cannot find has exactly the same problem: the sentence that answers the
-    /// question has to be where the question is asked. Files gets away with
-    /// the foot because its note sits under a short list of folders.
-    private var whereListeningHappens: some View {
-        Text(PodcastStrings.inTheDashboard)
-            .font(.caption)
-            .foregroundStyle(Color.fgMuted)
-            .fixedSize(horizontal: false, vertical: true)
+    /// `download=1`, which is what makes the server send a
+    /// `Content-Disposition` — the same thing Android asks `DownloadManager`
+    /// for (`VideosScreen.kt:222`). The name is built here rather than taken
+    /// from the server: an episode row carries a title and a file extension
+    /// and no filename at all.
+    private func save(_ episode: PodcastEpisode) {
+        guard let saves else { return }
+        saves.save(
+            path: PodcastPath.audio(episodeID: episode.id, download: true),
+            named: FileSaveModel.safeName(PodcastEpisodes.fileName(episode))
+        )
     }
 
     @ViewBuilder
@@ -276,23 +373,64 @@ struct PodcastEpisodesSheet: View {
     }
 }
 
-/// One episode: its name, and a mono line saying how long it is, how many
+/// One episode: its name, a mono line saying how long it is, how many
 /// chapters it has and — when the house has no file — what the download is
-/// doing.
+/// doing, and the two controls Android draws.
 ///
-/// `PodcastsEpisodes.kt:216-265`'s `EpisodeRow`, less the two controls it
-/// draws: the play button (nothing owns an engine) and `save to this device`
-/// (no download manager, and no size on the row). Both are
-/// ``PodcastsView``'s doc comment.
+/// `PodcastsEpisodes.kt:216-265`'s `EpisodeRow`, with both of its controls:
+/// `play` (`:183`, `:223`) and `save to this device` (`:258`).
 ///
 /// The whole line comes from ``PodcastEpisode/metaLine``, which is where
 /// `has_file` and `download_status` are read **together** — the one pair on
 /// this screen that must agree.
+///
+/// ### The row holds nothing
+///
+/// It is a lazy row, so neither control owns a task: `onPlay` reaches
+/// ``PodcastsModel``, which runs the position read on itself, and `onSave`
+/// reaches the screen's one ``SaveToDeviceModel``. Both outlive the row, the
+/// sheet and the screen — the standing rule that cost a real bug on this
+/// track.
+///
+/// ### Dynamic Type
+///
+/// The controls sit beside the words at ordinary sizes and under them at
+/// accessibility sizes, because at AX5 a glyph column and two lines of text
+/// do not share a row. The play glyph's box is `@ScaledMetric`, never a flat
+/// `frame(width:)`.
 struct PodcastEpisodeRow: View {
 
     let episode: PodcastEpisode
 
+    /// Whether this phone can play it — ``PodcastsModel/canPlay(_:)``, which
+    /// is the house having the file **and** this phone having a player.
+    let canPlay: Bool
+
+    let onPlay: () -> Void
+
+    /// Nil when there is nothing to save: no file, or no saver yet.
+    let onSave: (() -> Void)?
+
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    @ScaledMetric(relativeTo: .title2) private var glyph: CGFloat = 30
+
     var body: some View {
+        layout {
+            words
+            if !dynamicTypeSize.isAccessibilitySize { Spacer(minLength: 4) }
+            controls
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var layout: AnyLayout {
+        dynamicTypeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
+            : AnyLayout(HStackLayout(alignment: .top, spacing: 10))
+    }
+
+    private var words: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(episode.displayTitle)
                 .font(.subheadline)
@@ -309,10 +447,65 @@ struct PodcastEpisodeRow: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.vertical, 4)
-        // One stop per episode, reading the name and then the line: two
+        // One stop for the words, reading the name and then the line: two
         // elements would make a back catalogue of fifty-seven a hundred and
-        // fourteen stops.
+        // fourteen stops. The controls stay separate, because a combined
+        // element swallows a button.
         .accessibilityElement(children: .combine)
+    }
+
+    @ViewBuilder
+    private var controls: some View {
+        HStack(spacing: 4) {
+            if canPlay {
+                Button(action: onPlay) {
+                    Image(systemName: "play.circle")
+                        .font(.title2)
+                        .frame(width: glyph)
+                        .frame(minWidth: 44, minHeight: 44)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Color.brandInk)
+                // The **name**, not the bare word: a list read as "play,
+                // play, play" has no information in it.
+                .accessibilityLabel(PlayerStrings.playNamed(episode.displayTitle))
+            }
+            if let onSave {
+                Button(action: onSave) {
+                    Image(systemName: "square.and.arrow.down")
+                        .font(.body)
+                        .frame(width: glyph)
+                        .frame(minWidth: 44, minHeight: 44)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Color.fgMuted)
+                .accessibilityLabel(TransferStrings.saveToDevice)
+            }
+        }
+    }
+}
+
+/// What a saved episode is called on the phone.
+///
+/// Its own type rather than a method on ``PodcastEpisode``, because the name
+/// is a *presentation* decision — the share sheet shows it — and the row has
+/// no filename from the server to use: `podcast_episodes` stores a path the
+/// phone never sees and the API answers a title and a `file_ext`
+/// (`podcasts.py:311-317`).
+enum PodcastEpisodes {
+
+    /// `<title>.<ext>`, with `.mp3` when the server did not say.
+    ///
+    /// The extension matters more than it looks: iOS picks the app that opens
+    /// a shared file by its type, and a podcast saved with no extension is
+    /// handed to nothing. `mp3` is the fallback because it is what the
+    /// poller writes when a feed's enclosure has no usable type
+    /// (`podcast_feed_poller.py`).
+    static func fileName(_ episode: PodcastEpisode) -> String {
+        let ext = (episode.fileExt ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let suffix = ext.isEmpty ? "mp3" : ext.hasPrefix(".") ? String(ext.dropFirst()) : ext
+        return "\(episode.displayTitle).\(suffix)"
     }
 }

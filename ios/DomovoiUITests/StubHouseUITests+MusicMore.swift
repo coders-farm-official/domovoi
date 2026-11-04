@@ -1409,11 +1409,17 @@ extension StubHouseUITests {
     }
 
     /// With no room online, `play` and `shuffle all` are **absent**, and the
-    /// section label says why.
+    /// section label says why — while `play on this device` stays.
     ///
     /// `MusicPlaylistDetailModel.play(shuffle:rooms:)` refuses a room the
     /// server never reported, so a button drawn here would have nothing to
     /// send to (`PlaylistDrawer.kt:222`).
+    ///
+    /// The phone's two buttons are the half added in the 2026-11-03 batch,
+    /// and this is the case that says they are **independent** of the rooms:
+    /// a house with every satellite off is exactly when somebody wants the
+    /// handset, and a section that vanished with the rooms would be the worse
+    /// bug of the two.
     @MainActor
     func testMusicMore_NoRoomsNoPlayButton() throws {
         musicMoreReset()
@@ -1440,30 +1446,45 @@ extension StubHouseUITests {
             "`shuffle all` is drawn with nowhere to send it"
         )
         // The tracks are still listed: the sheet is not broken, only the two
-        // controls are gone.
+        // room controls are gone.
         XCTAssertTrue(
             containing(app, MusicMoreUnderTest.veldrassen).waitForExistence(timeout: 20),
             "the sheet stopped listing its tracks as well"
+        )
+        // And the phone's own buttons are untouched by the room list.
+        XCTAssertTrue(
+            app.buttons[MusicMoreUnderTest.playHere].exists,
+            "`play on this device` went away with the rooms — it needs none"
+        )
+        XCTAssertTrue(
+            app.buttons[MusicMoreUnderTest.shuffleHere].exists,
+            "`shuffle on this device` went away with the rooms"
         )
         // Put it back for whatever case runs next in this shared house.
         control("musicmore-rooms", "{}", port: 6601, what: "the rooms back")
     }
 
-    // MARK: - 8. the tab that is not offered
+    // MARK: - 8. the tab the engine brought
 
-    /// The tab bar does not offer `player`, and does offer `playlists`.
+    /// The tab bar offers `player`, and the tab behind it opens.
     ///
-    /// Nothing in this app conforms to `MusicMorePlayerEngine`, so
-    /// `MusicTab.shown(hasPlayer:)` leaves that tab out entirely — not
-    /// greyed, not empty. A bar built from `MusicTab.allCases` would offer
-    /// it, and `MusicPlayerTabView` behind it would draw a transport row over
-    /// nothing.
+    /// This case was `testMusicMore_ThePlayerTabIsNotOfferedWithoutAnEngine`
+    /// and its own note said to delete it "the day `use(_:)` is called with a
+    /// real engine". That day is D46: ``MusicView`` registers
+    /// ``PlayerModelMusicEngine`` over ``ShellModel/player``, so
+    /// `MusicTab.shown(hasPlayer:)` offers the tab. It is inverted rather
+    /// than deleted, because `MusicTab.shown(hasPlayer:)`'s false arm is
+    /// still a rule worth pinning and `MusicMoreModelTests` is where that is
+    /// done. **Not because a phone reaches it**: review 2 of the 2026-11-03
+    /// batch measured ``ShellModel/player`` nil only on a build with no audio
+    /// engine, which a Simulator running this app is not.
     ///
-    /// **Delete this case when the engine lands.** It is an assertion about
-    /// an absence that is deliberate today and will be wrong the day
-    /// `use(_:)` is called with a real engine.
+    /// It opens the tab as well as finding it: a word in a strip over a view
+    /// that crashes or draws nothing is the failure a `.exists` on the button
+    /// cannot see. With nothing queued the tab says so and says what to do
+    /// about it, which is the state a fresh phone is in.
     @MainActor
-    func testMusicMore_ThePlayerTabIsNotOfferedWithoutAnEngine() throws {
+    func testMusicMore_ThePlayerTabIsOfferedNowTheEngineIsRegistered() throws {
         musicMoreReset()
         let (app, landed) = openMusicMore()
         evidence(app, "musicmore-150-tab-bar")
@@ -1473,9 +1494,84 @@ extension StubHouseUITests {
             startingWith(app, MusicMoreUnderTest.tabPlaylists).exists,
             "the playlists tab is not offered, so this says nothing about the player tab"
         )
+        XCTAssertTrue(
+            musicMoreTapTab(app, MusicMoreUnderTest.tabPlayer),
+            "the tab bar does not offer a player tab, and D46 registered an engine"
+        )
+        XCTAssertTrue(
+            containing(app, MusicMoreUnderTest.nothingQueued).waitForExistence(timeout: 20),
+            "the player tab opened on nothing at all — tree follows\n" + app.debugDescription
+        )
+        XCTAssertTrue(
+            containing(app, MusicMoreUnderTest.nothingQueuedNote).exists,
+            "the empty player tab does not say how to put something in it"
+        )
+        evidence(app, "musicmore-151-player-tab-empty")
+    }
+
+    /// A playlist plays **on this phone**, and the player tab then holds it.
+    ///
+    /// The whole of what D46 added to this screen, end to end: the sheet's
+    /// `play on this device`, the sentence it says, and the queue arriving in
+    /// the player tab with the playlist's first track on it.
+    ///
+    /// ### What it does not assert
+    ///
+    /// That a sound came out. The stub house serves real seekable WAV on
+    /// `/api/music/library/{id}/audio` for the ids `fixtures/player.py`
+    /// seeds, and the musicmore fixture's playlist holds its own ids — so
+    /// whether `AVPlayer` reaches `.readyToPlay` here is a fact about which
+    /// fixture owns which id, not about this unit. The queue, the index and
+    /// the title are what the app decided; those are asserted.
+    /// `PhonePlayQueueTests` and `MusicEngineAdapterTests` hold the
+    /// arithmetic, and `testPlayer_TheStubHousePlaysTheFixturesAudio` holds
+    /// the bytes.
+    @MainActor
+    func testMusicMore_APlaylistPlaysOnThisPhoneAndReachesThePlayerTab() throws {
+        musicMoreReset()
+        let (app, landed) = openPlaylistsTab()
+        XCTAssertTrue(landed, "the playlists tab never drew a row")
+        XCTAssertTrue(
+            openPlaylistSheet(app, MusicMoreUnderTest.longwater),
+            "the sheet never opened"
+        )
+        XCTAssertTrue(
+            containing(app, MusicMoreUnderTest.veldrassen).waitForExistence(timeout: 20),
+            "the sheet listed no tracks, so there is nothing to play"
+        )
+
+        let here = app.buttons[MusicMoreUnderTest.playHere]
+        XCTAssertTrue(
+            here.waitForExistence(timeout: 20),
+            "the sheet offers no `play on this device` — tree follows\n" + app.debugDescription
+        )
+        here.tap()
+        evidence(app, "musicmore-152-played-on-this-phone")
+
+        XCTAssertTrue(
+            sheetSaid(app, containing: MusicMoreUnderTest.playingHerePrefix),
+            "the sheet did not say what started on this device"
+        )
+        XCTAssertEqual(
+            XCUIApplication.State.runningForeground, app.state,
+            "the app went away when a playlist started on the handset — "
+                + StubHouseUITests.stateName(app.state)
+        )
+
+        // Out of the sheet and into the tab the queue landed in.
+        app.buttons[MusicMoreUnderTest.close].firstMatch.tap()
+        XCTAssertTrue(
+            musicMoreTapTab(app, MusicMoreUnderTest.tabPlayer),
+            "the player tab is not offered after a play on this device"
+        )
+        evidence(app, "musicmore-153-player-tab-holds-it")
         XCTAssertFalse(
-            app.buttons[MusicMoreUnderTest.tabPlayer].exists,
-            "the tab bar offers a player tab with no engine behind it"
+            containing(app, MusicMoreUnderTest.nothingQueued).exists,
+            "the player tab says nothing is queued after a playlist was handed to it"
+        )
+        XCTAssertTrue(
+            containing(app, MusicMoreUnderTest.veldrassen).waitForExistence(timeout: 20),
+            "the player tab does not name the track that started"
         )
     }
 
@@ -1806,11 +1902,29 @@ enum MusicMoreUnderTest {
     static let tabPlaylists = "playlists"
     static let tabPlayer = "player"
 
-    /// The four words the strip offers with no engine registered, each one
-    /// the **start** of a button's label: two of them carry a count
-    /// (`library · 6`, `playlists · 3`) and the count moves with the
-    /// fixtures, so a whole label would be a second thing to keep true.
-    static let tabWords = ["library", "room queue", "playlists", "stats"]
+    /// The words the strip offers, each one the **start** of a button's
+    /// label: two of them carry a count (`library · 6`, `playlists · 3`) and
+    /// the count moves with the fixtures, so a whole label would be a second
+    /// thing to keep true.
+    ///
+    /// `player` is the fifth since D46 registered an engine, and it is in the
+    /// list rather than left out of it: it is drawn by the same
+    /// ``MusicTab/label(playlistCount:)`` as the other four, so a measurement
+    /// that skipped it would be measuring less for no reason. If a train
+    /// reports it "not on screen at AX5" that is a real finding about the
+    /// strip's width, not a reason to drop the word.
+    static let tabWords = ["library", "room queue", "playlists", "stats", "player"]
+
+    /// The playlist sheet's two phone buttons and what a start says
+    /// (``MusicMoreStrings/playHere``, ``shuffleHere``, ``playingHere(_:)``).
+    static let playHere = "play on this device"
+    static let shuffleHere = "shuffle on this device"
+    /// Matched as a prefix: the track's name is the rest of the sentence.
+    static let playingHerePrefix = "playing"
+
+    /// The empty player tab (``MusicMoreStrings/nothingQueued`` and its note).
+    static let nothingQueued = "nothing queued"
+    static let nothingQueuedNote = "open a playlist and play it on this device to start"
 
     /// The phone-source switch's server segment, by identifier
     /// (`PhoneSourceSwitchView.swift:171`). Not this item's control; it is

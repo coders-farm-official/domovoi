@@ -100,10 +100,11 @@ final class AudiobooksModelTests: XCTestCase {
             store: store,
             remote: { remote },
             clock: { nowMs },
-            // The bound's own timer, opened at once: a test that really
-            // waited three seconds for a hung read would be a test nobody
-            // runs.
-            sleep: { _ in }
+            // **Held shut, not opened at once.** `sleep: { _ in }` stood here
+            // and was the cause of this class's intermittent red —
+            // ``BookTimeout/heldShut(yields:)`` carries the whole account and
+            // `BookTimeoutTests` measures it.
+            sleep: BookTimeout.heldShut()
         )
     }
 
@@ -375,7 +376,8 @@ final class AudiobooksModelTests: XCTestCase {
             server: Self.away,
             sync: places,
             remote: slot,
-            sleep: { _ in }
+            // Held shut for the rig's reason above.
+            sleep: BookTimeout.heldShut()
         )
 
         XCTAssertEqual(600, plan.positionSec)
@@ -405,7 +407,8 @@ final class AudiobooksModelTests: XCTestCase {
             server: Self.home,
             sync: places,
             remote: slot,
-            sleep: { _ in }
+            // Held shut for the rig's reason above.
+            sleep: BookTimeout.heldShut()
         )
 
         let offer = try XCTUnwrap(plan.offer)
@@ -425,7 +428,8 @@ final class AudiobooksModelTests: XCTestCase {
             server: Self.home,
             sync: places,
             remote: slot,
-            sleep: { _ in }
+            // Held shut for the rig's reason above.
+            sleep: BookTimeout.heldShut()
         )
 
         XCTAssertNil(plan.offer)
@@ -828,7 +832,7 @@ final class AudiobooksModelTests: XCTestCase {
         XCTAssertEqual(9, model.books.count)
         XCTAssertEqual("showing 9 of 9 books", model.countText)
         XCTAssertEqual("book 3", model.books[3].displayTitle)
-        XCTAssertEqual("10:12:00 · 1 chapters · 1 KB", model.meta(model.books[3]))
+        XCTAssertEqual("10:12:00 · 1 chapter · 1 KB", model.meta(model.books[3]))
         XCTAssertNil(model.emptyNote)
     }
 
@@ -1211,7 +1215,7 @@ final class AudiobooksModelTests: XCTestCase {
 
         XCTAssertEqual(3672, page.placeSec)
         XCTAssertEqual("read by Ganymede Quill", page.narratorLine)
-        XCTAssertEqual("10:12:00 · 1 KB · 1 chapters", page.metaLine)
+        XCTAssertEqual("10:12:00 · 1 KB · 1 chapter", page.metaLine)
         XCTAssertEqual("your place: 1:01:12 of 10:12:00 · 10%", page.placeText)
         XCTAssertEqual("resume", page.playWord)
         XCTAssertEqual(["One"], page.chapters.map { $0.title })

@@ -201,15 +201,14 @@ final class PodcastModelsTests: XCTestCase {
         XCTAssertEqual("— · failed", failed.metaLine)
     }
 
-    /// Android has no singular form, so both phones say `1 chapters`. Pinned
-    /// so that "fixing" it on one side alone fails a test and sends the reader
-    /// to ``PodcastEpisode/metaLine``'s comment.
+    /// D48 (2026-11-03): both phones say `1 chapter` now, so this pins the
+    /// fix rather than the infelicity it used to pin.
     func testOneChapterSaysChaptersOnBothPhones() {
         let one = PodcastEpisode(
             id: 1, durationSec: 120, hasFile: true,
             chapters: [PodcastChapter(title: "only", startSec: 0)]
         )
-        XCTAssertEqual("2:00 · 1 chapters", one.metaLine)
+        XCTAssertEqual("2:00 · 1 chapter", one.metaLine)
     }
 
     func testAnEpisodeWithNoTitleIsCalledEpisode() throws {
@@ -556,12 +555,13 @@ final class PodcastModelsTests: XCTestCase {
             PodcastStrings.unsubscribeBody("The Kitchen Table")
         )
         XCTAssertEqual("failed: 404: not found", PodcastStrings.unsubscribeFailed("404: not found"))
-        // iOS-only twice over: neither app's screen can cast an episode to a
-        // room, and this one cannot play one on the phone either - nothing in
-        // the app owns a `PlayerModel`. It said `played on this phone` until
-        // train S004, which is a promise the screen has no control for.
+        // It said `played on this phone` until train S004, where that was a
+        // promise the screen had no control for; the 2026-11-03 batch put an
+        // owner on `ShellModel` and a play control on every downloadable row,
+        // so it says it again. Casting an episode to a **room** is still
+        // neither app's, and the subtitle has never named one.
         XCTAssertEqual(
-            "subscriptions + episodes, listened to in the dashboard",
+            "subscriptions + episodes, played on this phone",
             PodcastStrings.subtitle
         )
     }

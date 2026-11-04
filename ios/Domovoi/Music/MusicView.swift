@@ -25,15 +25,6 @@ import SwiftUI
 ///
 /// ### What is not, and why there is no control for it
 ///
-/// **This phone's own player**, which is Android's `player` tab: queueing to
-/// the handset, playing through its speaker, the seek bar, the sleep timer,
-/// the playback speed, chapters, and casting a local queue to a room. The
-/// screen for it is built (``MusicPlayerTabView``) and so is everything
-/// behind it, but **nothing conforms to ``MusicMorePlayerEngine`` yet** —
-/// the audio engine is its own item. So ``MusicTab/shown(hasPlayer:)``
-/// leaves `player` out of the tab bar entirely rather than offering a
-/// transport row with nothing behind it.
-///
 /// **Uploading** a file from the phone and **saving** a track to the phone.
 /// Each is a different batch's, and neither has a control here.
 ///
@@ -102,12 +93,16 @@ struct MusicView: View {
 
     /// This phone's own queue, over whatever engine is registered.
     ///
-    /// **Nothing registers one**, so ``MusicLocalQueueModel/hasEngine`` is
-    /// false, the `player` tab is not in the bar, and
-    /// ``MusicPlayerTabView`` is never on screen. The model is built anyway
-    /// — rather than the tab being commented out — so that the engine's item
-    /// lands as one `use(_:)` call and nothing here is written from scratch
-    /// against a thing that by then exists.
+    /// **The engine is registered since the 2026-11-03 batch** (D46/D49):
+    /// ``PlayerModelMusicEngine`` over ``ShellModel/player``, handed in by the
+    /// `.task` below — which is the one `use(_:)` call this note said the
+    /// engine's item would land as.
+    ///
+    /// Absent, not greyed, where there is no player at all: a **build with no
+    /// audio engine** and a shell built with no `deviceSelf`. Not "a phone
+    /// that has no device id" — one is minted locally on first launch
+    /// (`DeviceRegistry.swift:390-404`), which is the false cause review 2 of
+    /// that batch took out of four other comments.
     @State private var player: MusicLocalQueueModel?
 
     /// One room-lyrics model per room card, kept across redraws so that the
@@ -198,13 +193,11 @@ struct MusicView: View {
                     case .stats:
                         MusicStatsView(music: music)
                     case .player:
-                        // Not reachable today: ``MusicTab/shown(hasPlayer:)``
-                        // leaves this tab out of the bar while nothing
-                        // conforms to ``MusicMorePlayerEngine``, and `tab`
-                        // can only hold what the bar offered. Wired anyway,
-                        // so that the engine's item is one conformance and
-                        // not a screen written later against a seam nobody
-                        // kept honest.
+                        // Reachable since D46: the `.task` below registers
+                        // ``PlayerModelMusicEngine``, so
+                        // ``MusicTab/shown(hasPlayer:)`` offers this tab. It
+                        // stays out of the bar where there is no player, and
+                        // `tab` can only hold what the bar offered.
                         if let player {
                             MusicPlayerTabView(
                                 player: player,
@@ -235,6 +228,18 @@ struct MusicView: View {
             if nudges == nil { nudges = MusicLyricsNudgeStore() }
             if player == nil, let deviceID = model.deviceID {
                 player = MusicLocalQueueModel(deviceID: deviceID)
+            }
+            // **The engine, asked for on every appearance** (D46/D49).
+            //
+            // In a `.task` and never in a `body` because **reading
+            // `model.player` is what builds it**, and the player activates a
+            // `.playback` session — one built at launch stops whatever the
+            // person was already listening to. Re-asked rather than built
+            // once, as the other four screens of that item do: `use(_:)`
+            // replaces the engine, the queue it reads lives on the player, so
+            // re-adapting loses nothing.
+            if let made = model.player {
+                player?.use(PlayerModelMusicEngine(made))
             }
             music?.start()
             playlists?.start()
@@ -352,7 +357,10 @@ struct MusicView: View {
                     MusicPlaylistSheet(
                         detail: detail,
                         covers: covers,
-                        rooms: music.castRooms
+                        rooms: music.castRooms,
+                        // D46: the sheet's `this device` section, which is
+                        // absent when this is nil.
+                        player: player
                     )
                 }
             case .addTo(_, let add):

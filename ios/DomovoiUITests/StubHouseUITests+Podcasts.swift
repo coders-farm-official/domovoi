@@ -17,14 +17,17 @@ import XCTest
 ///
 /// ### What is **not** tested here, and why
 ///
-/// **Playing an episode.** There is no play control on this screen: the audio
-/// engine merged from `wf/ios-n-player` and nothing in the app owns one, so
-/// the control, the resume dialog and the position read/write are left out
-/// entirely (``PodcastsView``'s doc comment, and
-/// `overnight/podcasts/DECISIONS.md`). What *is* tested is that the control is
-/// absent — `testPodcasts_AnEpisodeWithNoFileSaysWhatTheDownloadIsDoing` —
-/// because a branch that later draws one before there is an owner should fail
-/// here rather than on Kamron's phone.
+/// **That a sound comes out.** The play control, the resume dialog and the
+/// position read/write landed in the 2026-11-03 batch (D46/D49), and
+/// `testPodcasts_AnEpisodeWithNoFileSaysWhatTheDownloadIsDoing` now asserts
+/// the button is there on a row with a file and **not** on one without — the
+/// case was written as an absence and is inverted rather than deleted. What a
+/// Simulator still cannot add is whether `AVPlayer` reached `.readyToPlay`:
+/// `testPlayer_TheStubHousePlaysTheFixturesAudio` owns the bytes and
+/// `PodcastPlayTests` owns the resume arithmetic — twelve cases over a real
+/// ``PlayerModel``, added in review 1 of this batch. This sentence named
+/// `PodcastsModelTests` while that file had no case naming play or resume,
+/// which is the kind of pointer that stops the next reader looking (M2).
 ///
 /// **A `podcasts.changed` push reloading the grid.** The stub house can push
 /// one hard-coded frame type and a fixture module cannot push its own
@@ -356,21 +359,23 @@ extension StubHouseUITests {
     }
 
     /// An episode the house has not downloaded says what the download is
-    /// doing, and offers no play control — because **nothing** on this screen
-    /// does.
+    /// doing and offers **no play control**, while the one beside it with a
+    /// file offers one.
     ///
-    /// Two halves, and the second is the one that matters tonight. Android
-    /// draws a filled play button on every row and disables it unless
+    /// Two halves, and the second is still the one that matters. Android
+    /// draws a filled play button on every row and **disables** it unless
     /// `has_file` (`PodcastsEpisodes.kt:223`); the audio route answers **409
     /// "episode not downloaded yet"** for such a row (`podcasts.py:514`), so
-    /// that button cannot do what it says. This port draws no play control at
-    /// all — not for this row and not for the downloaded one either, since
-    /// nothing in the app owns an audio engine — and says at the foot of the
-    /// list where listening is done instead.
+    /// that button cannot do what it says. This port draws no button at all
+    /// on that row, which is the owner's rule one step further than Android
+    /// took it.
     ///
-    /// So this case fails if a play button appears for an undownloaded
-    /// episode (the no-misleading-controls failure) **and** if one appears at
-    /// all before something owns a ``PlayerModel``.
+    /// Until the 2026-11-03 batch the second half read "and not for the
+    /// downloaded one either, since nothing in the app owns an audio engine".
+    /// D49 gave it one, so that clause is replaced by its opposite rather
+    /// than dropped: the downloaded row **must** have a play button, and the
+    /// row with no file must not. A single assertion that no button exists
+    /// anywhere would now pass only by regressing the feature.
     @MainActor
     func testPodcasts_AnEpisodeWithNoFileSaysWhatTheDownloadIsDoing() throws {
         resetPodcastHouse()
@@ -391,22 +396,44 @@ extension StubHouseUITests {
             podcastRow(app, StubPodcasts.newestEpisode, StubPodcasts.downloadedWord).exists,
             "an episode with its file still shows a download status"
         )
+        // The row with no file has no play button. Matched by the **name**,
+        // because that is what the button carries
+        // (`PlayerStrings.playNamed(_:)`): a bare `play` on fifty-seven rows
+        // reads as "play, play, play" and `firstMatch` on it would be
+        // whichever row the tree happens to hold first.
         XCTAssertFalse(
-            app.buttons[StubPodcasts.play].exists,
-            "something offers to play an episode and nothing in this app owns "
-                + "a player — a control that cannot do what it says"
+            app.buttons[StubPodcasts.playNamed(StubPodcasts.pendingEpisode)].exists,
+            "an episode the house has not got offers to play — the audio route "
+                + "would answer 409, so that control cannot do what it says"
         )
-        // **Under the show's name, not at the foot.** This assert is what
-        // failed on train S004: the sentence was the last thing in the
-        // episodes `LazyVStack`, and the foot of a lazy list of fifty-seven
-        // rows is not built, so it was in no tree - and a person hunting for
-        // the play control had the same trip to make
-        // (``PodcastEpisodesSheet/whereListeningHappens``). Asserted without
-        // scrolling on purpose: scrolling to it would have made the case pass
-        // and left the screen wrong.
+        // And the row that **does** have its file offers one. Asserted in the
+        // same case, so a merge that lost the button fails here instead of
+        // leaving an absence assertion that passes over a broken feature.
         XCTAssertTrue(
+            app.buttons[StubPodcasts.playNamed(StubPodcasts.newestEpisode)].exists,
+            "the downloaded episode has no play control — D46 put one on every "
+                + "row the house has the file for"
+        )
+        // Saving is the same shape (D47): offered where there is a file.
+        XCTAssertTrue(
+            app.buttons[StubPodcasts.saveControl].exists,
+            "no `save to device` on a show with a downloaded episode"
+        )
+        // The sentence that sent the reader to the dashboard is **gone**. It
+        // was drawn under the show's name rather than at the foot, which is
+        // what train S004 found the hard way (the foot of a lazy list of
+        // fifty-seven rows is in no tree); now that the control it apologised
+        // for is right there, the line would be a contradiction.
+        XCTAssertFalse(
             app.staticTexts[StubPodcasts.inTheDashboard].exists,
-            "the list does not say where listening and saving are done"
+            "the list still says listening is done in the dashboard, over a play button"
+        )
+        // And the chip is hidden, which is the design (D11): the stub house
+        // has no listener picked, and Android shows nothing at all in that
+        // state (`val id = listenerId ?: return`).
+        XCTAssertFalse(
+            containing(app, StubPodcasts.listenerChip).exists,
+            "a listening-as chip is drawn with no listener picked"
         )
     }
 
@@ -1026,7 +1053,7 @@ enum StubPodcasts {
     /// Train S004 shipped `subscriptions + episodes, played on this phone`,
     /// which claimed the one thing the screen has no control for. Corrected
     /// in the app, not here: ``PodcastStrings/subtitle``.
-    static let subtitle = "subscriptions + episodes, listened to in the dashboard"
+    static let subtitle = "subscriptions + episodes, played on this phone"
     static let pollNow = "poll now"
     static let subscribe = "subscribe"
     static let searchShows = "search shows…"
@@ -1104,8 +1131,22 @@ enum StubPodcasts {
     static let unsubscribeBody =
         "Unsubscribe from \"The Kitchen Table\"? Downloaded episodes are removed."
     static let unsubscribedToast = "Unsubscribed"
-    /// The VoiceOver label a play control would carry, which nothing draws.
-    static let play = "play"
+    /// The VoiceOver label a play control carries: the **name**, not the bare
+    /// word (``PlayerStrings/playNamed(_:)``).
+    static func playNamed(_ episode: String) -> String { "play \(episode)" }
+
+    /// `TransferStrings.saveToDevice`, spelt out like every other string this
+    /// file matches on.
+    static let saveControl = "save to device"
+
+    /// ``PlayerStrings/listeningAsChip(_:)``'s opening. The stub house has no
+    /// listener picked, so this must be absent everywhere these cases look.
+    static let listenerChip = "listening as"
+
+    /// `PodcastStrings.inTheDashboard`, which is **deleted** from the app
+    /// (D46 put the play and the save on the row). Kept here because that is
+    /// what a case now asserts: a merge that brought the sentence back beside
+    /// a play button would be a screen contradicting itself.
     static let inTheDashboard = "playing or saving an episode is done in the dashboard"
 
     // polling

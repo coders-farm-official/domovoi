@@ -9,17 +9,25 @@ import Foundation
 /// **device tier** or `require_device_read` (`audiobooks.py:56`, `:538`,
 /// `:599`, `:617`).
 ///
-/// ### `person_id` is deliberately absent from every one of these
+/// ### `person_id` is on all three position routes, as of D11
 ///
 /// Both position routes take an optional `person_id`, and Android always
 /// sends one (`ApiPositionRemote.kt:26-29`) because `prefs.listenerPersonId`
-/// exists there. **Nothing on iOS stores a listener person**, so every
-/// request this item makes lands in the server's *unidentified listener*
+/// exists there. Until 2026-11-03 nothing on iOS stored a listener, so every
+/// request this item made landed in the server's *unidentified listener*
 /// slot — a different row from any person's
-/// (`domovoi/spoken_audio.py:145-147`). Sending `person_id=` empty would be a
-/// *different key* to the server rather than an absent one, which is why the
-/// parameter is not here at all. DECISIONS §1 asks the owner whether the
-/// phone should get a picker.
+/// (`domovoi/spoken_audio.py:145-147`) — which meant "continue from the
+/// kitchen" could not see a place the voice path had saved under a person.
+/// Kamron's answer 11: "yes, match Android: build the 'listening as' picker",
+/// and ``PlayerListenerStore`` is where the choice lives.
+///
+/// **An id the server cannot read is left out rather than sent.** The server
+/// types `person_id` as an `int` on all three (`audiobooks.py:603`, `:541`,
+/// `PositionSave` at `:80`), so a non-numeric one is a 422 — and a 422 on the
+/// *read* is swallowed into "start at the top", which is a three-hour book
+/// silently resuming at zero. ``PlayerServerPositions/readQuery(deviceID:personID:)``
+/// already does exactly this, for exactly this reason, and so does
+/// ``person(_:)`` below.
 public enum AudiobookPath {
 
     /// Unreserved characters only, so `&`, `=`, `#`, `+`, `/`, `\` and a
@@ -84,9 +92,60 @@ public enum AudiobookPath {
         audio(bookID: bookID, file: part.file)
     }
 
-    /// This phone's slot in a book. `device_id` is **required** by the route.
-    public static func position(_ id: Int64, deviceID: String) -> String {
-        "/api/audiobooks/\(id)/position?device_id=\(esc(deviceID))"
+    /// The `&person_id=` fragment, or nothing at all.
+    ///
+    /// A **number**, never a string, and absent when the stored id is not one.
+    /// See this type's heading.
+    static func person(_ personID: String?) -> String {
+        guard let personID, let number = Int64(personID) else { return "" }
+        return "&person_id=\(number)"
+    }
+
+    /// The whole book as one file to keep (`audiobooks.py:353`).
+    ///
+    /// Not the audio route with `download=1` — that is **one chapter**
+    /// (`:314`), which for a folder book is one file of forty. This route is
+    /// the book: a single-file book comes back as itself, a folder book as a
+    /// stored (uncompressed) zip the server builds and then deletes. Both
+    /// arrive as an `attachment`, which is what ``SaveToDeviceModel`` needs in
+    /// order to hand the file on rather than render it.
+    public static func download(_ id: Int64) -> String {
+        "/api/audiobooks/\(id)/download"
+    }
+
+    /// What to call the file the person keeps.
+    ///
+    /// The server names it too (`safe_download_name`), but
+    /// ``SaveToDeviceModel`` writes to a path it chose before the first byte
+    /// arrives, so the name is decided here. The extension matters: a folder
+    /// book is a **zip** whatever its chapters are, and `file_ext` is null for
+    /// one (`audiobooks.py:218-230`) — which is why this takes `isFolder`
+    /// rather than trusting an absent extension to mean "unknown".
+    ///
+    /// `.m4b` for a single-file book with no extension at all: a file iOS
+    /// cannot open by name is a file the share sheet offers nothing for, and
+    /// an audiobook that is not a folder is an audio file.
+    public nonisolated static func downloadName(
+        title: String,
+        isFolder: Bool,
+        fileExt: String?
+    ) -> String {
+        if isFolder { return title + ".zip" }
+        let ext = (fileExt ?? "").lowercased()
+        if ext.isEmpty { return title + ".m4b" }
+        return ext.hasPrefix(".") ? title + ext : title + "." + ext
+    }
+
+    /// This phone's slot in a book, for this listener.
+    ///
+    /// `device_id` is **required** by the route (`audiobooks.py:599-615`);
+    /// `person_id` names whose place it is, and without one it is the
+    /// unidentified listener's. That paragraph was spliced onto
+    /// ``download(_:)`` until review 2 of the 2026-11-03 batch, which left
+    /// this — the one member the heading is about — the only undocumented
+    /// one in the file.
+    public static func position(_ id: Int64, deviceID: String, personID: String? = nil) -> String {
+        "/api/audiobooks/\(id)/position?device_id=\(esc(deviceID))\(person(personID))"
     }
 
     /// The save, which is a POST with a body.
@@ -96,8 +155,13 @@ public enum AudiobookPath {
 
     /// This listener's places on **other** devices and rooms; the asking
     /// device's own row is excluded by the server.
-    public static func positions(_ id: Int64, deviceID: String) -> String {
-        "/api/audiobooks/\(id)/positions?device_id=\(esc(deviceID))"
+    ///
+    /// The route answers rows for **exactly** this `person_id` and no other
+    /// (`audiobooks.py:545-552`), so the listener is what decides whether
+    /// "continue from the kitchen" can see a place a room saved under a
+    /// person — which is the whole point of D11.
+    public static func positions(_ id: Int64, deviceID: String, personID: String? = nil) -> String {
+        "/api/audiobooks/\(id)/positions?device_id=\(esc(deviceID))\(person(personID))"
     }
 
     /// The body of a position save (`PositionSave`, `audiobooks.py:78-83`).
@@ -110,10 +174,17 @@ public enum AudiobookPath {
     ///
     /// `nonisolated static` so a test off the main actor can ask for the
     /// bytes without a model.
+    /// - Parameter personID: whose place this is, or nil for the
+    ///   unidentified listener's slot. Written as a **number**, and left out
+    ///   when the stored id is not one: `PositionSave.person_id` is an
+    ///   `Optional[int]` (`audiobooks.py:80`), and a string there is a 422
+    ///   that `try? await client.send` drops on the floor — the place never
+    ///   saved at all.
     public nonisolated static func saveBody(
         deviceID: String,
         positionSec: Double,
-        speed: Double
+        speed: Double,
+        personID: String? = nil
     ) -> Data {
         // ``VideoPath/quoted(_:)`` rather than a second copy of it: a device
         // id is the person's own label for a phone and may hold a quote or a
@@ -121,6 +192,9 @@ public enum AudiobookPath {
         // be right.
         var out = #"{"device_id":"# + VideoPath.quoted(deviceID)
         out += #","position_sec":\#(Int64(max(0, positionSec.isFinite ? positionSec : 0)))"#
+        if let personID, let number = Int64(personID) {
+            out += #","person_id":\#(number)"#
+        }
         out += #","speed":\#(speed.isFinite && speed > 0 ? speed : 1)"#
         out += "}"
         return Data(out.utf8)

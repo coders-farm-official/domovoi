@@ -1,112 +1,78 @@
 import DomovoiKit
 import SwiftUI
 
-/// The merge of this item with the Player item: what happens when somebody
-/// taps `play` on a book.
+/// The adapter between Audiobooks and the app's one player: what happens when
+/// somebody taps `play` on a book.
 ///
-/// ``AudiobooksModel/player`` is an ``AudiobooksPlayer`` seam declared by this
-/// item, because the Player item was written in parallel and none of its names
-/// existed when Audiobooks' models were. This is the one adapter file
-/// `MAP.md` §5 said the merge would need: it conforms ``PlayerModel`` — the
-/// Player item's `AVQueuePlayer`-backed engine, queue, Now Playing slot,
-/// remote commands, sleep timer and chapter jumps — to that seam, and nothing
-/// else in Audiobooks knows the player exists.
+/// ``AudiobooksModel/player`` is an ``AudiobooksPlayer`` seam declared by the
+/// Audiobooks item, because the Player item was written in parallel and none
+/// of its names existed when Audiobooks' models were. This is the one adapter
+/// file `MAP.md` §5 said the merge would need: it conforms ``PlayerModel`` —
+/// the `AVQueuePlayer`-backed engine, queue, Now Playing slot, remote
+/// commands, sleep timer and chapter jumps — to that seam, and nothing else in
+/// Audiobooks knows the player exists.
 ///
-/// ### Why there is a process-wide object here, and what it is not
+/// ### It no longer holds a player of its own
 ///
-/// An audiobook is listened to for hours, with the phone locked and the app in
-/// the background. A player held as a view's `@State` dies when the tab
-/// changes, which would make `play` a control that stops when you look at
-/// something else — the misleading control this project will not ship. So the
-/// player is held here, for the process, keyed by the household it belongs to.
+/// It used to. Until the 2026-11-03 batch this file kept a `static var held`
+/// — one process-wide player keyed by household — and its own doc comment
+/// said, in as many words, that this was the wrong home for it: *"The player
+/// belongs on `AppContainer` beside the client and the socket, exactly as
+/// Android has it on its own container (`AppContainer.kt:95`, `BookPlay.kt:19`
+/// reaching `app.player`), so that Podcasts, Stations, Music and PhoneMedia
+/// share one player rather than one each."* `AppContainer.swift` was a shared
+/// file that item could not edit, so the holder lived here with the shared
+/// change written down.
 ///
-/// **This is the wrong home for it and it says so.** The player belongs on
-/// ``AppContainer`` beside the client and the socket, exactly as Android has
-/// it on its own container (`AppContainer.kt:95`, `BookPlay.kt:19` reaching
-/// `app.player`), so that Podcasts, Stations, Music and PhoneMedia share one
-/// player rather than one each. `AppContainer.swift` is a shared DomovoiKit
-/// file and NIGHT-RULES §2 forbids this item from editing it, so the holder
-/// lives in this item's own folder with the shared change written down
-/// (DECISIONS, "Needs a shared change"). The keying by household is what
-/// makes the move safe: whoever lifts this onto the container is lifting a
-/// single instance, not merging several.
+/// Kamron answered it (answer 2 / 49: "yes, as the next batch"), and the owner
+/// is ``ShellModel/player`` — not `AppContainer`, because ``PlayerModel`` is
+/// `@MainActor` and `AppContainer` is `Sendable` and not main-actor isolated,
+/// so a player cannot be one of its stored properties. What is left here is
+/// the adapter: the request-to-``PlayerItem`` mapping and the position store,
+/// both of which are Audiobooks' own.
 ///
-/// **The key is only consulted when ``shared(in:deviceID:places:)`` is
-/// called**, so whoever holds a player must ask for it again when the house
-/// changes — a player kept across a move still stamps every item with the old
-/// house's `origin`, and a place written under that key is a place the book
-/// page (which reads the *connected* key) will never find.
-/// ``AudiobooksView``'s `onChange(of: model.inputs.serverURL)` re-asks for
-/// exactly that reason.
+/// ### What this still owns: the key, and the places
+///
+/// ``PlayerModel/positions`` is the seam the Player item left for *this* item
+/// (`PlayerModel.swift:219`, whose comment names it). Without it the player
+/// would post straight to the server slot and nothing would ever be written on
+/// the phone — so a book page would show no place however long you had
+/// listened, because ``AudiobookDetailModel`` reads the **local** place, as
+/// Android's `produceState` does (`BookPage.kt:96-98`). One store, written by
+/// the player and read by the page, is the owner decision of 2026-10-20.
+///
+/// The store is keyed by household, so ``over(_:in:places:)`` is asked again
+/// whenever the house changes — a place recorded under the old key is a place
+/// the book page (which reads the connected one) would never find.
+/// ``AudiobooksView``'s `onChange(of: model.inputs.serverURL)` is that ask.
 ///
 /// ### Nil, and what nil means
 ///
-/// ``shared(in:deviceID:places:)`` answers nil when this phone has no device
-/// id. ``PlayerModel`` requires one — every position it saves is a slot the
-/// server keys by device (`PlayerModel.swift:241`) — and a player built with
-/// an empty id would write every listener's place into one row that belongs to
-/// nobody. Nil means ``AudiobooksModel/canPlay(_:)`` is false, so **no `play`
-/// button and no tappable chapter row is drawn at all**, which is the honest
-/// answer to a phone that has not introduced itself. The book page says so in
-/// words (``AudiobooksStrings/noDeviceID``).
+/// ``over(_:in:places:)`` answers nil when there is no player — a platform
+/// with no audio engine, or a shell built with no `deviceSelf`, and nothing
+/// else: ``ShellModel/player`` says why, and review 2 of the 2026-11-03 batch
+/// measured that no phone a person is holding is in that state. Nil means
+/// ``AudiobooksModel/canPlay(_:)`` is false, so **no `play` button and no
+/// tappable chapter row is drawn at all**, which is the honest answer rather
+/// than a control that cannot do what it says.
 @MainActor
 final class AudiobooksPhonePlayer: AudiobooksPlayer {
 
-    /// The one player in this process, and the household it was built for.
+    /// The adapter for this household, or nil when there is no player.
     ///
-    /// A `static var` rather than a lazily-built singleton: the household can
-    /// change while the app runs, and a player holding the old house's queue
-    /// is a player whose next position save goes to the wrong server.
-    private static var held: (key: BookServerKey, player: AudiobooksPhonePlayer)?
-
-    /// The player for this household, or nil when this phone has no device
-    /// id.
-    ///
-    /// - Parameter places: Audiobooks' own store of where you are in a book
-    ///   (``BookPositionSync``), handed to the player as its position store.
-    ///   **This is the half of the merge that matters**: without it the
-    ///   player would save places straight to the server slot, the phone's
-    ///   store would stay empty for ever, and a book page would show no place
-    ///   however long you had listened — because ``AudiobookDetailModel``
-    ///   reads the local place, as Android's `produceState` does
-    ///   (`BookPage.kt:96-98`). One store, written by the player and read by
-    ///   the page, is the owner decision of 2026-10-20: one place per book on
-    ///   the phone, shared by streaming and by a saved copy.
-    static func shared(
+    /// - Parameters:
+    ///   - player: ``ShellModel/player`` — the app's one player. Reading it is
+    ///     what builds it, which is why this is called from `.task` and from
+    ///     the server-change hook rather than from a `body`.
+    ///   - places: Audiobooks' own store of where you are in a book
+    ///     (``BookPositionSync``), handed to the player as its position store.
+    static func over(
+        _ player: PlayerModel?,
         in container: AppContainer,
-        deviceID: String?,
         places: BookPositionSync
     ) -> AudiobooksPhonePlayer? {
-        guard let deviceID, !deviceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return nil
-        }
-        let key = Self.key(of: container)
-        if let held, held.key.isSame(key) { return held.player }
-        // A player for another house is told the house changed and then
-        // stopped before it is let go.
-        //
-        // **Both halves matter.** `serverChanged(to:)` is the Player item's
-        // own move-house path (`PlayerModel.swift:889`, whose doc says the
-        // shell calls it — nothing does, so this item calls it for its own
-        // player): it drops whatever came from the old server from the queue
-        // and ends a cast to one of its rooms *without a word to the new
-        // server*, which a bare `stop()` would not — `stop()` while casting
-        // posts a room action, and that room is the old house's. Then
-        // `stop()`, because an `AVQueuePlayer` that is merely dropped keeps
-        // playing until it is collected, and two audiobooks heard at once is
-        // the bug the Player item's own `leaveRoom` exists for.
-        held?.player.player.serverChanged(
-            to: PlayerServerScope(address: key.address, fingerprint: key.fingerprint)
-        )
-        held?.player.player.stop()
-        let made = AudiobooksPhonePlayer(
-            in: container,
-            deviceID: deviceID,
-            places: places,
-            key: key
-        )
-        held = (key: key, player: made)
-        return made
+        guard let player else { return nil }
+        return AudiobooksPhonePlayer(player: player, key: Self.key(of: container), places: places)
     }
 
     /// Which household the container is pointed at — ``BookPositionSync``'s
@@ -122,28 +88,15 @@ final class AudiobooksPhonePlayer: AudiobooksPlayer {
 
     private let key: BookServerKey
 
-    private init(
-        in container: AppContainer,
-        deviceID: String,
-        places: BookPositionSync,
-        key: BookServerKey
-    ) {
+    private init(player: PlayerModel, key: BookServerKey, places: BookPositionSync) {
+        self.player = player
         self.key = key
-        self.player = PlayerModel(
-            client: container.client,
-            deviceID: deviceID,
-            // `spokenAudio: true` — `.timeDomain` time-stretching rather than
-            // `.spectral`, and never `.varispeed`, which is the one that
-            // makes a narrator sound like a chipmunk
-            // (`PlayerAudioEngine.swift:132-136`). A book is the case that
-            // flag was written for.
-            engine: AVQueueAudioEngine(spokenAudio: true),
-            session: AVAudioSessionControl(),
-            nowPlaying: MPNowPlayingPublisher()
-        )
-        // The seam the Player item left for this one
-        // (`PlayerModel.swift:210`, whose comment names this item).
-        self.player.positions = AudiobookPlaces(places: places, server: key)
+        // **Re-pointed on every ask**, which is what makes a house move safe:
+        // the store carries the household it writes under, and the player is
+        // the one object that outlives the move. The player itself has already
+        // been told the house changed by ``ShellModel/refresh()``, which is
+        // what drops the old house's queue.
+        player.positions = AudiobookPlaces(places: places, server: key)
     }
 
     /// Start this book here. ``AudiobooksPlayer``'s one method.

@@ -170,6 +170,55 @@ public final class MusicLocalQueueModel {
         )
     }
 
+    /// Whether anything on this phone can be played at all.
+    ///
+    /// An engine, and nothing else: a library track needs no room, no cast
+    /// plan and no position slot of its own. False is a build with no audio
+    /// engine, or a shell built with no `deviceSelf`, where
+    /// ``ShellModel/player`` is nil — **not** "a phone with no device id", as
+    /// this line said until review 3 of the 2026-11-03 batch: the id is
+    /// minted locally on first launch (`DeviceRegistry.swift:390-404`), so no
+    /// phone is ever in that state. A `play on this device`
+    /// button with nothing behind it is the control
+    /// [[no-misleading-controls]] forbids, so every caller draws nothing
+    /// rather than a disabled button.
+    public var mayPlayHere: Bool { hasEngine }
+
+    /// Play these library tracks on this phone, starting at `startAt`.
+    ///
+    /// `playHereAndSay` (`MusicScreen.kt:575-588`) is Android's shape,
+    /// including the "paused office" half: this takes the whole queue rather
+    /// than one track, and ``MusicMorePlayerEngine/playTracks(_:startAt:)``
+    /// leaves the room it was casting to on the way — which is the player's
+    /// own `leaveRoom`, so the room is paused and this phone starts, never
+    /// both.
+    ///
+    /// **Who says what, and when.** Android toasts `playing "X" on this
+    /// device` *at once* when no room was being cast to, and otherwise waits
+    /// for the room to answer its pause and says both halves in one sentence,
+    /// "so it never says 'paused office' over a pause the core says didn't
+    /// happen" (`MusicScreen.kt:567-570`). The same split here: this sets the
+    /// tab's own toast only when nothing was left, and the combined sentence
+    /// arrives from ``PlayerModel/say`` — which the shell routes to its toast
+    /// — once the pause has answered. Both toasts for one tap would be the
+    /// screen saying the same thing twice and contradicting itself if the
+    /// pause failed.
+    ///
+    /// Returns whether anything was handed over, so a caller can tell a
+    /// refusal from a start without reading the toast.
+    ///
+    /// An out-of-range `startAt` is clamped rather than refused: a playlist
+    /// can be re-read under the person's thumb between the tap and this call,
+    /// and starting at the top is better than not starting.
+    @discardableResult
+    public func playHere(_ tracks: [LibraryTrack], startAt: Int = 0) -> Bool {
+        guard let engine, !tracks.isEmpty else { return false }
+        let at = min(max(startAt, 0), tracks.count - 1)
+        let left = engine.playTracks(tracks, startAt: at)
+        if left == nil { toast = MusicMoreStrings.playingHere(tracks[at].displayTitle) }
+        return true
+    }
+
     /// Whether a cast menu is offered at all: only when a cast would send
     /// something. A menu over a queue nothing in which can go is the control
     /// [[no-misleading-controls]] forbids, and it is the exact one Android

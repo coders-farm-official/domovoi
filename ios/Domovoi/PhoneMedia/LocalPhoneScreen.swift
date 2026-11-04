@@ -27,13 +27,17 @@ import SwiftUI
 ///
 /// ### What is not, and why there is no control for it
 ///
-/// * **Music does not play here.** The local shell's Music tab lists the
-///   audio in the folders the person added and says
-///   ``PhoneMediaStrings/noPhonePlayerYet``. Android plays it; this app has
-///   no handset audio engine yet (DECISIONS), and the local shell is where
-///   that absence is most visible — a phone with no server and no player has
-///   a list and a `connect` pill, which map §10.1 says is the design rather
-///   than something to paper over with a wizard.
+/// * **Not playing.** This bullet said music does not play in the local
+///   shell, on the premise that the app's one player is keyed to a device id
+///   a phone only gets by pairing. **Review 2 of the 2026-11-03 batch
+///   measured all three clauses false**: the id is minted locally on first
+///   launch (`DeviceRegistry.swift:391-403`), `AppShellView` hands this shell
+///   the same ``ShellModel`` as the connected one, and ``PlayerModel``
+///   resolves a `file://` src with no server in it. So a phone track plays
+///   here exactly as it does on the device side of a connected shell, which
+///   is Android's behaviour too (`LocalMediaScreens.kt:158`). What the local
+///   shell still has none of is the house's own audio — a podcast episode, a
+///   book chapter or a station is a server path, and there is no server.
 /// * **The local shell's Settings screen** (`LocalSettingsScreen.kt:45`) is
 ///   still a later batch's: ``LocalShellView``'s gear is drawn and this item
 ///   does not change it. Mapped and not built — it is the phone's voice and

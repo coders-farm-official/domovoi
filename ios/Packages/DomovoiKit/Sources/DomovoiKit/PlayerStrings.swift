@@ -3,11 +3,11 @@ import Foundation
 /// Every word the player says, transcribed from the Kotlin, each with the file
 /// and line it came from — the shape ``ChatStrings`` and ``FileStrings`` have.
 ///
-/// This item draws nothing (MAP §7.3), so every one of these reaches a person
-/// through a consumer's toast or a sentence the lock screen shows. They are
-/// built **here** and never in a view: a view that assembles "casting to
-/// office" out of parts can claim playback that is not happening, which is the
-/// bug `CastOutcome` was written to stop (`CastPlan.kt:232`).
+/// Every one of these reaches a person through a screen's control, a toast or
+/// a sentence the lock screen shows. They are built **here** and never in a
+/// view: a view that assembles "casting to office" out of parts can claim
+/// playback that is not happening, which is the bug `CastOutcome` was written
+/// to stop (`CastPlan.kt:232`).
 ///
 /// Anything that had to change is marked **iOS-only** and recorded in
 /// `design-notes/ios/overnight/player/IOS-ONLY-STRINGS.md` with its reason.
@@ -124,6 +124,18 @@ public enum PlayerStrings {
     public static let playingOnThisDevice = "playing on this device"
     public static let onThisDevice = "on this device"
 
+    /// The same, naming what started: `playing "Decades" on this device`.
+    ///
+    /// `MusicScreen.kt:576` — Android's `playHereAndSay` builds exactly this
+    /// and hands it to `CastPlanner.playHereNote` as the `playing` half, so
+    /// the one toast a tap produces reads
+    /// `playing "Decades" on this device · paused kitchen`.
+    /// ``MusicMoreStrings/playingHere(_:)`` is the player tab's own name for
+    /// it and calls through to here, so there is one spelling of it.
+    public static func playingNamedOnThisDevice(_ title: String) -> String {
+        "playing \"\(title)\" on this device"
+    }
+
     public static func didNotCast(room: String) -> String {
         "didn't cast to \(room) · playing on this device instead"
     }
@@ -186,4 +198,63 @@ public enum PlayerStrings {
     /// `MicArbiter.kt:84`'s fallback, when the holder let go between the
     /// refusal and the throw.
     public static let micInUse = "the microphone is in use"
+
+    // MARK: - "play on this phone" (D46, 2026-11-03)
+
+    /// What every screen's play control says.
+    ///
+    /// Android's own word, everywhere: `Button(onClick = onPlay) { Text("play") }`
+    /// (`AudiobooksScreen.kt:325`, `BookPage.kt:178`), the row glyph's
+    /// `contentDescription = "play"` (`PodcastsEpisodes.kt:229`) and the
+    /// station row's (`StationsScreen.kt`). One word, so a person moving
+    /// between the two apps reads the same thing.
+    public static let play = "play"
+
+    /// The VoiceOver label for a glyph-only play control, which has to say
+    /// **what** it plays — a list of fifty-seven episodes read as "play,
+    /// play, play" is a list with no information in it.
+    ///
+    /// **iOS-only**: Android's `contentDescription` is the bare word because
+    /// TalkBack reads the row's text with it; an `accessibilityElement`
+    /// combining a row on iOS takes the button's label instead, so the name
+    /// has to be in it. IOS-ONLY-STRINGS.md.
+    public static func playNamed(_ what: String) -> String { "play \(what)" }
+
+    // `noFileYet` was here — "the house has not got this one yet", written
+    // for a row whose audio the house has not downloaded. It had no caller and
+    // is gone: the control for such a row is **absent**, not greyed (Android
+    // disables it, `PodcastsEpisodes.kt:223`), and what the row says instead
+    // is its own meta line: `PodcastEpisode.metaLine` appends the server's own
+    // `download_status` for a row with no file (`· queued`, `· failed`), which
+    // says *why* rather than restating it. A string with no caller reads as a
+    // sentence somebody sees.
+
+    // MARK: - §6.5 "Listening as" (`ConnectionPanel.kt:350-378`)
+
+    /// The card's title (`ConnectionPanel.kt:352`).
+    public static let listeningAsCard = "Listening as"
+
+    /// The card's subtitle, word for word (`ConnectionPanel.kt:353-355`).
+    public static let listeningAsCardSub =
+        "Podcast and audiobook resume positions sync to this person — pick "
+        + "yourself to share progress with the rooms; leave it on this device "
+        + "to keep it local."
+
+    /// The dropdown's null row (`ConnectionPanel.kt:338`, `:367`).
+    public static let listenerThisDevice = "me (this device)"
+
+    /// The hint chip on Podcasts and Audiobooks
+    /// (`AudiobooksScreen.kt:343`, `PodcastsScreen.kt:310`).
+    ///
+    /// `"listening as ${name ?: "…"}"` — the ellipsis is what it says while
+    /// the people list is still on its way, and the chip is **not drawn at
+    /// all** when no listener is set (`val id = listenerId ?: return`).
+    public static func listeningAsChip(_ name: String?) -> String {
+        "listening as \(name ?? "…")"
+    }
+
+    /// The card's own failure (`ConnectionPanel.kt:359`).
+    public static func couldNotLoadPeople(_ why: String) -> String {
+        "couldn't load people: \(why)"
+    }
 }

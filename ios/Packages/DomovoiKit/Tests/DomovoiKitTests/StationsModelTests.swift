@@ -1008,15 +1008,18 @@ final class StationsModelTests: XCTestCase {
         await started(quiet)
 
         XCTAssertEqual("23 favorited · 3 recent", quiet.subtitle)
-        XCTAssertEqual(
-            "playing on this phone isn't built yet — favoriting, sampling and detections all work",
-            quiet.playbackNote
-        )
+        // `playbackNote`'s two assertions stood here and are gone with their
+        // subject (review 2 of the 2026-11-03 batch): the note said a station
+        // would play "once this phone has joined a domovoi", and the device id
+        // the player is keyed to is minted locally on first launch
+        // (`DeviceRegistry.swift:391-403`), so it named a cause that does not
+        // exist for a state no phone reaches. The pair of subtitles is what is
+        // left, and `StationsWitnessTests` is where the no-play header and the
+        // witness handover are measured — this file is not the Player unit's
+        // to add cases to.
 
         let (loud, _, _, _) = rig(playback: StationsPlaybackSpy(canPlay: true))
         await started(loud)
         XCTAssertEqual("23 favorited · 3 recent · tap a station to play it", loud.subtitle)
-        XCTAssertNil(loud.playbackNote,
-                     "a build that can play says nothing about not being able to")
     }
 }

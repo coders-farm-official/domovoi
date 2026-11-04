@@ -94,6 +94,49 @@ public enum MusicMoreStrings {
         "\(isVirtual ? "virtual" : "playlist") · #\(id)"
     }
 
+    /// `play on this device` (D46).
+    ///
+    /// The whole phrase, not `play`, because this sits beside the room chips
+    /// and `play` there means "play in the room you picked". Android's
+    /// equivalent says the same words in its toast
+    /// (`MusicScreen.kt:583`: *playing "X" on this device*) and has no button
+    /// of its own, because its playlist drawer plays to rooms only.
+    public static let playHere = "play on this device"
+
+    /// `shuffle on this device` — the phone twin of ``shuffleAll``.
+    public static let shuffleHere = "shuffle on this device"
+
+    /// The section label over the two phone buttons.
+    ///
+    /// **`this device`: the thing, not the verb.** Three wordings have stood
+    /// here. It was `play on this phone`, which disagreed with its own two
+    /// buttons about what the handset is called; the fix pass made it `play
+    /// on this device`, which agreed with them **exactly** — the same
+    /// sentence as the button directly beneath it, so VoiceOver read it
+    /// twice and the sheet had two elements with one label, which is the trap
+    /// this track has already paid for ([[audit-reports-one-issue]]: two
+    /// controls sharing a label). This is the third: Android's own word for
+    /// the handset where it labels one, `Text("this device")`
+    /// (`ui/screens/music/PlayerTab.kt:408`) — `device` as
+    /// `MusicScreen.kt:583` has it, and no repeat of either button.
+    ///
+    /// Android has no heading over its phone controls at all, so this is
+    /// iOS-only (IOS-ONLY-STRINGS §7) and the alternative was to draw none:
+    /// the buttons do say where they play. It is kept because it is what
+    /// separates them from the room chips under them, and a sighted reader
+    /// has nothing else to read the grouping from.
+    public static let playHereLabel = "this device"
+
+    /// What a start on this phone says (`MusicScreen.kt:583`).
+    ///
+    /// One spelling of it: ``PlayerStrings/playingNamedOnThisDevice(_:)`` is
+    /// the same sentence, and the player uses it as the first half of the
+    /// combined `… · paused kitchen` note. Two literals would drift, and the
+    /// drift would show as one tap saying two different things.
+    public static func playingHere(_ title: String) -> String {
+        PlayerStrings.playingNamedOnThisDevice(title)
+    }
+
     public static let playInRoomLabel = "play in room"
     /// `PlaylistDrawer.kt:222` — the section label says the room list is
     /// empty rather than offering a picker with nothing in it.
@@ -325,8 +368,18 @@ public enum MusicMoreStrings {
 
     /// `PlayerTab.kt:169-171`, both lines.
     public static let nothingQueued = "nothing queued"
+
+    /// What to do about an empty queue.
+    ///
+    /// **It names the playlists tab, not the library tab.** It said "from the
+    /// library tab" while nothing anywhere could queue to this phone, and the
+    /// 2026-11-03 batch made that the one wrong word on the screen: the
+    /// control that queues to the handset is `play on this device` in a
+    /// playlist's sheet (D46), and the library row's sheet still casts to a
+    /// room only. A note pointing at a tab with no such control is the same
+    /// misleading instruction as a button that does nothing.
     public static let nothingQueuedNote =
-        "play a library track on this device from the library tab to start"
+        "open a playlist and play it on this device to start"
 
     public static func queueHeader(_ count: Int) -> String { "queue · \(count)" }
     public static let saveAsPlaylist = "save as playlist"

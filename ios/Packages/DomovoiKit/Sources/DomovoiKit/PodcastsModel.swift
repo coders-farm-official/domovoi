@@ -14,36 +14,39 @@ import Observation
 /// showing, and whether a sheet may close over a write still in flight are
 /// all **decisions**, and a view cannot be asked whether it got them right.
 ///
-/// ### What this does not do, and why there is no control for it
+/// ### What the 2026-11-03 batch added
 ///
-/// **Playing an episode**, the resume prompt, and the resume position
-/// read/write. `wf/ios-n-player` is merged and its engine *can* take a
-/// remote-URL episode — but **nothing in the app owns a ``PlayerModel``**:
-/// it is on neither ``AppContainer`` nor ``ShellModel``, and putting it there
-/// is a change to shared infrastructure this branch must not make. A player
-/// this screen built for itself would be destroyed when somebody left
-/// Podcasts, so the play control, the resume dialog and the position
-/// read/write are left out entirely — not drawn disabled, not stubbed
-/// (DECISIONS.md, "Phone playback has an engine and no owner").
-/// ``PodcastPath/audio(episodeID:download:)``, ``PodcastPosition``,
-/// ``PodcastPath/savePositionBody(deviceID:personID:positionSec:speed:)`` and
-/// ``PodcastRules/offersResume(positionSec:)`` are the seam, and
-/// **nothing in this model calls them**.
+/// **Playing an episode**, the resume prompt and the resume position. The
+/// seam was written and nothing called it, because nothing in the app owned a
+/// ``PlayerModel``. D49 put one on ``ShellModel`` — lazily, and iOS-only —
+/// and ``player`` here is handed it by ``PodcastsView``. So
+/// ``PodcastPath/audio(episodeID:download:)``, ``PodcastPosition`` and
+/// ``PodcastRules/offersResume(positionSec:)`` are all live, and ``play(_:)``
+/// is what reads the place and asks before it drops somebody into the middle
+/// of a programme.
+///
+/// **Saving an episode to the device** (D47), through
+/// ``SaveToDeviceModel``'s streaming save: no size on the row to check, and
+/// nothing to check it against now that the 64 MiB ceiling is gone.
+///
+/// **The listener.** ``PlayerListenerStore`` holds who is listening (D11) and
+/// the person reaches every position query, so a place is no longer recorded
+/// against the server's unidentified listener unless that is what was chosen.
+///
+/// ### What this still does not do, and why there is no control for it
 ///
 /// **Playing to a room.** Neither app can: a room plays library track ids
 /// through `POST /api/music/play-tracks` and an episode has none
 /// (`CastPlan.kt:10-20, 70-77`), and no server route plays an episode in a
 /// room — that exists only through voice, in the core's own MPD path. The
-/// header subtitle is reworded accordingly (``PodcastStrings/subtitle``).
+/// header subtitle names this phone instead (``PodcastStrings/subtitle``).
 ///
-/// **Saving an episode to the device.** No download manager on iOS, a 64 MiB
-/// ceiling on the one save path there is, and **no size on the row** to check
-/// it against. ``PodcastStrings/inTheDashboard`` is what the screen
-/// says instead.
-///
-/// **The "listening as *name*" pill.** This app stores no listener person, so
-/// `person_id` is simply absent from every position query — and absent is a
-/// different key from empty on the server.
+/// **Play with no player.** ``ShellModel/player`` is nil on a build with no
+/// audio engine and in a shell built with no `deviceSelf`, ``canPlay(_:)`` is
+/// false there, and no control is drawn — not greyed. This paragraph said
+/// "a phone with no device id" until review 2 of the 2026-11-03 batch, which
+/// measured that no phone is in that state: the id is minted locally on first
+/// launch (`DeviceRegistry.swift:391-403`).
 ///
 /// **Pull to refresh does not poll the feeds.** ``reload()`` re-reads the
 /// list; ``poll()`` is the only thing that fetches the internet, which is
@@ -151,6 +154,121 @@ public final class PodcastsModel {
     /// The shell's toast. Only ever set for something that lands with no
     /// sheet in front of it.
     public private(set) var toast: String?
+
+    // MARK: - playing an episode on this phone (D46)
+
+    /// The app's one player, or nil on a build that cannot play.
+    ///
+    /// ``ShellModel/player``, handed over by ``PodcastsView`` on every
+    /// appearance. Nil means **no play control is drawn at all**, which is
+    /// the honest answer rather than a button that cannot do what it says —
+    /// see ``ShellModel/player`` for which builds those are.
+    ///
+    /// Set rather than passed to `init` for the reason every other seam on
+    /// this screen is: the model is built in a `.task` before the view has
+    /// asked the shell for anything, and reading `model.player` is what
+    /// *builds* the player — which must not happen because a model was built.
+    public var player: PlayerModel?
+
+    /// The episode waiting on a resume/start-over choice, or nil.
+    ///
+    /// `ResumeRequest` (`PodcastsScreen.kt:313`): the server knew a place, so
+    /// the person is asked rather than dropped into the middle of something.
+    public private(set) var resuming: PodcastResume?
+
+    /// Whether this episode may be played here.
+    ///
+    /// Both halves, and they are different reasons: ``PodcastEpisode/canPlay``
+    /// is "the house has the audio" (`has_file`), and a player is "this phone
+    /// can play it". Android disables the button for the first and has no
+    /// second case at all, because its player is on the container.
+    public func canPlay(_ episode: PodcastEpisode) -> Bool {
+        player != nil && episode.canPlay
+    }
+
+    /// Play `episode` on this phone, from wherever it was left off.
+    ///
+    /// `PodcastsScreen.kt:316-343`, in order: read the place, and if there is
+    /// one, **ask**. Playing straight from a saved place would be wrong for
+    /// the common case of coming back to a programme days later, and starting
+    /// over always would throw away the thing the position store is for.
+    ///
+    /// The position read is the player's own
+    /// (``PlayerModel/fetchPosition(_:)``), which carries the listener and the
+    /// device and treats a failure as "start at the top" rather than losing
+    /// the place loudly. The house epoch is captured **before** the await and
+    /// checked after it: an episode id is the *house's* id, so a place that
+    /// lands after the app has moved would be house A's place applied to house
+    /// B's episode 9 — [[read-after-await-wrong-key]], the top defect class on
+    /// this track.
+    public func play(_ episode: PodcastEpisode) {
+        guard canPlay(episode), let player else { return }
+        let item = Self.item(episode, show: selected)
+        let epoch = houseEpoch
+        Task { @MainActor [weak self] in
+            let place = await player.fetchPosition(item)
+            guard let self, self.stillHome(epoch) else { return }
+            // `if (pos > 5)` (`PodcastsScreen.kt:226`), through the rule that
+            // was written for it. It was `> 0` here until review 1 of this
+            // batch, which is the dialog in front of somebody who pressed play
+            // and pressed stop — and it left ``PodcastRules/offersResume(positionSec:)``
+            // with no caller while its own comment said the two agreed.
+            guard PodcastRules.offersResume(positionSec: place.positionSec) else {
+                // The room this paused, if any, is named by
+                // ``PlayerModel/say`` once the room has answered — in the
+                // shell's toast, which outlives this sheet. Hence the discard.
+                _ = player.play([item], speed: place.speed)
+                return
+            }
+            self.resuming = PodcastResume(
+                item: item,
+                title: episode.displayTitle,
+                positionSec: place.positionSec,
+                speed: place.speed
+            )
+        }
+    }
+
+    /// Carry on from the saved place (`PodcastsScreen.kt:331`).
+    ///
+    /// The paused room is ``PlayerModel/say``'s to name, as in ``play(_:)``.
+    public func resume() {
+        guard let asked = resuming, let player else { return }
+        resuming = nil
+        _ = player.play([asked.item], resumeSec: asked.positionSec, speed: asked.speed)
+    }
+
+    /// From the top (`PodcastsScreen.kt:337`).
+    ///
+    /// The speed is kept: it is how this person listens, not where they were.
+    public func startOver() {
+        guard let asked = resuming, let player else { return }
+        resuming = nil
+        _ = player.play([asked.item], resumeSec: 0, speed: asked.speed)
+    }
+
+    /// The dialog went away without a choice (`BookUi.kt:167`'s
+    /// `onDismissRequest`): nothing plays.
+    public func cancelResume() { resuming = nil }
+
+    /// The queue entry for an episode.
+    ///
+    /// `PlayItem.fromEpisode` (`PlayItem.kt:68`), which puts the artwork
+    /// through ``PlayerArtwork/podcastPath(_:)`` so a publisher's own URL is
+    /// dropped and the phone never contacts one. The show is passed for the
+    /// artist line and the artwork; nil for an episode reached with no show
+    /// selected, which is not a state this screen has but is one a caller
+    /// could build.
+    static func item(_ episode: PodcastEpisode, show: PodcastShow?) -> PlayerItem {
+        PlayerItem.fromEpisode(
+            id: episode.id,
+            title: episode.displayTitle,
+            show: show?.displayTitle,
+            durationSec: episode.durationSec,
+            artwork: show.flatMap { PodcastArt.path(for: $0) },
+            chapters: episode.chapters.map { PlayerChapter(title: $0.title, startSec: $0.startSec) }
+        )
+    }
 
     // MARK: - the house, and the key every write holds
 
@@ -701,6 +819,10 @@ public final class PodcastsModel {
     /// episode needles **are** cleared, because the sheet they belong to is
     /// closing with them.
     public func serverChanged() {
+        // The open dialog is about the **old** house's episode, and its
+        // `resume` would hand the new house's player an id it has never heard
+        // of. Dropped before anything else, for ``AudiobooksView``'s reason.
+        resuming = nil
         houseEpoch += 1
         debounce?.cancel()
         episodeDebounce?.cancel()

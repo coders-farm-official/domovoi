@@ -12,26 +12,28 @@ import SwiftUI
 /// across a show's title, its author *and* its feed URL; `poll now`, which
 /// makes the house fetch every feed; `subscribe`, by RSS URL or by searching
 /// the directory; and a show's episodes in a sheet, with their own server
-/// search, their durations and chapter counts, and `unsubscribe` behind a
-/// destructive confirm. A pull re-reads the list.
+/// search, their durations and chapter counts, `unsubscribe` behind a
+/// destructive confirm, **`play` on every episode the house has the file
+/// for**, `save to this device`, and the "listening as" chip. A pull re-reads
+/// the list.
+///
+/// ### Playing, saving and the listener arrived in the 2026-11-03 batch
+///
+/// All three were absent, and each for a reason that has been answered:
+///
+/// * **`play`** needed an owner for the engine. There is one now —
+///   ``ShellModel/player``, D49 / Kamron's answer 2 — and this screen hands
+///   it to ``PodcastsModel/player``. Nil on a build with no audio engine —
+///   not on a phone that has not joined a house (``ShellModel/player``,
+///   corrected in review 2) — and nil still draws no control.
+/// * **`save to this device`** needed a transfer that does not hold the file
+///   in memory. ``SaveToDeviceModel`` is that (D47), and the route serves
+///   `download=1` as an attachment.
+/// * **The listener** needed somewhere to be stored. ``PlayerListenerStore``
+///   is that (D11), the selector is in Settings → Phones & browsers, and this
+///   screen draws Android's hint chip.
 ///
 /// ### What is not, and why there is no control for it
-///
-/// **Playing an episode on this phone**, the resume prompt, and the resume
-/// position. The engine landed with `wf/ios-n-player` and it can take an
-/// episode — ``PlayerItem/fromEpisode(id:title:show:durationSec:artwork:chapters:)``
-/// builds the item, and the audio route is open and serves `Range`, so there
-/// is no token problem of the kind ``VideoStream`` has. What is missing is an
-/// **owner**: nothing in this app holds a ``PlayerModel``. It is on neither
-/// ``AppContainer`` nor ``ShellModel``, and putting it there is a change to
-/// shared infrastructure this branch must not make (NIGHT-RULES §2). A
-/// player this screen built for itself would be destroyed the moment
-/// somebody left Podcasts — a play button that stops playing — and five
-/// screens each building their own would be five audio engines in one
-/// process. So the control is not drawn, not drawn disabled, and not
-/// stubbed; ``PodcastStrings/inTheDashboard`` is what the episodes list says
-/// instead, and `overnight/podcasts/DECISIONS.md` carries the shared change
-/// that would fix it.
 ///
 /// **Playing to a room**, which neither app can: a room plays library track
 /// ids through `POST /api/music/play-tracks` and an episode has none
@@ -39,14 +41,6 @@ import SwiftUI
 /// room at all — that exists only through voice, in the core's own MPD path.
 /// Android's own subtitle says "cast to a room" and its screen has no such
 /// control; ``PodcastStrings/subtitle`` drops the claim.
-///
-/// **Saving an episode to the device**: no download manager on iOS, a 64 MiB
-/// ceiling on the one save path there is, and no size on an episode row to
-/// check it against.
-///
-/// **The "listening as *name*" pill**: this app stores no listener person, so
-/// `person_id` is absent from every position query — and absent is a
-/// different key from empty on the server.
 ///
 /// ### The grid is lazy and a card holds nothing
 ///
@@ -63,6 +57,15 @@ struct PodcastsView: View {
 
     @State private var art: PodcastArtStore?
 
+    /// The household, for the "listening as" chip. Android reads the same
+    /// list on this screen (`PodcastsScreen.kt:308`).
+    @State private var listeners: PlayerListenerModel?
+
+    /// The one save in flight, held by the screen and not by a row: a lazy
+    /// card is recycled while it scrolls and a `Task` on one is cancelled
+    /// mid-file (the standing rule).
+    @State private var saves: SaveToDeviceModel?
+
     /// `onAppear`/`onDisappear`, for ``HomeView``'s reason: this screen is
     /// inside the workspace's `NavigationStack`, so a pushed destination
     /// fires `onDisappear` while this view stays in the hierarchy.
@@ -72,6 +75,7 @@ struct PodcastsView: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 16) {
                 header
+                listeningAsChip
                 searchField
                 if let podcasts, let art {
                     grid(podcasts, art)
@@ -102,12 +106,27 @@ struct PodcastsView: View {
             if art == nil {
                 art = PodcastArtStore(in: model.container)
             }
+            if listeners == nil {
+                listeners = PlayerListenerModel(in: model.container, listeners: model.listeners)
+            }
+            if saves == nil {
+                saves = SaveToDeviceModel(in: model.container)
+            }
+            // **The player, asked for on every appearance.** Reading
+            // `model.player` is what builds it — the app's one player is
+            // built on first use and never at launch, because a `.playback`
+            // session activated at launch stops whatever the person was
+            // already listening to. So it is read here, in a `.task`, and
+            // never in a `body`.
+            podcasts?.player = model.player
             podcasts?.start()
+            listeners?.start()
         }
         .onAppear { visible = true }
         .onDisappear {
             visible = false
             podcasts?.stop()
+            listeners?.stop()
         }
         // **The toast is the shell's**, drawn over the whole app, because a
         // toast about a poll that failed must outlive a scroll and does
@@ -123,6 +142,14 @@ struct PodcastsView: View {
             guard visible else { return }
             podcasts?.serverChanged()
             art?.serverChanged()
+            saves?.serverChanged()
+            // The player survives the move — ``ShellModel/refresh()`` has
+            // told it, which is what drops the old house's episode out of its
+            // queue — but it is re-read here so that no model keeps a slot
+            // read on an earlier visit. (Review 2: the case this comment used
+            // to name, a phone introducing itself, does not exist — the
+            // device id is minted locally on first launch.)
+            podcasts?.player = model.player
         }
         // **One `.sheet` over an enum**, which is ``FilesView``'s shape and
         // not a tidiness preference: several `.sheet` modifiers on one view
@@ -132,11 +159,35 @@ struct PodcastsView: View {
             if let podcasts, let art {
                 switch which {
                 case .episodes(let show):
-                    PodcastEpisodesSheet(show: show, podcasts: podcasts, art: art)
+                    PodcastEpisodesSheet(
+                        show: show,
+                        podcasts: podcasts,
+                        art: art,
+                        listeners: listeners,
+                        saves: saves,
+                        onTrouble: { model.showToast($0) }
+                    )
                 case .subscribe:
                     PodcastSubscribeSheet(podcasts: podcasts, art: art)
                 }
             }
+        }
+    }
+
+    /// Android's hint chip, under the header
+    /// (`PodcastsScreen.kt:300-311`): `listening as <name>`, and **nothing at
+    /// all** when no listener has been picked. The selector it hints at is in
+    /// Settings → Phones & browsers, which is also where Android keeps it.
+    @ViewBuilder
+    private var listeningAsChip: some View {
+        if let listeners, listeners.showsChip {
+            Text(listeners.chip)
+                .font(.caption)
+                .foregroundStyle(Color.brandInk)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 10)
+                .frame(minHeight: 28)
+                .background(.quaternary.opacity(0.3), in: Capsule())
         }
     }
 

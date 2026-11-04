@@ -81,6 +81,48 @@ import UIKit
 //
 // ===========================================================================
 
+/// How ``ShellModel`` builds the app's one player.
+///
+/// A closure rather than a line in ``ShellModel/player``, for two reasons that
+/// are both about this project rather than about architecture. The three
+/// AVFoundation parts a real player needs — ``AVQueueAudioEngine``,
+/// ``AVAudioSessionControl``, ``MPNowPlayingPublisher`` — are all behind
+/// `#if os(iOS)`, and this package's tests build for **macOS**, where none of
+/// them exists. And a test of the owner has to be able to count the players
+/// that were built, which it cannot do through a type it can also not
+/// construct.
+///
+/// Returns nil for a platform with no engine; see
+/// ``ShellModel/systemPlayer(_:_:)``.
+public typealias ShellPlayerBuilder = @MainActor (AppContainer, String) -> PlayerModel?
+
+extension ShellModel {
+
+    /// The real player: `AVQueuePlayer` behind an `AVAudioSession` with the
+    /// lock screen wired up — and **nil on any platform but iOS**, which is
+    /// the macOS this package's tests run on.
+    ///
+    /// `spokenAudio: true`: `.timeDomain` time-stretching rather than
+    /// `.spectral`, and never `.varispeed`, which is the one that makes a
+    /// narrator sound like a chipmunk (`PlayerAudioEngine.swift:132-136`).
+    /// One player serves songs and books alike, and a book is the case that
+    /// flag was written for; the engine reads it per `setRate`, so a song
+    /// played at 1.0 is unaffected either way.
+    public static func systemPlayer(_ container: AppContainer, _ deviceID: String) -> PlayerModel? {
+        #if os(iOS)
+        return PlayerModel(
+            client: container.client,
+            deviceID: deviceID,
+            engine: AVQueueAudioEngine(spokenAudio: true),
+            session: AVAudioSessionControl(),
+            nowPlaying: MPNowPlayingPublisher()
+        )
+        #else
+        return nil
+        #endif
+    }
+}
+
 /// A clock the tests can move. Only the sleep timer and the lyrics anchor need
 /// one, and both are wrong in a way nobody notices if they read the wall clock
 /// in a test that takes 40 ms.
@@ -395,8 +437,11 @@ public final class PlayerModel {
     /// players were heard.
     ///
     /// A list longer than ``PlayerQueueWindow/maximum`` is cut to a window
-    /// around `startAt`. Returns the room that was left, so a consumer can say
-    /// "paused office" once ``trouble`` tells it whether the pause landed.
+    /// around `startAt`. **Returns the room that was left**, or nil: a caller
+    /// that got a room back must not say "playing X on this device" itself,
+    /// because the sentence naming the room it paused arrives through ``say``
+    /// once the room has answered — one toast per tap, as Android's
+    /// `playHereAndSay` has it (`MusicScreen.kt:583-586`).
     @discardableResult
     public func play(
         _ items: [PlayerItem],
@@ -407,7 +452,16 @@ public final class PlayerModel {
         guard !items.isEmpty else { return nil }
         let window = PlayerQueueWindow.around(items, index: startAt)
         playHereGen += 1
-        let left = leaveRoom()
+        // The title of what is starting, so the room's pause comes back as
+        // `playing "X" on this device · paused kitchen` and not as a bare
+        // "playing on this device" the person cannot place. The bounds are
+        // checked rather than trusted: ``PlayerQueueWindow/around(_:index:)``
+        // does clamp, and a subscript that trapped here would take the whole
+        // app down for a sentence.
+        let starting = window.items.indices.contains(window.index)
+            ? PlayerStrings.playingNamedOnThisDevice(window.items[window.index].title)
+            : PlayerStrings.playingOnThisDevice
+        let left = leaveRoom(playing: starting)
         tagQueued(window.items, replaced: true)
         queue = window.items
         index = window.index
@@ -1321,7 +1375,8 @@ public final class PlayerModel {
                     self?.refreshNowPlaying()
                 }
             } catch let trouble {
-                self?.trouble = PlayerCastPlanner.failureNote(trouble, room: room)
+                // Said, not just noted: nobody awaited this one (`say`).
+                self?.report(PlayerCastPlanner.failureNote(trouble, room: room))
             }
         }
     }
@@ -1349,8 +1404,14 @@ public final class PlayerModel {
     /// (`PlayerController.kt:679`). Stop watching the room, point the controls
     /// here, and pause the room in the background. Returns the room that was
     /// left.
+    /// - Parameter playing: what started here, for the sentence the pause's
+    ///   answer carries — `playing "Decades" on this device · paused kitchen`.
+    ///   Android builds it from the caller's own title
+    ///   (`MusicScreen.kt:578-586`); the default is the bare
+    ///   ``PlayerStrings/playingOnThisDevice`` for the callers that have no
+    ///   one title to name (a hand-back, where the queue is whatever it was).
     @discardableResult
-    private func leaveRoom() -> String? {
+    private func leaveRoom(playing: String = PlayerStrings.playingOnThisDevice) -> String? {
         guard let room = target.roomID else { return nil }
         stopPoll()
         roomReading = nil
@@ -1361,9 +1422,13 @@ public final class PlayerModel {
                 "/api/music/pause/\(room)", as: PlayerBridgeAnswer.self
             )
             let paused = (answer?.ok != false) && answer != nil
-            self?.trouble = PlayerStrings.playHereNote(
-                playing: PlayerStrings.playingOnThisDevice, room: room, paused: paused
-            )
+            // **Said**, not only noted. This is the half of `playHereAndSay`
+            // that waits for the room: until ``say`` existed this line wrote
+            // the sentence into ``trouble`` and no screen read it, so a room
+            // that went quiet under a play here went quiet with nothing said.
+            self?.report(PlayerStrings.playHereNote(
+                playing: playing, room: room, paused: paused
+            ))
         }
         return room
     }
@@ -1411,4 +1476,36 @@ public final class PlayerModel {
 
     /// Clear the last refusal, once a screen has shown it.
     public func clearTrouble() { trouble = nil }
+
+    // MARK: - the sentences nobody is waiting for
+
+    /// Where a sentence that arrives **after** the caller has gone goes.
+    ///
+    /// ``ShellModel`` sets this to its own toast when it builds the player
+    /// (`ShellModel.player`), because the shell's toast is the one surface
+    /// that outlives the screen the tap was on.
+    ///
+    /// **Only two things speak through it**, and they are the two whose answer
+    /// comes back with nobody holding the question:
+    ///
+    /// 1. ``leaveRoom(playing:)``'s pause. A play here while casting pauses the
+    ///    room in the background, and Android waits for that answer before it
+    ///    says anything — *"so it never says 'paused office' over a pause the
+    ///    core says didn't happen"* (`MusicScreen.kt:567-570`). Until this
+    ///    existed the answer landed in ``trouble`` and nothing read it: a
+    ///    person casting to the kitchen tapped play on an episode, the kitchen
+    ///    went silent, and nothing said why.
+    /// 2. ``roomAction(_:_:)``'s fire-and-forget failure, for the same reason.
+    ///
+    /// Every **other** refusal is returned to its caller as
+    /// ``PlayerCastOutcome/refused(note:)`` and reaches the person through that
+    /// screen's own toast, so routing those here as well would say one thing
+    /// twice.
+    public var say: (@MainActor (String) -> Void)?
+
+    /// Note it **and** say it.
+    private func report(_ note: String) {
+        trouble = note
+        say?(note)
+    }
 }

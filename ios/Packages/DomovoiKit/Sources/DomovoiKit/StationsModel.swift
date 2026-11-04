@@ -59,7 +59,16 @@ public final class StationsModel {
     public static let instantFavoritesDebounceMs: Int64 = 220
 
     private let container: AppContainer
-    private let playback: any StationsPlayback
+    /// The audio engine, or the witness that says there is none.
+    ///
+    /// A `var`, re-pointed by ``use(_:)``: the view builds this model once,
+    /// on the first appearance, and the witness the route slot handed in was
+    /// built from ``ShellModel/player`` at that instant. Every other screen
+    /// this unit touched re-asks on every appearance and on a house move
+    /// (`PhoneDeviceMusicView.swift`'s `.task`, `AudiobooksView.swift`'s
+    /// two), and review 2 of the 2026-11-03 batch found this one the only
+    /// one that did not.
+    private var playback: any StationsPlayback
     private let wait: @Sendable (Int64) async throws -> Void
     private let clock: @Sendable () -> Int64
 
@@ -242,15 +251,14 @@ public final class StationsModel {
         return StationsStrings.subtitle(favorites: total, recent: recentRows.count)
     }
 
-    /// Why no row plays, or nil when they do.
-    ///
-    /// Said once, on the page, where the play controls would be. A build with
-    /// no engine draws no play affordance anywhere
-    /// (``StationsPlayback/canPlay``), and an omission with nothing said
-    /// about it reads as a screen that failed to draw.
-    public var playbackNote: String? {
-        playback.canPlay ? nil : StationsStrings.playingIsNotBuiltYet
-    }
+    // `playbackNote` stood here and is **gone** (review 2 of the 2026-11-03
+    // batch). It said a station would play "once this phone has joined a
+    // domovoi", on the premise that ``ShellModel/player`` is nil until a
+    // phone pairs — and the id is minted locally on first launch
+    // (`DeviceRegistry.swift:391-403`), so the sentence was false about its
+    // cause and drawn in no state a person can reach. The screen's honest
+    // answer to a build with no engine is the one it already gives: no play
+    // affordance anywhere, and a subtitle without the instruction.
 
     /// The submit button's word (`StationSearch.kt:222`).
     public var submitLabel: String {
@@ -853,6 +861,14 @@ public final class StationsModel {
 
     /// The app moved house. Everything this screen holds is the old house's —
     /// including the station ids, which two houses can both have.
+    /// Take the witness again.
+    ///
+    /// Called on every appearance and after a house move, not only at build
+    /// time. Cheap and idempotent: ``StationsPhonePlayback`` is a struct over
+    /// the shell's one player, so re-pointing it starts nothing and the model
+    /// keeps whatever it was doing.
+    public func use(_ playback: any StationsPlayback) { self.playback = playback }
+
     public func serverChanged() {
         houseEpoch += 1
         debounce?.cancel()

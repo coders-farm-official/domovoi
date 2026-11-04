@@ -56,15 +56,25 @@ public struct BookServerKey: Codable, Sendable, Equatable {
 
 /// The phone's place in one book. `BookPositions.kt:30`.
 ///
-/// ### No `personId`, deliberately
+/// ### Still no `personId` on the **phone's** record, and now on purpose
 ///
-/// Android's record carries the listener (`BookPositions.kt:34`) because
-/// `prefs.listenerPersonId` exists there. Nothing on iOS stores a listener,
-/// so a field that was always nil would be a seam with no caller reading as
-/// shipped behaviour — the defect class this track has already paid for. When
-/// a picker lands (DECISIONS §1, and the shared change it asks for) this
-/// record gains the field and the stored blob gains a key; an old blob
-/// decodes either way, because every field past the first three is optional.
+/// Android's record carries the listener (`BookPositions.kt:34`), and as of
+/// D11 iOS does store one (``PlayerListenerStore``) — but it is **not** in
+/// here, and that is a decision rather than an omission.
+///
+/// The phone keeps *one place per book*, which is the owner's decision of
+/// 2026-10-20: a streamed book and a saved copy share it. Keying it by
+/// listener as well would make "where am I in this book" depend on who
+/// Settings last said was listening, so picking a person would lose the place
+/// on the phone. What the listener decides is which **server row** the place
+/// goes to and comes from, and that is where it is sent:
+/// ``ApiBookPositionRemote`` reads it per request, exactly as Android's
+/// `ApiPositionRemote` reads `prefs.listenerPersonId.value` at each call
+/// (`ApiPositionRemote.kt:27`, `:40`, `:60`).
+///
+/// The consequence is written down rather than hidden: a phone whose listener
+/// changes keeps its own place and begins reading and writing a different
+/// server row. `AudiobookListenerTests` is what says so.
 public struct LocalBookPosition: Codable, Sendable, Equatable {
 
     public let bookID: Int64
@@ -378,16 +388,35 @@ public struct ApiBookPositionRemote: BookPositionRemote {
     private let client: DomovoiClient
     private let deviceID: String
 
-    public init?(client: DomovoiClient, deviceID: String?, server: BookServerKey) {
+    /// Who is listening, asked **at each request** rather than captured when
+    /// this was built.
+    ///
+    /// Android's shape, and for its reason: `prefs.listenerPersonId.value` is
+    /// read inside `query()` and inside `put` (`ApiPositionRemote.kt:27`,
+    /// `:40`), so a person picked in Settings takes effect on the next save
+    /// without anything being rebuilt. A captured `String?` would have made
+    /// the picker a control that worked only after a relaunch.
+    private let listener: @Sendable () -> String?
+
+    /// - Parameter listener: ``PlayerListenerStore/personID``, as a closure.
+    ///   Left out, every request is the unidentified listener's slot — which
+    ///   is what a phone that has never opened the picker wants.
+    public init?(
+        client: DomovoiClient,
+        deviceID: String?,
+        server: BookServerKey,
+        listener: @Sendable @escaping () -> String? = { nil }
+    ) {
         guard let deviceID, !ServerCredentials.isBlank(deviceID) else { return nil }
         self.client = client
         self.deviceID = deviceID
         self.server = server
+        self.listener = listener
     }
 
     public func get(_ bookID: Int64) async throws -> ServerBookPosition {
         try await client.get(
-            AudiobookPath.position(bookID, deviceID: deviceID),
+            AudiobookPath.position(bookID, deviceID: deviceID, personID: listener()),
             as: ServerBookPosition.self
         )
     }
@@ -399,14 +428,15 @@ public struct ApiBookPositionRemote: BookPositionRemote {
             body: AudiobookPath.saveBody(
                 deviceID: deviceID,
                 positionSec: positionSec,
-                speed: speed
+                speed: speed,
+                personID: listener()
             )
         )
     }
 
     public func others(_ bookID: Int64) async throws -> [OtherBookPosition] {
         try await client.get(
-            AudiobookPath.positions(bookID, deviceID: deviceID),
+            AudiobookPath.positions(bookID, deviceID: deviceID, personID: listener()),
             as: OtherBookPositions.self
         ).positions
     }
