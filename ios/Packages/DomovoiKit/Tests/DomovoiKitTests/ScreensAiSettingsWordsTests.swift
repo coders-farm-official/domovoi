@@ -54,15 +54,21 @@ final class ScreensAiSettingsWordsTests: XCTestCase {
     /// failure here rather than a row that announces its raw key: `word(for:)`
     /// falls through to the key (`ChatSettingsPanel.kt:69`), which is right
     /// for a key a *newer server* silenced and wrong for one this build ships.
+    ///
+    /// **Asked of the map and not by comparing the two strings**, which is
+    /// what the first draft of this case did and what pkgtest failed it on:
+    /// `KIND_WORDS` really does pair `"handwriting" to "handwriting"`
+    /// (`HeadsUpStore.kt:52-57`), so a word equal to its key is the Kotlin's
+    /// own data and not a missing entry.
     func testNoTwoKindsAnnounceTheSameThing() {
         var said: [String: String] = [:]
         for kind in AiSettingsHeadsUpKinds.kinds {
-            let word = AiSettingsHeadsUpKinds.word(for: kind)
-            XCTAssertNotEqual(
-                kind, word,
+            XCTAssertNotNil(
+                AiSettingsHeadsUpKinds.words[kind],
                 "this build ships `\(kind)` with no word, so its button would "
                     + "announce the raw key"
             )
+            let word = AiSettingsHeadsUpKinds.word(for: kind)
             let announcement = AiSettingsStrings.warnAgainAbout(word)
             XCTAssertTrue(
                 announcement.contains(word),
