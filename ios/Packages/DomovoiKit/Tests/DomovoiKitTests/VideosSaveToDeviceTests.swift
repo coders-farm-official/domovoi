@@ -69,6 +69,27 @@ final class VideosSaveToDeviceTests: XCTestCase {
         return VideosModel(in: container, deviceID: deviceID)
     }
 
+    /// **The identity gate's probe, answered.** Every read on a container's
+    /// client goes through it, and a server that does not answer
+    /// `/api/health` with a signed body refuses the request behind it — so a
+    /// case that left this out would assert over a save that never reached a
+    /// socket. `VideosModelTests.House.install()` says the same thing above
+    /// its own `/api/health` arm; this is that one arm, for the three cases
+    /// here that serve one route each.
+    ///
+    /// `nonisolated` because the dispatcher it is called from is `@Sendable`
+    /// and runs on a `URLSession` worker.
+    nonisolated private static func identityAnswer(
+        _ request: URLRequest
+    ) -> StubURLProtocol.Answer? {
+        guard let url = request.url,
+              let parts = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              parts.path == "/api/health"
+        else { return nil }
+        let challenge = (parts.queryItems ?? []).first { $0.name == "challenge" }?.value
+        return .json((try? TestIdentity.real.healthBody(challenge: challenge)) ?? "{}")
+    }
+
     private func settleUntil(
         _ done: @MainActor () -> Bool,
         _ what: String,
@@ -92,7 +113,9 @@ final class VideosSaveToDeviceTests: XCTestCase {
     /// the colon replaced, and what reaches the socket is the stream route
     /// with the attachment flag on it.
     func testAVideoIsAskedForAsAnAttachmentAndNamedSafely() async throws {
-        StubURLProtocol.enqueue(.json("the film's bytes"))
+        StubURLProtocol.dispatch { request in
+            Self.identityAnswer(request) ?? .json("the film's bytes")
+        }
         let model = rig()
         let video = VideoRow(
             libraryID: "core:videos",
@@ -117,8 +140,12 @@ final class VideosSaveToDeviceTests: XCTestCase {
         XCTAssertEqual(name, url.lastPathComponent, "the copy is written under the hardened name")
         XCTAssertEqual("the film's bytes", try String(contentsOf: url, encoding: .utf8))
 
-        let asked = try XCTUnwrap(StubURLProtocol.recorded.first?.url)
-        XCTAssertEqual("/api/videos/stream", asked.path)
+        // **Not `recorded.first`**: the identity probe above goes out first,
+        // and a case written against index 0 would be asserting on
+        // `/api/health`.
+        let asked = try XCTUnwrap(
+            StubURLProtocol.recorded.compactMap(\.url).first { $0.path == "/api/videos/stream" }
+        )
         // `absoluteString` and not `query`: the identity pair is
         // percent-encoded by ``VideoPath/esc(_:)`` and the assertions below
         // are about the encoded form, which is the thing that goes down the
@@ -179,7 +206,11 @@ final class VideosSaveToDeviceTests: XCTestCase {
     /// `testMovingHouseLetsGoOfItsOwnState` asserts the other four and is
     /// another unit's file to extend, so the fifth is here.
     func testAFilmThatLandsAfterTheHouseChangedIsNotHandedOver() async throws {
-        let park = parkRequest(to: "/api/videos/stream", answering: { .json("the old house's film") })
+        let park = parkRequest(
+            to: "/api/videos/stream",
+            answering: { .json("the old house's film") },
+            otherwise: { Self.identityAnswer($0) ?? .json("{}") }
+        )
         let model = rig()
         model.saveToDevice(VideoRow(libraryID: "core:videos", rel: "clips/x.mkv", name: "x.mkv"))
         XCTAssertEqual(.fetching("x.mkv", nil), model.saves.state)
