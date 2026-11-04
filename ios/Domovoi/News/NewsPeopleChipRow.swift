@@ -17,10 +17,23 @@ import SwiftUI
 /// (`NewsScreen.kt:185`). It is the rail's own sentence, kept rather than
 /// dropped with the layout.
 ///
-/// ### The chip's label is one `Text`, and the bubble is drawn over it
+/// ### The chip's label is one `Text`, and there is no longer a bubble
 ///
 /// This is a shape, not a style, and it is what the five `Contrast failed`
-/// this screen carried for four trains were: see ``chip(_:stacked:)``.
+/// this screen carried for four trains were: see ``chip(_:stacked:)``. The
+/// avatar bubble that used to be drawn over the pill is **gone** — Kamron's
+/// answer 39, 2026-11-03.
+///
+/// **It is a divergence from Android, not a port of it**, and the question
+/// Kamron answered said otherwise. `PeopleChipRow` draws
+/// `AvatarBubble(p.name, 20)` inside the chip's own `Row`
+/// (`NewsScreen.kt:139`), and the expanded rail draws
+/// `AvatarBubble(p.name, 32)` (`:185`), so Android has the bubble in both
+/// branches. Answer 39's own wording — "which is Android's shape
+/// (`NewsScreen.kt`)" — was wrong about that, and the answer is still the
+/// spec (BATCH-RULES: his answers win). What follows from the correction is
+/// that answer 39 needs an **Android half** like answers 2 and 24 got, and
+/// it is logged as one in this unit's DECISIONS.md.
 struct NewsPeopleChipRow: View {
 
     let news: NewsModel
@@ -28,16 +41,6 @@ struct NewsPeopleChipRow: View {
     let onPick: (Int64) -> Void
 
     @Environment(\.dynamicTypeSize) private var typeSize
-
-    /// The avatar bubble's box, the same ``ScaledMetric`` ``NewsAvatarBubble``
-    /// declares for itself.
-    ///
-    /// Declared twice because the bubble is drawn **over** the pill rather
-    /// than inside the button's label (``chip(_:stacked:)``), so the words
-    /// have to be inset by it here. A fixed inset under a scaled glyph is the
-    /// bubble sitting on the first letter of the name at AX5, which is the
-    /// same class of bug as a fixed `frame(width:)` on the glyph itself.
-    @ScaledMetric(relativeTo: .body) private var bubbleBox: CGFloat = 28
 
     var body: some View {
         if news.roster.isEmpty {
@@ -65,10 +68,6 @@ struct NewsPeopleChipRow: View {
             .scrollIndicators(.hidden)
         }
     }
-
-    /// The pill's leading pad, the bubble, and the gap after it — what the
-    /// words are inset by, now that the bubble is not a view beside them.
-    private var wordsInset: CGFloat { 12 + bubbleBox + 8 }
 
     /// One person's pill.
     ///
@@ -112,10 +111,31 @@ struct NewsPeopleChipRow: View {
     /// `news-category-…` chips (``NewsCategoryChip``),
     /// ``AssistantPlacePickerView``'s places, Home's `not live · updates every
     /// 30s`, and Alerts' `not now` with an `accessibilityLabel` of its own.
-    /// So the bubble leaves the label and is drawn **over** the pill, where it
-    /// is a decoration: not hit-testable, and hidden from VoiceOver by
-    /// ``NewsAvatarBubble`` itself, which works out here the way it never did
-    /// inside a button's label.
+    /// Round 3 took the bubble out of the label and drew it **over** the pill
+    /// as a hidden decoration, which cleared the five findings.
+    ///
+    /// ### And then the bubble went altogether (answer 39)
+    ///
+    /// Kamron's answer 39, 2026-11-03: `drop the avatar bubble out of the
+    /// News chip`. It was the row's only colour, it carried no information
+    /// that the name beside it did not — the initial *is* the first letter of
+    /// the name — and with the five-hue avatar declined (answer 37) there was
+    /// nothing left for it to say.
+    ///
+    /// **Android keeps its bubble**, so this is an unlabelled divergence no
+    /// longer: `NewsScreen.kt:139` is `AvatarBubble(p.name, 20)` inside the
+    /// chip's `Row`, and `:185` is the rail's `AvatarBubble(p.name, 32)`.
+    /// What is true is the other half — a chip row of plain pills is every
+    /// other pill in **this** app, and it is the shape that audits clean.
+    /// The Android half of answer 39 is logged in DECISIONS.md.
+    ///
+    /// It also removes the last thing between this row and an audit it cannot
+    /// explain: a filled circle inside a capsule was two overlapping fills
+    /// for the auditor to sample, and the whole four-train story above was
+    /// about what that sampling did. Nothing is classified in its place —
+    /// ``newsChipRowIsOneElement`` still pins the one-element shape, and a
+    /// `Contrast failed` anywhere in this row fails
+    /// ``testNews_PassesApplesAccessibilityAudit``.
     ///
     /// The words stay one `Text` in both layouts — at an accessibility size
     /// the `heard …` line is the second half of the same concatenation, the
@@ -128,10 +148,11 @@ struct NewsPeopleChipRow: View {
             words(person, stacked: stacked, picked: picked)
                 .fixedSize(horizontal: false, vertical: true)
                 .multilineTextAlignment(.leading)
-                // Not `.padding(.horizontal, 12)`: the leading side carries
-                // the bubble the overlay draws into it.
-                .padding(.leading, wordsInset)
-                .padding(.trailing, 12)
+                // Even on both sides now that nothing is drawn into the
+                // leading one (answer 39). It was `12 + bubbleBox + 8`, a
+                // `ScaledMetric` inset so the bubble could never land on the
+                // first letter of the name at AX5.
+                .padding(.horizontal, 12)
                 .padding(.vertical, 8)
                 .frame(minHeight: 44)
                 // Explicitly `CGFloat.infinity`, because the `nil` on the other
@@ -174,15 +195,6 @@ struct NewsPeopleChipRow: View {
         .accessibilityLabel(spoken(person, stacked: stacked))
         .accessibilityIdentifier("news-chip-\(person.displayName)")
         .accessibilityAddTraits(picked ? [.isButton, .isSelected] : [.isButton])
-        // **The bubble, outside the button's label.** Last in the chain so
-        // the accessibility modifiers above land on the Button itself, and
-        // `allowsHitTesting(false)` because a filled `Circle` over the left
-        // third of a pill is otherwise a hole in the tap target.
-        .overlay(alignment: .leading) {
-            NewsAvatarBubble(person: person, picked: picked)
-                .padding(.leading, 12)
-                .allowsHitTesting(false)
-        }
     }
 
     /// The chip's words: the name, and under it at an accessibility size the
@@ -214,46 +226,23 @@ struct NewsPeopleChipRow: View {
     }
 }
 
-/// `AvatarBubble` (`ui/components/Kit.kt:140-158`): a circle with the
-/// person's initial in it.
-///
-/// **One brand bubble, not Android's five hue gradients.** The gradients draw
-/// a white initial, which measures about 2:1 on every one of them; the app's
-/// own measured pair is ``Color/brand`` behind ``Color/brandFg`` at 8.49:1.
-/// The five hues carry no information — they are `name.hashCode() % 5` — so
-/// nothing is lost but the colour. DECISIONS.md.
-///
-/// The box is a ``ScaledMetric`` and never a fixed `frame(width:)`: a glyph
-/// box that does not grow with the type size is the clipped-initial bug the
-/// Dynamic Type rule is about. ``NewsPeopleChipRow/bubbleBox`` is the same
-/// metric, declared again because the chip insets its words by it.
-struct NewsAvatarBubble: View {
-
-    let person: NewsPerson
-    let picked: Bool
-
-    @ScaledMetric(relativeTo: .body) private var box: CGFloat = 28
-
-    var body: some View {
-        Circle()
-            .fill(picked ? Color.brandFg.opacity(0.18) : Color.brand)
-            .frame(width: box, height: box)
-            .overlay(
-                Text(person.initial)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(Color.brandFg)
-            )
-            // The name is beside it in words; an initial read out twice is
-            // noise, which is what ``NewsStrings/personChip(_:)`` is for.
-            //
-            // **Inside a button's label this did not take.** Trains S005,
-            // S008, S011, R001 and R002 all have the initial in the tree as a
-            // leaf of the chip `Button` — a hidden view inside a `Button`'s
-            // label is walked anyway, and it was the *second* element in that
-            // label, which is what made SwiftUI hand the name the pill's
-            // frame (``NewsPeopleChipRow/chip(_:stacked:)``). The chip now
-            // draws the bubble as an overlay **outside** its label, where
-            // this line is an ordinary hidden decoration.
-            .accessibilityHidden(true)
-    }
-}
+// ---------------------------------------------------------------------------
+// `NewsAvatarBubble` used to live here — `AvatarBubble`
+// (`ui/components/Kit.kt:140-158`), a circle with the person's initial in it,
+// drawn as one ``Color/brand`` bubble rather than Android's five hue
+// gradients (whose white initial measures about 2:1 on every one of them).
+//
+// **It is gone, and so is its only caller** (Kamron's answers 37 and 39,
+// 2026-11-03): the gradients are declined and the bubble is dropped out of
+// the chip. It is deleted rather than kept for later because a view with no
+// caller reads as shipped behaviour to the next person through this file —
+// the defect class this track has already paid for — and because what it
+// would have to come back as is a decision nobody has made: the brand bubble
+// it was, a measured dark ink on the five hues, or something else. The
+// arithmetic that rules out white-on-gradient is in this comment and in
+// DECISIONS.md, which is where a later round needs it; the twenty lines of
+// view were not carrying any of it.
+//
+// ``NewsPerson/initial`` stays: it is the server's field, ported, and
+// ``NewsPersonView``'s heading is where a future avatar would read it.
+// ---------------------------------------------------------------------------

@@ -1,0 +1,618 @@
+import Foundation
+import XCTest
+@testable import DomovoiKit
+
+/// The lyrics panel's **follow** state machine: the pause a drag makes, the
+/// four-second resume after it, and every path that cancels that resume.
+///
+/// Kamron's answer 35, 2026-11-03: `resume following on the 4-second timer`.
+/// Android pauses on `DragInteraction.Start` and starts a fresh
+/// `delay(FOLLOW_PAUSE_MS)` on `Stop`/`Cancel`
+/// (`LyricsPanel.kt:468-485`, `:118`); none of that is specified anywhere on
+/// that side, because it is a `LaunchedEffect` inside a composable.
+///
+/// **Its own file, and named after this unit**, rather than more cases in
+/// `MusicMoreModelTests`: that file's lyrics section belongs to the player
+/// unit's branch in the same batch, and two branches adding cases to one
+/// `final class` is a merge conflict a train pays for.
+///
+/// ### How a timer that must not fire is tested
+///
+/// Six of these cases are about a resume being **cancelled** — the four this
+/// section was written for (a second drag, the panel going away, a new house,
+/// a new song), the chip, and
+/// ``testAFingerLandingInsideTheFourSecondsCancelsTheArmedResume``, which the
+/// fix-pass review added — and "it did
+/// not happen" is the hardest thing in this file to assert honestly: a
+/// resume still parked and a resume cancelled look identical from outside.
+/// So the parked wait is **releasable**. A cancel case cancels the resume,
+/// then releases the park, then waits real time — and if the cancel had not
+/// taken, the task would wake, find itself uncancelled, and turn following
+/// on. Each one also arranges for `following` to be **false** at that moment,
+/// so the stale resume has something to change.
+///
+/// ### And `following` alone was not enough — ``Rig/resumesThatWoke``
+///
+/// Those four cases watched `following` and nothing else, which is a weaker
+/// measurement than their names claimed. The model checks three things
+/// **after** the sleep that it could not check before it — `Task.isCancelled`,
+/// `onScreen` and `!handDown` (`MusicRoomLyricsModel.swift:324`) — and every
+/// one of those guards blocks a woken stale task whether or not the cancel
+/// ever happened. A review deleted `resume?.cancel()` from
+/// ``MusicRoomLyricsModel/handPaused()`` and all ten cases passed (review 1,
+/// finding 6, SAB1): the behaviour survived on the guard alone, so the brace
+/// was doing the belt's work and nothing here could tell.
+///
+/// What tells them apart is the **wait itself**. A cancelled task's
+/// `Task.sleep` throws, so the sleeper never returns — and the rig now counts
+/// the resume waits that **returned**. A cancel case releases the park and
+/// then asserts that count is still zero, which is false the moment the
+/// cancel is missing, guard or no guard. The positive control is
+/// `testTheDragEndingStartsOneFourSecondResumeThatComesBackByItself`, which
+/// asserts the same counter is **one**: a counter that never increments
+/// proves nothing.
+@MainActor
+final class ScreensLyricsFollowTests: XCTestCase {
+
+    private let server = "http://10.0.0.77:6369"
+
+    override func setUp() {
+        super.setUp()
+        StubURLProtocol.reset()
+    }
+
+    override func tearDown() {
+        StubURLProtocol.reset()
+        super.tearDown()
+    }
+
+    // MARK: - the rig
+
+    private struct Rig {
+        let model: MusicRoomLyricsModel
+
+        /// Every duration the model asked to wait for that was the resume's,
+        /// in order. The republish loop's 100 ms waits are not in here.
+        let resumeWaits: Shared<[Int64]>
+
+        /// Lets a parked resume finish, so a cancel case can prove the task
+        /// is gone rather than merely asleep.
+        let releaseResume: Shared<Bool>
+
+        /// Set when a parked resume ran its bound out — neither released nor
+        /// cancelled. Asserted false, for `ParkedRequest/ranOut`'s reason: a
+        /// wait that outlasts its bound turns the case it serves into one
+        /// that cannot fail.
+        let ranOut: Shared<Bool>
+
+        /// How many resume waits **returned** rather than throwing.
+        ///
+        /// This is the one thing in the rig that can tell a cancelled resume
+        /// from a sleeping one, and it is why the four cancel cases are now
+        /// about the cancel rather than about the guard behind it (this
+        /// file's header). A cancelled task's `Task.sleep` throws, so a
+        /// cancelled wait never reaches the increment; a wait that was merely
+        /// parked and then released does.
+        ///
+        /// Counted inside the sleeper and not in the model, so the model
+        /// carries no test hook: the sleeper is injected for exactly this.
+        let resumesThatWoke: Shared<Int>
+
+        /// Let a parked resume finish, if it is still alive to finish.
+        ///
+        /// Named rather than `releaseResume.set(true)` at six call sites,
+        /// because what it means at each of them is "now prove the task is
+        /// gone".
+        func letTheResumeFinish() {
+            releaseResume.set(true)
+        }
+    }
+
+    /// - Parameter parkTheResume: `true` holds the resume's wait open until
+    ///   it is cancelled or ``Rig/releaseResume`` is set, which is how a case
+    ///   proves a cancel; `false` lets it return at once, which is how a case
+    ///   proves the resume fires.
+    private func rig(parkTheResume: Bool) -> Rig {
+        // The room read answers nothing. This file is about the follow flag,
+        // and a panel with no document still pauses and resumes — the view's
+        // `onScrollPhaseChange` does not ask what is in the list.
+        StubURLProtocol.dispatch { _ in .json(#"{"detail":"no lyrics here"}"#, status: 404) }
+        let store = InMemoryShellStore(serverURL: server, token: "household-abc")
+        store.trustServer(server, identity: TestIdentity.real.pin)
+        let container = AppContainer(
+            store: store,
+            vault: TokenVault(items: InMemoryKeychain()),
+            lock: HouseholdLock(),
+            clock: { 0 },
+            configuration: StubURLProtocol.session(timeout: 1)
+        )
+        let waits = Shared<[Int64]>([])
+        let release = Shared<Bool>(false)
+        let ranOut = Shared<Bool>(false)
+        let woke = Shared<Int>(0)
+        let model = MusicRoomLyricsModel(
+            room: "living room",
+            store: MusicLyricsStore(container: container, clock: { 0 }),
+            nudges: MusicLyricsNudgeStore(place: SavedStateBox()),
+            clock: { 0 },
+            wait: { ms in
+                guard ms == MusicRoomLyricsModel.followResumeMs else {
+                    // The republish loop. Parked for the test's life: this
+                    // file asserts nothing about the position.
+                    try await Task.sleep(for: .seconds(3_600))
+                    return
+                }
+                waits.mutate { $0.append(ms) }
+                guard parkTheResume else {
+                    try Task.checkCancellation()
+                    woke.mutate { $0 += 1 }
+                    return
+                }
+                // **Bounded**, like every wait in this suite, and `Task.sleep`
+                // is what throws when the task is cancelled — the mechanism
+                // these cases are about. A throw leaves ``Rig/resumesThatWoke``
+                // alone, which is what makes that counter a cancel detector:
+                // every path out of here that is *not* a cancellation
+                // increments it.
+                //
+                // `Task.checkCancellation()` before the increment, and it is
+                // not belt and braces: a cancel case cancels the task and
+                // releases the park in the same main-actor turn, so a 2 ms
+                // sleep that happened to return in that same instant would
+                // read `release` as true and report a wake for a task that
+                // had already been cancelled. The window is tiny and the
+                // flake it would cause is the worst kind — a case that fails
+                // once a month on the mechanism it is about.
+                for _ in 0..<500 {
+                    if release.current {
+                        try Task.checkCancellation()
+                        woke.mutate { $0 += 1 }
+                        return
+                    }
+                    try await Task.sleep(for: .milliseconds(2))
+                }
+                ranOut.set(true)
+            }
+        )
+        return Rig(
+            model: model, resumeWaits: waits, releaseResume: release,
+            ranOut: ranOut, resumesThatWoke: woke
+        )
+    }
+
+    /// Real time, so a task woken from a 2 ms sleep has certainly run.
+    ///
+    /// `Task.yield()` alone is not enough here: two thousand yields can
+    /// finish in well under a millisecond, so a released park would not have
+    /// woken yet and "it did not fire" would be a race the test won rather
+    /// than a measurement.
+    private func letTheResumeWakeIfItLives() async {
+        for _ in 0..<50 {
+            try? await Task.sleep(for: .milliseconds(2))
+            await Task.yield()
+        }
+    }
+
+    private func settleUntil(
+        _ done: @MainActor () -> Bool,
+        _ what: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async {
+        for _ in 0..<settleYieldLimit {
+            if done() { return }
+            await Task.yield()
+        }
+        XCTFail("\(what) never settled in \(settleYieldLimit) yields", file: file, line: line)
+    }
+
+    // MARK: - the number itself
+
+    /// `FOLLOW_PAUSE_MS = 4_000L` (`LyricsPanel.kt:118`), to the millisecond.
+    ///
+    /// Pinned on its own because every other case in this file asks the model
+    /// what its own constant is, and would pass just as happily with a
+    /// four-minute timer.
+    func testTheResumeIsAndroidsFourSeconds() {
+        XCTAssertEqual(4_000, MusicRoomLyricsModel.followResumeMs)
+    }
+
+    // MARK: - the drag
+
+    /// A finger on the list pauses following and starts **no** timer.
+    ///
+    /// This is the half that keeps the panel from being yanked out from under
+    /// someone: Android starts its `delay` on `Stop`, not on `Start`
+    /// (`LyricsPanel.kt:476-483`), so a drag held for a minute is a minute
+    /// with nothing counting down.
+    func testADragPausesFollowingAndStartsNothingWhileTheFingerIsDown() async {
+        let rig = rig(parkTheResume: true)
+        rig.model.start()
+        defer { rig.model.stop() }
+        XCTAssertTrue(rig.model.following, "a panel follows until something stops it")
+
+        rig.model.handPaused()
+        XCTAssertFalse(rig.model.following)
+        XCTAssertEqual([], rig.resumeWaits.current, "a pause must not start the resume")
+
+        // A second `.interacting` inside one gesture, which is what
+        // `onScrollPhaseChange` can deliver: still nothing counting down.
+        rig.model.handPaused()
+        await letTheResumeWakeIfItLives()
+        XCTAssertFalse(rig.model.following, "the list came back with a finger still on it")
+        XCTAssertEqual([], rig.resumeWaits.current)
+    }
+
+    /// The drag ending starts exactly one four-second resume, and following
+    /// comes back by itself when it fires.
+    ///
+    /// **Also the positive control for ``Rig/resumesThatWoke``.** Every
+    /// cancel case below asserts that counter is zero, and a counter that is
+    /// always zero would make all four of them vacuous — which is the shape
+    /// the four of them were in before it existed (this file's header).
+    func testTheDragEndingStartsOneFourSecondResumeThatComesBackByItself() async {
+        let rig = rig(parkTheResume: false)
+        rig.model.start()
+        defer { rig.model.stop() }
+
+        rig.model.handPaused()
+        rig.model.handReleased()
+        await settleUntil({ rig.model.following }, "the four-second resume")
+        XCTAssertEqual(
+            [MusicRoomLyricsModel.followResumeMs], rig.resumeWaits.current,
+            "one resume, and it waited the four seconds Android waits"
+        )
+        XCTAssertEqual(
+            1, rig.resumesThatWoke.current,
+            "a resume that fired must have woken, or the counter the cancel "
+                + "cases rest on cannot move at all"
+        )
+    }
+
+    /// **A phase change with no drag behind it starts nothing.**
+    ///
+    /// The panel scrolls itself (`scrollTo` on the active line), and that
+    /// produces `.animating` and then `.idle` — which the view reports as a
+    /// release, because `.interacting` is the only phase that means a finger.
+    /// A model that took every such phase for a drag ending would start a
+    /// timer on its own scrolling, and then turn following on from a scroll
+    /// that happened because following was already on.
+    func testAReleaseWithNoDragBeforeItStartsNothing() async {
+        let rig = rig(parkTheResume: false)
+        rig.model.start()
+        defer { rig.model.stop() }
+
+        rig.model.handReleased()
+        rig.model.handReleased()
+        await letTheResumeWakeIfItLives()
+        XCTAssertEqual([], rig.resumeWaits.current, "the panel's own scroll started a timer")
+        XCTAssertTrue(rig.model.following, "and it was on the whole time")
+
+        // And after a real drag has been served, the trailing phases of one
+        // flick — `.decelerating`, then `.idle` — do not start a second one.
+        rig.model.handPaused()
+        rig.model.handReleased()
+        rig.model.handReleased()
+        await settleUntil({ rig.model.following }, "the resume")
+        XCTAssertEqual(
+            1, rig.resumeWaits.current.count,
+            "one flick is one resume, however many phases it reports"
+        )
+    }
+
+    // MARK: - everything that cancels it
+
+    /// A finger back down inside the four seconds cancels the resume, so the
+    /// list is not pulled away mid-drag — `resume?.cancel()` on
+    /// `DragInteraction.Start` (`LyricsPanel.kt:473`).
+    func testAFingerBackDownInsideTheFourSecondsCancelsTheResume() async {
+        let rig = rig(parkTheResume: true)
+        rig.model.start()
+        defer { rig.model.stop() }
+
+        rig.model.handPaused()
+        rig.model.handReleased()
+        await settleUntil({ !rig.resumeWaits.current.isEmpty }, "the resume starting")
+
+        // The finger is back down, and following is off again. Releasing
+        // the park now is what tells a cancelled resume from a sleeping one —
+        // **but only together with the counter**: `following` staying false
+        // is also what the post-sleep `!handDown` guard produces, so on its
+        // own this assertion passes against a `handPaused()` that cancels
+        // nothing (review 1, SAB1).
+        rig.model.handPaused()
+        rig.letTheResumeFinish()
+        await letTheResumeWakeIfItLives()
+        XCTAssertFalse(
+            rig.model.following,
+            "the first drag's resume fired while a second finger was on the list"
+        )
+        XCTAssertEqual(
+            0, rig.resumesThatWoke.current,
+            "the first drag's resume was released and woke, so `handPaused()` "
+                + "never cancelled it — only the post-sleep guard stopped it"
+        )
+        XCTAssertFalse(rig.ranOut.current, "the parked resume ran its bound out")
+
+        // The second drag gets its own resume when it ends: cancelling one is
+        // not switching the feature off.
+        rig.model.handReleased()
+        await settleUntil({ rig.resumeWaits.current.count == 2 }, "the second resume")
+    }
+
+    /// The panel going away takes the resume with it: a `Task` the model owns
+    /// is cancelled in ``MusicRoomLyricsModel/stop()`` with the other two.
+    func testThePanelGoingAwayCancelsThePendingResume() async {
+        let rig = rig(parkTheResume: true)
+        rig.model.start()
+        rig.model.handPaused()
+        rig.model.handReleased()
+        await settleUntil({ !rig.resumeWaits.current.isEmpty }, "the resume starting")
+
+        rig.model.stop()
+        rig.letTheResumeFinish()
+        await letTheResumeWakeIfItLives()
+        XCTAssertFalse(rig.model.following, "a panel that is gone published into itself")
+        XCTAssertEqual(
+            0, rig.resumesThatWoke.current,
+            "`stop()` left the resume asleep instead of cancelling it; only the "
+                + "post-sleep `onScreen` guard stopped it publishing"
+        )
+        XCTAssertFalse(rig.ranOut.current)
+    }
+
+    /// Moving house cancels it: the drag that paused following was on the old
+    /// house's words.
+    func testMovingHouseCancelsThePendingResume() async {
+        let rig = rig(parkTheResume: true)
+        rig.model.start()
+        defer { rig.model.stop() }
+        rig.model.handPaused()
+        rig.model.handReleased()
+        await settleUntil({ !rig.resumeWaits.current.isEmpty }, "the resume starting")
+
+        rig.model.serverChanged()
+        XCTAssertTrue(rig.model.following, "a new house's words follow from the top")
+        // Pause again, so the stale resume has something to change, then let
+        // it wake. The counter is what says `serverChanged()` did the
+        // cancelling — the pause above also arms the `!handDown` guard, and
+        // that guard alone would keep `following` false.
+        rig.model.handPaused()
+        rig.letTheResumeFinish()
+        await letTheResumeWakeIfItLives()
+        XCTAssertFalse(
+            rig.model.following,
+            "the old house's resume was still running and turned following on"
+        )
+        XCTAssertEqual(
+            0, rig.resumesThatWoke.current,
+            "`serverChanged()` did not cancel the old house's resume"
+        )
+        XCTAssertFalse(rig.ranOut.current)
+    }
+
+    /// A new song cancels it, for the same reason and by the same two lines.
+    func testANewSongCancelsThePendingResume() async {
+        let rig = rig(parkTheResume: true)
+        rig.model.start()
+        defer { rig.model.stop() }
+        rig.model.handPaused()
+        rig.model.handReleased()
+        await settleUntil({ !rig.resumeWaits.current.isEmpty }, "the resume starting")
+
+        rig.model.offer(trackID: 99)
+        XCTAssertTrue(rig.model.following, "a new song's words follow from the top")
+        rig.model.handPaused()
+        rig.letTheResumeFinish()
+        await letTheResumeWakeIfItLives()
+        XCTAssertFalse(rig.model.following, "the old song's resume was still running")
+        XCTAssertEqual(
+            0, rig.resumesThatWoke.current,
+            "`offer(trackID:)` did not cancel the old song's resume"
+        )
+        XCTAssertFalse(rig.ranOut.current)
+    }
+
+    /// **The chip is kept** (Android ships it too, `:604`), it works at once,
+    /// and it cancels the timer rather than racing it.
+    func testTheFollowChipComesBackAtOnceAndCancelsTheTimer() async {
+        let rig = rig(parkTheResume: true)
+        rig.model.start()
+        defer { rig.model.stop() }
+
+        rig.model.handPaused()
+        rig.model.handReleased()
+        await settleUntil({ !rig.resumeWaits.current.isEmpty }, "the resume starting")
+
+        rig.model.follow()
+        XCTAssertTrue(rig.model.following, "the chip waits for nothing")
+
+        // A fresh drag right after the chip. The resume the chip cancelled
+        // must not come back and undo it.
+        rig.model.handPaused()
+        rig.letTheResumeFinish()
+        await letTheResumeWakeIfItLives()
+        XCTAssertFalse(
+            rig.model.following,
+            "the resume the chip cancelled fired anyway, on top of a new drag"
+        )
+        XCTAssertEqual(
+            1, rig.resumeWaits.current.count, "the chip started a resume of its own"
+        )
+        XCTAssertEqual(
+            0, rig.resumesThatWoke.current,
+            "``MusicRoomLyricsModel/follow()`` left the timer asleep rather than "
+                + "cancelling it, so the chip and the timer are racing"
+        )
+        XCTAssertFalse(rig.ranOut.current)
+    }
+
+    /// The old name still pauses, so a caller written against it does not
+    /// quietly lose the pause.
+    func testScrolledByHandIsStillThePause() {
+        let rig = rig(parkTheResume: true)
+        rig.model.start()
+        defer { rig.model.stop() }
+        rig.model.scrolledByHand()
+        XCTAssertFalse(rig.model.following)
+        XCTAssertEqual([], rig.resumeWaits.current)
+    }
+
+    // MARK: - what each scroll phase means
+
+    /// ``MusicRoomLyricsModel/hand(_:)`` maps a moving finger to the pause
+    /// and a settled list to the release.
+    ///
+    /// The mapping is in the model rather than at the `onScrollPhaseChange`
+    /// call site for exactly this: round 2 wrote it in the view, where
+    /// nothing in this file could reach it, and it was wrong
+    /// (``testAFingerRestingOnTheListArmsNothing``).
+    func testTheMovingAndSettledPhasesArePauseAndRelease() async {
+        let rig = rig(parkTheResume: false)
+        rig.model.start()
+        defer { rig.model.stop() }
+
+        rig.model.hand(.moving)
+        XCTAssertFalse(rig.model.following, "`.interacting` did not pause following")
+        XCTAssertEqual([], rig.resumeWaits.current, "a finger on the list started a timer")
+
+        rig.model.hand(.settled)
+        await settleUntil({ rig.model.following }, "the resume after a settled list")
+        XCTAssertEqual(
+            [MusicRoomLyricsModel.followResumeMs], rig.resumeWaits.current,
+            "the list settling started no four-second resume"
+        )
+        XCTAssertEqual(1, rig.resumesThatWoke.current)
+    }
+
+    /// **A finger resting on the list arms nothing** — `ScrollPhase.tracking`
+    /// is a finger down that has not moved the list.
+    ///
+    /// This is review 2's finding 3, and it is the one case in this file that
+    /// would have been red before it. Round 2's view read
+    /// `phase == .interacting ? handPaused() : handReleased()`, so `.tracking`
+    /// — which a real gesture reports *between* `.interacting` runs, and
+    /// before the first one — went down the release branch and armed the
+    /// four-second resume with a finger still on the glass. The model's
+    /// post-sleep `!handDown` guard cannot catch it: `handReleased()` is the
+    /// call that clears `handDown`, so by the time the sleep returns the
+    /// guard sees an empty list and lets the resume through.
+    ///
+    /// Measured on the counter and not only on `following`, for the reason
+    /// this file's header gives: a resume that is merely parked and a resume
+    /// that was never started look the same from outside, and
+    /// ``Rig/resumesThatWoke`` is what tells them apart. `parkTheResume:
+    /// false` here, so a resume that *was* armed returns at once and the
+    /// counter moves — there is no window in which this case wins a race.
+    func testAFingerRestingOnTheListArmsNothing() async {
+        let rig = rig(parkTheResume: false)
+        rig.model.start()
+        defer { rig.model.stop() }
+
+        // The whole of a drag that has not been let go of: the finger lands,
+        // moves the list, and then holds still on it.
+        rig.model.hand(.resting)
+        rig.model.hand(.moving)
+        rig.model.hand(.resting)
+        await letTheResumeWakeIfItLives()
+
+        XCTAssertFalse(
+            rig.model.following,
+            "following came back with a finger still on the list"
+        )
+        XCTAssertEqual(
+            [], rig.resumeWaits.current,
+            "`.tracking` armed the four-second resume under a finger that is "
+                + "still down — the release branch it must not take"
+        )
+        XCTAssertEqual(0, rig.resumesThatWoke.current)
+
+        // And the gesture ending still works: a rest arms nothing, but it is
+        // not a state the panel can get stuck in.
+        rig.model.hand(.settled)
+        await settleUntil({ rig.model.following }, "the resume after the finger lifts")
+        XCTAssertEqual([MusicRoomLyricsModel.followResumeMs], rig.resumeWaits.current)
+    }
+
+    /// **A finger landing inside the four seconds cancels the resume the
+    /// release armed** — and this is the half the first fix for review 2's
+    /// finding 3 did not have.
+    ///
+    /// That fix mapped `ScrollPhase.tracking` to *nothing at all*, which is
+    /// the mirror image of round 2's defect rather than the end of it. The
+    /// sequence is one real gesture followed by another: a drag, the finger
+    /// lifting (which arms the four seconds), and the finger coming back
+    /// down a second later without having moved the list yet. With
+    /// `.resting` inert, that landing neither cancelled the pending resume
+    /// nor set `handDown`, so the post-sleep `!handDown` guard saw an empty
+    /// list and let it through — the panel scrolled itself out from under a
+    /// finger that was on the glass, which is exactly what
+    /// `MusicRoomLyricsModel`'s own doc comment said could not happen.
+    /// ``MusicRoomLyricsModel/handRested()`` is what closes it.
+    ///
+    /// Three measurements, because the first two are each satisfied by the
+    /// wrong thing: `following` staying false is also what a guard produces,
+    /// and ``Rig/resumesThatWoke`` staying zero is also what a resume that
+    /// was never armed produces — so the case waits for the resume to be
+    /// armed first, and `parkTheResume: true` holds it open until the finger
+    /// has landed.
+    func testAFingerLandingInsideTheFourSecondsCancelsTheArmedResume() async {
+        let rig = rig(parkTheResume: true)
+        rig.model.start()
+        defer { rig.model.stop() }
+
+        // A drag, and then the finger lifts: one resume, counting down.
+        rig.model.hand(.moving)
+        XCTAssertFalse(rig.model.following, "the drag did not pause following")
+        rig.model.hand(.settled)
+        await settleUntil(
+            { !rig.resumeWaits.current.isEmpty }, "the resume the release armed"
+        )
+
+        // One second into the four, the finger is back on the list and has
+        // not moved it. Releasing the park is what tells a cancelled resume
+        // from a sleeping one.
+        rig.model.hand(.resting)
+        rig.letTheResumeFinish()
+        await letTheResumeWakeIfItLives()
+
+        XCTAssertFalse(
+            rig.model.following,
+            "the resume woke with a finger resting on the list and pulled it back"
+        )
+        XCTAssertEqual(
+            0, rig.resumesThatWoke.current,
+            "`.resting` left the armed resume asleep rather than cancelling it, "
+                + "so it is only the post-sleep `!handDown` guard standing "
+                + "between a finger on the glass and the panel moving — and "
+                + "`.resting` is the call that has to set `handDown` for that "
+                + "guard to read anything at all"
+        )
+        XCTAssertFalse(rig.ranOut.current, "the parked resume ran its bound out")
+
+        // And the finger it recorded is why the gesture can still end: the
+        // release that follows the rest arms a fresh four seconds rather
+        // than falling through `handReleased()`'s `guard handDown`.
+        rig.model.hand(.settled)
+        await settleUntil({ rig.resumeWaits.current.count == 2 }, "the second resume")
+        await settleUntil({ rig.model.following }, "following after the finger lifted")
+    }
+
+    /// And a rest on its own — a tap that never became a drag — neither
+    /// pauses following nor starts anything.
+    ///
+    /// `.tracking` with no `.interacting` after it is what a tap on the
+    /// lyrics list reports, and a tap is not a scroll: Android pauses on
+    /// `DragInteraction.Start` and a tap raises none.
+    func testARestWithNoDragLeavesFollowingAlone() async {
+        let rig = rig(parkTheResume: false)
+        rig.model.start()
+        defer { rig.model.stop() }
+
+        rig.model.hand(.resting)
+        await letTheResumeWakeIfItLives()
+        XCTAssertTrue(rig.model.following, "a tap on the list turned following off")
+        XCTAssertEqual([], rig.resumeWaits.current)
+        XCTAssertEqual(0, rig.resumesThatWoke.current)
+    }
+}

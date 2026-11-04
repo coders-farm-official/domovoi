@@ -24,16 +24,30 @@ import SwiftUI
 /// ``MusicLyricsResult/failed`` carries no message, and nothing here builds
 /// one — ``MusicMoreStrings/lyricsFailed`` is a fixed sentence.
 ///
+/// ### The panel comes back to the song by itself
+///
+/// A drag pauses following and it resumes four seconds after the drag **ends**
+/// — Android's `FOLLOW_PAUSE_MS` (`LyricsPanel.kt:468-485`, `:118`), Kamron's
+/// answer 35. This view only **reports the phase** (`.onScrollPhaseChange`,
+/// below); the timer is ``MusicRoomLyricsModel/handReleased()``'s, in a model
+/// that outlives this `ScrollView`.
+///
+/// It was left out for one round on the argument that SwiftUI has no
+/// drag-interaction stream and a timer started from a scroll phase would
+/// guess at the gesture — and that argument stayed in this header, in the
+/// same commit that built the feature 160 lines below it (review 1,
+/// finding 4). What answers it is that `.interacting` is reported for a
+/// finger and for nothing else, so a release that follows no pause starts
+/// nothing: the model refuses it, and `ScreensLyricsFollowTests`'
+/// `testAReleaseWithNoDragBeforeItStartsNothing` is the measurement. The
+/// `follow` chip stays as well — Android ships it too — and is the immediate
+/// way back.
+///
 /// ### What is not, and why there is no control for it
 ///
 /// * **A tap on a line to seek.** Rooms cannot seek — there is no route, and
 ///   Android's tap is local-and-seekable only (`LyricsPanel.kt:461`). The
 ///   lines here are text, not buttons.
-/// * **The 4-second automatic resume after a drag** (`LyricsPanel.kt:468`).
-///   SwiftUI has no drag-interaction stream for a `ScrollView`; a timer
-///   started from a scroll phase guesses at the gesture and yanks the list
-///   out from under a finger when it guesses wrong. The `follow` chip —
-///   which Android also ships — is the way back (DECISIONS).
 /// * **Anything that fetches or re-fetches lyrics.** The lyrics router
 ///   writes nothing at all (`lyrics.py:26`), so a "look again" button would
 ///   have no route behind it. `retry` exists for a failed **read** only.
@@ -183,12 +197,44 @@ struct MusicLyricsPanelView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .frame(maxHeight: Self.minHeight * 2)
-            // A scroll by hand turns following off; the chip turns it back
-            // on. `onScrollPhaseChange` is only read for the person's own
-            // gesture — `.interacting` — because the programmatic scroll
-            // below would otherwise switch itself off.
+            // A drag turns following off; it comes back four seconds after
+            // the drag ends, or at once from the chip (answer 35).
+            //
+            // **The view reports the phase and owns nothing.** The timer is
+            // ``MusicRoomLyricsModel/handReleased()``'s, reached through
+            // ``MusicRoomLyricsModel/hand(_:)``, in a model that outlives
+            // this `ScrollView`, because a `Task` started here dies with the
+            // panel and a lazy row never holds one (NIGHT-RULES §3).
+            //
+            // **Three phases, not two.** `.interacting` is a finger moving
+            // the list (Android's `DragInteraction.Start`,
+            // `LyricsPanel.kt:472`), and `.idle`, `.decelerating` after a
+            // flick and `.animating` from the panel's own `scrollTo` below
+            // are its `Stop`. `.tracking` is **neither**: a finger down that
+            // has not moved the list yet.
+            //
+            // Round 2 wrote this as `.interacting` against everything else,
+            // which sent `.tracking` down the release branch and armed the
+            // four-second resume with a finger still on the glass — and the
+            // model's post-sleep `!handDown` guard cannot catch that,
+            // because the release is the call that clears `handDown`
+            // (review 2, finding 3). Nor is `.tracking` inert: the first fix
+            // for that finding made it do nothing at all, and then a finger
+            // landing inside the four seconds cancelled nothing and set
+            // nothing, so the resume fired under it (fix-pass review,
+            // must 1). ``MusicRoomLyricsModel/handRested()`` is the third
+            // branch that mapping needs. All of it is
+            // ``MusicLyricsHandPhase``'s now, in the model, where
+            // `ScreensLyricsFollowTests` can hold it; what is left here is
+            // the one translation only a view can do.
             .onScrollPhaseChange { _, phase in
-                if phase == .interacting { lyrics.scrolledByHand() }
+                if phase == .interacting {
+                    lyrics.hand(.moving)
+                } else if phase == .tracking {
+                    lyrics.hand(.resting)
+                } else {
+                    lyrics.hand(.settled)
+                }
             }
             .onChange(of: lyrics.activeIndex) { _, now in
                 guard lyrics.following, now >= 0 else { return }

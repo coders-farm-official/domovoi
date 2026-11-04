@@ -14,15 +14,49 @@ import SwiftUI
 ///
 /// ### What is here
 ///
-/// Whether the engine is installed, running, or neither; a prompt and a
-/// picker over the models this house actually has, and one `generate`; a lane
-/// of what is being made right now, with its progress and a cancel; and the
-/// history, each generation with its first three pictures, the prompt and the
-/// settings it was made with. Tapping a picture opens it, and the share sheet
-/// is the way out to Files, Photos or AirDrop. A generation can be deleted,
-/// after being asked.
+/// Whether the engine is installed, running, or neither; a lane of what is
+/// being made right now, with its progress; and the history, each generation
+/// with its first three pictures, the prompt and the settings it was made
+/// with. Tapping a picture opens it, and the share sheet is the way out to
+/// Files, Photos or AirDrop.
+///
+/// **It is a read-only screen from a phone**, and the next section is why.
 ///
 /// ### What is not, and why there is no control for it
+///
+/// **Generate, the lane's cancel, and the history delete** — the plugin's
+/// three mutating routes. They were drawn for one round and are gone
+/// (2026-11-03).
+///
+/// All three are `dependencies=ADMIN_ONLY` on the server
+/// (`domovoi-plugin-imagegen/domovoi_plugin_imagegen/web.py:149`, applied at
+/// `:360` generate, `:339` cancel, `:651` delete history), which is
+/// `Depends(admin_required)` (`domovoi/webkit.py:363`) and classifies through
+/// `check_admin_request` (`domovoi/admin_auth.py:1245-1274`) — a Bearer
+/// session and the dashboard's cookie, and **never** `X-Device-Token`. This
+/// app holds no admin credential at all (`DeviceToken.swift:15`;
+/// `AudiobookModels.swift:444` records the same thing for the audiobook
+/// delete), so on any house whose admin password exists the three answered
+/// **401 `admin session required`**, every time, from every phone. The
+/// plugin's own module docstring states that posture (`web.py:15-21`) and
+/// every shipped version from 1.0.1 on carries it.
+///
+/// So: a control that cannot do what it says is not drawn (NIGHT-RULES §3),
+/// and Kamron settled it twice in the same answer set — answer 5 (hide
+/// Android's room-to-room `start`, which 401s from a phone the same way) and
+/// answer 41, "admin-only things stay off both phones". The four reads
+/// (`/models`, `/jobs`, `/history`, `/file/{name}`) are open and are the
+/// whole screen.
+///
+/// The plumbing behind the three is **kept and still tested** —
+/// ``ImagesModel/generate()``, ``ImagesModel/cancel(_:)``,
+/// ``ImagesModel/confirmDelete()`` and their three paths. Giving the plugin's
+/// three routes the household tier (`enforce_route_tier`,
+/// `domovoi/webkit.py:333-360`) is a change in a repository this batch must
+/// not edit, and it is the one line that would make them work from both
+/// phones; it is logged under "Needs a shared change" in
+/// `design-notes/ios/batch-2026-11-03/screens/DECISIONS.md`. The day it
+/// lands, this screen draws them again and the model is already there.
 ///
 /// **The engine itself** — installing it, starting it, stopping it,
 /// downloading a model. Android has no control for any of that either: the
@@ -40,9 +74,8 @@ import SwiftUI
 ///
 /// **A fourth picture in a generation.** Android draws three
 /// (`ImagesScreen.kt:398`) and so does this. A `+1 more` affordance would
-/// open nothing, which is the control this app is built not to draw; the
-/// delete confirmation still counts every image, because that is what is
-/// being deleted. DECISIONS.
+/// open nothing, which is the control this app is built not to draw; the card
+/// says `4 images, showing 3` instead (Kamron's answer 27). DECISIONS.
 ///
 /// **Re-running a past generation.** No Android control, no route.
 ///
@@ -54,11 +87,11 @@ import SwiftUI
 ///
 /// ### The lazy column holds nothing
 ///
-/// Every write — generate, cancel, delete — is ``ImagesModel``'s, never a
-/// row's. A row in a `LazyVStack` is torn down as it scrolls out and would
-/// take its `Task` with it, cancelling the write mid-flight. Android obeys
-/// the same rule for the same control: its cancel runs on `app.scope`
-/// (`ImagesScreen.kt:349`).
+/// Every read is ``ImagesModel``'s and so is every write the model still
+/// carries, never a row's. A row in a `LazyVStack` is torn down as it scrolls
+/// out and would take its `Task` with it, cancelling the work mid-flight.
+/// Android obeys the same rule for the same control: its cancel runs on
+/// `app.scope` (`ImagesScreen.kt:349`).
 struct ImagesView: View {
 
     let model: ShellModel
@@ -73,26 +106,12 @@ struct ImagesView: View {
     /// Which generated picture is open, by its file name.
     @State private var looking: ImagesOpenPicture?
 
+    /// **No `ZStack` and no dialog.** The one dialog this screen had was the
+    /// delete confirmation, and the delete it confirmed is admin-only (this
+    /// type's own note). A confirmation with nothing to confirm is a scrim
+    /// over a screen, so the body is the page.
     var body: some View {
-        ZStack {
-            screen
-                // **Hidden, not merely behind** — ``SettingsPlaceholder``'s
-                // note: `.isModal` stops VoiceOver navigating out of the
-                // card, but everything under the 35% scrim is still rendered
-                // and still reported, which is why Apple's audit keeps
-                // finding `Contrast failed` against text behind a dialog.
-                // Nothing behind a confirmation is content.
-                .accessibilityHidden(images?.confirmingDelete != nil)
-            if let images, let sentence = images.deleteBody {
-                DialogCard {
-                    ImagesDeleteCard(
-                        sentence: sentence,
-                        onCancel: { images.confirmingDelete = nil },
-                        onConfirm: { images.confirmDelete() }
-                    )
-                }
-            }
-        }
+        screen
     }
 
     private var screen: some View {
@@ -103,12 +122,11 @@ struct ImagesView: View {
                 header
                 if let images {
                     engine(images)
-                    // `:215` — the prompt, the picker and the button exist
-                    // only once the engine is installed. Not merely disabled:
-                    // there is nothing to pick and nowhere to send it.
-                    if images.state.data?.installed == true {
-                        ImagesComposer(images: images)
-                    }
+                    // `:215`'s prompt, picker and `generate` are **not
+                    // here**: the route behind them is admin-only and this
+                    // phone has no admin session, so the whole composer is
+                    // out rather than drawn and dead (this type's own note,
+                    // Kamron's answer 41).
                     lane(images)
                     history(images)
                 }
@@ -230,9 +248,13 @@ struct ImagesView: View {
 
     /// The live lane — `:245`. No label above it: Android has none, and a
     /// heading over an empty lane would be a section that is usually empty.
+    ///
+    /// Read-only: the per-job cancel is admin-only and is not drawn (this
+    /// type's own note). What the lane is for from a phone is seeing what the
+    /// house is making and what failed, which is the half that works.
     @ViewBuilder private func lane(_ images: ImagesModel) -> some View {
         ForEach(images.laneJobs) { job in
-            ImagesJobCard(job: job) { images.cancel(job) }
+            ImagesJobCard(job: job)
         }
     }
 
@@ -256,8 +278,7 @@ struct ImagesView: View {
                 ImagesHistoryCard(
                     job: job,
                     tiles: images.tiles,
-                    onOpen: { looking = ImagesOpenPicture(id: $0) },
-                    onDelete: { images.confirmingDelete = job }
+                    onOpen: { looking = ImagesOpenPicture(id: $0) }
                 )
             }
         }
@@ -271,47 +292,4 @@ struct ImagesView: View {
 /// name on one house, and a different name is a different sheet.
 struct ImagesOpenPicture: Identifiable, Equatable {
     let id: String
-}
-
-/// The delete confirmation's contents — `ConfirmDialog` at
-/// `ImagesScreen.kt:272-284`, destructive.
-///
-/// A ``DialogCard`` rather than a `confirmationDialog`, which is the shape
-/// this app's other destructive ask already uses
-/// (``SettingsPlaceholder``'s note): the body is a sentence that names a
-/// count, it has to wrap at an accessibility size, and `DialogCard` is itself
-/// a `ScrollView` over the dim so it cannot centre off the top of the screen.
-struct ImagesDeleteCard: View {
-
-    /// ``ImagesModel/deleteBody``: the sentence with the image count and the
-    /// plural already in it. Not named `body`, which is the view's own.
-    let sentence: String
-    let onCancel: () -> Void
-    let onConfirm: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(ImagesStrings.deleteTitle)
-                .font(.headline)
-                .fixedSize(horizontal: false, vertical: true)
-            Text(sentence)
-                .font(.subheadline)
-                .foregroundStyle(Color.fgMuted)
-                .fixedSize(horizontal: false, vertical: true)
-            HStack(spacing: 12) {
-                Button(ImagesStrings.dialogCancel, action: onCancel)
-                    .buttonStyle(.bordered)
-                    .frame(minHeight: 44)
-                Button(ImagesStrings.delete, action: onConfirm)
-                    .buttonStyle(.borderedProminent)
-                    // Destructive (`:282`), and `.tint` rather than a red
-                    // label: a word in `.red` as text is 3.55:1 and this app
-                    // draws text in the ink tokens only. The prominent
-                    // button's own fill-and-ink pair is what carries it.
-                    .tint(Color.errInk)
-                    .frame(minHeight: 44)
-            }
-            .frame(maxWidth: .infinity, alignment: .trailing)
-        }
-    }
 }

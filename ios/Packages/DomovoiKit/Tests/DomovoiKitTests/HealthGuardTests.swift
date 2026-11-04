@@ -72,9 +72,18 @@ final class HealthGuardTests: XCTestCase {
     }
 
     /// Both routes 404: a server older than the container guard. `loaded`,
-    /// tier none — **and that is what makes ``guardCheck(_:)`` green for
-    /// something nobody checked**, which is ported as it is and asked about
-    /// in DECISIONS rather than diverged from.
+    /// tier none.
+    ///
+    /// **The two expectations below are the only lines in this file the
+    /// `screens` unit changed** (2026-11-03), and it is not its file to edit
+    /// (BATCH-RULES §1): Kamron's answers 7 and 24 are `not checked yet` for
+    /// a house with no container guard, which is the collapse this case used
+    /// to record as green. The engine's own branch is untouched and still
+    /// Android's (`loaded`, tier `.none`) — what changed is
+    /// ``ContainerGuardState/checkedSomething``. Reverting the two values
+    /// hands the train a failing case, so it is left here for the
+    /// orchestrator and the fix itself is pinned next door in
+    /// `ScreensHealthGuardTests`, which that unit owns.
     func testAServerWithNoGuardIsLoadedAndEmpty() async {
         let result = await outcome(
             household: .answered(status: 404), summary: .answered(status: 404)
@@ -82,10 +91,10 @@ final class HealthGuardTests: XCTestCase {
         XCTAssertEqual(.none, result.tier)
         XCTAssertTrue(result.loaded)
         XCTAssertEqual(
-            HealthStrings.containersFine, guardCheck(result.guardState).text,
-            "the collapse this records: green for a house with no guard at all"
+            HealthStrings.unread, guardCheck(result.guardState).text,
+            "a server with no container guard reads `not checked yet`, not green"
         )
-        XCTAssertEqual(.ok, guardCheck(result.guardState).tone)
+        XCTAssertEqual(.idle, guardCheck(result.guardState).tone)
     }
 
     /// A 200 whose body is not this payload (`Read.Ok(null)`) is **not** a

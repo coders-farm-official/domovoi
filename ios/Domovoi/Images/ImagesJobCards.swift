@@ -47,14 +47,22 @@ struct ImagesEngineNote: View {
 /// (``ImagesJobStatus/inLane``, `:180-183`): a failure stays here rather than
 /// moving to history, which is how a dead generation gets noticed at all.
 ///
-/// **This row holds no `Task`.** `onCancel` calls into ``ImagesModel``, which
-/// outlives the row — a `LazyVStack` row is torn down as it scrolls out and
-/// would cancel the write mid-flight. Android does the same thing for the
-/// same control: its cancel runs on `app.scope` (`:349`).
+/// **Android's cancel (`:348-355`) is not drawn here.**
+/// `POST …/jobs/{id}/cancel` is `dependencies=ADMIN_ONLY`
+/// (`domovoi-plugin-imagegen/domovoi_plugin_imagegen/web.py:149`, applied at
+/// `:339`) and this app sends only `X-Device-Token`, so the button answered
+/// 401 every time from every phone — the control
+/// [[no-misleading-controls]] forbids, and Kamron's answer 41. The whole
+/// argument, and the one plugin change that would bring it back, is in
+/// ``ImagesView``'s header. The row is a report on something the house is
+/// doing; stopping it is the dashboard's.
+///
+/// This row therefore holds **no `Task` and no closure at all**, which is
+/// the rule it obeyed before for the same reason: a `LazyVStack` row is torn
+/// down as it scrolls out and would cancel a write mid-flight.
 struct ImagesJobCard: View {
 
     let job: ImagesJob
-    let onCancel: () -> Void
 
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
@@ -91,18 +99,16 @@ struct ImagesJobCard: View {
         )
     }
 
-    /// The status pill, the one line of text, and the cancel — `:331-355`.
+    /// The status pill and the one line of text — `:331-347`. `:348-355`'s
+    /// cancel is not drawn (this type's own note).
     @ViewBuilder private var top: some View {
         if dynamicTypeSize.isAccessibilitySize {
-            // A pill, a prompt and an icon on one line is three things
-            // competing for a phone's width at AX5. Rule §3: swap the row for
-            // a column.
+            // A pill and a prompt on one line is still two things competing
+            // for a phone's width at AX5 — the pill is a word that grows with
+            // the type size, so it is not a glyph that can be left beside
+            // one. Rule §3: swap the row for a column.
             VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 8) {
-                    pill
-                    Spacer(minLength: 8)
-                    cancel
-                }
+                pill
                 title
             }
         } else {
@@ -110,7 +116,6 @@ struct ImagesJobCard: View {
                 pill
                 title
                 Spacer(minLength: 8)
-                cancel
             }
         }
     }
@@ -142,30 +147,20 @@ struct ImagesJobCard: View {
             .truncationMode(.tail)
     }
 
-    /// `:348-355`, drawn **only while the job is still happening** — a cancel
-    /// offered for a failed job would be a control that cannot do what it
-    /// says, and ``ImagesModel/cancel(_:)`` refuses it as well so that the
-    /// check is not merely a courtesy of the view.
-    @ViewBuilder private var cancel: some View {
-        if job.status.isActive {
-            Button(action: onCancel) {
-                Image(systemName: "xmark.circle")
-                    .frame(minWidth: 44, minHeight: 44)
-                    .contentShape(.rect)
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(Color.fgMuted)
-            // Android's own `contentDescription` (`:353`). An icon-only
-            // control with no label is a button VoiceOver cannot name.
-            .accessibilityLabel(ImagesStrings.cancel)
-        }
-    }
 }
 
 /// One past generation — `HistoryCard`, `ImagesScreen.kt:381-436`.
 ///
-/// At most three pictures, the prompt, the settings it was made with, and a
-/// delete that asks first.
+/// At most three pictures, the prompt and the settings it was made with.
+///
+/// **Android's delete (`:430-432`) is not drawn, and nor is the confirmation
+/// it opened.** `DELETE …/history/{id}` is `dependencies=ADMIN_ONLY`
+/// (`domovoi-plugin-imagegen/domovoi_plugin_imagegen/web.py:149`, applied at
+/// `:651`) and this app has no admin session to send, so the bin answered 401
+/// from every phone — and worse than a dead button, it opened a destructive
+/// confirmation that could only ever fail at the end of it. ``ImagesView``'s
+/// header carries the whole argument and the one plugin change that brings it
+/// back. Kamron's answer 41.
 struct ImagesHistoryCard: View {
 
     let job: ImagesJob
@@ -176,7 +171,6 @@ struct ImagesHistoryCard: View {
     let tiles: VideoPosterStore
 
     let onOpen: (String) -> Void
-    let onDelete: () -> Void
 
     var body: some View {
         content
@@ -209,29 +203,51 @@ struct ImagesHistoryCard: View {
     /// In a column the three 84-point tiles want 268 of the card's 329 points
     /// and all three fit, so nothing is reported outside the strip, and the
     /// prompt gets the whole width instead of a seventh of it. At an
-    /// accessibility size this was already the layout, for rule §3's reason;
-    /// the one thing that changes there is that `delete` is now on its own
-    /// line at every size, which is the price of the tiles not overlapping the
-    /// only two lines that say what made the picture. DECISIONS, "The history
-    /// card is a column, not Android's row".
+    /// accessibility size this was already the layout, for rule §3's reason.
+    /// DECISIONS, "The history card is a column, not Android's row".
+    ///
+    /// The `delete` that used to end this column is gone with the route
+    /// behind it (this type's own note), so the card is now three things that
+    /// read in one direction: the pictures, what there are of them, and what
+    /// made them.
     private var content: some View {
         VStack(alignment: .leading, spacing: 10) {
             thumbnails
+            // Between the strip and the prompt, where it reads as a caption
+            // on the pictures rather than as part of what made them.
+            if job.hasMoreImagesThanTiles { moreImages }
             text
-            HStack {
-                Spacer(minLength: 8)
-                deleteButton
-            }
         }
+    }
+
+    /// `4 images, showing 3` — Kamron's answer 27, and his wording
+    /// (``ImagesStrings/moreImages(total:shown:)``, IOS-ONLY-STRINGS §9).
+    ///
+    /// Drawn only when the generation holds more pictures than the three
+    /// tiles above it, which is the condition
+    /// ``ImagesJob/hasMoreImagesThanTiles`` asks. **A sentence and not a
+    /// control**: the fourth picture has no route this card could open, so a
+    /// `+1 more` tap target would be a button that does nothing. Counting it
+    /// out loud is the honest half of that, and with the delete gone it is
+    /// now the **only** thing on this screen that says a generation holds
+    /// more than three pictures — the confirmation that used to count them
+    /// (``ImagesStrings/deleteBody(images:)``) is not drawn any more.
+    private var moreImages: some View {
+        Text(ImagesStrings.moreImages(total: job.imageNames.count, shown: job.tileNames.count))
+            .font(.caption)
+            // The same token the meta line under it uses, measured on this
+            // card: a second muted ink here would be two greys on one card.
+            .foregroundStyle(Color.fgMuted)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     /// `names.take(3)` (`:398`) — ``ImagesJob/tileNames``.
     ///
-    /// **A fourth picture is not drawn and not counted anywhere on the card.**
-    /// Android shows three and says nothing, and a `+1 more` affordance would
-    /// open nothing. The delete confirmation still counts every image,
-    /// because that is what is being deleted (``ImagesStrings/deleteBody(images:)``).
-    /// DECISIONS, "A fourth generated image is not shown, and not counted".
+    /// **A fourth picture is still not drawn, and it is now counted**:
+    /// Android shows three and says nothing, and Kamron's answer 27 is that
+    /// the card says `4 images, showing 3` — ``moreImages``, just below the
+    /// strip. No `+1 more` affordance, because it would open nothing.
     private var thumbnails: some View {
         // **Android's cap, and Android's own scrolling.** The strip is a
         // `LazyRow` with `Modifier.weight(1f, fill = false)` against the text
@@ -295,19 +311,6 @@ struct ImagesHistoryCard: View {
         }
     }
 
-    /// `:430-432`, with Android's own `contentDescription`.
-    private var deleteButton: some View {
-        Button(action: onDelete) {
-            Image(systemName: "trash")
-                .frame(minWidth: 44, minHeight: 44)
-                .contentShape(.rect)
-        }
-        .buttonStyle(.plain)
-        // The ink token, not `.red`: this is a glyph that carries meaning and
-        // `.red` is 3.55:1 on the light canvas.
-        .foregroundStyle(Color.errInk)
-        .accessibilityLabel(ImagesStrings.delete)
-    }
 }
 
 /// One generated picture, as a square that opens it.
@@ -316,10 +319,14 @@ struct ImagesHistoryCard: View {
 /// or an image box given a fixed `frame(width:)` does not grow with the type
 /// size, which is rule §3 and a finding this track has already had.
 ///
-/// The bytes come through ``VideoPosterStore`` and never `AsyncImage`:
-/// `…/file/{name}` is a device-tier route and `AsyncImage` makes its own
-/// unauthenticated request, which 401s every time. The store's own doc has
-/// the whole reason.
+/// The bytes come through ``VideoPosterStore`` and never `AsyncImage`. This
+/// used to say `…/file/{name}` is device-tier and `AsyncImage` would 401;
+/// **verification says the route is open** (`web.py:699`, no gate —
+/// ``ImagesPaths/file(_:)``), so that was not the reason. The real ones are
+/// the store's own, and they stand: one fetch per name shared by every row
+/// that asks for it, a cache that survives a lazy row being torn down and
+/// rebuilt, and the standing rule that a lazy row owns no request. The store's
+/// doc has them.
 struct ImagesTile: View {
 
     let name: String
