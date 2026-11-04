@@ -554,7 +554,7 @@ public enum ImagesEngineLine: Equatable, Sendable {
 ///
 /// With no plugin for the capability, Android renders the content bare
 /// (`PluginFrame.kt:98-101`); here that is a nil ``of(_:)``.
-public struct ImagesBand: Equatable, Sendable {
+public struct PluginBand: Equatable, Sendable {
 
     /// `plugin.name?.takeIf { it.isNotBlank() } ?: plugin.slug`
     /// (`PluginFrame.kt:124`) — a blank name falls back to the slug, so the
@@ -577,10 +577,10 @@ public struct ImagesBand: Equatable, Sendable {
         self.managePath = managePath
     }
 
-    public static func of(_ plugin: CapabilityPlugin?) -> ImagesBand? {
+    public static func of(_ plugin: CapabilityPlugin?) -> PluginBand? {
         guard let plugin else { return nil }
         let named = nonBlank(plugin.name)
-        return ImagesBand(
+        return PluginBand(
             name: named ?? plugin.slug,
             publisher: nonBlank(plugin.publisher),
             managePath: "/#plugins/\(plugin.slug)"

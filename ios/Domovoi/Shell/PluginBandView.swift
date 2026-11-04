@@ -285,28 +285,17 @@ enum PluginBandPlace {
     }
 }
 
-/// The Images band: ``PluginBandView`` for ``capImagegen``, wrapping the
-/// screen as `ScreenRouter.kt:67` does.
-///
-/// A wrapper and not a rename, because the call site is
-/// `RouteScreen.swift:125-132`, which this unit does not own.
-struct ImagesPluginBand<Content: View>: View {
-
-    let model: ShellModel
-
-    @ViewBuilder let content: Content
-
-    var body: some View {
-        PluginBandView(
-            model: model,
-            capability: capImagegen,
-            icon: Route.images.systemImage,
-            place: .aroundTheScreen
-        ) {
-            content
-        }
-    }
-}
+// `ImagesPluginBand` stood here — ``PluginBandView`` for ``capImagegen``,
+// wrapping the whole screen the way `ScreenRouter.kt:67` wraps
+// `ImagesScreen()`. It was a wrapper and not a rename because its one call
+// site was `RouteScreen.swift`, which the shell unit did not own.
+//
+// It is **gone**, with the wrapping: the band is `ImagesView`'s own first row
+// now (`ImagesView.swift`, `place: .insideThePage`), which is the band half of
+// owner answer 29 — outside the scroll view it kept 256 of 852 points at AX5
+// and left the page a 102-point window. The move needed `ImagesView.swift` and
+// `RouteScreen.swift` in one change, so it was made on the integration
+// (shell's DECISIONS §4a, screens' needs-a-shared-change (a)).
 
 /// The Stations band: ``PluginBandView`` for ``capStations``, drawn as a row
 /// of the page rather than around it (`StationsView.swift:86`).

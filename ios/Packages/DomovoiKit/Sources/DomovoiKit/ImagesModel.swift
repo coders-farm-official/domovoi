@@ -160,8 +160,8 @@ public final class ImagesModel {
     /// The band above the screen, or nil for a house with no imagegen plugin
     /// — in which case Android renders the content bare
     /// (`PluginFrame.kt:98-101`).
-    public func band(_ capabilities: Capabilities) -> ImagesBand? {
-        ImagesBand.of(capabilities.pluginFor(ImagesModel.capability))
+    public func band(_ capabilities: Capabilities) -> PluginBand? {
+        PluginBand.of(capabilities.pluginFor(ImagesModel.capability))
     }
 
     /// `CAP_IMAGEGEN` — the capability this whole screen is gated on

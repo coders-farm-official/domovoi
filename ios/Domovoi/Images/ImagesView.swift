@@ -7,8 +7,10 @@ import SwiftUI
 /// `android/.../ui/screens/images/ImagesScreen.kt`, the screen that the
 /// **Image Generation plugin** puts in the app rather than one of Domovoi's
 /// own. `ScreenRouter.kt:67` reaches it through
-/// `PluginScreenFrame(CAP_IMAGEGEN)`, which is ``ImagesPluginBand`` here, and
-/// the route itself is gated on the `imagegen` capability
+/// `PluginScreenFrame(CAP_IMAGEGEN)`, which is the ``PluginBandView`` row at
+/// the top of this page (owner answer 29 moved it inside the scroll view, so
+/// it is a row and not a wrapper), and the route itself is gated on the
+/// `imagegen` capability
 /// (``Route/requiredCapability``) — a house without the plugin never gets
 /// this far and sees ``Route/unavailableNote(_:)`` instead.
 ///
@@ -119,6 +121,33 @@ struct ImagesView: View {
             // 10-point gaps and 16-point padding, which is the Kotlin's
             // `LazyColumn` (`ImagesScreen.kt:184`).
             LazyVStack(alignment: .leading, spacing: 10) {
+                // **The plugin band is the page's first row, not a wrapper
+                // around the page** — the band half of owner answer 29, which
+                // asks a screen's chrome to scroll away at accessibility text
+                // sizes.
+                //
+                // It was `ImagesPluginBand { ImagesView(…) }` in
+                // `RouteScreen.swift`, i.e. a `VStack` *outside* this
+                // `ScrollView`, so the band held its 256 points of the 852 on
+                // a 393-point phone at AX5 whatever the page did (train S001,
+                // `testImages_AtTheLargestTypeSize`): with the header's 300,
+                // the navigation bar's 44 and the phone bar's 146 the page
+                // was left a 102-point window. Inside the scroll view it
+                // scrolls off like any other row. ``PluginBandPlace`` has the
+                // padding argument — `.insideThePage` pads by 0 because the
+                // `.padding(16)` below is the page's.
+                //
+                // The move needed `ImagesView.swift` and
+                // `RouteScreen.swift` at once, which is why neither the shell
+                // nor the player unit could make it (shell's DECISIONS §4a).
+                PluginBandView(
+                    model: model,
+                    capability: capImagegen,
+                    icon: Route.images.systemImage,
+                    place: .insideThePage
+                ) {
+                    EmptyView()
+                }
                 header
                 if let images {
                     engine(images)
@@ -137,12 +166,15 @@ struct ImagesView: View {
         // **The page says which scroll view it is.**
         //
         // `StubHouseUITests+Images.swift`'s `imagesPage(_:)` used to take the
-        // tallest scroll view in the tree, which is the page at an ordinary
-        // type size and is **not** the page at AX5: the band above it leaves
-        // the page a 102-point window (DECISIONS, "At an accessibility size
-        // the band leaves the page a 102-point window") while the shell's
-        // phone bar is a 146-point scroll view of its own. Train S004 flicked
-        // the phone bar instead and the flick landed on `music`, so
+        // tallest scroll view in the tree, and the band outside the page used
+        // to make the page the SHORTER one at AX5: 102 points against the
+        // shell's 146-point phone bar (DECISIONS, "At an accessibility size
+        // the band leaves the page a 102-point window"). The band is a row of
+        // this scroll view now, so that particular inversion is gone — but
+        // the identifier stays, because "the tallest scroll view" was never
+        // what the case meant and the phone bar can outgrow a short page
+        // again. Train S004 flicked the phone bar instead and the flick
+        // landed on `music`, so
         // `testImages_AtTheLargestTypeSize` measured Music and compared
         // nothing. An identifier is the only thing in the tree that tells two
         // scroll views apart by *what they are* rather than by their size;

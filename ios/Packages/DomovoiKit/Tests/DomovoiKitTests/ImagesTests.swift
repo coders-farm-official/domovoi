@@ -404,7 +404,7 @@ final class ImagesTests: XCTestCase {
             publisher: "Coders Farm",
             appCapabilities: ["imagegen"]
         )
-        let band = ImagesBand.of(full)
+        let band = PluginBand.of(full)
         XCTAssertEqual("Image Generation", band?.name)
         XCTAssertEqual("by Coders Farm", band?.publisherLine)
         XCTAssertEqual("/#plugins/imagegen", band?.managePath)
@@ -413,11 +413,11 @@ final class ImagesTests: XCTestCase {
             band?.manageLabel
         )
 
-        let bare = ImagesBand.of(CapabilityPlugin(slug: "imagegen", name: "  ", publisher: " "))
+        let bare = PluginBand.of(CapabilityPlugin(slug: "imagegen", name: "  ", publisher: " "))
         XCTAssertEqual("imagegen", bare?.name)
         XCTAssertNil(bare?.publisherLine)
 
-        XCTAssertNil(ImagesBand.of(nil))
+        XCTAssertNil(PluginBand.of(nil))
     }
 
     // MARK: - the model against a server that is not a server

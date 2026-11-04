@@ -405,7 +405,7 @@ public enum PluginBandStrings {
     public static let badge = "plugin"
 
     /// `PluginFrame.kt:144`. Never a bare `by`: the caller passes a publisher
-    /// it has already checked is non-blank (``ImagesBand/publisher``).
+    /// it has already checked is non-blank (``PluginBand/publisher``).
     public static func by(_ publisher: String) -> String { "by \(publisher)" }
 
     /// `PluginFrame.kt:178`, the word.

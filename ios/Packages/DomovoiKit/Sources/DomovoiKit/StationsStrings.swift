@@ -58,13 +58,14 @@ public enum StationsStrings {
 
     // MARK: - the plugin band (`ui/components/PluginFrame.kt`)
 
-    /// The bordered badge beside the plugin's name (`PluginFrame.kt:151`).
-    public static let pluginBadge = "plugin"
-
-    /// `"by Coders Farm"` (`PluginFrame.kt:144`). Nil-safe at the call site:
-    /// a plugin with no publisher draws no line at all rather than a bare
-    /// `by`.
-    public static func pluginBy(_ publisher: String) -> String { "by \(publisher)" }
+    // `pluginBadge` ("plugin", `PluginFrame.kt:151`) and `pluginBy(_:)`
+    // ("by <publisher>", `:144`) stood here and are **gone**. They were this
+    // screen's copy of the band's words, read by `StationsPluginBand.swift`
+    // until owner answer 58 folded the two bands into one view: the one copy
+    // is ``PluginBandStrings`` in `ShellStrings.swift`, and `ShellFoldTests`
+    // pins both sentences there. Nothing read these two after that fold —
+    // deleted on the integration, because the fold was the shell unit's and
+    // this file was not (shell's DECISIONS §4).
 
     // MARK: - the search card (`StationSearch.kt:84`)
 

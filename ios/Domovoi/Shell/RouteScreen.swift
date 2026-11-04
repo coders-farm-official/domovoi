@@ -124,12 +124,20 @@ struct RouteScreen: View {
             AudiobooksView(model: model)
         case .images:
             // slot: images
-            // The band wraps the screen exactly as `ScreenRouter.kt:67` wraps
-            // `ImagesScreen()` in `PluginScreenFrame(CAP_IMAGEGEN)`, and
-            // draws the content bare on a house whose manifest has no
-            // imagegen plugin (`PluginFrame.kt:98-101`). ``ImagesView`` says
-            // what is left out and why there is no control for it.
-            ImagesPluginBand(model: model) { ImagesView(model: model) }
+            // **No band wrapper here any more.** `ScreenRouter.kt:67` wraps
+            // `ImagesScreen()` in `PluginScreenFrame(CAP_IMAGEGEN)`, and this
+            // slot wrapped ``ImagesView`` in `ImagesPluginBand` to match. That
+            // put the band outside the page's scroll view, where it kept 256
+            // of 852 points at AX5 and left the page a 102-point window
+            // (train S001). Owner answer 29 asks a screen's chrome to scroll
+            // away at those sizes, so the band is ``ImagesView``'s own first
+            // row now, as Stations' already was — `PluginBandView` with
+            // `place: .insideThePage`. A house whose manifest has no imagegen
+            // plugin still draws the content bare (`PluginFrame.kt:98-101`):
+            // that is a nil ``PluginBand`` inside the same view.
+            // ``ImagesView`` says what is left out and why there is no
+            // control for it.
+            ImagesView(model: model)
         case .news:
             // slot: news
             // ``NewsView`` says what is left out and why there is no control
@@ -278,6 +286,19 @@ struct SettingsPlaceholder: View {
             // against text behind the dialog after the trait was added. They
             // were true: that text is unreadable while the dialog is up.
             // Nothing behind a confirmation is content, so it says so.
+            //
+            // **Kept, against the shell unit's DECISIONS §7.** That asked for
+            // this line as redundant, on the ground that ``DialogCard``
+            // presents a `fullScreenCover` now (answer 6) and UIKit takes the
+            // presenting controller's views out of the window — true on the
+            // path where the presentation arrives. It does not hold on the
+            // other path: ``DialogPresentationGuard`` draws the card **inline**
+            // when the cover is dropped, and inline is the pre-answer-6 shape,
+            // with this panel behind the card and sampled through the 35%
+            // scrim (`ConnectionDialogView.swift:460-471`). That path is the
+            // whole reason the guard exists, so the line is what keeps it from
+            // handing back the two `Contrast failed` findings it was added
+            // for. It costs a boolean.
             screen
                 .accessibilityHidden(askingToForget)
             if askingToForget, let ask = model.forgetActiveAsk() {

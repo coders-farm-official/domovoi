@@ -152,8 +152,12 @@ public enum ImagesStrings {
 
     // MARK: - the plugin band
 
-    /// `PluginFrame.kt:152`, the bordered badge.
-    public static let pluginBadge = "plugin"
+    // `pluginBadge` ("plugin", `PluginFrame.kt:152`) stood here and is gone:
+    // one view draws both bands since owner answer 58, and its copy of the
+    // word is ``PluginBandStrings/badge``, which `ShellFoldTests` pins.
+    // `by(_:)`, `manage` and `manageLabel(name:)` below are NOT dead —
+    // ``PluginBand/publisherLine`` and ``PluginBand/manageLabel`` read them
+    // (`ImagesModels.swift:605`, `:610`), which `ImagesTests` asserts.
 
     /// `PluginFrame.kt:144`.
     public static func by(_ publisher: String) -> String { "by \(publisher)" }

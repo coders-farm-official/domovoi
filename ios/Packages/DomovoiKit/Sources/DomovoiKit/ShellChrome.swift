@@ -66,21 +66,14 @@ public struct ShellPill: Equatable, Sendable {
     }
 }
 
-/// The plugin a screen belongs to, as the band above it draws it: the name
-/// (falling back to the slug), `by <publisher>` or nothing, and where `manage`
-/// goes.
-///
-/// **A name for a type that is already capability-agnostic.** It is
-/// ``ImagesBand``, written by the Images item the night two items each wrote a
-/// band, and nothing in it is about Images: ``ImagesBand/of(_:)`` takes any
-/// ``CapabilityPlugin`` and `PluginFrame.kt:124`/`:144`/`:170` are the three
-/// rules it ports. One view draws both bands now (owner answer 58,
-/// `ios/Domovoi/Shell/PluginBandView.swift`), so this is the name that view
-/// reads it by. Renaming the declaration means editing `ImagesModels.swift`
-/// and the tests that name it, neither of which this unit owns —
-/// `design-notes/ios/batch-2026-11-03/shell/DECISIONS.md` says so under
-/// "Needs a shared change".
-public typealias PluginBand = ImagesBand
+// `public typealias PluginBand = ImagesBand` stood here. The type the two
+// bands read is declared as ``PluginBand`` itself now, in `ImagesModels.swift`
+// — nothing in it was ever about Images (``PluginBand/of(_:)`` takes any
+// ``CapabilityPlugin``, and `PluginFrame.kt:124`/`:144`/`:170` are the three
+// rules it ports), and one view draws both bands since owner answer 58. The
+// shell unit could only add the alias, because the declaration and the tests
+// that name it are in files it did not own; the rename was made on the
+// integration (shell's DECISIONS §4).
 
 /// What is drawn, for one state of the shell: §2.11's table as a value.
 ///
