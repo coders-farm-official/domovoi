@@ -51,6 +51,7 @@ import com.domovoi.app.ui.components.LoadingState
 import com.domovoi.app.ui.components.SectionLabel
 import com.domovoi.app.ui.components.fmtBytes
 import com.domovoi.app.ui.components.fmtDur
+import com.domovoi.app.ui.screens.home.plural
 import com.domovoi.app.ui.shell.LocalServerChoice
 import com.domovoi.app.ui.shell.title
 import com.domovoi.app.ui.theme.Domovoi
@@ -160,7 +161,7 @@ internal fun BookPage(
                         meta = listOfNotNull(
                             book.duration_sec?.let { fmtDur(it) },
                             BookModels.sizeBytes(book)?.let { fmtBytes(it) },
-                            BookModels.chapters(book).size.takeIf { it > 0 }?.let { "$it chapters" },
+                            BookModels.chapters(book).size.takeIf { it > 0 }?.let { plural(it, "chapter") },
                         ).joinToString(" · "),
                         place = placeText(place, book.duration_sec),
                         state = state,

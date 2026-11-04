@@ -20,6 +20,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.domovoi.app.LocalApp
 import com.domovoi.app.assistant.docs.HeadsUpStore
@@ -65,10 +67,18 @@ internal fun ChatSettingsPanel(navigate: (Route) -> Unit) {
                         color = Domovoi.colors.fgMuted, modifier = Modifier.padding(top = 8.dp))
                     Column {
                         prefs.skip.sorted().forEach { kind ->
+                            val words = HeadsUpStore.KIND_WORDS[kind] ?: kind
                             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                                Text(HeadsUpStore.KIND_WORDS[kind] ?: kind, style = MaterialTheme.typography.bodyMedium,
+                                Text(words, style = MaterialTheme.typography.bodyMedium,
                                     color = Domovoi.colors.fg, modifier = Modifier.weight(1f))
-                                OutlinedButton(onClick = { store.warnAgain(kind) }) { Text("warn again") }
+                                // A screen reader hears "warn again, scanned pages": the
+                                // drawn words stay the same for everyone else, but a list
+                                // of buttons all called "warn again" names nothing (D2,
+                                // owner 2026-11-03 — the same answer covers both apps).
+                                OutlinedButton(
+                                    onClick = { store.warnAgain(kind) },
+                                    modifier = Modifier.semantics { contentDescription = "warn again, $words" },
+                                ) { Text("warn again") }
                             }
                         }
                     }

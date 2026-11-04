@@ -49,6 +49,7 @@ import com.domovoi.app.ui.components.PageHeader
 import com.domovoi.app.ui.components.SectionLabel
 import com.domovoi.app.ui.components.fmtBytes
 import com.domovoi.app.ui.components.fmtDur
+import com.domovoi.app.ui.screens.home.plural
 import com.domovoi.app.ui.theme.Domovoi
 import com.domovoi.app.ui.theme.MonoFamily
 import kotlinx.coroutines.Dispatchers
@@ -129,7 +130,7 @@ private fun SavedBookRow(book: SavedBook, state: SaveState, cover: String?, byte
                 Text(
                     listOfNotNull(
                         book.meta.durationSec?.let { fmtDur(it) },
-                        book.meta.chapters.size.takeIf { it > 0 }?.let { "$it chapters" },
+                        book.meta.chapters.size.takeIf { it > 0 }?.let { plural(it, "chapter") },
                         fmtBytes(bytes),
                     ).joinToString(" · "),
                     style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFamily),

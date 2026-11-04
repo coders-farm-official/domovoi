@@ -1005,6 +1005,16 @@ private fun LiveEmpty(text: String) {
     Text(text, style = MaterialTheme.typography.bodySmall, color = Domovoi.colors.fgMuted, modifier = Modifier.padding(10.dp))
 }
 
+/**
+ * What the unticked circle says when the document does not word it (D33,
+ * owner 2026-11-03: "can't tell from here" on both phones). The build
+ * script has carried `checklist_unknown` since scripts/manual/build_manual.py:361,
+ * so a current document supplies these words itself; a document built
+ * before that left the circle with an EMPTY contentDescription, which a
+ * screen reader reads as nothing at all.
+ */
+private const val CHECKLIST_UNKNOWN = "can't tell from here"
+
 @Composable
 private fun Checklist(doc: ManualDoc, live: Live, links: ManualLinks) {
     val c = Domovoi.colors
@@ -1013,7 +1023,7 @@ private fun Checklist(doc: ManualDoc, live: Live, links: ManualLinks) {
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Icon(
                     if (done == true) Icons.Outlined.CheckCircle else Icons.Outlined.Circle,
-                    contentDescription = when (done) { true -> "done"; false -> "not yet"; null -> doc.label("checklist_unknown") },
+                    contentDescription = when (done) { true -> "done"; false -> "not yet"; null -> doc.label("checklist_unknown", fallback = CHECKLIST_UNKNOWN) },
                     tint = if (done == true) c.ok else c.fgFaint,
                     modifier = Modifier.size(18.dp).padding(top = 2.dp),
                 )

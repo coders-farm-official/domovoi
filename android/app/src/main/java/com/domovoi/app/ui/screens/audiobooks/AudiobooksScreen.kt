@@ -76,6 +76,7 @@ import com.domovoi.app.ui.components.fmtBytes
 import com.domovoi.app.ui.components.fmtDur
 import com.domovoi.app.ui.components.rememberLibraryRefresh
 import com.domovoi.app.ui.components.rememberPager
+import com.domovoi.app.ui.screens.home.plural
 import com.domovoi.app.ui.screens.local.uploadFailureText
 import com.domovoi.app.ui.theme.Domovoi
 import com.domovoi.app.ui.theme.MonoFamily
@@ -311,7 +312,7 @@ private fun BookCard(
                 }
                 val meta = buildString {
                     append(if (book.duration_sec != null) fmtDur(book.duration_sec) else "—")
-                    if (book.chapters.isNotEmpty()) append(" · ${book.chapters.size} chapters")
+                    if (book.chapters.isNotEmpty()) append(" · ${plural(book.chapters.size, "chapter")}")
                     BookModels.sizeBytes(book)?.let { append(" · " + fmtBytes(it)) }
                 }
                 Text(

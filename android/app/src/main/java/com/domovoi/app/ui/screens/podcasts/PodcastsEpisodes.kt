@@ -60,6 +60,7 @@ import com.domovoi.app.ui.components.ErrorState
 import com.domovoi.app.ui.components.LoadingState
 import com.domovoi.app.ui.components.fmtDur
 import com.domovoi.app.ui.components.launchAction
+import com.domovoi.app.ui.screens.home.plural
 import com.domovoi.app.ui.theme.Domovoi
 import com.domovoi.app.ui.theme.MonoFamily
 
@@ -241,7 +242,7 @@ private fun EpisodeRow(ep: PodcastEpisode, onDownload: () -> Unit, onPlay: () ->
                 )
                 val meta = buildString {
                     append(if (ep.duration_sec != null) fmtDur(ep.duration_sec) else "—")
-                    if (ep.chapters.isNotEmpty()) append(" · ${ep.chapters.size} chapters")
+                    if (ep.chapters.isNotEmpty()) append(" · ${plural(ep.chapters.size, "chapter")}")
                     if (!ep.has_file && !ep.download_status.isNullOrBlank()) {
                         append(" · ${ep.download_status}")
                     }
