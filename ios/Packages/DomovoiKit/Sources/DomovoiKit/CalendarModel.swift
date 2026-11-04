@@ -247,6 +247,16 @@ public final class CalendarModel {
     /// the second landing settles, cut or not. ``ApiRead/refresh()`` is called
     /// from inside the read's own success path on purpose: it cancels the
     /// task that is running, which has published its value and is returning.
+    ///
+    /// That argument is load-bearing rather than decorative, so it is
+    /// measured and not asserted: without the `window.set(wanted)` below the
+    /// repair re-reads the window the box still holds — the union, which
+    /// comes back cut, which fires the repair again — an unbounded loop
+    /// against the house with ``isLoading`` true for ever. Both halves of the
+    /// guard are pinned: `testAWidenedReadThatComesBackCutIsReReadForTheRangeOnScreenAndStops`
+    /// (the cut page, and the ask-exactly-once) and
+    /// `testComingStraightBackFromAViewWhoseReadWasAbandonedStillSettles`
+    /// (the abandoned reply).
     private func pageLanded() {
         let wanted = wantedWindow
         guard events.data?.serves(wanted) != true else { return }
@@ -476,8 +486,19 @@ public final class CalendarModel {
     ///
     /// The union is taken against ``window`` (what was **asked**) and not
     /// against the page's own window, because a read may still be in flight:
-    /// unioning against a landed page would narrow the request and throw away
-    /// a range that was about to arrive.
+    /// unioning against a landed page would ask for less than the read
+    /// already on its way is bringing.
+    ///
+    /// That is about the **union**, and it is not an invariant that the box
+    /// is never narrowed below a read in flight: the branch that asks for
+    /// nothing narrows it to the range on screen unconditionally (below,
+    /// REVIEW-2's must 3), and a wider read can be in flight while it does.
+    /// Narrowing is safe *there* in a way that narrowing a request is not —
+    /// nothing is being asked for, so no range is dropped from any request; a
+    /// page carries the window it asked for (``CalendarPage``), so the wider
+    /// reply still lands under its own range and nothing is misfiled; and the
+    /// cost is at most one later request for rows that landing was about to
+    /// bring (REVIEW-FIX-1, note 1).
     ///
     /// ``ApiRead/refresh()`` cancels whatever is in flight, which is what
     /// drops a reply for the range the person has just left.

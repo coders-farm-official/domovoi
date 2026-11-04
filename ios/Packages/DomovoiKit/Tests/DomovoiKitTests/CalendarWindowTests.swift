@@ -1343,4 +1343,111 @@ final class CalendarWindowTests: XCTestCase {
             "the step back drew something other than the page in hand"
         )
     }
+
+    /// **A widened read that comes back cut is re-pointed at the range on
+    /// screen, and the repair asks exactly once.**
+    ///
+    /// REVIEW-FIX-1's must: `pageLanded()`'s `window.set(wanted)`
+    /// (``CalendarModel``) is what makes the repair terminate, and its doc
+    /// comment is the argument that it does — the class of comment this track
+    /// has been bitten by. Deleting that one line, or weakening the guard so
+    /// that only the abandoned-reply half repairs, each left the suite at
+    /// 109 tests / 0 failures.
+    ///
+    /// The state is `widen -> the union comes back cut`, and it takes three
+    /// model calls in this house. Day view on the **4th** is 500 rows and
+    /// cut, so the step to the 5th is barred from widening and reads the 5th
+    /// alone — one event, uncut. The step **back** to the 4th therefore has
+    /// an *uncut* page in hand and an excess of one day, so the cut-page bar
+    /// does not apply, the union `[nov 4, nov 6)` goes out, and `limit=500`
+    /// spends it all on the 4th: cut again, and no answer for the 4th alone
+    /// (``CalendarPage/serves(_:)``).
+    ///
+    /// So this case counts the requests after the step back and pins where
+    /// the box ends up:
+    ///
+    /// * **two.** Without `window.set(wanted)` the repair re-reads the
+    ///   **union** — which comes back cut, which fires the repair again: an
+    ///   unbounded loop against the house with ``CalendarModel/isLoading``
+    ///   true for ever. Measured against that break: the box stuck on the
+    ///   union's `nov 6` ceiling, four requests inside the settle, and the
+    ///   settle itself never returning.
+    /// * **and the second one is the 4th alone.** With the guard weakened to
+    ///   the page's bare `window.contains(wanted)` the cut half never
+    ///   repairs at all: one request, and `rangePending` true for ever.
+    ///   ``testComingStraightBackFromAViewWhoseReadWasAbandonedStillSettles()``
+    ///   covers the *other* half of that guard and cannot see this.
+    ///
+    /// The second landing settles **cut**, which is the termination argument
+    /// itself: its window **is** the range on screen, so `serves(_:)` is true
+    /// of it whether or not `limit` cut it.
+    func testAWidenedReadThatComesBackCutIsReReadForTheRangeOnScreenAndStops() async {
+        let house = busyDay()
+        let (model, _) = rig(house)
+        model.start()
+        await settleUntil({ model.events.answered }, "the opening read")
+
+        model.show(.day)
+        await settleUntil({ !model.rangePending }, "the 4th's own read")
+        let fourth = window((2026, 11, 4), (2026, 11, 5))
+        XCTAssertEqual(fourth, model.askedWindow)
+        XCTAssertTrue(
+            model.events.data?.truncated == true,
+            "five hundred events on the 4th did not cut its own read"
+        )
+
+        model.step(1)
+        await settleUntil({ !model.rangePending }, "the 5th's read")
+        XCTAssertEqual(window((2026, 11, 5), (2026, 11, 6)), model.askedWindow)
+        XCTAssertFalse(
+            model.events.data?.truncated ?? true,
+            "the 5th has one event on it, so the page in hand must be uncut — "
+                + "with a cut page in hand the bar, and not the repair, is "
+                + "what this case would be measuring"
+        )
+
+        let asksBefore = house.asked.current.count
+        model.step(-1)
+        await settleUntil({ !model.rangePending }, "the 4th again")
+
+        let union = window((2026, 11, 4), (2026, 11, 6))
+        XCTAssertTrue(
+            house.asked.current.dropFirst(asksBefore).contains(query(union)),
+            "the step back did not widen, so the union never came back cut and "
+                + "nothing here is about the repair"
+        )
+        XCTAssertEqual(
+            asksBefore + 2,
+            house.asked.current.count,
+            "the repair did not ask exactly once: more than two means the "
+                + "re-read was not pointed at the range on screen and the cut "
+                + "union is being read in a loop (REVIEW-FIX-1, must)"
+        )
+        XCTAssertEqual(
+            query(fourth),
+            house.asked.current.last,
+            "the repair's read was not for the range on screen"
+        )
+        XCTAssertEqual(
+            fourth,
+            model.askedWindow,
+            "the box was left on the union, so the next read anybody makes "
+                + "comes back cut again"
+        )
+        XCTAssertTrue(
+            model.events.data?.truncated == true,
+            "the 4th cannot be read uncut in this house"
+        )
+        XCTAssertFalse(
+            model.isLoading,
+            "a cut page whose window is the range on screen is the answer for "
+                + "it: the spinner must stop"
+        )
+        XCTAssertNil(model.errorText)
+        XCTAssertNil(model.emptyText)
+        XCTAssertTrue(
+            model.visible.contains { $0.title == "shift 0" },
+            "the 4th drew nothing after the repair"
+        )
+    }
 }
