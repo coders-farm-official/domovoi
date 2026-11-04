@@ -56,6 +56,12 @@ public final class ImagesModel {
     public let tiles: VideoPosterStore
 
     // MARK: - composing a generation
+    //
+    // **No view writes any of this.** The composer that did — the prompt
+    // field, the model picker and `generate` — is not drawn (see the note
+    // over "the three writes"). The state and its rules are kept with their
+    // tests, because they are what the screen gets back the day the plugin's
+    // three routes take the household tier.
 
     /// The prompt. **Not cleared after a successful generate**, and the model
     /// choice is not reset either — `ImagesScreen.kt:156-170` clears neither,
@@ -67,13 +73,14 @@ public final class ImagesModel {
     /// ``ImagesGenState/activeModel(chosen:)`` falls back to".
     public var chosenModelID: String?
 
-    /// A generate is in flight — `busy`, `:151`. Only this disables the
-    /// button; a cancel or a delete does not.
+    /// A generate is in flight — `busy`, `:151`. Only this disabled the
+    /// button; a cancel or a delete did not.
     public private(set) var busy = false
 
     /// The history row whose delete has been asked for and not yet confirmed
     /// — `confirmDelete`, `:152`. A destructive write with no ask is the thing
-    /// the dialog exists to prevent.
+    /// the dialog existed to prevent. **Nothing sets it** — the delete is not
+    /// drawn.
     public var confirmingDelete: ImagesJob?
 
     /// The one sentence the shell shows and clears, as every other screen's
@@ -100,7 +107,8 @@ public final class ImagesModel {
         state.data?.pickerLabel(chosen: chosenModelID) ?? ImagesStrings.noModelsInstalled
     }
 
-    /// Whether the generate button is enabled — `:231`, all four conjuncts.
+    /// Whether a generate button would be enabled — `:231`, all four
+    /// conjuncts. There is no such button on this screen.
     public var canGenerate: Bool {
         Self.canGenerate(state: state.data, active: activeModel, prompt: prompt, busy: busy)
     }
@@ -234,7 +242,30 @@ public final class ImagesModel {
 
     // MARK: - the three writes
 
-    /// `POST …/generate` — `ImagesScreen.kt:156-170`.
+    // -----------------------------------------------------------------------
+    // **Nothing in the app calls any of the three.**
+    //
+    // Said here, at the top of the section, because a seam with no caller
+    // that reads as shipped behaviour is a defect class this track has
+    // already paid for twice ([[reasoning-that-hides-a-bug]],
+    // `AudiobookModels.safeLibraryPath`). ``generate()``, ``cancel(_:)`` and
+    // ``confirmDelete()`` are complete, correct and tested — and the
+    // controls that used to call them are **not drawn** (2026-11-03), because
+    // all three routes are `dependencies=ADMIN_ONLY` on the plugin and this
+    // app sends only `X-Device-Token`, so every one answered 401 from every
+    // phone. ``ImagesPaths``'s header carries the evidence and ``ImagesView``
+    // the decision; Kamron's answer 41 is "admin-only things stay off both
+    // phones".
+    //
+    // They are kept rather than deleted because the fix is one line in the
+    // plugin (the household tier on three routes, logged under "Needs a
+    // shared change"), and because their tests are the only specification
+    // either platform has for those three requests. **Their presence is not
+    // evidence that a phone can generate, cancel or delete.**
+    // -----------------------------------------------------------------------
+
+    /// `POST …/generate` — `ImagesScreen.kt:156-170`. **No control calls
+    /// this** — see the note above.
     ///
     /// Returns whether the request went, which is what a test asserts on and
     /// what stops this being a method whose refusal is invisible.
@@ -270,11 +301,13 @@ public final class ImagesModel {
         return true
     }
 
-    /// `POST …/jobs/{id}/cancel` — `ImagesScreen.kt:348-355`.
+    /// `POST …/jobs/{id}/cancel` — `ImagesScreen.kt:348-355`. **No control
+    /// calls this** — see the section's note.
     ///
-    /// Refused for a job that is not pending or running, because the button
-    /// is drawn only for those (`:347`) and a method that would send it
-    /// anyway makes the check a courtesy.
+    /// Refused for a job that is not pending or running, because Android
+    /// draws the button only for those (`:347`) and a method that would send
+    /// it anyway makes the check a courtesy. The refusal is the rule, not the
+    /// view's: it is the half that survives a screen with no cancel on it.
     ///
     /// Two things Android does not do, both recorded in DECISIONS:
     /// the lane is **re-read** on success (Android waits for the plugin's
@@ -314,10 +347,12 @@ public final class ImagesModel {
         return true
     }
 
-    /// `DELETE …/history/{id}` — `ImagesScreen.kt:172-178`.
+    /// `DELETE …/history/{id}` — `ImagesScreen.kt:172-178`. **No control
+    /// calls this** — see the section's note.
     ///
-    /// Called by the confirmation, never by the row's button: the dialog is
-    /// the ask, and ``confirmingDelete`` is what the button sets.
+    /// Called by the confirmation, never by a row's button: the dialog is the
+    /// ask, and ``confirmingDelete`` is what a button would set. Neither the
+    /// button nor the dialog is drawn any more.
     public func deleteHistory(_ job: ImagesJob) {
         let epoch = houseEpoch
         let client = container.client
@@ -335,8 +370,9 @@ public final class ImagesModel {
     }
 
     /// The confirmation's body for the row waiting on it — `:275`, `:278`.
-    /// Nil when nothing is waiting, so the view has one source for both the
-    /// sentence and whether to show the dialog at all.
+    /// Nil when nothing is waiting, so a view would have one source for both
+    /// the sentence and whether to show the dialog at all. **No view reads
+    /// it**: the confirmation went with the delete.
     public var deleteBody: String? {
         confirmingDelete.map { ImagesStrings.deleteBody(images: $0.imageNames.count) }
     }

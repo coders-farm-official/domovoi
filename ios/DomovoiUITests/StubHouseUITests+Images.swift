@@ -27,6 +27,22 @@ import XCTest
 /// the collector to pick up. Nothing in these cases should be weakened to
 /// make them pass before then.
 ///
+/// ### This screen is read-only from a phone, and that is why cases went
+///
+/// `POST …/generate`, `POST …/jobs/{id}/cancel` and `DELETE …/history/{id}`
+/// are all `dependencies=ADMIN_ONLY` on the plugin
+/// (`domovoi-plugin-imagegen/domovoi_plugin_imagegen/web.py:149`, applied at
+/// `:360`, `:339`, `:651`) and this app sends only `X-Device-Token`, so all
+/// three answered 401 from every phone. The controls are not drawn
+/// (2026-11-03, Kamron's answer 41; `ImagesView.swift`'s header has the
+/// evidence), and the five cases that drove them are gone — each one named
+/// where it was, with what replaced it.
+///
+/// Nothing was weakened to make a case pass: the absences are asserted by
+/// name in `testScreens_ImagesOffersNothingOnlyAnAdminCanDo`, and the rules
+/// the deleted cases covered are pinned in the package, where they need no
+/// button.
+///
 /// ### What is not tested here, and where it is tested instead
 ///
 /// **A server switch inside the generate round trip.** The only way to
@@ -100,8 +116,13 @@ extension StubHouseUITests {
         static let tileTwo = "kingfisher-02.png"
         static let tileThree = "kingfisher-03.png"
         static let fourthImage = "kingfisher-04.png"
-        /// All four are counted by the confirmation, which is what is being
-        /// deleted (`:275`), not the three on the card.
+        /// All four were counted by the confirmation, which is what was
+        /// being deleted (`:275`), not the three on the card. **The
+        /// confirmation is not drawn any more** (the delete behind it is
+        /// admin-only), so this is one of the sentences
+        /// `testScreens_ImagesOffersNothingOnlyAnAdminCanDo` denies. The
+        /// count itself is still pinned in the package
+        /// (`ImagesTests.testTheConfirmationPluralises`).
         static let deleteFourImages =
             "Delete this generation and its 4 images? This can't be undone."
 
@@ -120,6 +141,12 @@ extension StubHouseUITests {
     }
 
     /// The app's own words, spelt out for the same reason.
+    ///
+    /// Five of these — ``promptHint``, ``generate``, ``pickAModel``,
+    /// ``cancel``, ``delete`` and ``deleteTitle`` — are now words that must
+    /// be **nowhere on the screen**: they are the three admin-only controls
+    /// this app does not draw. They are kept, not deleted, because an
+    /// absence case has to deny a string somebody would actually have used.
     enum ImagesWords {
         static let engineRunning = "engine running"
         static let notInstalledTitle = "engine not installed"
@@ -142,6 +169,15 @@ extension StubHouseUITests {
         /// counts: a helper that computed `4` and `3` from the same seed the
         /// card reads would agree with the card however wrong both were.
         static let fourImagesShowingThree = "4 images, showing 3"
+        /// The part of that sentence every form of it shares, for the count
+        /// that says it is on **one** card. Not the whole sentence: the
+        /// failure the count is for is a card drawing
+        /// ``oneImageShowingOne``, which shares no suffix with the sentence
+        /// above (review 1, finding 5).
+        static let moreImagesStem = "images, showing "
+        /// What row 22 would draw if the gate on the sentence were removed,
+        /// spelt out so the denial is of a string and not of an idea.
+        static let oneImageShowingOne = "1 images, showing 1"
         /// The page's scroll view, named in `ImagesView.swift` so that
         /// ``imagesPage(_:)`` can pick it out from the shell's phone bar at
         /// any type size. Not a word anybody reads — an identifier.
@@ -209,57 +245,24 @@ extension StubHouseUITests {
         return (app, landed)
     }
 
-    /// Type into the prompt field.
+    /// The prompt field — which must not exist.
     ///
-    /// Matched by label across every element type, as `composerField` is: it
-    /// is a `TextField` with a vertical axis so that it grows with the type
-    /// size, and a vertically-growing SwiftUI field does not always report as
-    /// `.textField` in the query tree.
+    /// **It is a query for an absence now.** The composer was removed on
+    /// 2026-11-03 because `POST …/generate` is admin-only and 401s from every
+    /// phone, so three cases use this to say the field is gone and none types
+    /// into it.
+    ///
+    /// Still matched by label across every element type rather than as a
+    /// `.textField`: the field was a `TextField` with a vertical axis so that
+    /// it grew with the type size, and a vertically-growing SwiftUI field
+    /// does not always report as `.textField`. A query narrowed to
+    /// `.textFields` would therefore find nothing whether or not a field was
+    /// drawn, which is the way an absence check quietly stops checking.
     @MainActor
     func imagesPromptField(_ app: XCUIApplication) -> XCUIElement {
         app.descendants(matching: .any)
             .matching(NSPredicate(format: "label == %@", ImagesWords.promptHint))
             .firstMatch
-    }
-
-    /// A button **inside the delete confirmation**, when the screen behind it
-    /// has one by the same name.
-    ///
-    /// Both of the dialog's words collide with the screen's: the lane's
-    /// cancel is an icon button labelled `cancel` (Android's own
-    /// `contentDescription`, `:353`) and every history card has a `delete`
-    /// (`:431`). `firstMatch` takes whichever came first in the tree, and a
-    /// tap on the row's `delete` while the dialog is up would **open a second
-    /// confirmation** rather than answer the one on screen — which reads
-    /// exactly like a dialog whose buttons do nothing.
-    ///
-    /// `inSheet` cannot tell them apart here, and that is worth saying:
-    /// ``DialogCard`` is a `ZStack` overlay and not a presented sheet, so the
-    /// screen behind it stays hittable. What does tell them apart is the
-    /// dialog's own title — the card's buttons are the ones **below** it.
-    @MainActor
-    func imagesDialogButton(_ app: XCUIApplication, _ label: String) -> XCUIElement? {
-        let title = app.staticTexts[ImagesWords.deleteTitle].firstMatch
-        guard title.exists else { return nil }
-        let floor = title.frame.maxY
-        let all = app.buttons.matching(NSPredicate(format: "label == %@", label))
-        var best: XCUIElement?
-        var top = CGFloat.greatestFiniteMagnitude
-        for index in 0..<all.count {
-            let candidate = all.element(boundBy: index)
-            guard candidate.exists, candidate.frame.minY >= floor else { continue }
-            // The nearest one under the title, so a history card further down
-            // the page cannot be mistaken for the card's own button.
-            if candidate.frame.minY < top {
-                top = candidate.frame.minY
-                best = candidate
-            }
-        }
-        if best == nil {
-            print("=== NO DIALOG `\(label)` under the title — tree follows ===")
-            print(app.debugDescription)
-        }
-        return best
     }
 
     /// The `generate` button, and **not the keyboard key** that may share its
@@ -285,9 +288,10 @@ extension StubHouseUITests {
     /// cases then failed on the history half of the screen while blaming the
     /// app for a key read wrong (2026-11-02 review).
     ///
-    /// The page is taken as the **tallest** scroll view, not `firstMatch`:
-    /// the composer's own field and the picker's menu each put one in the
-    /// tree, and the one worth flicking is the one that is the page.
+    /// The page is taken by its identifier and not by `firstMatch` — every
+    /// history card's tile strip is a horizontal scroll view of its own, and
+    /// the one worth flicking is the one that is the page. ``imagesPage(_:)``
+    /// carries the whole measurement.
     /// `.slow` for ``StubHouseUITests/scrollUntilBuilt(_:_:flicks:)``'s
     /// measured reason — a plain `swipeUp()` steps over a row.
     @MainActor
@@ -382,20 +386,6 @@ extension StubHouseUITests {
         return page
     }
 
-    @MainActor
-    func imagesGenerateButton(_ app: XCUIApplication) -> XCUIElement? {
-        let ceiling = app.keyboards.firstMatch.exists
-            ? app.keyboards.firstMatch.frame.minY
-            : CGFloat.greatestFiniteMagnitude
-        let all = app.buttons.matching(NSPredicate(format: "label == %@", ImagesWords.generate))
-        for index in 0..<all.count {
-            let candidate = all.element(boundBy: index)
-            guard candidate.exists, candidate.frame.minY < ceiling else { continue }
-            return candidate
-        }
-        return nil
-    }
-
     // MARK: - the screen draws the house
 
     /// The engine line, the band, and the plugin's name — the three things
@@ -451,171 +441,28 @@ extension StubHouseUITests {
         )
     }
 
-    // MARK: - choosing a model
-
-    /// The picker offers the two installed models and **not** the third.
-    ///
-    /// A failure means the `installed` filter at `ImagesScreen.kt:148` was
-    /// dropped, and the picker would be offering a model this house cannot
-    /// run — a control that cannot do what it says.
-    @MainActor
-    func testImages_ThePickerOffersOnlyInstalledModels() throws {
-        let (app, landed) = openImages()
-        XCTAssertTrue(landed, "Images never opened")
-        let picker = app.buttons[ImagesWords.pickAModel].firstMatch
-        XCTAssertTrue(picker.waitForExistence(timeout: 20), "there is no model picker")
-        picker.tap()
-
-        // The recommended one reads with its suffix (`:318`), both spaces
-        // either side of the separator.
-        let recommended = app.buttons[StubImages.recommended].firstMatch
-        XCTAssertTrue(
-            recommended.waitForExistence(timeout: 10),
-            "the recommended model is not marked"
-        )
-        XCTAssertTrue(
-            app.buttons[StubImages.otherInstalledModel].firstMatch.exists,
-            "the second installed model is not offered"
-        )
-        evidence(app, "images-picker")
-        XCTAssertFalse(
-            containing(app, StubImages.uninstalledModel).exists,
-            "a model this house has not installed is on offer"
-        )
-
-        // Choosing is what the picker is for, and the field has to say so
-        // afterwards: a menu that opens and changes nothing is the half of
-        // this control a presence check would miss.
-        //
-        // **The other model, not the recommended one.** `SDXL Turbo` is
-        // already active — `activeModel(chosen: nil)` falls back to the first
-        // installed model (`ImagesModels.swift:107-110`) and the fixture
-        // lists `sdxl-turbo` first — so picking it changes nothing
-        // observable, and the old assertion (that `pick a model` still
-        // exists) was on the picker's static `accessibilityLabel`
-        // (`ImagesModelPicker.swift:145`), which is there whatever is chosen.
-        // Both halves passed against a menu whose buttons did nothing
-        // (2026-11-02 review). The one element that moves when a choice lands
-        // is the picker's `accessibilityValue`, which is `images.pickerLabel`
-        // (`:146`).
-        app.buttons[StubImages.otherInstalledModel].firstMatch.tap()
-        let field = app.buttons[ImagesWords.pickAModel].firstMatch
-        XCTAssertTrue(field.waitForExistence(timeout: 10), "the picker vanished after a choice")
-        XCTAssertEqual(
-            StubImages.otherInstalledModel,
-            field.value as? String,
-            "the picker does not read back the model that was chosen"
-        )
-    }
-
-    // MARK: - generating
-
-    /// `generate` is off with no prompt and on with one — `:231`'s four
-    /// conjuncts, through the two a UI case can move.
-    @MainActor
-    func testImages_GenerateIsOffWithoutAPromptAndOnWithOne() throws {
-        let (app, landed) = openImages()
-        XCTAssertTrue(landed, "Images never opened")
-        guard let button = imagesGenerateButton(app) else {
-            evidence(app, "images-no-generate")
-            return XCTFail("there is no generate button")
-        }
-        XCTAssertFalse(button.isEnabled, "generate is live with an empty prompt")
-
-        let field = imagesPromptField(app)
-        XCTAssertTrue(field.waitForExistence(timeout: 20), "there is no prompt field")
-        field.tap()
-        // Three spaces first: `prompt.isNotBlank()` is Kotlin's, and **blank**
-        // rather than empty, so whitespace must not enable it. This is the
-        // conjunct a test of "empty vs typed" alone would never reach.
-        app.typeText("   ")
-        XCTAssertFalse(
-            imagesGenerateButton(app)?.isEnabled ?? true,
-            "generate is live for a prompt of nothing but spaces"
-        )
-        app.typeText("a lantern in fog")
-        evidence(app, "images-generate-enabled")
-        XCTAssertTrue(
-            imagesGenerateButton(app)?.isEnabled ?? false,
-            "generate is still off with a prompt typed"
-        )
-    }
-
-    /// Typing a prompt and tapping `generate` puts a new `pending` job in the
-    /// lane, **with that prompt on it**.
-    ///
-    /// The prompt is the discriminating part: the fixture records the body as
-    /// it arrived, so a POST with the wrong keys queues a job with an empty
-    /// prompt and this fails. A failure also covers `jobs.refresh()` after
-    /// the write being lost.
-    @MainActor
-    func testImages_GeneratingAddsAJobToTheLane() throws {
-        let (app, landed) = openImages()
-        XCTAssertTrue(landed, "Images never opened")
-        let field = imagesPromptField(app)
-        XCTAssertTrue(field.waitForExistence(timeout: 20), "there is no prompt field")
-        field.tap()
-        let asked = "a paper submarine in a bathtub"
-        app.typeText(asked)
-
-        // **What the lane row must say, counted before the tap.**
-        //
-        // `containing` matches on `label`, and the field's label is pinned to
-        // the placeholder for VoiceOver's sake
-        // (`ImagesModelPicker.swift:86` — `.accessibilityLabel`), so the text
-        // somebody typed is the field's *value* and never its label. That is
-        // why one `containing(app, asked).exists` is a sound check on the
-        // lane today — and why it would stop being one the day the field
-        // reports its contents as a label as well. The count makes it not
-        // depend on that: whatever the composer contributes, it contributes
-        // the same before and after, and a new match is the lane's.
-        let matches = app.descendants(matching: .any)
-            .matching(NSPredicate(format: "label CONTAINS %@", asked))
-        let beforeTap = matches.count
-        guard let button = imagesGenerateButton(app) else {
-            evidence(app, "images-no-generate-2")
-            return XCTFail("there is no generate button")
-        }
-        button.tap()
-
-        let queued = containing(app, asked)
-        let appeared = queued.waitForExistence(timeout: 30)
-        evidence(app, "images-generated")
-        XCTAssertTrue(appeared, "the new job never reached the lane")
-        XCTAssertGreaterThan(
-            matches.count,
-            beforeTap,
-            "nothing new on screen carries the prompt — the POST sent it under another key"
-        )
-        XCTAssertTrue(
-            containing(app, "pending").exists,
-            "the new job is on screen without its status word"
-        )
-        // A generate that posted the prompt under another key queues a job
-        // whose title is an **empty** string — `laneTitle` is
-        // `prompt ?? model` (`ImagesScreen.kt:341`) and the fixture writes
-        // `said.get("prompt") or ""` (`fixtures/images.py:389`), so the row
-        // arrives with a `pending` pill and no words at all. The two
-        // assertions above are what deny it; a query for the empty label
-        // itself is not asserted on, because SwiftUI puts unlabelled leaves
-        // in the tree on every screen and that query would fail on a healthy
-        // app.
-        //
-        // **The prompt is not cleared** — `ImagesScreen.kt:156-170` clears
-        // neither it nor the model choice, and a second go at a prompt one
-        // word different is the ordinary next thing somebody does.
-        //
-        // The field's **value**. This read `containing(app, asked)` a second
-        // time, which is the same element the lane assertion above is about:
-        // it asserted the lane twice and the composer never, so a screen that
-        // cleared the field would have passed it (2026-11-03, strengthening
-        // after train X004).
-        XCTAssertEqual(
-            asked,
-            field.value as? String,
-            "something cleared the prompt that Android keeps"
-        )
-    }
+    // MARK: - choosing a model, and generating
+    //
+    // **Nothing here any more.** `POST …/generate` is
+    // `dependencies=ADMIN_ONLY` on the plugin
+    // (`domovoi-plugin-imagegen/domovoi_plugin_imagegen/web.py:149`, applied
+    // at `:360`) and this app sends only `X-Device-Token`, so the composer —
+    // the prompt field, the model picker and `generate` — answered 401 from
+    // every phone and is not drawn (Kamron's answer 41; `ImagesView.swift`'s
+    // header carries the evidence). Four cases went with it:
+    // `testImages_ThePickerOffersOnlyInstalledModels`,
+    // `testImages_GenerateIsOffWithoutAPromptAndOnWithOne`,
+    // `testImages_GeneratingAddsAJobToTheLane` and
+    // `testImages_ARunningJobShowsItsProgressAndCanBeCancelled`.
+    //
+    // What replaces them is in `StubHouseUITests+Screens.swift`:
+    // `testScreens_ImagesOffersNothingOnlyAnAdminCanDo` denies all three
+    // controls by name on a screen whose reads it proves are there, and
+    // `testScreens_ImagesARunningJobShowsItsProgressAndNoCancel` keeps the
+    // progress line's own assertion. The **rules** behind the deleted cases
+    // are still pinned in the package, where they do not need a button:
+    // `ImagesTests` holds the `installed` filter, `canGenerate`'s four
+    // conjuncts, the generate body and the mid-generate house switch.
 
     // MARK: - the lane
 
@@ -652,37 +499,6 @@ extension StubHouseUITests {
         XCTAssertFalse(
             app.staticTexts[StubImages.doneStatusWord].exists,
             "a `done` pill is on screen, so the lane filter took every job"
-        )
-    }
-
-    /// A running job shows `status_text · pct` and can be cancelled.
-    ///
-    /// The composed line, not either half: `:362-366` joins them, and a
-    /// screen drawing only `status_text` would pass a check for either one
-    /// alone.
-    @MainActor
-    func testImages_ARunningJobShowsItsProgressAndCanBeCancelled() throws {
-        let (app, landed) = openImages()
-        XCTAssertTrue(landed, "Images never opened")
-        XCTAssertTrue(
-            containing(app, StubImages.runningProgress).waitForExistence(timeout: 20),
-            "the progress line is not composed as `status_text · pct%`"
-        )
-        let cancel = app.buttons[ImagesWords.cancel].firstMatch
-        XCTAssertTrue(cancel.waitForExistence(timeout: 20), "the running job has no cancel")
-        evidence(app, "images-progress")
-        cancel.tap()
-
-        XCTAssertTrue(
-            waitUntilGone(containing(app, StubImages.runningPrompt), timeout: 30),
-            "the cancelled job is still in the lane"
-        )
-        // The failed row is **still there**: a cancel that removed the wrong
-        // id, or cleared the lane, would pass an assertion about the running
-        // row alone.
-        XCTAssertTrue(
-            containing(app, StubImages.failedPrompt).exists,
-            "cancelling one job took another with it"
         )
     }
 
@@ -854,20 +670,43 @@ extension StubHouseUITests {
             app.staticTexts[ImagesWords.fourImagesShowingThree].exists,
             "the card draws three of four pictures and does not say so"
         )
-        // Row 22 has one image, and a card with nothing to say says nothing:
-        // `1 images, showing 1` on every other card is the failure this
-        // half catches. `robot` is row 22's word and no other row's.
+        // Row 22 has one image, and a card with nothing to say says nothing.
+        //
+        // **This half asserted the wrong string for one round.** It counted
+        // the labels ending `images, showing 3`, and the failure it names —
+        // row 22 drawing `1 images, showing 1` once the
+        // `if job.hasMoreImagesThanTiles` gate at `ImagesJobCards.swift:221`
+        // is removed — ends `showing 1`, which that predicate never sees. The
+        // count passed against the very defect it was for (review 1,
+        // finding 5).
+        //
+        // So the discriminator is now row 22's own wording, denied by name on
+        // a card this has scrolled until it is **built** — a lazy list's foot
+        // is unbuilt, not off screen, and an absence check against an
+        // unbuilt row is the way this stops checking. `robot` is row 22's
+        // word and no other row's (`fixtures/images.py:235`).
         let oneImageRow = containing(app, StubImages.widthOnlyPrompt)
         XCTAssertTrue(
             imagesScrollUntilBuilt(app, oneImageRow),
             "the one-image history row never built"
         )
-        XCTAssertEqual(
-            1,
+        XCTAssertFalse(
+            app.staticTexts[ImagesWords.oneImageShowingOne].exists,
+            "the one-image card says `\(ImagesWords.oneImageShowingOne)`, so the "
+                + "sentence is drawn on every card rather than asked for"
+        )
+        // And the sentence is on **no more than one** card, on the stem every
+        // form of it shares. `<= 1` and not `== 1`: row 21 may have left the
+        // tree while this scrolled down to row 22, and a case that fails
+        // because a lazy list recycled a row is a case that reports the
+        // scroller. The `== 1`-shaped half of this is the existence
+        // assertion above, taken while row 21 was in the window.
+        XCTAssertLessThanOrEqual(
             app.staticTexts.matching(
-                NSPredicate(format: "label ENDSWITH %@", "images, showing 3")
+                NSPredicate(format: "label CONTAINS %@", ImagesWords.moreImagesStem)
             ).count,
-            "the sentence is on more than one card, so it is not asking the count"
+            1,
+            "two cards are counting their pictures, and only one has more than three"
         )
     }
 
@@ -915,107 +754,17 @@ extension StubHouseUITests {
     }
 
     // MARK: - deleting
-
-    /// Deleting asks first, cancelling keeps the row, confirming removes it.
-    ///
-    /// The sentence is asserted in full because the **count** in it is the
-    /// part that has been wrong on both platforms: it is every image in the
-    /// generation (`:275`), four here, not the three tiles on the card.
-    @MainActor
-    func testImages_DeletingAGenerationAsksFirst() throws {
-        let (app, landed) = openImages()
-        XCTAssertTrue(landed, "Images never opened")
-        let row = containing(app, StubImages.historyPromptWord)
-        XCTAssertTrue(imagesScrollUntilBuilt(app, row), "the history row is not on screen")
-
-        let bin = app.buttons[ImagesWords.delete].firstMatch
-        XCTAssertTrue(bin.waitForExistence(timeout: 20), "the history card has no delete")
-        bin.tap()
-
-        let asked = app.staticTexts[StubImages.deleteFourImages]
-        XCTAssertTrue(
-            asked.waitForExistence(timeout: 20),
-            "the confirmation does not say what is being deleted, or counts it wrong"
-        )
-        evidence(app, "images-delete-ask")
-        XCTAssertTrue(
-            containing(app, ImagesWords.deleteTitle).exists,
-            "the dialog has no title"
-        )
-
-        // Cancelling keeps the row. A destructive dialog whose cancel also
-        // deletes is the whole reason to test both arms.
-        guard let noThanks = imagesDialogButton(app, ImagesWords.cancel) else {
-            evidence(app, "images-delete-no-cancel")
-            return XCTFail("the confirmation has no cancel")
-        }
-        noThanks.tap()
-        XCTAssertTrue(waitUntilGone(asked, timeout: 20), "the dialog stayed up after cancel")
-        XCTAssertTrue(
-            containing(app, StubImages.historyPromptWord).exists,
-            "cancelling the confirmation deleted the generation anyway"
-        )
-
-        // Now confirm.
-        app.buttons[ImagesWords.delete].firstMatch.tap()
-        XCTAssertTrue(asked.waitForExistence(timeout: 20), "the dialog did not come back")
-        // The dialog's own `delete`, which is the one **below the dialog's
-        // title**: the row's button is behind the scrim and still in the tree,
-        // and tapping it would open a second confirmation instead of
-        // answering this one.
-        guard let confirm = imagesDialogButton(app, ImagesWords.delete) else {
-            evidence(app, "images-delete-no-confirm")
-            return XCTFail("the confirmation has no destructive button")
-        }
-        confirm.tap()
-
-        XCTAssertTrue(
-            waitUntilGone(containing(app, StubImages.historyPromptWord), timeout: 30),
-            "the generation is still in history after a confirmed delete"
-        )
-        evidence(app, "images-deleted")
-        XCTAssertTrue(
-            containing(app, ImagesWords.deleted).exists
-                || containing(app, StubImages.widthOnlyPrompt).exists,
-            "neither the toast nor the remaining row is on screen, so nothing was re-read"
-        )
-    }
+    //
+    // **Not from a phone.** `DELETE …/history/{id}` is `ADMIN_ONLY` too
+    // (`web.py:651`), so the bin and the confirmation it opened are not
+    // drawn, and `testImages_DeletingAGenerationAsksFirst` went with them.
+    // Their absence is asserted in
+    // `testScreens_ImagesOffersNothingOnlyAnAdminCanDo`, the sentence that
+    // counted the images is still pinned by `ImagesTests` in the package,
+    // and `ImagesModel.confirmDelete()` is still there and still tested for
+    // the day the plugin's three routes take the household tier.
 
     // MARK: - nothing yet, and nothing answering
-
-    /// An engine that is running and a house that has generated nothing.
-    ///
-    /// The empty state is **not** an empty screen: the header, the engine
-    /// line and the composer are all there, and `history` is not — the label
-    /// exists only when there is history (`:247`). A screen that drew the
-    /// label over nothing would be a section that is usually empty.
-    @MainActor
-    func testImages_WithNothingGeneratedYetTheComposerIsStillThere() throws {
-        let (app, landed) = openImages(how: "empty")
-        evidence(app, "images-empty")
-        XCTAssertTrue(landed, "the engine line is missing on an empty house")
-        XCTAssertTrue(
-            imagesPromptField(app).waitForExistence(timeout: 20),
-            "an empty house has no prompt field, so nothing can be generated"
-        )
-        XCTAssertFalse(
-            app.staticTexts[ImagesWords.history].exists,
-            "the history label is drawn over no history"
-        )
-        // The guard is one `if` over the label **and** the cards
-        // (`ImagesScreen.kt:247-268`, ``ImagesModel/showsHistory``), so a
-        // widened guard shows both: a heading, and whatever rows the house
-        // did not send. Asserting the label alone leaves a screen that drew
-        // the section's contents from a stale read unmentioned.
-        XCTAssertFalse(
-            containing(app, StubImages.historyPromptWord).exists,
-            "a history card is on a house that has generated nothing"
-        )
-        XCTAssertFalse(
-            containing(app, StubImages.runningPrompt).exists,
-            "the lane has a job on a house with none"
-        )
-    }
 
     /// The three states where the engine cannot do anything, and the **one**
     /// thing each of them must not have: a control.
@@ -1024,26 +773,31 @@ extension StubHouseUITests {
     /// before "no data", or a screen that is still reading announces that the
     /// plugin did not answer (`:190-195`). The ordering itself is a package
     /// test (`ImagesTests.testTheEngineLineFollowsAndroidsOrder`); this is the
-    /// three sentences on a real screen, and the absence of the composer with
-    /// them.
+    /// three sentences on a real screen, and what is not drawn beside them.
+    ///
+    /// **The composer is now absent in all three, and in the two good states
+    /// too**, so its presence is no longer the variable: `generate` is
+    /// admin-only and is not drawn at all (`ImagesView.swift`'s header).
+    /// What this case still does that no other does is prove the three
+    /// *engine* controls were never invented — install, start, download —
+    /// on the three screens that would most tempt someone to add one.
     @MainActor
     func testImages_AnEngineThatCannotRunSaysSoAndOffersNothing() throws {
-        for (how, title, composer) in [
-            ("not-installed", ImagesWords.notInstalledTitle, false),
-            // Installed but not running: Android still draws the composer,
-            // because `:215` guards on `installed` and not on `ready`. The
-            // button is what is disabled (`:231`), which is faithful: the
-            // prompt can be typed while the engine is being started.
-            ("offline", ImagesWords.offlineTitle, true),
-            ("unavailable", ImagesWords.unavailableTitle, false),
+        for (how, title) in [
+            ("not-installed", ImagesWords.notInstalledTitle),
+            // Installed but not running. Android draws the composer here —
+            // `:215` guards on `installed`, not on `ready` — and this port
+            // draws it nowhere, so the `offline` state is now the same
+            // read-only screen as the other two.
+            ("offline", ImagesWords.offlineTitle),
+            ("unavailable", ImagesWords.unavailableTitle),
         ] {
             let (app, landed) = openImages(how: how, waitingFor: title)
             evidence(app, "images-engine-\(how)")
             XCTAssertTrue(landed, "the `\(how)` state does not say `\(title)`")
-            XCTAssertEqual(
-                composer,
+            XCTAssertFalse(
                 imagesPromptField(app).exists,
-                "the composer's presence is wrong for `\(how)`"
+                "`\(how)` draws a prompt field, and nothing on this phone can send it"
             )
             if how == "unavailable" {
                 // The read's own message, which is what Android puts in the
@@ -1055,23 +809,23 @@ extension StubHouseUITests {
                     "the plugin said why it is not answering and the screen does not"
                 )
             }
-            if composer {
-                XCTAssertFalse(
-                    imagesGenerateButton(app)?.isEnabled ?? true,
-                    "generate is live with the engine offline"
-                )
-            }
             // **No engine control, in any of the three.** The dashboard owns
             // installing and starting it (`ImagesScreen.kt:70-74`), Android
             // draws no button for either, and one here would be a control
-            // that cannot do what it says.
-            for forbidden in ["install", "start engine", "start the engine", "download"] {
+            // that cannot do what it says. `generate` and `pick a model` are
+            // in the same list now and for the same reason — the route
+            // behind each of them needs an admin session this app has not
+            // got.
+            for forbidden in [
+                "install", "start engine", "start the engine", "download",
+                ImagesWords.generate, ImagesWords.pickAModel,
+            ] {
                 XCTAssertEqual(
                     0,
                     app.buttons.matching(
                         NSPredicate(format: "label CONTAINS[c] %@", forbidden)
                     ).count,
-                    "`\(how)` offers an engine control (`\(forbidden)`) that has no route"
+                    "`\(how)` offers a control (`\(forbidden)`) with no route this phone can call"
                 )
             }
             app.terminate()
@@ -1248,20 +1002,30 @@ extension StubHouseUITests {
     /// One audit over the screen, classified **by signature**.
     ///
     /// What it is looking for, in order of likelihood: contrast on the muted
-    /// meta line, which sits on a tinted card while `Color.fgMuted` was
-    /// measured against the **white** canvas; an unlabelled icon button
-    /// (cancel, delete); and a tile with no label. Never a pinned total — a
-    /// count passes for the wrong reason the moment a row is added.
+    /// text that sits on a tinted card while `Color.fgMuted` was measured
+    /// against the **white** canvas — the meta line, and now the
+    /// `4 images, showing 3` caption beside it — and a tile with no label.
+    /// Never a pinned total: a count passes for the wrong reason the moment a
+    /// row is added.
     ///
     /// **It found one, and it took the screenshot to name it.** Trains S004–
     /// S006 reported a `Contrast failed` with `element: nil`, which no tree
     /// dump could attribute; sampling the audit's own PNG put every text on
     /// the screen at 5.4:1 or better except the **disabled** `generate`
     /// button at 1.47:1 — `.borderedProminent` dims its fill and its label
-    /// towards each other, and the prompt is empty while this case runs, so
-    /// the button is disabled every time. ``ImagesGenerateButtonStyle`` draws
-    /// both states itself now. [[audit-reports-one-issue]]: when a finding
-    /// will not attribute itself, look at the picture.
+    /// towards each other, and the prompt was empty while this case ran, so
+    /// the button was disabled every time. [[audit-reports-one-issue]]: when
+    /// a finding will not attribute itself, look at the picture.
+    ///
+    /// **That button is now gone** with the rest of the composer (the route
+    /// behind it is admin-only), and so are the two unlabelled icon buttons
+    /// this used to watch — the lane's `cancel` and the card's `delete`. So
+    /// one source of findings here is removed rather than fixed, which is
+    /// worth saying plainly: if the next train still reports an anonymous
+    /// `Contrast failed`, the disabled button was not the whole of it and the
+    /// picture is again the thing to read. The caption added to the history
+    /// card is the one new muted leaf on a tinted surface, and it is the
+    /// first place to look.
     @MainActor
     @available(iOS 17.0, *)
     func testImages_PassesApplesAccessibilityAudit() throws {

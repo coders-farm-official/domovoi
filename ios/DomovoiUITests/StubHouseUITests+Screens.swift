@@ -5,11 +5,24 @@ import XCTest
 ///
 /// Its other work is asserted where it belongs — the Images sentence on the
 /// card's own case (`testImages_AHistoryCardShowsThreeTilesOfFour`), the
-/// container check in the package (`HealthChecksTests`, `HealthGuardTests`),
-/// the follow state machine in `ScreensLyricsFollowTests`. What is here is
-/// what needed a **new** case and a running app: the drag that pauses Music's
-/// lyrics and the timer that un-pauses it, the `warn again` announcement, and
-/// the News chip row with no bubble in it.
+/// container check in the package (`ScreensHealthGuardTests`), the follow
+/// state machine in `ScreensLyricsFollowTests`, the Images shapes in
+/// `ScreensImagesShapeTests`. What is here is what needed a **new** case and
+/// a running app: the drag that pauses Music's lyrics and the timer that
+/// un-pauses it, the `warn again` announcement, the News chip row with no
+/// bubble in it, and the three Images controls this app does not draw.
+///
+/// ### Three of these are about Images, and they are here rather than there
+///
+/// `StubHouseUITests+Images.swift` lost five cases when the composer, the
+/// lane's cancel and the history delete came off the screen — all three
+/// routes are admin-only on the plugin and 401 from every phone (Kamron's
+/// answer 41; `ImagesView.swift`'s header has the evidence). The cases that
+/// replace them are **new**, so they are named `testScreens_…` and their
+/// evidence is `screens-…`, which is how a train hands a result back to the
+/// branch that wrote it. They call that file's own internal helpers
+/// (`openImages`, `imagesPromptField`, `imagesTile`, `imagesScrollUntilBuilt`,
+/// `StubImages`, `ImagesWords`) and edit none of them.
 ///
 /// Every case is `testScreens_…` because that prefix is how a train hands
 /// results back to this unit (NIGHT-RULES §2).
@@ -150,10 +163,10 @@ extension StubHouseUITests {
     ///
     /// Two silenced kinds, so the case can say the two announcements differ:
     /// a label built from a constant would be the same string on both rows,
-    /// which is the defect this answers. The drawn word is asserted
-    /// separately, because the point of the change is that it did **not**
-    /// change — Android's wording stays on screen and only the announcement
-    /// grows.
+    /// which is the defect this answers. The **drawn** word did not change —
+    /// Android's wording stays on screen and only the announcement grows —
+    /// and that half is not assertable from a tree, for the reason written
+    /// out at the foot of this case.
     ///
     /// The buttons are found by their identifiers, which is how
     /// `testAiSettings_WarnAgainClearsOneKindAndLeavesTheOther` finds them: a
@@ -189,12 +202,221 @@ extension StubHouseUITests {
             "both rows announce the same thing, which is the defect this fixes"
         )
 
-        // **And the drawn word is untouched.** The kind is in the
-        // announcement only; a button that now *reads* its kind would be a
-        // rewording of Android's control, which this answer did not ask for.
+        // **The drawn word cannot be asserted from here, and this is where
+        // that is written down.**
+        //
+        // This asked for `app.staticTexts["warn again"]` for one round, which
+        // cannot pass: a SwiftUI `Button` whose label is a `Text` is **one**
+        // accessibility element with no `StaticText` child. Train I001's tree
+        // for this very panel shows it —
+        // `att/testAiSettings_WarnAgainClearsOneKindAndLeavesTheOther/`
+        // `aisettings-two-silenced-tree_…txt:35,37`:
+        // `Button, …, identifier: 'aisettings-warn-again-calc',`
+        // `label: 'warn again'`, with nothing under it. And after this change
+        // the Button's own label is `warn again, <kind>`, so the bare three
+        // words are on no element in any form (review 1, finding 2).
+        //
+        // The drawn word *is* untouched — `AiSettingsChatPanel.swift:134` is
+        // still `Button(AiSettingsStrings.warnAgain)` — and the wording
+        // itself is pinned against the Kotlin in the package, where it needs
+        // no tree:
+        // `AiSettingsStringsTests.testTheChatPanelSaysWhatTheKotlinSays`.
+        //
+        // What a tree *can* say is that **no row was left behind**: a kind
+        // whose button never got its `accessibilityLabel` would announce the
+        // bare three words, which is the defect answer 2 is about and the one
+        // thing the two equalities above cannot see (they name their two
+        // rows). On this seed both rows are silenced, so the count is zero.
+        XCTAssertEqual(
+            0,
+            app.buttons.matching(
+                NSPredicate(format: "label == %@", ScreensWords.warnAgain)
+            ).count,
+            "a `warn again` button still announces the bare three words, so one "
+                + "row was left without its kind"
+        )
+    }
+
+    // MARK: - Images draws nothing only an admin can use
+
+    /// **The three admin-only controls are not on the screen** — and the
+    /// screen is there, which is the half that makes the other half mean
+    /// something.
+    ///
+    /// `POST …/generate` (`web.py:360`), `POST …/jobs/{id}/cancel` (`:339`)
+    /// and `DELETE …/history/{id}` (`:651`) all carry
+    /// `dependencies=ADMIN_ONLY` (`:149`), which classifies through
+    /// `check_admin_request` (`domovoi/admin_auth.py:1245-1274`) — a Bearer
+    /// session and the dashboard's cookie, never `X-Device-Token`. This app
+    /// sends only the device token, so all three answered 401 from every
+    /// phone, every time. Kamron's answer 41: "admin-only things stay off
+    /// both phones". `ImagesView.swift`'s header carries the whole argument
+    /// and the one plugin change that would bring them back.
+    ///
+    /// ### Why the order of the assertions is the test
+    ///
+    /// An absence check on a screen that did not draw passes for the wrong
+    /// reason, and so does one against a row a lazy list has not built. So
+    /// this walks the page the way a person would:
+    ///
+    /// 1. the engine line, which only a completed `…/models` read can draw —
+    ///    `openImages` already waits for it;
+    /// 2. the **composer's** three words denied while the top of the page is
+    ///    the window, because the composer was at the top and a page already
+    ///    scrolled past it would deny them vacuously;
+    /// 3. the history card scrolled until it is built, then the `delete`, the
+    ///    confirmation's title and the confirmation's own sentence denied —
+    ///    with the card's tiles and its `4 images, showing 3` asserted
+    ///    present, so the denial is of a card that is really there.
+    ///
+    /// `testAudiobooks_NoControlPromisesWhatThisAppCannotDo` is the same
+    /// shape, and this is the Images half of it.
+    @MainActor
+    func testScreens_ImagesOffersNothingOnlyAnAdminCanDo() throws {
+        let (app, landed) = openImages()
+        XCTAssertTrue(landed, "Images never drew `engine running`")
+        evidence(app, "screens-40-images-readonly")
+
+        // 1. The composer, at the top of the page where it used to be.
+        XCTAssertFalse(
+            imagesPromptField(app).exists,
+            "the prompt field is drawn, and `POST …/generate` 401s from this phone"
+        )
+        for (what, label) in [
+            ("generate", ImagesWords.generate),
+            ("the model picker", ImagesWords.pickAModel),
+        ] {
+            XCTAssertEqual(
+                0,
+                app.buttons.matching(NSPredicate(format: "label == %@", label)).count,
+                "\(what) is drawn, and the route behind it needs an admin session"
+            )
+        }
+        // The picker's own menu wording, which nothing else on the screen
+        // spells with two spaces either side of the separator: a picker drawn
+        // without its `accessibilityLabel` would slip past the query above
+        // and not past this one.
+        XCTAssertFalse(
+            containing(app, StubImages.recommended).exists,
+            "the model menu's `recommended` wording is on screen"
+        )
+
+        // 2. The lane's cancel. The running job is asserted present first —
+        // the cancel was drawn only for an active job (`:347`), so a lane
+        // with nothing in it would deny the button for the wrong reason.
         XCTAssertTrue(
-            app.staticTexts[ScreensWords.warnAgain].exists,
-            "the visible `warn again` is gone from the panel"
+            containing(app, StubImages.runningPrompt).exists,
+            "the running job is not in the lane, so a missing cancel proves nothing"
+        )
+        XCTAssertEqual(
+            0,
+            app.buttons.matching(
+                NSPredicate(format: "label == %@", ImagesWords.cancel)
+            ).count,
+            "the lane draws a cancel, and `…/jobs/{id}/cancel` 401s from this phone"
+        )
+
+        // 3. The history card's delete, on a card scrolled until it is built.
+        let tile = imagesTile(app, showing: StubImages.tileOne)
+        XCTAssertTrue(
+            imagesScrollUntilBuilt(app, tile),
+            "the history card never built, so nothing below was really checked"
+        )
+        XCTAssertTrue(
+            app.staticTexts[ImagesWords.fourImagesShowingThree].exists,
+            "the card that should carry the count does not, so this is the wrong card"
+        )
+        evidence(app, "screens-41-images-history-no-delete")
+        XCTAssertEqual(
+            0,
+            app.buttons.matching(
+                NSPredicate(format: "label == %@", ImagesWords.delete)
+            ).count,
+            "a history card draws a delete, and `DELETE …/history/{id}` 401s here"
+        )
+        // And nothing opened the confirmation either — a dialog on a screen
+        // with no button to open it would be a scrim nobody asked for.
+        XCTAssertFalse(
+            app.staticTexts[ImagesWords.deleteTitle].exists,
+            "the delete confirmation is on screen"
+        )
+        XCTAssertFalse(
+            app.staticTexts[StubImages.deleteFourImages].exists,
+            "the confirmation's sentence is on screen"
+        )
+    }
+
+    /// A running job shows `status_text · pct`, and has **no cancel**.
+    ///
+    /// The progress half is
+    /// `testImages_ARunningJobShowsItsProgressAndCanBeCancelled`'s, which
+    /// went with the control its name promised: the composed line, not either
+    /// half of it, because `:362-366` joins them and a screen drawing only
+    /// `status_text` would pass a check for either one alone.
+    ///
+    /// The cancel is denied here as well as in the case above, and it is not
+    /// a duplicate: that one walks the whole screen and this one is the lane
+    /// row's own case, so a lane that grew a cancel back fails the case named
+    /// after the row it is on.
+    @MainActor
+    func testScreens_ImagesARunningJobShowsItsProgressAndNoCancel() throws {
+        let (app, landed) = openImages()
+        XCTAssertTrue(landed, "Images never opened")
+        XCTAssertTrue(
+            containing(app, StubImages.runningProgress).waitForExistence(timeout: 20),
+            "the progress line is not composed as `status_text · pct%`"
+        )
+        evidence(app, "screens-42-images-progress")
+        XCTAssertEqual(
+            0,
+            app.buttons.matching(
+                NSPredicate(format: "label == %@", ImagesWords.cancel)
+            ).count,
+            "the running job's row draws a cancel this phone cannot send"
+        )
+        // The failed row is still beside it: a lane that drew only the
+        // running job would pass the two assertions above.
+        XCTAssertTrue(
+            containing(app, StubImages.failedPrompt).exists,
+            "the failed job left the lane — a dead generation nobody can see"
+        )
+    }
+
+    /// A house that has generated nothing: the engine line, and **nothing
+    /// else**.
+    ///
+    /// `testImages_WithNothingGeneratedYetTheComposerIsStillThere`'s, with
+    /// its one premise inverted — the composer is not there on any house now.
+    /// What survives unchanged is the part that was always the point: the
+    /// `history` label exists only when there is history (`:247`,
+    /// ``ImagesModel/showsHistory``), so a screen that drew the label over
+    /// nothing would be a section that is usually empty.
+    ///
+    /// The guard is one `if` over the label **and** the cards
+    /// (`ImagesScreen.kt:247-268`), so a widened guard shows both: a heading,
+    /// and whatever rows the house did not send. Asserting the label alone
+    /// leaves a screen that drew the section's contents from a stale read
+    /// unmentioned.
+    @MainActor
+    func testScreens_ImagesWithNothingGeneratedYetIsTheEngineLineOnly() throws {
+        let (app, landed) = openImages(how: "empty")
+        evidence(app, "screens-43-images-empty")
+        XCTAssertTrue(landed, "the engine line is missing on an empty house")
+        XCTAssertFalse(
+            imagesPromptField(app).exists,
+            "an empty house draws a prompt field, and nothing can send it"
+        )
+        XCTAssertFalse(
+            app.staticTexts[ImagesWords.history].exists,
+            "the history label is drawn over no history"
+        )
+        XCTAssertFalse(
+            containing(app, StubImages.historyPromptWord).exists,
+            "a history card is on a house that has generated nothing"
+        )
+        XCTAssertFalse(
+            containing(app, StubImages.runningPrompt).exists,
+            "the lane has a job on a house with none"
         )
     }
 
@@ -328,8 +550,14 @@ enum ScreensWords {
     static let followChip = "follow the song again"
 
     /// `ChatSettingsPanel.kt:71` — the word every row draws, and the first
-    /// half of what each row now announces. Asserted as the drawn text as
-    /// well: answer 2 grew the announcement and left the wording alone.
+    /// half of what each row now announces.
+    ///
+    /// **Not assertable as drawn text.** A `Button` with a `Text` label has
+    /// no `StaticText` child, so the word is only ever read off the Button's
+    /// own label — which now ends with the kind. It is used here as the
+    /// prefix the announcements are built from, and as the bare label that
+    /// must appear on **no** button (a row whose `accessibilityLabel` was
+    /// forgotten).
     static let warnAgain = "warn again"
 
     /// The initials of the People seed's whole roster — Kamron and Chevy,

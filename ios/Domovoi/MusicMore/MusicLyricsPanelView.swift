@@ -24,16 +24,30 @@ import SwiftUI
 /// ``MusicLyricsResult/failed`` carries no message, and nothing here builds
 /// one — ``MusicMoreStrings/lyricsFailed`` is a fixed sentence.
 ///
+/// ### The panel comes back to the song by itself
+///
+/// A drag pauses following and it resumes four seconds after the drag **ends**
+/// — Android's `FOLLOW_PAUSE_MS` (`LyricsPanel.kt:468-485`, `:118`), Kamron's
+/// answer 35. This view only **reports the phase** (`.onScrollPhaseChange`,
+/// below); the timer is ``MusicRoomLyricsModel/handReleased()``'s, in a model
+/// that outlives this `ScrollView`.
+///
+/// It was left out for one round on the argument that SwiftUI has no
+/// drag-interaction stream and a timer started from a scroll phase would
+/// guess at the gesture — and that argument stayed in this header, in the
+/// same commit that built the feature 160 lines below it (review 1,
+/// finding 4). What answers it is that `.interacting` is reported for a
+/// finger and for nothing else, so a release that follows no pause starts
+/// nothing: the model refuses it, and `ScreensLyricsFollowTests`'
+/// `testAReleaseWithNoDragBeforeItStartsNothing` is the measurement. The
+/// `follow` chip stays as well — Android ships it too — and is the immediate
+/// way back.
+///
 /// ### What is not, and why there is no control for it
 ///
 /// * **A tap on a line to seek.** Rooms cannot seek — there is no route, and
 ///   Android's tap is local-and-seekable only (`LyricsPanel.kt:461`). The
 ///   lines here are text, not buttons.
-/// * **The 4-second automatic resume after a drag** (`LyricsPanel.kt:468`).
-///   SwiftUI has no drag-interaction stream for a `ScrollView`; a timer
-///   started from a scroll phase guesses at the gesture and yanks the list
-///   out from under a finger when it guesses wrong. The `follow` chip —
-///   which Android also ships — is the way back (DECISIONS).
 /// * **Anything that fetches or re-fetches lyrics.** The lyrics router
 ///   writes nothing at all (`lyrics.py:26`), so a "look again" button would
 ///   have no route behind it. `retry` exists for a failed **read** only.

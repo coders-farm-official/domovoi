@@ -51,14 +51,31 @@ import Foundation
 /// (`web.py:15-21`), and it is in every shipped version from 1.0.1 on
 /// (1.0.0 had `/generate` ungated).
 ///
-/// The controls are **not removed in this batch** and the three paths stay
-/// here. The honest fix is a decision above a builder: device-tier the three
-/// mutations in the plugin (a repo this batch must not edit), or take the
-/// buttons out of both apps — which is the shape Kamron chose for the
-/// identical finding on room drop-in's `start` (answer 5, ledger #22). It is
-/// the first item of this unit's REPORT.md and DECISIONS.md, and until it is
-/// answered the toast a failed generate already shows carries the server's
-/// own words (``ImagesStrings/generateFailed(_:)``).
+/// **So the three controls are gone** (2026-11-03, round 2). Generate, the
+/// lane's cancel and the history delete are not drawn on this screen any
+/// more: a control that cannot do what it says is not drawn (NIGHT-RULES §3
+/// bullet 1 names "no button that 401s every time from a phone" exactly), and
+/// Kamron settled the same shape twice in the same answer set — answer 5
+/// (hide Android's room-to-room `start`) and answer 41, "admin-only things
+/// stay off both phones". ``ImagesView``'s header is where a reader of the
+/// screen meets that argument.
+///
+/// **The three paths stay here, and so does the plumbing they belong to.**
+/// They are not dead ends being kept for sentiment: every one is verified
+/// against the plugin line by line above, each is pinned by a package test,
+/// and ``ImagesModel/generate()``, ``ImagesModel/cancel(_:)`` and
+/// ``ImagesModel/confirmDelete()`` are all still here and still exercised.
+/// What they are missing is a caller in a view. Giving the plugin's three
+/// mutations the household tier (`enforce_route_tier`,
+/// `domovoi/webkit.py:333-360`) is one change in a repository this batch must
+/// not edit, and the day it lands the screen draws the controls again —
+/// logged under "Needs a shared change" in
+/// `design-notes/ios/batch-2026-11-03/screens/DECISIONS.md`.
+///
+/// Said plainly, because [[reasoning-that-hides-a-bug]] is a real trap on
+/// this track: a seam with no caller is **not** evidence that the app can do
+/// the thing. `AudiobookModels.safeLibraryPath` carries the same warning for
+/// the same reason.
 public enum ImagesPaths {
 
     /// `ImagesScreen.kt:76`, and the mount the dashboard gives a plugin
@@ -124,7 +141,8 @@ public enum ImagesPaths {
     ///   have; it is logged in DECISIONS rather than built.
     public static let history = "\(root)/history"
 
-    // MARK: - the three writes (every one admin-only on the server)
+    // MARK: - the three writes (every one admin-only on the server, and
+    // every one with no control behind it — see this type's own header)
 
     /// `ImagesScreen.kt:162`. The reply is ignored; `jobs` is re-read.
     ///
@@ -133,7 +151,9 @@ public enum ImagesPaths {
     /// reply is `{"job": <row>}` (`:396`), which the app does not read, and
     /// the route 409s for a model that is not installed (`:368`) and 503s
     /// with the engine not reachable (`:373`) — both of which arrive as the
-    /// server's own words in ``ImagesStrings/generateFailed(_:)``.
+    /// server's own words in ``ImagesStrings/generateFailed(_:)`` — a toast
+    /// nothing on the screen can raise any more, since no control calls
+    /// ``ImagesModel/generate()``.
     public static let generate = "\(root)/generate"
 
     /// `ImagesScreen.kt:350`.
@@ -211,9 +231,10 @@ public enum ImagesPaths {
     /// has.
     ///
     /// A prompt longer than 4000 characters is a 422 whose `detail` names the
-    /// field, which reaches the person through
+    /// field, which would reach the person through
     /// ``ImagesStrings/generateFailed(_:)`` (Kamron's answer 44: a 422's
-    /// field list is not stripped).
+    /// field list is not stripped) — "would", because nothing on the screen
+    /// sends this body today.
     ///
     /// Through `JSONEncoder` rather than string interpolation, because a
     /// prompt is free text: it holds quotation marks, newlines and emoji by

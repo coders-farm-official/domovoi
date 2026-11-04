@@ -447,51 +447,6 @@ final class HealthChecksTests: XCTestCase {
         )
     }
 
-    /// **A read that answered and checked nothing is `not checked yet`** —
-    /// Kamron's answers 7 and 24, at the function rather than at the engine.
-    ///
-    /// `loaded` with tier ``ContainerGuardState/Tier/none`` is every state
-    /// where a route came back and told this phone nothing about any
-    /// container: a server older than the guard (404 on both reads), and a
-    /// phone the guard refuses (401/403). It used to be **green** — `every
-    /// container Domovoi expects looks right`, for something nobody checked —
-    /// and `guardCheck` now asks
-    /// ``ContainerGuardState/checkedSomething`` instead of `loaded`.
-    ///
-    /// Four assertions and not one, because each is a different way the fix
-    /// could be half-made: the words, the tone, that it is not counted as a
-    /// problem, and that the derived question itself says no. The engine's
-    /// own two branches are pinned next door
-    /// (`HealthGuardTests.testAServerWithNoGuardIsLoadedAndSaysNotCheckedYet`,
-    /// `…testARefusedReadAlsoSaysNotCheckedYet`).
-    func testARouteThatAnsweredAboutNothingIsNotAGreenTick() {
-        let answeredAboutNothing = ContainerGuardState(loaded: true, tier: .none)
-        XCTAssertFalse(answeredAboutNothing.checkedSomething)
-        let check = guardCheck(answeredAboutNothing)
-        XCTAssertEqual(HealthStrings.unread, check.text)
-        XCTAssertEqual(.idle, check.tone)
-        XCTAssertFalse(check.problem)
-    }
-
-    /// And the same state **with** a banner is still the banner's story.
-    ///
-    /// The grey arm is first, so a server that answered about nothing *and*
-    /// somehow raised a banner would read `not checked yet` — which is the
-    /// one case where the new order could lose a real problem. It cannot
-    /// happen (a banner comes from a payload or a summary, and either of
-    /// those is a tier), and it is asserted so that a future engine which
-    /// made it happen fails here rather than hiding a failure behind a grey
-    /// tick.
-    func testABannerWithNoTierIsNotReachableAndIsPinnedAnyway() {
-        let impossible = ContainerGuardState(
-            loaded: true, tier: .none, bannerShows: true, bannerTone: .error, incidentIDs: [1]
-        )
-        XCTAssertEqual(
-            HealthStrings.unread, guardCheck(impossible).text,
-            "if this ever changes, the engine has started raising banners with no tier"
-        )
-    }
-
     /// `HomeGuardRowTest.oneFailureReadsItsOwnWords` — the server's summary,
     /// trailing full stop trimmed, first character lower-cased.
     func testOneFailureReadsItsOwnWords() {

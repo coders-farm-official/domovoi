@@ -26,6 +26,27 @@ import XCTest
 /// taken, the task would wake, find itself uncancelled, and turn following
 /// on. Each one also arranges for `following` to be **false** at that moment,
 /// so the stale resume has something to change.
+///
+/// ### And `following` alone was not enough — ``Rig/resumesThatWoke``
+///
+/// Those four cases watched `following` and nothing else, which is a weaker
+/// measurement than their names claimed. The model checks three things
+/// **after** the sleep that it could not check before it — `Task.isCancelled`,
+/// `onScreen` and `!handDown` (`MusicRoomLyricsModel.swift:324`) — and every
+/// one of those guards blocks a woken stale task whether or not the cancel
+/// ever happened. A review deleted `resume?.cancel()` from
+/// ``MusicRoomLyricsModel/handPaused()`` and all ten cases passed (review 1,
+/// finding 6, SAB1): the behaviour survived on the guard alone, so the brace
+/// was doing the belt's work and nothing here could tell.
+///
+/// What tells them apart is the **wait itself**. A cancelled task's
+/// `Task.sleep` throws, so the sleeper never returns — and the rig now counts
+/// the resume waits that **returned**. A cancel case releases the park and
+/// then asserts that count is still zero, which is false the moment the
+/// cancel is missing, guard or no guard. The positive control is
+/// `testTheDragEndingStartsOneFourSecondResumeThatComesBackByItself`, which
+/// asserts the same counter is **one**: a counter that never increments
+/// proves nothing.
 @MainActor
 final class ScreensLyricsFollowTests: XCTestCase {
 
@@ -60,6 +81,19 @@ final class ScreensLyricsFollowTests: XCTestCase {
         /// that cannot fail.
         let ranOut: Shared<Bool>
 
+        /// How many resume waits **returned** rather than throwing.
+        ///
+        /// This is the one thing in the rig that can tell a cancelled resume
+        /// from a sleeping one, and it is why the four cancel cases are now
+        /// about the cancel rather than about the guard behind it (this
+        /// file's header). A cancelled task's `Task.sleep` throws, so a
+        /// cancelled wait never reaches the increment; a wait that was merely
+        /// parked and then released does.
+        ///
+        /// Counted inside the sleeper and not in the model, so the model
+        /// carries no test hook: the sleeper is injected for exactly this.
+        let resumesThatWoke: Shared<Int>
+
         /// Let a parked resume finish, if it is still alive to finish.
         ///
         /// Named rather than `releaseResume.set(true)` at six call sites,
@@ -91,6 +125,7 @@ final class ScreensLyricsFollowTests: XCTestCase {
         let waits = Shared<[Int64]>([])
         let release = Shared<Bool>(false)
         let ranOut = Shared<Bool>(false)
+        let woke = Shared<Int>(0)
         let model = MusicRoomLyricsModel(
             room: "living room",
             store: MusicLyricsStore(container: container, clock: { 0 }),
@@ -104,18 +139,41 @@ final class ScreensLyricsFollowTests: XCTestCase {
                     return
                 }
                 waits.mutate { $0.append(ms) }
-                guard parkTheResume else { return }
+                guard parkTheResume else {
+                    try Task.checkCancellation()
+                    woke.mutate { $0 += 1 }
+                    return
+                }
                 // **Bounded**, like every wait in this suite, and `Task.sleep`
                 // is what throws when the task is cancelled — the mechanism
-                // these cases are about.
+                // these cases are about. A throw leaves ``Rig/resumesThatWoke``
+                // alone, which is what makes that counter a cancel detector:
+                // every path out of here that is *not* a cancellation
+                // increments it.
+                //
+                // `Task.checkCancellation()` before the increment, and it is
+                // not belt and braces: a cancel case cancels the task and
+                // releases the park in the same main-actor turn, so a 2 ms
+                // sleep that happened to return in that same instant would
+                // read `release` as true and report a wake for a task that
+                // had already been cancelled. The window is tiny and the
+                // flake it would cause is the worst kind — a case that fails
+                // once a month on the mechanism it is about.
                 for _ in 0..<500 {
-                    if release.current { return }
+                    if release.current {
+                        try Task.checkCancellation()
+                        woke.mutate { $0 += 1 }
+                        return
+                    }
                     try await Task.sleep(for: .milliseconds(2))
                 }
                 ranOut.set(true)
             }
         )
-        return Rig(model: model, resumeWaits: waits, releaseResume: release, ranOut: ranOut)
+        return Rig(
+            model: model, resumeWaits: waits, releaseResume: release,
+            ranOut: ranOut, resumesThatWoke: woke
+        )
     }
 
     /// Real time, so a task woken from a 2 ms sleep has certainly run.
@@ -183,6 +241,11 @@ final class ScreensLyricsFollowTests: XCTestCase {
 
     /// The drag ending starts exactly one four-second resume, and following
     /// comes back by itself when it fires.
+    ///
+    /// **Also the positive control for ``Rig/resumesThatWoke``.** Every
+    /// cancel case below asserts that counter is zero, and a counter that is
+    /// always zero would make all four of them vacuous — which is the shape
+    /// the four of them were in before it existed (this file's header).
     func testTheDragEndingStartsOneFourSecondResumeThatComesBackByItself() async {
         let rig = rig(parkTheResume: false)
         rig.model.start()
@@ -194,6 +257,11 @@ final class ScreensLyricsFollowTests: XCTestCase {
         XCTAssertEqual(
             [MusicRoomLyricsModel.followResumeMs], rig.resumeWaits.current,
             "one resume, and it waited the four seconds Android waits"
+        )
+        XCTAssertEqual(
+            1, rig.resumesThatWoke.current,
+            "a resume that fired must have woken, or the counter the cancel "
+                + "cases rest on cannot move at all"
         )
     }
 
@@ -242,16 +310,23 @@ final class ScreensLyricsFollowTests: XCTestCase {
         rig.model.handReleased()
         await settleUntil({ !rig.resumeWaits.current.isEmpty }, "the resume starting")
 
-        // The finger is back down, and following is off again. Releasing the
-        // park now is what tells a cancelled resume from a sleeping one: an
-        // uncancelled task would wake and turn following on with a finger on
-        // the list, which is the yank.
+        // The finger is back down, and following is off again. Releasing
+        // the park now is what tells a cancelled resume from a sleeping one —
+        // **but only together with the counter**: `following` staying false
+        // is also what the post-sleep `!handDown` guard produces, so on its
+        // own this assertion passes against a `handPaused()` that cancels
+        // nothing (review 1, SAB1).
         rig.model.handPaused()
         rig.letTheResumeFinish()
         await letTheResumeWakeIfItLives()
         XCTAssertFalse(
             rig.model.following,
             "the first drag's resume fired while a second finger was on the list"
+        )
+        XCTAssertEqual(
+            0, rig.resumesThatWoke.current,
+            "the first drag's resume was released and woke, so `handPaused()` "
+                + "never cancelled it — only the post-sleep guard stopped it"
         )
         XCTAssertFalse(rig.ranOut.current, "the parked resume ran its bound out")
 
@@ -274,6 +349,11 @@ final class ScreensLyricsFollowTests: XCTestCase {
         rig.letTheResumeFinish()
         await letTheResumeWakeIfItLives()
         XCTAssertFalse(rig.model.following, "a panel that is gone published into itself")
+        XCTAssertEqual(
+            0, rig.resumesThatWoke.current,
+            "`stop()` left the resume asleep instead of cancelling it; only the "
+                + "post-sleep `onScreen` guard stopped it publishing"
+        )
         XCTAssertFalse(rig.ranOut.current)
     }
 
@@ -290,13 +370,19 @@ final class ScreensLyricsFollowTests: XCTestCase {
         rig.model.serverChanged()
         XCTAssertTrue(rig.model.following, "a new house's words follow from the top")
         // Pause again, so the stale resume has something to change, then let
-        // it wake.
+        // it wake. The counter is what says `serverChanged()` did the
+        // cancelling — the pause above also arms the `!handDown` guard, and
+        // that guard alone would keep `following` false.
         rig.model.handPaused()
         rig.letTheResumeFinish()
         await letTheResumeWakeIfItLives()
         XCTAssertFalse(
             rig.model.following,
             "the old house's resume was still running and turned following on"
+        )
+        XCTAssertEqual(
+            0, rig.resumesThatWoke.current,
+            "`serverChanged()` did not cancel the old house's resume"
         )
         XCTAssertFalse(rig.ranOut.current)
     }
@@ -316,6 +402,10 @@ final class ScreensLyricsFollowTests: XCTestCase {
         rig.letTheResumeFinish()
         await letTheResumeWakeIfItLives()
         XCTAssertFalse(rig.model.following, "the old song's resume was still running")
+        XCTAssertEqual(
+            0, rig.resumesThatWoke.current,
+            "`offer(trackID:)` did not cancel the old song's resume"
+        )
         XCTAssertFalse(rig.ranOut.current)
     }
 
@@ -344,6 +434,11 @@ final class ScreensLyricsFollowTests: XCTestCase {
         )
         XCTAssertEqual(
             1, rig.resumeWaits.current.count, "the chip started a resume of its own"
+        )
+        XCTAssertEqual(
+            0, rig.resumesThatWoke.current,
+            "``MusicRoomLyricsModel/follow()`` left the timer asleep rather than "
+                + "cancelling it, so the chip and the timer are racing"
         )
         XCTAssertFalse(rig.ranOut.current)
     }
