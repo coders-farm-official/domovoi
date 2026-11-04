@@ -397,7 +397,12 @@ final class AudiobookModelsTests: XCTestCase {
         XCTAssertEqual("/api/audiobooks?sort=title&q=" + String(repeating: "a", count: 200), path)
     }
 
-    func testThePositionRoutesCarryTheDeviceAndNoPerson() {
+    /// With **no listener picked** — the state every phone starts in — the
+    /// two reads carry the device and nothing else. The listener half is
+    /// `AudiobookListenerTests` (D11, 2026-11-03): the parameter exists now,
+    /// and `person_id=` empty would still be a different key to the server
+    /// rather than an absent one, which is what this pins.
+    func testThePositionRoutesCarryTheDeviceAndNoPersonWhenNobodyIsPicked() {
         XCTAssertEqual(
             "/api/audiobooks/7/position?device_id=ios-1",
             AudiobookPath.position(7, deviceID: "ios-1")
@@ -408,7 +413,8 @@ final class AudiobookModelsTests: XCTestCase {
         )
         XCTAssertFalse(
             AudiobookPath.position(7, deviceID: "ios-1").contains("person_id"),
-            "there is no listener person on iOS, and person_id= empty is a different key"
+            "a phone with no listener picked must send no person_id at all: "
+                + "person_id= empty is a different key to the server"
         )
     }
 
