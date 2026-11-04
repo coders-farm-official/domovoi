@@ -178,22 +178,33 @@ struct RoomsRoomScreen: View {
     let model: RoomsModel
     let open: RoomsOpenRoom
 
-    /// Whether **this** view is the one holding ``RoomsModel`` up.
+    /// This screen's hold on ``RoomsModel``, and the room it opened.
     ///
-    /// The guard that makes `onAppear`/`onDisappear` safe to receive twice.
-    /// `@State`, so it belongs to this view's identity: one push, one hold,
-    /// one release, whatever order and however many times the two callbacks
-    /// arrive.
-    @State private var held = false
+    /// **`@State`, so it is this view's identity and not this view's
+    /// visibility** — which is review round 4's must, and the whole of
+    /// ``RoomsScreenHold``'s doc comment. A covered screen keeps its `@State`
+    /// and a popped one does not, so the object is the one thing in SwiftUI
+    /// that can tell a cover from a destruction; `onDisappear` cannot, and
+    /// this screen used to ask it to. `hold == nil` is also the guard that
+    /// makes a repeated `onAppear` do nothing.
+    @State private var hold: RoomsScreenHold?
 
     /// This room's reads, taken in `onAppear` and never given back.
     ///
     /// Taken there rather than in `body` for two reasons.
     /// ``RoomsModel/reads(for:)`` builds and **caches** on first use, and a
     /// `body` that writes the cache it also reads is a redraw asking for
-    /// itself. And an `@State` of this view's is the one place a reads object
-    /// cannot be taken away from under a live call — ``RoomsModel/openReads``
-    /// can, which is the must above.
+    /// itself. And an `@State` of this view's is the one **reference** a
+    /// redraw cannot change under a live call, where ``RoomsModel/openReads``
+    /// is derived from a property a lifetime callback used to clear.
+    ///
+    /// The honest limit, which review round 4's SHOULD 1 was right about: the
+    /// reference cannot be taken away, the **object** can.
+    /// ``RoomsModel/stop()`` stops every value in `byRoom` and empties it, so
+    /// after a stop this would hold a `RoomsRoomModel` whose seven reads are
+    /// all down. What closes that is not this property — it is that `stop()`
+    /// can no longer be reached while this screen is mounted, which is the
+    /// must above.
     @State private var reads: RoomsRoomModel?
 
     /// The pushed room, as the roster has it **now**.
@@ -223,47 +234,40 @@ struct RoomsRoomScreen: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .navigationTitle(RoomsStrings.roomTitle(open.roomID))
         .navigationBarTitleDisplayMode(.inline)
-        // **All four on one mechanism**, which review round 1 was right to
-        // pull on. It used to be `model.open(_:)` from `.task` — justified by
-        // "a sheet presented over this screen can fire `onAppear` again" —
-        // and `hold()`/`release()` from `onAppear`/`onDisappear`, under a
-        // sheet this very screen presents (``RoomsDropInRow``). Both halves
-        // cannot be right: if an extra `onAppear` can arrive, it took the
-        // holder count to 2 and the model never stopped; if it cannot, the
-        // reason for `.task` was never there.
+        // **One callback, and nothing on the way out.** Review round 4's
+        // must, which is the third round this screen's lifetime has taken.
         //
-        // So: one pair of callbacks, made safe against arriving more than
-        // once. ``held`` is this view's own, so a second `onAppear` holds
-        // nothing twice and a second `onDisappear` releases nothing twice —
-        // the count is balanced whatever SwiftUI does. And
-        // ``RoomsModel/open(_:)`` is idempotent, so re-entering cannot put
-        // the tab strip back to `overview`, which is the one harm `.task`
-        // was there to prevent.
+        // It was `model.open(_:)` from `.task` and `hold()`/`release()` from
+        // `onAppear`/`onDisappear`; then all four on that pair, guarded
+        // against arriving twice. Both shapes rest on the same false premise:
+        // that `onDisappear` means this screen has gone. It does not — a
+        // covered view goes on receiving it while it is still mounted and
+        // still drawing, which is the whole reason
+        // ``RoomsModel/holders`` is a count — and this screen presents a
+        // sheet of its own, so the cover is not hypothetical. What ran under
+        // that sheet was `release()` to zero (the roster released when the
+        // room was pushed, so this screen is the only holder) and then
+        // ``RoomsModel/stop()`` one hop later, which hangs the live call up:
+        // `call?.abandon()`. And `close()`, which cleared the property
+        // `open(_:)`'s idempotence is measured on, so the uncover put the tab
+        // strip back to `overview`.
         //
-        // **What these two may write, after review round 3's must.** A
-        // covered view goes on receiving this pair — that is the whole
-        // reason ``RoomsModel/holders`` is a count — so neither of them may
-        // write anything `body` draws from. `hold()`/`release()` are a
-        // balanced count and ``RoomsModel/close()`` is now
-        // ``RoomsModel/openRoomID`` alone, which nothing on this screen
-        // reads any more. The reads are taken into ``reads`` here for the
-        // same reason.
+        // The cover and the pop deliver the same callback, so the difference
+        // cannot be read from the callback. It can be read from the `@State`:
+        // ``hold`` is a ``RoomsScreenHold``, which opens the room and holds
+        // the model in its initialiser and gives both back in its `deinit`.
+        // A cover keeps the state and the hold; a pop destroys the state and
+        // ``RoomsModel/roomScreenGone(_:)`` runs. Android draws the line in
+        // the same place — `onDispose`, not the dialog going up
+        // (`PhoneDropinCall.kt:68`, `:124-127`).
+        //
+        // So `onAppear` is idempotent by `hold == nil` and there is **no**
+        // `onDisappear` at all. Nothing this screen is sent on its way out
+        // writes anything, because it is no longer asked.
         .onAppear {
-            guard !held else { return }
-            held = true
-            model.open(open.roomID)
+            guard hold == nil else { return }
+            hold = RoomsScreenHold(model, roomID: open.roomID)
             reads = model.reads(for: open.roomID)
-            model.hold()
-        }
-        .onDisappear {
-            guard held else { return }
-            held = false
-            model.release()
-            // Said here and not left to `stop()`: popping back to the roster
-            // does not stop the model (the roster re-holds it), and no room
-            // is open once this screen is gone — a push that lands on the
-            // room's reads is a read of a screen nobody is looking at.
-            model.close()
         }
     }
 }

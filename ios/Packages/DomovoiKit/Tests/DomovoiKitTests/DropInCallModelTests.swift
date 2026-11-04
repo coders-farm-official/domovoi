@@ -869,8 +869,17 @@ final class DropInCallModelTests: XCTestCase {
     /// must not put the tab strip back to `overview` under somebody reading
     /// the timers tab. It used to be driven from `.task` for that reason,
     /// which review round 1 showed could not be squared with
-    /// `hold()`/`release()` living on `onAppear`/`onDisappear` — so one pair
-    /// of callbacks drives all four now, and this is what makes it safe.
+    /// `hold()`/`release()` living on `onAppear`/`onDisappear`.
+    ///
+    /// **This is the sequence a cover and its uncover produce**, and after
+    /// review round 4 it is the only one they produce: the screen's hold is a
+    /// ``RoomsScreenHold`` in `@State`, so a cover writes nothing at all and
+    /// the uncover's `onAppear` is this call and nothing else. Round 3's
+    /// shape put ``RoomsModel/close()`` on the cover, which cleared the
+    /// property this guard reads — so the sequence below stopped being the
+    /// app's, and the case went on passing.
+    /// ``testClosingARoomLeavesTheTabAndTheRoomsReadsAlone()`` is the other
+    /// sequence, a real pop and a re-push, and the two no longer overlap.
     func testOpeningTheRoomThatIsAlreadyOpenKeepsTheTab() async {
         let (model, _, _) = roomsRig()
         model.hold()
@@ -897,8 +906,19 @@ final class DropInCallModelTests: XCTestCase {
     /// crossed a view identity under a live drop-in sheet because its
     /// `onDisappear` — which a covered view goes on receiving while it is
     /// still mounted, the whole reason ``RoomsModel/holders`` is a count —
-    /// wrote the state its `body` drew from. The view half is one call site
-    /// now (``RoomsRoomScreen``); this is the model half:
+    /// wrote the state its `body` drew from.
+    ///
+    /// **Whose call this is, after review round 4.** Not a callback's: a
+    /// ``RoomsScreenHold``'s `deinit`, through
+    /// ``RoomsModel/roomScreenGone(_:)``, so it arrives when the screen's
+    /// identity is destroyed and never while it is merely covered. Round 3
+    /// left it on `onDisappear`, which meant this sequence — a close and then
+    /// an open of the same room — was *also* what a cover and its uncover
+    /// produced, and ``testOpeningTheRoomThatIsAlreadyOpenKeepsTheTab()``
+    /// forbids exactly that. The two cases asserted opposite answers for one
+    /// sequence; they now describe two different ones, and
+    /// ``RoomsScreenHoldTests`` pins which event each belongs to. This is
+    /// still the model half:
     ///
     ///  * ``RoomsModel/close()`` leaves ``RoomsModel/tab`` alone. It is what
     ///    ``RoomsDetailView``'s body switches on, and a `switch`'s branches

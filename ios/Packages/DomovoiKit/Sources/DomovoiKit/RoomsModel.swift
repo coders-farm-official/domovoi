@@ -258,9 +258,18 @@ public final class RoomsModel {
     /// is what makes it safe.
     ///
     /// A **fresh push** of the same room is a different thing from a repeated
-    /// `onAppear`, and it does start on the overview: the pop ran
-    /// ``close()``, so `openRoomID` is nil by the time the new screen opens
-    /// the room and this runs in full.
+    /// `onAppear`, and it does start on the overview: the pop destroyed the
+    /// old screen's ``RoomsScreenHold``, which ran ``roomScreenGone(_:)``, so
+    /// `openRoomID` is nil by the time the new screen opens the room and this
+    /// runs in full.
+    ///
+    /// **And a cover is a third thing.** Review round 4's must: a sheet over
+    /// the pushed room screen may fire that screen's `onDisappear` while it
+    /// is still mounted, and until ``RoomsScreenHold`` the pair on those two
+    /// callbacks ran ``close()`` between the two `onAppear`s — so this was not
+    /// idempotent across a cover after all, and the uncover put the tab strip
+    /// back to `overview` and re-issued the overview's reads. Nothing on
+    /// either callback writes anything now.
     public func open(_ roomID: String) {
         guard openRoomID != roomID else { return }
         openRoomID = roomID
@@ -273,22 +282,62 @@ public final class RoomsModel {
     /// No room is open: the screen that was drawing one has gone.
     ///
     /// **``openRoomID`` and nothing else**, which review round 3 narrowed it
-    /// to. It used to put ``tab`` back to `overview` as well, and that made
-    /// it unsafe for the one caller it has — ``RoomsRoomScreen``'s
-    /// `onDisappear`, which a covered view goes on receiving while it is
-    /// still mounted and drawing (the reason ``holders`` is a count at all).
-    /// ``tab`` is what that screen's body switches on, and a `switch`'s
-    /// branches are separate view identities, so a reset under a live drop-in
-    /// call would have destroyed the row holding its sheet up. Starting a
-    /// room on its overview is ``open(_:)``'s job, and with this clearing
-    /// ``openRoomID`` a re-push of the same room is no longer a no-op there.
+    /// to. It used to put ``tab`` back to `overview` as well, and ``tab`` is
+    /// what the room screen's body switches on — a `switch`'s branches are
+    /// separate view identities, so a reset under a live drop-in call would
+    /// have destroyed the row holding its sheet up. Starting a room on its
+    /// overview is ``open(_:)``'s job.
     ///
-    /// What this is still for: ``received(_:)`` and
+    /// What this is for: ``received(_:)`` and
     /// ``RoomsRoomModel/followServerVolume(_:)`` go through ``openReads``,
     /// and a popped room's seven reads must not keep answering the house's
     /// pushes behind the roster.
+    ///
+    /// **A view calls ``roomScreenGone(_:)`` and not this**, which is this
+    /// plus ``release()`` and a guard on *whose* screen went away. This is
+    /// where the one line lives, because "no room is open" is a fact about
+    /// the model and not about a screen — ``serverChanged()`` reaches the
+    /// same state, inline, with eight other fields.
     public func close() {
         openRoomID = nil
+    }
+
+    /// The pushed screen for `roomID` is **gone** — destroyed, not covered.
+    ///
+    /// ### Why a view may not say this on `onDisappear`
+    ///
+    /// Review round 4's must, and the hazard class in NIGHT-RULES §3: a view
+    /// that is *covered* — by the drop-in sheet this screen presents, or by a
+    /// screen pushed on top of it — goes on receiving `onDisappear` while it
+    /// is still mounted and still drawing. That is the whole reason
+    /// ``holders`` is a count. So `onDisappear` cannot mean "gone", and the
+    /// room screen used to put ``release()`` and ``close()`` on it:
+    ///
+    /// * ``release()`` took the count to **zero** — the room screen is the
+    ///   only holder while it is up, ``RoomsView`` having released when the
+    ///   room was pushed — and ``release()``'s deferral is one turn of the
+    ///   main actor, not one that waits for the matching `onAppear`. So
+    ///   ``stop()`` ran under the live sheet and ``stop()`` calls
+    ///   ``DropInCallModel/abandon()``: the call was hung up, or the
+    ///   microphone was left open in somebody's kitchen while the sheet said
+    ///   it was live. Android's call survives its dialog going up, because
+    ///   `PhoneDropinRow` keeps the client across it (`PhoneDropinCall.kt:68`)
+    ///   and only `onDispose` ends it (`:124-127`) — a `Dialog` does not
+    ///   leave the composition that remembers it.
+    /// * ``close()`` cleared ``openRoomID``, so the uncover's `onAppear` found
+    ///   ``open(_:)`` no longer a no-op and reset the tab strip.
+    ///
+    /// ``RoomsScreenHold`` is what says this instead: a `@State` object whose
+    /// life is the screen's **identity**, so it is released when the screen is
+    /// destroyed and not when it is covered. That is the same line Android's
+    /// `DisposableEffect` is drawn on.
+    ///
+    /// The guard is on `roomID` because this arrives one hop late (see
+    /// ``RoomsScreenHold``): a pop followed immediately by a push of another
+    /// room must not have the old screen's departure close the new one's.
+    public func roomScreenGone(_ roomID: String) {
+        if openRoomID == roomID { close() }
+        release()
     }
 
     /// Pick a tab, and read what it needs the first time it is shown.
