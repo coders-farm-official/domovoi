@@ -10,7 +10,10 @@ import Observation
 /// the view can be made to draw all four. ``saved`` is the string
 /// `@SceneStorage` keeps, which is the same promise `rememberSaveable` makes
 /// — it survives a process death and dies with the app's removal.
-public enum ManualPlace: Equatable, Sendable {
+/// `Hashable` because a level is a **value on a navigation stack** of its own
+/// now (``ManualModel/levels``, answer 32): `navigationDestination(for:)` and
+/// `NavigationLink(value:)` both ask for it.
+public enum ManualPlace: Equatable, Hashable, Sendable {
     case start
     case map
     case topic(String)
@@ -364,13 +367,13 @@ public struct ManualLive: Equatable, Sendable {
 /// ### What is not here, and why there is no control for it
 ///
 /// **Nothing on this screen writes.** Every route it touches is a GET, so
-/// there is no control that could 401 from a phone and nothing was left out
-/// for Kamron's no-misleading-controls rule. The two omissions this item does
-/// make are decoration and belong to the view: the node-name scramble
-/// (`ManualScreen.kt:683`, nine accessibility-value changes under VoiceOver's
-/// cursor for 216 ms of effect) and the nodes' continuous float
-/// (`:570`, a moving hit target for Switch Control). Both are in
-/// `design-notes/ios/overnight/manual/DECISIONS.md`.
+/// there is no control that could 401 from a phone and nothing is left out
+/// for Kamron's no-misleading-controls rule. The two ornaments the first pass
+/// left out — the node-name scramble (`ManualScreen.kt:683`) and the nodes'
+/// float (`:570`) — are built as of his answers 30 and 31, both in the view
+/// and both stopped by Reduce Motion. What is still given up is one frame of
+/// the float: the wires do not follow it
+/// (`ManualMapView.swift`, with the reason).
 @MainActor
 @Observable
 public final class ManualModel {
@@ -397,6 +400,55 @@ public final class ManualModel {
     }
 
     public private(set) var place: ManualPlace = .start
+
+    /// How many times each level has been **arrived at**, counting only the
+    /// times the screen actually moved — the map's own arrival counter.
+    ///
+    /// ### Why a counter, and why it is not decoration
+    ///
+    /// Android's node names scramble on every level change, up as well as
+    /// down: `levelKey` is computed in **one** composition
+    /// (`ManualScreen.kt:593`) and handed to every `MapNode` (`:633`), so
+    /// `LaunchedEffect(key, text)` (`:686`) re-fires for all of them whenever
+    /// `focus` changes — which `zoom out` and the system back both do.
+    ///
+    /// Answer 32 put the manual's levels on a `NavigationStack`
+    /// (``levels``), and a stack does not tear the level underneath down: the
+    /// map's page is still mounted while a cluster is on top of it, so going
+    /// back up re-shows a view whose scramble has long since finished and
+    /// whose `.task(id:)` is not restarted by the pop. The ornament Kamron
+    /// called "meant to impress" ran on the way down and never again, which
+    /// is the review's finding.
+    ///
+    /// So a level's page keys its scramble on *which* level it draws **and
+    /// which arrival at it** (`ManualMapView.swift`'s `levelKey`). Popping
+    /// back to the map bumps the map's count, the key changes, the task
+    /// restarts; pushing a cluster leaves the map's count alone, so the
+    /// covered page does not spend its scramble behind the one on screen.
+    ///
+    /// Read through ``arrivals(of:)``. It is `0` before the first arrival,
+    /// which is the value a freshly mounted page sees — and a fresh page runs
+    /// its `.task` on appear anyway, so zero needs no special case.
+    public private(set) var arrivalCounts: [ManualPlace: Int] = [:]
+
+    /// Move to a level, and count the arrival.
+    ///
+    /// **Every write of ``place`` goes through here**, which is the point:
+    /// four call sites wrote it directly before (``go(_:)``, ``up()``,
+    /// ``open(levels:)`` and ``restore(saved:)``) and a counter maintained at
+    /// three of four is worse than none. Arriving where we already are is not
+    /// an arrival: re-tapping the node of the level on screen is no move on
+    /// Android either, because its `levelKey` does not change.
+    private func land(on next: ManualPlace) {
+        guard next != place else { return }
+        place = next
+        arrivalCounts[next, default: 0] += 1
+    }
+
+    /// How many times this level has been arrived at this session.
+    public func arrivals(of place: ManualPlace) -> Int {
+        arrivalCounts[place] ?? 0
+    }
 
     /// What is typed in the search field. Android has **no debounce** here —
     /// `remember(query, visible) { searchManual(...) }` runs the search on
@@ -669,24 +721,33 @@ public final class ManualModel {
     /// `go` (`ManualScreen.kt:300`): an id to a level, following an alias.
     public func go(_ id: String) {
         guard let doc else {
-            place = .start
+            land(on: .start)
             return
         }
         if id == "map" {
-            place = .map
+            land(on: .map)
         } else if doc.topic(id) != nil {
-            place = .topic(id)
+            land(on: .topic(id))
         } else if let piece = doc.piece(id) {
-            place = .piece(piece.aliasOf ?? id)
+            land(on: .piece(piece.aliasOf ?? id))
         } else {
-            place = .start
+            land(on: .start)
         }
     }
 
-    /// `up` (`ManualScreen.kt:308`), and the system back on Android. On iOS
-    /// the swipe-back pops the **route**, not the level, so this is a control
-    /// on the screen — see DECISIONS.md.
+    /// `up` (`ManualScreen.kt:308`), and the system back on Android.
+    ///
+    /// Two ways up here, as on Android: `zoom out` in the crumbs calls this,
+    /// and the swipe-back gesture pops ``levels`` — which is the same move,
+    /// because that array is this function's own chain (answer 32).
     public func up() {
+        land(on: parent(of: place))
+    }
+
+    /// The level above this one. Factored out of ``up()`` so that the gesture
+    /// and the control cannot come to disagree: ``levels`` walks this, and
+    /// `up()` is one step of it.
+    public func parent(of place: ManualPlace) -> ManualPlace {
         switch place {
         case .piece(let id):
             // Kotlin builds `"t:${doc.piece(id)?.topic}"`, which for a piece
@@ -694,15 +755,50 @@ public final class ManualModel {
             // document has, so its map draws at level 1 anyway. The map,
             // said once.
             if let topic = doc?.piece(id)?.topic, doc?.topic(topic) != nil {
-                place = .topic(topic)
-            } else {
-                place = .map
+                return .topic(topic)
             }
+            return .map
         case .topic:
-            place = .map
+            return .map
         case .map, .start:
-            place = .start
+            return .start
         }
+    }
+
+    /// Where we are, as the **chain of levels** from Start here up to it:
+    /// `[]` on Start here, `[.map]` on the map, `[.map, .topic]` in a
+    /// cluster, `[.map, .topic, .piece]` on a piece's page.
+    ///
+    /// This is the array the screen's own `NavigationStack` is given
+    /// (`ManualView.swift`), so the system's swipe-back pops **one level**
+    /// and only the top of the manual leaves it — Kamron's answer 32. It is
+    /// *computed* from ``place`` rather than stored beside it: two sources of
+    /// truth for where the screen is would be the defect this app has already
+    /// paid for twice, and `place` is what the pills, the crumbs, the search
+    /// and `@SceneStorage` all read and write. Popping writes back through
+    /// ``open(levels:)``, and the recomputed chain then equals what was
+    /// written, which is the contract a `NavigationStack` path binding asks
+    /// for.
+    ///
+    /// The walk is bounded: the four levels are a chain, ``parent(of:)``
+    /// reaches `.start` in at most three steps, and the count is capped so a
+    /// future level that parented itself could not spin here.
+    public var levels: [ManualPlace] {
+        var chain: [ManualPlace] = []
+        var at = place
+        while at != .start, chain.count < 4 {
+            chain.append(at)
+            at = parent(of: at)
+        }
+        return chain.reversed()
+    }
+
+    /// The screen's stack popped or pushed: the level on top is where we are.
+    ///
+    /// An empty array is Start here, which is what a pop-to-root gesture
+    /// hands over.
+    public func open(levels: [ManualPlace]) {
+        land(on: levels.last ?? .start)
     }
 
     /// Picking a search result: open it, clear the field (`ManualScreen.kt:387`).
@@ -720,7 +816,7 @@ public final class ManualModel {
 
     /// Restore the level a previous launch was on (`@SceneStorage`).
     public func restore(saved: String) {
-        place = ManualPlace(saved: saved)
+        land(on: ManualPlace(saved: saved))
     }
 
     /// The next **visible** sibling of this piece, for the page's footer

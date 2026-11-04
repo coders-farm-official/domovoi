@@ -605,3 +605,210 @@ public func manualRouteOpens(_ route: ManualRoute, _ visibility: RouteVisibility
     guard let screen = Route(rawValue: name) else { return true }
     return screen.visibleWith(visibility)
 }
+
+// MARK: - the inline wash, as numbers
+
+/// One **opaque** sRGB colour, as the three components a contrast ratio is
+/// computed from.
+///
+/// It exists so the wash under an inline `code` run can be *stated*: the view
+/// builds its `Color` from these numbers and
+/// ``manualContrastRatio(_:_:)`` computes the ratios the doc comment claims,
+/// so the claim and the pixels cannot drift apart. A `Color` cannot do that —
+/// `Color.fgMuted` and friends live in the app target, and a translucency over
+/// an unknown parent has no ratio at all, which is why there is no `alpha`
+/// here.
+public struct ManualWash: Equatable, Sendable {
+
+    public let red: Double
+    public let green: Double
+    public let blue: Double
+
+    public init(red: Double, green: Double, blue: Double) {
+        self.red = red
+        self.green = green
+        self.blue = blue
+    }
+
+    /// From the hex the token is written as in
+    /// `android/.../ui/theme/Color.kt` and
+    /// `web/static/colors_and_type.css`.
+    public init(hex: UInt32) {
+        self.init(
+            red: Double((hex >> 16) & 0xFF) / 255,
+            green: Double((hex >> 8) & 0xFF) / 255,
+            blue: Double(hex & 0xFF) / 255
+        )
+    }
+}
+
+/// `--sunken` in the light theme (`#F5F3F0`, `Color.kt:49`) — "table header,
+/// code blocks" in the stylesheet's own words
+/// (`web/static/colors_and_type.css:138`), which is exactly what an inline
+/// `code` run is.
+public let manualCodeWashLight = ManualWash(hex: 0xF5F3F0)
+
+/// `--sunken` in the dark theme (`#100E0B`, `Color.kt:77`).
+public let manualCodeWashDark = ManualWash(hex: 0x100E0B)
+
+/// WCAG 2.1 relative luminance.
+public func manualRelativeLuminance(_ wash: ManualWash) -> Double {
+    func channel(_ value: Double) -> Double {
+        value <= 0.04045 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
+    }
+    return 0.2126 * channel(wash.red)
+        + 0.7152 * channel(wash.green)
+        + 0.0722 * channel(wash.blue)
+}
+
+/// The WCAG contrast ratio between two opaque colours, lighter over darker.
+///
+/// Body text needs 4.5:1. Every pairing the manual draws on
+/// ``manualCodeWashLight``/``manualCodeWashDark`` is listed in
+/// `ManualPageView.swift`'s `Color.manualCodeWash`, and this is the function
+/// those numbers come out of.
+public func manualContrastRatio(_ one: ManualWash, _ other: ManualWash) -> Double {
+    let a = manualRelativeLuminance(one)
+    let b = manualRelativeLuminance(other)
+    return (max(a, b) + 0.05) / (min(a, b) + 0.05)
+}
+
+/// The wash under a **map node's** folded-in `preview`/`plugin` word, light
+/// theme.
+///
+/// Not ``manualCodeWashLight``, and the difference is the whole point of this
+/// token existing: a map node's card is `secondarySystemBackground`
+/// (`#F2F2F7`), and `--sunken` on that is **1.008:1** — a wash nobody can
+/// see, which would have made the pills read as plain words with extra spaces
+/// around them. Android does not have that problem because it washes a node's
+/// tags with `idleSoft` over `card`, a different token from the `sunken` it
+/// washes a page's code runs with (`ManualScreen.kt:668` against `:872`).
+///
+/// So this is Android's own node wash, composited **once, by hand**, onto the
+/// surface this screen actually draws a node on: `idleSoft` is `#A09E9B` at
+/// α=0.141 (`Color.kt:64`) and over `#F2F2F7` that is `#E6E6EA`. The result
+/// is **1.115:1** against the card, which is Android's own 1.127:1 to within
+/// a rounding step — a tint you can see, with a ratio that can be stated
+/// because it is opaque.
+public let manualNodeWashLight = ManualWash(hex: 0xE6E6EA)
+
+/// The same, dark: `idleSoft` is `#73716E` at α=0.180 (`Color.kt:92`) and over
+/// `secondarySystemBackground`'s `#1C1C1E` that is `#2C2B2C` — **1.206:1**
+/// against the card, where Android's is 1.209:1.
+public let manualNodeWashDark = ManualWash(hex: 0x2C2B2C)
+
+// MARK: - the name that scrambles into place, as arithmetic
+
+/// The alphabet a scrambling name is drawn from (`GLYPHS`,
+/// `ManualScreen.kt:169`), character for character.
+public let manualScrambleGlyphs = Array("ABCDEFGHKMNPRSTVXZ0123456789#%&*/<>")
+
+/// Nine frames, `0...8` (`ScrambleText`'s `steps = 8`, `:688`).
+public let manualScrambleSteps = 8
+
+/// One frame of a name scrambling into place (`ScrambleText`'s `buildString`,
+/// `ManualScreen.kt:690-694`), as a function of the frame number.
+///
+/// It lives here rather than inside the view's loop so that it can be *tested*
+/// — the settle arithmetic is the part of answer 30 that can be wrong without
+/// anybody noticing on a screenshot, and the view (`ManualMapView.swift`'s
+/// ``ManualScrambleName``) calls exactly this.
+///
+///  * the name settles **from the left**, `frame / steps` of it at a time,
+///    which is the Kotlin's `i < frame.toFloat() / steps * text.length`;
+///  * a **space is never replaced**, so the word shapes stay where they are;
+///  * the character **count never changes**, at any frame.
+///
+/// ### The comparison is a `Double`, and the first port's truncation was a
+/// character behind
+///
+/// The Kotlin compares an index against a **float**:
+/// `i < frame.toFloat() / steps * text.length`. The first port wrote
+/// `Int(Double(frame) / Double(steps) * Double(letters.count))` and then
+/// `at < settled`, which is `floor` of the same number — one character fewer
+/// settled at every frame where the quotient is not whole. For
+/// `Rooms & devices` (15 characters, `steps = 8`) frame 4 is `7.5`: Android
+/// settles every `i < 7.5`, which is **eight** characters, and the truncation
+/// settled seven. Frame by frame Android is 0/2/4/6/8/10/12/14/15 and the
+/// truncation was 0/1/3/5/7/9/11/13/15 — one behind at frames 1 through 7,
+/// equal only at the ends.
+///
+/// One glyph for 24 ms is cosmetic; the defect the review named was that this
+/// comment claimed the two were the same line. They are now, and
+/// `ManualAnswersTests.testTheSettleIsAndroidsFloatComparison` pins the
+/// sequence rather than the arithmetic that produced it.
+///
+/// `glyph` is the picker — `{ manualScrambleGlyphs.randomElement()! }` in the
+/// view, a constant in a test, which is the only way an effect built on
+/// `Random` can be asserted on at all.
+public func manualScrambleFrame(
+    of letters: [Character],
+    frame: Int,
+    steps: Int = manualScrambleSteps,
+    glyph: () -> Character
+) -> String {
+    let steps = max(steps, 1)
+    let frame = min(max(frame, 0), steps)
+    let settled = Double(frame) / Double(steps) * Double(letters.count)
+    return String(
+        letters.enumerated().map { at, letter in
+            Double(at) < settled || letter == " " ? letter : glyph()
+        }
+    )
+}
+
+// MARK: - the float, as arithmetic
+
+/// How long one bob takes for the card at this index in the map's geometry:
+/// `5.5 + (i % 4) * 0.9` seconds (`bob`, `ManualScreen.kt:562`).
+public func manualFloatPeriod(at index: Int) -> Double {
+    5.5 + Double(index % 4) * 0.9
+}
+
+/// The period a node actually bobs at, **gates and all** — what
+/// `ManualMapView`'s `nodes(_:shown:nodeWidth:nodeHeight:)` hands each card.
+///
+/// It lives here rather than inside the view's `ternary` because three of the
+/// four gates are decisions, not layout, and a decision with no test is how
+/// review 2's S3 came to ship:
+///
+///  * **Reduce Motion** is still, which is Android's own first line
+///    (`bob`, `ManualScreen.kt:560`, `if (reduce || id !in shown) return 0f`);
+///  * ``ManualFloatClock`` off is still — `-domovoi-manual-float-off`, so a UI
+///    case can drive a map that is holding position;
+///  * a **covered** level is still, and that one is iOS-only. Android fades
+///    every node of every level in and out of **one** composition, so there is
+///    no such thing as a covered node to animate; answer 32 put the levels on
+///    a `NavigationStack`, which keeps each level below the one on screen
+///    *mounted*, and three stages' worth of `repeatForever` behind two covered
+///    screens is not what answer 31 was costed at
+///    (``ManualMapStage/wires(_:size:)``).
+///
+/// Zero is a still card and **not** "no card": the view's zero arm pins the
+/// offset at the geometry's own position, because a `floating` that flips
+/// unanimated would otherwise leave every node five points above where the map
+/// put it.
+public func manualNodeFloatPeriod(
+    at index: Int,
+    reduceMotion: Bool,
+    floatOn: Bool,
+    onTop: Bool
+) -> Double {
+    guard !reduceMotion, floatOn, onTop else { return 0 }
+    return manualFloatPeriod(at: index)
+}
+
+/// How far into its bob a card starts — Android's `i * 0.7` seconds
+/// (`:563`), **wrapped at eight**.
+///
+/// Android's phase is an offset inside a sine that is already running, so an
+/// unbounded `i * 0.7` only ever picks a point on the curve. Here it is a
+/// one-shot `delay` on a repeating animation, so it is the time the card
+/// spends *still* before its first bob: uncapped, the twentieth card of a
+/// larger geometry would sit motionless for fourteen seconds after the map
+/// opened, which reads as a bug rather than as a stagger. Wrapped at eight it
+/// is at most 4.9 s, under one of the 5.5–8.2 s periods, and the ring of seven
+/// nodes a phone draws is unaffected either way.
+public func manualFloatPhase(at index: Int) -> Double {
+    Double(index % 8) * 0.7
+}

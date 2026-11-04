@@ -107,11 +107,28 @@ public enum ManualStrings {
         public static let roomsNone = "no rooms yet"
         public static let pluginsNone = "no plugins installed"
         public static let sayNone = "no phrases listed"
-        /// `doc.label("checklist_unknown")` is called with **no** fallback
-        /// (`ManualScreen.kt:1017`), so a document without the key gives the
-        /// circle an empty accessibility label. Kept as the Kotlin has it;
-        /// flagged in DECISIONS.md rather than quietly improved.
-        public static let checklistUnknown = ""
+        /// A checklist circle the app cannot judge, on a server whose document
+        /// predates the key — **Kamron's answer 33**, "can't tell from here on
+        /// both phones".
+        ///
+        /// These are the words the generator already writes:
+        /// `scripts/manual/build_manual.py:361` puts
+        /// `"checklist_unknown": "can't tell from here"` in `DEFAULT_LABELS`
+        /// and `web/static/manual-content.json:30` carries it, so every server
+        /// built from this repository supplies them and this fallback is only
+        /// ever read on an older one. It was `""` — ported from
+        /// `doc.label("checklist_unknown")`, which Android calls with no
+        /// fallback (`ManualScreen.kt:1016`) — and an empty string is an
+        /// unlabelled control: the circle is drawn, VoiceOver reads it as an
+        /// image with no name, and the third state ("neither ticked nor
+        /// crossed") is the one state that *needs* words, because the shape
+        /// alone cannot say "this app cannot tell".
+        ///
+        /// The read still goes through this named fallback
+        /// (`ManualPageView.swift`'s `label(of:)`), not an inline literal, so
+        /// the wording stays in one place. Android's half of answer 33 is the
+        /// android unit's.
+        public static let checklistUnknown = "can't tell from here"
         /// `map_hint` and `centre_hint` are read with no fallback too
         /// (`ManualScreen.kt:356`).
         public static let mapHint = ""

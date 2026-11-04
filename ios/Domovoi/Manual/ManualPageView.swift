@@ -260,6 +260,20 @@ struct ManualMapPage: View {
     let manual: ManualModel
     let focus: ManualTopic?
     let reduceMotion: Bool
+
+    /// **Which level this page was pushed as**, handed down rather than
+    /// derived from ``focus``.
+    ///
+    /// ``ManualMapStage`` needs two things that `focus` cannot answer: which
+    /// arrival at this level the scramble should key on, and whether this
+    /// page is the one on top of the manual's stack (only the top level's
+    /// cards float). Deriving it would get the `.piece` fallback wrong —
+    /// ``ManualView`` draws a map for a piece the document no longer has, and
+    /// that page's `focus` is `nil` while its place is `.piece(…)`, so a
+    /// derived place would call the top level covered and hold its cards
+    /// still.
+    let place: ManualPlace
+
     /// See ``ManualStartPage/scrolls``.
     var scrolls: Bool = true
 
@@ -270,7 +284,8 @@ struct ManualMapPage: View {
                     doc: doc,
                     manual: manual,
                     focus: focus,
-                    reduceMotion: reduceMotion
+                    reduceMotion: reduceMotion,
+                    place: place
                 )
                 // The topic's own introduction at level two, the document's
                 // map hint at level one, nothing when the document has
@@ -542,6 +557,95 @@ enum ManualTextScale: Equatable {
     var mono: Font { .system(style, design: .monospaced) }
 }
 
+extension Color {
+
+    /// The wash under an inline `code` or pill **run** — Android's
+    /// `background = c.sunken` (`ManualScreen.kt:872`), and **Kamron's answer
+    /// 34**, "tinted background on code spans".
+    ///
+    /// ### Opaque, and that is the whole point
+    ///
+    /// Android's inline washes are translucencies (`warnSoft` is amber at
+    /// α=0.12, `idleSoft` grey at α=0.14) and `sunken` is the one that is not.
+    /// A translucency has **no contrast ratio**: it resolves against whatever
+    /// the run happens to be drawn over — a card, the canvas, a bordered table
+    /// cell — so "4.5:1" could not be said about it truthfully, which is the
+    /// reason the first port left the wash out altogether and said so in the
+    /// run's own comment. This is `--sunken` from
+    /// `web/static/colors_and_type.css:138` ("table header, code blocks"),
+    /// written out opaque in both themes from
+    /// ``manualCodeWashLight``/``manualCodeWashDark``, so the numbers below are
+    /// computed rather than hoped for — ``manualContrastRatio(_:_:)`` is the
+    /// function, and these are its answers for every ink the manual draws a
+    /// run in:
+    ///
+    /// | run's ink | light (`#F5F3F0`) | dark (`#100E0B`) |
+    /// |---|---|---|
+    /// | `Color.primary` — a `p`, a list item, a table's first cell | **18.96:1** | **19.27:1** |
+    /// | ``Color/fgMuted`` — a note, a table's second cell, `preview`/`plugin` | **6.72:1** | **7.77:1** |
+    /// | ``Color/warnInk`` — the `{admin}` pill | **5.17:1** | **10.08:1** |
+    ///
+    /// Body text needs 4.5:1 and the weakest pairing is 5.17:1.
+    ///
+    /// ### How strong the tint is, against the surface it is actually on
+    ///
+    /// **1.108:1 light and 1.090:1 dark** — measured against the page's own
+    /// background, which is where every run in this file is drawn: a
+    /// paragraph, a list item, a note, a checklist line and a table cell all
+    /// sit on the page (the table has a border and no fill), and nothing here
+    /// draws prose on a card. That is a tint you can see, and it is the same
+    /// strength as Android's own (`idleSoft` over `card` is 1.127:1).
+    ///
+    /// An earlier draft of this comment said "1.11:1 against the card it sits
+    /// on". The number was right and the surface was wrong — 1.108:1 is the
+    /// ratio against **white** — and that matters exactly once, on the one
+    /// card this screen washes a run on: a map node, whose card is
+    /// `secondarySystemBackground`, where `--sunken` measures 1.008:1 and is
+    /// invisible. That run takes ``Color/manualNodeWash`` instead.
+    ///
+    /// Nothing is *only* said by either wash — the monospaced face already
+    /// tells code from prose and a pill's word is its own label — but a tint
+    /// that cannot be seen is a tint that was not built, which is Kamron's
+    /// no-misleading-controls rule pointed at decoration.
+    ///
+    /// ### Why it is not `secondarySystemBackground`
+    ///
+    /// ``ManualPill`` — a pill that is its own view — takes that one, and it
+    /// is opaque too. This is the dashboard's own code-block token instead, so
+    /// an inline run on an iPhone is washed the same colour as the same run on
+    /// the dashboard and on Android.
+    static let manualCodeWash = Color(UIColor { traits in
+        opaque(traits.userInterfaceStyle == .dark ? manualCodeWashDark : manualCodeWashLight)
+    })
+
+    /// The wash under a `preview`/`plugin` word folded into a **map node's**
+    /// subtitle — Android's `SpanStyle(background = c.idleSoft)`
+    /// (`ManualScreen.kt:668`), which is a *different* token from the `sunken`
+    /// it washes a page's code runs with (`:872`).
+    ///
+    /// The port had one wash for both and that was a defect, not a
+    /// simplification: a node's card is `secondarySystemBackground`, and
+    /// ``Color/manualCodeWash`` on that is **1.008:1** — the two pills read as
+    /// plain words with extra spaces. This is Android's node wash composited
+    /// onto that card instead (``manualNodeWashLight``/``manualNodeWashDark``,
+    /// where the arithmetic is), **1.115:1** light and **1.206:1** dark, with
+    /// `fgMuted` over it at **5.98:1** and **5.68:1** — body text needs 4.5:1.
+    static let manualNodeWash = Color(UIColor { traits in
+        opaque(traits.userInterfaceStyle == .dark ? manualNodeWashDark : manualNodeWashLight)
+    })
+
+    /// A ``ManualWash`` — three sRGB components and no alpha — as the
+    /// `UIColor` a run's `backgroundColor` takes.
+    private static func opaque(_ wash: ManualWash) -> UIColor {
+        UIColor(
+            red: CGFloat(wash.red),
+            green: CGFloat(wash.green),
+            blue: CGFloat(wash.blue),
+            alpha: 1
+        )
+    }
+}
+
 /// The manual's inline markup, drawn (`ManualText`, `ManualScreen.kt:861`).
 ///
 /// ### A `route:` link the app cannot open is plain text
@@ -587,12 +691,17 @@ struct ManualRichText: View {
             run.font = scale.font.italic()
             return run
         case .code(let text):
-            // Monospace **without** the sunken wash Android gives it: an
-            // inline background inside a `Text` is a colour Apple's contrast
-            // audit cannot attribute to the run that owns it, and the
-            // typeface already tells code from prose. Recorded in DECISIONS.
+            // Monospace **and** the sunken wash, as Android has it
+            // (`withStyle(SpanStyle(fontFamily = MonoFamily, background =
+            // c.sunken))`, `ManualScreen.kt:872`) — answer 34.
+            //
+            // The wash is an **opaque** token, not a translucency:
+            // ``Color/manualCodeWash`` carries the arithmetic, and the reason
+            // the first port had no inline background at all was that a
+            // see-through one has no ratio to state.
             var run = AttributedString(text)
             run.font = scale.mono
+            run.backgroundColor = Color.manualCodeWash
             return run
         case .wake:
             var run = AttributedString(
@@ -601,9 +710,22 @@ struct ManualRichText: View {
             run.font = scale.font.weight(.semibold)
             return run
         case .tag(let name):
+            // A pill inside a sentence: the Kotlin's `" $label "` with a
+            // background (`:881`), so the wash has a space of air either side
+            // of the word.
+            //
+            // **One wash for all three names, where Android tints each.** Its
+            // `{admin}` is amber at 12% and `{preview}`/`{plugin}` grey at
+            // 14%, and both are translucencies — see
+            // ``Color/manualCodeWash``. The tone is carried by the ink, which
+            // is the rule ``ManualPill`` already follows on this very screen
+            // (one opaque surface, ``Color/warnInk`` or ``Color/fgMuted`` over
+            // it), and `admin` stays the only one in amber. Logged in
+            // DECISIONS.
             var run = AttributedString(" \(word(of: name)) ")
             run.font = .system(.caption2)
             run.foregroundColor = name == "admin" ? Color.warnInk : Color.fgMuted
+            run.backgroundColor = Color.manualCodeWash
             return run
         case .link(let text, let kind, let target):
             guard manual.linkIsLive(kind: kind, target: target),
@@ -673,10 +795,14 @@ struct ManualChecklistView: View {
         switch done {
         case true: return ManualStrings.checkDone
         case false: return ManualStrings.checkNotYet
-        // `doc.label("checklist_unknown")` is read with **no** fallback on
-        // Android (`:1017`), so a document without the key leaves this empty.
-        // Ported as it stands and raised in DECISIONS rather than quietly
-        // improved.
+        // The document's own wording, and `can't tell from here` when a server
+        // older than the key cannot supply it (answer 33). The fallback is
+        // **named**, not inlined here: the words are
+        // ``ManualStrings/Fallback/checklistUnknown``, where the reason they
+        // are no longer the empty string is written down, and the generator
+        // already ships the key (`build_manual.py:361`), so this arm is the
+        // old-server path only. Android reads the same key with no fallback
+        // (`:1016`); that half is the android unit's.
         default: return doc.label("checklist_unknown", fallback: ManualStrings.Fallback.checklistUnknown)
         }
     }
