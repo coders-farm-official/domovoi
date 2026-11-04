@@ -15,7 +15,6 @@ import androidx.compose.material.icons.automirrored.filled.VolumeDown
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudDownload
-import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
@@ -65,7 +64,12 @@ import kotlinx.serialization.json.put
 import kotlin.math.roundToInt
 
 /** Overview tab — web OverviewBody analog. [onRefresh] re-reads the roster
- *  after a change only it can show (the timer-scope switch). */
+ *  after a change only it can show (the timer-scope switch).
+ *
+ *  [sats] is the whole roster. Nothing on this tab reads it since the
+ *  room-to-room drop-in picker came out (D5/D53): it was the list of rooms
+ *  to call. The parameter is kept because SatelliteDetail.kt:97 passes it
+ *  and that file is not this change's. */
 @Composable
 fun SatOverviewTab(s: Satellite, sats: List<Satellite>, onRefresh: () -> Unit = {}) {
     // The Domovoi server's current git SHA. A satellite whose last-synced SHA
@@ -212,7 +216,7 @@ fun SatOverviewTab(s: Satellite, sats: List<Satellite>, onRefresh: () -> Unit = 
         HorizontalDivider(color = Domovoi.colors.borderSoft)
         TimerScopeSection(s, onRefresh)
         HorizontalDivider(color = Domovoi.colors.borderSoft)
-        DropInSection(s, sats)
+        DropInSection(s)
         HorizontalDivider(color = Domovoi.colors.borderSoft)
         MaintenanceSection(s, coreSha, needsUpgrade, upToDate, rebootReason, netStep, onRefresh)
     }
@@ -465,39 +469,10 @@ private fun TimerScopeSection(s: Satellite, onChanged: () -> Unit) {
 /* ---- Drop-in --------------------------------------------------------------- */
 
 @Composable
-private fun DropInSection(s: Satellite, sats: List<Satellite>) {
+private fun DropInSection(s: Satellite) {
     val app = LocalApp.current
     val toast = LocalToast.current
     val scope = rememberCoroutineScope()
-    var peer by remember(s.room_id) { mutableStateOf("") }
-
-    // Eligible peers: OTHER online rooms that are AEC-capable (full_duplex)
-    // and not already in a call. The Domovoi server re-checks all of this.
-    val peers = sats.filter {
-        it.room_id != s.room_id && it.online && it.full_duplex && it.in_call_with == null
-    }
-
-    fun start() {
-        if (peer.isBlank()) {
-            toast("pick a room to drop in on")
-            return
-        }
-        if (!s.online) {
-            toast("${s.room_id} is offline")
-            return
-        }
-        scope.launch {
-            runCatching {
-                app.api.post(
-                    "/api/satellites/${s.room_id}/dropin/start",
-                    buildJsonObject { put("target_room", peer) },
-                )
-            }.onSuccess {
-                toast("dropping in: ${s.room_id} → $peer")
-                peer = ""
-            }.onFailure { toast("drop-in failed: ${it.message}") }
-        }
-    }
 
     fun hangUp() {
         scope.launch {
@@ -529,25 +504,18 @@ private fun DropInSection(s: Satellite, sats: List<Satellite>) {
                 color = Domovoi.colors.fgFaint,
                 modifier = Modifier.padding(top = 8.dp),
             )
-            else -> Row(
-                Modifier.fillMaxWidth().padding(top = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                SatDropdown(
-                    value = peer,
-                    options = peers.map { it.room_id },
-                    placeholder = if (peers.isEmpty()) "no eligible rooms" else "choose a room…",
-                    enabled = s.online && peers.isNotEmpty(),
-                    modifier = Modifier.weight(1f),
-                    onSelect = { peer = it },
-                )
-                Button(onClick = { start() }, enabled = peer.isNotBlank() && s.online) {
-                    Icon(Icons.Filled.Phone, contentDescription = null, modifier = Modifier.size(14.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text("start")
-                }
-            }
+            // No room-to-room `start` here (owner decision 2026-11-03, D5/D53;
+            // ledger #22). Opening two rooms' microphones with nobody asked
+            // is admin-only at the core, so this button 401'd every time it
+            // was pressed from a phone — a control that cannot do what it
+            // says is not drawn. Starting one stays a dashboard job; what a
+            // phone CAN do is below (PhoneDropinRow).
+            else -> Text(
+                "a call between two rooms is started from the dashboard",
+                style = MaterialTheme.typography.labelSmall,
+                color = Domovoi.colors.fgFaint,
+                modifier = Modifier.padding(top = 8.dp),
+            )
         }
         Text(
             "live two-way audio — say \"hang up\" or use the button to end",
