@@ -594,20 +594,133 @@ extension StubHouseUITests {
         )
     }
 
-    /// A formatted document keeps the read-only reader: the editor this port
-    /// does not build is not claimed by one that would 415 on every save.
+    /// A formatted document opens in an editor on the phone, saves, and
+    /// cannot be navigated off the house.
+    ///
+    /// This case **replaced** `testDocuments_AFormattedDocumentStaysReadOnly`,
+    /// which asserted the opposite and was right until owner answer 21: a
+    /// `.html` now opens the dashboard's own editor page in a `WKWebView`
+    /// (``DocumentsWebEditorHost``), so the old case was a guard on a
+    /// decision that has been taken the other way. The three things it is
+    /// worth asserting are the three the port could get wrong:
+    ///
+    /// * **the page read the document** — `COUNCIL-BY-THE-DOC-ROUTE` is in
+    ///   the `/doc` answer and nowhere else, and the page can only have it
+    ///   if the token reached it through the bridge rather than through the
+    ///   URL. A page that got no token shows `PAGE-COULD-NOT-READ` instead,
+    ///   and ``docsHandoffMarkers`` names the other four ways the handoff can
+    ///   be wrong;
+    /// * **the page saved** — through `PUT /api/documents/doc`, with the
+    ///   token, and the word it wrote is on screen when the file is opened
+    ///   again;
+    /// * **the origin lock holds** — the page carries a link to
+    ///   `example.invalid`, the navigation policy cancels it, and the host
+    ///   says so. A port that left `decidePolicyFor` out would leave the
+    ///   house entirely, and the toast is the only part of that a case can
+    ///   see.
+    ///
+    /// **That third one is the only automated proof that WebKit calls the
+    /// policy method at all**, and it is why this case matters more than it
+    /// looks. The rule is ``DocumentsWebEditorRules/navigation(to:base:mainFrame:)``
+    /// in DomovoiKit and 16 package cases hold it, but a package case cannot
+    /// see whether anything *asks* it: `decidePolicyFor` is an **optional**
+    /// requirement of an `@objc` protocol, so a signature that differs from
+    /// the SDK's by one annotation is not a witness, is not implicitly
+    /// `@objc`, and `respondsToSelector:` answers NO — the method never runs
+    /// and every navigation is allowed. The fix pass shipped exactly that
+    /// (`decisionHandler` without the SDK's `@MainActor @Sendable`), with all
+    /// 16 package cases green, and this tap is what would have gone red.
     @MainActor
-    func testDocuments_AFormattedDocumentStaysReadOnly() throws {
+    func testDocuments_AFormattedDocumentOpensInTheEditor() throws {
         guard let app = documentsOpen() else { return }
         // A formatted document's row shows no extension
         // (``FileKinds/displayName(of:isDir:)``).
         XCTAssertTrue(documentsTap(app, "Letter to the council"), "the document's row never built")
 
-        let readOnly = app.staticTexts["read-only — editing is on the dashboard"]
-        XCTAssertTrue(readOnly.waitForExistence(timeout: 20), "an .html did not open the reader")
-        evidence(app, "documents-18-formatted-read-only")
-        XCTAssertFalse(app.buttons["save"].exists, "the reader is offering a save it cannot do")
+        let said = containing(app, "COUNCIL-BY-THE-DOC-ROUTE")
+        XCTAssertTrue(said.waitForExistence(timeout: 30),
+                      "an .html did not open an editor showing the document's own words")
+        evidence(app, "documents-18-formatted-editor")
+        XCTAssertTrue(app.staticTexts[DocumentsPillWord.document].exists,
+                      "no pill saying which editor this is")
         XCTAssertFalse(app.textFields["A1"].exists, "an .html opened the grid editor")
+        // The replaced case (`testDocuments_AFormattedDocumentStaysReadOnly`)
+        // asserted this and this one had stopped (round 2's review, note 5):
+        // the host deliberately draws **no Save of its own**, because the page
+        // owns the document's dirty state and its autosave, and a Save up here
+        // would be a button whose state the host cannot know
+        // ([[no-misleading-controls]]). `app.buttons["save"]` is the native
+        // editors' own Save, matched exactly, and is not the page's
+        // `Save in page` below.
+        XCTAssertFalse(app.buttons["save"].exists,
+                       "the web editor host drew a Save of its own")
+        for marker in Self.docsHandoffMarkers {
+            XCTAssertFalse(containing(app, marker).exists,
+                           "the page reports \(marker) — the token handoff is wrong")
+        }
+
+        // The save is the page's own control, not the host's: the host draws
+        // no Save, because the page owns the document's dirty state.
+        app.buttons["Save in page"].firstMatch.tap()
+        XCTAssertTrue(containing(app, "page saved").waitForExistence(timeout: 25),
+                      "the page's save never landed")
+
+        // Off the house, and back again. Asserted after the save so a
+        // cancelled navigation cannot be mistaken for a page that never
+        // loaded.
+        app.links["leave the house"].firstMatch.tap()
+        let stayed = app.descendants(matching: .staticText)
+            .matching(NSPredicate(format: "label == %@", DocumentsWebWord.stayedHere))
+            .firstMatch
+        XCTAssertTrue(stayed.waitForExistence(timeout: 20),
+                      "an off-origin link was followed, or the refusal was silent")
+        evidence(app, "documents-18b-origin-refused")
+        XCTAssertTrue(containing(app, "COUNCIL-BY-THE-DOC-ROUTE").exists,
+                      "the page left the document after a link it was not allowed to follow")
+
+        app.buttons["close"].firstMatch.tap()
+        XCTAssertTrue(documentsTap(app, "Letter to the council"), "back to the list")
+        XCTAssertTrue(containing(app, "SAVED-FROM-THE-PHONE").waitForExistence(timeout: 30),
+                      "the saved words are not in the document the house hands back")
+        // After the wait, not before it: this paragraph is drawn on the same
+        // load as the document, so asking before the page has answered asks
+        // about a page that is not there yet.
+        XCTAssertTrue(containing(app, "BRIDGE-HAS-DOWNLOAD").exists,
+                      "the page's Download menu would fall back to a browser's way of doing it")
+        evidence(app, "documents-18c-formatted-reopened")
+    }
+
+    /// The **five** markers the stub editor page draws about its own handoff,
+    /// each one naming a different way the port can be wrong. Every
+    /// web-editor case asserts all five are absent.
+    ///
+    /// Four are about the token: it never arrived on the page request
+    /// (`NO-TOKEN-ON-THE-PAGE-REQUEST`, which only the server can see), the
+    /// bridge handed it over twice inside one document
+    /// (`TOKEN-HANDED-TWICE`), the injected script never ran at all
+    /// (`NO-BRIDGE-ON-THIS-PAGE`), or the token did not satisfy the read
+    /// (`PAGE-COULD-NOT-READ`). The fifth is not about the token:
+    /// `NO-DOWNLOAD-ON-THE-BRIDGE` is the branch `doc_editor.jsx` takes for
+    /// its Download menu when the bridge has no `saveFile`/`print` — an
+    /// `<a download>` click and `window.print()`, both of which a `WKWebView`
+    /// ignores silently.
+    ///
+    /// `TOKEN-AFTER-RELOAD` is deliberately **not** in this list: it is only
+    /// drawn on the page's second load, and
+    /// ``testDocs_ASecondDocumentGetsNoToken`` is the one case that asks for
+    /// one.
+    static let docsHandoffMarkers = [
+        "NO-TOKEN-ON-THE-PAGE-REQUEST",
+        "TOKEN-HANDED-TWICE",
+        "NO-BRIDGE-ON-THIS-PAGE",
+        "PAGE-COULD-NOT-READ",
+        "NO-DOWNLOAD-ON-THE-BRIDGE",
+    ]
+
+    /// The host's own words, spelled here for the reason
+    /// ``DocumentsPillWord`` is: this target does not link `DomovoiKit`.
+    enum DocumentsWebWord {
+        static let stayedHere = "that link isn't on your home server, so it wasn't opened"
     }
 
     // MARK: - the audit, and the type size
@@ -735,7 +848,8 @@ extension StubHouseUITests {
     /// finding, a clipped text, a hit area, a Dynamic Type finding on a leaf
     /// nobody measured — comes straight back.
     func documentsUnexcused(_ found: [String], grew: Set<String>) -> [String] {
-        let pillWords = [DocumentsPillWord.text, DocumentsPillWord.markdown, DocumentsPillWord.sheet]
+        let pillWords = [DocumentsPillWord.text, DocumentsPillWord.markdown,
+                         DocumentsPillWord.sheet, DocumentsPillWord.document]
         let pillMeasured = grew.contains(DocumentsPillWord.markdown)
         return found.filter { line in
             guard line.hasPrefix("Dynamic Type font sizes") else { return true }
@@ -753,6 +867,9 @@ extension StubHouseUITests {
         static let text = "text"
         static let markdown = "markdown"
         static let sheet = "sheet"
+        /// ``DocumentsEditorKind/web``'s pill, which arrived with owner
+        /// answer 21.
+        static let document = "document"
     }
 
     /// A cell grows with the type size.

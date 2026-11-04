@@ -8,15 +8,47 @@ import Observation
 ///
 /// * **Drawing** is left out on both sides: neither app has a drawing editor,
 ///   and a new `.excalidraw` would open in nothing (`NewDocument.kt:17-21`).
-/// * **Document** (`kind: "doc"`, which makes an `.html`) is left out **on
-///   iOS only**, because the formatted-document editor is the WebView host
-///   that is not ported: the file would be made and then have nowhere to
-///   open. A person who wants a formatted document makes it on the
-///   dashboard; a person who wants a markdown one types `notes.md` into Text
-///   file, which the server takes verbatim (`documents.py:772-785`) and this
-///   app opens in the markdown editor. Recorded in
-///   `overnight/documents/DECISIONS.md`.
+/// * **Document** (`kind: "doc"`, which makes an `.html`,
+///   `documents.py:758`) **is here now.** It was left out while the
+///   formatted-document editor was not ported — a file made with nowhere to
+///   open is the misleading control in its purest form — and owner answer 21
+///   built that editor (``DocumentsEditorKind/web``), so the kind came back
+///   with it. The order below is Android's menu order
+///   (`NewDocument.kt:22-34`): Document, Spreadsheet, Text file.
+///
+/// ### What a typed extension does, as the route really has it
+///
+/// `POST /create` appends the kind's default extension **only when the typed
+/// one is not already one of that kind's own** (`documents.py:779`), and the
+/// Document kind's set is the whole Documents catch-all — `.html`, `.htm`,
+/// `.docx`, `.doc`, `.odt`, `.rtf`, `.txt`, `.md` (`_DOC_EXTS`, `:144`). The
+/// route says so itself at `:755-757`: *"A new document is a formatted
+/// document (.html, the live editor's own format); naming it 'x.md' still
+/// makes a markdown one."*
+///
+/// So `notes.md` typed into **Document** makes `notes.md`, not
+/// `notes.md.html`. An earlier version of this paragraph said the opposite,
+/// and round 2's review (S3) found it: the misread hid the case that matters.
+/// **`letter.odt`, `x.rtf` and `memo.doc` typed into Document are accepted by
+/// the server and then open in nothing** — ``DocumentsKinds/category(ofExt:)``
+/// sends all three to `.download` through ``FileKinds/officeWordProcessor``,
+/// and ``DocumentsKinds/editor(for:in:)`` answers nil, so the row is a
+/// reader. That is a `+ New` that made a file with nowhere to edit it, which
+/// is what bringing Document back was supposed to end.
+///
+/// It is left as it is because Android does exactly the same
+/// (`opensInDocEditor`, `WebEditorHost.kt:405-406`) and this batch takes the
+/// Android-faithful choice rather than inventing a client-side name rule the
+/// dashboard does not have. It is written down here as the behaviour it is,
+/// and in the unit's DECISIONS.md under "What `+ New > Document` does with a
+/// typed extension", for Kamron to settle.
+///
+/// A person who wants a **markdown** file can type `notes.md` into either
+/// Text file (whose name the server takes verbatim) or Document; the hint
+/// under Document says `.html` because that is what a name with no extension
+/// gets.
 public enum DocumentsNewKind: String, CaseIterable, Equatable, Sendable, Identifiable {
+    case document
     case spreadsheet
     case text
 
@@ -25,6 +57,7 @@ public enum DocumentsNewKind: String, CaseIterable, Equatable, Sendable, Identif
     /// `kind` for `POST /api/documents/create`.
     public var api: String {
         switch self {
+        case .document: return "doc"
         case .spreadsheet: return "sheet"
         case .text: return "text"
         }
@@ -32,6 +65,7 @@ public enum DocumentsNewKind: String, CaseIterable, Equatable, Sendable, Identif
 
     public var label: String {
         switch self {
+        case .document: return "Document"
         case .spreadsheet: return "Spreadsheet"
         case .text: return "Text file"
         }
@@ -40,6 +74,7 @@ public enum DocumentsNewKind: String, CaseIterable, Equatable, Sendable, Identif
     /// The line under the label in the menu.
     public var hint: String {
         switch self {
+        case .document: return "Formatted document · .html"
         case .spreadsheet: return "Workbook · .xlsx"
         case .text: return "Plain text · name as typed"
         }
@@ -49,6 +84,7 @@ public enum DocumentsNewKind: String, CaseIterable, Equatable, Sendable, Identif
     /// it.
     public var prompt: String {
         switch self {
+        case .document: return "new document"
         case .spreadsheet: return "new spreadsheet"
         case .text: return "new text file"
         }
@@ -56,20 +92,29 @@ public enum DocumentsNewKind: String, CaseIterable, Equatable, Sendable, Identif
 
     public var placeholder: String {
         switch self {
+        case .document: return "e.g. Letter to the council"
         case .spreadsheet: return "e.g. Budget"
         case .text: return "e.g. shopping.txt"
         }
     }
 
     /// The SF Symbol the menu row draws. Android's are
-    /// `Outlined.TableChart` and `AutoMirrored.Outlined.Article`
-    /// (`FilesScreen.kt:564-566`); these are the closest Apple glyphs, and
-    /// the same two ``FileRowView`` already uses for a sheet and a text file,
-    /// so one file does not get two different pictures in one screen.
+    /// `Outlined.Article`, `Outlined.TableChart` and
+    /// `AutoMirrored.Outlined.Article` (`FilesScreen.kt:564-566`); these are
+    /// the closest Apple glyphs, and each one is **the glyph
+    /// ``FilesView/entryGlyph(_:)`` already draws for the file this kind
+    /// makes**, so a file does not get two different pictures in one screen.
+    ///
+    /// `.text` moved from `doc.text` to `doc.plaintext` when Document arrived
+    /// and took `doc.text`: `doc.text` is the row glyph for a formatted
+    /// document (`FilesView.swift:598`) and `doc.plaintext` is the row glyph
+    /// for a `doc-text` (`:606`), so the two were the wrong way round
+    /// already — one of them just had nothing to collide with.
     public var glyph: String {
         switch self {
+        case .document: return "doc.text"
         case .spreadsheet: return "tablecells"
-        case .text: return "doc.text"
+        case .text: return "doc.plaintext"
         }
     }
 }

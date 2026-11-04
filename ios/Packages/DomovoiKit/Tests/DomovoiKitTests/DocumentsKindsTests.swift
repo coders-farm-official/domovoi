@@ -62,20 +62,40 @@ final class DocumentsKindsTests: XCTestCase {
         XCTAssertEqual(.sheet, DocumentsKinds.editor(for: entry("rows.csv"), in: documents))
     }
 
-    /// The WebView host is not ported, so the files it owned open **no**
-    /// editor and keep today's read-only reader. An editor claiming an
-    /// `.html` would 415 on every save (`_assert_text_editor_may_write`
-    /// refuses `_FORMATTED_EXTS` outright).
-    func testAFormattedDocumentAndAWordFileOpenNoEditor() {
+    /// A formatted document and a Word file open the **WebView host** (owner
+    /// answer 21): the dashboard's own editor page, which saves through
+    /// `PUT /api/documents/doc` — the one route that takes those two
+    /// extensions. The native text editor must never claim them, because
+    /// `_assert_text_editor_may_write` refuses `_FORMATTED_EXTS` and `.docx`
+    /// outright, so a `.text` answer here would be a 415 on every save.
+    ///
+    /// This case said the opposite until 2026-11-03, when the editor was
+    /// built; it is the package-level twin of
+    /// `testDocuments_AFormattedDocumentStaysReadOnly`, which the same change
+    /// replaced with `testDocuments_AFormattedDocumentOpensInTheEditor`.
+    func testAFormattedDocumentAndAWordFileOpenTheWebEditor() {
         let documents = FileLibrary.documents
-        XCTAssertNil(DocumentsKinds.editor(for: entry("Letter to the council.html"), in: documents))
-        XCTAssertNil(DocumentsKinds.editor(for: entry("page.htm"), in: documents))
-        XCTAssertNil(DocumentsKinds.editor(for: entry("contract.docx"), in: documents))
+        XCTAssertEqual(.web, DocumentsKinds.editor(for: entry("Letter to the council.html"), in: documents))
+        XCTAssertEqual(.web, DocumentsKinds.editor(for: entry("page.htm"), in: documents))
+        XCTAssertEqual(.web, DocumentsKinds.editor(for: entry("contract.docx"), in: documents))
+        // And nowhere but Documents: the page reads `/api/documents/doc`,
+        // which resolves inside the documents folder only.
+        XCTAssertNil(DocumentsKinds.editor(for: entry("page.html"), in: "core:music"))
     }
 
+    /// `letter.odt` and `memo.doc` are in this list for a second reason as
+    /// well as the first: `POST /create` accepts either name under the
+    /// **Document** kind, because `.odt` and `.doc` are in its own extension
+    /// set (`documents.py:144`, `:779`), and the file it makes then opens in
+    /// nothing. Round 2's review (S3) found the written rule saying `.html`
+    /// was appended instead; ``DocumentsNewKind`` now says what the route
+    /// really does, and this is where the consequence is pinned.
     func testTheOtherCategoriesOpenNothing() {
         let documents = FileLibrary.documents
-        for name in ["old.xls", "old.ods", "typed.rtf", "scan.pdf", "photo.png", "board.excalidraw"] {
+        for name in [
+            "old.xls", "old.ods", "typed.rtf", "scan.pdf", "photo.png", "board.excalidraw",
+            "letter.odt", "memo.doc",
+        ] {
             XCTAssertNil(DocumentsKinds.editor(for: entry(name), in: documents), name)
         }
     }
@@ -103,6 +123,7 @@ final class DocumentsKindsTests: XCTestCase {
     func testThePillNamesTheEditor() {
         XCTAssertEqual("text", DocumentsEditorKind.text.pill)
         XCTAssertEqual("markdown", DocumentsEditorKind.markdown.pill)
+        XCTAssertEqual("document", DocumentsEditorKind.web.pill)
         XCTAssertEqual("sheet", DocumentsEditorKind.sheet.pill)
     }
 

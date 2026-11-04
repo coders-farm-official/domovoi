@@ -46,6 +46,61 @@ final class DocumentsPathTests: XCTestCase {
         )
     }
 
+    /// `GET /api/documents/raw/{rel_path}` — the file's own bytes, which the
+    /// grid editor's fallback fetches when `/sheet` could not answer. A path
+    /// tail like the other three, so the separators survive and nothing else
+    /// does: a `#` left raw would end the path and the phone would parse a
+    /// **different file** than the one on screen, then show its cells under
+    /// this file's name.
+    func testTheRawRouteIsAPathTailToo() {
+        XCTAssertEqual("/api/documents/raw/takings.csv", DocumentsPath.raw(rel: "takings.csv"))
+        XCTAssertEqual(
+            "/api/documents/raw/Sheets/last%20year%20%232.csv",
+            DocumentsPath.raw(rel: "Sheets/last year #2.csv")
+        )
+        XCTAssertEqual("/api/documents/raw/a%2Bb%20%25%20c.xlsx", DocumentsPath.raw(rel: "a+b % c.xlsx"))
+    }
+
+    /// `GET /doc.html?path={rel}` — the dashboard's editor page, the one
+    /// address in this file that is **not** an API route.
+    ///
+    /// Two things are asserted and both are load-bearing:
+    ///
+    /// * the path is a **query value**, so `/` is escaped with everything else
+    ///   (``FilePath/esc(_:)``, not ``FilePath/escPath(_:)``) — `doc_page.jsx:23`
+    ///   reads it with `URLSearchParams`, and a raw `#` would truncate the
+    ///   path into a fragment while a raw `&` would become a second parameter
+    ///   the page reads as something else entirely;
+    /// * **the token is not in it.** `doc_page.jsx:42` accepts a
+    ///   `?device_token=`, and that branch is the one this app must never
+    ///   take: the bridge hands the token over in memory instead
+    ///   (``DocumentsWebEditorHost``). The address is the only place a token
+    ///   would be visible to a log, a screenshot or a referrer, and this file's
+    ///   doc comment argues that at length with — until now — no case behind it.
+    func testTheEditorPagesAddressCarriesThePathAndNeverAToken() {
+        XCTAssertEqual(
+            "/doc.html?path=Letter%20to%20the%20council.html",
+            DocumentsPath.documentPage(rel: "Letter to the council.html")
+        )
+        // A folder separator is escaped here and NOT in the path-tail routes:
+        // it is one query value, not a tail.
+        XCTAssertEqual(
+            "/doc.html?path=Letters%2Fto%20the%20bank%20%232.html",
+            DocumentsPath.documentPage(rel: "Letters/to the bank #2.html")
+        )
+        // `&` would start a second parameter, `+` would be read as a space,
+        // `?` would be a second query. All three are escaped.
+        XCTAssertEqual(
+            "/doc.html?path=a%26b%20%2B%20c%3F.html",
+            DocumentsPath.documentPage(rel: "a&b + c?.html")
+        )
+        for name in ["Letter to the council.html", "Letters/to the bank #2.html", "a&b + c?.html"] {
+            let page = DocumentsPath.documentPage(rel: name)
+            XCTAssertFalse(page.contains("device_token"), page)
+            XCTAssertFalse(page.contains("token"), page)
+        }
+    }
+
     /// The text reader and the editor must ask for the SAME url — two copies
     /// of the escaping rule is how two screens come to disagree about a
     /// filename with a plus in it.
@@ -134,6 +189,6 @@ final class DocumentsPathTests: XCTestCase {
     /// The two kinds this app offers, and the two `kind` values the server
     /// takes for them (`CreateRequest:616`).
     func testTheKindsAreTheServers() {
-        XCTAssertEqual(["sheet", "text"], DocumentsNewKind.allCases.map(\.api))
+        XCTAssertEqual(["doc", "sheet", "text"], DocumentsNewKind.allCases.map(\.api))
     }
 }

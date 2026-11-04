@@ -19,26 +19,40 @@ enum DocumentsEditorCover: Identifiable, Equatable {
     case text(FileEntry)
     case markdown(FileEntry)
     case sheet(FileEntry)
+    /// A formatted document or a Word file, in the dashboard's own editor
+    /// page — ``DocumentsWebEditorHost`` (owner answer 21).
+    case web(FileEntry)
 
     /// The cover for `entry`, or nil when nothing in this app edits it.
     ///
     /// One question, asked in one place: ``DocumentsKinds/editor(for:in:)``
     /// already answers nil for every library but Documents, for a folder, and
-    /// for everything this port leaves out (`.html`, `.docx`, `.xls`, `.ods`,
-    /// drawings, PDFs, pictures). A second table here is how two screens come
-    /// to disagree about a `.csv`.
+    /// for everything this port leaves out (`.xls`, `.ods`, drawings, PDFs,
+    /// pictures). A second table here is how two screens come to disagree
+    /// about a `.csv`.
+    ///
+    /// Adding ``case web`` here and one line to that table is the **whole**
+    /// of what the formatted-document editor needed at the dispatch point:
+    /// the two call sites in `FilesView.swift` (`:204`, `:487`) ask this
+    /// initializer and nothing else, so an `.html` row became an editing tap
+    /// without Files changing. Its own doc comment at `:34-45` still says a
+    /// `.html` opens the reader, and that sentence is now stale — the file
+    /// belongs to the transfers unit this batch, so it is listed in
+    /// `batch-2026-11-03/documents/DECISIONS.md` rather than edited here.
     init?(for entry: FileEntry, in libraryID: String?) {
         switch DocumentsKinds.editor(for: entry, in: libraryID) {
         case .text: self = .text(entry)
         case .markdown: self = .markdown(entry)
         case .sheet: self = .sheet(entry)
+        case .web: self = .web(entry)
         case nil: return nil
         }
     }
 
     var entry: FileEntry {
         switch self {
-        case .text(let entry), .markdown(let entry), .sheet(let entry): return entry
+        case .text(let entry), .markdown(let entry), .sheet(let entry), .web(let entry):
+            return entry
         }
     }
 
@@ -47,6 +61,7 @@ enum DocumentsEditorCover: Identifiable, Equatable {
         case .text(let entry): return "text:\(entry.rel)"
         case .markdown(let entry): return "markdown:\(entry.rel)"
         case .sheet(let entry): return "sheet:\(entry.rel)"
+        case .web(let entry): return "web:\(entry.rel)"
         }
     }
 }
@@ -71,6 +86,8 @@ struct DocumentsEditorCoverView: View {
             )
         case .sheet(let entry):
             DocumentsSheetEditorView(entry: entry, files: files, model: model, onClose: onClose)
+        case .web(let entry):
+            DocumentsWebEditorView(entry: entry, files: files, model: model, onClose: onClose)
         }
     }
 }

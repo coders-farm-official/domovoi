@@ -29,11 +29,16 @@ final class DocumentsNewTests: XCTestCase {
 
     // MARK: - the kinds
 
-    /// Two kinds, not Android's three: `Document` makes an `.html`, whose
-    /// editor is the WebView host this port leaves out, so it would make a
-    /// file with nowhere to open.
+    /// **Three kinds, Android's three** (owner answer 21). `Document` was
+    /// left out while the formatted-document editor was unported — an `.html`
+    /// with nowhere to open is a `+ New` that makes rubbish — and came back
+    /// with ``DocumentsWebEditorHost``. Android's fourth, Drawing, is drawn on
+    /// neither side: there is no drawing editor (`NewDocument.kt:17-21`).
     func testTheKindsAreTheOnesThisAppCanOpen() {
-        XCTAssertEqual([.spreadsheet, .text], DocumentsNewKind.allCases)
+        XCTAssertEqual([.document, .spreadsheet, .text], DocumentsNewKind.allCases)
+        XCTAssertEqual("Document", DocumentsNewKind.document.label)
+        XCTAssertEqual("Formatted document · .html", DocumentsNewKind.document.hint)
+        XCTAssertEqual("new document", DocumentsNewKind.document.prompt)
         XCTAssertEqual("Spreadsheet", DocumentsNewKind.spreadsheet.label)
         XCTAssertEqual("Workbook · .xlsx", DocumentsNewKind.spreadsheet.hint)
         XCTAssertEqual("new spreadsheet", DocumentsNewKind.spreadsheet.prompt)

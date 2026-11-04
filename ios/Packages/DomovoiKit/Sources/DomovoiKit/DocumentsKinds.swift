@@ -26,20 +26,37 @@ public enum DocumentsCategory: String, Equatable, Sendable {
     case text
 }
 
-/// Which of this app's three editors opens a file, or none.
+/// Which of this app's four editors opens a file, or none.
 ///
-/// Android's `openWith` (`FileKinds.kt:88`) has the same shape with one more
-/// destination: there a `.md`, an `.html` and a `.docx` all go to the
-/// dashboard's own editor inside a `WebView`. That host is not ported (see
-/// `overnight/documents/DECISIONS.md`), so there are three answers here and
-/// each one is an editor this app really has.
+/// Android's `openWith` (`FileKinds.kt:88`) has the same four destinations:
+/// a `.md`, an `.html` and a `.docx` all go to the dashboard's own editor
+/// inside a `WebView`, and that host is now ported too
+/// (``case web``, owner answer 21), so this table and Android's answer the
+/// same question the same way for every extension. A `.md` is the one place
+/// they differ on purpose, and ``case markdown`` says why.
 public enum DocumentsEditorKind: Equatable, Sendable {
     /// Plain UTF-8 over `/api/documents/text`.
     case text
     /// Markdown over `/api/documents/doc` — `{markdown: …}` both ways.
+    ///
+    /// Android sends a `.md` to the WebView host as well. Here it keeps the
+    /// native editor it already has, with its formatting row and its caret
+    /// rules, because markdown is text: there is nothing in a `.md` the
+    /// native editor can drop, which is the whole of entry 21's argument and
+    /// the reason it does **not** apply to this one extension.
     case markdown
     /// The grid over `/api/documents/sheet`.
     case sheet
+    /// The dashboard's own editor page in a `WKWebView` —
+    /// ``DocumentsWebEditorHost``, for a formatted document (`.html`,
+    /// `.htm`) and a Word file (`.docx`).
+    ///
+    /// Not a native round trip: a `.docx` and a sanitised `.html` hold
+    /// tables, pictures, fonts and comments that nothing on this phone can
+    /// represent, and an `AttributedString` round trip would drop them
+    /// silently — invisible until somebody reopened the file on a laptop
+    /// ([[no-misleading-controls]], and entry 21 word for word).
+    case web
 
     /// The pill beside the file's name.
     public var pill: String {
@@ -47,6 +64,7 @@ public enum DocumentsEditorKind: Equatable, Sendable {
         case .text: return DocumentsStrings.pillText
         case .markdown: return DocumentsStrings.pillMarkdown
         case .sheet: return DocumentsStrings.pillSheet
+        case .web: return DocumentsStrings.pillDocument
         }
     }
 }
@@ -177,20 +195,30 @@ public enum DocumentsKinds {
     ///
     /// * **Documents only.** Every `/api/documents/*` route resolves inside
     ///   the household's documents folder (`_readable_target`), so the same
-    ///   `.txt` in the Music library is a 404 there. Android's gate is
-    ///   `ServerFileSource.editsInApp` (`FileSource.kt:174`), which is the
-    ///   same library for the same reason.
+    ///   `.txt` in the Music library is a 404 there — and so is a `.docx`,
+    ///   because the WebView host's page reads and writes through
+    ///   `/api/documents/doc` like everything else in that module. Android's
+    ///   gate is `ServerFileSource.editsInApp` (`FileSource.kt:174`), which
+    ///   is the same library for the same reason.
     /// * **A folder never opens an editor.**
-    /// * The category decides, and `doc` only answers for a **markdown**
-    ///   file: a `.html` or a `.docx` is the WebView host's, which is not
-    ///   ported, so those rows keep the read-only reader they have today.
+    /// * The category decides, and `doc` splits in two: a **markdown** file
+    ///   gets the native text editor, and a `.html`, `.htm` or `.docx` gets
+    ///   the WebView host (``DocumentsEditorKind/web``) — which is the
+    ///   dashboard's own editor page, so it can save exactly the files
+    ///   `PUT /doc` takes.
+    ///
+    /// This function is the **one** dispatch point for all four editors, and
+    /// the only thing that had to change for owner answer 21: the two call
+    /// sites in `FilesView.swift` (`:204`, `:487`) ask
+    /// ``DocumentsEditorCover/init(for:in:)``, which asks this, so a formatted
+    /// document became editable without a line changing in Files.
     public static func editor(for entry: FileEntry, in libraryID: String?) -> DocumentsEditorKind? {
         guard libraryID == FileLibrary.documents, !entry.isDir else { return nil }
         let named = entry.name.isEmpty ? entry.rel : entry.name
         switch category(of: named) {
         case .text: return .text
         case .sheet: return .sheet
-        case .doc: return markdown.contains(FileKinds.ext(of: named)) ? .markdown : nil
+        case .doc: return markdown.contains(FileKinds.ext(of: named)) ? .markdown : .web
         case .drawing, .newtab, .download: return nil
         }
     }

@@ -25,8 +25,11 @@ private let sheetGrid = """
 @MainActor
 final class DocumentsSheetModelTests: XCTestCase {
 
-    private func entry(_ name: String) -> FileEntry {
-        FileEntry(name: name, rel: name, isDir: false, size: 4096, mtime: 1_762_000_000, kind: "doc-office")
+    /// `size` is what the **listing** says, which is what the fallback now
+    /// reads before it fetches anything (round 2's review, S4). `nil` is a
+    /// listing that did not carry one.
+    private func entry(_ name: String, size: Int64? = 4096) -> FileEntry {
+        FileEntry(name: name, rel: name, isDir: false, size: size, mtime: 1_762_000_000, kind: "doc-office")
     }
 
     private func settleUntil(
@@ -137,6 +140,14 @@ final class DocumentsSheetModelTests: XCTestCase {
     /// keystroke PUTs eight rows of blanks and the server's diff clears every
     /// cell in the window. So the grid is never offered — the model fails, as
     /// ``DocumentsEditorModel/body(_:for:)`` already did for the text half.
+    ///
+    /// It is also the case that decides **whose** refusal is drawn. The same
+    /// thing answering `/sheet` with `{"status":"ok"}` answers `/raw` with it
+    /// too, so the phone's reader refuses those bytes — "not an xlsx file (not
+    /// a zip)", which blames a file that is probably fine. `notDomovoi` is the
+    /// diagnosis and the reader's refusal is the symptom, which is why
+    /// `ServerMiss` exists rather than a flat "the reader knows best"
+    /// (round 1's review asked for the flat rule; this case is why it is not).
     func testASheetReadThatIsNotThisRoutesAnswerFails() async throws {
         let calls = Calls()
         let model = sheet(calls: calls) { _, _ in Data(#"{"status":"ok"}"#.utf8) }
@@ -145,6 +156,12 @@ final class DocumentsSheetModelTests: XCTestCase {
         XCTAssertEqual(
             DocumentsSheetLoad.failed(DocumentsStrings.couldNotLoad(DocumentsEditorModel.notDomovoi)),
             model.load
+        )
+        // The fallback did run — this is not the 415 short-circuit — and its
+        // reader's refusal was deliberately not the sentence shown.
+        XCTAssertEqual(
+            ["GET /api/documents/sheet/a%20spreadsheet.xlsx", "GET /api/documents/raw/a%20spreadsheet.xlsx"],
+            calls.lines.current
         )
         // Nothing to type into and nothing to save back.
         XCTAssertTrue(model.grid.isEmpty)
@@ -173,11 +190,12 @@ final class DocumentsSheetModelTests: XCTestCase {
 
     private func sheet(
         _ name: String = "a spreadsheet.xlsx",
+        size: Int64? = 4096,
         canWrite: Bool = true,
         calls: Calls,
         answer: @Sendable @escaping (String, String) async throws -> Data
     ) -> DocumentsSheetModel {
-        DocumentsSheetModel(entry: entry(name), canWrite: canWrite, deviceID: "phone-1", send: { method, path, body in
+        DocumentsSheetModel(entry: entry(name, size: size), canWrite: canWrite, deviceID: "phone-1", send: { method, path, body in
             calls.lines.mutate { $0.append("\(method) \(path)") }
             if let body { calls.bodies.mutate { $0.append(body) } }
             return try await answer(method, path)
@@ -306,6 +324,268 @@ final class DocumentsSheetModelTests: XCTestCase {
         await settleUntil({ model.load == .ready }, "the grid")
         XCTAssertEqual(200, model.maxRows)
         XCTAssertEqual(12, model.maxCols)
+    }
+
+    // MARK: - the sheet the phone read for itself (owner answer 22)
+
+    /// A `.csv` the house could not read is parsed **here**, and the grid that
+    /// comes back is read-only.
+    ///
+    /// There is no route a phone can PUT a workbook's bytes to, so a Save over
+    /// this grid would either 415 or write the *parsed* grid back through
+    /// `/sheet` and lose everything the reader could not represent — styles,
+    /// other sheets, charts ([[no-misleading-controls]]).
+    ///
+    /// Three properties, asserted separately because three different things
+    /// ask them: ``DocumentsSheetModel/offersSave`` decides whether the button
+    /// is drawn at all, ``DocumentsSheetModel/canSave`` whether it is enabled,
+    /// and ``DocumentsSheetModel/canEdit`` whether a cell takes typing
+    /// (`DocumentsSheetEditorView.swift:330`). **Round 1's sabotage stripped
+    /// `source == .server` out of all three and the whole package suite stayed
+    /// green**; the only guard anywhere was one UI assertion that a train has
+    /// to run. This case is the cheap one.
+    func testASheetTheHouseCannotReadIsParsedHereAndIsReadOnly() async throws {
+        let calls = Calls()
+        let model = sheet("takings.csv", calls: calls) { _, path in
+            if path.hasPrefix("/api/documents/sheet/") {
+                throw sheetRefusal(500, body: "openpyxl fell over")
+            }
+            return Data("week,sales\nWHISTLES,12\n".utf8)
+        }
+        model.read()
+        await settleUntil({ model.load == .ready }, "the phone's own grid")
+
+        // `/sheet` first and always, `/raw` only because it failed.
+        XCTAssertEqual(
+            ["GET /api/documents/sheet/takings.csv", "GET /api/documents/raw/takings.csv"],
+            calls.lines.current
+        )
+        XCTAssertEqual(.thisPhone, model.source)
+        XCTAssertEqual("week", model.cell(row: 0, column: 0))
+        XCTAssertEqual("12", model.cell(row: 1, column: 1))
+        // The one thing that says the grid did not come from the house: the
+        // grid itself looks identical either way.
+        XCTAssertEqual(DocumentsStrings.sheetReadOnThisPhone, model.note)
+
+        XCTAssertFalse(model.canEdit, "a grid nothing can save still takes typing")
+        XCTAssertFalse(model.offersSave, "a Save is drawn over a grid there is no route for")
+        model.setCell(row: 0, column: 0, to: "Thing")
+        XCTAssertTrue(model.dirty, "the model is not tracking the edit at all")
+        XCTAssertFalse(model.canSave, "an edit to a phone-parsed grid came out saveable")
+        model.save()
+        for _ in 0..<3000 { await Task.yield() }
+        XCTAssertFalse(
+            calls.lines.current.contains(where: { $0.hasPrefix("PUT") }),
+            "a grid the phone parsed was PUT back through /sheet"
+        )
+    }
+
+    /// The other half of the same rule, and the half that makes it a rule
+    /// rather than a blanket refusal: a grid the **house** sent is editable,
+    /// saveable, and says nothing about where it came from.
+    func testAGridTheHouseSentIsEditableAndSaysNothingAboutThePhone() async throws {
+        let calls = Calls()
+        let model = sheet(calls: calls) { _, _ in Data(sheetGrid.utf8) }
+        model.read()
+        await settleUntil({ model.load == .ready }, "the grid")
+        XCTAssertEqual(.server, model.source)
+        XCTAssertNil(model.note, "a grid the house sent is reported as read on the phone")
+        XCTAssertTrue(model.canEdit)
+        XCTAssertTrue(model.offersSave)
+    }
+
+    /// A **415 is an answer, not a failure**, and it does not reach the
+    /// fallback: it is the server saying this is a `.xls` or an `.ods`, and
+    /// the phone's reader does not read either (``DocumentsSheetTrouble/notASheet``).
+    /// A `/raw` request here would be a download of a file nothing can then
+    /// open, and the editor would say "not a spreadsheet this phone can read"
+    /// where the server had already said something better.
+    func testA415DoesNotFallBackToThePhonesOwnReader() async throws {
+        let calls = Calls()
+        let model = sheet("old.ods", calls: calls) { _, path in
+            if path.hasPrefix("/api/documents/sheet/") {
+                throw sheetRefusal(415, body: #"{"detail":".ods isn't editable in the sheet editor (xlsx/csv only)"}"#)
+            }
+            return Data()
+        }
+        model.read()
+        await settleUntil({ model.load != .loading }, "the refusal")
+        XCTAssertEqual(.unsupported, model.load)
+        XCTAssertEqual(
+            ["GET /api/documents/sheet/old.ods"], calls.lines.current,
+            "a 415 fell through to /raw"
+        )
+        XCTAssertEqual(.server, model.source)
+        XCTAssertFalse(model.offersSave)
+    }
+
+    /// When the bytes are in hand, the **reader's** refusal is what is shown
+    /// — not the server's.
+    ///
+    /// The old code parsed with `try?` and reported the server's failure
+    /// whatever happened, which left four of ``DocumentsSheetTrouble``'s five
+    /// sentences written and reachable from nothing: a file that is not a zip
+    /// came out as "Couldn't load: 500 …", which tells a person to check their
+    /// network about a file that is broken.
+    func testAFileThePhoneCannotParseSaysWhatTheReaderFound() async throws {
+        let calls = Calls()
+        let model = sheet("greenhouse.xlsx", calls: calls) { _, path in
+            if path.hasPrefix("/api/documents/sheet/") {
+                throw sheetRefusal(500, body: "openpyxl fell over")
+            }
+            return Data("this is not a zip at all".utf8)
+        }
+        model.read()
+        await settleUntil({ model.load != .loading }, "the refusal")
+        guard case .failed(let said) = model.load else {
+            XCTFail("a file the reader refused did not fail the editor: \(model.load)")
+            return
+        }
+        XCTAssertTrue(
+            said.hasPrefix("This file isn't a spreadsheet this phone can read"),
+            "the reader's own refusal is not what the editor shows — it says \(said)"
+        )
+        XCTAssertFalse(said.contains("openpyxl"), "the server's failure masked the reader's")
+    }
+
+    /// The byte cap, through the model: a workbook over
+    /// ``DocumentsSheetLimits/maxFileBytes`` says the limit, with the number
+    /// in it, because opening it elsewhere is the only thing to do about it.
+    func testASheetOverThisPhonesByteCapSaysTheLimit() async throws {
+        let calls = Calls()
+        let big = Data(count: DocumentsSheetLimits.maxFileBytes + 1)
+        let model = sheet("huge.xlsx", calls: calls) { _, path in
+            if path.hasPrefix("/api/documents/sheet/") {
+                throw sheetRefusal(500, body: "openpyxl fell over")
+            }
+            return big
+        }
+        model.read()
+        await settleUntil({ model.load != .loading }, "the refusal")
+        XCTAssertEqual(
+            DocumentsSheetLoad.failed(
+                DocumentsStrings.sheetTooBig(DocumentsSheetLimits.maxFileBytes / (1024 * 1024))
+            ),
+            model.load
+        )
+    }
+
+    /// Round 2's review, S4: the cap is asked of the **listing's** size
+    /// before a byte is fetched.
+    ///
+    /// The case above is the same refusal a megabyte too late: a 500 MB
+    /// workbook — exactly what openpyxl falls over on, which is what sends
+    /// the read here in the first place — was pulled over the LAN in full
+    /// and buffered in a `Data` before the number was looked at. On a phone
+    /// that is a jetsam kill as likely as a sentence, under a bare spinner
+    /// with nothing to cancel.
+    ///
+    /// The assertion that matters is the **call list**: one `GET /sheet` and
+    /// no `GET /raw` at all.
+    func testASheetTheListingSaysIsTooBigIsNeverFetched() async throws {
+        let calls = Calls()
+        let model = sheet(
+            "huge.xlsx",
+            size: Int64(DocumentsSheetLimits.maxFileBytes) + 1,
+            calls: calls
+        ) { _, _ in
+            throw sheetRefusal(500, body: "openpyxl fell over")
+        }
+        model.read()
+        await settleUntil({ model.load != .loading }, "the refusal")
+        XCTAssertEqual(
+            DocumentsSheetLoad.failed(
+                DocumentsStrings.sheetTooBig(DocumentsSheetLimits.maxFileBytes / (1024 * 1024))
+            ),
+            model.load,
+            "the limit is not what the editor says"
+        )
+        XCTAssertEqual(
+            ["GET /api/documents/sheet/huge.xlsx"],
+            calls.lines.current,
+            "the file was fetched although the listing already said how big it is"
+        )
+    }
+
+    /// A listing with **no** size in it is not a small file: the read must
+    /// still be tried, because the size is the listing's and a model reached
+    /// another way has none.
+    func testASheetWithNoSizeInTheListingIsStillRead() async throws {
+        let calls = Calls()
+        let model = sheet("takings.csv", size: nil, calls: calls) { _, path in
+            if path.hasPrefix("/api/documents/sheet/") {
+                throw sheetRefusal(500, body: "openpyxl fell over")
+            }
+            return Data("week,spent\n12,13\n".utf8)
+        }
+        model.read()
+        await settleUntil({ model.load == .ready }, "the phone-parsed grid")
+        XCTAssertEqual(
+            ["GET /api/documents/sheet/takings.csv", "GET /api/documents/raw/takings.csv"],
+            calls.lines.current
+        )
+        XCTAssertEqual("week", model.cell(row: 0, column: 0))
+    }
+
+    /// And the one case where the **server's** sentence is still the right
+    /// one: the file's bytes never arrived, so there is nothing the reader
+    /// could have found and "Couldn't load: …" is what happened.
+    func testWhenTheBytesNeverArriveTheServersFailureIsWhatIsShown() async throws {
+        let calls = Calls()
+        let model = sheet("takings.csv", calls: calls) { _, _ in
+            throw sheetRefusal(500, body: "openpyxl fell over")
+        }
+        model.read()
+        await settleUntil({ model.load != .loading }, "the refusal")
+        guard case .failed(let said) = model.load else {
+            XCTFail("an unreachable file did not fail the editor: \(model.load)")
+            return
+        }
+        XCTAssertTrue(said.hasPrefix("Couldn't load:"), "the editor says \(said)")
+        XCTAssertFalse(
+            said.contains("isn't a spreadsheet"),
+            "a file that never arrived was reported as a broken spreadsheet"
+        )
+    }
+
+    /// [[read-after-await-wrong-key]] for the fallback: a `/raw` answer that
+    /// lands after the retry link already put the **house's** grid on screen
+    /// must be dropped. Kept, it would replace a current grid with a stale one
+    /// and flip ``DocumentsSheetModel/source`` to `.thisPhone`, taking the
+    /// Save away from a grid the house really did send.
+    ///
+    /// The switch happens **inside** the round trip, which is the only way
+    /// this class of bug is caught.
+    func testARawAnswerThatLandsAfterARetryIsDropped() async throws {
+        let calls = Calls()
+        let letTheRawLand = Shared<Bool>(false)
+        let sheetFails = Shared<Bool>(true)
+        let model = sheet("takings.csv", calls: calls) { _, path in
+            if path.hasPrefix("/api/documents/raw/") {
+                while !letTheRawLand.current { await Task.yield() }
+                return Data("week,sales\nWHISTLES,12\n".utf8)
+            }
+            if sheetFails.current { throw sheetRefusal(500, body: "openpyxl fell over") }
+            return Data(
+                #"{"rel_path":"takings.csv","rows":[[{"v":"from the house"}]],"max_rows":1000,"max_cols":60}"#.utf8
+            )
+        }
+        model.read()
+        await settleUntil(
+            { calls.lines.current.contains(where: { $0.hasPrefix("GET /api/documents/raw/") }) },
+            "the fallback"
+        )
+        // The retry link, and this time the house answers.
+        sheetFails.set(false)
+        model.read()
+        await settleUntil({ model.cell(row: 0, column: 0) == "from the house" }, "the retry")
+        letTheRawLand.set(true)
+        for _ in 0..<3000 { await Task.yield() }
+
+        XCTAssertEqual("from the house", model.cell(row: 0, column: 0))
+        XCTAssertEqual(.server, model.source)
+        XCTAssertNil(model.note)
+        XCTAssertTrue(model.offersSave, "the house's own grid lost its Save to a stale read")
     }
 
     /// [[read-after-await-wrong-key]]: a save that lands after the grid was
