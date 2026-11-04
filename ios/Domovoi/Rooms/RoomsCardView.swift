@@ -13,7 +13,8 @@ import SwiftUI
 /// there is nothing else on it to tap, so a separate `open` control would be
 /// a second way to do one thing. What changed with D56 is **who** draws the
 /// control: a room is now a pushed screen, so ``RoomsView`` wraps this in a
-/// `NavigationLink(value:)` and the card itself is just the label. A `Button`
+/// `NavigationLink` whose destination is the room screen (not a `value:` —
+/// ``RoomsView`` measures why) and the card itself is just the label. A `Button`
 /// here as well would be a button inside a button — two overlapping targets,
 /// and two elements in the accessibility tree answering to one name, which is
 /// exactly what sends a test's tap to the wrong one.
