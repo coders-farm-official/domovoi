@@ -224,25 +224,6 @@ public enum PodcastStrings {
     /// (the removal was not confirmed) rather than guessing at a cause.
     public static let notConfirmed = "the server did not confirm the removal"
 
-    /// Where an episode is listened to and saved from, since this app draws
-    /// neither control.
-    ///
-    /// **iOS-only**, and one sentence rather than two because the two
-    /// omissions have one answer: the dashboard. Said at the foot of the
-    /// episodes list, where somebody would go looking for a play button.
-    ///
-    /// **Saving**: iOS has no download manager, and the app's only save path
-    /// pulls a whole file into memory with a 64 MiB ceiling
-    /// (`FileSave.swift:40-48`) while an episode row carries **no size** at
-    /// all to check it against (`podcasts.py:311-317`).
-    ///
-    /// **Playing**: the engine exists on this branch
-    /// (``PlayerItem/fromEpisode(id:title:show:durationSec:artwork:chapters:)``)
-    /// and nothing in the app owns one, so a screen that made its own would
-    /// stop playing the moment somebody left Podcasts. DECISIONS.md,
-    /// "Phone playback has an engine and no owner".
-    public static let inTheDashboard = "playing or saving an episode is done in the dashboard"
-
     // MARK: - subscribing
 
     /// `PodcastsSubscribe.kt:110`.
@@ -268,25 +249,22 @@ public enum PodcastStrings {
     // MARK: - playing, when a screen may own the engine
 
     /// The play button's VoiceOver label (`PodcastsEpisodes.kt:229`).
-    ///
-    /// **Nothing draws it.** See ``youWereAt(_:)`` below for the whole
-    /// reason: the engine merged, and there is nowhere for one to live.
     public static let play = "play"
+
+    /// The resume dialog's title, which names what is being resumed.
+    ///
+    /// Android's dialog has no title and relies on the sentence under it
+    /// (`PodcastsScreen.kt:316`). **iOS-only**: an `alert` without a title
+    /// draws its message as the title in a smaller face, and a person
+    /// returning to a back catalogue needs to know *which* episode is being
+    /// offered. IOS-ONLY-STRINGS.md.
+    public static func resumeTitle(_ episode: String) -> String { episode }
 
     /// The resume prompt's words (`PodcastsScreen.kt:316-343`).
     ///
-    /// **Nothing draws these.** `wf/ios-n-player`'s engine *can* take a
-    /// remote-URL episode — ``PlayerItem/fromEpisode(id:title:show:durationSec:artwork:chapters:)``
-    /// builds exactly the item this screen would hand it — but nothing in the
-    /// app **owns** a ``PlayerModel``: it is not on ``AppContainer`` or
-    /// ``ShellModel``, and adding it there is a change to shared
-    /// infrastructure this branch must not make (NIGHT-RULES §2). A player
-    /// built by this screen would be destroyed when somebody left Podcasts,
-    /// which is a play button that stops playing — DECISIONS.md, "Phone
-    /// playback has an engine and no owner".
-    ///
-    /// They are transcribed because the words are Android's and whoever wires
-    /// the owner must not invent them.
+    /// Drawn by ``PodcastResumeDialog`` since the 2026-11-03 batch: the owner
+    /// of the player is ``ShellModel/player`` (D49), so an episode plays here
+    /// and a saved place is something to be asked about.
     public static func youWereAt(_ position: String) -> String {
         "You were at \(position)."
     }

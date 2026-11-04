@@ -253,7 +253,9 @@ public struct PodcastEpisode: PagedRow, Identifiable, Equatable, Sendable {
         return out
     }
 
-    /// Whether this row gets a play control at all.
+    /// Whether this row gets a play control at all — and since the
+    /// 2026-11-03 batch it really is a play control
+    /// (``PodcastsModel/play(_:)``).
     ///
     /// Android draws the button always and **disables** it
     /// (`PodcastsEpisodes.kt:223`). Here a row with no file draws no button:
@@ -540,29 +542,30 @@ public enum PodcastPath {
     /// header and no token in a URL, which is the exception ``VideoStream``
     /// had to make and this one does not.
     ///
-    /// `download=1` asks for a `Content-Disposition: attachment`. Nothing
-    /// calls it with `download: true`: there is no save-to-device control
-    /// (DECISIONS.md), and the parameter is spelt out so the next reader
-    /// looking for it finds the route and the reason rather than a gap.
+    /// `download=1` asks for a `Content-Disposition: attachment`, which is
+    /// what the save-to-device control passes (D47, and Android asks for the
+    /// same thing: `VideosScreen.kt:222`).
     public static func audio(episodeID: Int64, download: Bool = false) -> String {
         "/api/podcasts/episodes/\(episodeID)/audio" + (download ? "?download=1" : "")
     }
 
     /// Who is listening, for the per-(device × person) resume store.
     ///
-    /// The person is **left out entirely**, always, because this app stores
-    /// no listener person (DECISIONS.md) — and absent is a *different* key
-    /// from empty on the server, which types `person_id` as an optional
-    /// integer (`:528`). ``VideoPath/watcher(deviceID:personID:)`` makes the
-    /// same omission for an unsigned-in phone; the parameter is accepted here
-    /// so that the branch which adds the preference has somewhere to put it.
+    /// **A number, or absent.** The server types `person_id` as an optional
+    /// integer (`:528`), so a non-numeric one is a 422 — and a 422 on a
+    /// position read is swallowed into "start at the top", which is an hour
+    /// of a programme silently replayed. Absent is also a *different* key
+    /// from empty, which is why an unparseable id is left out rather than
+    /// sent. The listener itself is ``PlayerListenerStore`` (D11); the player
+    /// builds this query through ``PlayerServerPositions/readQuery(deviceID:personID:)``,
+    /// and this spelling is here for anything that asks outside the player.
     public static func position(
         episodeID: Int64,
         deviceID: String,
         personID: String? = nil
     ) -> String {
         var out = "/api/podcasts/positions/\(episodeID)?device_id=\(esc(deviceID))"
-        if let personID, !personID.isEmpty { out += "&person_id=\(esc(personID))" }
+        if let personID, let number = Int64(personID) { out += "&person_id=\(number)" }
         return out
     }
 
@@ -661,5 +664,37 @@ public enum PodcastRules {
     public static func offersResume(positionSec: Double) -> Bool {
         guard positionSec.isFinite else { return false }
         return positionSec > resumeThresholdSec
+    }
+}
+
+/// An episode with a saved place, waiting on a resume/start-over choice.
+///
+/// `ResumeRequest` (`PodcastsScreen.kt:313`). It carries the **built queue
+/// item** rather than the episode row, because the row is in a pager whose
+/// page can be replaced under the dialog — a `podcasts.changed` push, a
+/// search, a scroll — and a choice must play what was asked for rather than
+/// whatever is in that slot by the time the person taps.
+public struct PodcastResume: Equatable, Sendable, Identifiable {
+
+    public let item: PlayerItem
+    /// For the dialog's own title; the item's title is the same string, and
+    /// this is kept separate so the sentence cannot drift if the item's ever
+    /// gains a prefix.
+    public let title: String
+    public let positionSec: Double
+    public let speed: Float
+
+    public var id: String { item.uid }
+
+    public init(item: PlayerItem, title: String, positionSec: Double, speed: Float) {
+        self.item = item
+        self.title = title
+        self.positionSec = positionSec
+        self.speed = speed
+    }
+
+    /// `You were at 1:02:11.` — the place in the person's words.
+    public var said: String {
+        PodcastStrings.youWereAt(fmtDur(positionSec))
     }
 }
