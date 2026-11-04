@@ -37,34 +37,46 @@ public enum FileStrings {
     /// Apple's audit named this field `Text clipped` on train I004
     /// (`FILES AUDIT REST :: … type=49 label='filter this folder…'
     /// frame=(16.0, 401.3, 361.0, 34.0)`), and the words do not fit the
-    /// field at an accessibility type size. Measured, from two trees of that
-    /// one train rather than from font tables: the `showing 50 of 56 items`
-    /// leaf beside it is one `.footnote` line **142.0 points** wide for 22
-    /// glyphs, which calibrates a glyph-advance model to +6.4 %; the `.body`
-    /// `Music` leaf above it measures the type scale at **3.118×**
-    /// (20.3 → 63.3 points high, `large` → AX5). Nineteen glyphs of
-    /// `filter this folder…` then want **436 points** inside a
-    /// `.roundedBorder` field that offers 361 − 16 = **345** — short by 91,
-    /// about four glyphs. `filter…` wants **172**, half the room there is.
+    /// field at an accessibility type size. Measured off that one train's
+    /// own pixels and trees, not font tables: in `67-files-scale-large_*.png`
+    /// the drawn `filter this folder…` is **125.3 points** of ink at `large`
+    /// (starting 7.3 points inside the field's left edge), and the `.body`
+    /// `Music` leaf measures the type scale at **3.118×** (20.3 → 63.3
+    /// points high across the `large` and AX5 trees). Scaled, Android's
+    /// sentence wants about **391 points** at AX5 inside a `.roundedBorder`
+    /// field that offers 361 − 16 = **345** — over by about 13 %. AX5 draws
+    /// in SF Pro Display, whose tracking differs, so allow several per cent
+    /// either way; the overshoot survives that. `filter…`, scaled the same
+    /// way, wants about **154**, under half the room. These AX5 figures are
+    /// scaled, not seen: I004 never photographs the field at AX5 (its tree
+    /// puts it below the fold there).
     ///
-    /// The model is not a guess: on the one finding of this kind with a
-    /// photograph behind it, News's 39-glyph hint in a 329-point field, it
-    /// returns 315.8 against 313 available — clipped, which is what train
-    /// S005's screenshot shows (cut mid-`Formula 1`) — and clears the
-    /// 31-glyph hint that replaced it at 242.4, which no audit has named
-    /// since. ``NewsStrings/freeformPlaceholderShort`` is that precedent,
-    /// and this is its shape: short on screen, whole to a reader.
+    /// An earlier draft of this comment rested on a glyph-advance model
+    /// calibrated on the `showing 50 of 56 items` leaf, "validated" by a
+    /// claim that it predicts News's 39-glyph hint clipped at the ordinary
+    /// size as train S005 photographed it. That claim is withdrawn: S005's
+    /// own `news-12-audited` screenshot draws that hint whole, ellipsis
+    /// included, in about 296 points of ink inside its 329-point field, so
+    /// the model's one validation was a false positive. The model also reads
+    /// 7–12 % wide (139.8 for the 125.3 measured above, 315.8 for that
+    /// 296). Only the pixel figures are used here.
+    /// ``NewsStrings/freeformPlaceholderShort`` is still the precedent for
+    /// the shape — short on screen, whole to a reader — but it is not
+    /// evidence for the arithmetic.
     ///
     /// Which words go: `this folder`, because the breadcrumb row directly
-    /// above the field is the folder — `library root / Music / Albums` — so
-    /// the scope is already on screen, the way News's `add topic` button
+    /// above the field names where the filter applies — in I004 one crumb,
+    /// labelled `library root` and drawn as a house and `Music` — so the
+    /// scope is already on screen, the way News's `add topic` button
     /// already said its verb. `filter…` is also what Android's own hint is
     /// on the two screens that have a shorter folder to name
     /// (``VideoStrings/filterPlaceholder``,
     /// ``PhoneMediaStrings/filterPlaceholder``), so this app says one word
-    /// for one control. `filter folder…` was measured too and rejected: 331
-    /// against 345 is 4 % of margin, inside the model's own error.
-    /// `IOS-ONLY-STRINGS.md`, and `gx-transfers/DECISIONS.md` for the call.
+    /// for one control. `filter folder…` would fit too — about 297 of 345 at
+    /// AX5 on the pixel scale, roughly 14 % to spare — and was passed over
+    /// for that one-word consistency, not for size; it is an open call for
+    /// Kamron in `gx-transfers/DECISIONS.md`. `IOS-ONLY-STRINGS.md` records
+    /// the string.
     public static let filterPlaceholderShort = "filter…"
 
     /// The picker's label when no library is chosen yet (`FilesScreen.kt:983`).

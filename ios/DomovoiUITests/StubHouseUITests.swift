@@ -3762,29 +3762,35 @@ final class StubHouseUITests: XCTestCase {
         // and a field that grows taller can still cut its hint off at the
         // right edge. The exclusion is gone and nothing replaces it.
         //
-        // The finding is true, measured off the two trees of that same train
-        // and nothing else: the `.footnote` leaf below this field,
-        // `showing 50 of 56 items`, is **142.0** points wide for 22 glyphs on
-        // one line (`67-files-scale-large-tree:43`), which calibrates a
-        // glyph-advance model to +6.4 %; the `.body` `Music` leaf above it
-        // measures the type scale at **3.118×** (20.3 → 63.3 points high
-        // across the two trees). Android's nineteen-glyph sentence then wants
-        // **436** points at AX5 where a 361-point `.roundedBorder` field
-        // offers **345**, short by about four glyphs. The same model returns
-        // 315.8 against 313 for News's 39-glyph hint, which train S005
-        // photographed clipped mid-`Formula 1`, and clears the 31-glyph hint
-        // that replaced it — so it predicts the one finding of this kind that
-        // has a picture behind it, and the fix that answered it.
+        // The words are too long for the field at AX5, measured off that
+        // same train's own pixels and trees: the drawn `filter this folder…`
+        // is **125.3** points of ink at `large` in
+        // `67-files-scale-large_*.png`, and the `.body` `Music` leaf above
+        // it measures the type scale at **3.118×** (20.3 → 63.3 points high
+        // across the two trees). Scaled, Android's nineteen-glyph sentence
+        // wants about **391** points at AX5 where a 361-point
+        // `.roundedBorder` field offers **345** — over by about 13 %, which
+        // survives the few per cent SF Pro Display's different tracking at
+        // AX5 could move it. The AX5 width is scaled, not photographed: I004
+        // never shows the field at AX5. (An earlier draft rested on a
+        // glyph-advance model "validated" against News's hint, which it said
+        // train S005 photographed clipped; S005's screenshots draw that hint
+        // whole, so that validation is withdrawn and only the pixel figures
+        // are kept — ``FileStrings/filterPlaceholderShort`` has the details.)
+        // This is a reason the long hint fails the person at AX5; it is not
+        // a claim about what Apple's audit tests, which runs at the ordinary
+        // size.
         //
         // So `FilesView.filterField` now draws
-        // ``FileStrings/filterPlaceholderShort`` (`filter…`, 172 points at
-        // AX5) and keeps Android's whole sentence as the field's
+        // ``FileStrings/filterPlaceholderShort`` (`filter…`, about 154
+        // points at AX5) and keeps Android's whole sentence as the field's
         // accessibility label — which is why the element's `label=` in this
         // screen's tree is unchanged and `testTheFilesListTextGrowsAtAX5`
         // still finds it by that label. **If `Text clipped` names this field
-        // again, this case reds**, and that is the right outcome: it would
-        // mean Apple is reading the label and not the drawn hint, and the
-        // next fix is a shorter label or a wrapping one.
+        // again, this case reds**, and that is the right outcome whatever
+        // the cause — Apple reading the label rather than the drawn hint is
+        // one reading, this screen's already unstable audit output another —
+        // and it is looked at then, not excused now.
         //
         // What the first pass got right and is kept: the audit's output on
         // this screen is not stable (10, 8, 1 and 5 findings over four trains
@@ -3929,11 +3935,12 @@ final class StubHouseUITests: XCTestCase {
             )
             // **Short on screen, whole to a reader** — the shape
             // `NewsTopicsView.freeform` already took for the same finding.
-            // Measured off I004's own two trees: Android's nineteen glyphs
-            // want 436 points at AX5 in the 345 a 361-point
-            // `.roundedBorder` field offers, and `filter…` wants 172
+            // Measured off I004's own `large` screenshot and the type scale
+            // of its two trees: Android's nineteen glyphs want about 391
+            // points at AX5 in the 345 a 361-point `.roundedBorder` field
+            // offers, and `filter…` about 154
             // (``FileStrings/filterPlaceholderShort`` carries the
-            // calibration and the leaves it rests on). If someone restores
+            // measurement and what it rests on). If someone restores
             // the long hint to the field, this fails and `Text clipped`
             // comes back with it; if someone takes the whole sentence off
             // the label as well, the second assertion fails and VoiceOver
