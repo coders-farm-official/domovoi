@@ -1074,6 +1074,27 @@ extension StubHouseUITests {
     /// finding about ink coverage. So it is pinned to that label: if the
     /// token ever does regress, the author line goes with it and lands in
     /// `unexplained` below.
+    ///
+    /// ### What train I003 answered, and why nothing here changed for it
+    ///
+    /// Two findings, and both are the shell's new large navigation title:
+    /// `Text clipped` naming `domovoi / audiobooks` at **7.3 x 40.7 points**
+    /// (a two-line title squeezed to seven points of width, in the 200-point
+    /// blank band the screenshot shows under `Back`), and one anonymous
+    /// `Contrast failed` — a finding with no measurement, which is what
+    /// Apple reports over a text element it cannot read a colour pair off.
+    /// The same pair turned up on `testMusicMore_AuditThePlaylistsTab`, and
+    /// the lone anonymous `Contrast failed` on its own on
+    /// `testSystemSettings_AppLayoutPassesApplesAccessibilityAudit`, which is
+    /// a panel this unit has never touched.
+    ///
+    /// The seventeen named Dynamic Type findings and the named em-dash
+    /// contrast this case was written around did **not** appear: the title
+    /// takes 96 points of the page and the audit saw five rows where I002
+    /// saw nine. So the filters above are left exactly as they are — they
+    /// describe the screen, not this run of it — and the two findings go
+    /// with the shell's fix. If either survives it, it is new and this case
+    /// will say so.
     @MainActor
     @available(iOS 17.0, *)
     func testAudiobooks_TheLibraryPassesApplesAudit() throws {
