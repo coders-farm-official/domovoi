@@ -720,8 +720,19 @@ final class CalendarWindowTests: XCTestCase {
                 + "the crowd is too thin or the house stopped honouring `limit`"
         )
 
+        let fetchesBefore = model.events.fetches
         model.goToToday()
-        await settleUntil({ !model.rangePending }, "the read home")
+        // **Not `!rangePending`**, which is already false here and was while
+        // this case was being written: the cut page from may *contains* the
+        // range coming home, so it `landed(for:)` it and a settle on that
+        // predicate returns before the request has even gone out. What is
+        // waited for is the page in hand being the one that was asked for.
+        XCTAssertEqual(
+            fetchesBefore + 1, model.events.fetches,
+            "`today` asked for nothing: a cut page from may was taken as the "
+                + "answer for november"
+        )
+        await settleUntil({ model.events.data?.window == model.askedWindow }, "the read home")
 
         XCTAssertEqual(
             calendarWindow(mode: .agenda, anchor: day(2026, 11, 4), in: chicago),
