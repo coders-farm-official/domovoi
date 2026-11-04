@@ -102,51 +102,158 @@ extension StubHouseUITests {
         return "\(first.month) \(first.day) – \(last.month) \(last.day), \(last.year)"
     }
 
-    /// Tap one of the view toggle's four words, scrolling the toggle
-    /// **sideways** first when that word is not on screen.
+    /// The view toggle's **own** horizontal scroll view — the clip a toggle
+    /// word can hide behind at `UICTContentSizeCategoryAccessibilityXXXL`.
+    ///
+    /// Picked as the shortest scroll view that spans a toggle word's own
+    /// middle, rather than as "the shortest on screen" the way
+    /// ``roomsScrollView(_:strip:)`` picks the tab strip: Calendar has three
+    /// scroll views up at AX5 — the page (393 x 702), this toggle
+    /// (361 x 60.7) and the phone tab bar (393 x 146, which is not a scroll
+    /// view at the ordinary size at all) — and a helper that scrolled the
+    /// page believing it was the toggle would move the agenda and then tap a
+    /// word that had not moved. The page spans the word's middle too, so the
+    /// height test is what separates the two; the tab bar is 180 points below
+    /// it and is excluded by the span.
+    @MainActor
+    func calViewToggle(_ app: XCUIApplication) -> XCUIElement? {
+        guard let word = CalWords.viewWords
+            .map({ app.buttons[$0] })
+            .first(where: { $0.exists && $0.isHittable })
+        else { return nil }
+        let middle = word.frame.midY
+        let all = app.scrollViews
+        var best: XCUIElement?
+        var height = CGFloat.greatestFiniteMagnitude
+        for index in 0..<all.count {
+            let one = all.element(boundBy: index)
+            guard one.exists else { continue }
+            let box = one.frame
+            guard box.minY <= middle, box.maxY >= middle else { continue }
+            if box.height < height {
+                height = box.height
+                best = one
+            }
+        }
+        return best
+    }
+
+    /// Drag the toggle sideways until `element` is **wholly inside** `view`,
+    /// and say whether it got there.
+    ///
+    /// A port of ``roomsBring(_:into:vertical:flicks:)``'s horizontal half
+    /// (`StubHouseUITests+Rooms.swift:266-361`), kept here under this unit's
+    /// own names rather than called across files, and for the same three
+    /// reasons that helper carries in its doc comment: containment on the
+    /// scroll axis only (`CGRect.contains` fails on a word as tall as its own
+    /// clip), a measured press-and-drag rather than a flick (a flick carries
+    /// momentum and oscillates past the word), and an eight-point margin
+    /// (landing on the clip's edge is landing outside).
+    @MainActor
+    func calBring(_ element: XCUIElement, into view: XCUIElement, flicks: Int = 8) -> Bool {
+        let slack: CGFloat = 0.5
+        let margin: CGFloat = 8
+        func inside() -> Bool {
+            let it = element.frame
+            let seat = view.frame
+            return it.minX >= seat.minX - slack && it.maxX <= seat.maxX + slack
+        }
+        for _ in 0..<flicks {
+            if inside() { return true }
+            let it = element.frame
+            let seat = view.frame
+            let shortfall: CGFloat
+            if it.maxX > seat.maxX {
+                shortfall = -(it.maxX - seat.maxX + margin)
+            } else if it.minX < seat.minX {
+                shortfall = (seat.minX - it.minX) + margin
+            } else {
+                // Unreachable: `inside()` above answers this very question
+                // with half a point of slack. Kept so that a future change to
+                // the slack cannot turn a zero shortfall into a loop that
+                // drags nothing, which is how train S008 burned ten
+                // iterations in Rooms.
+                break
+            }
+            guard seat.width > 40 else { break }
+            // The whole gesture stays inside the strip — a touch that leaves
+            // it is a touch on something else — so one drag travels at most
+            // 80% of the strip's width and the loop does the rest.
+            let travel = max(-seat.width * 0.8, min(seat.width * 0.8, shortfall))
+            let from = view.coordinate(
+                withNormalizedOffset: CGVector(dx: travel < 0 ? 0.9 : 0.1, dy: 0.5)
+            )
+            // The press before the move is what makes this a drag and not a
+            // flick, and it is long enough that the toggle word under the
+            // finger cannot read the gesture as a tap.
+            from.press(
+                forDuration: 0.4,
+                thenDragTo: from.withOffset(CGVector(dx: travel, dy: 0))
+            )
+        }
+        return inside()
+    }
+
+    /// Tap one of the view toggle's four words, dragging the toggle
+    /// **sideways** first until the whole word is inside its own clip, and
+    /// then waiting for the toggle to **say** that word is the chosen one.
     ///
     /// The toggle is a horizontal `ScrollView` (``CalendarScreenView``'s
     /// `CalendarRangeBarView`), and at
     /// `UICTContentSizeCategoryAccessibilityXXXL` four scaling words do not
-    /// fit a 390pt phone. `week` is the third of them, nothing in this suite
-    /// had tapped past the second at that size, and a tap on an element that
-    /// is off screen **fails rather than scrolling to it** (REVIEW-1, note 8).
+    /// fit a 390pt phone: measured in train I004, the strip spans x 16–377
+    /// and holds 608 points of words, so `agenda` is 16.0–200.3, `day`
+    /// 206.3–311.0, **`week` 317.0–455.7** and `month` 461.7–624.0.
     ///
-    /// The swipe is dispatched on a toggle word that *is* hittable, so the
-    /// gesture lands inside the toggle's own scroll view: swiping the
-    /// application would scroll the agenda underneath instead. The second
-    /// half of the flicks go the other way, in case the first swipe carried
-    /// the wanted word off the left-hand end.
+    /// ### Why `isHittable` was the bug, and not the gesture
     ///
-    /// **Every swipe is followed by a look.** The loop was check-then-swipe,
-    /// so the last flick was dispatched and nothing ever looked at what it
-    /// did — with the default four that left two left flicks and exactly
-    /// **one** usable right-hand flick, which is the case the right-hand
-    /// flicks exist for (REVIEW-2, should 4). A flake here lands in a train
-    /// as a red case and reads as a layout bug.
+    /// Train I004's one Calendar red,
+    /// ``testCal_TheWeeksEmptyDayLineGrowsAtAccessibilitySize()``, and the
+    /// same failure Rooms had already paid for twice
+    /// (``roomsBring(_:into:vertical:flicks:)``, trains S004 and S006).
+    /// `week`'s **centre** at AX5 is x 386.3: on the window, which is 393
+    /// wide, and off the toggle's clip, which ends at 377. So `isHittable`
+    /// answered true, the loop below tapped on the first look and never
+    /// nudged, the synthesised touch landed on the page's scroll content
+    /// behind the clip — and nothing happened. The case then flicked twenty
+    /// times looking for the week's `nothing on` line with the **agenda**
+    /// still on screen (its tree held `mon, nov 9`, a day no week this case
+    /// draws contains) and reported the week's line as unreachable: a passing
+    /// tap, a red case and a layout bug in the message, none of them true.
+    ///
+    /// So reachable here means **wholly inside the clip** (``calBring``), and
+    /// the tap is confirmed against the toggle's own `.isSelected` trait
+    /// — the thing ``calendarStillOn(_:_:_:)`` already reads — rather than
+    /// against the tap having been dispatched. A tap that misses now fails
+    /// here, where the tree is printed, instead of twenty rows later.
+    ///
+    /// `flicks` is the number of drag steps allowed; the drag converges from
+    /// either side in one or two, so the default is generous.
     @MainActor
     func calTapViewWord(_ app: XCUIApplication, _ word: String, flicks: Int = 4) -> Bool {
-        let wanted = app.buttons[word]
-        func tapIfReachable() -> Bool {
-            guard wanted.exists, wanted.isHittable else { return false }
-            wanted.tap()
-            return true
+        let wanted = app.buttons[word].firstMatch
+        guard wanted.waitForExistence(timeout: 20) else {
+            print("=== THE TOGGLE HAS NO `\(word)` AT ALL — tree follows ===")
+            print(app.debugDescription)
+            return false
         }
-        for flick in 0..<flicks {
-            if tapIfReachable() { return true }
-            guard let onScreen = CalWords.viewWords
-                .map({ app.buttons[$0] })
-                .first(where: { $0.exists && $0.isHittable })
-            else { break }
-            if flick < flicks / 2 {
-                onScreen.swipeLeft()
-            } else {
-                onScreen.swipeRight()
-            }
+        guard let toggle = calViewToggle(app) else {
+            print("=== NO VIEW TOGGLE TO SCROLL — tree follows ===")
+            print(app.debugDescription)
+            return false
         }
-        // The look the loop used to leave out.
-        if tapIfReachable() { return true }
-        print("=== THE TOGGLE'S `\(word)` NEVER BECAME HITTABLE — tree follows ===")
+        guard calBring(wanted, into: toggle, flicks: max(flicks, 8)) else {
+            print("=== THE TOGGLE'S `\(word)` WOULD NOT COME WHOLLY INSIDE — tree follows ===")
+            print(app.debugDescription)
+            return false
+        }
+        wanted.tap()
+        let deadline = Date().addingTimeInterval(10)
+        while Date() < deadline {
+            if wanted.isSelected { return true }
+            usleep(150_000)
+        }
+        print("=== `\(word)` WAS TAPPED AND THE TOGGLE DID NOT MOVE — tree follows ===")
         print(app.debugDescription)
         return false
     }
@@ -309,10 +416,19 @@ extension StubHouseUITests {
     /// the one thing the week added that nothing measured.
     @MainActor
     func testCal_TheWeeksEmptyDayLineGrowsAtAccessibilitySize() throws {
+        // Which half of `lineHeight` gave way, so that the failure names it:
+        // the toggle that opens the week, or the week's own line.
+        var theToggleGaveWay = false
+
         func lineHeight(_ app: XCUIApplication) -> CGFloat? {
-            // The toggle is nudged sideways first at AX5, where `week` is the
-            // third of four scaling words (``calTapViewWord(_:_:flicks:)``).
-            guard calTapViewWord(app, CalWords.week) else { return nil }
+            // The toggle is dragged sideways first at AX5, where `week` sits
+            // at x 317.0–455.7 in a clip that ends at 377
+            // (``calTapViewWord(_:_:flicks:)`` carries the measurement and
+            // the train I004 red it cost).
+            guard calTapViewWord(app, CalWords.week) else {
+                theToggleGaveWay = true
+                return nil
+            }
             // **`.firstMatch`, because a week has more than one empty day.**
             // The fixture's week leaves four days with nothing on them, so
             // the bare subscript is an ambiguous query: `exists` tolerates
@@ -329,7 +445,11 @@ extension StubHouseUITests {
         let ordinary = openCalendar()
         XCTAssertTrue(ordinary.landed, "the agenda never drew a row at the ordinary size")
         guard let small = lineHeight(ordinary.app) else {
-            return XCTFail("no `nothing on` line to measure at the ordinary size")
+            return XCTFail(
+                theToggleGaveWay
+                    ? "the toggle's `week` never opened the week at the ordinary size"
+                    : "no `nothing on` line to measure at the ordinary size"
+            )
         }
         evidence(ordinary.app, "cal-03-empty-day-large")
         ordinary.app.terminate()
@@ -340,7 +460,16 @@ extension StubHouseUITests {
         // and the scroll inside `lineHeight` is what reaches anything.
         let big = openCalendar("UICTContentSizeCategoryAccessibilityXXXL")
         guard let grown = lineHeight(big.app) else {
-            return XCTFail("the `nothing on` line is not reachable at AX5")
+            return XCTFail(
+                theToggleGaveWay
+                    // Train I004's red, before `calTapViewWord` measured
+                    // containment: this read "the `nothing on` line is not
+                    // reachable at AX5" while the week had never been opened.
+                    ? "the toggle's `week` never opened the week at AX5, so "
+                        + "nothing was measured — the tree above is the screen "
+                        + "that was still up"
+                    : "the week's `nothing on` line is not reachable at AX5"
+            )
         }
         evidence(big.app, "cal-03-empty-day-ax5")
         print("MEASURED week empty-day line: ordinary \(small) -> AX5 \(grown)")
