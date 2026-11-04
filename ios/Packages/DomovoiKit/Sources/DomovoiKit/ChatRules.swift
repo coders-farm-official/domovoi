@@ -340,4 +340,25 @@ public enum ChatRules {
         let before = transcript[transcript.count - 2]
         return last.role != "user" && !last.pending && before.role == "user" && last.retryable
     }
+
+    // MARK: - the composer's send
+
+    /// Whether the composer draws a send at all: **something has been typed**
+    /// (D8, and Android's `else` at `ChatScreen.kt:1165`).
+    ///
+    /// ### Why this is its own rule and not `!micOffered(typed:)`
+    ///
+    /// The mic's gate is ``ChatMoreModel/micOffered(typed:)``, which asks two
+    /// questions — is the box empty, **and** does this phone have a device id
+    /// to record against — and only the first of them has anything to do with
+    /// the send. Reading the mic's rule backwards for the send made a future
+    /// gate on the mic silently a gate on the send too: a phone with no device
+    /// id and a typed message would have lost its send button, which is the
+    /// one control this screen cannot do without. Spelt out here, the two
+    /// branches are two questions about two controls, and the trim is the same
+    /// one ``ChatMoreVoiceRules/micOffered(typed:)`` makes so that a box
+    /// holding one space is still empty.
+    public static func sendOffered(typed: String) -> Bool {
+        !typed.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
 }

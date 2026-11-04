@@ -206,3 +206,193 @@ final class ChatTranscriptWindowTests: XCTestCase {
         XCTAssertNil(transcript.window.pinned)
     }
 }
+
+// MARK: - the phone's conversation
+
+/// The **same** cap on the phone's own transcript
+/// (``AssistantPhoneModel/transcriptPage``), which round 1 of this branch
+/// built and left with no package test at all — the view windowed the array
+/// inline and `drawnTranscript` had no caller.
+///
+/// It is in this file rather than `AssistantPhoneModelTests` because it is one
+/// rule in one type (``ChatTranscriptWindow``) read through two models, and a
+/// reader checking what the cap does wants both halves in front of them. The
+/// cases are the Assistant-side twins of the house ones above: the newest page
+/// on open, one page a tap, the absolute pin under a reply, and the reset on
+/// every one of the three ways a conversation changes.
+@MainActor
+final class AssistantPhoneTranscriptWindowTests: XCTestCase {
+
+    private var directory: URL!
+
+    override func setUpWithError() throws {
+        try super.setUpWithError()
+        directory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("assistant-window-\(UUID().uuidString)", isDirectory: true)
+    }
+
+    override func tearDownWithError() throws {
+        try? FileManager.default.removeItem(at: directory)
+        try super.tearDownWithError()
+    }
+
+    /// A model over a temporary store, with the clock and the waits in the
+    /// test's hands — `AssistantPhoneModelTests`'s own rig, cut down to what
+    /// a window needs.
+    private func make() -> (AssistantPhoneModel, AssistantConversationStore) {
+        let store = AssistantConversationStore(directory: directory)
+        let model = AssistantPhoneModel(
+            engine: FakeAssistantEngine(),
+            store: store,
+            lastPlace: SavedStateBox(),
+            nowMs: { 1_762_000_000_000 },
+            stamp: { _ in "2026-11-03 09:00" },
+            wait: { _ in }
+        )
+        return (model, store)
+    }
+
+    /// `count` messages, alternating, named by their number so a case can say
+    /// which one is at the top of the window.
+    private func conversation(_ id: String, _ count: Int) -> AssistantConversation {
+        AssistantConversation(
+            id: id,
+            created: 1,
+            updated: 2,
+            messages: (1...count).map { number in
+                AssistantMessage(
+                    from: number.isMultiple(of: 2) ? .domovoi : .user,
+                    text: "message \(number)",
+                    at: Int64(number)
+                )
+            },
+            name: "the long one \(id)"
+        )
+    }
+
+    private func seed(_ store: AssistantConversationStore, _ id: String, _ count: Int) {
+        XCTAssertTrue(store.save(conversation(id, count)), "the conversation was not written")
+    }
+
+    func testALongConversationOnThePhoneOpensAtItsNewestPage() {
+        let (model, store) = make()
+        seed(store, "a", 1000)
+        model.open("a")
+        let page = model.transcriptPage
+        XCTAssertEqual(1000, page.all.count, "the whole conversation is still held")
+        XCTAssertEqual(950, page.hidden, "the cap is not applied")
+        XCTAssertEqual(50, page.drawn.count)
+        XCTAssertEqual("message 951", page.drawn.first?.text)
+        XCTAssertEqual("message 1000", page.drawn.last?.text)
+        XCTAssertEqual(999, page.lastIndex)
+    }
+
+    func testAShortConversationOnThePhoneIsDrawnWhole() {
+        let (model, store) = make()
+        seed(store, "b", 8)
+        model.open("b")
+        let page = model.transcriptPage
+        XCTAssertEqual(0, page.hidden, "an eight-message conversation was windowed")
+        XCTAssertEqual(8, page.drawn.count)
+    }
+
+    /// The slice carries the array's own indices, which is what the window
+    /// divider and the "writing" spinner are keyed on: a window that
+    /// renumbered would put the spinner on the wrong bubble.
+    func testThePhonesDrawnSliceKeepsTheConversationsOwnIndices() {
+        let (model, store) = make()
+        seed(store, "c", 1000)
+        model.open("c")
+        let page = model.transcriptPage
+        XCTAssertEqual(950, page.drawn.startIndex)
+        XCTAssertEqual(1000, page.drawn.endIndex)
+        XCTAssertEqual("message 951", page.all[page.drawn.startIndex].text)
+    }
+
+    func testShowEarlierOnThePhoneAddsOnePage() {
+        let (model, store) = make()
+        seed(store, "d", 1000)
+        model.open("d")
+        model.showEarlier()
+        let page = model.transcriptPage
+        XCTAssertEqual(900, page.hidden)
+        XCTAssertEqual(100, page.drawn.count)
+        XCTAssertEqual(
+            "message 901", page.drawn.first?.text,
+            "one tap of a fifty-message page makes 901 the oldest drawn message"
+        )
+        model.showEarlier()
+        XCTAssertEqual("message 851", model.transcriptPage.drawn.first?.text)
+    }
+
+    /// A reply landing under a grown window must not walk the message somebody
+    /// is reading off the top. ``AssistantPhoneModel/transcript`` appends the
+    /// reply being written, so this is the growth without a round trip: a
+    /// count from the end would read `message 903` here.
+    func testAReplyUnderAGrownPhoneWindowLeavesItsTopAlone() async {
+        let (model, store) = make()
+        seed(store, "e", 1000)
+        model.open("e")
+        model.showEarlier()
+        XCTAssertEqual("message 901", model.transcriptPage.drawn.first?.text)
+        model.send("and one more thing")
+        // The person's own message is saved before the model is asked, so it
+        // is in the transcript as soon as `send` returns.
+        XCTAssertEqual(
+            "message 901", model.transcriptPage.drawn.first?.text,
+            "a send walked the top of a window somebody was reading"
+        )
+        XCTAssertEqual(
+            "and one more thing", model.transcriptPage.drawn.last?.text,
+            "a send into a windowed conversation is not on screen"
+        )
+        // And again once the reply has actually landed, which is 1,002
+        // messages: the thousand, the question and the answer. Waited for by
+        // the count rather than by `sending`, so a loop that ran before the
+        // reply's task started cannot make this case pass by measuring
+        // nothing.
+        for _ in 0..<600 where model.transcriptPage.all.count < 1002 {
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertEqual(
+            1002, model.transcriptPage.all.count,
+            "the fake engine's reply never landed, so nothing was measured under it"
+        )
+        XCTAssertEqual(
+            "message 901", model.transcriptPage.drawn.first?.text,
+            "the reply walked the top of a window somebody was reading"
+        )
+    }
+
+    /// Rule 4, through all three of the ways this model leaves a conversation:
+    /// the window is a reading position in the one that was open.
+    func testEveryWayOutOfAPhoneConversationStartsTheNextOneAtItsNewestPage() {
+        let (model, store) = make()
+        seed(store, "f", 1000)
+        seed(store, "g", 1000)
+
+        model.open("f")
+        model.showEarlier()
+        XCTAssertEqual(900, model.transcriptPage.hidden)
+        model.open("g")
+        XCTAssertEqual(
+            950, model.transcriptPage.hidden,
+            "open carried a reading position into the next conversation"
+        )
+
+        model.showEarlier()
+        model.close()
+        model.open("f")
+        XCTAssertEqual(
+            950, model.transcriptPage.hidden,
+            "close left a reading position behind for the next conversation"
+        )
+
+        model.showEarlier()
+        model.newChat()
+        XCTAssertNil(
+            model.transcriptWindow.pinned,
+            "a new chat opened with the last conversation's reading position"
+        )
+    }
+}

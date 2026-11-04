@@ -71,7 +71,10 @@ struct ChatConversationView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if !chromeScrolls { chrome }
+            // **The way out is always pinned.** At an accessibility size the
+            // name, the place and the internet switch go with the scroll
+            // (``chromeScrolls``) and the chevron does not: see ``exitRow``.
+            if chromeScrolls { exitRow } else { chrome }
             if let note = chat.aiOffNote {
                 // **In place of the whole conversation**, which is what
                 // ``ChatModel/aiOffNote`` is for: the household's AI switch
@@ -264,127 +267,184 @@ struct ChatConversationView: View {
     /// **Never over the AI-off note**, which replaces the transcript
     /// altogether: there is no scrolling half to put the row in, and the note
     /// is two short sentences that squeeze nothing.
+    ///
+    /// **And what scrolls is never the way out.** Round 1 of this branch put
+    /// the whole row inside the transcript, which at an accessibility size put
+    /// the only exit from a conversation behind a scroll that opens at its
+    /// foot — this app has no system back and no swipe-back until answer 32
+    /// lands. ``exitRow`` is pinned at every size for that reason; only the
+    /// name, the place and the internet switch go with the scroll
+    /// (``scrollingChrome``).
     private var chromeScrolls: Bool {
         dynamicTypeSize.isAccessibilitySize && chat.aiOffNote == nil
     }
 
     /// The title row with the place, the per-thread internet switch, and the
-    /// rule under them.
+    /// rule under them — the pinned band at the ordinary sizes.
     @ViewBuilder private var chrome: some View {
         VStack(spacing: 0) {
             titleRow
-            // The per-thread internet switch (``ChatMoreInternetChipView``).
-            // Honest now: the chip turns a chat's lookups on, and the card a
-            // lookup then stops at is one this app can answer.
-            if let more, chat.openThread != nil {
-                ChatMoreInternetChipView(more: more)
-                    .padding(.horizontal, 12)
-            }
+            internetSwitch
             Divider()
+        }
+    }
+
+    /// The way out, pinned at every size.
+    ///
+    /// 44 points of chevron (and share, where there is a thread to share),
+    /// which is what the conversation keeps when the rest of its chrome goes
+    /// with the scroll. ``chromeScrolls`` carries the argument: the chevron is
+    /// the only way back to the list, so it is the one part of this row that
+    /// may never be somewhere a reader has to scroll to find.
+    private var exitRow: some View {
+        HStack(spacing: 8) {
+            backButton
+            Spacer(minLength: 8)
+            shareButton
+        }
+        .padding(.horizontal, 12)
+    }
+
+    /// The name, the place and the per-thread internet switch, as the first
+    /// rows of the transcript at an accessibility size.
+    ///
+    /// This is what hands the transcript its height back — about 107 points of
+    /// header row and the 80 of band D63 removed, of the 401.7 Chat is given
+    /// at AX5 (train R001). The internet switch comes with it because it is a
+    /// per-thread setting rather than a way out: a reader who wants it scrolls
+    /// to the top of the conversation, which is where Android keeps it too
+    /// (`ChatHome.kt:721-733`, inside the header `ChatHeader` drops whole when
+    /// the window is short).
+    private var scrollingChrome: some View {
+        VStack(spacing: 0) {
+            titleAndPlace
+                .padding(.horizontal, 12)
+            internetSwitch
+            Divider()
+        }
+    }
+
+    /// The per-thread internet switch (``ChatMoreInternetChipView``).
+    ///
+    /// Honest now: the chip turns a chat's lookups on, and the card a lookup
+    /// then stops at is one this app can answer.
+    @ViewBuilder private var internetSwitch: some View {
+        if let more, chat.openThread != nil {
+            ChatMoreInternetChipView(more: more)
+                .padding(.horizontal, 12)
         }
     }
 
     private var titleRow: some View {
         HStack(spacing: 8) {
-            // ``ChatStrings/backToChats`` serves both ways out of this screen
-            // — the archived view's and this one's. Android words the
-            // conversation's back arrow with no text at all, and a glyph with
-            // no label is unreachable by VoiceOver, so the word the Kotlin
-            // already has is used rather than a new one invented for a port.
+            backButton
+            titleAndPlace
+            Spacer(minLength: 8)
+            shareButton
+        }
+        .padding(.horizontal, 12)
+    }
+
+    /// ``ChatStrings/backToChats`` serves both ways out of this screen — the
+    /// archived view's and this one's. Android words the conversation's back
+    /// arrow with no text at all, and a glyph with no label is unreachable by
+    /// VoiceOver, so the word the Kotlin already has is used rather than a new
+    /// one invented for a port.
+    private var backButton: some View {
+        Button {
+            chat.closeChat()
+        } label: {
+            Image(systemName: "chevron.left")
+                .font(.body)
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(Color.brandInk)
+        .accessibilityLabel(ChatStrings.backToChats)
+    }
+
+    /// **``ChatModel/openTitle``**, which is the list's title first:
+    /// the model's own title job names a thread after the first reply
+    /// and a rename on another device shows while this is open. A
+    /// stored string could do neither.
+    ///
+    /// **At most two lines, and only at an accessibility size.** The
+    /// round that bounded it at every size was wrong about Apple's
+    /// audit. A flat
+    /// `.lineLimit(2)` was reasoned safe because two lines hold a
+    /// title like that one whole at `large` — which is true, and not
+    /// what the audit asks. `Text clipped` is a **prediction**: it
+    /// re-measures the element at a larger content size against the
+    /// frame it has now, so a two-line cap is a finding at `large`
+    /// even on a title that fits in one line there, and it named both
+    /// threads' titles (train MS004: 'The weather in Lisbon', one
+    /// line of 20.3 points, flagged).
+    ///
+    /// So the cap goes where the breakage actually was. At an
+    /// accessibility size a title is as long as a person's first
+    /// question and wrapped to **311 points**, leaving the
+    /// transcript a viewport of exactly zero (train MS003); below
+    /// that it is a line or two and costs the transcript nothing, so
+    /// it wraps whole and no text is ever dropped at the sizes most
+    /// people read at. Android truncates at one line at every size
+    /// (`maxLines = 1`, `ChatHome.kt:722`), so the bound itself is
+    /// the faithful behaviour and this only delays it. DECISIONS.md.
+    ///
+    /// **And the cap is a branch, not a `nil` argument.** Round four
+    /// made `.lineLimit` nil below an accessibility size and left
+    /// `.truncationMode(.tail)` on the `Text` at every size — and the
+    /// finding came back unchanged in train I001, with the same two
+    /// frames it had in MS004. The tree says why: the reply's own
+    /// words on the same screen are a two-line `Text` of exactly the
+    /// same shape *without* a truncation mode (26.0, 335.3, 284.0,
+    /// 42.3) and the audit says nothing about them, while the title
+    /// (64.0, 138.2, 193.3, 42.3) is named. A `Text` that has been
+    /// told how to truncate is a `Text` the audit predicts will have
+    /// to; MS003, which carried neither modifier, audited clean. So
+    /// at the sizes Apple's audit runs at the title now carries
+    /// neither — exactly MS003's shape — and both modifiers apply
+    /// only where the bound is wanted.
+    ///
+    /// **And under it, the place** (D63): Android's header is a
+    /// `Column(Modifier.weight(1f))` holding the title and the place
+    /// chip (`ChatHeader`, `ChatHome.kt:721-724`), and that is where
+    /// the chip the place band used to draw above this screen now
+    /// lives. ``AssistantConversationPlaceChip`` is nothing at all on
+    /// a phone with one place, which is every iPhone without the
+    /// system model and the whole of iOS 18-25 — so the house's
+    /// conversation looks exactly as it shipped there.
+    private var titleAndPlace: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            title
+            AssistantConversationPlaceChip(place: place)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Share reads the thread back before it has anything to hand over
+    /// (``ChatModel/share(_:)``), so a chat with **no thread on the server
+    /// yet** is offered nothing: a new chat left empty has nothing to share,
+    /// and a button that silently did nothing is the control this app does not
+    /// draw.
+    @ViewBuilder private var shareButton: some View {
+        if let id = chat.openThread {
             Button {
-                chat.closeChat()
+                // The row this screen has: ``ChatModel/share(_:)`` reads only
+                // the thread id and the title off it, and the title is
+                // ``ChatModel/openTitle`` — the list's own, which is what a
+                // row would have carried anyway.
+                chat.share(ChatRow(id: String(id), title: chat.openTitle))
             } label: {
-                Image(systemName: "chevron.left")
+                Image(systemName: "square.and.arrow.up")
                     .font(.body)
                     .frame(minWidth: 44, minHeight: 44)
                     .contentShape(.rect)
             }
             .buttonStyle(.plain)
             .foregroundStyle(Color.brandInk)
-            .accessibilityLabel(ChatStrings.backToChats)
-
-            // **``ChatModel/openTitle``**, which is the list's title first:
-            // the model's own title job names a thread after the first reply
-            // and a rename on another device shows while this is open. A
-            // stored string could do neither.
-            //
-            // **At most two lines, and only at an accessibility size.** The
-            // round that bounded it at every size was wrong about Apple's
-            // audit. A flat
-            // `.lineLimit(2)` was reasoned safe because two lines hold a
-            // title like that one whole at `large` — which is true, and not
-            // what the audit asks. `Text clipped` is a **prediction**: it
-            // re-measures the element at a larger content size against the
-            // frame it has now, so a two-line cap is a finding at `large`
-            // even on a title that fits in one line there, and it named both
-            // threads' titles (train MS004: 'The weather in Lisbon', one
-            // line of 20.3 points, flagged).
-            //
-            // So the cap goes where the breakage actually was. At an
-            // accessibility size a title is as long as a person's first
-            // question and wrapped to **311 points**, leaving the
-            // transcript a viewport of exactly zero (train MS003); below
-            // that it is a line or two and costs the transcript nothing, so
-            // it wraps whole and no text is ever dropped at the sizes most
-            // people read at. Android truncates at one line at every size
-            // (`maxLines = 1`, `ChatHome.kt:722`), so the bound itself is
-            // the faithful behaviour and this only delays it. DECISIONS.md.
-            //
-            // **And the cap is a branch, not a `nil` argument.** Round four
-            // made `.lineLimit` nil below an accessibility size and left
-            // `.truncationMode(.tail)` on the `Text` at every size — and the
-            // finding came back unchanged in train I001, with the same two
-            // frames it had in MS004. The tree says why: the reply's own
-            // words on the same screen are a two-line `Text` of exactly the
-            // same shape *without* a truncation mode (26.0, 335.3, 284.0,
-            // 42.3) and the audit says nothing about them, while the title
-            // (64.0, 138.2, 193.3, 42.3) is named. A `Text` that has been
-            // told how to truncate is a `Text` the audit predicts will have
-            // to; MS003, which carried neither modifier, audited clean. So
-            // at the sizes Apple's audit runs at the title now carries
-            // neither — exactly MS003's shape — and both modifiers apply
-            // only where the bound is wanted.
-            //
-            // **And under it, the place** (D63): Android's header is a
-            // `Column(Modifier.weight(1f))` holding the title and the place
-            // chip (`ChatHeader`, `ChatHome.kt:721-724`), and that is where
-            // the chip the place band used to draw above this screen now
-            // lives. ``AssistantConversationPlaceChip`` is nothing at all on
-            // a phone with one place, which is every iPhone without the
-            // system model and the whole of iOS 18-25 — so the house's
-            // conversation looks exactly as it shipped there.
-            VStack(alignment: .leading, spacing: 2) {
-                title
-                AssistantConversationPlaceChip(place: place)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-
-            Spacer(minLength: 8)
-
-            // Share reads the thread back before it has anything to hand over
-            // (``ChatModel/share(_:)``), so a chat with **no thread on the
-            // server yet** is offered nothing: a new chat left empty has
-            // nothing to share, and a button that silently did nothing is the
-            // control this app does not draw.
-            if let id = chat.openThread {
-                Button {
-                    // The row this screen has: ``ChatModel/share(_:)`` reads
-                    // only the thread id and the title off it, and the title
-                    // is ``ChatModel/openTitle`` — the list's own, which is
-                    // what a row would have carried anyway.
-                    chat.share(ChatRow(id: String(id), title: chat.openTitle))
-                } label: {
-                    Image(systemName: "square.and.arrow.up")
-                        .font(.body)
-                        .frame(minWidth: 44, minHeight: 44)
-                        .contentShape(.rect)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(Color.brandInk)
-                .accessibilityLabel(ChatStrings.actionShare)
-            }
+            .accessibilityLabel(ChatStrings.actionShare)
         }
-        .padding(.horizontal, 12)
     }
 
     private func aiOff(_ note: (title: String, detail: String)) -> some View {
@@ -411,12 +471,13 @@ struct ChatConversationView: View {
                 // `ScrollView` takes ONE view, and two statements in its
                 // builder are a `TupleView` with no layout of its own.
                 VStack(spacing: 0) {
-                    // ``chromeScrolls``: at an accessibility size the title
-                    // row, the place chip and the internet switch are the
-                    // first thing in the transcript rather than a band above
-                    // it, which is what hands the transcript back the height
-                    // train R001 found it had none of.
-                    if chromeScrolls { chrome }
+                    // ``chromeScrolls``: at an accessibility size the title,
+                    // the place chip and the internet switch are the first
+                    // thing in the transcript rather than a band above it,
+                    // which is what hands the transcript back the height
+                    // train R001 found it had none of. The chevron is **not**
+                    // in here — see ``exitRow``.
+                    if chromeScrolls { scrollingChrome }
                     // **A `VStack`, and it was a `LazyVStack` until train
                     // R002 measured what the laziness costs here.**
                     //
@@ -808,12 +869,16 @@ struct ChatConversationView: View {
                     .foregroundStyle(Color.brandInk)
                     .accessibilityLabel(ChatMoreStrings.talk)
                     .disabled(!chat.canSend)
-                } else if !ChatMoreVoiceRules.micOffered(typed: typed) {
-                    // **Something is typed**, which is the same rule read the
-                    // other way round rather than a second spelling of it: the
-                    // mic is offered with a blank box and send with a full one,
-                    // and the gate is one function (`ChatScreen.kt:1157`,
-                    // `:1165`).
+                } else if ChatRules.sendOffered(typed: typed) {
+                    // **Something is typed** — ``ChatRules/sendOffered(typed:)``,
+                    // which is the send's own question and deliberately not the
+                    // mic's read backwards. That rule's doc comment has the
+                    // argument: ``ChatMoreModel/micOffered(typed:)`` carries a
+                    // device-id gate as well, and `!micOffered` would have made
+                    // that gate a gate on the send too. Android's pair is
+                    // `ChatScreen.kt:1157` and `:1165`, and the two are still
+                    // never both drawn: with a blank box and a thread the first
+                    // branch takes it, and with words in the box this one does.
                     //
                     // **The label's colour is named, not inherited** (D8,
                     // Kamron's answer 8: "same send-key fix on the house

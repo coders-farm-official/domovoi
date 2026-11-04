@@ -90,6 +90,33 @@ extension StubHouseUITests {
     /// one message above or nine hundred. `app.buttons["show earlier"]`
     /// therefore matches nothing at all, which is a case that would pass
     /// against an app that had lost the control.
+    /// The frame of the **highest** element on screen whose label is exactly
+    /// `words`, or nil where there is none.
+    ///
+    /// For the header's title, which cannot be asked for by `firstMatch`: a
+    /// thread named after what was asked carries the same words in its first
+    /// bubble, and `firstMatch` is hierarchy order rather than screen order —
+    /// so under a chrome that moved into the transcript it would take the
+    /// bubble. The topmost one is the header's, in both the shape this batch
+    /// built and the band it replaced, which is what makes the comparison it
+    /// is used for discriminate.
+    @MainActor
+    func chatTopmostFrame(_ app: XCUIApplication, _ words: String) -> CGRect? {
+        let all = app.staticTexts.matching(NSPredicate(format: "label == %@", words))
+        var best: CGRect?
+        for index in 0..<all.count {
+            let one = all.element(boundBy: index)
+            guard one.exists else { continue }
+            let frame = one.frame
+            // A zero-height element is a view that is not laid out; its minY
+            // is not a position on screen.
+            guard frame.height > 0 else { continue }
+            if let found = best, found.minY <= frame.minY { continue }
+            best = frame
+        }
+        return best
+    }
+
     @MainActor
     func chatShowEarlier(_ app: XCUIApplication) -> XCUIElement {
         app.buttons
@@ -271,9 +298,17 @@ extension StubHouseUITests {
             startingWith(app, StubChatLong.firstEver).exists,
             "the first of a thousand messages was built on open — the transcript is not capped"
         )
+        // The window's own edge, both sides of it. On open the oldest drawn
+        // message is 951, so 901 is 50 rows above the first drawn one and 900
+        // is 51 — neither is built, and neither is "100 messages above the
+        // window", which is what this said before the arithmetic was checked.
         XCTAssertFalse(
-            startingWith(app, StubChatLong.wayBack).exists,
-            "message 900 was built on open, 100 messages above the window"
+            startingWith(app, StubChatLong.firstOfSecondPage).exists,
+            "message 901 was built on open, 50 rows above the oldest drawn message"
+        )
+        XCTAssertFalse(
+            startingWith(app, StubChatLong.stillAboveAfterOnePage).exists,
+            "message 900 was built on open, 51 rows above the oldest drawn message"
         )
         XCTAssertTrue(
             chatShowEarlier(app).exists,
@@ -331,17 +366,37 @@ extension StubHouseUITests {
         XCTAssertTrue(top.exists, "message 951 is not drawn, so the window is not fifty long")
         let before = top.frame.minY
         control.tap()
+        // **One page exactly, and the edge is asserted on both sides.**
+        // Message 901 is the oldest drawn message after one tap and message
+        // 900 is the row above it; a window that grew by the wrong amount
+        // fails one of these two whichever way it was wrong.
         XCTAssertTrue(
-            startingWith(app, StubChatLong.wayBack).waitForExistence(timeout: 25),
-            "show earlier did not bring message 900 in"
+            startingWith(app, StubChatLong.firstOfSecondPage).waitForExistence(timeout: 25),
+            "show earlier did not bring message 901 in — it is the oldest message of the "
+                + "second page, which is what one tap of a fifty-message page adds"
+        )
+        XCTAssertFalse(
+            startingWith(app, StubChatLong.stillAboveAfterOnePage).exists,
+            "message 900 is drawn after one tap: the window grew by more than its page"
         )
         let after = top.frame.minY
         print("CHAT show earlier: the window's old top was at \(before), now \(after)")
         evidence(app, "chat-show-earlier")
+        // **200 points, and the reason it is not tighter.** `before` is read
+        // with the control scrolled into view, so the transcript is clamped at
+        // its top: `HomeLink` carries a 44-point hit target
+        // (`HomeCardView.swift:122`) and sits inside the transcript's 16-point
+        // padding, which puts the pinned row some sixty points below where
+        // `scrollTo(_, anchor: .top)` lands it afterwards. That is a working
+        // pin, and a 60-point bar would have failed it. What the case has to
+        // tell apart is a pin from no pin at all, and no pin is **a page**:
+        // fifty bubbles inserted above this row is of the order of 2,500
+        // points, which 200 is nowhere near.
         XCTAssertLessThan(
-            abs(after - before), 60,
+            abs(after - before), 200,
             "show earlier moved the message that was at the top from \(before) to \(after): "
-                + "the scroll is not pinned to it"
+                + "a page of fifty bubbles is about 2,500 points, so the scroll is not "
+                + "pinned to it"
         )
         // And it is still the only control of its kind, now saying 900.
         XCTAssertTrue(
@@ -402,6 +457,35 @@ extension StubHouseUITests {
     /// and share. So the chip is above the first bubble and below nothing but
     /// the shell, and the picker's `runs` label — which belongs to the band
     /// over a **list** — is not on a conversation at all.
+    ///
+    /// ### What discriminates, and what review round 1 found did not
+    ///
+    /// "Above the first bubble", "less than 400 points down" and "no `runs`
+    /// label" were **all three true before this change**. The old
+    /// `AssistantPlaceSwitch` drew the band over a conversation at the
+    /// ordinary sizes with `choices = [place]`, which is
+    /// `AssistantPlacePickerView`'s one-choice branch: a chip in a band
+    /// directly above the conversation, with no `runs` label anywhere (that
+    /// label only exists in the `choices.count > 1` branch). A case that
+    /// passes against the shape it was written to replace is a case that was
+    /// never testing anything.
+    ///
+    /// So the two assertions that say **this** shape and not that one are
+    /// geometric, and each fails on its own against the band:
+    ///
+    ///  1. **The chip is under the title**, which is the column
+    ///     (`ChatHome.kt:721-724`, ``ChatConversationView/titleAndPlace``). In
+    ///     a band above the conversation the chip is *above* the title, so
+    ///     `chip.minY >= title.maxY` is false by the height of the row.
+    ///  2. **The chip is right of the chevron**, because the column sits
+    ///     beside it in the header row. The band was full width with a
+    ///     12-point inset, which puts its chip at about x=24 against a chevron
+    ///     ending at about x=56 — `chip.minX > back.maxX` is false there.
+    ///
+    /// The title is taken as the **topmost** element carrying the thread's
+    /// name, because the thread's first message carries it too (thread 12 is
+    /// named after what was asked); in the band's shape that is still the
+    /// header's title, with the chip above it.
     @MainActor
     func testChat_TheHousesConversationSaysItsPlaceInItsHeader() throws {
         resetChatHouse()
@@ -440,6 +524,28 @@ extension StubHouseUITests {
             chip.frame.minY, 400,
             "the place chip is \(chip.frame.minY) points down the screen — that is not a header"
         )
+
+        // **Android's shape, asserted.** The two geometric facts the band
+        // cannot satisfy; this case's doc comment has the arithmetic.
+        guard let titleFrame = chatTopmostFrame(app, StubChat.garage) else {
+            print("=== NO TITLE ON SCREEN — tree follows ===")
+            print(app.debugDescription)
+            return XCTFail("the conversation draws no title, so the chip has nothing to be under")
+        }
+        let back = app.buttons[ChatStringsUnderTest.backToChats].firstMatch
+        XCTAssertTrue(back.exists, "the conversation has no way out of it")
+        print("CHAT header title \(titleFrame) back \(back.frame)")
+        XCTAssertGreaterThanOrEqual(
+            chip.frame.minY, titleFrame.maxY,
+            "the chip at \(chip.frame) is not under the title at \(titleFrame): that is a band "
+                + "above the conversation, not Android's header column"
+        )
+        XCTAssertGreaterThan(
+            chip.frame.minX, back.frame.maxX,
+            "the chip at \(chip.frame.minX) starts left of the back chevron's right edge at "
+                + "\(back.frame.maxX): it is not inside the header row's own column"
+        )
+
         // The band's own label belongs to a list, never a conversation.
         XCTAssertFalse(
             startingWith(app, AssistantUnderTest.runs).exists,
@@ -501,8 +607,21 @@ extension StubHouseUITests {
                 + "measured 6.7 with the band drawn): the chrome is not giving the "
                 + "conversation its height back"
         )
-        // And the place is still said — at AX5 the header is inside the
-        // scrolling half, so it is reached by scrolling back to the top.
+        // **The way out is pinned, and it is checked before anything is
+        // scrolled.** The chrome that goes with the scroll is the name, the
+        // place and the internet switch; the chevron is not in it
+        // (``ChatConversationView/exitRow``), and the full case for that is
+        // `testChat_TheWayOutOfAConversationIsPinnedAtTheLargestTypeSize`.
+        let back = app.buttons[ChatStringsUnderTest.backToChats].firstMatch
+        XCTAssertTrue(
+            back.exists && back.isHittable,
+            "the way out of the conversation is at \(back.frame) and cannot be tapped at AX5, "
+                + "before anything has been scrolled"
+        )
+
+        // And the place is still said — at AX5 the name and the chip are
+        // inside the scrolling half, so they are reached by scrolling back to
+        // the top.
         let chip = startingWith(app, AssistantUnderTest.chipServerShared)
         if !chip.exists || chip.frame.height == 0 {
             for _ in 0..<8 where !chip.exists { transcript.swipeDown(velocity: .slow) }
@@ -511,6 +630,71 @@ extension StubHouseUITests {
             chip.exists,
             "the conversation does not say its place at AX5 — which is entry 63's own complaint, "
                 + "the other way round"
+        )
+    }
+
+    /// **The only way out of a conversation is reachable at AX5**, and it is
+    /// still reachable after the transcript has been read to its foot.
+    ///
+    /// This app has no system back and no swipe-back — answer 32's is not
+    /// built — so the chevron in the header row is the one control that leaves
+    /// a conversation. Round 1 of this branch put the whole header row inside
+    /// the transcript at accessibility sizes, which put that chevron behind a
+    /// scroll that opens at its foot: a reader at the newest message had
+    /// nothing on screen that left the chat. ``ChatConversationView/exitRow``
+    /// is the answer and this is the case for it.
+    ///
+    /// Three things, in the order a person would hit them: the chevron is on
+    /// screen and hittable **without scrolling**, it is still hittable after
+    /// the transcript has been scrolled to its foot, and tapping it actually
+    /// leaves. The third is what makes the first two more than a frame check.
+    @MainActor
+    func testChat_TheWayOutOfAConversationIsPinnedAtTheLargestTypeSize() throws {
+        let (app, landed) = openChat("UICTContentSizeCategoryAccessibilityXXXL")
+        XCTAssertTrue(landed, "the thread list never answered at AX5")
+
+        let row = app.buttons[StubChat.garage].firstMatch
+        XCTAssertTrue(scrollUntilBuilt(app, row), "the garage row was never built at AX5")
+        row.tap()
+        XCTAssertTrue(
+            startingWith(app, StubChat.garageSnippet).waitForExistence(timeout: 30),
+            "the garage thread drew no transcript at AX5"
+        )
+        evidence(app, "chat-way-out-ax5")
+
+        let back = app.buttons[ChatStringsUnderTest.backToChats].firstMatch
+        XCTAssertTrue(back.waitForExistence(timeout: 20), "the conversation draws no way out")
+        print("CHAT AX5 way out \(back.frame) hittable=\(back.isHittable)")
+        XCTAssertTrue(
+            back.isHittable,
+            "the way out is at \(back.frame) and cannot be tapped on a freshly-opened "
+                + "conversation at AX5"
+        )
+
+        // Read to the foot, which is where the follow-scroll leaves a reader
+        // and where a chevron inside the transcript would have gone off
+        // screen. The transcript is dragged by its **identifier**, never
+        // `scrollViews.firstMatch` (train R002).
+        let transcript = app.scrollViews[ChatStringsUnderTest.transcriptID].firstMatch
+        if transcript.exists {
+            for _ in 0..<4 { transcript.swipeUp(velocity: .slow) }
+        }
+        XCTAssertTrue(
+            back.isHittable,
+            "the way out is at \(back.frame) after the transcript was read to its foot: it "
+                + "scrolled away with the chrome, and nothing else leaves a conversation"
+        )
+
+        back.tap()
+        // The composer is the conversation's own, so its absence is the
+        // conversation's: `new chat` belongs to the list it goes back to.
+        XCTAssertTrue(
+            app.buttons[ChatStringsUnderTest.newChat].firstMatch.waitForExistence(timeout: 25),
+            "the chevron was tapped and the thread list did not come back"
+        )
+        XCTAssertFalse(
+            composerField(app).exists,
+            "the conversation's composer is still drawn after its way out was tapped"
         )
     }
 }
@@ -536,9 +720,23 @@ enum StubChatLong {
     /// Message 960, inside the newest page.
     static let insideFirstPage = "Dulcimer: nine hundred and sixty"
 
-    /// Message 900, one page above the window: absent on open, present after
-    /// one "show earlier".
-    static let wayBack = "Chandelier: nine hundred messages in"
+    /// Message **901** — the oldest message drawn after exactly one "show
+    /// earlier", which is the window's new edge.
+    ///
+    /// The arithmetic, which review round 1 of this file had one row wrong:
+    /// the page is fifty, so a 1,000-message thread opens on messages
+    /// 951-1000 (indices 950-999) and one tap pins the window at index 900,
+    /// which is message **901**. The branch's own package test says the same
+    /// thing (`ChatTranscriptWindowTests.testShowEarlierOnTheHousesTranscript`
+    /// asserts `drawn.first == "message 901"`), and the case that waited for
+    /// message 900 after one tap would have timed out on the train.
+    static let firstOfSecondPage = "Bellwether: nine hundred and one"
+
+    /// Message **900** — the row directly above ``firstOfSecondPage``, which
+    /// is still outside the window after one tap. Asserted absent beside 901's
+    /// presence, which together pin the window's edge rather than merely
+    /// saying something older arrived.
+    static let stillAboveAfterOnePage = "Chandelier: nine hundred messages in"
 
     /// Message 1, which no number of taps in these cases reaches.
     static let firstEver = "Antiquarian: the very first thing"
