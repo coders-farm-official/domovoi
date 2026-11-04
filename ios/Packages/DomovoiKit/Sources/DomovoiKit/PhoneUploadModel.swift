@@ -589,7 +589,7 @@ public typealias PhoneUploadSend = @Sendable (
     _ path: String,
     _ fileURL: URL,
     _ contentType: String,
-    _ onProgress: @Sendable (Int64, Int64) -> Void
+    _ onProgress: @Sendable @escaping (Int64, Int64) -> Void
 ) async throws -> Data
 
 /// Which door an upload is going through, decided before the `Task` starts.

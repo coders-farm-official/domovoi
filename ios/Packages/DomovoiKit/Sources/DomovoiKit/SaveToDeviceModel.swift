@@ -84,14 +84,14 @@ public final class SaveToDeviceModel {
     private let fetch: @Sendable (
         _ path: String,
         _ into: URL,
-        _ onProgress: @Sendable (Int64, Int64) -> Void
+        _ onProgress: @Sendable @escaping (Int64, Int64) -> Void
     ) async throws -> URL
 
     public init(
         fetch: @Sendable @escaping (
             _ path: String,
             _ into: URL,
-            _ onProgress: @Sendable (Int64, Int64) -> Void
+            _ onProgress: @Sendable @escaping (Int64, Int64) -> Void
         ) async throws -> URL
     ) {
         self.fetch = fetch
