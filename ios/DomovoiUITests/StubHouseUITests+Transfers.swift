@@ -714,9 +714,21 @@ extension StubHouseUITests {
         }
         wanted.tap()
 
-        // The ring says a number. `uploadingLabel(_:)` is `uploading 42%`
-        // once a percentage has arrived and plain `uploading` until then, so
-        // this is the assertion that the progress callback reaches the row.
+        // **Busy first, counting second.** `uploadingLabel(_:)` is plain
+        // `uploading` until a percentage has arrived and `uploading 42%`
+        // after, so the two claims — the row knows an upload is running, and
+        // the progress callback reaches it — are two different failures and
+        // the next train should not have to tell them apart from one
+        // sentence. (Train I003 could not: it read "never reported a
+        // percentage" off a row whose upload had already finished.)
+        let busy = app.buttons
+            .matching(NSPredicate(format: "label BEGINSWITH %@", "uploading"))
+            .firstMatch
+        XCTAssertTrue(
+            busy.waitForExistence(timeout: 60),
+            "the row never said it was uploading at all, with the house holding the door open"
+        )
+
         let counting = app.buttons
             .matching(NSPredicate(
                 format: "label BEGINSWITH %@ AND label CONTAINS %@", "uploading", "%"
