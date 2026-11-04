@@ -824,12 +824,15 @@ public func manualFloatPhase(at index: Int) -> Double {
 ///
 /// A one-line join does not obviously need a function of its own. It has one
 /// because, since the second line left the accessibility tree
-/// (``ManualMapNode``'s note: the frame it claimed was the whole card,
-/// which is the rectangle Apple's audit measured), this string is the **only**
-/// reading VoiceOver gets of a node — the title is hidden with the scramble
-/// it carries, the subtitle is hidden with the wash it carries, and a label
-/// that quietly lost half of itself would leave three cards announced by their
-/// titles alone with nothing in the suite objecting. ``manualNodeReading``
+/// (``ManualMapNode``'s note: the frame it claimed was the whole card, and
+/// the model that fits every rectangle sampled — a model, not Apple's
+/// documented rule — says that is the rectangle Apple's audit measured), this
+/// string is the **only** reading VoiceOver gets of a node — the title is
+/// hidden with the scramble it carries, the subtitle is hidden with the wash
+/// it carries, and a label that quietly lost half of itself would leave three
+/// cards announced by their titles alone with nothing in the suite objecting.
+/// It takes no tags: a piece node's `preview`/`plugin` words are not in it,
+/// so since that hide they are announced nowhere, as on Android. ``manualNodeReading``
 /// has `ManualAnswersTests.testANodeIsAnnouncedWithBothOfItsLines`.
 ///
 /// An empty subtitle is the hub's own case on levels the document gives no
