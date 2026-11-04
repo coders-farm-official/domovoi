@@ -689,25 +689,51 @@ extension StubHouseUITests {
         // spends that whole hold failing a one-second predicate. Every
         // failed poll makes XCTest capture an element debug description
         // **and** a whole accessibility-hierarchy snapshot of the app, so
-        // this case was walking the entire tree twelve times before the
+        // this case was walking the entire tree eleven times before the
         // screen it is about had been drawn once.
         //
-        // In train I004 the twelfth of those walks is where the app went:
-        // `StubHouseUITests+PhoneMedia.swift:155` reported `Lost connection
-        // to the application (pid 93158)` at t = 15.45 s after eleven
-        // `Capturing element debug description` lines at one-second spacing
-        // (`I004/ALL/testTransfers_ABigPhoneFileGoesThroughTheStreamedDoor.log`),
-        // and the Simulator log has the process taking SIGSEGV on the main
-        // thread five elements into an XCTest AX query. No app frame is
-        // named and the cause is not attributed — `testNews_PassesApples\
-        // AccessibilityAudit` died the same way in the same train — so this
-        // is not a claim to have fixed it. It is the one thing this case can
-        // do about it: a sleep asks the app for nothing, so the twelve walks
-        // become one and the window this case holds open shrinks with them.
+        // **Where the app actually died, since a first reading of this log
+        // got it wrong and a wrong reading sends the next person to the
+        // wrong statement.** In train I004 there were **eleven** failed
+        // polls, t = 3.53 s to t = 13.55 s, each ending in a `Capturing
+        // element debug description` line. The twelfth, at t = 14.38 s,
+        // **succeeded** — no capture follows it, and the next line is a new
+        // top-level activity at the outer indent, `t = 14.44s Find the
+        // Button (First Match)`
+        // (`I004/ALL/testTransfers_ABigPhoneFileGoesThroughTheStreamedDoor.log:42-50`).
+        // So `StubHouseUITests+PhoneMedia.swift:142`'s
+        // `waitForExistence(timeout: 40)` returned `true`, and the app died
+        // inside the *separate* first-match query on the line below it,
+        // `:155`'s `either.identifier`, which reported `Lost connection to
+        // the application (pid 93158)` after its one retry at t = 15.45 s.
+        // `VANISH-TRACE.md:163-168` is the same statement from the other
+        // side: the main thread was inside `Beginning first match sequence`,
+        // nine elements in, when it took signal 11.
+        //
+        // No app frame is named and the cause is not attributed —
+        // `testNews_PassesApplesAccessibilityAudit` died the same way in the
+        // same train — so this is not a claim to have fixed it, and **this
+        // sleep does not move the statement that died**: the case still
+        // reaches `:155` at about the same fourteen-second mark. What it
+        // changes is the only lever the trace itself names
+        // (`VANISH-TRACE.md:224-227`, "what reduces it is asking for fewer
+        // whole-tree walks"): eleven whole-hierarchy snapshots before the
+        // screen exists become none.
         //
         // The wait below is unchanged and still forty seconds, so a push
         // that lands late is still waited for in the ordinary way. The sleep
         // costs nothing: the case already spent these seconds, polling.
+        //
+        // **Not the Printing file's technique.**
+        // `StubHouseUITests+Printing.swift:46-53` cuts the same twelve
+        // seconds by *shortening* them (`launch(…, pushDelay: 2)`), which is
+        // the better shape and was closed to this case:
+        // ``phoneLaunch(push:media:mode:server:port:)`` takes no `pushDelay`
+        // and hard-codes `Self.pushDelay`
+        // (`StubHouseUITests+PhoneMedia.swift:66-73`), and that file belongs
+        // to another unit. A parameter there is in `DECISIONS.md` under
+        // "Needs a shared change"; until it exists, sleeping is what is
+        // available here.
         usleep(useconds_t(Self.pushDelay * 1_000_000))
         XCTAssertTrue(
             phoneSwitchToDevice(app, waitingFor: StubPhoneMedia.phoneBigFileWord),

@@ -450,11 +450,40 @@ struct FilesView: View {
         .scrollIndicators(.hidden)
     }
 
+    /// The folder filter.
+    ///
+    /// Single-line, which is Android's own (`FilesScreen.kt:694-696` has no
+    /// `maxLines` and `ImeAction` default), so `.submitLabel(.search)` is a
+    /// key that does what it says — the rule that bans a `submitLabel` on a
+    /// `TextField(axis: .vertical)` does not reach here.
+    ///
+    /// **The hint is short on screen and whole to a reader.** Train I004's
+    /// audit named this field `Text clipped: Text of this element may be
+    /// clipped at larger Dynamic Type sizes | type=49 label='filter this
+    /// folder…' frame=(16.0, 401.3, 361.0, 34.0)`, and it was right: the
+    /// nineteen glyphs of Android's sentence want 436 points at AX5 inside
+    /// the 345 a 361-point `.roundedBorder` field offers, measured off the
+    /// two trees of that same train (``FileStrings/filterPlaceholderShort``
+    /// carries the arithmetic and the leaves it is calibrated on). A hint
+    /// nobody at that type size can finish reading is a hint with nothing in
+    /// it, which is the reading `NewsTopicsView.freeform` took on the same
+    /// finding, so this field takes the same shape: Android's whole sentence
+    /// is still the accessibility label, and the drawn hint drops the words
+    /// the breadcrumb row immediately above already says.
+    ///
+    /// **What is *not* done here, and why.** The alternative was to keep the
+    /// long hint and move it to a wrapping `Text` above the field at
+    /// `dynamicTypeSize.isAccessibilitySize` — this file's usual column
+    /// swap. It was rejected because the audit runs at the *ordinary* size,
+    /// where the swap has not happened and the long hint is still in the
+    /// field, so the finding would have survived a fix that really did help
+    /// the person at AX5: a swap cannot answer a prediction made before it
+    /// fires. Shortening is the change that is true at every size.
     @ViewBuilder
     private func filterField(_ files: FilesModel) -> some View {
         if files.selectedID != nil {
             TextField(
-                FileStrings.filterPlaceholder,
+                FileStrings.filterPlaceholderShort,
                 text: Binding(get: { files.filter }, set: { files.typed($0) })
             )
             .textFieldStyle(.roundedBorder)
