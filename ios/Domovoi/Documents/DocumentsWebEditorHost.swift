@@ -201,7 +201,14 @@ struct DocumentsWebEditorView: View {
                     // The page is the whole editor: it scrolls itself, it
                     // handles every gesture, and it must have the window.
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .accessibilityLabel(entry.displayTitle)
+                    // **No `accessibilityLabel` here.** The file's name is on
+                    // the navigation bar already, and a label on a container
+                    // whose children carry their own is how a `WKWebView`
+                    // becomes one opaque element: VoiceOver would read the
+                    // file name and nothing in the document, and the audit
+                    // would measure a rectangle instead of the page. The
+                    // `ProgressView` above is labelled because it has nothing
+                    // of its own to say.
             }
         }
     }
