@@ -422,6 +422,45 @@ public final class DomovoiClient: Sendable {
         mode: TokenMode = .scoped,
         wsUpgrade: Bool = false
     ) async throws(DomovoiError) -> (body: Data, response: HTTPURLResponse, sentToken: String?) {
+        let ready = try await prepare(request, mode: mode, wsUpgrade: wsUpgrade)
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: ready.outgoing, delegate: ready.hops)
+        } catch {
+            // A refusal recorded by the delegate explains the failure better
+            // than whatever URLSession turned it into, so it wins.
+            if let refusal = ready.hops.refusal { throw refusal }
+            throw Self.transportError(error)
+        }
+        if let refusal = ready.hops.refusal { throw refusal }
+        guard let http = response as? HTTPURLResponse else {
+            // Not reachable over http(s), where every response is an
+            // HTTPURLResponse; it is here because the type system cannot say
+            // so and because a wrong answer to "did the server answer?" is
+            // the kind of thing this client must not guess at.
+            throw DomovoiError.notDomovoi("the answer was not an HTTP response")
+        }
+        noteTokenHealth(ready, http: http, body: Self.text(data))
+        return (data, http, ready.sentToken)
+    }
+
+    /// Everything ``perform`` decides **before** a connection is attempted:
+    /// the cleartext rule, the token on the first hop, and the delegate that
+    /// decides each hop after it.
+    ///
+    /// It is its own step because there are two tails now — one that reads
+    /// the whole body (``perform``) and one that reads it as it arrives
+    /// (``events(method:path:body:timeout:)``) — and **the half that must be
+    /// identical for both is this one.** A streamed request that built its
+    /// own token decision would be a second copy of the scope rule, and the
+    /// first time the two drifted a chat would be the request carrying a
+    /// token somewhere the rest of the client would not.
+    func prepare(
+        _ request: URLRequest,
+        mode: TokenMode,
+        wsUpgrade: Bool
+    ) async throws(DomovoiError) -> Prepared {
         guard let url = request.url, let parsed = ServerURL.parse(url.absoluteString) else {
             throw DomovoiError.notPermitted("that is not a server address")
         }
@@ -492,25 +531,25 @@ public final class DomovoiClient: Sendable {
             decide = { _ in .bare }
         }
         let hops = RedirectDelegate(start: outgoing, wsUpgrade: wsUpgrade, decide: decide)
-        let data: Data
-        let response: URLResponse
-        do {
-            (data, response) = try await session.data(for: outgoing, delegate: hops)
-        } catch {
-            // A refusal recorded by the delegate explains the failure better
-            // than whatever URLSession turned it into, so it wins.
-            if let refusal = hops.refusal { throw refusal }
-            throw Self.transportError(error)
-        }
-        if let refusal = hops.refusal { throw refusal }
-        guard let http = response as? HTTPURLResponse else {
-            // Not reachable over http(s), where every response is an
-            // HTTPURLResponse; it is here because the type system cannot say
-            // so and because a wrong answer to "did the server answer?" is
-            // the kind of thing this client must not guess at.
-            throw DomovoiError.notDomovoi("the answer was not an HTTP response")
-        }
+        return Prepared(outgoing: outgoing, hops: hops, sentToken: sentToken, tokenServer: tokenServer)
+    }
 
+    /// What ``prepare`` settled, handed to whichever tail reads the answer.
+    struct Prepared {
+        let outgoing: URLRequest
+        let hops: RedirectDelegate
+        /// The token the FIRST hop carried, nil when it carried none — what
+        /// ``TokenHealth`` needs to know whether an answer is about a token
+        /// this phone sent.
+        let sentToken: String?
+        let tokenServer: String?
+    }
+
+    /// Tell ``TokenHealth`` what an answer said about the token that was sent.
+    ///
+    /// Shared by both tails so that a streamed 401 teaches the same lesson a
+    /// read one does.
+    func noteTokenHealth(_ ready: Prepared, http: HTTPURLResponse, body: String) {
         // Only the server's own answers (its scheme, host and port) speak for
         // its token; the drop-in socket on the core's port keeps its own
         // count.
@@ -530,7 +569,7 @@ public final class DomovoiClient: Sendable {
         // A redirect WITHIN the active server still teaches, as on Android:
         // the hop carried the token (`decide` put it back) and the origin that
         // answered is the one that issued it.
-        if let health, let sentToken, let tokenServer,
+        if let health, let sentToken = ready.sentToken, let tokenServer = ready.tokenServer,
            let base = TokenScope.baseOf(tokenServer),
            let answered = http.url.flatMap({ ServerURL.parse($0.absoluteString) }),
            TokenScope.sameServer(base, answered) {
@@ -543,11 +582,10 @@ public final class DomovoiClient: Sendable {
                 // one that could be sent is the header-safe one.
                 current: headerSafeToken(book.tokenForServer(tokenServer)),
                 status: http.statusCode,
-                body: Self.text(data),
+                body: body,
                 retryAfter: http.value(forHTTPHeaderField: "Retry-After")
             )
         }
-        return (data, http, sentToken)
     }
 
     /// Android's `raw`: the body as text, or the server's error as an error.

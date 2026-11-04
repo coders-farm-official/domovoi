@@ -144,6 +144,24 @@ struct ShellTopBar<Trailing: View>: View {
             // is an iOS invention with no counterpart on the web — so the
             // word moves off it, onto the canvas the ink was measured
             // against, beside `live`, which has always sat there.
+            //
+            // **Train R001 flagged it again, and the measurement says it is
+            // still not this.** Four `Contrast failed` against Home, naming
+            // `domovoi / home`, `127.0.0.1:6601`, `unverified` and `  live` —
+            // the whole bar, including two labels that are plain primary ink
+            // on white. A bar where *every* leaf fails and none of them share
+            // a colour is not a colour result. The run's own evidence says
+            // what it was: a notification banner at
+            // `{{8.0, 56.0}, {377.0, 78.7}}`
+            // (`overnight-trains/R001/BaseAudit/att/testTheStatesTheAuditHadNeverSeen/`
+            // `Debug_description_for_NotificationShortLookView…`), and all
+            // four elements sit at `y ≈ 69`, inside it.
+            // `performAccessibilityAudit` samples pixels, so it measured the
+            // banner's material. Darkening `warnInk` to quiet that would be
+            // editing `web/static/colors_and_type.css`'s spec to answer a
+            // measurement of SpringBoard. `StubHouseUITests.auditIssues` is
+            // what changed instead: it retakes an audit taken through a
+            // banner.
             if pill.unverified {
                 Text(ShellStrings.unverified)
                     .font(.caption2)
