@@ -1,36 +1,35 @@
 import DomovoiKit
 import SwiftUI
 
-/// Calendar: what the household has on, three ways.
+/// Calendar: what the household has on, four ways.
 ///
 /// `android/.../ui/screens/calendar/CalendarScreen.kt` (428 lines) with its
-/// two grid files, as a phone screen. One read —
-/// `GET /api/calendar/events` with no parameters, re-read on
-/// `calendar.events.changed` — and every view's window cut out of that list
-/// client-side, so a chevron costs no round trip (``CalendarModel``).
+/// two grid files, as a phone screen. **One bounded read per range** —
+/// `GET /api/calendar/events?start=&end=&limit=` for the visible window,
+/// re-read on `calendar.events.changed`, widened rather than repeated when a
+/// chevron steps next door (``CalendarModel``, Kamron's answer 16).
 ///
 /// ### What is here
 ///
-/// An agenda grouped by day, a single day against the hours, and a month of
-/// dots; a `new event` button, and a tap on any row opens that event in full,
-/// where it can be edited or deleted after a confirmation. **All three
-/// writes work from a paired phone**: both tiers of this route are
-/// `require_device` / `require_device_read` (`calendar.py:26,:34`), which is
-/// the difference from Files, where the delete is an admin route and is
-/// therefore not drawn at all.
+/// An agenda grouped by day, a single day against the hours, a week of the
+/// agenda's rows under seven day headers, and a month of dots; a `new event`
+/// button, and a tap on any row opens that event in full, where it can be
+/// edited or deleted after a confirmation. **All three writes work from a
+/// paired phone**: both tiers of this route are `require_device` /
+/// `require_device_read` (`calendar.py:26,:34`), which is the difference from
+/// Files, where the delete is an admin route and is therefore not drawn at
+/// all.
 ///
 /// ### What is not, and why there is no control for it
 ///
-/// * **Week view.** Android offers it (`CalendarModels.kt:50-52`) and it is a
-///   seven-column time grid of 9-11sp text in fixed-height blocks
-///   (`CalendarGrids.kt:212-286`). Seven columns on a 390pt phone is ~49pt
-///   each; the standing rules require `@ScaledMetric` glyph widths and
-///   `fixedSize` on wrapping text and reject `minimumScaleFactor` outright,
-///   and there is no layout that keeps that grid legible at
-///   `UICTContentSizeCategoryAccessibilityXXXL`. The week's arithmetic is
-///   still ported and tested (``calendarWeekRangeLabel(_:)``), so the view is
-///   one file away; map §3.2, DECISIONS §3 asks whether Kamron wants it as a
-///   grouped list instead.
+/// * **Android's week GRID.** Over there the week is a seven-column time grid
+///   of 9-11sp text in fixed-height blocks (`CalendarGrids.kt:212-286`).
+///   Seven columns on a 390pt phone is ~49pt each; the standing rules require
+///   `@ScaledMetric` glyph widths and `fixedSize` on wrapping text and reject
+///   `minimumScaleFactor` outright, and there is no layout that keeps that
+///   grid legible at `UICTContentSizeCategoryAccessibilityXXXL`. DECISIONS §3
+///   asked whether the week was wanted as a grouped list instead; answer 14
+///   says yes, and it is ``CalendarWeekListView``.
 /// * **No "sync now"**, no connect, no disconnect. Nothing in
 ///   `web/backend/api/` syncs a Google calendar, so the button would 404
 ///   every time. A `source == "google"` row says only what is true: its pill
@@ -227,6 +226,7 @@ struct CalendarScreenView: View {
             switch calendar.mode {
             case .agenda: CalendarAgendaListView(calendar: calendar)
             case .day: CalendarDayGridView(calendar: calendar)
+            case .week: CalendarWeekListView(calendar: calendar)
             case .month: CalendarMonthGridView(calendar: calendar)
             }
         }
@@ -335,7 +335,11 @@ struct CalendarRangeBarView: View {
             HStack(spacing: 6) {
                 ForEach(CalendarViewMode.allCases, id: \.self) { mode in
                     Button {
-                        calendar.mode = mode
+                        // ``CalendarModel/show(_:)`` and not `mode =`: each
+                        // view has its own read now (answer 16), and the
+                        // toggle is one of the four things that move the
+                        // range.
+                        calendar.show(mode)
                     } label: {
                         Text(mode.label)
                             .font(.subheadline)

@@ -134,15 +134,48 @@ public func calendarStartMs(_ entry: CalendarEntry) -> Int64 {
     isoMs(entry.startsAt) ?? Int64.max
 }
 
-/// `endLocal()` (`CalendarModels.kt:36`) — **the start when there is no end.**
+/// The end a **window** measures an event against — ``eventEndMs(_:)``'s rule,
+/// line for line: the server's `ends_at`, or **an hour after the start** when
+/// there is none.
 ///
-/// Not ``eventEndMs(_:)``, which gives an open-ended event an hour. The two
-/// rules are visible side by side (Home's today card and this list) and only
-/// one of them is a port of this screen: Android's agenda floor uses this
-/// fallback (`:91`), so an event with no `ends_at` drops out of the agenda the
-/// moment its start passes, where Home's keeps it for an hour. Ported as
-/// Android has it and raised in DECISIONS §8 rather than quietly harmonised.
+/// ### Why this is now Home's rule and not Android's
+///
+/// It used to fall back to the *start*, which is Android's `endLocal()`
+/// (`CalendarModels.kt:36`) and what its agenda floor filters on (`:91`) — so
+/// an event with no `ends_at` dropped out of the agenda the moment its start
+/// passed, while Home's card beside it kept the same event for an hour. Two
+/// rules for one row, raised as DECISIONS §8.
+///
+/// **Kamron's answer 17 (2026-11-03): "yes: match Home, keep an open-ended
+/// event on screen for an hour."** So this is `HomeToday.swift`'s
+/// ``eventEndMs(_:)``, copied rather than approximated: the server's end if it
+/// parses, else `start + 3_600_000`, and the `Int64.max` sentinel stays itself
+/// so an unreadable `starts_at` cannot be turned into a real instant by
+/// addition.
+///
+/// It is the **window's** end, not the drawn one: ``calendarBlockEndMs(_:)`` is
+/// what a clock or a day-grid block uses, and it still falls back to the start,
+/// because Home keeps the same split (`TodayRow.endMs` is nil when the server
+/// gave no end — "the hour exists for the filtering alone"). An invented hour
+/// that reached the screen would draw `3:00pm – 4:00pm` on a row the house
+/// never gave an end for.
 public func calendarEndMs(_ entry: CalendarEntry) -> Int64 {
+    if let end = isoMs(entry.endsAt) { return end }
+    let start = calendarStartMs(entry)
+    return start == Int64.max ? Int64.max : start + 3_600_000
+}
+
+/// `endLocal()` (`CalendarModels.kt:36`) — **the start when there is no end**,
+/// for the two places that draw an end rather than filter on one.
+///
+/// The day grid's block height (``calendarDayGridPlacement(_:on:in:)``) and the
+/// `9:00am – 10:00am` range (``calendarRange(_:in:)``) both have to say what
+/// the house said. Android's 20-minute minimum block exists precisely because
+/// this fallback makes an open-ended event zero minutes long
+/// (`CalendarGrids.kt:314`), and answer 17 was about keeping such an event on
+/// the agenda, not about growing its block to an hour — so the drawn end is
+/// left exactly as Android has it.
+public func calendarBlockEndMs(_ entry: CalendarEntry) -> Int64 {
     if let end = isoMs(entry.endsAt) { return end }
     return calendarStartMs(entry)
 }
@@ -284,23 +317,33 @@ public struct CalendarDay: Hashable, Comparable, Sendable {
 /// The toggle's views — `CalView` (`CalendarModels.kt:43-45`), whose raw
 /// values are the lower-case words drawn on it.
 ///
-/// **`week` is absent.** Android offers it on compact (`calViews`, `:51-52`)
-/// and it is a seven-column time grid of 9–11sp text inside fixed-height
-/// blocks (`CalendarGrids.kt:212-286`). Seven columns on a 390pt phone is
-/// ~49pt each, and the standing rules require `@ScaledMetric` glyph widths,
-/// `fixedSize` on wrapping text and reject `minimumScaleFactor` outright —
-/// there is no layout that keeps that grid legible at
-/// `UICTContentSizeCategoryAccessibilityXXXL`. The week's *arithmetic* is
-/// still here and still tested (``calendarWeekStart(_:)``,
-/// ``calendarRangeLabel(mode:anchor:)``), so the view is a view file and one
-/// case away. DECISIONS §3 asks whether Kamron wants it as a grouped list.
+/// ### `week` is here, and it is not Android's grid
 ///
-/// `CaseIterable`'s order is the toggle's order, and it is Android's compact
-/// order with week removed: agenda leads, because agenda is what a phone
-/// opens on (`CalendarScreen.kt:89`).
+/// Android's week is a seven-column time grid of 9–11sp text inside
+/// fixed-height blocks (`CalendarGrids.kt:212-286`). Seven columns on a 390pt
+/// phone is ~49pt each, and the standing rules require `@ScaledMetric` glyph
+/// widths and `fixedSize` on wrapping text and reject `minimumScaleFactor`
+/// outright, so that grid has no legible layout at
+/// `UICTContentSizeCategoryAccessibilityXXXL`. DECISIONS §3 asked whether the
+/// week was wanted as a grouped list instead.
+///
+/// **Kamron's answer 14 (2026-11-03): "build the week view (agenda rows under
+/// seven day headers)."** So the week is a week-bounded list — the agenda's own
+/// rows, under all seven day headers, from ``calendarWeekSections(_:todayMs:in:)``
+/// — and the arithmetic it steps on is the one that was already ported and
+/// tested (``calendarWeekStart(_:)``, ``calendarWeekRangeLabel(_:)``).
+///
+/// ### The order
+///
+/// `CaseIterable`'s order is the toggle's order. Android's compact order is
+/// agenda, month, week, day (`calViews`, `:51-52`); this port's was already
+/// agenda, day, month — widening spans, which is how the three read as a set
+/// on one line — and `week` goes where its span puts it, between day and
+/// month. One divergence from Android's order, not two.
 public enum CalendarViewMode: String, CaseIterable, Sendable {
     case agenda
     case day
+    case week
     case month
 
     /// `CalView.label` (`CalendarModels.kt:43`) — the word on the toggle.

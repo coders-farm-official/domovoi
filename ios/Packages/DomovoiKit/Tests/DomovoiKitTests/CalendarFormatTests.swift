@@ -61,8 +61,12 @@ final class CalendarFormatTests: XCTestCase {
     }
 
     /// With no `ends_at` the range is the start twice, through
-    /// ``calendarEndMs(_:)`` — which is why the views only draw it when
+    /// ``calendarBlockEndMs(_:)`` — which is why the views only draw it when
     /// `ends_at` is there.
+    ///
+    /// Through the **block** end and not ``calendarEndMs(_:)``, which since
+    /// answer 17 invents an hour for the agenda's floor: this is the case that
+    /// fails if that hour ever reaches a clock.
     func testARangeWithNoEndRepeatsTheStart() {
         let open = CalendarEntry(id: 2, title: "all afternoon", startsAt: "2026-11-07T19:00:00+00:00")
         XCTAssertEqual("7:00pm – 7:00pm", calendarRange(open, in: TimeZone(secondsFromGMT: 0)!))

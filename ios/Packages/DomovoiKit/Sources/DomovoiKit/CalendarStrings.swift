@@ -11,12 +11,12 @@ import Foundation
 ///
 /// ### What is not here, and why there is no control for it
 ///
-/// * **No week view**, so no `week` toggle word. A seven-column time grid of
-///   9–11sp text in fixed-height blocks cannot be built under the standing
-///   Dynamic Type rules on a 390pt phone (map §3.2, DECISIONS §3). The week's
-///   arithmetic is still ported and tested — ``calendarWeekStart(_:)`` and
-///   ``calendarRangeLabel(mode:anchor:)``'s week spellings — so the view is a
-///   view file away if Kamron wants it.
+/// * **No week GRID.** Android's week is a seven-column time grid of 9–11sp
+///   text in fixed-height blocks, which cannot be built under the standing
+///   Dynamic Type rules on a 390pt phone (map §3.2, DECISIONS §3). Kamron's
+///   answer 14 chose the other shape instead — the agenda's rows under seven
+///   day headers — so there is a `week` toggle word and
+///   ``nothingOnThisDay`` under an empty day, and no grid words at all.
 /// * **No "sync now"**, no connect, no disconnect: there is no route in
 ///   `web/backend/api/` that syncs a Google calendar (map §1.7), so a button
 ///   would 404 every time. A google row says only what is true — its pill and
@@ -36,10 +36,20 @@ public enum CalendarStrings {
     /// `CalendarScreen.kt:144`.
     public static let title = "Calendar"
 
-    /// `CalendarScreen.kt:145` — `"<n> events · the household's calendar"`.
-    /// The separator is U+00B7 with a space either side.
+    /// `CalendarScreen.kt:145` — `"<n> events in view · the household's
+    /// calendar"`. The separator is U+00B7 with a space either side.
+    ///
+    /// **iOS-only wording: `in view`, and a singular.** Android counts the
+    /// whole list, because the whole list is what it read. Since answer 16 the
+    /// read is a window per view (``calendarWindow(mode:anchor:in:)``), so
+    /// there is no "whole list" on the phone any more and a bare
+    /// `"12 events · the household's calendar"` would be a count of the
+    /// current range worded as a count of the house, which is the
+    /// no-misleading-controls rule applied to a sentence. It counts what is drawn
+    /// (``CalendarModel/visible``), which is also why `1 events` had to go.
     public static func subtitle(count: Int) -> String {
-        "\(count) events · the household's calendar"
+        let what = count == 1 ? "1 event" : "\(count) events"
+        return "\(what) in view · the household's calendar"
     }
 
     /// `CalendarScreen.kt:147`, the header's button.
@@ -236,6 +246,17 @@ public enum CalendarStrings {
         default: return "\(count) events"
         }
     }
+
+    /// **iOS-only:** what a day of the week view with nothing on it says.
+    ///
+    /// The week draws all seven day headers, empty days included (answer 14,
+    /// ``calendarWeekSections(_:anchor:todayMs:in:)``), and a header with
+    /// nothing under it reads as a screen that failed to draw. Android needs
+    /// no such line: its week is a grid of hour rows, so an empty column is
+    /// visibly an empty column.
+    ///
+    /// Lower case, like the rest of this screen's chrome.
+    public static let nothingOnThisDay = "nothing on"
 
     /// **iOS-only:** the month grid's own hint, because this port's cell shows
     /// marks rather than titles and tapping it is the only way to read them

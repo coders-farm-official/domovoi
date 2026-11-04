@@ -34,11 +34,16 @@ public func calendarClock(ms: Int64, timeZone: TimeZone) -> String {
 ///
 /// The dash is an **en dash, U+2013**, with a space either side, as the
 /// Kotlin's literal is. The end falls back to the start when `ends_at` is
-/// null, through ``calendarEndMs(_:)``, which is why a view only draws this
-/// when `ends_at` is there (`CalendarScreen.kt:393`, `EventEditor.kt:93`).
+/// null, through ``calendarBlockEndMs(_:)``, which is why a view only draws
+/// this when `ends_at` is there (`CalendarScreen.kt:393`, `EventEditor.kt:93`).
+///
+/// ``calendarBlockEndMs(_:)`` and **not** ``calendarEndMs(_:)``, which since
+/// answer 17 gives an open-ended event an hour: that hour is what the agenda's
+/// floor measures against, and a clock built on it would read
+/// `3:00pm – 4:00pm` for a row the house never gave an end for.
 public func calendarRange(_ entry: CalendarEntry, in timeZone: TimeZone) -> String {
     let start = calendarClock(ms: calendarStartMs(entry), timeZone: timeZone)
-    let end = calendarClock(ms: calendarEndMs(entry), timeZone: timeZone)
+    let end = calendarClock(ms: calendarBlockEndMs(entry), timeZone: timeZone)
     return "\(start) – \(end)"
 }
 
@@ -84,15 +89,15 @@ public func calendarDateButton(ms: Int64, in timeZone: TimeZone) -> String {
 /// `rangeLabel(view, anchor)` (`CalendarModels.kt:128-143`) — what sits
 /// between the two chevrons.
 ///
-/// The week branch is here although there is **no week view**
-/// (``CalendarViewMode``): the arithmetic is the half of that view this port
-/// does keep, both spellings are tested, and the day/month stepping is read
-/// off the same function. ``calendarWeekRangeLabel(_:)`` is where a week view
-/// would get it.
+/// The week branch is ``calendarWeekRangeLabel(_:)``, which was written and
+/// tested before there was a week view to use it (answer 14 added the view;
+/// its label needed nothing new).
 public func calendarRangeLabel(mode: CalendarViewMode, anchor: CalendarDay) -> String {
     switch mode {
     case .month:
         return calendarMonthYear(anchor)
+    case .week:
+        return calendarWeekRangeLabel(anchor)
     case .day:
         // `EEEE, MMMM d` — no year, unlike `fmtDateLong` (`:141` vs `:124`).
         return "\(calendarWeekdaysLong[anchor.weekdayIndex]), "
@@ -158,6 +163,45 @@ public func calendarInstant(_ date: Date) -> String {
         format: "%04d-%02d-%02dT%02d:%02d:%02dZ",
         p.year ?? 1970, p.month ?? 1, p.day ?? 1, p.hour ?? 0, p.minute ?? 0, p.second ?? 0
     )
+}
+
+/// ``calendarInstant(_:)`` with the colons percent-encoded, which is what a
+/// query string needs.
+///
+/// Built on ``calendarInstant(_:)`` rather than beside it: one instant
+/// formatter in this file, already pinned character for character by
+/// `CalendarFormatTests`, and one substitution over it. `HomeReads.swift` has
+/// its own `isoInstantEncoded`, file-private and not reachable from here, and
+/// a second hand-rolled `DateComponents` formatter is exactly the duplicate
+/// that makes two screens disagree about one minute.
+///
+/// `:` is the only character that needs it: `-`, `T` and `Z` are all left
+/// alone by `URLEncoder`, which is what the server's other caller sends and
+/// what `HomeModelsTest.calendarReadStartsAtLocalMidnightForAWeek` pins.
+public func calendarInstantEncoded(ms: Int64) -> String {
+    calendarInstant(Date(timeIntervalSince1970: Double(ms) / 1000))
+        .replacingOccurrences(of: ":", with: "%3A")
+}
+
+/// `GET /api/calendar/events` for one window — Kamron's answer 16.
+///
+/// `start` always, `end` only when the window has a ceiling (the route's
+/// docstring: "omit ``end`` for everything from ``start`` onwards"), and
+/// `limit` always, so that a read which came back full can be recognised as
+/// possibly cut (``CalendarPage/truncated``).
+///
+/// The three parameters go in the route's own order — `start`, `end`, `limit`
+/// (`calendar.py:38-41`) — because a test asserts the whole string, which is
+/// the same reason ``calendarInstant(_:)`` is spelt out by hand.
+public func calendarEventsPath(
+    _ window: CalendarWindow,
+    limit: Int = calendarWindowLimit
+) -> String {
+    var path = "/api/calendar/events?start=\(calendarInstantEncoded(ms: window.startMs))"
+    if !window.isOpenEnded {
+        path += "&end=\(calendarInstantEncoded(ms: window.endMs))"
+    }
+    return path + "&limit=\(limit)"
 }
 
 // MARK: - the tables

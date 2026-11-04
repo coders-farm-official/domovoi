@@ -119,18 +119,55 @@ final class CalendarModelsTests: XCTestCase {
         XCTAssertNil(CalendarDraft(broken), "and no editor opens on it")
     }
 
-    /// `endLocal()` falls back to the **start**, where Home's `eventEndMs`
-    /// gives an open-ended event an hour. The two rules are side by side on
-    /// the phone and only one of them is a port of this screen (DECISIONS §8).
-    func testAnOpenEndedEventEndsWhenItStartsHereAndAnHourLaterOnHome() {
-        let open = CalendarEntry(id: 5, title: "all afternoon", startsAt: "2026-11-04T15:00:00+00:00")
-        XCTAssertEqual(calendarStartMs(open), calendarEndMs(open))
-        let asHomeSeesIt = HomeEvent(id: 5, title: "all afternoon", startsAt: "2026-11-04T15:00:00+00:00")
+    /// An open-ended event **runs an hour**, exactly as Home's does, and the
+    /// drawn end still falls back to the start.
+    ///
+    /// ### Why this case turned over
+    ///
+    /// It used to assert the opposite: `calendarEndMs` fell back to the
+    /// **start**, which is Android's `endLocal()` (`CalendarModels.kt:36`) and
+    /// what its agenda floor filters on, so an event with no `ends_at`
+    /// dropped out of the agenda the instant it began while Home's card
+    /// beside it kept the same row for an hour. Two rules for one event,
+    /// raised as DECISIONS §8.
+    ///
+    /// **Kamron's answer 17 (2026-11-03): "yes: match Home, keep an
+    /// open-ended event on screen for an hour."** So the divergence is gone
+    /// and this case now pins the agreement — asserted against
+    /// ``eventEndMs(_:)`` itself rather than against the literal hour, so the
+    /// two cannot drift apart again without failing here.
+    ///
+    /// The second half is the split Home also keeps: the invented hour is for
+    /// filtering, and ``calendarBlockEndMs(_:)`` is what a clock or a day-grid
+    /// block uses (`TodayRow.endMs` is nil over there for the same reason).
+    func testAnOpenEndedEventRunsAnHourLikeHomesAndIsStillDrawnWithNoEnd() {
+        let startsAt = "2026-11-04T15:00:00+00:00"
+        let open = CalendarEntry(id: 5, title: "all afternoon", startsAt: startsAt)
+        let asHomeSeesIt = HomeEvent(id: 5, title: "all afternoon", startsAt: startsAt)
         XCTAssertEqual(
-            3_600_000,
-            eventEndMs(asHomeSeesIt) - eventStartMs(asHomeSeesIt),
-            "Home's rule is the divergence this calendar deliberately does not share"
+            eventEndMs(asHomeSeesIt),
+            calendarEndMs(open),
+            "answer 17: the calendar's window end is Home's, not Android's"
         )
+        XCTAssertEqual(3_600_000, calendarEndMs(open) - calendarStartMs(open))
+
+        XCTAssertEqual(
+            calendarStartMs(open),
+            calendarBlockEndMs(open),
+            "the hour is for filtering; a drawn end is still the start, so no "
+                + "row shows a range the house never gave"
+        )
+    }
+
+    /// The `Int64.max` sentinel survives the invented hour.
+    ///
+    /// `Int64.max + 3_600_000` overflows, and in Swift that traps rather than
+    /// wrapping — a crash on any house with one unparseable `starts_at`. Home
+    /// guards it the same way and this is the case that says so on both.
+    func testTheUnreadableSentinelIsNotGivenAnHour() {
+        let broken = CalendarEntry(id: 7, title: "who knows", startsAt: "not a time")
+        XCTAssertEqual(Int64.max, calendarEndMs(broken))
+        XCTAssertEqual(Int64.max, calendarBlockEndMs(broken))
     }
 
     // MARK: - the civil date

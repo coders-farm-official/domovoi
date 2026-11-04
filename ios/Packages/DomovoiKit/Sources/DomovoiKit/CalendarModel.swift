@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import Synchronization
 
 /// The Calendar screen's state and its three writes — `CalendarScreen.kt:76-261`
 /// as a type, in the shape ``FilesModel`` and ``ChatModel`` have.
@@ -19,13 +20,40 @@ import Observation
 ///   ``selectedID``, ``draft`` or the read — so a reply for house A cannot
 ///   land under house B, which is the top defect class on this track.
 ///
-/// ### One read, and what it costs
+/// ### One bounded read per range
 ///
-/// `GET /api/calendar/events` with **no parameters** (`:84`, DECISIONS §7):
-/// the first 500 events by `starts_at` (`calendar.py:41`), every view's window
-/// cut out of that list client-side, so a chevron costs no round trip. The
-/// cost is the cap — in a house with more than 500 events the far future is
-/// not there.
+/// It used to be `GET /api/calendar/events` with **no parameters** (`:84`,
+/// DECISIONS §7) — the first 500 events by `starts_at` (`calendar.py:41`) with
+/// every view's window cut out of that list client-side, so a chevron cost no
+/// round trip. The cap was the cost, and it was worse than it sounded: the
+/// route is `ORDER BY starts_at ASC LIMIT 500` **from the dawn of time**, so a
+/// house whose oldest 500 events are all in the past drew an empty agenda.
+///
+/// **Kamron's answer 16 (2026-11-03): "yes: ask the server for a window per
+/// view (`?start=&end=`)."** So:
+///
+/// * ``wantedWindow`` is the visible range as the route's two bounds
+///   (``calendarWindow(mode:anchor:in:)``), and it moves with the chevrons,
+///   `today`, a month cell's tap and the view toggle.
+/// * The read is ``events``, whose value is a ``CalendarPage`` — **the rows
+///   together with the window they were asked for.** That pairing is the
+///   read-after-`await` rule made structural: the window is read off
+///   ``window`` *before* the request and travels back inside the reply, so
+///   there is no moment at which rows for one range can be filed under
+///   another. A reply that lands after the range moved is dropped by
+///   ``ApiRead``'s own cancel-on-refresh, which is what moving the range
+///   calls.
+/// * Stepping stays responsive because a page is **reused**, and widened
+///   rather than replaced: a range already inside the page costs nothing
+///   (``CalendarPage/serves(_:)``), and a range next to it is read as the
+///   union of the two (``CalendarWindow/touches(_:)``), so flicking back and
+///   forth over a fortnight settles into one window instead of a request a
+///   tap. A jump that touches nothing read is a fresh read of just that
+///   range.
+///
+/// The cost that remains is named at ``calendarWindow(mode:anchor:in:)``: the
+/// route filters on `starts_at`, so an event longer than a day that began
+/// more than a day before the agenda's anchor is not read.
 ///
 /// Both tiers of this route are `require_device` / `require_device_read`
 /// (`calendar.py:26,:34`), so **create, edit and delete all work from a paired
@@ -55,8 +83,17 @@ public final class CalendarModel {
 
     // MARK: - the read
 
-    /// The whole list, re-read on `calendar.events.changed`.
-    public let events: ApiRead<[CalendarEntry]>
+    /// One window's rows, re-read on `calendar.events.changed`.
+    public let events: ApiRead<CalendarPage>
+
+    /// The window the next request will ask for, shared with ``events``'
+    /// `@Sendable` fetch closure — ``HomeModel``'s `DayWindow`, which holds
+    /// Home's own calendar window for the same reason: the closure runs
+    /// outside this actor and the window changes under it.
+    ///
+    /// It is the **asked** window, not the wanted one: after a widening it is
+    /// the union, which is bigger than any one view needs.
+    private let window: CalendarWindowBox
 
     /// The push every write fires — `pg_notify('calendar_changed')` inside the
     /// write's own transaction (`calendar.py:127`), mapped to the topic
@@ -71,7 +108,13 @@ public final class CalendarModel {
     /// Agenda, as a phone opens (`CalendarScreen.kt:89` — compact leads with
     /// agenda). There is no rotation reset to port: Android's `view` is
     /// `remember(compact)`-keyed and a phone is always compact.
-    public var mode: CalendarViewMode = .agenda
+    ///
+    /// Settable through ``show(_:)`` and not directly, because since answer 16
+    /// each view has its **own read**: a bare `var` would let the toggle move
+    /// the range without anything asking the server for it, and the screen
+    /// would draw the old window's rows under the new view for as long as
+    /// nobody else happened to refresh.
+    public private(set) var mode: CalendarViewMode = .agenda
 
     /// The date every view is drawn around — `anchor` (`:91`), which starts at
     /// today and is moved by the chevrons, by `today` and by a month-cell tap.
@@ -111,22 +154,53 @@ public final class CalendarModel {
         self.container = container
         self.nowMs = nowMs
         self.timeZone = timeZone
-        self.anchor = CalendarDay(ms: nowMs(), in: timeZone())
+        let opening = CalendarDay(ms: nowMs(), in: timeZone())
+        self.anchor = opening
+        // The agenda's window, because ``mode`` opens on the agenda. Built
+        // before ``events`` so the very first request is already bounded.
+        let window = CalendarWindowBox(
+            calendarWindow(mode: .agenda, anchor: opening, in: timeZone())
+        )
+        self.window = window
         let client = container.client
         self.events = ApiRead(in: container, eventTypes: Self.eventTypes) {
-            try await client.get("/api/calendar/events", as: [CalendarEntry].self)
+            // **The window is taken here, before the `await`**, and handed
+            // back inside the page. The alternative — reading the box again
+            // when the reply lands — is the top defect class on this track
+            // with the house swapped for the range: the rows of one range
+            // filed under another, which no view could tell from a server
+            // that answered wrongly.
+            let asked = window.current
+            let rows = try await client.get(
+                calendarEventsPath(asked),
+                as: [CalendarEntry].self
+            )
+            return CalendarPage(
+                window: asked,
+                rows: rows,
+                // A read that came back exactly full may have been cut by
+                // `LIMIT`, so it is not evidence about any range but its own.
+                truncated: rows.count >= calendarWindowLimit
+            )
         }
     }
 
     // MARK: - lifecycle
 
     /// The screen appeared: read, and join the push registry.
+    ///
+    /// The window is set from the anchor first. A screen that came back after
+    /// ``stop()`` may have been left on a range the box no longer names —
+    /// nothing moves the anchor while the screen is gone, but ``serverChanged()``
+    /// can have cleared everything around it — and a `refresh()` that reused
+    /// a stale box would read the wrong fortnight once.
     public func start() {
         if eventSink == nil {
             eventSink = container.onStateEvent { [weak self] event in
                 Task { @MainActor in self?.received(event) }
             }
         }
+        window.set(wantedWindow)
         events.refresh()
     }
 
@@ -149,6 +223,10 @@ public final class CalendarModel {
     /// pending delete all name a row id that belongs to the house they have
     /// left, and `7` exists in both.
     public func serverChanged() {
+        // The window goes with everything else: a union widened over the old
+        // house's ranges is not a range anybody asked this one for, and the
+        // next read would be bigger than any view needs.
+        window.set(wantedWindow)
         events.serverChanged()
         selectedID = nil
         draft = nil
@@ -162,10 +240,16 @@ public final class CalendarModel {
         return toast
     }
 
+    /// The window the next request will ask for — ``HomeModel``'s
+    /// `calendarWindowStart`, for a test that has to say "and the widening
+    /// asked for the union, not for the new range alone".
+    public var askedWindow: CalendarWindow { window.current }
+
     // MARK: - what is drawn
 
-    /// Every event the read has, or none while it has not answered.
-    public var all: [CalendarEntry] { events.data ?? [] }
+    /// Every event the read has — the current page's rows, which are one
+    /// window's and no longer "the house's first 500".
+    public var all: [CalendarEntry] { events.data?.rows ?? [] }
 
     /// The zone every view of this screen formats in.
     ///
@@ -181,10 +265,14 @@ public final class CalendarModel {
     /// the same reason as ``zone``.
     public var clockMs: Int64 { nowMs() }
 
-    /// `"<n> events · the household's calendar"` (`CalendarScreen.kt:145`) —
-    /// counted over the **whole** list, not the visible window, as Android
-    /// counts it.
-    public var subtitle: String { CalendarStrings.subtitle(count: all.count) }
+    /// `"<n> events in view · the household's calendar"`
+    /// (`CalendarScreen.kt:145`).
+    ///
+    /// Android counts the **whole** list here, because the whole list is what
+    /// it read. Since answer 16 this phone reads a window, so the only honest
+    /// count left is of what is drawn — ``visible`` — and the sentence says
+    /// `in view` to mean it (``CalendarStrings/subtitle(count:)``).
+    public var subtitle: String { CalendarStrings.subtitle(count: visible.count) }
 
     /// What sits between the chevrons.
     public var rangeLabel: String {
@@ -201,6 +289,11 @@ public final class CalendarModel {
         calendarAgendaSections(visible, todayMs: nowMs(), in: timeZone())
     }
 
+    /// The week view's **seven** day groups, empty days included (answer 14).
+    public var weekSections: [CalendarAgendaSection] {
+        calendarWeekSections(visible, anchor: anchor, todayMs: nowMs(), in: timeZone())
+    }
+
     /// The month grid's 42 cells.
     public var monthCells: [CalendarMonthCell] {
         calendarMonthCells(anchor: anchor, events: all, in: timeZone())
@@ -215,14 +308,45 @@ public final class CalendarModel {
         all.first { $0.id == selectedID }
     }
 
-    /// The loading state's own condition — `loading && data == null` (`:161`).
-    public var isLoading: Bool { events.loading && events.data == nil }
+    /// The window this view needs read — answer 16's range, as the route's
+    /// two bounds.
+    ///
+    /// Derived, never stored: the anchor, the mode and the zone are the facts,
+    /// and a cached copy of a function of three facts is a fourth fact that
+    /// can be wrong.
+    public var wantedWindow: CalendarWindow {
+        calendarWindow(mode: mode, anchor: anchor, in: timeZone())
+    }
 
-    /// The error state's — `error != null && data == null` (`:162`). A failure
-    /// **after** a success keeps the stale rows with no mark, which is
-    /// ``ApiRead``'s ported behaviour and Android's.
+    /// The read for the visible range has not come back yet.
+    ///
+    /// This replaces `data == null` in all three states below, and it is the
+    /// difference a windowed read makes: the page can be a perfectly good page
+    /// **of another range**, and a screen that treated it as an answer would
+    /// flash `nothing in this range` on every chevron into unread territory.
+    ///
+    /// ``CalendarPage/landed(for:)`` and not ``CalendarPage/serves(_:)``: a
+    /// page cut short by `LIMIT` is still this range's answer and must not
+    /// spin for ever, even though it is not evidence about a neighbouring
+    /// range.
+    public var rangePending: Bool {
+        !(events.data?.landed(for: wantedWindow) ?? false)
+    }
+
+    /// The loading state's own condition — `loading && data == null` (`:161`),
+    /// with ``rangePending`` standing in for "there is nothing for this range".
+    public var isLoading: Bool { rangePending && events.error == nil }
+
+    /// The error state's — `error != null && data == null` (`:162`).
+    ///
+    /// A failure **after** a success keeps the stale rows with no mark, which
+    /// is ``ApiRead``'s ported behaviour and Android's — but only for the
+    /// range those rows are. A read that failed while the person was stepping
+    /// into a range nothing has been read for says why: the alternative is a
+    /// spinner that never stops, or a screen that is silently empty for want
+    /// of a request.
     public var errorText: String? {
-        guard events.data == nil, let error = events.error else { return nil }
+        guard rangePending, let error = events.error else { return nil }
         return error.isEmpty ? CalendarStrings.requestFailed : error
     }
 
@@ -230,7 +354,7 @@ public final class CalendarModel {
     /// other view says what range is empty — the day label in day view, else
     /// the view's word.
     public var emptyText: (title: String, body: String)? {
-        guard events.answered, errorText == nil, visible.isEmpty else { return nil }
+        guard !rangePending, errorText == nil, visible.isEmpty else { return nil }
         if mode == .agenda {
             return (CalendarStrings.emptyAgendaTitle, CalendarStrings.emptyAgendaBody)
         }
@@ -243,11 +367,13 @@ public final class CalendarModel {
     /// A chevron — `stepAnchor` (`:306`, `:313`).
     public func step(_ direction: Int) {
         anchor = calendarStep(anchor, mode: mode, by: direction)
+        rangeMoved()
     }
 
     /// `today` (`:300`) — back to the anchor the screen opened on.
     public func goToToday() {
         anchor = CalendarDay(ms: nowMs(), in: timeZone())
+        rangeMoved()
     }
 
     /// `pickDay` (`:140`) — a month cell's tap: anchor there and switch to
@@ -256,6 +382,58 @@ public final class CalendarModel {
     public func pickDay(_ day: CalendarDay) {
         anchor = day
         mode = .day
+        rangeMoved()
+    }
+
+    /// The view toggle — `view = v` (`CalendarScreen.kt:287`).
+    ///
+    /// A method rather than a settable ``mode`` so that every way of moving
+    /// the range goes through ``rangeMoved()``. The anchor is deliberately
+    /// **not** moved: Android keeps it across a view change too, so switching
+    /// from the week of the 8th to month lands on the 8th's month.
+    public func show(_ next: CalendarViewMode) {
+        guard next != mode else { return }
+        mode = next
+        rangeMoved()
+    }
+
+    /// The range changed: read it, unless what is already here covers it.
+    ///
+    /// Three outcomes, and the middle one is what keeps the chevrons
+    /// responsive:
+    ///
+    /// * the page already **serves** the new range — nothing is asked, and
+    ///   ``ApiRead/fetches`` does not move. Agenda → day on the anchor is
+    ///   this: the day is inside the agenda's own open-ended window.
+    /// * the asked window **touches** the new range — their union is read, so
+    ///   a fortnight of stepping back and forth settles into one window
+    ///   rather than costing a request a tap.
+    /// * it touches nothing — the new range alone is read. `today` from six
+    ///   months out must not read half a year to get home.
+    ///
+    /// The union is taken against ``window`` (what was **asked**) and not
+    /// against the page's own window, because a read may still be in flight:
+    /// unioning against a landed page would narrow the request and throw away
+    /// a range that was about to arrive.
+    ///
+    /// ``ApiRead/refresh()`` cancels whatever is in flight, which is what
+    /// drops a reply for the range the person has just left.
+    private func rangeMoved() {
+        let wanted = wantedWindow
+        // Served **and** safe to leave alone. The second half is not
+        // belt-and-braces: ``window`` is what any read still in flight is
+        // for, and ``ApiRead`` has one slot for its value, so a reply for a
+        // range the person has left replaces the page they are looking at.
+        // Without this test, agenda → month → straight back to the agenda
+        // left the month's page in the slot with nothing in flight to replace
+        // it: the agenda was `rangePending` for ever, which is a spinner that
+        // never stops. When the in-flight window does not cover the new
+        // range, the read is re-pointed, and ``ApiRead/refresh()``'s cancel
+        // is what drops the reply that is on its way.
+        if events.data?.serves(wanted) == true, window.current.contains(wanted) { return }
+        let asked = window.current
+        window.set(asked.touches(wanted) ? asked.union(wanted) : wanted)
+        events.refresh()
     }
 
     public func select(_ id: Int64?) {
@@ -375,5 +553,78 @@ public final class CalendarModel {
                 self.toast = CalendarStrings.deleteFailed(trouble.message)
             }
         }
+    }
+}
+
+// MARK: - what one read came back with
+
+/// One windowed read's answer — **the rows together with the window they were
+/// asked for.**
+///
+/// The pairing is the point. `ApiRead<[CalendarEntry]>` would hand the model a
+/// bare array and leave it to work out which range those rows are, by reading
+/// the range back after the `await` — the read-after-`await`-wrong-key defect
+/// with the house swapped for the range, and the one shape of it a view could
+/// not possibly detect, since rows for the wrong fortnight look exactly like a
+/// server that answered wrongly. Here the key travels inside the value, so
+/// there is nothing to read back.
+public struct CalendarPage: Equatable, Sendable {
+
+    /// What was asked for, read off ``CalendarModel``'s window box **before**
+    /// the request went.
+    public let window: CalendarWindow
+
+    /// What came back, in the server's order (`ORDER BY starts_at ASC`).
+    public let rows: [CalendarEntry]
+
+    /// The read came back with `limit` rows, so `LIMIT` may have cut it and
+    /// ``rows`` may not be everything in ``window``.
+    public let truncated: Bool
+
+    public init(window: CalendarWindow, rows: [CalendarEntry], truncated: Bool = false) {
+        self.window = window
+        self.rows = rows
+        self.truncated = truncated
+    }
+
+    /// This page is `wanted`'s own answer: the read for that range has come
+    /// back, whether or not it was cut.
+    ///
+    /// What ``CalendarModel/rangePending`` asks, and the reason it is not
+    /// ``serves(_:)``: a cut page is still an answer, and a screen that spun
+    /// until it got an uncut one would spin for ever in a busy house.
+    public func landed(for wanted: CalendarWindow) -> Bool {
+        window.contains(wanted)
+    }
+
+    /// `wanted` can be drawn from these rows with no further request.
+    ///
+    /// A **cut** page serves only itself: it is the first `limit` rows of its
+    /// window, so for any smaller range inside it there may be rows it never
+    /// carried. `window == wanted` is the one case where that does not matter,
+    /// because the read for `wanted` is exactly this one and reading it again
+    /// would return the same cut.
+    public func serves(_ wanted: CalendarWindow) -> Bool {
+        if window == wanted { return true }
+        return !truncated && window.contains(wanted)
+    }
+}
+
+/// The window the calendar read will ask for, readable from its `@Sendable`
+/// fetch closure — ``HomeModel``'s `DayWindow` and ``FilesModel``'s
+/// `FileFolderBox`, for the same reason: `Mutex` is `~Copyable`, so it can be
+/// a stored property but not a capture.
+final class CalendarWindowBox: Sendable {
+
+    private let value: Mutex<CalendarWindow>
+
+    init(_ initial: CalendarWindow) {
+        value = Mutex(initial)
+    }
+
+    var current: CalendarWindow { value.withLock { $0 } }
+
+    func set(_ next: CalendarWindow) {
+        value.withLock { $0 = next }
     }
 }
