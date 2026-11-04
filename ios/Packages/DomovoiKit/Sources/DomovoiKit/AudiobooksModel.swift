@@ -15,9 +15,10 @@ import Observation
 /// * **No "add to server"** (`:197`). A document picker, a folder grant and a
 ///   multipart upload are the PhoneMedia item's. A button that opens nothing
 ///   is exactly the control the owner's rule forbids.
-/// * **No "listening as" chip** (`:205`). Nothing on iOS stores a listener
-///   person, so the chip would always have to say `listening as …` — a
-///   control stating something the app cannot know. DECISIONS §1.
+/// * **The "listening as" chip is here since D11** (`:205`). It was left out
+///   while nothing on iOS stored a listener person; `PlayerListenerModel` and
+///   Settings → Phones & browsers store one now, and `AudiobooksView` draws
+///   the chip — hidden entirely when nobody is picked, as Android's is.
 /// * **No save badge and no "save to phone"** while ``shelf`` is nil, and
 ///   **no `play`** while ``player`` is nil. Both are seams for branches
 ///   landing beside this one (`AudiobooksPlayer.swift`), and nil draws
@@ -78,11 +79,35 @@ public final class AudiobooksModel {
 
     /// Whatever plays audio on this phone, when something does. **Nil draws
     /// no `play` control**, and the chapter rows become plain rows.
-    public weak var player: (any AudiobooksPlayer)?
+    ///
+    /// **Held strongly, and that is the fix for train I003.** It was `weak`,
+    /// from the night `AudiobooksPhonePlayer` kept a process-wide `static var
+    /// held` and this was only a second reference to it. The 2026-11-03 batch
+    /// moved the player onto ``ShellModel`` and left the *adapter* with no
+    /// owner at all: `AudiobooksView`'s `.task` writes
+    /// `books.player = AudiobooksPhonePlayer.over(…)`, a freshly made object
+    /// that nothing else holds, so it was released before the next line ran.
+    /// ``canPlay(_:)`` was then false on every book — no `play` on a book's
+    /// page, no `resume`, and every chapter row drawn as plain text — which is
+    /// six of this unit's reds (`testAudiobooks_AFreshBookGoesStraightToPlay`,
+    /// `…ABookPageShowsItsChaptersAndPlace`, `…AFolderBookWithoutChaptersListsItsFiles`,
+    /// `…TheResumeDialogOffersTheRoomThatGotFurther`,
+    /// `…TheServersPlaceWinsWhenOnlyItMoved`, `…ABookPagePassesApplesAudit`)
+    /// and the cause of `testPlayer_ThePersonPickerNamesTheListenerOnPodcasts`
+    /// reading no position.
+    ///
+    /// No cycle: the adapter holds ``PlayerModel``, which the shell owns, and
+    /// neither holds this model. A later `over(_:in:places:)` replaces the
+    /// adapter and the previous one goes.
+    public var player: (any AudiobooksPlayer)?
 
     /// The phone's saved copies, when the shelf exists. **Nil draws no badge
     /// and no save control.**
-    public weak var shelf: (any AudiobooksShelf)?
+    ///
+    /// Strong for ``player``'s reason, and before anything is assigned to it:
+    /// a seam whose only writer would build the conformance at the call site
+    /// is a seam that must own what it is given.
+    public var shelf: (any AudiobooksShelf)?
 
     private let container: AppContainer
     private let wait: @Sendable (Int64) async throws -> Void

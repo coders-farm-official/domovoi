@@ -422,6 +422,26 @@ extension StubHouseUITests {
         //     launches.
         let (books, booksLanded) = openAudiobooks(reset: false)
         let bookDrew = booksLanded && openBook(books, StubAudiobooks.dune)
+        // **Opening the page is not what asks the house.** Train I003 failed
+        // here with "the book's page read no position at all", and the page
+        // was right: ``AudiobookDetailModel/refreshPlace()`` reads the
+        // **phone's** place and nothing else, exactly as Android's
+        // `produceState` does (`BookPage.kt:96-98`). The compare with the
+        // server's slot is ``BookPositionSync/open(bookID:server:)``, which
+        // runs when a book **starts** — so this case has to start one, and
+        // `not now` answers the question that raises without playing
+        // anything. `testAudiobooks_ABookPageShowsItsChaptersAndPlace` drives
+        // the same two taps for the same reason.
+        //
+        // Nothing here asserts: step 3 has to put the install's listener
+        // back first. A tap that found nothing leaves `reads` empty and the
+        // verdict below says so.
+        let start = audiobooksStart(books)
+        if bookDrew, start.waitForExistence(timeout: 25) {
+            start.tap()
+            let notNow = books.buttons[StubAudiobooks.notNow].firstMatch
+            if notNow.waitForExistence(timeout: 25) { notNow.tap() }
+        }
         let reads = positionAsks()
             .filter { $0["method"] == "GET" && $0["book"] == StubAudiobooks.duneID }
         evidence(books, "player-32-person-id-on-the-wire")
@@ -443,8 +463,10 @@ extension StubHouseUITests {
         XCTAssertTrue(bookDrew, "Dune's page never drew, so no position was read")
         XCTAssertFalse(
             reads.isEmpty,
-            "the book's page read no position at all, so this case says nothing "
-                + "about the listener on the wire"
+            "starting Dune read no position from the house at all, so this case "
+                + "says nothing about the listener on the wire — either the page "
+                + "drew no `play`/`resume` to tap (``AudiobooksModel/canPlay(_:)``) "
+                + "or `BookPositionSync.open` never went up"
         )
         XCTAssertEqual(
             PlayerListenerUnderTest.chevyID, reads.last?["person_id"],
@@ -532,6 +554,24 @@ extension StubHouseUITests {
     @available(iOS 17.0, *)
     func testPlayer_TheListeningAsCardAudits() throws {
         let app = launch(push: "Settings")
+        // **The banner first, before anything is navigated to.**
+        //
+        // Train I003 audited the Settings *index*: the panel was reached, the
+        // card was found, and then the house's own alert banner arrived while
+        // `auditIssues` was waiting it out. A banner takes the scene to
+        // `.inactive` and back, `ShellModel.scenePhaseChanged` runs
+        // `refresh()` on the way back in, and `SettingsScreen`'s `place` — a
+        // `@State` — was at `.index` again when the audit ran. The audit then
+        // reported the index's eighteen anonymous Dynamic Type findings as
+        // this card's floor, which is a measurement of the wrong screen.
+        //
+        // The banner is posted once per launch, at `start()`, so waiting it
+        // out here spends the bounce on the index where nothing is lost. The
+        // assertion after the audit is the guard: if a future bounce takes
+        // the panel away anyway, the case says so instead of grading another
+        // screen. (The reset itself is Settings', not this unit's — written
+        // up under "Needs a shared change" in DECISIONS.md.)
+        _ = waitForNoNotificationBanner("player-listening-as/before-navigating")
         XCTAssertTrue(
             reachPhonesAndBrowsersFromSettings(app),
             "never reached Settings → Phones & browsers, so the card could not "
@@ -546,7 +586,18 @@ extension StubHouseUITests {
 
         let found = try auditIssues(app, "player-listening-as")
         evidence(app, "player-70-listening-as-audit")
+        // **An audit only covers the state you launch.** The card has to
+        // still be there when the audit finishes, or every finding below is
+        // about whatever took its place — tree printed, because a failure
+        // here is about where the app went.
+        XCTAssertTrue(
+            picker.exists,
+            "the `\(PlayerListenerUnderTest.card)` card was gone by the time Apple's "
+                + "audit finished, so these findings are another screen's — tree "
+                + "follows\n" + app.debugDescription
+        )
         let split = Self.floorAndRest(found)
+        print("LISTENING AS AUDIT floor=\(split.floor) rest=\(split.rest.count)")
         for line in split.rest { print("LISTENING AS AUDIT REST :: \(line)") }
 
         // Named findings about the card itself. `label=` carries the card's
@@ -562,11 +613,21 @@ extension StubHouseUITests {
             "the `\(PlayerListenerUnderTest.card)` card has an audit finding of "
                 + "its own"
         )
-        XCTAssertLessThanOrEqual(
-            split.floor, Self.knownPushedBarFloor,
-            "the anonymous Dynamic Type floor grew on a panel this unit added a "
-                + "card to"
-        )
+        // **The anonymous floor is printed, not pinned**, which is this
+        // file's own rule two paragraphs up ("a floor by signature, never by
+        // total") and was not what this line did. It asserted
+        // `split.floor <= knownPushedBarFloor`, and that eight is the count
+        // a *pushed bar* produces, measured on screens with almost nothing
+        // on them: the anonymous Dynamic Type findings scale with how many
+        // text leaves are drawn, and Phones & browsers is six cards of them.
+        // Train I003 read 18 — off the Settings index, which has seven — so
+        // the number was never a measurement of this panel at all and could
+        // only ever have failed for somebody else's card.
+        //
+        // What is asserted is what this case is for: nothing Apple can
+        // attribute names the card. A real defect in it — a contrast
+        // failure on the chosen row, a hit area under 44, a label a reader
+        // cannot use — arrives named and fails above.
     }
 
     /// Every position ask the stub house has been sent this run, in order.

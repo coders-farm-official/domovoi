@@ -268,6 +268,21 @@ extension StubHouseUITests {
         app.buttons.matching(NSPredicate(format: "label == %@", StubPhoneMedia.upload))
     }
 
+    /// The same control while its file is on its way: `uploading` or
+    /// `uploading 37%` (``StubPhoneMedia/uploadingPrefix``).
+    ///
+    /// A **button**, by prefix. Both halves matter: the percentage is what
+    /// the exact match missed in train I003, and `uploading "…" to Music…` is
+    /// a toast with the same opening that an `.any` query would take instead
+    /// of the row — which would make a case about a ring pass over a row that
+    /// never drew one.
+    @MainActor
+    func phoneBusyUploadControl(_ app: XCUIApplication) -> XCUIElement {
+        app.buttons
+            .matching(NSPredicate(format: "label BEGINSWITH %@", StubPhoneMedia.uploadingPrefix))
+            .firstMatch
+    }
+
     // MARK: - the page under the switch
 
     /// Scroll the page **under the source switch** until `element` is built,
@@ -655,9 +670,7 @@ extension StubHouseUITests {
         XCTAssertTrue(phoneSwitchToDevice(app, waitingFor: StubPhoneMedia.phoneTrackWord))
         phoneUploadControls(app).element(boundBy: 0).tap()
 
-        let busy = app.descendants(matching: .any)
-            .matching(NSPredicate(format: "label == %@", StubPhoneMedia.uploading))
-            .firstMatch
+        let busy = phoneBusyUploadControl(app)
         let ringed = busy.waitForExistence(timeout: 15)
         evidence(app, "phonemedia-upload-ring")
         XCTAssertTrue(ringed, "no row said it was uploading while a six-second upload ran")
@@ -680,9 +693,7 @@ extension StubHouseUITests {
         // The same control, under its busy name: the button stays tappable
         // while it is busy on purpose, because the tap is how the refusal and
         // this message get said at all.
-        let busy = app.descendants(matching: .any)
-            .matching(NSPredicate(format: "label == %@", StubPhoneMedia.uploading))
-            .firstMatch
+        let busy = phoneBusyUploadControl(app)
         XCTAssertTrue(busy.waitForExistence(timeout: 15), "the first upload never showed as busy")
         busy.tap()
 
@@ -1334,6 +1345,7 @@ extension StubHouseUITests {
         phoneReset()
         var measured: [String: [String: CGRect]] = [:]
         var rowWidth: [String: CGFloat] = [:]
+        var rowLeft: [String: CGFloat] = [:]
         for (label, mode) in [
             ("large", Self.ordinaryTypeSize),
             ("AX5", "UICTContentSizeCategoryAccessibilityXXXL"),
@@ -1357,6 +1369,10 @@ extension StubHouseUITests {
             // padding on each side (``PhoneDeviceBody``). About 361 on the
             // iPhone the trains run.
             rowWidth[label] = band.width - 32
+            // And where a row's content starts, which is the discriminator
+            // below: a glyph column beside the name indents it by its own
+            // scaled width.
+            rowLeft[label] = band.minX + 16
             let here = leafFrames(app, label)
             evidence(app, "phonemedia-scale-\(label)")
             measured[label] = here
@@ -1395,14 +1411,46 @@ extension StubHouseUITests {
         XCTAssertEqual([], stuck, "a leaf Apple flagged really does not scale")
 
         // ---- the shape of the AX5 row, which height alone cannot see -----
+        //
+        // **What `0.75 × the row` was, and why it is not that any more.**
+        // Review 3 of the 2026-11-03 batch added this half and pinned the
+        // name's box at three quarters of the row without measuring one.
+        // Train I003 measured them: `quenlo lullaby.mp3` 236.3 and
+        // `zarbis dune ride.mp4` 221.0 in a 361-point row — and the
+        // screenshot beside those numbers (`phonemedia-scale-AX5`) shows the
+        // fixed row: the glyph on its own line, the upload box under the
+        // face, and the name wrapped over the full width at its spaces. A
+        // `Text` reports the width of its longest LINE, not of the box it was
+        // given, and no line of "huge raw.wav" at AX5 reaches 271 points. The
+        // threshold was unreachable by a wrapping name, so it tested the
+        // wrapping and not the layout.
+        //
+        // The layout is tested by where the name STARTS. In the shape I002
+        // found, the glyph took a `@ScaledMetric` 40 → about 113 points
+        // beside the name, so the name's box began at the row's leading edge
+        // plus that column; in the fixed shape the glyph is above it and the
+        // name begins at the row's own edge. That is exact, and it is the
+        // thing the old message claimed to be about ("the trailing boxes are
+        // still taking the name's width"). The width floor stays as a second,
+        // slack guard against the 79.0-point column: half the row is far
+        // above anything the two trailing boxes can leave and far below what
+        // a wrapped name delivers.
         let inner = rowWidth["AX5"] ?? 0
+        let left = rowLeft["AX5"] ?? 0
         XCTAssertGreaterThan(inner, 0, "the AX5 list had no width")
         for leaf in ["row-title", "row-video-title"] {
             let box = try XCTUnwrap(big[leaf], "\(leaf) was required and is not here")
+            XCTAssertLessThanOrEqual(
+                box.minX, left + 8,
+                "\(leaf) starts at \(box.minX) in a row whose content starts at \(left):"
+                    + " the glyph column is beside the name again, which is the AX5 shape"
+                    + " I002 measured at 79.0 points of name"
+            )
             XCTAssertGreaterThanOrEqual(
-                box.width, inner * 0.75,
+                box.width, inner * 0.5,
                 "\(leaf) is \(box.width) wide in a \(inner)-point row: the trailing boxes are"
-                    + " still taking the name's width (I002 measured 79.0)"
+                    + " still taking the name's width (I002 measured 79.0; I003 measured"
+                    + " 236.3 with the row laid out correctly)"
             )
         }
         let line = try XCTUnwrap(big["folder-name"]).height
@@ -1455,6 +1503,7 @@ extension StubHouseUITests {
         phoneReset()
         var measured: [String: [String: CGRect]] = [:]
         var tileWidth: [String: CGFloat] = [:]
+        var tileLeft: [String: CGFloat] = [:]
         for (label, mode) in [
             ("large", Self.ordinaryTypeSize),
             ("AX5", "UICTContentSizeCategoryAccessibilityXXXL"),
@@ -1473,6 +1522,7 @@ extension StubHouseUITests {
                 "the device Videos page has no `\(StubPhoneMedia.deviceVideosList)` at \(label)"
             )
             tileWidth[label] = list.frame.width - 32
+            tileLeft[label] = list.frame.minX + 16
 
             var here: [String: CGRect] = [:]
             var travel: [Int] = []
@@ -1530,10 +1580,24 @@ extension StubHouseUITests {
         let inner = tileWidth["AX5"] ?? 0
         XCTAssertGreaterThan(inner, 0, "the AX5 Videos list had no width")
         let caption = try XCTUnwrap(big["tile-title"])
+        // **Half the tile, not three quarters** — the row case's reasoning
+        // applies here word for word: a `Text` reports its longest LINE, and
+        // train I003 measured this caption at 221.0 in a 361-point tile with
+        // the column layout working (`phonemedia-tile-AX5`). Three quarters
+        // was a number nobody had measured; half is still far above the
+        // sliver the upload box used to leave beside it.
         XCTAssertGreaterThanOrEqual(
-            caption.width, inner * 0.75,
+            caption.width, inner * 0.5,
             "the tile's name is \(caption.width) wide in a \(inner)-point tile: the upload"
-                + " box is still taking the caption's width at AX5"
+                + " box is still taking the caption's width at AX5 (I003 measured 221.0"
+                + " with the caption on its own line)"
+        )
+        // Where it starts says the same thing exactly: the upload box beside
+        // the caption pushed it off the tile's leading edge.
+        XCTAssertLessThanOrEqual(
+            caption.minX, (tileLeft["AX5"] ?? 0) + 8,
+            "the tile's name starts at \(caption.minX) in a tile whose content starts at"
+                + " \(tileLeft["AX5"] ?? 0) — the upload box is beside it again"
         )
     }
 }
@@ -1618,9 +1682,25 @@ enum StubPhoneMedia {
     // ---- what the app says ---------------------------------------------
 
     static let upload = "upload"
-    /// `PhoneMediaStrings.uploadingLabel(nil)` — there is no percentage,
-    /// because `DomovoiClient.raw` reports none.
-    static let uploading = "uploading"
+    /// ``PhoneMediaStrings/uploadingLabel(_:)``'s **opening**, matched as a
+    /// prefix.
+    ///
+    /// It was the whole label — `uploadingLabel(nil)`, "there is no
+    /// percentage, because `DomovoiClient.raw` reports none". The transfers
+    /// unit's streaming upload reports one: `PhoneUploadModel.running` is a
+    /// map of percentages now and not the set it was ("nothing could report a
+    /// percent when the body was built in memory, and now everything can",
+    /// `PhoneUploadModel.swift:136-139`), so the busy button reads
+    /// `uploading 37%` and an exact match on `uploading` found nothing. That
+    /// is train I003's `testPhoneMedia_AProgressRingShowsWhileAnUploadRuns`
+    /// and `…ASecondTapDoesNotStartASecondUpload`, and the percentage is the
+    /// ring those cases are named for.
+    ///
+    /// Matched on **buttons only** by both callers: the toast
+    /// ``PhoneMediaStrings/uploadingTo(_:_:)`` opens with the same word and
+    /// is a `StaticText`, so an `.any` query would take it and pass over a
+    /// row that never changed.
+    static let uploadingPrefix = "uploading"
     static let uploadedTrack = "uploaded \"quenlo lullaby.mp3\" to Music · indexing…"
     /// Documents, not Videos: the stub has no `core:videos` **Files**
     /// library.

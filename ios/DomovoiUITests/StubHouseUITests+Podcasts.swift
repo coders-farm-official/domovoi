@@ -997,6 +997,11 @@ extension StubHouseUITests {
                 + "was mid-flight"
         )
 
+        // The shell's navigation bar, before. It folds its large title away
+        // on a scroll and the audit scrolls, so the whole page rides up with
+        // it — see the assertion below.
+        let barBefore = app.navigationBars.firstMatch.frame.height
+
         let found = try auditIssues(app, "podcasts-grid")
         evidence(app, "podcasts-80-grid-audited")
         let (floor, rest) = Self.floorAndRest(found)
@@ -1010,10 +1015,37 @@ extension StubHouseUITests {
         // carry unnecessary, which is why that exemption is gone rather than
         // kept as a safety net. An exemption with no case under it is a hole
         // for the next real finding to fall through.
+        //
+        // ### What moves it that is not a scroll (train I003)
+        //
+        // The foot came back 52 points higher and the grid had not moved a
+        // row: the shell grew a large navigation title in the 2026-11-03
+        // batch, Apple's audit scrolls, and the title folded away — the bar
+        // went 96 points to 44 and the page under it rose by exactly the
+        // difference. That is the shell's own behaviour and its own case
+        // (`testShell_TheHeaderScrollsAwayOnAPushedScreen` asserts it), not
+        // a list mid-flight, and a case that cannot tell the two apart is
+        // one that fails for somebody else's feature.
+        //
+        // So the claim is made exactly rather than loosened: the foot may
+        // move by the bar's own collapse and by nothing else. A grid that
+        // really scrolled under the audit moves further than the bar shrank
+        // — S007's run moved the content offset by 463 points — and still
+        // fails here.
+        let barAfter = app.navigationBars.firstMatch.frame.height
+        let folded = barBefore - barAfter
+        let rose = before.minY - foot.frame.minY
+        print("PODCASTS AUDIT bar \(barBefore)->\(barAfter) foot \(before.minY)->\(foot.frame.minY)")
         XCTAssertEqual(
-            before, foot.frame,
-            "the page moved while Apple's audit ran, so its contrast "
-                + "readings are of a list mid-flight (train S007)"
+            folded, rose, accuracy: 1,
+            "the page moved \(rose) points while Apple's audit ran and the shell's bar "
+                + "folded by \(folded) of them, so its contrast readings are of a list "
+                + "mid-flight (train S007)"
+        )
+        XCTAssertEqual(
+            before.size, foot.frame.size,
+            "the foot card changed size during the audit, so the page was still "
+                + "laying out when its colours were read"
         )
 
         let unexplained = rest.filter { line in

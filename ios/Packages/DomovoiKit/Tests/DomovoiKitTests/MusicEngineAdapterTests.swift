@@ -202,6 +202,31 @@ final class MusicEngineAdapterTests: XCTestCase {
         XCTAssertNil(model.takeToast())
     }
 
+    /// ``MusicLocalQueueModel/use(_:)`` **owns** the adapter, which is the
+    /// I003 fix.
+    ///
+    /// `MusicView`'s `.task` is `player?.use(PlayerModelMusicEngine(made))` —
+    /// an adapter built on that line over the shell's player and held by
+    /// nothing else. While the seam was `weak` it was released at once,
+    /// ``MusicLocalQueueModel/hasEngine`` stayed false, and the player tab
+    /// and both `play on this device` buttons were never drawn (train I003,
+    /// four cases). The harness holds the player and nothing holds the
+    /// adapter, which is exactly the call site.
+    func testTheSeamKeepsAnEngineNothingElseHolds() {
+        let harness = PlayerHarness()
+        let model = MusicLocalQueueModel(deviceID: "phone-1")
+
+        autoreleasepool {
+            model.use(PlayerModelMusicEngine(harness.model))
+        }
+        XCTAssertTrue(
+            model.hasEngine,
+            "the adapter was let go of the moment it was registered, so this "
+                + "phone offers no player tab and no play on this device"
+        )
+        XCTAssertTrue(MusicTab.shown(hasPlayer: model.hasEngine).contains(.player))
+    }
+
     /// With an engine registered the player tab is in the bar. The same call
     /// with `false` is a phone whose ``ShellModel/player`` is nil.
     func testTheTabAppearsOnceAnEngineIsRegistered() {
