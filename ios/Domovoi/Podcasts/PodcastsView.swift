@@ -23,8 +23,9 @@ import SwiftUI
 ///
 /// * **`play`** needed an owner for the engine. There is one now —
 ///   ``ShellModel/player``, D49 / Kamron's answer 2 — and this screen hands
-///   it to ``PodcastsModel/player``. Nil on a phone with no device id, and
-///   nil still draws no control.
+///   it to ``PodcastsModel/player``. Nil on a build with no audio engine —
+///   not on a phone that has not joined a house (``ShellModel/player``,
+///   corrected in review 2) — and nil still draws no control.
 /// * **`save to this device`** needed a transfer that does not hold the file
 ///   in memory. ``SaveToDeviceModel`` is that (D47), and the route serves
 ///   `download=1` as an attachment.
@@ -144,9 +145,10 @@ struct PodcastsView: View {
             saves?.serverChanged()
             // The player survives the move — ``ShellModel/refresh()`` has
             // told it, which is what drops the old house's episode out of its
-            // queue — but it is re-read here for the one case that is not a
-            // move at all: a phone that had no device id when this screen
-            // first appeared and has introduced itself since.
+            // queue — but it is re-read here so that no model keeps a slot
+            // read on an earlier visit. (Review 2: the case this comment used
+            // to name, a phone introducing itself, does not exist — the
+            // device id is minted locally on first launch.)
             podcasts?.player = model.player
         }
         // **One `.sheet` over an enum**, which is ``FilesView``'s shape and

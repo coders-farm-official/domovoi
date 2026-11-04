@@ -814,11 +814,14 @@ extension StubHouseUITests {
     /// fixture gap is written down in the player unit's DECISIONS with the
     /// one change that would close it.
     ///
-    /// The foot note is the other half: ``PhoneMediaStrings/noPhonePlayerYet``
-    /// is for a phone with **no device id**, and the stub house claims one as
-    /// part of pairing — so on this screen it must not be drawn at all. A
-    /// line explaining an absence under controls that are present is worse
-    /// than no line.
+    /// **No foot-note half any more.** This case also asserted that
+    /// `PhoneMediaStrings.noPhonePlayerYet` was absent, on the story that it
+    /// was drawn for a phone with no device id and the stub house claims one
+    /// as part of pairing. Review 2 of the 2026-11-03 batch measured that
+    /// premise false — the id is minted locally on first launch — so the
+    /// sentence is deleted from the app and the assertion with it: a query
+    /// for words no build contains can only ever pass. What discriminates is
+    /// the assertion above, that the row IS a button with a play hint.
     @MainActor
     func testPhoneMedia_APhoneTrackOffersToPlayOnThisPhone() throws {
         phoneReset()
@@ -833,10 +836,6 @@ extension StubHouseUITests {
             track.waitForExistence(timeout: 30),
             "the track row is not a button, so nothing on it plays — tree follows\n"
                 + app.debugDescription
-        )
-        XCTAssertFalse(
-            startingWith(app, StubPhoneMedia.noPhonePlayerPrefix).exists,
-            "the page still says a phone track does not play here, under rows that do"
         )
         // The folder is a button too (it opens), and the document is not a
         // button at all — ``PhoneMediaRowView`` draws a row with no tap as a
@@ -1277,7 +1276,9 @@ enum StubPhoneMedia {
     static let phoneTrackWord = "quenlo"
     /// The 8 MB video, which is the one video tile.
     static let phoneVideo = "zarbis"
-    /// The 200 MB row, which must be listed and must have **no** control.
+    /// The 200 MB row. It must be listed and, since D43 took the ceiling
+    /// out, it must have an upload control like any other
+    /// (``testPhoneMedia_EveryFileHasAnUploadControlNow()``).
     static let phoneBigFileWord = "grendalf"
 
     // ---- the server's rows, which the phone's side must not show --------
@@ -1317,12 +1318,6 @@ enum StubPhoneMedia {
     /// and live rule, so the only way to catch a ceiling creeping back is to
     /// go on looking for these words.
     static let tooBigPrefix = "too big to upload from a phone"
-
-    /// A prefix of ``PhoneMediaStrings/noPhonePlayerYet``, which is drawn
-    /// only on a phone with no device id — a state the stub house cannot
-    /// reach, because it claims one as part of pairing. So on every screen
-    /// these cases open, this must be absent.
-    static let noPhonePlayerPrefix = "a phone track plays here once"
 
     /// The seeded library's one folder (``PhoneDeviceSources/seeded``).
     static let phoneFolder = "Trips"

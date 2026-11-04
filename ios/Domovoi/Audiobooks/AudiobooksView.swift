@@ -178,9 +178,9 @@ struct AudiobooksView: View {
             }
             if let books {
                 // **The Player merge.** Nil draws no `play` anywhere on the
-                // screen, and nil is what ``ShellModel/player`` answers for a
-                // phone with no device id — the player cannot own a server
-                // slot without one.
+                // screen, and nil is what ``ShellModel/player`` answers on a
+                // build with no audio engine — not, as this comment said
+                // until review 2, on a phone that has not joined a house.
                 //
                 // **Reading `model.player` is what builds it**, which is why
                 // this is here and not in a `body`: the app's one player is

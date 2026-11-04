@@ -101,9 +101,6 @@ public enum AudiobookPath {
         return "&person_id=\(number)"
     }
 
-    /// This phone's slot in a book, for this listener. `device_id` is
-    /// **required** by the route; `person_id` names whose place it is, and
-    /// without one it is the unidentified listener's.
     /// The whole book as one file to keep (`audiobooks.py:353`).
     ///
     /// Not the audio route with `download=1` — that is **one chapter**
@@ -139,6 +136,14 @@ public enum AudiobookPath {
         return ext.hasPrefix(".") ? title + ext : title + "." + ext
     }
 
+    /// This phone's slot in a book, for this listener.
+    ///
+    /// `device_id` is **required** by the route (`audiobooks.py:599-615`);
+    /// `person_id` names whose place it is, and without one it is the
+    /// unidentified listener's. That paragraph was spliced onto
+    /// ``download(_:)`` until review 2 of the 2026-11-03 batch, which left
+    /// this — the one member the heading is about — the only undocumented
+    /// one in the file.
     public static func position(_ id: Int64, deviceID: String, personID: String? = nil) -> String {
         "/api/audiobooks/\(id)/position?device_id=\(esc(deviceID))\(person(personID))"
     }

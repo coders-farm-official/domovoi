@@ -326,18 +326,18 @@ final class PodcastPlayTests: XCTestCase {
 
     // MARK: - 4. what is refused, and what it leaves behind
 
-    /// No player — a phone with no device id — offers nothing and plays
-    /// nothing.
+    /// No player offers nothing and plays nothing.
     ///
-    /// ``ShellModel/player`` is nil for such a phone, and `PodcastsView` hands
-    /// nil over. The row draws no play control at all, so this is the model
-    /// half of the same rule: a tap that reached the model anyway does
+    /// ``ShellModel/player`` is nil on a build with no audio engine (review 2
+    /// corrected the "phone with no device id" this said), and `PodcastsView`
+    /// hands nil over. The row draws no play control at all, so this is the
+    /// model half of the same rule: a tap that reached the model anyway does
     /// nothing, and asks nothing.
     func testWithNoPlayerNothingIsOfferedAndNothingPlays() async {
         let kit = rig(withPlayer: false)
         kit.house.podcastPosition.set(#"{"position_sec":3671,"speed":1.0}"#)
 
-        XCTAssertFalse(kit.podcasts.canPlay(episode()), "a phone with no player offered play")
+        XCTAssertFalse(kit.podcasts.canPlay(episode()), "a model with no player offered play")
         kit.podcasts.play(episode())
         for _ in 0..<settleYieldLimit { await Task.yield() }
 

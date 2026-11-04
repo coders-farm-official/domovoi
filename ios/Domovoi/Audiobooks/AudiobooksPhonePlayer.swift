@@ -48,12 +48,13 @@ import SwiftUI
 ///
 /// ### Nil, and what nil means
 ///
-/// ``over(_:in:places:)`` answers nil when there is no player — which is a
-/// phone with no device id (``ShellModel/player`` says why) or a platform with
-/// no audio engine. Nil means ``AudiobooksModel/canPlay(_:)`` is false, so
-/// **no `play` button and no tappable chapter row is drawn at all**, which is
-/// the honest answer rather than a control that cannot do what it says. The
-/// book page says so in words (``AudiobooksStrings/noDeviceID``).
+/// ``over(_:in:places:)`` answers nil when there is no player — a platform
+/// with no audio engine, or a shell built with no `deviceSelf`, and nothing
+/// else: ``ShellModel/player`` says why, and review 2 of the 2026-11-03 batch
+/// measured that no phone a person is holding is in that state. Nil means
+/// ``AudiobooksModel/canPlay(_:)`` is false, so **no `play` button and no
+/// tappable chapter row is drawn at all**, which is the honest answer rather
+/// than a control that cannot do what it says.
 @MainActor
 final class AudiobooksPhonePlayer: AudiobooksPlayer {
 

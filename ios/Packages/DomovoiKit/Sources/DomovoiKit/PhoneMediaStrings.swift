@@ -82,17 +82,18 @@ public enum PhoneMediaStrings {
     /// `PhoneFiles.kt:196`.
     public static let imageCannotBeShown = "This image can't be shown here."
 
-    /// Why a phone audio row has no play control **on a phone that has not
-    /// introduced itself to a house**.
-    ///
-    /// **iOS-only.** Android's player needs no device identity; this app's one
-    /// player is keyed to one (``ShellModel/player``), because it writes
-    /// listening positions per device. So in the local shell — no server, no
-    /// device id — a track still does not play here, and this says so rather
-    /// than drawing an arrow that does nothing
-    /// ([[no-misleading-controls]]). Every other phone has `play` on the row
-    /// since the 2026-11-03 batch (D46), and this line is not drawn there.
-    public static let noPhonePlayerYet = "a phone track plays here once this phone has joined a domovoi — until then this side browses"
+    // `noPhonePlayerYet` stood here and is **gone** (review 2 of the
+    // 2026-11-03 batch). It said a phone track would play "once this phone
+    // has joined a domovoi", on the premise that ``ShellModel/player`` is nil
+    // until a phone pairs. The premise was false: the device id the player is
+    // keyed to is minted locally on first launch
+    // (`DeviceRegistry.swift:391-403`), and `AppShellView` hands the LOCAL
+    // shell the same ``ShellModel``, so a phone track plays in the local
+    // shell too — ``PlayerModel`` resolves a non-`/` src with `URL(string:)`
+    // and a `file://` track needs no server at all. So the line explained a
+    // cause that does not exist, in a state no phone reaches, and the brief
+    // had asked for it to be removed. The rows have a tap; nothing is said
+    // about an absence that is not there.
 
     /// A tap on a phone track the folder no longer holds.
     ///
@@ -181,9 +182,16 @@ public enum PhoneMediaStrings {
     // MARK: - the ceiling, which Android has not got
 
     /// A row the app will not pull into memory gets **no upload control** and
-    /// this line, which is ``FileStrings/tooBigToSave(_:)``'s pattern the
-    /// other way round. **iOS-only** — Android streams the bytes from the
-    /// content uri and has no ceiling (`PhoneUpload.kt:29`).
+    /// this line. **iOS-only** — Android streams the bytes from the content
+    /// uri and has no ceiling (`PhoneUpload.kt:29`).
+    ///
+    /// **Nothing in this app draws it any more**: D43 took the phone's own
+    /// ceiling out, and `PhoneUploadTooBigNote`'s two call sites went with it.
+    /// It stays because `PhoneMediaError.tooBig` stays (`PhoneUploadRules.swift`,
+    /// the transfers unit's), and because the server can still refuse a file
+    /// for its size. The sentence it used to cite, `FileStrings.tooBigToSave`,
+    /// was deleted by that unit — the reference went with it rather than
+    /// pointing at nothing (transfers' own “needs a shared change”, review 2).
     public static func tooBigToUpload(_ size: Int64) -> String {
         "too big to upload from a phone (\(fmtBytes(size))) — on the dashboard"
     }

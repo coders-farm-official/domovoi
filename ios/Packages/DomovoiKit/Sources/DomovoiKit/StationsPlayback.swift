@@ -44,8 +44,15 @@ public protocol StationsPlayback: Sendable {
 /// `StationsPhonePlayback` over ``ShellModel/player``, and the one line in
 /// `RouteScreen` changed as this note said it would. It is kept because it is
 /// what every ``StationsModel`` test that is *about* the no-engine rules is
-/// built on — the screen still has to draw nothing when the player is nil,
-/// which is a phone with no device id.
+/// built on — the screen still has to draw nothing when the player is nil.
+///
+/// **Which is not a phone with no device id**, as an earlier draft of this
+/// sentence said: the id is minted locally on first launch
+/// (`DeviceRegistry.swift:391-403`), so ``ShellModel/player`` is nil only on
+/// a build with no audio engine (DomovoiKit's own macOS test build) and in a
+/// shell built with no `deviceSelf`. The rules this witness pins are still
+/// worth pinning — a drawing mistake here is what the owner's rule forbids —
+/// but no person is ever on the other side of them.
 public struct StationsNoPlayback: StationsPlayback {
 
     public init() {}

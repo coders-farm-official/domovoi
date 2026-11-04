@@ -998,37 +998,71 @@ final class StationsModelTests: XCTestCase {
 
     /// With no player the header says the counts and **not** how to play.
     ///
-    /// The view asks these two for exactly one reason: the subtitle's tail is
-    /// an instruction, and a page whose rows do not play must not carry it.
-    /// Both go back to Android's wording the moment a witness that can play
-    /// is handed in, which is the other half asserted here.
+    /// The view asks for exactly one reason: the subtitle's tail is an
+    /// instruction, and a page whose rows do not play must not carry it. It
+    /// goes back to Android's wording the moment a witness that can play is
+    /// handed in, which is the other half asserted here.
     ///
-    /// The note's words changed in review 1 of the 2026-11-03 batch and the
-    /// case was renamed with them: `canPlay == false` used to mean a build
-    /// with no audio engine and now means a phone with **no device id**, so a
-    /// sentence reading "isn't built yet" was false. The whole sentence is
-    /// pinned, not a prefix: this is the one place that says what the page
-    /// tells a person who cannot play, and it has been wrong once already.
+    /// **`playbackNote` is gone and so are its two assertions** (review 2 of
+    /// the 2026-11-03 batch). It said a station would play "once this phone
+    /// has joined a domovoi", and the device id the player is keyed to is
+    /// minted locally on first launch (`DeviceRegistry.swift:391-403`) — so
+    /// the sentence named a cause that does not exist, for a state no phone
+    /// reaches. What is left is the pair of subtitles, which is honest in
+    /// either build: the counts are the same two, so only the tail
+    /// discriminates.
     func testWithNoPlayerTheHeaderSaysTheCountsAndNotHowToPlay() async throws {
         let silent = StationsPlaybackSpy(canPlay: false)
         let (quiet, _, _, _) = rig(playback: silent)
         await started(quiet)
 
         XCTAssertEqual("23 favorited · 3 recent", quiet.subtitle)
-        XCTAssertEqual(
-            "a station plays here once this phone has joined a domovoi — "
-                + "favoriting, sampling and detections all work",
-            quiet.playbackNote
-        )
-        XCTAssertFalse(
-            quiet.playbackNote?.contains("built yet") ?? false,
-            "the page told the person playing here is unbuilt, which D46 built"
-        )
+        XCTAssertFalse(quiet.subtitle.contains("tap a station"),
+                       "a page whose rows do not play told somebody to tap one")
 
         let (loud, _, _, _) = rig(playback: StationsPlaybackSpy(canPlay: true))
         await started(loud)
         XCTAssertEqual("23 favorited · 3 recent · tap a station to play it", loud.subtitle)
-        XCTAssertNil(loud.playbackNote,
-                     "a build that can play says nothing about not being able to")
+    }
+
+    /// A witness handed in **after** the model was built is the one the next
+    /// tap reaches.
+    ///
+    /// Review 2's second finding: this screen was the one of the five that
+    /// captured its witness once. ``StationsView`` builds the model on the
+    /// first appearance from whatever ``ShellModel/player`` was at that
+    /// instant, and nothing re-asked — so a player that arrived later, or a
+    /// house move that brought a different one, left a stale `canPlay` and a
+    /// stale engine behind the rows. ``StationsModel/use(_:)`` is the seam
+    /// the view now calls on every appearance and on a move.
+    ///
+    /// It discriminates in both directions: the subtitle's instruction has to
+    /// appear, and the **new** witness has to be the one that is played
+    /// through — a `use(_:)` that stored the value and left the old one in
+    /// the play path would pass the first assertion and fail the last.
+    func testAWitnessHandedInLaterIsTheOneThatPlays() async throws {
+        let silent = StationsPlaybackSpy(canPlay: false)
+        let (model, house, _, _) = rig(playback: silent)
+        await started(model)
+        let row = try XCTUnwrap(model.favorites.state.items.first)
+        XCTAssertFalse(model.canPlayAnything)
+        XCTAssertFalse(model.canPlay(row), "the silent witness is the one in the gate")
+
+        let engine = StationsPlaybackSpy(canPlay: true)
+        model.use(engine)
+
+        XCTAssertTrue(model.canPlayAnything)
+        XCTAssertEqual("23 favorited · 3 recent · tap a station to play it", model.subtitle)
+        model.play(row)
+        await settleUntil({ !engine.played.current.isEmpty }, "the play")
+        // 101, not `row.id`: `/play` answers the SAVED row and that is what
+        // the engine is handed, which `testPlayingPostsPlayAndHandsTheAnsweredRowToTheEngine`
+        // pins for the same stub.
+        XCTAssertEqual([101], engine.played.current,
+                       "the tap went somewhere other than the witness handed in last")
+        XCTAssertTrue(silent.played.current.isEmpty,
+                      "the stale witness is still in the play path")
+        XCTAssertEqual(["POST /api/plugins/radio/play"], house.requests(to: "radio/play"),
+                       "one tap is one history entry: \(house.seen.current)")
     }
 }

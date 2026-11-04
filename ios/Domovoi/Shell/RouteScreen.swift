@@ -163,9 +163,13 @@ struct RouteScreen: View {
             // ``StationsPhonePlayback`` over the app's one player (D46/D49) —
             // the one argument this slot's comment said the merge that brings
             // phone audio would change, and it is the only line that changed
-            // here. Nil inside it (a phone with no device id) puts the screen
-            // back to drawing **no play affordance at all**, which is what it
-            // was built to do.
+            // here. Nil inside it — a build with no audio engine, which is
+            // not a state any phone reaches — puts the screen back to drawing
+            // **no play affordance at all**, which is what it was built to do.
+            //
+            // Re-read on every body evaluation here, and
+            // ``StationsModel/use(_:)`` is what carries it into a model built
+            // on an earlier visit (review 2 of the 2026-11-03 batch).
             //
             // Reading ``ShellModel/player`` from a `body` is safe and
             // deliberate: the player's slot is `@ObservationIgnored`, and

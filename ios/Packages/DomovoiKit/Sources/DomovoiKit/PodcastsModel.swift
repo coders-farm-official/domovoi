@@ -41,10 +41,12 @@ import Observation
 /// room — that exists only through voice, in the core's own MPD path. The
 /// header subtitle names this phone instead (``PodcastStrings/subtitle``).
 ///
-/// **Play on a phone with no device id.** ``ShellModel/player`` is nil for
-/// one, ``canPlay(_:)`` is false, and no control is drawn — not greyed. The
-/// player writes a listening position per device and cannot own a server slot
-/// without one.
+/// **Play with no player.** ``ShellModel/player`` is nil on a build with no
+/// audio engine and in a shell built with no `deviceSelf`, ``canPlay(_:)`` is
+/// false there, and no control is drawn — not greyed. This paragraph said
+/// "a phone with no device id" until review 2 of the 2026-11-03 batch, which
+/// measured that no phone is in that state: the id is minted locally on first
+/// launch (`DeviceRegistry.swift:391-403`).
 ///
 /// **Pull to refresh does not poll the feeds.** ``reload()`` re-reads the
 /// list; ``poll()`` is the only thing that fetches the internet, which is
@@ -155,12 +157,12 @@ public final class PodcastsModel {
 
     // MARK: - playing an episode on this phone (D46)
 
-    /// The app's one player, or nil on a phone that cannot play.
+    /// The app's one player, or nil on a build that cannot play.
     ///
     /// ``ShellModel/player``, handed over by ``PodcastsView`` on every
-    /// appearance. Nil means **no play control is drawn at all** — a phone
-    /// with no device id, which is the honest answer rather than a button
-    /// that cannot save a place.
+    /// appearance. Nil means **no play control is drawn at all**, which is
+    /// the honest answer rather than a button that cannot do what it says —
+    /// see ``ShellModel/player`` for which builds those are.
     ///
     /// Set rather than passed to `init` for the reason every other seam on
     /// this screen is: the model is built in a `.task` before the view has

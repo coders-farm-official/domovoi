@@ -40,11 +40,12 @@ import XCTest
 /// `StationsModelTests.testAPlayThatLandsAfterTheHouseChangedIsDropped`.
 /// [[read-after-await-wrong-key]].
 ///
-/// **Playing.** This branch's route slot passes `StationsNoPlayback`, so no
-/// play affordance is drawn at all and `POST /play` is never sent.
-/// ``testStations_NothingOffersToPlayAndTheScreenSaysWhy()`` asserts exactly
-/// that, including against the house's own request log — so the branch that
-/// brings the engine will see this case fail and move it, which is the point.
+/// **Playing.** The route slot passes `StationsPhonePlayback` over the app's
+/// one player since D46, so the rows play on this phone and one tap sends
+/// exactly one `POST /play`. ``testStations_TappingAStationPlaysItOnThisPhone()``
+/// asserts that against the house's own request log — it is the inverted
+/// descendant of `testStations_NothingOffersToPlayAndTheScreenSaysWhy`, whose
+/// own comment asked for exactly this rewrite.
 extension StubHouseUITests {
 
     // MARK: - the house, by the words on its screen
@@ -106,20 +107,26 @@ extension StubHouseUITests {
         static let title = "Stations"
         /// **With** Android's `· tap a station to play it` since D46: the
         /// rows play on this phone, so the one instruction on the page is
-        /// true. A phone with no device id still gets the shorter sentence
-        /// (``StationsStrings/subtitleWithoutPlaying(favorites:recent:)``),
-        /// which is a state the stub house cannot reach — it claims a device
-        /// id as part of pairing.
+        /// true. The shorter sentence
+        /// (``StationsStrings/subtitleWithoutPlaying(favorites:recent:)``) is
+        /// a build with no audio engine, which no phone is — the device id
+        /// the player is keyed to is minted locally on first launch, not
+        /// handed out by a house (review 2 of the 2026-11-03 batch).
         static let subtitle = "23 favorited · 3 recent · tap a station to play it"
         static let subtitleAfterAStar = "24 favorited · 3 recent · tap a station to play it"
         static let subtitleAfterTwoStars = "25 favorited · 3 recent · tap a station to play it"
         static let subtitleAfterAForget = "22 favorited · 3 recent"
         static let playingTail = "tap a station to play it"
-        /// What the page says where the play controls would be, on a phone
-        /// with **no device id** — the only state that reaches it since D46.
-        /// Unreachable in the stub house, which claims a device id as part of
-        /// pairing, so every case here asserts it is **absent**; it is spelt
-        /// out so that a build which drew it over rows that play fails.
+        /// `StationsStrings.playingNeedsAHouse`, **which no build contains
+        /// any more**: review 2 of the 2026-11-03 batch deleted it, because
+        /// it named a cause that does not exist (the device id is minted
+        /// locally) for a state no phone reaches.
+        ///
+        /// Kept as a query on purpose, and it is the one assertion here that
+        /// is deliberately vacuous today: the sentence coming back is how a
+        /// build that re-grew the premise would announce itself, and these
+        /// words are the only handle on that. It is spelt out rather than
+        /// imported for the reason every string in this file is.
         static let noPlayback =
             "a station plays here once this phone has joined a domovoi — favoriting, sampling and detections all work"
         static let importIsAnAdminJob =
@@ -487,9 +494,13 @@ extension StubHouseUITests {
         let (app, landed) = openStations()
         XCTAssertTrue(landed, "Stations never drew its subtitle")
 
+        // The sentence is deleted from the app (review 2), so this cannot
+        // fail on today's build. It stays as the tripwire for the premise
+        // coming back: a branch that re-grows "a station plays here once this
+        // phone has joined a domovoi" fails here rather than shipping it.
         XCTAssertFalse(
             app.staticTexts[StationsWords.noPlayback].exists,
-            "the screen still says playing here isn't built, over rows that play"
+            "the screen says a station needs a house to play — a premise review 2 measured false"
         )
         // Android's subtitle ends `· tap a station to play it`, and now that
         // is true, the page says it. `landed` already matched the whole

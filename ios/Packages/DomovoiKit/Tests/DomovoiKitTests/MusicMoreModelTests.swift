@@ -1186,11 +1186,14 @@ final class MusicMoreModelTests: XCTestCase {
     ///
     /// This case used to end "the assertion that goes away with the Player
     /// item's engine". It does not go away: ``PlayerModelMusicEngine`` conforms
-    /// now, but it is built over ``ShellModel/player``, which is **nil on a
-    /// phone with no device id** — the player writes a listening position per
-    /// device and is keyed to one. So this is no longer a statement about an
-    /// unbuilt engine; it is the live description of that phone, and
-    /// `mayPlayHere` is the one line added to it.
+    /// now, but `MusicLocalQueueModel` is built before any engine is
+    /// registered and is handed one by ``MusicView`` on each appearance, so
+    /// the no-engine arm is the shape every Music screen passes through.
+    ///
+    /// It is **not** "the live description of a phone with no device id", as
+    /// this note said until review 2 of the 2026-11-03 batch: that state is a
+    /// build with no audio engine and nothing a person holds
+    /// (``ShellModel/player``). `mayPlayHere` is the one line added here.
     func testWithNoEngineNothingIsOfferedAndNothingCanBeCast() {
         let model = MusicLocalQueueModel(deviceID: phone)
         XCTAssertFalse(model.hasEngine)

@@ -215,15 +215,23 @@ final class PlayerOwnerTests: XCTestCase {
         XCTAssertNil(rig.sessions.current.first?.active)
     }
 
-    /// A phone with no device id gets **no player at all**, however often it
+    /// A shell with no device id gets **no player at all**, however often it
     /// is asked.
     ///
     /// Every position a player saves is a slot the server keys by device
     /// (`audiobooks.py:599-604`), and one built with an empty id writes every
     /// listener's place into a row belonging to nobody. Nil is what makes the
-    /// five screens draw no play control, which is the honest answer to a
-    /// phone that has not introduced itself.
-    func testAPhoneThatHasNotIntroducedItselfGetsNoPlayer() {
+    /// five screens draw no play control.
+    ///
+    /// **It is not a state a phone reaches**, which review 2 of the
+    /// 2026-11-03 batch measured and this case's name used to claim the
+    /// opposite of: `DomovoiApp.swift:142` always passes a `deviceSelf`, and
+    /// the id it carries is minted locally on first launch
+    /// (`DeviceRegistry.swift:391-403`). The rule is still worth pinning — a
+    /// player keyed to an empty id is a corrupt write, not a missing one —
+    /// and the only callers that can reach it are this test and a shell built
+    /// without a `deviceSelf`.
+    func testAShellWithNoDeviceIdGetsNoPlayer() {
         let none = Rig(serverURL: houseA, deviceID: nil)
         XCTAssertNil(none.model.player, "a player was built with no device id")
         XCTAssertEqual(0, none.built.current, "the builder was called for a phone with no id")

@@ -11,12 +11,16 @@ import SwiftUI
 ///
 /// A tap on a track plays it on the handset, with the neighbouring tracks
 /// behind it (``PhoneMediaListModel/playQueue(around:)``), on the app's one
-/// player (``ShellModel/player``) — lock screen, Now Playing and all. The
-/// one phone where it still does not is a phone with **no device id**: the
-/// player writes a listening position per device and is keyed to one, so in
-/// the local shell there is no player, the rows get no tap, and
-/// ``PhoneMediaStrings/noPhonePlayerYet`` says why at the foot. That limit is
-/// written down in `design-notes/ios/batch-2026-11-03/player/DECISIONS.md`.
+/// player (``ShellModel/player``) — lock screen, Now Playing and all.
+///
+/// **In the local shell too**, which review 2 of the 2026-11-03 batch
+/// corrected: this file said a phone with no server had no device id and so
+/// no player, and all three clauses in the middle were wrong. The id is
+/// minted locally on first launch (`DeviceRegistry.swift:391-403`),
+/// `AppShellView` hands the local shell the same ``ShellModel``, and
+/// ``PlayerModel`` plays a `file://` track without a server
+/// (`resolve(_:)`). The foot note that explained the absence is deleted with
+/// the premise it rested on.
 ///
 /// ### What is not, and why there is no control for it
 ///
@@ -46,7 +50,7 @@ struct PhoneDeviceMusicView: View {
     @State private var device: PhoneDevicePage?
     @State private var visible = false
 
-    /// The app's one player, or nil on a phone with no device id.
+    /// The app's one player, or nil on a build with no audio engine.
     ///
     /// Held in `@State` and taken in a `.task`, never read from `body`:
     /// reading ``ShellModel/player`` is what **builds** it, and a build during
@@ -79,18 +83,14 @@ struct PhoneDeviceMusicView: View {
                             onTap: tap(item, device)
                         )
                     }
-                    // Said once, at the foot, because it is about the whole
-                    // side and not about a row — and **only** when nothing
-                    // here can play. On every phone that has joined a house
-                    // the rows have a tap, and a line explaining an absence
-                    // under controls that are present is worse than no line.
-                    if player == nil, !device.list.rows.state.items.isEmpty {
-                        Text(PhoneMediaStrings.noPhonePlayerYet)
-                            .font(.caption)
-                            .foregroundStyle(Color.fgMuted)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .padding(.top, 8)
-                    }
+                    // A foot note saying "a phone track plays here once this
+                    // phone has joined a domovoi" stood here and is gone
+                    // (review 2): the player is not keyed to pairing, so the
+                    // note was drawn in no state a person reaches and was
+                    // wrong about why. `player` is still taken in the `.task`
+                    // below because `tap(_:_:)` needs it; when it is nil the
+                    // rows get no tap and the page says nothing, which is the
+                    // honest shape of a build with no audio engine.
                 }
             }
             .padding(16)
@@ -104,9 +104,10 @@ struct PhoneDeviceMusicView: View {
             visible: $visible
         ))
         .task { player = model.player }
-        // A move brings a different device id with it — and the case that
-        // matters more is a phone that had none at all when this screen first
-        // appeared and has introduced itself since.
+        // A move brings a different scope with it, and the shell re-points
+        // the player it holds rather than rebuilding it
+        // (``ShellModel/serverChanged()``) — so this takes the slot again
+        // rather than trusting the one read on the first appearance.
         .onChange(of: model.inputs.serverURL) { _, _ in
             guard visible else { return }
             player = model.player

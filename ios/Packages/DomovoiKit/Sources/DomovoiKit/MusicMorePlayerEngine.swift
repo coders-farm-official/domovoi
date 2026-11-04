@@ -166,8 +166,9 @@ public struct MusicRemoteNowPlaying: Equatable, Sendable {
 /// (``MusicCastPlanner``, ``MusicPlayerMath``, ``MusicLocalQueueModel``), and
 /// **the tab drawn only when an engine is registered** — with none, `player`
 /// is not in the tab bar at all: not greyed, not empty. That is still live,
-/// and it is still what a phone with no device id gets, because
-/// ``ShellModel/player`` is nil for one.
+/// and it is what a build with no audio engine gets — not, as this sentence
+/// said until review 2, a phone that has not joined a house
+/// (``ShellModel/player``).
 ///
 /// A transport row over no engine is the control
 /// [[no-misleading-controls]] forbids, and that is the whole reason this is a

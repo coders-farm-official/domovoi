@@ -1113,12 +1113,22 @@ public final class ShellModel {
     public var player: PlayerModel? {
         if let heldPlayer { return heldPlayer }
         guard let deviceID, !ServerCredentials.isBlank(deviceID) else {
-            // No device id, no player. Every position it would save is a slot
-            // the server keys by device (`audiobooks.py:599-604`), and a
-            // player built with an empty id writes every listener's place into
-            // one row belonging to nobody. Nil means no play control is drawn
-            // at all, which is the honest answer to a phone that has not
-            // introduced itself.
+            // No device id, no player: a player built with an empty id writes
+            // every listener's place into one row belonging to nobody, in a
+            // slot the server keys by device (`audiobooks.py:599-604`).
+            //
+            // **Unreachable in the shipping app, and review 2 of the
+            // 2026-11-03 batch is what measured it.** The id does NOT come
+            // from joining a house: `DeviceIdentity.stable(in:)` returns the
+            // saved one or mints `"ios-"` plus eight random bytes and writes
+            // it back (`DeviceRegistry.swift:391-403`), on first launch, with
+            // no server in it — and `DomovoiApp.swift:142` is the only
+            // `ShellModel(` in the app and always passes it. So this arm is
+            // reached by a `ShellModel` built with no `deviceSelf` at all,
+            // which is a test's, and by nothing a person can do. Anything
+            // written on the premise that an unpaired phone has no player was
+            // wrong; the sentences hung on it are deleted rather than
+            // reworded (`StationsStrings`, `PhoneMediaStrings`).
             return nil
         }
         guard let made = buildPlayer(container, deviceID) else { return nil }

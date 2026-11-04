@@ -42,16 +42,17 @@ import SwiftUI
 /// ``StationsPhonePlayback`` is the witness the route slot passes now, over
 /// ``ShellModel/player``, and every affordance the screen already knew how to
 /// draw appears — the rows that play, the play glyph, `play here`.
-/// ``StationsModel/playbackNote`` goes quiet by itself, because it is
-/// `playback.canPlay ? nil : …`, and the subtitle's
-/// `· tap a station to play it` is true again.
+/// The subtitle's `· tap a station to play it` is true again.
 ///
-/// The witness still answers **false on a phone with no device id**, which is
-/// what ``ShellModel/player`` is nil for: a station needs no position slot,
-/// but the player that plays it writes one for whatever else is in its queue,
-/// and a second player built just for radio is a second thing heard at once.
-/// So the whole screen goes back to drawing no play affordance in that state,
-/// which is exactly what it was built to do.
+/// The witness answers false only on a build with **no audio engine** —
+/// ``ShellModel/player`` is nil there and in a test's shell, and nowhere a
+/// person can get to: the device id it is keyed to is minted locally on first
+/// launch (`DeviceRegistry.swift:391-403`), not handed out by a house. The
+/// screen still draws no play affordance at all in that state, which is what
+/// it was built to do, and it no longer says a sentence about why — review 2
+/// of the 2026-11-03 batch deleted `playbackNote` and
+/// `StationsStrings.playingNeedsAHouse` with it, because an explanation of a
+/// cause that does not exist is worse than the silence.
 ///
 /// **Pages.** Android's `prev` / `next` footers, its `page n / m` line, its
 /// "nothing on this page" empty and the effect that steps back a page when
@@ -110,6 +111,16 @@ struct StationsView: View {
             if stations == nil {
                 stations = StationsModel(in: model.container, playback: playback)
             }
+            // **Re-pointed on every appearance**, not only on the first one.
+            // The witness the route slot handed in was built from
+            // ``ShellModel/player`` at the instant this view's body ran; a
+            // model built on one visit would otherwise hold that answer for
+            // the life of the screen. The case that matters is a shell that
+            // had no player when Stations first drew and has one now — the
+            // same reason ``PhoneDeviceMusicView`` takes its player in a
+            // `.task` and ``AudiobooksView`` calls
+            // `AudiobooksPhonePlayer.over(_:_:)` twice.
+            stations?.use(playback)
             stations?.start()
         }
         .onAppear { visible = true }
@@ -127,6 +138,10 @@ struct StationsView: View {
         }
         .onChange(of: model.inputs.serverURL) { _, _ in
             guard visible else { return }
+            // The witness first: a move brings a different device id and a
+            // different scope with it, and the player the shell hands back is
+            // the one the next tap must reach.
+            stations?.use(playback)
             stations?.serverChanged()
         }
         // One sheet, keyed on the station — `.sheet(item:)` rebuilds on a
@@ -177,12 +192,6 @@ struct StationsView: View {
                     .font(.footnote)
                     .foregroundStyle(Color.fgMuted)
                     .fixedSize(horizontal: false, vertical: true)
-                if let note = stations.playbackNote {
-                    Text(note)
-                        .font(.footnote)
-                        .foregroundStyle(Color.fgMuted)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
             }
             // Where Android's `import fcc fm` button is, saying where the
             // import happens instead of being a button that 401s.

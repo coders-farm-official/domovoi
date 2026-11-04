@@ -1473,8 +1473,11 @@ extension StubHouseUITests {
     /// real engine". That day is D46: ``MusicView`` registers
     /// ``PlayerModelMusicEngine`` over ``ShellModel/player``, so
     /// `MusicTab.shown(hasPlayer:)` offers the tab. It is inverted rather
-    /// than deleted, because the absence is still reachable — on a phone with
-    /// no device id — and this is where that is written down.
+    /// than deleted, because `MusicTab.shown(hasPlayer:)`'s false arm is
+    /// still a rule worth pinning and `MusicMoreModelTests` is where that is
+    /// done. **Not because a phone reaches it**: review 2 of the 2026-11-03
+    /// batch measured ``ShellModel/player`` nil only on a build with no audio
+    /// engine, which a Simulator running this app is not.
     ///
     /// It opens the tab as well as finding it: a word in a strip over a view
     /// that crashes or draws nothing is the failure a `.exists` on the button
