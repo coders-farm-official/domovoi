@@ -520,7 +520,16 @@ extension StubHouseUITests {
         )
 
         XCTAssertTrue(say(app, StubChatLong.asked), "the composer would not send")
-        let ending = startingWith(app, StubChat.replyEnding)
+        // `CONTAINS`, not `BEGINSWITH`. ``StubChat/replyEnding`` is the reply's
+        // LAST words ("once the oven is free.") and the bubble's label is the
+        // whole 1,400-character paragraph, which begins with
+        // ``StubChat/replyOpening`` — so `startingWith` matched nothing and
+        // this case failed on train I003 with "no reply arrived" while the
+        // reply was on screen and the follow-scroll had done its job (the
+        // triage tree had the paragraph ending at y=355.3 with the keyboard's
+        // top at 516). Every other reader of `replyEnding` already uses
+        // `containing`; this one was the odd one out.
+        let ending = containing(app, StubChat.replyEnding)
         XCTAssertTrue(
             ending.waitForExistence(timeout: 40),
             "no reply arrived in a thread of a thousand messages"

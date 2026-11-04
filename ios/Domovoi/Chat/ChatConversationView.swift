@@ -33,6 +33,11 @@ struct ChatConversationView: View {
     @State private var draft: ChatMoreDraftModel?
     @State private var sheet: ChatMoreSheet?
 
+    /// The ordinal of the bubble that was at the top of the window when
+    /// "show earlier" was tapped, waiting for the page above it to be drawn
+    /// — see ``showEarlier(hidden:)``.
+    @State private var earlierPin: Int?
+
     /// Read for one decision: the header's title is bounded only at an
     /// accessibility size (``title``).
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -553,7 +558,7 @@ struct ChatConversationView: View {
                         // window divider in the wrong place and offer a
                         // heads-up card on the wrong row.
                         let hidden = chat.transcript.earlierCount
-                        if hidden > 0 { showEarlier(hidden: hidden, pinning: scroller) }
+                        if hidden > 0 { showEarlier(hidden: hidden) }
                         // **The slice's own indices, and fifty pairs rather
                         // than a thousand.** `drawn` is
                         // `messages.dropFirst(hidden)` — the same slice
@@ -725,6 +730,32 @@ struct ChatConversationView: View {
                 guard !chat.transcript.messages.isEmpty else { return }
                 scroller.scrollTo(Self.foot)
             }
+            // **The "show earlier" pin, applied to the content that has the
+            // page in it** — see ``showEarlier(hidden:)``.
+            //
+            // Train I003 measured what asking inside the tap costs: the row
+            // that was at the top went from y=262 to y=4,711, a drop of 4,449
+            // points, which is the height of the page that was inserted above
+            // it. The request was answered against the content the scroll
+            // view still had — fifty bubbles short — and the page then went in
+            // above the offset it had just been given. This runs after the
+            // window has grown and the body has been re-read with the new
+            // bubbles in it, which is when the scroll view has something to
+            // pin to.
+            //
+            // The key is ``ChatTranscriptWindow/pinned`` and not
+            // ``ChatTranscript/earlierCount``: the pin moves only when
+            // somebody grows the window, while `earlierCount` walks down by
+            // one on every message appended to a thread over fifty long — so
+            // on that key this would fire on every delta of a streaming
+            // reply. It cannot fight the follow-scroll above either: growing
+            // the window changes neither the message count nor the last
+            // message, which is all ``tail`` is made of.
+            .onChange(of: chat.transcript.window.pinned) { _, _ in
+                guard let pin = earlierPin else { return }
+                earlierPin = nil
+                scroller.scrollTo(pin, anchor: .top)
+            }
             // Named so a case can drag **this** scroll view, as
             // ``AssistantPhoneConversationView/transcriptId`` is: the shell's
             // phone bar is a `ScrollView` too, and train R002 watched
@@ -755,15 +786,23 @@ struct ChatConversationView: View {
     /// viewport to longer; this is one request, once, on a tap, over content
     /// that is certainly longer — there are more than fifty messages, or this
     /// control is not drawn.
+    /// **The scroll is asked for after the page is drawn, not inside the
+    /// tap.** `ScrollViewProxy.scrollTo` is answered against the content the
+    /// scroll view has when it is asked, and inside this action that content
+    /// is still the old window: train I003 watched the pinned row land at the
+    /// top and then be pushed 4,449 points down it by the fifty bubbles the
+    /// same update inserted above it. So the ordinal is parked in
+    /// ``earlierPin`` and spent by the `.onChange` on
+    /// ``ChatTranscript/earlierCount`` in ``transcript``, which runs once the
+    /// window has grown.
     @ViewBuilder
-    private func showEarlier(hidden: Int, pinning scroller: ScrollViewProxy) -> some View {
+    private func showEarlier(hidden: Int) -> some View {
         HomeLink(ChatStrings.showEarlier) {
             // The ordinal of the bubble at the top of the window, read
             // **before** it grows: the rows are keyed on
             // ``ChatLiveMessage/ordinal``, so that is the id `scrollTo` wants.
-            let top = chat.transcript.drawn.first?.ordinal
+            earlierPin = chat.transcript.drawn.first?.ordinal
             chat.showEarlier()
-            if let top { scroller.scrollTo(top, anchor: .top) }
         }
         .accessibilityLabel(ChatStrings.showEarlierNote(hidden: hidden))
         .frame(maxWidth: .infinity, alignment: .center)
