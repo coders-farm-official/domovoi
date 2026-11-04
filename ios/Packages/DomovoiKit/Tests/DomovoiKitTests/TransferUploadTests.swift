@@ -544,8 +544,12 @@ final class TransferUploadTests: XCTestCase {
     private func redirects(from url: URL) -> RedirectDelegate {
         var request = URLRequest(url: url)
         request.setValue("household-abc", forHTTPHeaderField: deviceTokenHeader)
+        // The address is read out **before** the closure, which is
+        // `@Sendable`: `self.server` inside one captures a non-Sendable
+        // XCTestCase.
+        let active = server
         return RedirectDelegate(start: request, wsUpgrade: false) { _ in
-            .send(token: "household-abc", server: self.server)
+            .send(token: "household-abc", server: active)
         }
     }
 }
