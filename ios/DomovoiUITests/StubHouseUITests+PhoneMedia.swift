@@ -86,6 +86,122 @@ extension StubHouseUITests {
         return app
     }
 
+    /// Choose one side of the switch, whichever shape the switch is in.
+    ///
+    /// **Two shapes, one helper.** Below an accessibility type size the
+    /// switch is the two-segment pill and the side is a button on screen.
+    /// At an accessibility size it is ``PhoneSourceCollapsedSwitch`` — one row
+    /// naming the current side, with both sides in its menu — because the
+    /// column it replaced cost the page 164 of the window's 852 points
+    /// (`PhoneSourceSwitchPill`'s own doc comment has the measurement, and
+    /// `integration/sourceswitch-r4.md` the band breakdown). Every case in
+    /// this file that switches sides runs at one size or the other, so the
+    /// question "which shape is drawn" is asked here and nowhere else.
+    ///
+    /// ### One waited query over both shapes, and why round 1's poll was the
+    /// wrong instrument
+    ///
+    /// Round 1 polled `.exists` on the two shapes in turn every 200 ms, to
+    /// avoid spending a whole `waitForExistence` timeout on the shape that is
+    /// **not** drawn. That cost is avoided here too — both shapes carry this
+    /// side's own identifier, so **one** predicate query finds either in one
+    /// snapshot — and the poll then cost R004 a round for a second reason,
+    /// which is the one worth writing down:
+    ///
+    /// `XCUIElement.exists` **returns `false` when the snapshot itself
+    /// failed.** In R004's
+    /// `testPhoneMedia_TheDeviceSideHasNoAuditFindings` the run's automation
+    /// channel went bad at `t = 9.94s` — every query from there to the end of
+    /// the case logs `(retry 1)`, `(retry 2)` and costs 2.1 s, and
+    /// `app.debugDescription` came back with no tree at all — and this loop
+    /// turned twenty-five seconds of channel failure into `NO SWITCH OF
+    /// EITHER SHAPE`: a diagnosis about this unit's control for a failure that
+    /// was neither the control's nor the app's. Three other cases in the same
+    /// twelve minutes of that run named what had really happened (`Lost
+    /// connection to the application`), and the difference between them and
+    /// this one is only that they were inside a `waitForExistence`, which
+    /// **throws** rather than shrugging. It also polls once a second instead
+    /// of five times, so a case that waits through the 12-second seeded push
+    /// (``StubHouseUITests/pushDelay``) asks for thirty snapshots of the whole
+    /// hierarchy rather than three hundred.
+    ///
+    /// Both shapes are matched by **identifier**: a segment carries
+    /// `PhoneSourceSwitchPill.serverSegmentID`/`deviceSegmentID` and the
+    /// collapsed row carries `PhoneSourceSwitchPill.collapsedID`, and
+    /// `PhoneSourceCollapsedSwitch.identifier(of:)` puts the same two on the
+    /// menu's rows — which cannot be confused with these, since the menu is
+    /// shut until the row below is tapped.
+    @MainActor
+    func phoneSourcePickSide(_ app: XCUIApplication, _ side: PhoneSideUnderTest) -> Bool {
+        let either = app.buttons.matching(
+            NSPredicate(
+                format: "identifier == %@ OR identifier == %@",
+                StubPhoneMedia.collapsedSwitch, side.identifier
+            )
+        ).firstMatch
+        guard either.waitForExistence(timeout: 40) else {
+            // **`app.state` needs no snapshot**, so it answers even when the
+            // channel that would print a tree cannot: `runningForeground`
+            // here means the switch really was not drawn and this unit is
+            // what the next round should read, and anything else means the
+            // run lost the app and it is not.
+            print(
+                "=== NO SWITCH OF EITHER SHAPE — app is "
+                    + "\(Self.stateName(app.state)) — tree follows ==="
+            )
+            print(app.debugDescription)
+            return false
+        }
+        guard either.identifier == StubPhoneMedia.collapsedSwitch else {
+            either.tap()
+            return true
+        }
+        either.tap()
+        guard let row = phoneSourceMenuRow(app, side) else {
+            print("=== THE COLLAPSED SWITCH'S MENU HAS NO `\(side.words)` — tree follows ===")
+            print(app.debugDescription)
+            return false
+        }
+        row.tap()
+        return true
+    }
+
+    /// One row of the open collapsed menu.
+    ///
+    /// The identifier first, because that is what
+    /// ``PhoneSourceCollapsedSwitch`` puts on each row and it is the handle
+    /// that cannot be confused with anything. SwiftUI hands a `Menu`'s buttons
+    /// to UIKit as menu elements, and an identifier does not reliably survive
+    /// that trip, so the words are the fallback — under two exclusions, both
+    /// of which are a real element on this screen and not a precaution:
+    ///
+    /// * **`.buttons`, never `.any`.** The shell's own server chip is a
+    ///   `Button` labelled `switch server` whose *child* `StaticText` is the
+    ///   house's address, so an `.any` query for the address would find it —
+    ///   and tapping it opens the connection sheet, which NIGHT-RULES §1
+    ///   forbids on a Simulator because it sweeps Kamron's real home network.
+    ///   Matching a button's own label leaves it out, and the explicit skip
+    ///   below is the second lock on the same door.
+    /// * **the collapsed row itself.** Its label is
+    ///   `PhoneMediaStrings.showingSide(_:)` over the *current* side, so it
+    ///   contains the current side's words; asking for the side the page is
+    ///   already on would otherwise find the row and tap the menu shut.
+    @MainActor
+    func phoneSourceMenuRow(_ app: XCUIApplication, _ side: PhoneSideUnderTest) -> XCUIElement? {
+        let byID = app.descendants(matching: .any).matching(identifier: side.identifier).firstMatch
+        if byID.waitForExistence(timeout: 5) { return byID }
+        let byWords = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", side.words))
+        for index in 0..<byWords.count {
+            let candidate = byWords.element(boundBy: index)
+            guard candidate.exists,
+                  candidate.identifier != StubPhoneMedia.collapsedSwitch,
+                  !(candidate.label.contains(StubPhoneMedia.switchServer))
+            else { continue }
+            return candidate
+        }
+        return nil
+    }
+
     /// Tap `your device` and wait for the phone's side to have drawn.
     ///
     /// It waits for a **row**, not for the segment to look selected: the
@@ -94,16 +210,17 @@ extension StubHouseUITests {
     /// landed.
     @MainActor
     func phoneSwitchToDevice(_ app: XCUIApplication, waitingFor row: String) -> Bool {
-        let segment = app.buttons[StubPhoneMedia.yourDevice].firstMatch
-        guard segment.waitForExistence(timeout: 30) else {
-            print("=== NO `your device` SEGMENT — tree follows ===")
-            print(app.debugDescription)
-            return false
-        }
-        segment.tap()
+        guard phoneSourcePickSide(app, .device) else { return false }
         let landed = containing(app, row).waitForExistence(timeout: 30)
         if !landed {
-            print("=== THE DEVICE SIDE DREW NO `\(row)` — tree follows ===")
+            // The app's state beside the complaint, for the same reason
+            // ``phoneSourcePickSide(_:_:)`` prints it: a tree that comes back
+            // empty says the run lost the app, not that the side drew
+            // nothing, and R004 spent a case on that distinction.
+            print(
+                "=== THE DEVICE SIDE DREW NO `\(row)` — app is "
+                    + "\(Self.stateName(app.state)) — tree follows ==="
+            )
             print(app.debugDescription)
         }
         return landed
@@ -122,16 +239,13 @@ extension StubHouseUITests {
     /// the default: it is proof the **device page** is what the switch drew.
     @MainActor
     func phoneSwitchToDeviceHeader(_ app: XCUIApplication, waitingFor header: String) -> Bool {
-        let segment = app.buttons[StubPhoneMedia.yourDevice].firstMatch
-        guard segment.waitForExistence(timeout: 30) else {
-            print("=== NO `your device` SEGMENT — tree follows ===")
-            print(app.debugDescription)
-            return false
-        }
-        segment.tap()
+        guard phoneSourcePickSide(app, .device) else { return false }
         let landed = app.staticTexts[header].firstMatch.waitForExistence(timeout: 30)
         if !landed {
-            print("=== THE DEVICE SIDE DREW NO `\(header)` — tree follows ===")
+            print(
+                "=== THE DEVICE SIDE DREW NO `\(header)` — app is "
+                    + "\(Self.stateName(app.state)) — tree follows ==="
+            )
             print(app.debugDescription)
         }
         return landed
@@ -164,14 +278,23 @@ extension StubHouseUITests {
     /// The switch is pinned above the page: ``PhoneSourceSwitchView`` is a
     /// `VStack` of the pill and the two sides, so the side that is shown
     /// scrolls in whatever the pill leaves. At `large` the pill is 45 points
-    /// and nothing notices. At AX5 it is **164**, and the folder's
-    /// `ScrollView` on a 393×852 phone is left 178.7 points (the tree beside
+    /// and nothing notices. At AX5 it **was 164**, and the folder's
+    /// `ScrollView` on a 393×852 phone was left 178.7 points (the tree beside
     /// `overnight-trains/R001/FilesVideos/testFilesAtTheLargestTypeSize.log`).
     /// A `LazyVStack` builds about a viewport deep, Files' header alone is
     /// 383.7 points, and so the `choose library` button — the second lazy
-    /// item — is **unbuilt**, not off screen. Five of the Files and Videos
+    /// item — was **unbuilt**, not off screen. Five of the Files and Videos
     /// cases this item wrapped were written before there was a pill and
     /// waited for a marker that can no longer arrive on its own.
+    ///
+    /// ``PhoneSourceCollapsedSwitch`` has since taken the switch at
+    /// accessibility sizes down to one row of about 65 points, which hands
+    /// the page roughly 99 of those 164 back. That makes the scroll shorter;
+    /// it does not make it unnecessary — Files' AX5 header is still 383.7
+    /// points against a viewport under 280, so the picker is still the second
+    /// lazy item below the fold. The number is printed on every run that has
+    /// to scroll, so the next train reads the page's real height rather than
+    /// this comment's arithmetic.
     ///
     /// ### It is ``documentsScrollTo(_:_:flicks:big:)``, deliberately
     ///
@@ -200,13 +323,17 @@ extension StubHouseUITests {
         if element.exists { return true }
         // **The number this scroll exists because of, in every log.** The
         // window left to the page is what makes the difference between a
-        // marker that is off screen and one that was never built, and it is
-        // also the open finding on this screen: 178.7 of 852 points at AX5,
+        // marker that is off screen and one that was never built, and it was
+        // the open finding on this screen: 178.7 of 852 points at AX5,
         // against the 260 dp of content Android's own shell treats as the
-        // floor (`AppShell.kt:481`'s `CONTENT_FLOOR`). Printed rather than
-        // asserted — the three chrome bars that divide those 852 points
-        // belong to three different owners and only one of them is this
-        // item's. `integration/filesvideos.md` has the breakdown.
+        // floor (`AppShell.kt:481`'s `CONTENT_FLOOR`). The band this unit
+        // owns has been cut from 164 points to one row
+        // (``PhoneSourceCollapsedSwitch``) and
+        // ``testPhoneMedia_TheSwitchSegmentsGrowWithTheTypeSize`` now asserts
+        // that floor; the two bars still above the floor's other side are the
+        // Shell's. Printed here as well, so every train's log carries the
+        // measurement next to the scroll it explains.
+        // `integration/sourceswitch-r4.md` has the breakdown.
         if let page = documentsFolderScroll(app) {
             print("PAGE UNDER THE SWITCH height=\(page.frame.height) minY=\(page.frame.minY)")
         }
@@ -307,10 +434,10 @@ extension StubHouseUITests {
         // assertion below could only pass if the parked server side leaked
         // into the accessibility tree, which is the very defect
         // `ShownOrParked` exists to prevent. The server's segment cannot be
-        // found by label: its label is the house's own name.
-        let back = app.buttons[StubPhoneMedia.serverSegment].firstMatch
-        XCTAssertTrue(back.waitForExistence(timeout: 20), "the switch has no server segment")
-        back.tap()
+        // found by label: its label is the house's own name, which is why
+        // ``PhoneSideUnderTest/identifier`` is what
+        // ``phoneSourcePickSide(_:_:)`` matches on.
+        XCTAssertTrue(phoneSourcePickSide(app, .server), "the switch has no server side")
         evidence(app, "phonemedia-server-kept-its-place")
         // Back on the server's side, and still in the folder. A container
         // that rebuilt the server side would be at its root, asking the
@@ -686,33 +813,131 @@ extension StubHouseUITests {
 
     // MARK: - Dynamic Type, measured
 
-    /// The switch's segments grow with the type size.
+    /// The switch's words grow with the type size — **and** the switch leaves
+    /// the page enough of the window to be a page.
     ///
-    /// **Measured at two sizes**, not read off a headline: Android's pill is
-    /// 40 dp (`YourDevice.kt:196`) and a straight port would be
-    /// `frame(height: 40)` — which does not clip, so nothing but a
-    /// measurement finds it. A named Dynamic Type audit finding has twice
-    /// been a false positive on this track, which is the other half of why
-    /// this is a measurement.
+    /// ### What this case used to assert, and why that became the wrong
+    /// question
+    ///
+    /// It compared the `your device` **segment's own height** at `large` and
+    /// at AX5 and required the second to be bigger. That caught the defect it
+    /// was written for — Android's pill is 40 dp (`YourDevice.kt:196`) and a
+    /// straight port would be `frame(height: 40)`, which does not clip, so
+    /// nothing but a measurement finds it — and then it rewarded the cure
+    /// that was worse: the taller the switch grew, the better it scored.
+    /// R003 measured where that ended. On a 393×852 phone at AX5 the switch
+    /// was a 164-point column and the page under it 178.7 points, against the
+    /// 260 dp that Android's own shell treats as the floor below which it
+    /// stops drawing chrome at all (`AppShell.kt:481`'s `CONTENT_FLOOR`,
+    /// read by `YourDevice.kt:198` and `Kit.kt:212`).
+    ///
+    /// So ``PhoneSourceCollapsedSwitch`` collapses the switch to one row at
+    /// accessibility sizes, and this case now measures the four properties
+    /// that the one it replaced was standing in for:
+    ///
+    /// 1. **The collapse happens where it should and nowhere else** — the
+    ///    two-segment pill at an ordinary size, the one row at AX5, never
+    ///    both and never the wrong one.
+    /// 2. **The row's text still scales**, measured against the 44-point
+    ///    floor rather than against the old size (see below). A fixed font
+    ///    size or a `minimumScaleFactor` anywhere in the switch fails it.
+    /// 3. **Both sides are still offered and the house is still named** — the
+    ///    row says which side, the menu says which server, so the name the
+    ///    column used to show in full is still shown in full.
+    /// 4. **The page gets its window back.** A future switch that grows back
+    ///    into a column fails on Android's floor rather than scoring well on
+    ///    height, which is the trap the case this replaced fell into.
+    ///
+    /// ### And why the AX5 half is `> 44` rather than a ratio
+    ///
+    /// Because the accessibility tree cannot report a `Text`'s own height
+    /// inside a `Button`. R003's `large` tree has the segment at
+    /// `{{15.5, 144.8}, {178.7, 45}}` and its `StaticText` at
+    /// `{{16, 145.3}, {177.7, 44}}` — the **button's** 44-point `minHeight`,
+    /// not the 18-point line in the middle of it. So "the words grew" is not
+    /// a measurable quantity here, and the measurable thing that means the
+    /// same is this: the collapsed row is one line of `.subheadline` against a
+    /// 44-point floor, so a row **taller than 44** is a row whose text
+    /// outgrew the floor, and a row of exactly 44 is a row whose text did not
+    /// scale. R003's AX5 tree gives that line as 49 points (the server
+    /// segment's two lines measured 98), which is the five points of margin
+    /// this assertion lives on; the number is printed either way.
     @MainActor
     func testPhoneMedia_TheSwitchSegmentsGrowWithTheTypeSize() throws {
         phoneReset()
+        // At `large` the pill is intact: two segments, side by side, which is
+        // Android's control to the point. If this ever collapses at an
+        // ordinary size the AX5 half below would still pass, so it is asserted
+        // here.
         let small = phoneLaunch(push: "Music")
-        let ordinary = small.buttons[StubPhoneMedia.yourDevice].firstMatch
+        let ordinary = small.buttons[StubPhoneMedia.serverSegment].firstMatch
         XCTAssertTrue(ordinary.waitForExistence(timeout: 40), "the switch never drew at L")
-        let atL = ordinary.frame.height
+        let boxAtL = ordinary.frame
         evidence(small, "phonemedia-segment-L")
+        print("SWITCH AT L segment=\(boxAtL)")
+        XCTAssertTrue(
+            small.buttons[StubPhoneMedia.yourDevice].exists,
+            "the pill drew one segment at an ordinary size — both sides are on screen there"
+        )
+        XCTAssertFalse(
+            small.buttons[StubPhoneMedia.collapsedSwitch].exists,
+            "the switch collapsed at an ordinary size, where there is room for the pill"
+        )
         small.terminate()
 
         let big = phoneLaunch(push: "Music", mode: "UICTContentSizeCategoryAccessibilityXXXL")
-        let huge = big.buttons[StubPhoneMedia.yourDevice].firstMatch
-        XCTAssertTrue(huge.waitForExistence(timeout: 40), "the switch never drew at AX5")
-        let atAX5 = huge.frame.height
+        let collapsed = big.buttons[StubPhoneMedia.collapsedSwitch].firstMatch
+        XCTAssertTrue(
+            collapsed.waitForExistence(timeout: 40),
+            "the switch drew no collapsed row at AX5"
+        )
+        let boxAtAX5 = collapsed.frame
+        // The page under the switch, by the same helper the Files and Videos
+        // cases scroll with, so the number this asserts is the number they
+        // print.
+        let page = documentsFolderScroll(big)?.frame ?? .null
         evidence(big, "phonemedia-segment-AX5")
+        print("SWITCH AT AX5 row=\(boxAtAX5) page=\(page)")
 
+        // 1. The collapse happened, rather than both shapes drawing.
+        XCTAssertFalse(
+            big.buttons[StubPhoneMedia.serverSegment].exists,
+            "the two-segment pill is still on screen at AX5 as well as the collapsed row"
+        )
+        // 2. The row's one line of text outgrew the 44-point floor, which is
+        //    what a scaling font does and a fixed one does not.
         XCTAssertGreaterThan(
-            atAX5, atL,
-            "the segment is \(atL) points at L and \(atAX5) at AX5 — a fixed height, ported from the 40 dp pill"
+            boxAtAX5.height, 44,
+            "the collapsed row is \(boxAtAX5.height) points at AX5 — exactly the platform "
+                + "minimum, so its text is not scaling"
+        )
+        // 3. Both sides are still offered, in full. The row names the side;
+        //    the menu names the house, and this is what says the name did not
+        //    simply go away.
+        collapsed.tap()
+        let serverRow = phoneSourceMenuRow(big, .server)
+        let deviceRow = phoneSourceMenuRow(big, .device)
+        evidence(big, "phonemedia-segment-AX5-menu")
+        XCTAssertNotNil(deviceRow, "the collapsed switch does not offer the phone's side")
+        guard let serverRow else {
+            print("=== THE MENU DOES NOT NAME THE HOUSE — tree follows ===")
+            print(big.debugDescription)
+            return XCTFail("the collapsed switch's menu does not carry the server's own name")
+        }
+        XCTAssertTrue(
+            serverRow.label.contains(StubPhoneMedia.serverAddressStem),
+            "the menu's server row says `\(serverRow.label)`, which is not the house's name"
+        )
+        // Picking the side that is already on is idempotent
+        // (`PhoneSourceChoices.choose`) and is how this closes the menu
+        // without tapping anything it did not mean to.
+        serverRow.tap()
+
+        // 4. And the page is above the floor Android's own shell keeps.
+        XCTAssertGreaterThanOrEqual(
+            page.height, 260,
+            "the switch leaves the page \(page.height) of 852 points, under Android's own "
+                + "CONTENT_FLOOR of 260 (AppShell.kt:481). switch=\(boxAtAX5) page=\(page)"
         )
     }
 
@@ -756,7 +981,15 @@ extension StubHouseUITests {
     func testPhoneMedia_TheDeviceSideHasNoAuditFindings() throws {
         phoneReset()
         let app = phoneLaunch(push: "Files")
-        XCTAssertTrue(phoneSwitchToDevice(app, waitingFor: StubPhoneMedia.phoneTrackWord))
+        // The message is not decoration. R004 failed this line as a bare
+        // `XCTAssertTrue failed`, and the helper's own print was the only
+        // thing that said the switch was never found — which it also got
+        // wrong, because the run had lost the app
+        // (``phoneSourcePickSide(_:_:)``).
+        XCTAssertTrue(
+            phoneSwitchToDevice(app, waitingFor: StubPhoneMedia.phoneTrackWord),
+            "the device side of Files never drew — the print above says whether the app was still there"
+        )
         evidence(app, "phonemedia-files-audit")
 
         let found = try auditIssues(app, "phonemedia-files")
@@ -937,6 +1170,24 @@ enum StubPhoneMedia {
     /// LABEL is the house's own name, so an identifier is the only stable
     /// handle on it.
     static let serverSegment = "phone-source-server"
+    /// `PhoneSourceSwitchPill.deviceSegmentID`. The device's side has a
+    /// readable label as well; this is what finds its row inside the
+    /// collapsed menu, where a label may be the one VoiceOver was given.
+    static let deviceSegment = "phone-source-device"
+    /// `PhoneSourceSwitchPill.collapsedID` — the one-row switch
+    /// ``PhoneSourceCollapsedSwitch`` draws at an accessibility type size.
+    /// Labelled with whichever side is current, so an identifier is the only
+    /// stable handle on it too.
+    static let collapsedSwitch = "phone-source-switch"
+    /// Enough of the stub house's address to find it and not enough to depend
+    /// on a truncated label (`phoneLaunch` passes `127.0.0.1:6601`).
+    static let serverAddressStem = "127.0.0.1"
+    /// The SHELL's server chip (`ShellChromeViews.swift`), which must never be
+    /// tapped: it opens the connection sheet, and NIGHT-RULES §1 forbids one
+    /// on a Simulator because it sweeps Kamron's real home network. Spelt out
+    /// here so ``StubHouseUITests/phoneSourceMenuRow(_:_:)`` can skip it by
+    /// name as well as by query shape.
+    static let switchServer = "switch server"
     /// The phone bar's buttons carry the route's own name
     /// (`ShellChromeViews.swift:304`), which is `Route`'s raw value.
     static let musicTab = "Music"
@@ -999,4 +1250,44 @@ enum StubPhoneMedia {
     static let noLongerReadable = "no longer readable"
     /// What ``ScreenPlaceholder`` drew in the local shell before this item.
     static let notBuiltYet = "on this phone — not built yet"
+}
+
+/// One side of the source switch, as a case finds it.
+///
+/// Two handles rather than one, because the switch has two shapes and the
+/// server's side has no readable label in either: the identifier that the
+/// pill's segment and the collapsed menu's row both carry, and the words that
+/// survive in a menu whose identifiers SwiftUI may not have carried into
+/// UIKit.
+enum PhoneSideUnderTest {
+
+    case server
+    case device
+
+    // `segmentLabel` — "an identifier for the server, the words for the
+    // phone", for `app.buttons[_:]`, which matches either — is gone with the
+    // poll that used it: ``StubHouseUITests/phoneSourcePickSide(_:_:)`` now
+    // matches both shapes on `identifier` alone, which every one of the four
+    // elements carries. A second way to name the same side is how two cases
+    // come to disagree about which control they found.
+
+    /// The identifier this side carries in both shapes
+    /// (`PhoneSourceCollapsedSwitch.identifier(of:)` is the same two).
+    var identifier: String {
+        switch self {
+        case .server: return StubPhoneMedia.serverSegment
+        case .device: return StubPhoneMedia.deviceSegment
+        }
+    }
+
+    /// Words of this side that appear on its row of the collapsed menu —
+    /// whether that row kept the title it was given or the spoken label over
+    /// it (`PhoneMediaStrings.serverSideLabel(_:)` contains the address, and
+    /// `yourDevice` is both).
+    var words: String {
+        switch self {
+        case .server: return StubPhoneMedia.serverAddressStem
+        case .device: return StubPhoneMedia.yourDevice
+        }
+    }
 }

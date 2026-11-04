@@ -69,9 +69,11 @@ extension StubHouseUITests {
         // said "the playlists tab never drew a row", which reads as a screen
         // that did not answer; the tree beside it said otherwise. At
         // AX5 the three room cards above the strip are 1520 points tall
-        // against a 178-point content area — the shell's crumb, the server
-        // button and the phone-source switch take 523 of the 852 — so the
-        // strip is not off screen, it is *unbuilt*, the lazy foot of a
+        // against a content area under 280 — the shell's crumb, the server
+        // button, the navigation bar and the phone-source switch take the
+        // rest of the 852, and R003 measured the content area at 178.7
+        // before ``PhoneSourceCollapsedSwitch`` gave back the switch's
+        // column — so the strip is not off screen, it is *unbuilt*, the lazy foot of a
         // `LazyVStack` nobody has scrolled to. Scrolling to it is what a
         // person does, so the case does it too, rather than the screen being
         // called broken. S010 then failed here a second time, for a
@@ -176,9 +178,10 @@ extension StubHouseUITests {
     ///
     /// **An element bigger than its own clip** can never be wholly inside it,
     /// and asking for that is how a loop oscillates until its budget runs
-    /// out. At AX5 Music's page viewport is 178.7 points tall — the
-    /// phone-source pill above it is a column there, see this item's report —
-    /// while one room card is 1520, so this is not hypothetical. The best
+    /// out. At AX5 Music's page viewport is under 280 points tall — it was
+    /// 178.7 while the phone-source switch was a column there, see
+    /// `integration/sourceswitch-r4.md` — while one room card is 1520, so
+    /// this is not hypothetical. The best
     /// that can be asked of such an element is that its **leading edge** is
     /// inside, which is where a tap on it lands.
     func musicMoreShortfall(_ it: CGRect, in seat: CGRect, vertical: Bool) -> CGFloat {
@@ -327,6 +330,29 @@ extension StubHouseUITests {
         // nothing, and until a drag has been measured and moved nothing,
         // nothing says the scroller is deaf.
         var scrollerTookTheDrag = true
+        // **The damper, and the measurement it answers.** R002 and R003 both
+        // measured this loop asking for 142.9 points and getting about 294 —
+        // the same ~285 of travel whatever it asked for, in either direction,
+        // because `press(forDuration:thenDragTo:)` lifts the finger while it
+        // is still moving and a scroller reads that as a throw. The loop then
+        // alternated (−142.9, +47.3, −136.0, +74.3, …) with the shortfall no
+        // smaller at step 30 than at step 1.
+        //
+        // ``musicMoreDrag(_:by:vertical:)`` now holds before the lift, which
+        // is the correction `assistantCreep` measured
+        // (`StubHouseUITests+Assistant.swift:949`) and which R003 never ran —
+        // its log line still reads "hold for 0.0 seconds", so the three
+        // MusicMore reds in that train are round 2's gesture, not round 3's.
+        // This halving is the belt on top of that brace: whatever residual
+        // momentum a drag carries, a loop that overshot once asks for half as
+        // much next time, so it converges geometrically instead of ringing.
+        // It cannot mask a real failure — the element's frame is still what
+        // decides, and the ask never goes below
+        // ``musicMoreDrag(_:by:vertical:)``'s 24-point floor, which is well
+        // inside the acceptance window (219 points on Music at AX5: a
+        // 278-point viewport less the 58.7-point strip).
+        var damp: CGFloat = 1
+        var lastSign: CGFloat = 0
         for step in 0..<steps {
             guard element.exists, view.exists else { return false }
             let before = element.frame
@@ -334,12 +360,15 @@ extension StubHouseUITests {
             let shortfall = self.musicMoreShortfall(
                 before, in: view.frame, vertical: vertical
             )
-            if !self.musicMoreDrag(view, by: shortfall, vertical: vertical) { break }
+            let sign: CGFloat = shortfall < 0 ? -1 : 1
+            if lastSign != 0, sign != lastSign { damp /= 2 }
+            lastSign = sign
+            if !self.musicMoreDrag(view, by: shortfall * damp, vertical: vertical) { break }
             // A lazy container can unbuild the element the drag was for. Put
             // it back the way it came rather than leaving the caller with no
             // frame to measure at all.
             guard element.exists else {
-                _ = self.musicMoreDrag(view, by: -shortfall, vertical: vertical)
+                _ = self.musicMoreDrag(view, by: -shortfall * damp, vertical: vertical)
                 break
             }
             let after = element.frame
@@ -355,7 +384,7 @@ extension StubHouseUITests {
                 // short after its budget is a number the next train needs.
                 print(
                     "=== BRING RAN OUT OF STEPS: element \(after) in \(view.frame), "
-                        + "last shortfall \(shortfall), last step moved \(moved) ==="
+                        + "last shortfall \(shortfall), damp \(damp), last step moved \(moved) ==="
                 )
             }
         }
