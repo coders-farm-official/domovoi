@@ -885,18 +885,25 @@ extension StubHouseUITests {
             // measurement behind it is how a stuck leaf gets excused. If this
             // leaf ever stops growing, that excuse fails here first.
             ("prompt", StubImages.historyPrompt),
+            // `4 images, showing 3` — Kamron's answer 27, added 2026-11-04
+            // for the same reason the prompt was. It is a new drawn text
+            // leaf on the card this case exists to measure, and the audit
+            // case waives anonymous `Text clipped` on the strength of *this*
+            // list; a caption nothing here measures is a leaf that waiver
+            // covers without having looked at it (review 2, finding 4).
+            ("more-images", ImagesWords.fourImagesShowingThree),
         ]
 
         /// Every leaf, **walked down from the top of the page**.
         ///
-        /// Four of the seven are below the fold at AX5 and a lazy stack's
+        /// Four of the eight are below the fold at AX5 and a lazy stack's
         /// foot is unbuilt, not merely off screen, so one look at whatever
         /// is on screen measures a different set in each pass. Flicking to
         /// the tiles first and then looking is worse still: five of the
-        /// seven live above the tiles and the scroller only goes down, so
+        /// eight live above the tiles and the scroller only goes down, so
         /// they were gone by the time this ran, and the case could satisfy
         /// its own `compared >= 3` guard on two leaves while printing
-        /// seven (2026-11-02 review). Chat's note at
+        /// all of them (2026-11-02 review). Chat's note at
         /// `StubHouseUITests.swift:3732-3740` is the same lesson: the walk
         /// has to start at the top and record each leaf the first time it
         /// is seen.
@@ -944,12 +951,12 @@ extension StubHouseUITests {
             XCTAssertTrue(landed, "Images never opened at \(label)")
             usleep(2_000_000)
             // **The text leaves first, from the top of the page.** Five of
-            // the seven — `engine`, `progress`, `lane-title`, `error` and
+            // the eight — `engine`, `progress`, `lane-title`, `error` and
             // `history-label` — live ABOVE the tiles, and the scroller only
             // ever goes down: measured after the flick to the tile they are
             // unbuilt or above the viewport, so the two passes compared
             // different sets and the case could pass having compared two
-            // leaves while claiming seven. Chat already paid for this exact
+            // leaves while claiming all of them. Chat already paid for this exact
             // bug (`StubHouseUITests.swift:3732-3740`) — walking down from
             // the top is the whole trick, and it only works from the top.
             // `heights` walks the page from the top itself, so it ends
@@ -1098,7 +1105,7 @@ extension StubHouseUITests {
             // anonymous view. Chat is the screen that paid for this one and
             // carries the whole note (`StubHouseUITests.swift:3653-3662`); what
             // stands behind it here is the same thing that stands behind it
-            // there — ``testImages_AtTheLargestTypeSize()`` measures seven of
+            // there — ``testImages_AtTheLargestTypeSize()`` measures eight of
             // this screen's leaves at `large` and at AX5 and fails if one of
             // them does not grow. An attributed one is *not* covered: it falls
             // through to the assertion below.

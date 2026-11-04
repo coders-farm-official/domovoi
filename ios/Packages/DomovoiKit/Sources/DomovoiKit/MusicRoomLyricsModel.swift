@@ -44,11 +44,21 @@ import Observation
 ///
 /// **It cannot yank the panel while a finger is down.** The timer is started
 /// by ``handReleased()`` and by nothing else, and ``handPaused()`` cancels
-/// whatever is pending — which is Android's own pair of branches, mapped onto
-/// `onScrollPhaseChange`: `.interacting` is the finger, anything else is not.
-/// So a drag held for a minute starts no timer, and a drag that ends starts
-/// exactly one. The ``follow()`` chip stays (Android ships it too) and is
-/// still the immediate way back.
+/// whatever is pending — which is Android's own pair of branches. So a drag
+/// held for a minute starts no timer, and a drag that ends starts exactly
+/// one. The ``follow()`` chip stays (Android ships it too) and is still the
+/// immediate way back.
+///
+/// **And `onScrollPhaseChange` is three branches, not two** — the mapping is
+/// ``hand(_:)`` and ``MusicLyricsHandPhase``, here rather than in the view,
+/// because round 2 got it wrong in the view where nothing could test it.
+/// `.interacting` is a finger that is moving the list and `.idle`,
+/// `.decelerating` and `.animating` are a list nobody is holding, but
+/// **`.tracking` is a finger down that has not moved yet** — and mapping it
+/// to a release armed the four-second timer with the finger still on the
+/// glass. The post-sleep `!handDown` guard cannot catch that, because the
+/// very call that armed the timer is the one that cleared `handDown`
+/// (review 2, finding 3).
 ///
 /// ### What is not, and why there is no control for it
 ///
@@ -327,6 +337,28 @@ public final class MusicRoomLyricsModel {
         }
     }
 
+    /// What the panel's scroll view just reported, mapped to this model's
+    /// pair of calls — ``MusicLyricsHandPhase``.
+    ///
+    /// The mapping lives here and not at the `onScrollPhaseChange` call site
+    /// so that it has a test: the view's own job is one `switch` over
+    /// SwiftUI's `ScrollPhase`, which a reader can check against
+    /// ``MusicLyricsHandPhase``'s three doc comments and nothing else.
+    public func hand(_ phase: MusicLyricsHandPhase) {
+        switch phase {
+        case .moving:
+            handPaused()
+        case .resting:
+            // **Nothing.** Not a pause — Android pauses on a drag
+            // (`DragInteraction.Start`) and a finger resting on the list has
+            // not dragged it — and above all not a release, which would arm
+            // the resume under a finger that is still down.
+            break
+        case .settled:
+            handReleased()
+        }
+    }
+
     /// The `follow` chip: back to the active line at once
     /// (`LyricsPanel.kt:604`). **Kept** — Android ships the chip as well as
     /// the timer, and four seconds is a long time to watch a list not move.
@@ -453,4 +485,33 @@ public final class MusicRoomLyricsModel {
             playing: anchor.playing
         )
     }
+}
+
+/// What a scroll phase means to the lyrics panel's **follow** state —
+/// ``MusicRoomLyricsModel/hand(_:)``.
+///
+/// Three cases and not two, because SwiftUI's `ScrollPhase` has a state
+/// between "a finger is moving the list" and "nobody is holding it", and
+/// round 2 of this unit mapped that state to the wrong one of the two
+/// (review 2, finding 3). Declared in the package so the mapping can be
+/// tested — `ScrollPhase` itself is SwiftUI's, the view's to name.
+public enum MusicLyricsHandPhase: Sendable, Equatable {
+
+    /// A finger is dragging the list: `ScrollPhase.interacting`, which is
+    /// Android's `DragInteraction.Start` (`LyricsPanel.kt:472`).
+    case moving
+
+    /// A finger is **down and has not moved** the list:
+    /// `ScrollPhase.tracking`. Neither of Android's two branches — nothing
+    /// has been dragged yet, so nothing is paused, and nothing has been let
+    /// go of, so nothing is counting down.
+    case resting
+
+    /// Nobody is holding the list: `ScrollPhase.idle`, `.decelerating` after
+    /// a flick, or `.animating` from the panel's own `scrollTo`. Android's
+    /// `DragInteraction.Stop`/`Cancel` (`LyricsPanel.kt:476-483`) — and
+    /// ``MusicRoomLyricsModel/handReleased()`` refuses a release that follows
+    /// no pause, which is what keeps the panel's own programmatic scroll from
+    /// arming a resume for a drag that never happened.
+    case settled
 }

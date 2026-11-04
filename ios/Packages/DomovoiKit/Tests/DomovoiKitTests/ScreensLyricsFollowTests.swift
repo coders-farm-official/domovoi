@@ -453,4 +453,98 @@ final class ScreensLyricsFollowTests: XCTestCase {
         XCTAssertFalse(rig.model.following)
         XCTAssertEqual([], rig.resumeWaits.current)
     }
+
+    // MARK: - what each scroll phase means
+
+    /// ``MusicRoomLyricsModel/hand(_:)`` maps a moving finger to the pause
+    /// and a settled list to the release.
+    ///
+    /// The mapping is in the model rather than at the `onScrollPhaseChange`
+    /// call site for exactly this: round 2 wrote it in the view, where
+    /// nothing in this file could reach it, and it was wrong
+    /// (``testAFingerRestingOnTheListArmsNothing``).
+    func testTheMovingAndSettledPhasesArePauseAndRelease() async {
+        let rig = rig(parkTheResume: false)
+        rig.model.start()
+        defer { rig.model.stop() }
+
+        rig.model.hand(.moving)
+        XCTAssertFalse(rig.model.following, "`.interacting` did not pause following")
+        XCTAssertEqual([], rig.resumeWaits.current, "a finger on the list started a timer")
+
+        rig.model.hand(.settled)
+        await settleUntil({ rig.model.following }, "the resume after a settled list")
+        XCTAssertEqual(
+            [MusicRoomLyricsModel.followResumeMs], rig.resumeWaits.current,
+            "the list settling started no four-second resume"
+        )
+        XCTAssertEqual(1, rig.resumesThatWoke.current)
+    }
+
+    /// **A finger resting on the list arms nothing** — `ScrollPhase.tracking`
+    /// is a finger down that has not moved the list.
+    ///
+    /// This is review 2's finding 3, and it is the one case in this file that
+    /// would have been red before it. Round 2's view read
+    /// `phase == .interacting ? handPaused() : handReleased()`, so `.tracking`
+    /// — which a real gesture reports *between* `.interacting` runs, and
+    /// before the first one — went down the release branch and armed the
+    /// four-second resume with a finger still on the glass. The model's
+    /// post-sleep `!handDown` guard cannot catch it: `handReleased()` is the
+    /// call that clears `handDown`, so by the time the sleep returns the
+    /// guard sees an empty list and lets the resume through.
+    ///
+    /// Measured on the counter and not only on `following`, for the reason
+    /// this file's header gives: a resume that is merely parked and a resume
+    /// that was never started look the same from outside, and
+    /// ``Rig/resumesThatWoke`` is what tells them apart. `parkTheResume:
+    /// false` here, so a resume that *was* armed returns at once and the
+    /// counter moves — there is no window in which this case wins a race.
+    func testAFingerRestingOnTheListArmsNothing() async {
+        let rig = rig(parkTheResume: false)
+        rig.model.start()
+        defer { rig.model.stop() }
+
+        // The whole of a drag that has not been let go of: the finger lands,
+        // moves the list, and then holds still on it.
+        rig.model.hand(.resting)
+        rig.model.hand(.moving)
+        rig.model.hand(.resting)
+        await letTheResumeWakeIfItLives()
+
+        XCTAssertFalse(
+            rig.model.following,
+            "following came back with a finger still on the list"
+        )
+        XCTAssertEqual(
+            [], rig.resumeWaits.current,
+            "`.tracking` armed the four-second resume under a finger that is "
+                + "still down — the release branch it must not take"
+        )
+        XCTAssertEqual(0, rig.resumesThatWoke.current)
+
+        // And the gesture ending still works: `.tracking` is inert, not a
+        // state the panel can get stuck in.
+        rig.model.hand(.settled)
+        await settleUntil({ rig.model.following }, "the resume after the finger lifts")
+        XCTAssertEqual([MusicRoomLyricsModel.followResumeMs], rig.resumeWaits.current)
+    }
+
+    /// And a rest on its own — a tap that never became a drag — neither
+    /// pauses following nor starts anything.
+    ///
+    /// `.tracking` with no `.interacting` after it is what a tap on the
+    /// lyrics list reports, and a tap is not a scroll: Android pauses on
+    /// `DragInteraction.Start` and a tap raises none.
+    func testARestWithNoDragLeavesFollowingAlone() async {
+        let rig = rig(parkTheResume: false)
+        rig.model.start()
+        defer { rig.model.stop() }
+
+        rig.model.hand(.resting)
+        await letTheResumeWakeIfItLives()
+        XCTAssertTrue(rig.model.following, "a tap on the list turned following off")
+        XCTAssertEqual([], rig.resumeWaits.current)
+        XCTAssertEqual(0, rig.resumesThatWoke.current)
+    }
 }

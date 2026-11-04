@@ -43,11 +43,27 @@ extension StubHouseUITests {
     /// the *heading* comes from the roster, so waiting on a story would make
     /// every case in this file also a test of the items read — and report a
     /// failed items read as "News never drew".
+    /// - Parameter watchingTheProcess: poll `app.state` once a second while
+    ///   waiting for the heading and print the wall-clock instant it first
+    ///   stops being `.runningForeground`, with the seconds since the launch
+    ///   returned. **Off by default**, and passed only by
+    ///   ``testNews_PassesApplesAccessibilityAudit()``: it is a diagnostic
+    ///   for the one case that keeps losing its process, and a per-second
+    ///   poll in all thirteen would cost the run for nothing.
+    ///
+    ///   The print is the whole point. The failure gives a time in the
+    ///   xcodebuild log (`t = …`) and the Simulator's unified log gives wall
+    ///   clock, and nothing yet lines the two up — so a clean `simlog.txt`
+    ///   cannot be read as "no termination reason" rather than "the window
+    ///   was wrong". It changes no assertion: the heading is still waited for
+    ///   to the same 40 seconds, and a process that dies is still reported
+    ///   by the wait, not by this.
     @MainActor
     func openNews(
         _ mode: String = StubHouseUITests.ordinaryTypeSize,
         port: Int = 6601,
-        delay: Double? = nil
+        delay: Double? = nil,
+        watchingTheProcess: Bool = false
     ) -> (app: XCUIApplication, landed: Bool) {
         let app = launch(
             mode: mode,
@@ -56,7 +72,47 @@ extension StubHouseUITests {
             pushDelay: delay ?? Self.pushDelay
         )
         let heading = newsElement(app, "news-person-heading")
-        return (app, heading.waitForExistence(timeout: 40))
+        guard watchingTheProcess else {
+            return (app, heading.waitForExistence(timeout: 40))
+        }
+
+        // One second at a time to the same 40, so the poll itself is what
+        // notices the death rather than the 40-second wait reporting it
+        // afterwards with no instant attached.
+        let began = Date()
+        let stamp = ISO8601DateFormatter()
+        stamp.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        print("NEWS-WATCH launch returned at \(stamp.string(from: began))")
+        for _ in 0..<40 {
+            // **The state before the query, every time.** A query resolved
+            // against a process that has gone is what raises `Failed to
+            // resolve query: Application … is not running`, so asking the
+            // tree first would throw on the very second this is here to
+            // timestamp.
+            guard app.state == .runningForeground else {
+                print(
+                    "NEWS-WATCH app.state is \(app.state.rawValue) at "
+                        + "\(stamp.string(from: Date())), "
+                        + "+\(Date().timeIntervalSince(began))s — line this up "
+                        + "against the Simulator's unified log"
+                )
+                // Returned, not asked again: a query against a process that
+                // is gone is the `Failed to resolve query: Application … is
+                // not running` this case has been dying on, and raising it
+                // from a diagnostic would hide the thing the diagnostic is
+                // for. The caller fails on `landed`, as it always has.
+                return (app, false)
+            }
+            if heading.waitForExistence(timeout: 1) {
+                print(
+                    "NEWS-WATCH heading at \(stamp.string(from: Date())), "
+                        + "+\(Date().timeIntervalSince(began))s"
+                )
+                return (app, true)
+            }
+        }
+        print("NEWS-WATCH no heading in 40s, and the app never left the foreground")
+        return (app, false)
     }
 
     /// Any element with this identifier, whatever type it reports as.
@@ -846,9 +902,47 @@ extension StubHouseUITests {
         // seconds *before* News was ever built, and no line of this screen's
         // code had run. The twelve sibling cases in the same run reached
         // `news-person-heading` through this very helper, case 204 of 372 in
-        // a two-hour Simulator. Nothing here is changed for it: this is the
-        // crowd death I1H2-SIM-REPORT.md run 11 could not pin, and a case
-        // cannot be written around a process that is taken from it.
+        // a two-hour Simulator.
+        //
+        // **And it is not "the crowd death of a two-hour Simulator", which
+        // is what this comment used to say.** Corrected 2026-11-04 against
+        // the I002 diagnosis, which measured three more runs:
+        //
+        // * **R005 was a 13-case, News-only run** and this was still the
+        //   only case that died. In the 372-case trains I001 and I002 it was
+        //   also the only one. What stays constant is *this case*, not where
+        //   it sits in a run or how old the Simulator is — so a crowd is not
+        //   what is killing it.
+        // * **The hand-off from `testNews_Favoriting…` is not it either.**
+        //   R005's process 1 was launched straight after Favoriting's and it
+        //   survived, reaching the heading and running the audits. The
+        //   process that died was the one after *this case's own*
+        //   `app.terminate()`.
+        // * **The clock is tight and the cause is not the audit.** Measured
+        //   from Running Foreground to the lost connection: I001 10.0s,
+        //   I002 10.2s, R005 process 2 10.1-10.6s — while every process that
+        //   survives finds `news-person-heading` at RF + 12.1s. The deaths
+        //   come 1.5 to 2 seconds *before* the seeded push, so no News code
+        //   has run. R004's process 3 is the exception at RF + 12.6s, after
+        //   News had drawn, so it is not one fixed clock.
+        // * **"External SIGKILL" is not established.** An uncaught ObjC
+        //   exception kills the app at once and writes no crash report
+        //   either — the `ordinaryTypeSize` note in `StubHouseUITests.swift`
+        //   documents one this rig has already had. The video and the
+        //   missing crash report fit that as well as a kill from outside,
+        //   which means **the cause may be in the app**, on Home's path.
+        //
+        // Nothing here is changed for it, because there is nothing honest to
+        // change yet: no assertion of this case has run when it dies. What
+        // was added is a **measurement** — `watchingTheProcess: true` on the
+        // first `openNews` below, which prints the wall-clock instant the
+        // process stopped being `.runningForeground` so the death can be
+        // lined up against the Simulator's unified log. Capturing that log is
+        // `design-notes/ios/stubhouse/stub_run.sh`'s, outside this repo and
+        // outside this unit's files; the predicate to use, and the
+        // `Terminating app due to uncaught exception` clause that separates
+        // an in-app exception from a RunningBoard or jetsam termination, are
+        // in the I002 diagnosis and in this unit's REPORT.
         //
         // **R004 lost the third launch, and the run says it was not this
         // case's doing.** The page pass classified (`floor=0 rest=0 leaves an
@@ -892,7 +986,11 @@ extension StubHouseUITests {
 
         // ### 1. The page, as it lands.
         do {
-            let (app, landed) = openNews()
+            // `watchingTheProcess` only here: this is the launch the process
+            // keeps dying in, and the print is what lets the instant be
+            // lined up against the Simulator's unified log (the I002 note
+            // above).
+            let (app, landed) = openNews(watchingTheProcess: true)
             defer { app.terminate() }
             if !landed { mishaps.append("News never drew a person's heading") }
             evidence(app, "news-12-audited")

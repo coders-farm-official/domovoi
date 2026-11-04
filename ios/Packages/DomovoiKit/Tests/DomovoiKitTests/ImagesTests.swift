@@ -810,36 +810,19 @@ final class ImagesTests: XCTestCase {
     /// the fixture, so that a seed edited to stop discriminating — the word
     /// `quicksilver` moved into a history row, row 22 given a height — fails
     /// here rather than quietly turning a UI case into a tautology.
-    ///
-    /// **The two seeds below changed on 2026-11-03** — `kind` from `txt2img`
-    /// to `generate` and the finished `status` from `completed` to `done` —
-    /// and they are the only lines in this file its owner did not write. They
-    /// are copies of `fixtures/images.py`, and that fixture moved: the
-    /// plugin's own schema `CHECK`s `kind` to `generate|pull` and `status` to
-    /// `pending|running|done|failed|cancelled`
-    /// (`domovoi-plugin-imagegen/migrations/V001__imagegen_schema.sql`,
-    /// verified for Kamron's answers 6 and 25), so `txt2img` and `completed`
-    /// are words no version of the plugin has ever sent. Nothing about the
-    /// behaviour changes — both fell through `ImagesJobStatus.other(_:)`
-    /// before and `done` does the same — but a copy of a fixture has to be a
-    /// copy. The rest of that verification is in `ScreensImagesShapeTests`,
-    /// which the `screens` unit owns; the three seeds above are hand-written
-    /// rather than copied and still say `txt2img`/`completed`, which is
-    /// logged under "Needs a shared change" rather than edited here
-    /// (BATCH-RULES §1).
     func testTheFixturesOwnRowsDriveTheLaneTheMetaLineAndTheTiles() throws {
         // `fixtures/images.py:151-196`.
         let fixtureJobs = """
         {"jobs":[
-        {"id":7,"kind":"generate","model":"sdxl-turbo","prompt":"a brass orrery on a velvet desk",
+        {"id":7,"kind":"txt2img","model":"sdxl-turbo","prompt":"a brass orrery on a velvet desk",
          "params":{"width":1024,"height":1024,"steps":28,"seed":41},
          "status":"running","pct":42,"status_text":"sampling step 7 of 20"},
-        {"id":8,"kind":"generate","model":"flux-schnell","prompt":"a cathedral of folded paper",
+        {"id":8,"kind":"txt2img","model":"flux-schnell","prompt":"a cathedral of folded paper",
          "params":{"width":512,"height":512,"steps":4,"seed":9001},
          "status":"failed","error":"the engine ran out of memory"},
-        {"id":9,"kind":"generate","model":"sdxl-turbo","prompt":"a quicksilver tide at dusk",
+        {"id":9,"kind":"txt2img","model":"sdxl-turbo","prompt":"a quicksilver tide at dusk",
          "params":{"width":768,"height":768,"steps":20,"seed":5},
-         "status":"done","pct":100,"result":{"images":["tide-01.png"]}}]}
+         "status":"completed","pct":100,"result":{"images":["tide-01.png"]}}]}
         """
         let jobs = try decode(ImagesJobList.self, fixtureJobs).jobs
         XCTAssertEqual(3, jobs.count, "the fixture's three rows, or this test is about something else")
@@ -864,15 +847,15 @@ final class ImagesTests: XCTestCase {
         // `fixtures/images.py:199-247`.
         let fixtureHistory = """
         {"history":[
-        {"id":21,"kind":"generate","model":"sdxl-turbo",
+        {"id":21,"kind":"txt2img","model":"sdxl-turbo",
          "prompt":"a kingfisher on a frozen reed",
          "params":{"width":1024,"height":1024,"steps":28,"seed":773451},
-         "status":"done","pct":100,
+         "status":"completed","pct":100,
          "result":{"images":["kingfisher 01.png","kingfisher-02.png","kingfisher-03.png","kingfisher-04.png"]}},
-        {"id":22,"kind":"generate","model":"flux-schnell",
+        {"id":22,"kind":"txt2img","model":"flux-schnell",
          "prompt":"a tin robot watering a window box",
          "params":{"width":512,"height":null,"steps":4,"seed":null},
-         "status":"done","pct":100,"result":{"images":["robot-01.png"]}}]}
+         "status":"completed","pct":100,"result":{"images":["robot-01.png"]}}]}
         """
         let history = try decode(ImagesHistoryList.self, fixtureHistory).history
         XCTAssertEqual([21, 22], history.map(\.id))

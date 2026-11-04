@@ -74,17 +74,16 @@ final class HealthGuardTests: XCTestCase {
     /// Both routes 404: a server older than the container guard. `loaded`,
     /// tier none.
     ///
-    /// **The two expectations below changed on 2026-11-03**, and they are the
-    /// only lines this file's owner did not write: `guardCheck(_:)` used to
-    /// answer `every container Domovoi expects looks right` for a house with
-    /// no guard at all — the collapse this case recorded — and Kamron's
-    /// answers 7 and 24 are `not checked yet` on both apps. The engine's own
-    /// branch is untouched and still Android's (`loaded`, tier `.none`); what
-    /// changed is ``ContainerGuardState/checkedSomething``, which the check
-    /// now asks instead of `loaded`. The name is kept, and the rest of the
-    /// fix is pinned next door in `ScreensHealthGuardTests` — a file the
-    /// `screens` unit owns, because this one is not its to edit
-    /// (BATCH-RULES §1).
+    /// **The two expectations below are the only lines in this file the
+    /// `screens` unit changed** (2026-11-03), and it is not its file to edit
+    /// (BATCH-RULES §1): Kamron's answers 7 and 24 are `not checked yet` for
+    /// a house with no container guard, which is the collapse this case used
+    /// to record as green. The engine's own branch is untouched and still
+    /// Android's (`loaded`, tier `.none`) — what changed is
+    /// ``ContainerGuardState/checkedSomething``. Reverting the two values
+    /// hands the train a failing case, so it is left here for the
+    /// orchestrator and the fix itself is pinned next door in
+    /// `ScreensHealthGuardTests`, which that unit owns.
     func testAServerWithNoGuardIsLoadedAndEmpty() async {
         let result = await outcome(
             household: .answered(status: 404), summary: .answered(status: 404)

@@ -22,8 +22,18 @@ import SwiftUI
 /// This is a shape, not a style, and it is what the five `Contrast failed`
 /// this screen carried for four trains were: see ``chip(_:stacked:)``. The
 /// avatar bubble that used to be drawn over the pill is **gone** — Kamron's
-/// answer 39, 2026-11-03 — which is also Android's shape for a chip row
-/// (`NewsScreen.kt`) once its gradient avatars are not ported (answer 37).
+/// answer 39, 2026-11-03.
+///
+/// **It is a divergence from Android, not a port of it**, and the question
+/// Kamron answered said otherwise. `PeopleChipRow` draws
+/// `AvatarBubble(p.name, 20)` inside the chip's own `Row`
+/// (`NewsScreen.kt:139`), and the expanded rail draws
+/// `AvatarBubble(p.name, 32)` (`:185`), so Android has the bubble in both
+/// branches. Answer 39's own wording — "which is Android's shape
+/// (`NewsScreen.kt`)" — was wrong about that, and the answer is still the
+/// spec (BATCH-RULES: his answers win). What follows from the correction is
+/// that answer 39 needs an **Android half** like answers 2 and 24 got, and
+/// it is logged as one in this unit's DECISIONS.md.
 struct NewsPeopleChipRow: View {
 
     let news: NewsModel
@@ -110,8 +120,14 @@ struct NewsPeopleChipRow: View {
     /// News chip`. It was the row's only colour, it carried no information
     /// that the name beside it did not — the initial *is* the first letter of
     /// the name — and with the five-hue avatar declined (answer 37) there was
-    /// nothing left for it to say. A chip row of plain pills is Android's own
-    /// shape for the compact branch, and it is every other pill in this app.
+    /// nothing left for it to say.
+    ///
+    /// **Android keeps its bubble**, so this is an unlabelled divergence no
+    /// longer: `NewsScreen.kt:139` is `AvatarBubble(p.name, 20)` inside the
+    /// chip's `Row`, and `:185` is the rail's `AvatarBubble(p.name, 32)`.
+    /// What is true is the other half — a chip row of plain pills is every
+    /// other pill in **this** app, and it is the shape that audits clean.
+    /// The Android half of answer 39 is logged in DECISIONS.md.
     ///
     /// It also removes the last thing between this row and an audit it cannot
     /// explain: a filled circle inside a capsule was two overlapping fills

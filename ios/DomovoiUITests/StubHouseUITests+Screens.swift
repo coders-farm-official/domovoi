@@ -443,16 +443,33 @@ extension StubHouseUITests {
     ///
     /// The bubble was the row's only colour and the last thing in it an
     /// auditor could sample and misattribute — five `Contrast failed` over
-    /// four trains, written up in `StubHouseUITests+News.swift`. Dropping it
-    /// is Android's shape for a compact chip row once its gradient avatars
-    /// are not ported (answer 37).
+    /// four trains, written up in `StubHouseUITests+News.swift`.
     ///
-    /// Asserted two ways, because each catches a different way of getting it
-    /// wrong: the chips expose no text leaf at all
-    /// (``newsChipRowIsOneElement(_:)``, which the audit case also pins), and
-    /// no single-letter element exists on the page — which is what a bubble
-    /// drawn *outside* a button's label would leave behind, and which the
-    /// leaf count on its own would miss.
+    /// **This is a divergence from Android, not a port of it.** Answer 39's
+    /// question said dropping the bubble "is Android's shape
+    /// (`NewsScreen.kt`)"; it is not. `NewsScreen.kt:139` draws
+    /// `AvatarBubble(p.name, 20)` inside the chip's `Row` and `:185` draws
+    /// the rail's `AvatarBubble(p.name, 32)`. Kamron's answer is still the
+    /// spec, and the Android half of it is logged in this unit's
+    /// DECISIONS.md — the same way answers 2 and 24 got one.
+    ///
+    /// Asserted three ways, because each catches a different way of getting
+    /// it wrong, and the first two cannot see what the third does:
+    ///
+    /// 1. the chips expose no text **leaf** at all
+    ///    (``newsChipRowIsOneElement(_:)``, which the audit case also pins) —
+    ///    a bubble back **inside** the button's label;
+    /// 2. nothing in the whole tree is drawn **over** a chip: no element's
+    ///    frame lies inside a chip's frame. That is the exact shape round 3
+    ///    shipped and this one deleted — `StaticText 'K' {{28,225.3},{28,28}}`
+    ///    inside `Button 'Kamron' {{16,217.3},{113,44}}` — and it is
+    ///    letter-blind, so it fails on a bubble that draws a glyph, a digit
+    ///    or nothing nameable at all;
+    /// 3. no initial of the roster exists as a standalone element.
+    ///    ``ScreensWords/newsInitials`` is the **whole** roster's, because
+    ///    the chip row is driven by the People seed's four people and not by
+    ///    `fixtures/news.py`'s two (review 2, finding 5): a bubble left on
+    ///    either `Alex` chip used to pass both halves of this case.
     @MainActor
     func testScreens_TheNewsPersonChipsHaveNoAvatarBubble() throws {
         resetNewsHouse()
@@ -466,8 +483,39 @@ extension StubHouseUITests {
             "the chip row is not one element per chip: \(complaints.joined(separator: "; "))"
         )
 
-        // A one-character element is what a bubble is whether it is inside a
-        // button's label or drawn over the pill.
+        // 2. Nothing drawn over a chip. The chips' own frames come from the
+        //    identifiers `newsChipRowIsOneElement` just proved exist, so a
+        //    missing chip cannot make this half vacuous.
+        //
+        //    `allElementsBoundByIndex` once, not a query per chip: one
+        //    snapshot of the tree, and `exists` on each because an element
+        //    resolved from a stale snapshot answers a zero frame.
+        let chips: [(name: String, box: CGRect)] = ScreensWords.newsChipPeople
+            .compactMap { name in
+                let chip = app.buttons["news-chip-\(name)"]
+                return chip.exists ? (name, chip.frame) : nil
+            }
+        XCTAssertEqual(
+            ScreensWords.newsChipPeople.count, chips.count,
+            "a chip is missing, so the overlay half of this case checked nothing"
+        )
+        for text in app.staticTexts.allElementsBoundByIndex where text.exists {
+            let box = text.frame
+            // A zero-area frame is in no rectangle in any useful sense, and
+            // `CGRect.contains` says a zero-height rect is contained by
+            // anything that spans its origin.
+            guard box.width > 0, box.height > 0 else { continue }
+            for chip in chips where chip.box.contains(box) {
+                XCTFail(
+                    "something is drawn over the \(chip.name) chip — "
+                    + "`\(text.label)` at \(box), which is the shape an "
+                    + "avatar bubble drawn outside the button's label leaves "
+                    + "behind"
+                )
+            }
+        }
+
+        // 3. And no initial of the roster stands on its own anywhere.
         for initial in ScreensWords.newsInitials {
             XCTAssertFalse(
                 app.staticTexts[initial].exists,
@@ -576,9 +624,23 @@ enum ScreensWords {
     /// forgotten).
     static let warnAgain = "warn again"
 
-    /// The initials of the People seed's whole roster — Kamron and Chevy,
-    /// the two people in `fixtures/news.py` — which is what an avatar bubble
-    /// would have drawn. Both, not a sample: a bubble dropped from one chip
-    /// and left on the other is a defect this would otherwise miss.
-    static let newsInitials = ["K", "C"]
+    /// The people the chip row draws, in `last_seen_at DESC` order — the
+    /// **People** seed's roster (`fixtures/people.py:95,105,115,128`), which
+    /// is what News defers to. Not `fixtures/news.py`'s, and not a sample:
+    /// `newsChipRowIsOneElement(_:)` has iterated these same four since it
+    /// was written, and the leaf that cost the fifth `Contrast failed`
+    /// belonged to the last of them.
+    ///
+    /// The fourth name's trailing space is the seed's, kept exactly: the
+    /// chip's identifier is built from `NewsPerson.displayName`, so a name
+    /// trimmed here would look for a chip that is not there.
+    static let newsChipPeople = ["Kamron", "Chevy", "Alex", "alex "]
+
+    /// The initials of that whole roster — what an avatar bubble would have
+    /// drawn (``NewsPerson/initial``: trimmed, first character, uppercased,
+    /// so both `Alex` and `alex ` give `A`). Deduplicated, and all of them
+    /// rather than a sample: round 2 of this unit denied `K` and `C` only,
+    /// described as "the two people in `fixtures/news.py`", so a bubble left
+    /// on either `Alex` chip passed (review 2, finding 5).
+    static let newsInitials = ["K", "C", "A"]
 }

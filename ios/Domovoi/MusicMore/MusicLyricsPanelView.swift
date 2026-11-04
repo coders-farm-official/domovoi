@@ -205,18 +205,29 @@ struct MusicLyricsPanelView: View {
             // outlives this `ScrollView`, because a `Task` started here dies
             // with the panel and a lazy row never holds one (NIGHT-RULES §3).
             //
-            // `.interacting` is the one phase that means a finger is on the
-            // list, which is Android's `DragInteraction.Start`
-            // (`LyricsPanel.kt:472`); every other phase — `.decelerating`
-            // after a flick, `.animating` from the panel's own `scrollTo`
-            // below, `.idle` — is its `Stop`. The model refuses a release
-            // that follows no pause, so the programmatic scroll cannot start
-            // a resume for a drag that never happened.
+            // **Three phases, not two.** `.interacting` is a finger moving
+            // the list (Android's `DragInteraction.Start`,
+            // `LyricsPanel.kt:472`), and `.idle`, `.decelerating` after a
+            // flick and `.animating` from the panel's own `scrollTo` below
+            // are its `Stop`. `.tracking` is **neither**: a finger down that
+            // has not moved the list yet.
+            //
+            // Round 2 wrote this as `.interacting` against everything else,
+            // which sent `.tracking` down the release branch and armed the
+            // four-second resume with a finger still on the glass — and the
+            // model's post-sleep `!handDown` guard cannot catch that,
+            // because the release is the call that clears `handDown`
+            // (review 2, finding 3). The mapping is
+            // ``MusicLyricsHandPhase``'s now, in the model, where
+            // `ScreensLyricsFollowTests` can hold it; what is left here is
+            // the one translation only a view can do.
             .onScrollPhaseChange { _, phase in
                 if phase == .interacting {
-                    lyrics.handPaused()
+                    lyrics.hand(.moving)
+                } else if phase == .tracking {
+                    lyrics.hand(.resting)
                 } else {
-                    lyrics.handReleased()
+                    lyrics.hand(.settled)
                 }
             }
             .onChange(of: lyrics.activeIndex) { _, now in
