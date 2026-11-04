@@ -220,9 +220,14 @@ struct VideoFeedView: View {
             switch slot {
             case .feed(let which):
                 if let feed {
-                    VideoFeedSheetView(which: which, feed: feed, engine: engine) { entry in
-                        save(entry)
-                    }
+                    VideoFeedSheetView(
+                        which: which,
+                        feed: feed,
+                        engine: engine,
+                        onSave: { entry in save(entry) },
+                        saveState: videos.saves.state,
+                        onCancelSave: { videos.saves.cancel() }
+                    )
                 }
             case .share(let url, _):
                 FileShareSheet(url: url)
@@ -259,7 +264,10 @@ struct VideoFeedView: View {
     private func save(_ entry: FeedVideo) {
         guard let row = open.videos.first(where: { $0.id == entry.key }) else { return }
         videos.saveToDevice(row)
-        feed?.closeSheet()
+        // **The sheet is not closed.** It is where the percentage and the
+        // stop are drawn, and ``openSheet`` replaces it with the share sheet
+        // the moment the file is ready. The reasoning is on the options row
+        // in `VideoFeedSheets.swift`.
     }
 
     // MARK: - building it

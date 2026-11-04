@@ -36,10 +36,12 @@ public enum TransferStrings {
     /// sentence, and an X beside a filename is the shape of a delete.
     public static let cancel = "stop saving"
 
-    /// What a cancelled save says. Not an error — the person asked for it —
-    /// so the control simply goes back to offering the save, and this is the
-    /// toast that says the half-written copy is gone.
-    public static let cancelled = "stopped saving — nothing was kept"
+    // There is **no "stopped saving" sentence** here, and there was one
+    // while this file was being written. A cancel is not an error — the
+    // person asked for it — and a toast confirming a button somebody has
+    // just pressed is noise on a phone. ``SaveToDeviceModel/cancel()`` goes
+    // back to `idle`, which is the control offering the save again, and that
+    // is the whole report.
 
     /// A save that could not be made. `why` is ``FilesModel/why(_:)``'s
     /// wording, which is the same sentence every other failed read on these
@@ -52,10 +54,9 @@ public enum TransferStrings {
 
     // MARK: - the upload side
 
-    /// While a phone file is on its way up and its size is known.
-    ///
-    /// Only a percent, because the row's own name is beside it: the whole
-    /// sentence is ``PhoneMediaStrings/uploadingTo(_:_:)``'s toast, said once
-    /// when the upload starts.
-    public static func uploadPercent(_ percent: Int) -> String { "\(percent)%" }
+    // Nothing. The upload's own percentage is
+    // ``PhoneMediaStrings/uploadingLabel(_:)`` — `uploading 42%` — which is
+    // where every other word on the phone-media rows lives and is what the
+    // 48-point row's control reads out. A second wording for the same number
+    // here would be two sentences for one state.
 }

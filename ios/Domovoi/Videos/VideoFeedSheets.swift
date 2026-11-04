@@ -13,10 +13,21 @@ struct VideoFeedSheetView: View {
     let feed: VideoFeedModel
     let engine: FeedEngine
 
-    /// `save to device` (`VideoFeed.kt:459`). The caller does the lookup from
-    /// a ``FeedVideo`` to the row and closes the sheet, because the row is
-    /// the feed view's to find.
+    /// `save to device` (`VideoFeed.kt:459`). The caller does the lookup
+    /// from a ``FeedVideo`` to the row, because the row is the feed view's to
+    /// find — and it does **not** close this sheet, for the reason the
+    /// options row below gives.
     let onSave: (FeedVideo) -> Void
+
+    /// How the save is getting on, so the row can draw it.
+    ///
+    /// Passed in rather than read from a model here: this view is handed the
+    /// feed and the engine and owns neither, and a save belongs to the
+    /// screen (``VideosModel/saves``) because it outlives any one sheet.
+    let saveState: SaveToDeviceModel.State
+
+    /// Stop the save. See the options row.
+    let onCancelSave: () -> Void
 
     var body: some View {
         NavigationStack {
@@ -88,12 +99,25 @@ struct VideoFeedSheetView: View {
             // fling that moved the page while the sheet was open moved the
             // title too. Nothing is drawn when there is no video, which is
             // the state a feed emptied underneath its own sheet is in.
+            //
+            // **The sheet stays open while it saves, and this row becomes the
+            // progress.** Android closes its sheet and lets the system draw a
+            // download notification with a cancel in it
+            // (`DeviceDownloads.enqueueWithToken`); iOS has no such
+            // notification and no system downloader to hand the request to,
+            // so a sheet that closed on the tap would leave a film of any
+            // size coming down with nothing on screen saying so and no way to
+            // stop it — a control that cannot do what it says
+            // ([[no-misleading-controls]]). ``SaveToDeviceButton`` draws the
+            // tap, the percentage and the stop from one state, and when the
+            // file is ready the screen's own binding swaps this sheet for the
+            // share sheet (``VideoFeedView/openSheet``).
             if let video = feed.showing {
-                Button {
-                    onSave(video)
-                } label: {
-                    Label(TransferStrings.saveToDevice, systemImage: "square.and.arrow.down")
-                }
+                SaveToDeviceButton(
+                    state: saveState,
+                    onTap: { onSave(video) },
+                    onCancel: onCancelSave
+                )
             }
         }
         .listStyle(.plain)

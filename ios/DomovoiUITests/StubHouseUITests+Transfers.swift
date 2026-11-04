@@ -258,6 +258,23 @@ extension StubHouseUITests {
         XCTAssertTrue(offered, "the feed's options sheet does not offer a save to device")
         save.tap()
 
+        // **The sheet stays open and becomes the progress.** Android closes
+        // its sheet and lets the system notification carry the download; iOS
+        // has no such notification, so a sheet that closed on the tap would
+        // leave a film coming down with nothing on screen and no way to stop
+        // it. The options row is `SaveToDeviceButton`, so the same stop that
+        // Files draws is here.
+        let saving = app.descendants(matching: .staticText)
+            .matching(NSPredicate(format: "label BEGINSWITH %@", "saving \""))
+            .firstMatch
+        let drawn = saving.waitForExistence(timeout: 20)
+        evidence(app, "48-feed-saving")
+        XCTAssertTrue(drawn, "the feed's save says nothing while it works")
+        XCTAssertTrue(
+            app.buttons["stop saving"].exists,
+            "a film coming down from the feed has no way out"
+        )
+
         XCTAssertTrue(shareSheetAppeared(app, "a video's save"),
                       "the video was fetched and never offered")
         evidence(app, "48-feed-video-saved")
