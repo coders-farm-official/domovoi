@@ -639,6 +639,51 @@ extension StubHouseUITests {
     /// Read the screenshots in `att/` before believing a named finding. Twice
     /// on this track the picture attributed a failure two tree diffs could
     /// not — and once, above, it refuted one of mine.
+    ///
+    /// ### Train I004's red, and where it was placed
+    ///
+    /// The bare run returned one `Contrast failed … | element: nil` and no cut
+    /// text leaf to allow it against, so it failed — which is exactly what the
+    /// previous round tightened the allowance to make happen ("an unknown to
+    /// report, not an allowance"). The report has now been read. **What the
+    /// train's own logs settle is the panel; the leaf is narrowed to two
+    /// candidates and proven to be neither.**
+    ///
+    /// Settled, and both numbers are in the same train's logs:
+    ///
+    ///  * `About & updates` went through the **identical** shell in the same
+    ///    train, composed and bare, and returned **no contrast finding of any
+    ///    kind** in either run (8 findings and 4, all Dynamic Type). App
+    ///    layout returned 3 and 1. Same bars, same `Settings` heading, same
+    ///    subtitle: the difference is the panel.
+    ///  * The bare tree holds `label: '4'` at `{{30.0, 513.5}, {7.7, 14.3}}` —
+    ///    the frame I002 named when this very finding last carried an element.
+    ///
+    /// Not settled, and the frame match is not proof of it: a second candidate
+    /// has the same signature and was not examined when the ordinal was
+    /// changed. The bare run's chip row sits 12 points lower than the composed
+    /// run's, which puts `Images` and `News` at y = 773.2 against a painted
+    /// edge at 770 — **wholly outside the viewport**, where Apple reports a
+    /// contrast failure with no element to name, and where no allowance counts
+    /// them. The same chips have carried a contrast finding on this panel
+    /// twice: S005's cut slab of button fill (`1.00:1`, measured, and the
+    /// reason `SystemSettingsSpareButtonStyle` is an outline) and this train's
+    /// composed run, which named `Podcasts` at `(62.33, 760.83, 70.33,
+    /// 20.33)`. Both candidates produce exactly one anonymous finding in the
+    /// bare run, so I004's counts cannot separate them.
+    ///
+    /// What was done is therefore a **controlled change, not a fix**:
+    /// `SystemSettingsLayoutPanel.swift`'s ordinal now draws in
+    /// `Color.primary` — the step the previous round wrote down for "if `4` is
+    /// flagged again" — which makes the ordinal near-black and so removes it
+    /// as a variable. **No allowance moved**: the bare run is still allowed
+    /// nothing, and the composed run is still allowed one anonymous contrast
+    /// per straddling text leaf, counted from the tree. If the finding returns
+    /// the ordinal is eliminated and the clipped chips are what is left; if it
+    /// goes away, it was the ordinal. Either way the
+    /// `SUSPECT ::` lines ``systemSettingsAudit(_:_:allowingLeavesCutByTheScrollEdge:)``
+    /// now prints list every text leaf of the page with its frame and whether
+    /// the painted edge cuts it or has left it out altogether.
     @MainActor
     func testSystemSettings_AppLayoutPassesApplesAccessibilityAudit() throws {
         guard #available(iOS 17.0, *) else { return }
@@ -756,6 +801,17 @@ extension StubHouseUITests {
     /// With text leaves only, App layout's bare allowance is 0 and its
     /// composed one is 2 (`Podcasts`, `Audiobooks`), which still covers that
     /// run's 2 anonymous findings. About passes `false` and is unaffected.
+    ///
+    /// **Leaves wholly past the edge are printed and not counted**, which is
+    /// the deliberate reason App layout's bare run is allowed nothing even
+    /// though it has two: the bare run's chips sit at y = 773.2 against an
+    /// edge at 770, so `Images` and `News` are outside the painted rectangle
+    /// altogether rather than halved by it. That they *could* be what Apple
+    /// reported anonymously is on the record — the class has produced findings
+    /// on this panel twice — but an allowance is only ever opened by a
+    /// measurement, and nothing here has yet measured these chips where they
+    /// are painted. Until something does, it stays an unknown to report, and
+    /// the `SUSPECT` lines name it for the next reader.
     @MainActor
     @available(iOS 17.0, *)
     func systemSettingsAudit(
@@ -800,6 +856,48 @@ extension StubHouseUITests {
             return false
         }
         for line in unexplained { print("AUDIT \(name) REST :: \(line)") }
+        // **The suspect list, printed only when there is something to pin on
+        // it.** An anonymous `Contrast failed` carries no frame, so the run it
+        // appears in says nothing about which leaf it came from, and the next
+        // red has to be readable against this one without another bisect.
+        //
+        // **Every text leaf of the page, not a size-filtered few.** This was
+        // `frame.height <= 16`, on the argument that Apple mis-clusters the
+        // smallest leaves — and that filter would have hidden the one leaf
+        // this very train named. I004's composed run reported
+        // `Contrast failed … element: type=48 label='Podcasts'
+        // frame=(62.33, 760.83, 70.33, 20.33)`: a **20.3-point** chip label,
+        // cut by the scroll edge. I002's `4` at `(30, 513.5, 7.7, 14.3)` is
+        // not the only attribution this screen has had, and height is not what
+        // the attributions have in common. Being unreadable where it was drawn
+        // is: `4` is a 7.7-point glyph that is mostly antialiasing, and
+        // `Podcasts` is a leaf the viewport had halved.
+        //
+        // So each leaf is printed with the two measurements that bear on that:
+        // its frame, and where it sits against the painted edge — `cut` for
+        // the straddle this screen already allows for, and **`unpainted` for a
+        // leaf wholly past the edge**, which is the candidate class the
+        // attribution of I004's bare finding did not examine (`Images` and
+        // `News` are at y = 773.2 against an edge at 770, entirely outside the
+        // rectangle the panel is painted in, and the same chips have carried a
+        // contrast finding twice on this panel — S005's cut slab of fill and
+        // this train's named `Podcasts`). Descendants of the page, so that the
+        // phone bar's own leaves — painted, below the edge, and no part of the
+        // scroller — are not mistaken for clipped ones.
+        if unexplained.contains(where: { $0.hasSuffix("| element: nil") }) {
+            let leaves = page?.staticTexts.allElementsBoundByIndex ?? []
+            for leaf in leaves where !leaf.label.isEmpty && leaf.frame.height > 0 {
+                let box = leaf.frame
+                var marks: [String] = []
+                if box.height <= 16 { marks.append("small") }
+                if straddles(box) { marks.append("cut by the painted edge") }
+                if box.minY >= bottom { marks.append("unpainted — wholly past it") }
+                print(
+                    "AUDIT \(name) SUSPECT :: \(Self.oneLine(leaf))"
+                        + (marks.isEmpty ? "" : " [\(marks.joined(separator: ", "))]")
+                )
+            }
+        }
         return (floor, unexplained, header.count)
     }
 

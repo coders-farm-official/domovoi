@@ -431,9 +431,75 @@ private struct SystemSettingsBarRow: View {
             // read it. If `4` is flagged again, the next step is
             // `Color.primary` for the ordinal alone — never a change to the
             // token, and never a weight whose effect cannot be measured.
+            //
+            // ### It was flagged again in train I004, and this is that step
+            //
+            // `testSystemSettings_AppLayoutPassesApplesAccessibilityAudit`
+            // went red on one `Contrast failed … | element: nil` in the
+            // **bare** run — the panel with the shell header stripped, where
+            // the measured allowance is zero because no text leaf straddles
+            // the scroll edge.
+            //
+            // Two measurements from that train put it in **this panel**, and
+            // both are in the run's own log. Neither puts it on this line: see
+            // "What this does not establish" below, which is the honest
+            // reading and the one the unit's REPORT.md carries.
+            //
+            //  * **It is this panel's, not the chrome's.** The same train
+            //    audited `About & updates` through the identical shell, twice:
+            //    `systemsettings-about` returned 8 findings and
+            //    `systemsettings-about-nobar` 4, and **not one of the twelve
+            //    was a contrast finding**. App layout returned 3 contrast
+            //    findings composed and 1 bare. Same navigation bar, same phone
+            //    bar, same `Settings` heading and subtitle; different panel.
+            //  * **The frame is this line's, to the decimal.** I002 named `4`
+            //    at `(30, 513.5, 7.7, 14.3)`, and I004's bare tree holds
+            //    `StaticText … {{30.0, 513.5}, {7.7, 14.3}}, label: '4'` —
+            //    this `Text`, at the same place, in a panel whose geometry had
+            //    not moved.
+            //
+            // Why `4` and not `1`, `2`, `3`, at one ink and one size: Apple's
+            // audit samples the element's pixels and clusters them. A
+            // 7.7 x 14.3-point `4` is two diagonals and a bar, so most of its
+            // coverage is antialiased mid-tone — a blend of `fgMuted` and the
+            // card, which reads worse than either. `1` is a single stem and
+            // `2`/`3` are curves with heavier stems. That is why Review 4 was
+            // right that the pixels did not vary across a pass and a fail:
+            // what varies is which glyph the sampler had to average.
+            //
+            // So the ordinal alone goes to `Color.primary`, exactly as written
+            // above. `fgMuted` is untouched here (the glyph beside it keeps
+            // it, and so does ``ShellStrings/alwaysFirst``) and untouched
+            // everywhere else.
+            //
+            // ### What this does not establish
+            //
+            // **This is a controlled change, not a proven fix.** The finding
+            // is anonymous, and a second leaf of this panel has the identical
+            // signature and was not examined before the colour was changed:
+            // in the bare run the spare chips sit 12 points lower than in the
+            // composed one, which leaves `Images` and `News` at y = 773.2
+            // against a painted edge at y = 770 — **wholly outside the
+            // viewport**, with no pixels to sample and no element reported.
+            // These chips have carried a contrast finding on this panel twice
+            // already: train S005's cut slab of button fill (`1.00:1`,
+            // measured — it is why the style above is an outline and not
+            // `.bordered`) and I004's own composed run, which named
+            // `Podcasts` at `(62.33, 760.83, 70.33, 20.33)` where the edge
+            // halved it. Both candidates yield exactly one anonymous finding
+            // in the bare run, so that run's counts cannot separate them.
+            //
+            // What the change buys is a decision next train rather than
+            // another suspicion: near-black leaves no mid-tone blend that can
+            // fall under 4.5:1, so if the finding comes back the ordinal is
+            // eliminated and the clipped chips are what is left — and the
+            // case now prints every text leaf of the page with its frame and
+            // its relation to the painted edge, so the answer is in the log
+            // either way. The visual cost is one leaf: the position number in
+            // each row is as dark as the route's name beside it.
             Text("\(index + 1)")
                 .font(.caption.monospaced())
-                .foregroundStyle(Color.fgMuted)
+                .foregroundStyle(Color.primary)
                 .frame(minWidth: indexWidth, alignment: .leading)
             Image(systemName: route.systemImage)
                 .foregroundStyle(Color.fgMuted)

@@ -737,6 +737,35 @@ extension StubHouseUITests {
     /// is why nothing below is relaxed: a finding that names an element is a
     /// defect until a **measurement** says otherwise, and the measurement
     /// here says the defect is the banner rather than the ink.
+    ///
+    /// ### Train I004: red on one anonymous `Text clipped`, and it is the
+    /// shell's
+    ///
+    /// The `large` pass passed (floor 8, rest 0). The AX5 pass returned floor
+    /// 3, and a rest of two: the `How this phone speaks…` paragraph's
+    /// `Contrast failed` at `(16, 607.7, 351, 312.7)`, which the viewport
+    /// clause excuses by measurement as it was written to, and
+    /// `Text clipped … | element: nil`, which nothing explains — so the case
+    /// failed, correctly.
+    ///
+    /// **That finding is not this section's, and the same train measured it
+    /// three ways.** `testTheAX5WordingIsTheSameBarFindings` pushed `Music` at
+    /// AX5 and got the identical line (`AX5STRIP [none]`, floor 3 and that one
+    /// finding, nothing else); `testShell_TheHeaderScrollsAwayOnAPushedScreen`
+    /// got it on the Settings root; `testTheChatListAudits` got **five** of
+    /// them and `testImages_PassesApplesAccessibilityAudit` two. Four
+    /// destinations with nothing in common but the chrome, and this screen's
+    /// own AX5 contribution beyond the excused paragraph is **zero** — the
+    /// floor of 3 and that one line are what the chrome returns with no
+    /// destination content at all.
+    ///
+    /// **Nothing here is changed for it, and the case stays red on purpose.**
+    /// `ios/Domovoi/Shell/` is the shell unit's, its own two cases are already
+    /// red on the same line and say so in the same words ("in the chrome
+    /// rather than in the destination"), and an exclusion added here would
+    /// make this the one screen in the app that cannot see a chrome defect.
+    /// It is routed in this unit's REPORT.md under `for_others`. The one thing
+    /// this case must not do is absorb it.
     @MainActor
     func testVoiceSettings_Audit() throws {
         let ax5 = "UICTContentSizeCategoryAccessibilityXXXL"
