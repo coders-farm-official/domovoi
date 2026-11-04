@@ -56,9 +56,14 @@ import SwiftUI
 /// pops it is the one every other screen of this app already has. At an
 /// accessibility size the swipe leaves the manual instead, because the bar
 /// and the page share one scroll view there — ``ready(_:cached:_:)`` has the
-/// measurement, the `zoom out` control says so out loud
-/// (``ManualStrings/swipeLeavesTheManualHint``), and it is Kamron's open
-/// entry 74.
+/// measurement, and it is Kamron's open entry 74.
+///
+/// The divergence is **said out loud on every level it is reachable from**
+/// (``ManualStrings/swipeHint(isAccessibilitySize:)``): `zoom out` carries it
+/// on a cluster and on a piece, and the `start here` pill carries it on the
+/// map, which draws no `zoom out` (``ManualCrumbs``' `topic != nil`). That
+/// last one is review round 2's F2 — the comment that stood here claimed
+/// three levels and the code covered two.
 ///
 /// **A `route:` link the app cannot open is plain text, never a link.** That
 /// is ``ManualModel/linkIsLive(kind:target:)`` — ported from
@@ -807,6 +812,18 @@ struct ManualLevelHost: View {
         // body rebuild, and this host may be a covered screen when the
         // presentation ends under it (the manual losing the top of the stack
         // is one way), where a rebuild is exactly what finding 2 was about.
+        //
+        // **The guard removes the redundant writes and not that one**, which
+        // is review round 2's F3 and is deliberate: when ``isTopRoute`` goes
+        // false — the phone-bar exit — every host's presentation ends at
+        // once, and a host that had `deeperDrew == true` writes it false
+        // while covered, in the same update as the route being pushed. The
+        // alternative is worse: clearing in the *presenting* branch races the
+        // child's `onAppear`, and losing that race arms the 700 ms fallback
+        // on a push that landed, which is two stages both believing they are
+        // on top (``ManualMapStage/wires(_:size:)`` says that cannot happen).
+        // So this host writes on tear-down, on purpose, in the same update as
+        // a rebuild that was happening anyway.
         guard presentsDeeper else {
             if deeperDrew { deeperDrew = false }
             if deeperIsLate { deeperIsLate = false }
@@ -882,7 +899,15 @@ struct ManualTopBar: View {
     @ViewBuilder private func pillPair(_ doc: ManualDoc) -> some View {
         ManualSegPill(
             label: doc.label("start_here", fallback: ManualStrings.Fallback.startHere),
-            active: manual.place == .start
+            active: manual.place == .start,
+            // **Only on the map**, where this pill is the way up and no
+            // `zoom out` is drawn (``ManualSegPill/hint``). From Start here
+            // the swipe leaves the manual at every size and there is nothing
+            // above to go up to, so the sentence would be false; from a
+            // cluster or a piece `zoom out` is on screen and carries it.
+            hint: manual.place == .map
+                ? ManualStrings.swipeHint(isAccessibilitySize: typeSize.isAccessibilitySize)
+                : nil
         ) {
             manual.go("start")
         }
@@ -1022,6 +1047,20 @@ struct ManualSegPill: View {
 
     let label: String
     let active: Bool
+    /// What the leading-edge swipe does from the level this pill is the way
+    /// up from, or nil for a pill that is nobody's way up.
+    ///
+    /// **Review round 2's F2.** ``ManualCrumbs`` carries
+    /// ``ManualStrings/swipeHint(isAccessibilitySize:)`` on `zoom out`, and
+    /// draws `zoom out` only while `topic != nil` — so on the **map**, one of
+    /// the three levels where the gesture means two different things at two
+    /// text sizes, there was no control carrying the sentence at all and a
+    /// VoiceOver user was told nothing. The map's way up is this pill.
+    ///
+    /// Nothing can see it: `XCUIElement` exposes no hint, so
+    /// `ManualAnswersTests.testZoomOutSaysWhatTheSwipeDoesAtThisTextSize`
+    /// pins the sentence and this is its second reader, by review only.
+    var hint: String? = nil
     let action: () -> Void
 
     var body: some View {
@@ -1050,6 +1089,12 @@ struct ManualSegPill: View {
         // The pills are a two-way choice and the lit one is not merely
         // coloured: VoiceOver is told which is picked.
         .accessibilityAddTraits(active ? [.isButton, .isSelected] : .isButton)
+        // An empty hint is no hint, which is what every pill but one gets.
+        // Said unconditionally rather than behind a `ViewBuilder` `if`: two
+        // arms are a `_ConditionalContent` and this app has already paid for
+        // a modifier that flipped a subtree's identity
+        // (`ShellChromeViews.swift:505-530`).
+        .accessibilityHint(Text(verbatim: hint ?? ""))
     }
 }
 

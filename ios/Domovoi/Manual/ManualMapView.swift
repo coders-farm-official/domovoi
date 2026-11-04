@@ -617,12 +617,16 @@ struct ManualMapNode: View {
         // .joinToString(": ")` (`:655`), so a node reads as one thing rather
         // than as two labels and a pair of pills.
         //
-        // **This is also what keeps the scramble out of VoiceOver's way.** The
-        // label is the node's real name, set here on the control, and
-        // ``ManualScrambleName`` labels its own `Text` with the real name too:
-        // the drawn glyphs are never anybody's accessibility label, so a case
-        // that reaches a node by its name reaches it mid-scramble exactly as
-        // it does at rest (``testManual_ANodeIsNamedWhileItsNameScrambles``).
+        // **This is also what keeps the scramble out of VoiceOver's way, and
+        // since train I004 it is the ONLY thing that does.** The label is the
+        // node's real name, set here on the control; ``ManualScrambleName``
+        // is hidden from accessibility entire, because I004's `manual-audit-map`
+        // tree had the glyph frame in it as a static text of its own beside
+        // the real name (that view's note has the two lines). So the drawn
+        // glyphs are nobody's label, and a case that reaches a node by its
+        // name reaches it mid-scramble exactly as it does at rest
+        // (``testManual_ANodeIsNamedWhileItsNameScrambles``, which now counts
+        // the node's children for that reason).
         .accessibilityLabel(
             node.subtitle.isEmpty ? node.title : "\(node.title): \(node.subtitle)"
         )
@@ -878,17 +882,41 @@ enum ManualFloatClock {
 /// name's box rather than allowed to push anything — 216 ms of a clipped
 /// glyph, against a card that resizes under the reader's finger.
 ///
-/// ### VoiceOver never reads gibberish
+/// ### VoiceOver never reads gibberish — and train I004 said the first
+/// version of this did
 ///
 /// The effect replaces characters in the **string being drawn** and nothing
-/// else. The accessibility label of the laid-out `Text` is the real name, the
-/// overlay is hidden from accessibility outright, and the control these sit in
-/// carries `"<title>: <subtitle>"` (``ManualMapNode``), so the glyph run is
-/// not any element's label or value for a single frame. Android's scramble
-/// *is* its node's text, which is why its `contentDescription` at `:655` is
-/// what saves it there too — here it is said three times, because a case that
-/// reaches a node by its name (``manualNode``, every map case in this item)
-/// must not be racing an animation.
+/// else, and the control these sit in carries `"<title>: <subtitle>"`
+/// (``ManualMapNode``), which is the label every case in this item reaches a
+/// node by.
+///
+/// That was argued here before it was measured, and the measurement came back
+/// against it. `overnight-trains/I004/ALL/testManual_AuditsClean.log`, the
+/// `manual-audit-map` tree, has **two** static texts per node at one frame:
+///
+///     StaticText, {{53.1, 416.3}, {120.7, 15.7}}, label: 'Rooms & devices'
+///     StaticText, {{53.1, 416.3}, {120.7, 15.7}}, label: 'Rooms & deX76H0'
+///
+/// — the laid-out name and the glyph overlay, in the tree together, with the
+/// overlay's own `.accessibilityHidden(true)` not having removed it. So the
+/// drawn glyphs *were* an element's label, which is the half of answer 30
+/// Kamron named out loud ("leaving the accessibility label alone"). The same
+/// audit returned two `Contrast failed` findings it could not attribute to any
+/// element, on a screen whose every ink is unchanged from the settled frame
+/// the identical audit passed clean in I002 — a transparent text and a second
+/// text in its exact frame are the only two things that changed about that
+/// tree, and both go away here.
+///
+/// The fix is one modifier and not a redraw: the **whole** name — the
+/// laid-out copy, the overlay and the box they share — leaves the
+/// accessibility tree, and ``ManualMapNode``'s own label is what carries the
+/// name. It is the belt without the braces, deliberately: three sayings of
+/// one thing were what hid this, since two of them were inside a subtree
+/// nothing was checking.
+///
+/// It stays in the **layout** and in the picture: `.accessibilityHidden` is
+/// not `.hidden()`, so the card is still measured by the real name and the
+/// scramble still draws.
 ///
 /// Under Reduce Motion the name is drawn straight — Android's own `reduce`
 /// branch (`:687`), and the same cut the float takes
@@ -912,8 +940,6 @@ struct ManualScrambleName: View {
         name(text)
             // Transparent, not absent: it is still the thing being measured.
             .opacity(glyphs.isEmpty ? 1 : 0)
-            // The real name, always — see this view's note.
-            .accessibilityLabel(text)
             .overlay(alignment: .topLeading) {
                 if !glyphs.isEmpty {
                     name(glyphs)
@@ -926,9 +952,15 @@ struct ManualScrambleName: View {
                             alignment: .topLeading
                         )
                         .clipped()
-                        .accessibilityHidden(true)
                 }
             }
+            // **Both copies leave the accessibility tree, from out here.**
+            // See this view's note: I004's tree carried the glyph frame as a
+            // static text of its own beside the real one, with the overlay's
+            // inner `.accessibilityHidden(true)` applied and not taken. One
+            // modifier on the composed view cannot be routed around the same
+            // way, and ``ManualMapNode`` sets the label this name is read by.
+            .accessibilityHidden(true)
             // `LaunchedEffect(key, text)` (`:686`): the name scrambles again
             // when the level changes, and when the document changes under it,
             // and at no other time. A `.task(id:)` is cancelled and restarted
