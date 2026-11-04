@@ -815,3 +815,25 @@ public func manualNodeFloatPeriod(
 public func manualFloatPhase(at index: Int) -> Double {
     Double(index % 8) * 0.7
 }
+
+// MARK: - what a map node is announced as
+
+/// How a map card reads out loud: Android's
+/// `contentDescription = listOfNotNull(title, sub).joinToString(": ")`
+/// (`MapNode`, `ManualScreen.kt:655`).
+///
+/// A one-line join does not obviously need a function of its own. It has one
+/// because, since the second line left the accessibility tree
+/// (``ManualMapNode``'s note: the frame it claimed was the whole card,
+/// which is the rectangle Apple's audit measured), this string is the **only**
+/// reading VoiceOver gets of a node — the title is hidden with the scramble
+/// it carries, the subtitle is hidden with the wash it carries, and a label
+/// that quietly lost half of itself would leave three cards announced by their
+/// titles alone with nothing in the suite objecting. ``manualNodeReading``
+/// has `ManualAnswersTests.testANodeIsAnnouncedWithBothOfItsLines`.
+///
+/// An empty subtitle is the hub's own case on levels the document gives no
+/// second line: `listOfNotNull` drops a null, so there is no stray `": "`.
+public func manualNodeReading(title: String, subtitle: String) -> String {
+    subtitle.isEmpty ? title : "\(title): \(subtitle)"
+}

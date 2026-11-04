@@ -18,11 +18,13 @@ import SwiftUI
 // up where they happen: the wires do not follow the float
 // (``ManualMapStage/wires(_:size:)``), and there is no 280 ms camera zoom
 // between levels, because a level change is a different arm of
-// ``ManualView``'s `@ViewBuilder` switch — a transition between two stages,
-// not a value change inside one, so there is no camera to move
+// ``ManualLevelView``'s `switch` — a transition between two stages, not a
+// value change inside one, so there is no camera to move
 // (``ManualMapStage/body``, which has the whole reason). That held before
-// answer 32 was attempted and it holds now that the attempt is reverted;
-// the stack never came into it.
+// answer 32, while it was attempted on a stack of the manual's own, and
+// now that a level is a pushed screen (``ManualLevelHost``): how the levels
+// are mounted never came into it, and Kamron's entry 73 is the open
+// question of building the glide for real.
 // ---------------------------------------------------------------------------
 
 /// A world position and the scale the thing at it is drawn at — `Pos`
@@ -227,7 +229,7 @@ struct ManualMapStage: View {
         // **No 280 ms camera animation, because there is no camera move to
         // animate.** Android keeps one `ManualMap` composition and animates
         // `focus` inside it (`MOVE_MS`, `ManualScreen.kt:549`). Here a level
-        // change is a different arm of ``ManualView``'s `@ViewBuilder`
+        // change is a different arm of ``ManualLevelView``'s
         // switch, which SwiftUI gives a different identity, and `focus` is a
         // `let` on a view built per level, so it cannot change within one
         // stage's lifetime. The level change is a *transition* between two
@@ -274,14 +276,28 @@ struct ManualMapStage: View {
     /// two ~104-point cards, so the part of it that would move is the part
     /// covered by the cards.
     ///
-    /// **And that cost is one stage's.** One level is mounted at a time —
-    /// the inner stack that kept covered levels alive is gone
-    /// (``ManualView/ready(_:cached:_:)``) — so there is one
-    /// `GeometryReader` and one set of `repeatForever` offsets, which is
-    /// what this decision was costed against. ``isOnTop`` still gates the
-    /// float and is still worth its line: it is the gate that makes the cost
-    /// one stage's whatever mounts a second one, and it is `true` for the
-    /// level on screen either way. The wires never followed in any case.
+    /// **And that cost is one stage's, which is ``isOnTop``'s whole job.**
+    /// Answer 32 mounts a level as a screen on the shell's stack
+    /// (``ManualLevelHost``), so a map **stays mounted** under the cluster
+    /// pushed over it and two or three stages are alive at once. Only the top
+    /// one floats: `isOnTop` is a comparison against ``ManualModel/place``,
+    /// so the covered stages hold their cards still and there is one set of
+    /// `repeatForever` offsets on screen, which is what this decision was
+    /// costed against.
+    ///
+    /// That holds because a covered host draws the level it **owns** and not
+    /// the open one. It did not for one commit: ``ManualLevelHost``'s late
+    /// fallback could fire on a buried host, whose `shown` then became
+    /// `manual.place`, and a buried stage that believes it is on top is two
+    /// or three sets of offsets — the one thing this paragraph says cannot
+    /// happen. The fallback is now asked once per push and a working push
+    /// never reaches it (review round 1's finding 2). Honest limit: UIKit
+    /// taking a covered screen's view out of the window is what makes being
+    /// wrong about this cheap, not this comment.
+    ///
+    /// For one commit — `6d071463` to the one before this — the gate was
+    /// constant `true` because one level was mounted at a time; it is load
+    /// bearing again. The wires never followed in any case.
     ///
     /// Hidden from VoiceOver — it is a drawing of the links the nodes beside
     /// it already are.
@@ -404,7 +420,7 @@ struct ManualMapStage: View {
     /// *up* as much as on the way down.
     ///
     /// SwiftUI does not. Two sibling clusters are the same arm of
-    /// ``ManualView``'s `@ViewBuilder` switch with a different `focus`, so
+    /// ``ManualLevelView``'s switch with a different `focus`, so
     /// the view is reused rather than rebuilt; and while the levels were a
     /// `NavigationStack` of the manual's own the level below the one on
     /// screen stayed mounted, so a pop restarted nothing at all. Either way
@@ -426,7 +442,7 @@ struct ManualMapStage: View {
     ///
     /// Only the top one floats — see ``wires(_:size:)``. It is a comparison
     /// of two `ManualPlace`s and not "is my focus the model's focus", so the
-    /// `.piece` fallback (``ManualView``'s map for a piece the document lost)
+    /// `.piece` fallback (``ManualLevelView``'s map for a piece the document lost)
     /// is on top when it is on top.
     private var isOnTop: Bool { manual.place == place }
 
@@ -573,6 +589,60 @@ struct ManualMapNode: View {
                         .foregroundStyle(Color.fgMuted)
                         .multilineTextAlignment(.leading)
                         .fixedSize(horizontal: false, vertical: true)
+                        // **Out of the accessibility tree, because the frame
+                        // it claims is not its own.** The words are not lost:
+                        // the card's own label below is `"<title>: <subtitle>"`
+                        // (``manualNodeReading(title:subtitle:)``), which is
+                        // Android's `contentDescription` and the only reading
+                        // VoiceOver ever gets of a node.
+                        //
+                        // Measured, in train I004's own screenshots:
+                        //
+                        //  - I002, when this was a `String`:
+                        //    `label: 'where it listens'` at
+                        //    `{{25.1, 435.0}, {85.3, 14.3}}` — its own glyphs,
+                        //    and the only pair inside it is `fgMuted` on the
+                        //    card, 6.66:1.
+                        //  - I004, as an `AttributedString`:
+                        //    the same label at `{{14.0, 407.3}, {177.7, 104.0}}`
+                        //    — the **whole card**, twelve times the area, in
+                        //    the scrambling tree and in the settled one alike.
+                        //    That rectangle holds the card's own 1-point
+                        //    border, so the strongest failing pair in it is
+                        //    `(242,242,247)` against `(210,210,215)` —
+                        //    **1.35:1** — and on the hub, whose border is
+                        //    `brandInk` at 60%, `(187,150,99)` — 2.46:1.
+                        //
+                        // Those are the only sub-4.5 pairs anywhere in the
+                        // picture Apple returned two unattributable
+                        // `Contrast failed` findings on: the card rectangles
+                        // of I002's clean audit and I004's dirty one are
+                        // identical to the pixel, inks and all
+                        // (``testManual_AuditsClean``'s note has the method
+                        // and the counts). A tight frame cannot contain that
+                        // pair; this one does, and nothing repainted.
+                        //
+                        // **What is not established is the mechanism.** The
+                        // `AttributedString` is the only edit this line took
+                        // in the batch the frame changed in, and that is a
+                        // correlation, not a cause: ``ManualPiecePage``'s
+                        // washed paragraph is an `AttributedString` too and
+                        // its frame is its own four lines
+                        // (`361 × 64.3`), as is Start here's unwashed one.
+                        // Nothing here rests on knowing which: the element
+                        // leaves the tree either way, and the words it carries
+                        // are in the card's label regardless. The cost is
+                        // stated and it is small — a future SwiftUI that gave
+                        // this line an honest frame again would not be
+                        // noticed, because a hidden element is not measured by
+                        // anything.
+                        //
+                        // `.accessibilityHidden` and not `.hidden()`: the line
+                        // is still drawn, still measured and still washes its
+                        // `preview`/`plugin` runs. Android does not announce
+                        // those pills either (`ManualScreen.kt:655` joins the
+                        // title and the subtitle and stops).
+                        .accessibilityHidden(true)
                 }
             }
             .padding(.horizontal, 11)
@@ -601,15 +671,23 @@ struct ManualMapNode: View {
         // .joinToString(": ")` (`:655`), so a node reads as one thing rather
         // than as two labels and a pair of pills.
         //
-        // **This is also what keeps the scramble out of VoiceOver's way.** The
-        // label is the node's real name, set here on the control, and
-        // ``ManualScrambleName`` labels its own `Text` with the real name too:
-        // the drawn glyphs are never anybody's accessibility label, so a case
-        // that reaches a node by its name reaches it mid-scramble exactly as
-        // it does at rest (``testManual_ANodeIsNamedWhileItsNameScrambles``).
-        .accessibilityLabel(
-            node.subtitle.isEmpty ? node.title : "\(node.title): \(node.subtitle)"
-        )
+        // **This is also what keeps the scramble out of VoiceOver's way, and
+        // since train I004 it is the ONLY thing that does.** The label is the
+        // node's real name, set here on the control; ``ManualScrambleName``
+        // is hidden from accessibility entire, because I004's `manual-audit-map`
+        // tree had the glyph frame in it as a static text of its own beside
+        // the real name (that view's note has the two lines). So the drawn
+        // glyphs are nobody's label, and a case that reaches a node by its
+        // name reaches it mid-scramble exactly as it does at rest
+        // (``testManual_ANodeIsNamedWhileItsNameScrambles``, which now counts
+        // the node's children for that reason).
+        //
+        // It is now the only reading of the second line too (above), so the
+        // join is a rule with a test of its own rather than a ternary in a
+        // view body: ``manualNodeReading(title:subtitle:)``. Both texts under
+        // this control are hidden, and a label that lost half of itself would
+        // leave a node announced by its title alone with nothing objecting.
+        .accessibilityLabel(manualNodeReading(title: node.title, subtitle: node.subtitle))
         // The one thing a UI case can read about the scramble — see
         // ``scrambleState``. The **empty** string in every build that could
         // ship, and in a DEBUG build nobody passed the argument to, which is
@@ -862,17 +940,60 @@ enum ManualFloatClock {
 /// name's box rather than allowed to push anything — 216 ms of a clipped
 /// glyph, against a card that resizes under the reader's finger.
 ///
-/// ### VoiceOver never reads gibberish
+/// ### VoiceOver never reads gibberish — and train I004 said the first
+/// version of this did
 ///
 /// The effect replaces characters in the **string being drawn** and nothing
-/// else. The accessibility label of the laid-out `Text` is the real name, the
-/// overlay is hidden from accessibility outright, and the control these sit in
-/// carries `"<title>: <subtitle>"` (``ManualMapNode``), so the glyph run is
-/// not any element's label or value for a single frame. Android's scramble
-/// *is* its node's text, which is why its `contentDescription` at `:655` is
-/// what saves it there too — here it is said three times, because a case that
-/// reaches a node by its name (``manualNode``, every map case in this item)
-/// must not be racing an animation.
+/// else, and the control these sit in carries `"<title>: <subtitle>"`
+/// (``ManualMapNode``), which is the label every case in this item reaches a
+/// node by.
+///
+/// That was argued here before it was measured, and the measurement came back
+/// against it. `overnight-trains/I004/ALL/testManual_AuditsClean.log`, the
+/// `manual-audit-map` tree, has **two** static texts per node at one frame:
+///
+///     StaticText, {{53.1, 416.3}, {120.7, 15.7}}, label: 'Rooms & devices'
+///     StaticText, {{53.1, 416.3}, {120.7, 15.7}}, label: 'Rooms & deX76H0'
+///
+/// — the laid-out name and the glyph overlay, in the tree together, with the
+/// overlay's own `.accessibilityHidden(true)` not having removed it. So the
+/// drawn glyphs *were* an element's label, which is the half of answer 30
+/// Kamron named out loud ("leaving the accessibility label alone"). The same
+/// audit returned two `Contrast failed` findings it could not attribute to any
+/// element.
+///
+/// **Those findings are not this view's, and the first account of them said
+/// they were.** It claimed a transparent text and a second text in its frame
+/// were "the only two things that changed about that tree". A third thing
+/// changed, and it is where the arithmetic lands: the node's **second line**
+/// went from a `String` to an `AttributedString` with answer 34, and its
+/// accessibility frame went from `{85.3 × 14.3}` to the whole `{177.7 × 104}`
+/// card with it — in the scrambling tree and the settled one alike
+/// (``ManualMapNode``'s second line has the measurement and the ratios).
+/// Sampled off I004's own screenshot, the glyph frames measure
+/// `(0,0,0)` on `(242,242,247)`, **18.82:1**, pixel-for-pixel what I002's
+/// clean audit measured in the same rectangles — the gibberish is the same
+/// black as the name. A re-lettering cannot fail a contrast check, so the
+/// hide below is answer 30's half and **not** the audit's fix; the second
+/// line's is.
+///
+/// The fix is one modifier and not a redraw: the **whole** name — the
+/// laid-out copy, the overlay and the box they share — leaves the
+/// accessibility tree, and ``ManualMapNode``'s own label is what carries the
+/// name. It is the belt without the braces, deliberately: three sayings of
+/// one thing were what hid this, since two of them were inside a subtree
+/// nothing was checking.
+///
+/// What holds it is ``testManual_ANodeIsNamedWhileItsNameScrambles``, which
+/// counts this control's children while the glyphs are on screen, and
+/// ``testManual_ANodeCardIsOneElementAndNotFour``, which counts them at rest
+/// with a positive control that SwiftUI still exposes a button's children at
+/// all. The audit does not hold it and was never able to: with the glyphs
+/// measuring 18.82:1 there is nothing in them for a contrast check to find.
+///
+/// It stays in the **layout** and in the picture: `.accessibilityHidden` is
+/// not `.hidden()`, so the card is still measured by the real name and the
+/// scramble still draws.
 ///
 /// Under Reduce Motion the name is drawn straight — Android's own `reduce`
 /// branch (`:687`), and the same cut the float takes
@@ -896,8 +1017,6 @@ struct ManualScrambleName: View {
         name(text)
             // Transparent, not absent: it is still the thing being measured.
             .opacity(glyphs.isEmpty ? 1 : 0)
-            // The real name, always — see this view's note.
-            .accessibilityLabel(text)
             .overlay(alignment: .topLeading) {
                 if !glyphs.isEmpty {
                     name(glyphs)
@@ -910,9 +1029,15 @@ struct ManualScrambleName: View {
                             alignment: .topLeading
                         )
                         .clipped()
-                        .accessibilityHidden(true)
                 }
             }
+            // **Both copies leave the accessibility tree, from out here.**
+            // See this view's note: I004's tree carried the glyph frame as a
+            // static text of its own beside the real one, with the overlay's
+            // inner `.accessibilityHidden(true)` applied and not taken. One
+            // modifier on the composed view cannot be routed around the same
+            // way, and ``ManualMapNode`` sets the label this name is read by.
+            .accessibilityHidden(true)
             // `LaunchedEffect(key, text)` (`:686`): the name scrambles again
             // when the level changes, and when the document changes under it,
             // and at no other time. A `.task(id:)` is cancelled and restarted

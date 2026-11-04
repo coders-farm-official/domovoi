@@ -61,6 +61,51 @@ public enum ManualStrings {
         "version \(version)"
     }
 
+    // MARK: - what the swipe back does, said out loud
+
+    /// `zoom out`'s VoiceOver hint below the accessibility sizes: the gesture
+    /// does the same thing this control does.
+    ///
+    /// iOS-only, and there is no Android line for it — Android's way up is a
+    /// hardware or gestural **back**, which the platform announces itself,
+    /// while iOS's leading-edge swipe is announced by nobody. Kamron's answer
+    /// 32 put the gesture on this screen; a gesture a VoiceOver user cannot
+    /// discover is a control that may as well not exist, so the control that
+    /// does the same job says so. Recorded, with
+    /// ``swipeLeavesTheManualHint``, in
+    /// `design-notes/ios/batch-2026-11-03/gx-manual/IOS-ONLY-STRINGS.md` —
+    /// this item's batch notes, not the overnight ones, because the overnight
+    /// file belongs to an item nobody in this batch owns.
+    public static let swipeGoesUpHint = "a swipe back from the left edge does this too"
+
+    /// The same hint at an accessibility text size, where the swipe does
+    /// something else.
+    ///
+    /// There the top bar and the page share one scroll view and the levels
+    /// are swapped in place rather than pushed (``ManualView/ready(_:cached:_:)``),
+    /// so the gesture pops the **route** and leaves the manual. Saying "a
+    /// swipe back does this too" there would be the app telling a VoiceOver
+    /// user something untrue of the screen in front of them, which is
+    /// Kamron's no-misleading-controls rule pointed at a hint; entry 74 in
+    /// `DECISIONS-FOR-KAMRON.md` is his open question about the divergence
+    /// itself.
+    public static let swipeLeavesTheManualHint =
+        "at this text size a swipe back leaves the manual; this goes up a level"
+
+    /// Which of the two `zoom out` says, asked **here** and not in a view
+    /// body.
+    ///
+    /// ``ShellHeaderFold``'s reason, which this app has already paid for: a
+    /// review's negative control broke two size gates written as ternaries
+    /// inside view bodies and nothing in the repository noticed, because
+    /// `pkgtest` builds the package and not the views. A sentence that is
+    /// wrong at one text size is the no-misleading-controls rule broken by a
+    /// hint, so the choice is a function with a test on it
+    /// (`ManualAnswersTests`).
+    public static func swipeHint(isAccessibilitySize: Bool) -> String {
+        isAccessibilitySize ? swipeLeavesTheManualHint : swipeGoesUpHint
+    }
+
     /// `"${label("next")}: ${title}"` (`ManualScreen.kt:769`).
     public static func next(_ label: String, piece title: String) -> String {
         "\(label): \(title)"
