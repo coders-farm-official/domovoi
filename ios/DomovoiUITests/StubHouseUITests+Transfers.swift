@@ -135,11 +135,21 @@ extension StubHouseUITests {
     @MainActor
     func testTransfers_AFilmFarOverTheOldCapIsSavedAndHandedToTheShareSheet() throws {
         transfersReset()
-        // Paced, so the saving state is on screen long enough to be seen at
-        // all: at full speed six mebibytes over loopback can be done before
-        // the first query lands, and the case would then be asserting the
-        // share sheet only.
-        savePace(25)
+        // **Paced, and paced for the whole window this case needs.** At full
+        // speed six mebibytes over loopback can be done before the first query
+        // lands, and the case would then be asserting the share sheet only.
+        //
+        // Sixty milliseconds a chunk and not twenty-five: `BIG_SAVE_BYTES` in
+        // 56 KiB chunks is 110 of them, so 25 made the whole body about 2.7
+        // seconds while three XCUITest queries and two `evidence()`
+        // screenshots sat inside that window. A save that won that race failed
+        // this case with "the save never reported a percentage — the bar is
+        // indeterminate", which reads as the feature being broken
+        // (REVIEW-2's fourth finding). 60 ms is ~6.6 s, which is what
+        // `testTransfers_ASaveCanBeStopped` picked for the same reason, and
+        // the percentage assertion below now says out loud when it lost the
+        // race rather than blaming the app.
+        savePace(60)
         let (app, landed) = openFiles()
         XCTAssertTrue(landed, "the folder never answered")
         XCTAssertTrue(pickLibrary(app, "Documents"), "the library picker never opened")
@@ -173,7 +183,22 @@ extension StubHouseUITests {
             .firstMatch
         let counted = percent.waitForExistence(timeout: 30)
         evidence(app, "56-files-saving-percent")
-        XCTAssertTrue(counted, "the save never reported a percentage — the bar is indeterminate")
+        if !counted {
+            // **Which of the two things happened?** Either no percentage ever
+            // reached the control — the defect this asserts — or the save
+            // finished before the query got there, which is this case losing a
+            // race against its own fixture. The share sheet, or the saving
+            // sentence having gone, tells them apart, and a failure that names
+            // the wrong one costs somebody an afternoon in the wrong file.
+            let finished = app.otherElements["ActivityListView"].exists || !saving.exists
+            XCTAssertTrue(
+                counted,
+                finished
+                    ? "the save finished before the percentage could be read: raise savePace, "
+                        + "this says nothing about the bar"
+                    : "the save never reported a percentage — the bar is indeterminate"
+            )
+        }
 
         XCTAssertTrue(shareSheetAppeared(app, "a four-gigabyte row's save"),
                       "the file was fetched and never offered")
@@ -295,6 +320,95 @@ extension StubHouseUITests {
         evidence(app, "48-feed-after-sharing")
     }
 
+    /// **A save that outlives the player**, which is the gesture that had
+    /// nothing drawn for it at all.
+    ///
+    /// ``VideosModel/saves`` is held by the screen and not by the feed on
+    /// purpose — a film takes minutes and a sheet takes one swipe to close —
+    /// and for a while only ``VideoFeedView`` drew anything for it. So: tap
+    /// `save to device`, swipe the options sheet away, dismiss the player, and
+    /// the transfer kept running with no percentage, no stop, no share sheet
+    /// when it finished and no toast when it failed. The copy sat in
+    /// `domovoi-saved/sN/` until the next Videos save swept it (REVIEW-2
+    /// finding 2).
+    ///
+    /// The three claims are the three things that were missing, and each one
+    /// of them is a line in ``VideosView`` that a one-line deletion removes.
+    ///
+    /// **The sheet is swiped rather than closed by its button**: the options
+    /// sheet's own `close` (`VideoFeedSheets.swift:39`) and the player's
+    /// (`VideoFeedView.swift:491`) carry the same label, so a query for it
+    /// while both are on screen is whichever the tree holds first. A drag is
+    /// what a finger would do and is unambiguous. The player's `close` is then
+    /// the only one left.
+    @MainActor
+    func testTransfers_ASaveOutlivesTheSheetAndThePlayerItWasStartedFrom() throws {
+        transfersReset()
+        // Long enough that the save is still running after four gestures.
+        savePace(60)
+        let (app, landed) = openVideos()
+        XCTAssertTrue(landed, "the videos list never answered")
+        app.buttons["a long one.mp4"].firstMatch.tap()
+        let counter = app.staticTexts["1 / 50"]
+        XCTAssertTrue(counter.waitForExistence(timeout: 20), "the feed did not open")
+
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4))
+            .press(forDuration: 1.0)
+        let save = app.buttons["save to device"]
+        XCTAssertTrue(save.waitForExistence(timeout: 10), "the options sheet offers no save")
+        save.tap()
+
+        let saving = app.descendants(matching: .staticText)
+            .matching(NSPredicate(format: "label BEGINSWITH %@", "saving \""))
+            .firstMatch
+        XCTAssertTrue(saving.waitForExistence(timeout: 20), "the save never started")
+
+        // 1. The sheet, swiped away.
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.55))
+            .press(
+                forDuration: 0.1,
+                thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.98))
+            )
+        XCTAssertTrue(
+            waitForAbsence(save, timeout: 15),
+            "the options sheet would not go, so the rest of this case is about the sheet"
+        )
+
+        // 2. The player, closed. `feedClosed(on:)` takes the strip's read and
+        //    the centring with it and says nothing about the save, which is
+        //    the right division of labour and was also the whole bug.
+        let close = app.buttons["close"]
+        XCTAssertTrue(close.waitForExistence(timeout: 10), "the player has no way out")
+        close.tap()
+        XCTAssertTrue(waitForAbsence(counter, timeout: 20), "the player would not close")
+
+        // 3. And the grid is back, with the save still said on it — the
+        //    percentage and the stop, on the screen that owns the model.
+        let grid = app.descendants(matching: .staticText)
+            .matching(NSPredicate(format: "label BEGINSWITH %@", "showing "))
+            .firstMatch
+        XCTAssertTrue(grid.waitForExistence(timeout: 20), "the grid did not come back")
+        let stillSaving = saving.waitForExistence(timeout: 20)
+        evidence(app, "48-videos-saving-after-the-player-closed")
+        XCTAssertTrue(
+            stillSaving,
+            "a save started in the player says nothing once the player is gone"
+        )
+        XCTAssertTrue(
+            app.buttons["stop saving"].exists,
+            "a film still coming down has no way out once the player is closed"
+        )
+
+        // And it is handed over. Nothing presented this sheet before: on
+        // `.ready` the screen drew nothing at all.
+        XCTAssertTrue(
+            shareSheetAppeared(app, "a save that outlived the player"),
+            "the film was fetched and never offered, so the copy is in the spool"
+        )
+        evidence(app, "48-videos-saved-after-the-player-closed")
+        dismissShareSheet(app)
+    }
+
     /// **The save from the Files viewer**, which is the third of the four
     /// call sites and had no case of its own.
     ///
@@ -378,11 +492,31 @@ extension StubHouseUITests {
     /// failing.
     ///
     /// The claim that discriminates: **at an accessibility size the longer
-    /// title is taller than the shorter one.** With a two-line ceiling both
-    /// are capped at two lines and the heights are equal; with no ceiling the
-    /// twenty-character name takes more lines than the fourteen-character one
-    /// and is strictly taller. Put the `lineLimit(2)` back and this case
-    /// fails.
+    /// title is far taller than the shorter one.** With a two-line ceiling
+    /// both are capped at two lines and the heights are equal; with no ceiling
+    /// the long one takes as many lines as it needs. Put the `lineLimit(2)`
+    /// back and this case fails.
+    ///
+    /// ### Why the long name is seventy characters and not twenty
+    ///
+    /// It was `01 she said "no".mp4` against `a long one.mp4`, twenty
+    /// characters against fourteen, and that rested on an unmeasured premise:
+    /// in a 160-point column at `AccessibilityM` both may land on the same
+    /// line count, and the case would then fail although the fix works
+    /// (REVIEW-2's fifth finding). `04 a very long filename that will
+    /// certainly need to wrap on a phone.mkv` is already in the fixture
+    /// (`stubhouse.py`'s `_videos()`, index 4, and the index prefix makes it
+    /// unique) and cannot tie with a fourteen-character name under any column
+    /// width: unbounded it is many lines, and the ceiling caps it at two.
+    ///
+    /// So the assertion is a **ratio** rather than a strict inequality, which
+    /// is what removes the false negative from both directions. With the
+    /// ceiling the two are the same two lines and the ratio is 1; without it
+    /// the long caption is at least three lines to the short one's one or two.
+    /// 1.5 is the floor: it fails on a tie, and it cannot be reached by a
+    /// single extra point of padding.
+    ///
+    /// Still under 128 characters, so the query cannot throw (train S001).
     ///
     /// `AccessibilityM` rather than AX5: it is the **smallest** size at which
     /// `isAccessibilitySize` is true, so the rule under test is on while the
@@ -393,7 +527,7 @@ extension StubHouseUITests {
     @MainActor
     func testTransfers_ALongVideoNameWrapsRatherThanClippingAtAnAccessibilitySize() throws {
         let short = "a long one.mp4"
-        let long = "01 she said \"no\".mp4"
+        let long = "04 a very long filename that will certainly need to wrap on a phone.mkv"
         let (app, _) = openVideos("UICTContentSizeCategoryAccessibilityM")
 
         // Both captions, taken as they appear while the page is flicked: a
@@ -418,10 +552,13 @@ extension StubHouseUITests {
             print(app.debugDescription)
             return XCTFail("the two captions could not be measured, so this proved nothing")
         }
+        print("WRAP [AccessibilityM] ratio=\(longHeight / max(1, shortHeight))")
         XCTAssertGreaterThan(
-            longHeight, shortHeight,
-            "the two captions are the same height at an accessibility size, which is what a "
-                + "two-line ceiling does: the longer name is being clipped, not wrapped"
+            longHeight, shortHeight * 1.5,
+            "a seventy-character caption is no more than half again the height of a "
+                + "fourteen-character one at an accessibility size (\(longHeight) vs "
+                + "\(shortHeight)), which is what a two-line ceiling does to both: the long "
+                + "name is being clipped, not wrapped"
         )
     }
 

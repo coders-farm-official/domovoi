@@ -2446,9 +2446,10 @@ final class StubHouseUITests: XCTestCase {
             //
             // And that half is now measured rather than asserted:
             // `testTransfers_ALongVideoNameWrapsRatherThanClippingAtAnAccessibilitySize`
-            // compares the fourteen- and twenty-character captions at an
-            // accessibility size and fails if they come back the same height,
-            // which is what a two-line ceiling does. A classification that
+            // compares the fourteen- and seventy-character captions at an
+            // accessibility size and fails unless the long one is half again
+            // the short one's height, which a two-line ceiling makes
+            // impossible: it caps both at the same two lines. A classification that
             // rests on a measurement somewhere else is the only kind this
             // project keeps ([[reasoning-that-hides-a-bug]]).
             //

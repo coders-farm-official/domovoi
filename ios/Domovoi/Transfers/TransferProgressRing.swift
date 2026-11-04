@@ -19,6 +19,33 @@ import SwiftUI
 /// label this control has no room for; a `Circle` with `.trim` is the whole
 /// of it.
 ///
+/// ### What this file's drawing is NOT guarded by, and cannot be
+///
+/// No automated case can see this arc. A `Shape` has no element, no label and
+/// no frame in the accessibility tree, and the ring is deliberately
+/// `.accessibilityHidden(true)` besides, so swapping it back for
+/// `ProgressView(value:).progressViewStyle(.circular)` leaves every package
+/// case and every UI case green — which is exactly how the bug above shipped
+/// the first time (REVIEW-2's third finding says so, and says the file argued
+/// the fix instead of recording the gap).
+///
+/// What **is** guarded, after that finding:
+///
+///  * ``transferRingFraction(_:)``, in `DomovoiKit`, which is the
+///    determinate-or-spinner decision and the clamp. Both were written out
+///    three times in two views and this file; they are one function with
+///    cases now (`TransferUploadTests`), and both callers go through it.
+///  * the **number**, which is the part a person reads and the part a
+///    regression would be noticed for: `transfers-upload-percent` beside the
+///    upload row's ring and ``TransferStrings/savingPercent(_:_:)`` in the
+///    save's sentence, asserted by
+///    `testTransfers_ABigPhoneFileGoesThroughTheStreamedDoor` and
+///    `testTransfers_AFilmFarOverTheOldCapIsSavedAndHandedToTheShareSheet`.
+///
+/// So the arc itself is review-only, and that is a known limit rather than an
+/// oversight: anybody replacing this view has to be reading this comment to
+/// find the type at all.
+///
 /// Where the number itself is **said** is up to the caller — the save puts it
 /// in its sentence (`SaveToDeviceButton`), the upload row puts it beside the
 /// ring (`PhoneUploadRowButton`) — because a number inside a 48-point box is
@@ -37,7 +64,10 @@ struct TransferProgressRing: View {
 
     private var width: CGFloat { max(2, diameter / 7) }
 
-    private var fraction: Double { max(0, min(1, share)) }
+    /// The clamp is ``transferRingFraction(_:)``'s, not a third copy of it.
+    /// `share` is non-optional here, so the nil arm is unreachable and 0 is
+    /// the arithmetic answer rather than a fallback with a meaning.
+    private var fraction: Double { transferRingFraction(share) ?? 0 }
 
     var body: some View {
         ZStack {

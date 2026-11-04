@@ -93,8 +93,8 @@ struct SaveToDeviceButton: View {
             // drew while both comments claimed otherwise (REVIEW-1 finding
             // 3). The percentage in `said` was right either way, which is
             // why nothing here failed.
-            if let share {
-                TransferProgressRing(share: share, diameter: glyphWidth)
+            if let fraction = transferRingFraction(share) {
+                TransferProgressRing(share: fraction, diameter: glyphWidth)
             } else {
                 ProgressView()
                     .frame(width: glyphWidth, height: glyphWidth)

@@ -271,6 +271,39 @@ final class TransferUploadTests: XCTestCase {
         )
     }
 
+    /// **The ring's one decision**, which until REVIEW-2 was written out
+    /// three times and tested nowhere.
+    ///
+    /// `nil` means "draw the spinner" and a number means "draw the arc", and
+    /// the clamp is here because the two byte counts come from the platform
+    /// separately. There is no case for the arc itself: a `Shape`'s `trim` has
+    /// no element in the accessibility tree, which is the limit recorded on
+    /// `TransferProgressRing` — this is the part of that view a test can hold
+    /// still, and both call sites go through it.
+    func testTheRingIsDeterminateOnlyWhenSomethingKnowsTheShare() {
+        XCTAssertNil(
+            transferRingFraction(nil),
+            "nothing declared draws the spinner, not an arc pinned at nought"
+        )
+        XCTAssertEqual(0, transferRingFraction(0))
+        XCTAssertEqual(0.5, transferRingFraction(0.5))
+        XCTAssertEqual(1, transferRingFraction(1))
+        XCTAssertEqual(
+            1, transferRingFraction(1.17),
+            "a server that undercounted its own length would send the arc round twice"
+        )
+        XCTAssertEqual(0, transferRingFraction(-0.2))
+        // Neither can arise from ``transferPercent(sent:of:)``, which answers
+        // an `Int`; they are what a future caller dividing two of its own
+        // numbers would hand this. The spinner is the honest answer to both —
+        // `min(1, .infinity)` is 1, and an arc at 100% is a finished transfer.
+        XCTAssertNil(
+            transferRingFraction(Double.nan),
+            "nought divided by nought is not a share of anything"
+        )
+        XCTAssertNil(transferRingFraction(.infinity), "nor is a division by nought")
+    }
+
     // MARK: - the two tails, against a socket that records what left
 
     /// **Why this section exists.** REVIEW-1 finding 2: nothing in the

@@ -128,6 +128,29 @@ public func transferPercent(sent: Int64, of total: Int64) -> Int? {
     return max(0, min(100, Int((share * 100).rounded(.down))))
 }
 
+/// How far round a progress ring goes, or nil for "draw the spinner".
+///
+/// **One decision in one tested place**, which it was not. Both the save's
+/// control and the upload row's wrote `if let share { ring } else { spinner }`
+/// with the clamp a third time inside the ring itself, and the whole of that
+/// — the determinate/indeterminate choice *and* the clamp — was guarded by
+/// nothing but the comments beside it. That is how REVIEW-1's finding 3
+/// shipped: two rings documented at length as determinate, both drawing the
+/// indeterminate spinner, and no test anywhere that could tell.
+///
+/// What a test can reach is this function; what it cannot reach is a `Shape`'s
+/// `trim`, which has no element, no label and no frame in the accessibility
+/// tree. The residual gap is written down on `TransferProgressRing` rather
+/// than argued away.
+///
+/// Clamped for ``transferPercent(sent:of:)``'s reason: the two numbers come
+/// from the platform separately, and an arc asked for 1.17 goes round and
+/// starts again.
+public func transferRingFraction(_ share: Double?) -> Double? {
+    guard let share, share.isFinite else { return nil }
+    return max(0, min(1, share))
+}
+
 /// The upload's per-task delegate: ``RedirectDelegate``'s rules, plus how far
 /// the body has got.
 ///

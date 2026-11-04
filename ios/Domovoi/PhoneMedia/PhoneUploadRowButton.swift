@@ -137,8 +137,8 @@ struct PhoneUploadRowButton: View {
             //
             // The determinate one is ``TransferProgressRing``: see the note
             // on the type for why `ProgressView(value:)` was not one.
-            if let percent {
-                TransferProgressRing(share: Double(percent) / 100, diameter: box * 0.55)
+            if let fraction = transferRingFraction(percent.map { Double($0) / 100 }) {
+                TransferProgressRing(share: fraction, diameter: box * 0.55)
             } else {
                 ProgressView()
                     .progressViewStyle(.circular)
