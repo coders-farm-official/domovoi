@@ -1,6 +1,7 @@
 package com.domovoi.app.ui.screens.calendar
 
 import com.domovoi.app.ui.components.parseInstant
+import com.domovoi.app.ui.screens.home.plural
 import kotlinx.serialization.Serializable
 import java.time.LocalDate
 import java.time.LocalDateTime
@@ -36,8 +37,8 @@ internal fun parseLocal(iso: String?): LocalDateTime? =
  * the far future, not "now": such a row used to be DRAWN as if it were
  * happening at this moment (D18 / iOS entry 18 — `calendarStartMs(_:)`
  * returns `Int64.max` there for the same reason). It falls outside every
- * view window, and [withReadableStart] drops it before anything is drawn,
- * so this value is never put on screen.
+ * view window, and [visibleEvents] drops it by name before anything is
+ * drawn, so this value is never put on screen.
  */
 internal fun CalendarEvent.startLocal(): LocalDateTime =
     parseLocal(starts_at) ?: LocalDateTime.MAX
@@ -47,10 +48,15 @@ internal fun CalendarEvent.endLocal(): LocalDateTime =
 
 /**
  * The rows with a readable `starts_at` — the only ones the calendar draws
- * (D18). A row whose timestamp we cannot parse has no place on any day, so
- * the honest thing is to leave it out rather than invent one; the agenda in
- * particular would otherwise keep it forever, since its `endLocal()` is in
- * the far future too.
+ * or counts (D18). A row whose timestamp we cannot parse has no place on
+ * any day, so the honest thing is to leave it out rather than invent one.
+ *
+ * This is the predicate, not the place it is applied: the two things the
+ * screen puts on the page each drop the row themselves — [visibleEvents]
+ * for every view, [calendarSubtitle] for the header's count — so that no
+ * call site can forget to and no test has to reach a composable to pin it.
+ * (The screen used to call this itself at `CalendarScreen.kt:89`, where
+ * deleting the call broke the agenda silently and no case failed.)
  */
 internal fun List<CalendarEvent>.withReadableStart(): List<CalendarEvent> =
     filter { parseLocal(it.starts_at) != null }
@@ -83,7 +89,17 @@ internal fun stepAnchor(view: CalView, anchor: LocalDate, dir: Long): LocalDate 
     CalView.Day -> anchor.plusDays(dir)
 }
 
-/** Events shown for the current view window (the web `visible` memo). */
+/**
+ * Events shown for the current view window (the web `visible` memo).
+ *
+ * A row whose `starts_at` will not parse is dropped **here**, inside the
+ * one function every view goes through, the way iOS does it
+ * (`CalendarRules.swift:95` `calendarVisibleEvents(mode:anchor:events:in:)`,
+ * which "drops the sentinel by name and not by its window"). Month, week
+ * and day drop it through their own predicates — [startLocal] is
+ * `LocalDateTime.MAX`, outside every window — but the agenda's filter has a
+ * floor and no ceiling, so it has to say so explicitly (D18).
+ */
 internal fun visibleEvents(
     view: CalView,
     anchor: LocalDate,
@@ -109,11 +125,37 @@ internal fun visibleEvents(
     CalView.Agenda -> {
         val floor = anchor.atStartOfDay()
         events
+            // The unreadable row is excluded by name: this window keeps
+            // anything that has not ENDED, and such a row's `endLocal()` is
+            // `LocalDateTime.MAX` too, so `MAX >= floor` holds and the
+            // agenda would carry it forever, sorted last under a junk day
+            // header. iOS's agenda branch does exactly this
+            // (`CalendarRules.swift` `calendarStartMs($0) != Int64.max`).
+            .withReadableStart()
             .filter { !it.endLocal().isBefore(floor) }
             .sortedBy { it.starts_at }
             .take(25)
     }
 }
+
+/**
+ * The page header's second line — `"1 event · the household's calendar"`.
+ *
+ * A pure function rather than a string built in the composable, for two
+ * reasons. It counts what the calendar will DRAW, so the row with an
+ * unreadable `starts_at` that no view shows is not counted either (D18;
+ * the drop lives in one predicate, [withReadableStart], with
+ * [visibleEvents]). And `"${events.size} events"` printed `1 events` —
+ * the same defect as the chapter counts (D48), fixed with the same
+ * helper.
+ *
+ * Android counts the WHOLE list, not the current window, because the whole
+ * list is what it read (`GET /api/calendar/events` with no window). iOS
+ * reads a window per view and so says "in view" and counts that
+ * (`CalendarStrings.subtitle(count:)`).
+ */
+internal fun calendarSubtitle(events: List<CalendarEvent>): String =
+    "${plural(events.withReadableStart().size, "event")} · the household's calendar"
 
 // ---------------------------------------------------------------------------
 // Formatting — lowercase chrome, US-style clock like the web helpers.
@@ -210,7 +252,16 @@ internal fun editDraftOf(e: CalendarEvent): EventDraft? =
 
 internal fun draftOf(e: CalendarEvent): EventDraft {
     val s = e.startLocal()
-    val en = parseLocal(e.ends_at) ?: s.plusHours(1)
+    // The sentinel stays itself. `s` is `LocalDateTime.MAX` for a
+    // `starts_at` we cannot read, and `MAX.plusHours(1)` overflows the year
+    // and THROWS `DateTimeException` — so the row that made [startLocal]
+    // return a sentinel would crash the one function that reads it. iOS
+    // guards the same addition (`CalendarFormat.swift:165`,
+    // `start == Int64.max ? Int64.max : start + 3_600_000`): "an unreadable
+    // starts_at cannot be turned into a real instant by addition".
+    // [editDraftOf] screens such a row out before it gets here, which makes
+    // this the second lock on that door rather than the only one.
+    val en = parseLocal(e.ends_at) ?: if (s == LocalDateTime.MAX) s else s.plusHours(1)
     return EventDraft(
         id = e.id,
         title = e.title,

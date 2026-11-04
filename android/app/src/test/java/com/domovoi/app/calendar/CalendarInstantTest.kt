@@ -3,6 +3,7 @@ package com.domovoi.app.calendar
 import com.domovoi.app.ui.screens.calendar.CalView
 import com.domovoi.app.ui.screens.calendar.CalendarEvent
 import com.domovoi.app.ui.screens.calendar.calendarInstant
+import com.domovoi.app.ui.screens.calendar.calendarSubtitle
 import com.domovoi.app.ui.screens.calendar.draftOf
 import com.domovoi.app.ui.screens.calendar.editDraftOf
 import com.domovoi.app.ui.screens.calendar.visibleEvents
@@ -77,16 +78,48 @@ class CalendarInstantTest {
         assertEquals(emptyList<Long>(), visibleEvents(CalView.Week, today, listOf(bad())).map { it.id })
     }
 
-    @Test fun theScreenDropsTheRowBeforeItCountsOrDrawsAnything() {
-        // The agenda is why the drop has to happen at the source: its filter
-        // keeps anything that has not ended, and an unreadable row's end is
-        // the far future, so the agenda alone would carry it forever.
-        assertEquals(listOf(2L), listOf(bad(), good()).withReadableStart().map { it.id })
+    @Test fun theAgendaDropsTheRowItselfAndNotBecauseTheScreenAskedIt() {
+        // The list goes in RAW — no `withReadableStart()` at the call site —
+        // because that is how `CalendarScreen` passes it. The agenda window
+        // is where the drop has to live: its filter keeps anything that has
+        // not ENDED, and an unreadable row's `endLocal()` is the far future
+        // too, so the row would be carried forever.
+        //
+        // This case exists because the drop WAS a line in the composable
+        // (`CalendarScreen.kt:89`), where deleting it broke the agenda with
+        // all 2233 unit cases still green — review-1 sabotage 5.
         assertEquals(
             listOf(2L),
-            visibleEvents(CalView.Agenda, LocalDate.of(2026, 9, 1), listOf(bad(), good()).withReadableStart())
+            visibleEvents(CalView.Agenda, LocalDate.of(2026, 9, 1), listOf(bad(), good()))
                 .map { it.id },
         )
+        // And the predicate on its own, which both the window and the
+        // header's count are built from.
+        assertEquals(listOf(2L), listOf(bad(), good()).withReadableStart().map { it.id })
+    }
+
+    @Test fun theHeaderCountsOnlyWhatTheCalendarWillDraw() {
+        // Same raw list: the header used to read `"${events.size} events"`
+        // over whatever the screen had filtered for itself, so it counted
+        // the dropped row whenever that filter was not there.
+        assertEquals("1 event · the household's calendar", calendarSubtitle(listOf(bad(), good())))
+        // … and `1 events` is gone with it (D48's defect class).
+        assertEquals("2 events · the household's calendar", calendarSubtitle(listOf(good(2), good(3))))
+        assertEquals("0 events · the household's calendar", calendarSubtitle(emptyList()))
+        assertEquals("0 events · the household's calendar", calendarSubtitle(listOf(bad())))
+    }
+
+    @Test fun aDraftForAnUnreadableStartDoesNotOverflowTheYear() {
+        // `LocalDateTime.MAX.plusHours(1)` throws DateTimeException, so the
+        // sentinel's own default end would crash `draftOf` for exactly the
+        // row the sentinel was introduced for. iOS keeps the sentinel
+        // itself (`CalendarFormat.swift:165`) and so does this.
+        val d = draftOf(bad())
+        assertEquals(LocalDateTime.MAX, d.start)
+        assertEquals(LocalDateTime.MAX, d.end)
+        // A readable row with no `ends_at` still gets its hour.
+        val hour = draftOf(good())
+        assertEquals(hour.start.plusHours(1), hour.end)
     }
 
     @Test fun theEditorRefusesToOpenForAnUnreadableStart() {

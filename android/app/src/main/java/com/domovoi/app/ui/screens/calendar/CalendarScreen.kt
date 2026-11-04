@@ -83,10 +83,14 @@ fun CalendarScreen() {
     val state = rememberApi(eventTypes = setOf("calendar.events.changed")) { a ->
         a.api.get("/api/calendar/events").decode<List<CalendarEvent>>()
     }
-    // A row whose `starts_at` we cannot read is dropped here, before
-    // anything counts or draws it (D18) — it used to be drawn as if it
-    // were happening now.
-    val events = (state.data ?: emptyList()).withReadableStart()
+    // The whole list, as read. A row whose `starts_at` we cannot read is
+    // dropped by the two functions that put rows and counts on the page —
+    // `visibleEvents` for every view and `calendarSubtitle` for the
+    // header — and NOT by a filter here (D18). It was a filter here, and
+    // deleting that one line broke the agenda with every one of the 2233
+    // unit cases still green; a composable is not somewhere a behaviour
+    // should live alone.
+    val events = state.data ?: emptyList()
 
     var view by remember(compact) {
         mutableStateOf(if (compact) CalView.Agenda else CalView.Month)
@@ -95,6 +99,9 @@ fun CalendarScreen() {
     var selectedId by remember { mutableStateOf<Long?>(null) }
     var editorDraft by remember { mutableStateOf<EventDraft?>(null) }
     var deleteTarget by remember { mutableStateOf<CalendarEvent?>(null) }
+    // `selectedId` only ever comes from tapping a drawn row, and a row with
+    // an unreadable start is never drawn, so this cannot resolve to one;
+    // `editDraftOf` refuses it anyway if a stale id ever did.
     val selected = events.firstOrNull { it.id == selectedId }
 
     fun save(d: EventDraft) {
@@ -148,7 +155,7 @@ fun CalendarScreen() {
     Column(Modifier.fillMaxSize().padding(16.dp)) {
         PageHeader(
             "Calendar",
-            "${events.size} events · the household's calendar",
+            calendarSubtitle(events),
             actions = {
                 Button(onClick = { editorDraft = blankDraft(anchor) }) { Text("new event") }
             },
