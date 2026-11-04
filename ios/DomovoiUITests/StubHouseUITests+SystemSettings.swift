@@ -756,16 +756,6 @@ extension StubHouseUITests {
     /// With text leaves only, App layout's bare allowance is 0 and its
     /// composed one is 2 (`Podcasts`, `Audiobooks`), which still covers that
     /// run's 2 anonymous findings. About passes `false` and is unaffected.
-    ///
-    /// **And a cut button with no cut text inside it is a leaf of its own.**
-    /// Train I003's bare run put that right: the edge crossed two `add … to
-    /// the bar` chips whose labels sat *below* it, so nothing was a cut text,
-    /// and Apple still had an 8.7-point sliver of chip with no glyph in it to
-    /// report one anonymous `Contrast failed` against. The count in the body
-    /// is `cutTexts + cut buttons none of whose own texts are cut` — two
-    /// populations that cannot overlap, so `Podcasts` and `Audiobooks` are
-    /// still counted once each and the bare run is allowed the 2 glyphless
-    /// slivers it really has.
     @MainActor
     @available(iOS 17.0, *)
     func systemSettingsAudit(
@@ -795,49 +785,13 @@ extension StubHouseUITests {
         func straddles(_ box: CGRect) -> Bool { box.minY < bottom && box.maxY > bottom }
         let cutTexts = app.staticTexts.allElementsBoundByIndex.filter { straddles($0.frame) }
         let cutButtons = app.buttons.allElementsBoundByIndex.filter { straddles($0.frame) }
-        // **A cut button whose own label is wholly outside the viewport is a
-        // cut leaf too** — train I003's bare run is the measurement. The
-        // scroll view was `{{0, 0}, {393, 770}}`, so the edge was at y = 770;
-        // `add Images to the bar` and `add News to the bar` each spanned
-        // 761.3…805.3 and each held a `staticText` (`Images`, `News`) at
-        // 773.2…793.5 — **below** the edge, so neither one straddles and
-        // `cutTexts` was empty. Apple still returned one anonymous
-        // `Contrast failed`, because the 8.7 points of those chips it could
-        // sample hold the outline and the fill and not one glyph: the same
-        // "half an element has no pixels to read" this file already allows
-        // for, arriving through the container because the container is the
-        // only thing the edge crossed.
-        //
-        // The note above this function says "text leaves, not their buttons",
-        // and that stays the rule where the text **is** cut: `Podcasts` and
-        // `Audiobooks` are each a cut `staticText` inside a cut button, and
-        // counting both doubled the allowance. So a cut button is counted
-        // only when none of its own text leaves is cut — the two populations
-        // cannot overlap, and the bare run's allowance goes from 0 to the 2
-        // glyphless slivers that are actually on screen.
-        //
-        // What this does NOT re-open: a **named** finding is still judged by
-        // its own frame two blocks down, so I002's `4` at y = 513.5 fails
-        // whatever this count is. An anonymous finding of that defect could
-        // sit in this allowance, which is the standing weakness of any
-        // anonymous allowance and the reason the number is measured per run
-        // rather than pinned.
-        let glyphlessCutButtons = cutButtons.filter { button in
-            !button.staticTexts.allElementsBoundByIndex.contains { straddles($0.frame) }
-        }
         // Printed whether or not they are allowed for: a case that goes red
-        // here next train needs to know what the edge was cutting, and which
-        // side of the count each leaf fell.
+        // here next train needs to know what the edge was cutting. The
+        // buttons are printed and NOT counted — see the note above.
         for leaf in cutTexts { print("AUDIT \(name) CUT :: \(Self.oneLine(leaf))") }
-        for leaf in cutButtons {
-            let counted = glyphlessCutButtons.contains { $0.frame == leaf.frame }
-            print(
-                "AUDIT \(name) CUT (button, \(counted ? "no glyph in the sliver, counted" : "its own text is cut, not counted")) "
-                    + ":: \(Self.oneLine(leaf))"
-            )
-        }
+        for leaf in cutButtons { print("AUDIT \(name) CUT (button, not counted) :: \(Self.oneLine(leaf))") }
 
-        var anonymousAllowed = cutAllowed ? cutTexts.count + glyphlessCutButtons.count : 0
+        var anonymousAllowed = cutAllowed ? cutTexts.count : 0
         let unexplained = rest.filter { line in
             guard cutAllowed, line.hasPrefix("Contrast failed") else { return true }
             if let box = Self.frame(in: line) { return !straddles(box) }

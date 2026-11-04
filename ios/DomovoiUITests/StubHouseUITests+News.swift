@@ -1160,16 +1160,30 @@ extension StubHouseUITests {
                         allowingLeavesCutByAnEdge: false
                     )
                     // **The dialog has to still be there to be dismissed**,
-                    // and in train I003 it was not: `news-remove-ask` was on
-                    // screen for `news-12-audited-dialog`, the audit took two
-                    // seconds, and `news-remove-cancel` was gone by the tap —
-                    // with the page behind it *un*hidden and its rows intact,
-                    // so the detail model had not been torn down and nothing
-                    // in `NewsPersonModel` clears `confirmingRemoval` without
-                    // also tearing it down. The view above this screen was
-                    // rebuilt, which is the same instability that put
-                    // `testPrinting_PanelAudit` and the About audit back on
-                    // the Settings index inside one case.
+                    // and in train I003 it was not. Two snapshots, five
+                    // seconds apart, and nothing between them but the audit:
+                    //
+                    // * `news-12-audited-dialog` (t = 68.57): the dialog is
+                    //   up — `news-remove-ask`, `news-remove-cancel`,
+                    //   `news-remove-confirm` — and the page behind it is
+                    //   `.accessibilityHidden`, its scroll content an empty
+                    //   `{{0, -341.7}, {393, 1111.7}}` with no leaves. That
+                    //   is the correct modal shape, so nothing was wrong yet.
+                    // * The failed `tap()`'s own input dump (t = 73.07): no
+                    //   `news-remove-cancel` anywhere, and the page back and
+                    //   whole — `news-remove-topic-tech`, `news-expand-tech`,
+                    //   both person chips, both story rows.
+                    //
+                    // So the dialog closed itself during its own audit and
+                    // the detail screen behind it survived intact. Nothing in
+                    // `NewsPersonModel` clears `confirmingRemoval` without
+                    // also tearing `detail` down — `stop()` does both
+                    // (`NewsPersonModel.swift:432-444`) and `cancelRemoval()`
+                    // / `confirmRemoval(_:)` only run from the dialog's own
+                    // buttons — so the presentation was dropped from above,
+                    // the same instability that put `testPrinting_PanelAudit`
+                    // and the About and App-layout audits back on the
+                    // Settings index inside one case.
                     //
                     // An unguarded `tap()` reports that as "Failed to tap",
                     // which says nothing about what happened. This is **not**
