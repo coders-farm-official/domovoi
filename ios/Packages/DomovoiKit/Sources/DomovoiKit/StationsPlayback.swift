@@ -40,8 +40,12 @@ public protocol StationsPlayback: Sendable {
 /// The witness for a build with no audio engine: nothing plays, and the
 /// screen draws nothing that says it would.
 ///
-/// What the `stations` route slot passes until the `player` item merges, at
-/// which point **one line** in `RouteScreen` changes and nothing else does.
+/// **The route slot no longer passes this.** D46 landed
+/// `StationsPhonePlayback` over ``ShellModel/player``, and the one line in
+/// `RouteScreen` changed as this note said it would. It is kept because it is
+/// what every ``StationsModel`` test that is *about* the no-engine rules is
+/// built on — the screen still has to draw nothing when the player is nil,
+/// which is a phone with no device id.
 public struct StationsNoPlayback: StationsPlayback {
 
     public init() {}

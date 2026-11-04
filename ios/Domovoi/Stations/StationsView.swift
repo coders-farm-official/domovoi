@@ -35,16 +35,23 @@ import SwiftUI
 /// "fcc running: 0 new, 0 updated" about a job that has not begun (MAP §8.1,
 /// reported, not fixed — `android/` is out of bounds).
 ///
-/// **Playing anything, until the `player` item's witness reaches the route
-/// slot.** ``StationsPlayback`` is the seam and this branch passes
-/// ``StationsNoPlayback``, so **no play affordance is drawn at all**: no row
-/// that plays, no play glyph, no `play here`. Said once on the page
-/// (``StationsModel/playbackNote``), and the subtitle drops Android's
-/// `· tap a station to play it` with it — the one instruction on the screen
-/// must not be one that does nothing. ``StationsModel/play(_:)`` sends
-/// nothing either, because `POST /play` stamps the station into Recent: the
-/// one visible effect of a silent button would be a history entry for
-/// something nobody heard.
+/// **Nothing, on the playback front, any more.** ``StationsPlayback`` was
+/// the seam and the branch passed ``StationsNoPlayback``, so no play
+/// affordance was drawn at all. D46 (Kamron's answer 46: "the real play
+/// buttons are added in this same work") filled it:
+/// ``StationsPhonePlayback`` is the witness the route slot passes now, over
+/// ``ShellModel/player``, and every affordance the screen already knew how to
+/// draw appears — the rows that play, the play glyph, `play here`.
+/// ``StationsModel/playbackNote`` goes quiet by itself, because it is
+/// `playback.canPlay ? nil : …`, and the subtitle's
+/// `· tap a station to play it` is true again.
+///
+/// The witness still answers **false on a phone with no device id**, which is
+/// what ``ShellModel/player`` is nil for: a station needs no position slot,
+/// but the player that plays it writes one for whatever else is in its queue,
+/// and a second player built just for radio is a second thing heard at once.
+/// So the whole screen goes back to drawing no play affordance in that state,
+/// which is exactly what it was built to do.
 ///
 /// **Pages.** Android's `prev` / `next` footers, its `page n / m` line, its
 /// "nothing on this page" empty and the effect that steps back a page when
@@ -331,5 +338,49 @@ struct StationsView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, 8)
+    }
+}
+
+/// The app's one player, as this screen's seam.
+///
+/// `app.player.playItems(listOf(PlayItem.fromStation(...)))`
+/// (`StationPlay.kt:71`) — one line on Android, because its player is on its
+/// container. Here the owner is ``ShellModel/player`` (D49) and this is the
+/// adapter, which is what the route slot's comment said the merge would be:
+/// *"This one argument is the whole of what the merge that brings phone audio
+/// changes here."*
+///
+/// A `struct` and not a class: ``StationsPlayback`` is `Sendable`, and a
+/// main-actor-isolated class is `Sendable` — so holding the player in a value
+/// is the shape that satisfies both without an `@unchecked`.
+///
+/// ``canPlay`` is false for a nil player, and the screen then draws no play
+/// affordance anywhere. ``StationsModel/play(_:)`` checks it before it POSTs
+/// `/play`, which matters: that route stamps the station into Recent, so a
+/// silent button's one visible effect would be a history entry for something
+/// nobody heard.
+struct StationsPhonePlayback: StationsPlayback {
+
+    let player: PlayerModel?
+
+    var canPlay: Bool { player != nil }
+
+    /// Hand the row to the player as a live stream.
+    ///
+    /// ``PlayerItem/fromStation(id:name:)`` builds it: the artist line is the
+    /// literal `"live radio"` and `seekable` is **false**, so the model
+    /// refuses a seek and the lock screen's scrubber is disabled — a live
+    /// stream has no place to seek to. Its `src` is
+    /// `/api/plugins/radio/stations/{id}/stream`, the same relay
+    /// ``StationsRules/stream(_:)`` names, which resolves a **row id** rather
+    /// than a URL so the server can refuse a house-local address and relay
+    /// bytes the phone cannot reach itself.
+    ///
+    /// The row is always one the server has stamped: the model POSTs `/play`
+    /// first and hands on the row that answered, which is how a directory hit
+    /// that was never saved gets an id.
+    @MainActor
+    func play(station: StationsRow) {
+        player?.play([PlayerItem.fromStation(id: Int64(station.id), name: station.name)])
     }
 }

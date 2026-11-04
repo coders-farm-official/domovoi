@@ -1132,7 +1132,12 @@ public final class ShellModel {
 
     /// How many players this shell has built. One, for the life of a shell —
     /// `PlayerOwnerTests` is the thing that says so.
-    public private(set) var playerBuilds = 0
+    ///
+    /// Outside observation with the other two: a route slot reads ``player``
+    /// from a `body` to decide whether it may draw a play control
+    /// (`RouteScreen.swift`'s `stations` slot), and a **tracked** counter
+    /// moving there is SwiftUI's "Modifying state during view update".
+    @ObservationIgnored public private(set) var playerBuilds = 0
 
     @ObservationIgnored private var heldPlayer: PlayerModel?
     @ObservationIgnored private var playerServer: PlayerServerScope?
