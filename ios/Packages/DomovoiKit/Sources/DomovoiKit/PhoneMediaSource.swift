@@ -67,9 +67,17 @@ public enum PhoneMediaKind: String, Codable, Equatable, Sendable, CaseIterable {
         self = PhoneMediaKind(rawValue: FileKinds.kind(of: fileName, isDir: isDir)) ?? (isDir ? .folder : .other)
     }
 
-    /// The kinds the device side of Music lists. Audio only — and **no play
-    /// control on any of them**, for the reason
-    /// ``PhoneMediaStrings/noPhonePlayerYet`` gives.
+    /// The kinds the device side of Music lists. Audio only.
+    ///
+    /// It used to say "**no play control on any of them**", pointing at
+    /// `PhoneMediaStrings.noPhonePlayerYet`. Both halves are gone: the Player
+    /// item removed that sentence in this batch because the premise under it
+    /// was false — the device id the player is keyed to is minted locally on
+    /// first launch, so a `file://` track plays in the local shell with no
+    /// server at all — and these rows have a tap now. Rewritten here rather
+    /// than left as a dangling DocC reference, which is what it becomes the
+    /// day that branch merges (batch REPORT, the Player unit's "Needs a
+    /// shared change").
     public static let audioOnly: Set<PhoneMediaKind> = [.audio]
 
     /// The kinds the device side of Videos lists.

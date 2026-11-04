@@ -37,14 +37,18 @@ import SwiftUI
 /// really can write — the old note was about a batch that had not built them,
 /// not about a refusal. Tapping a `.txt`, a `.md`, a `.csv` or an `.xlsx` in
 /// Documents opens an editor (``DocumentsEditorCover``), and the header
-/// offers `+ New` there. What is still **not** built: the
-/// formatted-document/Word editor, which is the dashboard's own page in a
-/// WebView, and with it pictures-in-a-document, co-editing and the
-/// print/share-as-Word downloads; `+ New → Document`, which would make an
-/// `.html` with nowhere to open; and the Documents upload, bulk zip and
-/// delete. A `.html` or `.docx` row therefore still opens the **reader**,
-/// whose "read-only — editing is on the dashboard" line stays true of exactly
-/// the files that reach it. See `overnight/documents/DECISIONS.md`.
+/// offers `+ New` there. What is still **not** built: pictures in a
+/// document, which wants an `NSPhotoLibraryUsageDescription` nothing has
+/// added yet; and the Documents upload, bulk zip and delete.
+///
+/// **A `.html` or a `.docx` opens an editor now, not the reader.** The lines
+/// above said the opposite and were true when they were written: the
+/// Documents item of the 2026-11-03 batch built the WebView host, so
+/// ``DocumentsEditorKind`` resolves `.html`, `.htm` and `.docx` to `.web`
+/// and `+ New → Document` has somewhere to open after all. The reader's
+/// "read-only — editing is on the dashboard" line stays true of exactly the
+/// files that still reach it. See `batch-2026-11-03/documents/REPORT.md`,
+/// which asked for these two lines from whoever owned this file next.
 ///
 /// **Printing and scanning are here now.** A printable row offers `Print`
 /// (``PrintSheetView``) and Documents' header offers `scan`
