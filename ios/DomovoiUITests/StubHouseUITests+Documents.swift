@@ -661,17 +661,28 @@ extension StubHouseUITests {
         XCTAssertTrue(documentsTap(app, "Letter to the council"), "back to the list")
         XCTAssertTrue(containing(app, "SAVED-FROM-THE-PHONE").waitForExistence(timeout: 30),
                       "the saved words are not in the document the house hands back")
+        // After the wait, not before it: this paragraph is drawn on the same
+        // load as the document, so asking before the page has answered asks
+        // about a page that is not there yet.
+        XCTAssertTrue(containing(app, "BRIDGE-HAS-DOWNLOAD").exists,
+                      "the page's Download menu would fall back to a browser's way of doing it")
         evidence(app, "documents-18c-formatted-reopened")
     }
 
     /// The fixture's three handoff markers, which the stub editor page draws
     /// when the token did not arrive, arrived twice, or there was no bridge
     /// at all. Every web-editor case asserts all three are absent.
+    /// `NO-DOWNLOAD-ON-THE-BRIDGE` is the fifth and the one that is not
+    /// about the token: it is the branch `doc_editor.jsx` takes for its
+    /// Download menu when the bridge has no `saveFile`/`print` — an
+    /// `<a download>` click and `window.print()`, both of which a
+    /// `WKWebView` ignores silently.
     static let docsHandoffMarkers = [
         "NO-TOKEN-ON-THE-PAGE-REQUEST",
         "TOKEN-HANDED-TWICE",
         "NO-BRIDGE-ON-THIS-PAGE",
         "PAGE-COULD-NOT-READ",
+        "NO-DOWNLOAD-ON-THE-BRIDGE",
     ]
 
     /// The host's own words, spelled here for the reason

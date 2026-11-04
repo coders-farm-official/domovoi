@@ -1,5 +1,6 @@
 import DomovoiKit
 import SwiftUI
+import UIKit
 import WebKit
 
 /// The household's formatted documents (`.html`, `.htm`) and Word files
@@ -168,6 +169,22 @@ struct DocumentsWebEditorView: View {
         // And on a network change, because the gate's proof is per network
         // and `inputs` can be identical across one.
         .onChange(of: model.networkGeneration) { _, _ in host?.recheck(model.inputs) }
+        // Download → Word / Markdown, which the page hands back as bytes
+        // (``DocumentsWebEditorModel/hand(name:mime:base64:)``). **One
+        // `.sheet` on this view and no other**: several on one view do not
+        // reliably coexist in SwiftUI, and `FilesView` is where this app
+        // found that out.
+        .sheet(item: handingBinding) { file in
+            DocumentsWebFileShare(file: file)
+        }
+    }
+
+    /// The model's `handing` as a binding, so the sheet can clear it on its
+    /// own dismissal. A manual `Binding` because the model arrives through
+    /// `@State` as an optional — there is nothing to project from until
+    /// ``body``'s `task` has built it.
+    private var handingBinding: Binding<DocumentsWebEditorFile?> {
+        Binding(get: { host?.handing }, set: { host?.handing = $0 })
     }
 
     @ViewBuilder
@@ -214,6 +231,60 @@ struct DocumentsWebEditorView: View {
     }
 }
 
+/// A file the editor page built and handed back, on its way to the share
+/// sheet — a `.docx` or a `.md` from its Download menu.
+///
+/// `id` carries the byte count as well as the name: Download → Word twice
+/// over, after an edit in between, is two different files with one name, and
+/// `.sheet(item:)` rebuilds on a changed id and not otherwise.
+struct DocumentsWebEditorFile: Identifiable, Equatable {
+    let name: String
+    let bytes: Data
+    var id: String { "\(name)#\(bytes.count)" }
+}
+
+/// The handed-back file, written down and then shared.
+///
+/// `ChatMoreFileShareSheet` (`ChatMoreSheets.swift:388`) is the same view for
+/// the same reason, and the reason is in ``FileShareSheet``: the activity
+/// controller takes a **url**, and bytes handed over as `Data` arrive
+/// unnamed.
+struct DocumentsWebFileShare: View {
+
+    let file: DocumentsWebEditorFile
+
+    @State private var url: URL?
+
+    var body: some View {
+        Group {
+            if let url {
+                FileShareSheet(url: url)
+            } else {
+                ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .accessibilityLabel(file.name)
+            }
+        }
+        .task {
+            guard url == nil else { return }
+            let manager = FileManager.default
+            let dir = manager.temporaryDirectory
+                .appendingPathComponent("docs-share", isDirectory: true)
+            try? manager.createDirectory(at: dir, withIntermediateDirectories: true)
+            // Emptied first, as Android empties its own share folder
+            // (`WebEditorHost.kt:423`): yesterday's copy of somebody's
+            // contract has no reason to still be on the phone, and the
+            // share sheet has already been handed the one it wanted.
+            if let old = try? manager.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) {
+                for one in old { try? manager.removeItem(at: one) }
+            }
+            let target = dir.appendingPathComponent(file.name)
+            guard (try? file.bytes.write(to: target, options: .atomic)) != nil else { return }
+            url = target
+        }
+    }
+}
+
 /// What the host needs before it can open the page: the server it is allowed
 /// to talk to, the page's address, and the token handed over once.
 struct DocumentsWebEditorHandoff: Equatable {
@@ -248,6 +319,10 @@ final class DocumentsWebEditorModel {
     }
 
     private(set) var state: State = .preparing
+
+    /// A file the page has handed back, on its way to the share sheet.
+    /// Cleared by the sheet's own dismissal.
+    var handing: DocumentsWebEditorFile?
 
     let entry: FileEntry
     private let dark: Bool
@@ -358,13 +433,99 @@ final class DocumentsWebEditorModel {
             deviceToken: function () { var v = t; t = ''; return v; },
             deviceId: function () { return \(jsString(deviceID ?? "")); },
             darkTheme: function () { return \(dark ? "true" : "false"); },
-            close: function () {
-              try { window.webkit.messageHandlers.\(Self.bridgeName).postMessage({ name: 'close' }); }
-              catch (e) { /* no host: the page falls back to history.back() */ }
+            close: function () { post({ name: 'close' }); },
+            saveFile: function (name, mime, base64) {
+              if (!base64 || base64.length > \(Self.maxShareBase64)) { return; }
+              post({ name: 'saveFile', file: name, mime: mime, data: base64 });
+            },
+            print: function (html, title) {
+              if (!html || html.length > \(Self.maxPrintCharacters)) { return; }
+              post({ name: 'print', html: html, title: title });
             }
           };
+          function post(what) {
+            try { window.webkit.messageHandlers.\(Self.bridgeName).postMessage(what); }
+            catch (e) { /* no host: the page falls back to the browser's way */ }
+          }
         })();
         """
+    }
+
+    /// `MAX_SHARE_BYTES` (`WebEditorHost.kt:378`) and the base64 length that
+    /// carries it, which is the length the bridge actually sees — Android
+    /// checks the same arithmetic on the same side (`:337`).
+    static let maxShareBytes = 64 * 1024 * 1024
+    static let maxShareBase64 = maxShareBytes / 3 * 4 + 4
+    /// `MAX_PRINT_CHARS` (`:379`).
+    static let maxPrintCharacters = 48 * 1024 * 1024
+
+    // MARK: - the page handing something back
+
+    /// `saveFile(name, mime, base64)` (`:335`) — Download → Word or Markdown.
+    ///
+    /// **This is not an extra.** `deliverFile` (`doc_editor.jsx:1739`) uses
+    /// the bridge when `typeof host.saveFile === 'function'` and otherwise
+    /// clicks an `<a download>`; in a `WKWebView` with no
+    /// `WKDownloadDelegate` that click does nothing at all, silently. So a
+    /// bridge without this method is a Download menu that looks like it
+    /// works — [[no-misleading-controls]] in the page this app chose to
+    /// host, which is this app's problem whoever drew the button.
+    ///
+    /// The bytes land in a file because that is what a share sheet takes
+    /// (``FileShareSheet``, `FileViewers.swift:212`): handed `Data`, every
+    /// activity gets an unnamed blob, and the name is the point.
+    func hand(name: String, mime: String, base64: String) {
+        guard base64.count <= Self.maxShareBase64,
+              let bytes = Data(base64Encoded: base64, options: .ignoreUnknownCharacters),
+              !bytes.isEmpty else { return }
+        handing = DocumentsWebEditorFile(name: Self.shareName(name, mime: mime), bytes: bytes)
+    }
+
+    /// `print(html, title)` (`:344`) — Download → PDF.
+    ///
+    /// Android hands the page to the print service; iOS has
+    /// `UIPrintInteractionController`, whose sheet offers AirPrint **and**
+    /// Save to Files, which is where the PDF comes from. `printDocument`
+    /// (`doc_editor.jsx:1714`) falls back to `window.print()` in a hidden
+    /// iframe, and `window.print()` is a no-op in a `WKWebView` — the same
+    /// silent nothing as the download, for the same reason.
+    ///
+    /// The html is the **page the editor built** (`printablePage`), already
+    /// styled and with its pictures in it, so a markup formatter is the right
+    /// one: it lays out exactly that document rather than re-rendering the
+    /// view.
+    func printPage(html: String, title: String) {
+        guard !html.isEmpty, html.count <= Self.maxPrintCharacters else { return }
+        // Belt and braces: the framework is always there on iOS, and a
+        // version of it that says no is a version where there is nothing to
+        // present rather than something to apologise for.
+        guard UIPrintInteractionController.isPrintingAvailable else { return }
+        let info = UIPrintInfo.printInfo()
+        info.outputType = .general
+        info.jobName = Self.shareName(title, mime: "")
+        let controller = UIPrintInteractionController.shared
+        controller.printInfo = info
+        controller.printFormatter = UIMarkupTextPrintFormatter(markupText: html)
+        _ = controller.present(animated: true, completionHandler: nil)
+    }
+
+    /// `safeFileName` (`:416`) with `shareMime` (`:410`) folded in.
+    ///
+    /// The extension does the work `mime` does on Android: a share sheet has
+    /// no MIME type of its own — every activity reads the file's own
+    /// extension — so a name without one gets the one the page asked for.
+    static func shareName(_ name: String, mime: String) -> String {
+        let refused: Set<Character> = ["\\", "/", ":", "*", "?", "\"", "<", ">", "|"]
+        var cleaned = String(name.map { character in
+            let control = (character.unicodeScalars.first?.value ?? 32) <= 0x1f
+            return control || refused.contains(character) ? "_" : character
+        })
+        cleaned = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+        while cleaned.hasPrefix(".") { cleaned.removeFirst() }
+        cleaned = String(cleaned.prefix(120))
+        if cleaned.isEmpty { cleaned = "Document" }
+        guard !mime.isEmpty, !cleaned.contains(".") else { return cleaned }
+        return cleaned + (mime == "text/markdown" ? ".md" : ".docx")
     }
 
     /// A JavaScript string literal for `text`, through `JSONSerialization` so
@@ -601,17 +762,42 @@ final class DocumentsWebEditorCoordinator: NSObject, WKNavigationDelegate, WKScr
         decisionHandler(.allow)
     }
 
-    /// The page asking the app to leave the editor — `close()` (`:331`).
-    /// Nothing else is accepted: an unknown `name` is a page doing something
+    /// The three things the page asks the app for: `close()` (`:331`),
+    /// `saveFile` (`:335`) and `print` (`:344`).
+    ///
+    /// Nothing else is accepted. An unknown `name` is a page doing something
     /// this host was not built for, and acting on it would be acting on
-    /// whatever the page says.
+    /// whatever the page says — which is the rule for everything that
+    /// arrives from inside a web view.
+    ///
+    /// The arguments are read defensively and the methods themselves refuse
+    /// what they cannot use (an empty body, an over-long one, bytes that are
+    /// not base64): a message handler is reachable by any script the page
+    /// runs, and `message.frameInfo` is not something this host can pin to
+    /// the main frame on its own.
     func userContentController(
         _ userContentController: WKUserContentController,
         didReceive message: WKScriptMessage
     ) {
         guard message.name == DocumentsWebEditorModel.bridgeName,
               let body = message.body as? [String: Any],
-              (body["name"] as? String) == "close" else { return }
-        onClose()
+              let name = body["name"] as? String else { return }
+        switch name {
+        case "close":
+            onClose()
+        case "saveFile":
+            host.hand(
+                name: (body["file"] as? String) ?? "",
+                mime: (body["mime"] as? String) ?? "",
+                base64: (body["data"] as? String) ?? ""
+            )
+        case "print":
+            host.printPage(
+                html: (body["html"] as? String) ?? "",
+                title: (body["title"] as? String) ?? ""
+            )
+        default:
+            return
+        }
     }
 }
