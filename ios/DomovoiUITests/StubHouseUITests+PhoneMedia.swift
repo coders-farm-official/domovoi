@@ -356,9 +356,34 @@ extension StubHouseUITests {
     /// Never `app.swipeUp()`, whose gesture starts in the middle of the
     /// window — which at AX5 **is the pill**, so it scrolls nothing at all.
     /// That is half of why these cases found nothing.
+    ///
+    /// ### `identifier`, since review 3 of the 2026-11-03 batch
+    ///
+    /// ``documentsFolderScroll(_:)`` picks the full-width scroll view with the
+    /// smallest `minY`, which is a heuristic over a screen that has **two**:
+    /// the parked side of the switch keeps its own at the same frame. Given a
+    /// device page's identifier (`PhoneDeviceLists` in the app, spelt out in
+    /// ``StubPhoneMedia``) this takes that one and the heuristic is out of it.
+    ///
+    /// A case that scrolls a device list calls this rather than building a
+    /// gesture of its own. The AX5 growth case did build one — two
+    /// coordinates and a press-and-drag — and reached 12% of the travel it
+    /// asked for, because a press-and-drag that begins on a row is a gesture
+    /// the row may take. One copy of how a page under the switch is scrolled,
+    /// as the comment above this one says.
     @MainActor
-    func phoneSourceFlick(_ app: XCUIApplication) {
-        documentsFolderScroll(app)?.swipeUp(velocity: .slow)
+    func phoneSourceFlick(_ app: XCUIApplication, _ identifier: String? = nil) {
+        guard let identifier else {
+            documentsFolderScroll(app)?.swipeUp(velocity: .slow)
+            return
+        }
+        let list = app.scrollViews[identifier].firstMatch
+        guard list.exists else {
+            print("=== NO SCROLL VIEW `\(identifier)` TO FLICK — tree follows ===")
+            print(app.debugDescription)
+            return
+        }
+        list.swipeUp(velocity: .slow)
     }
 
     // MARK: - the switch
@@ -1201,8 +1226,9 @@ extension StubHouseUITests {
         /// a press-and-drag that begins on a row is a gesture the row may
         /// take.
         ///
-        /// So the gesture is the platform's own now — `swipeUp()` **on the
-        /// list**, which scrolls inside that element's frame — and the list
+        /// So the gesture is this file's own ``phoneSourceFlick(_:_:)`` now —
+        /// `swipeUp(velocity: .slow)` **on the list**, which scrolls inside
+        /// that element's frame, re-resolved every flick — and the list
         /// is found by `PhoneDeviceLists.files` in the app, an identifier
         /// added for this case. The hand-built drag existed only because
         /// there was no stable handle: the one query that found this
@@ -1263,13 +1289,18 @@ extension StubHouseUITests {
                 used = swipe
                 if required.allSatisfy({ out[$0] != nil }) { break }
                 if swipe == swipes { break }
-                let list = app.scrollViews[StubPhoneMedia.deviceFilesList].firstMatch
-                guard list.exists else {
+                guard app.scrollViews[StubPhoneMedia.deviceFilesList].firstMatch.exists else {
                     print("=== PHONEMEDIA SCALE [\(label)] THE LIST IS GONE at swipe \(swipe) ===")
                     break
                 }
                 let before = places()
-                list.swipeUp()
+                // This file's one copy of how a page under the switch is
+                // scrolled, now that it can be told which page:
+                // `.swipeUp(velocity: .slow)` on the list, re-resolved every
+                // flick. Not a full-velocity flick — momentum carries the
+                // page over rows, and at AX5 a row stepped over is a leaf
+                // that was never built and so never measured.
+                phoneSourceFlick(app, StubPhoneMedia.deviceFilesList)
                 let after = places()
                 let step = moved(before, after)
                 travel.append(Int(step ?? -1))
@@ -1443,7 +1474,7 @@ extension StubHouseUITests {
                 if here["tile-title"] != nil { break }
                 if swipe == 12 { break }
                 let before = app.staticTexts.allElementsBoundByIndex.map { $0.frame.minY }
-                app.scrollViews[StubPhoneMedia.deviceVideosList].firstMatch.swipeUp()
+                phoneSourceFlick(app, StubPhoneMedia.deviceVideosList)
                 let after = app.staticTexts.allElementsBoundByIndex.map { $0.frame.minY }
                 travel.append(Int(abs((after.min() ?? 0) - (before.min() ?? 0))))
                 still = before == after ? still + 1 : 0
