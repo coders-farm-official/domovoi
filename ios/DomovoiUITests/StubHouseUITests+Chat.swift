@@ -123,7 +123,7 @@ extension StubHouseUITests {
     @MainActor
     func chatShowEarlier(_ app: XCUIApplication) -> XCUIElement {
         app.buttons
-            .matching(NSPredicate(format: "label BEGINSWITH %@", ChatBatchUnderTest.showEarlier))
+            .matching(NSPredicate(format: "label BEGINSWITH %@", ChatStringsUnderTest.showEarlier))
             .firstMatch
     }
 
@@ -165,7 +165,7 @@ extension StubHouseUITests {
                 + "it says, on a blank box"
         )
         XCTAssertFalse(
-            app.buttons[ChatBatchUnderTest.talk].exists,
+            app.buttons[ChatMoreStringsUnderTest.talk].exists,
             "a mic on a chat with no thread yet: POST /threads/{id}/voice has no id to use"
         )
 
@@ -200,7 +200,7 @@ extension StubHouseUITests {
         evidence(app, "chat-thread-blank-composer")
 
         XCTAssertTrue(
-            app.buttons[ChatBatchUnderTest.talk].waitForExistence(timeout: 10),
+            app.buttons[ChatMoreStringsUnderTest.talk].waitForExistence(timeout: 10),
             "a thread with a blank box drew no mic — the mic-or-send rule has changed"
         )
         XCTAssertFalse(
@@ -215,7 +215,7 @@ extension StubHouseUITests {
             "a typed message was offered nothing to send it with"
         )
         XCTAssertFalse(
-            app.buttons[ChatBatchUnderTest.talk].exists,
+            app.buttons[ChatMoreStringsUnderTest.talk].exists,
             "the mic stayed beside the send on a box with words in it"
         )
     }
@@ -284,7 +284,7 @@ extension StubHouseUITests {
                 + "failed in train S005"
         )
         XCTAssertFalse(
-            app.buttons[ChatBatchUnderTest.talk].exists,
+            app.buttons[ChatMoreStringsUnderTest.talk].exists,
             "the mic took the spot while there were words in the box: the mic-or-send rule is "
                 + "about an EMPTY box (ChatScreen.kt:1157)"
         )
@@ -841,20 +841,12 @@ enum StubChatLong {
     static let asked = "Vermilion, and how does this one end"
 }
 
-/// The words this batch added or needs, which the shared
-/// ``ChatStringsUnderTest`` does not have.
-///
-/// Spelt out here and not added there: `StubHouseUITests.swift` is the
-/// transfers unit's file in this batch and this one may not edit it. Each of
-/// these is the app string's exact value, and a query that silently followed a
-/// renamed constant would stop testing what it claims to.
-enum ChatBatchUnderTest {
-
-    /// ``ChatStrings/showEarlier`` — the transcript's cap (D64).
-    static let showEarlier = "show earlier"
-
-    /// ``ChatMoreStrings/talk``, the mic's accessibility label. The ChatMore
-    /// unit's own file calls this `ChatMoreStringsUnderTest.talk`; that file
-    /// is another unit's too.
-    static let talk = "talk"
-}
+// `ChatBatchUnderTest` stood here. It held `showEarlier` and `talk` because
+// this unit could not add them to the files they belonged in:
+// `ChatStringsUnderTest` is in `StubHouseUITests.swift` (the transfers unit's
+// this batch) and `ChatMoreStringsUnderTest` is in
+// `StubHouseUITests+ChatMore.swift`. Both now have them — the transfers unit
+// added `ChatStringsUnderTest.showEarlier` in the same batch, and
+// `ChatMoreStringsUnderTest.talk` was already there — so the enum is deleted
+// on the integration, where all three files are in one tree. On either branch
+// alone this deletion does not compile, which is why neither unit made it.

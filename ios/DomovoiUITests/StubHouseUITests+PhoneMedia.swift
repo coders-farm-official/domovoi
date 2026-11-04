@@ -1631,14 +1631,19 @@ enum StubPhoneMedia {
     /// ``PhoneMediaStrings/uploadRefused(_:)``'s own opening, which only a
     /// 403 may use.
     static let uploadRefusedPrefix = "upload refused"
-    /// A prefix of `PhoneMediaStrings.tooBigToUpload(_:)`, matched as a
-    /// prefix so the byte formatting is not this case's business.
+    /// The opening of the sentence a row over the old ceiling used to draw,
+    /// matched as a prefix so the byte formatting is not this case's business.
     ///
-    /// **Nothing in the app draws this any more** (D43 took the ceiling out),
-    /// and it is kept because that is now what a case asserts: the string
-    /// still exists for a file the **server** refuses, which is a different
-    /// and live rule, so the only way to catch a ceiling creeping back is to
-    /// go on looking for these words.
+    /// **A literal on purpose, and the only copy left.** D43 took the ceiling
+    /// out and the integration deleted the rest of the chain —
+    /// `PhoneMediaStrings.tooBigToUpload(_:)`, `PhoneMediaError.tooBig` and
+    /// `PhoneUploadTooBigNote` — so there is no symbol to point at. (The
+    /// sentence was kept on the branches on the story that "the server can
+    /// still refuse a file for its size"; it cannot refuse it in *these*
+    /// words, a 403 or 413 is worded by `uploadRefused`/`uploadFailed`.)
+    /// Keeping the words here is what lets
+    /// `testPhoneMedia_EveryFileHasAnUploadControlNow` fail if a ceiling
+    /// creeps back and brings a line like this with it.
     static let tooBigPrefix = "too big to upload from a phone"
 
     /// The seeded library's one folder (``PhoneDeviceSources/seeded``).

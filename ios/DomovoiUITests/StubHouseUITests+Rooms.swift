@@ -107,34 +107,35 @@ extension StubHouseUITests {
         return app
     }
 
-    /// ``launch(mode:paired:server:port:strip:push:pushDelay:)`` with one more
-    /// launch argument on it: ``DropInTestSeam``'s.
+    /// ``launch(mode:paired:server:port:strip:push:pushDelay:args:)`` with one
+    /// more launch argument on it: ``DropInTestSeam``'s.
     ///
-    /// **A copy and not a parameter**, deliberately. `launch` is in
-    /// `StubHouseUITests.swift`, which this item does not own, and one more
-    /// optional parameter there is a line every other item in this batch
-    /// would have to merge around for the sake of two cases. The body is
-    /// `launch`'s, and the only thing it adds is the one argument: if `launch`
-    /// grows a step, this has to grow it too, which is the cost of not
-    /// touching the shared file.
+    /// It was a **copy** of `launch`'s body on this unit's branch, because
+    /// `launch` is in `StubHouseUITests.swift`, which this unit did not own,
+    /// and `launchArguments` must be set before `launch()`. The `args:`
+    /// parameter this unit asked for under "needs a shared change" landed in
+    /// the same batch, so the body is one call now and cannot drift from the
+    /// real launcher.
     @MainActor
     func roomsLaunch(mode: String, pushDelay: Double, micSeam: String) -> XCUIApplication {
-        let app = XCUIApplication()
-        app.launchArguments = [
-            "-domovoi-server", "127.0.0.1:6601",
-            "-domovoi-token", Self.token,
-            "-domovoi-audit-push", "Satellites",
-            "-domovoi-audit-push-delay", "\(pushDelay)",
-            "-UIPreferredContentSizeCategoryName", mode,
-            // The microphone, the audio session and the engine, replaced by
-            // stand-ins. Everything else about the call is the app's own —
-            // ``DropInTestSeam`` has the argument for why this exists and
-            // what it is not allowed to do.
-            "-domovoi-dropin-mic", micSeam,
-        ]
-        app.launch()
-        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 30))
-        return app
+        // **`launch(args:)` and not a copy of its body.** This used to write
+        // the whole launcher out again, because `launchArguments` must be set
+        // before `launch()` and there was no way to add one argument. The
+        // `args:` parameter landed on the transfers unit's branch in this same
+        // batch, so the duplicate — which drifted from `launch()` silently,
+        // and had already lost `wait(for: .runningForeground)`'s siblings once
+        // — is gone on the integration.
+        //
+        // `-domovoi-dropin-mic` replaces the microphone, the audio session and
+        // the engine with stand-ins. Everything else about the call is the
+        // app's own — ``DropInTestSeam`` has the argument for why this exists
+        // and what it is not allowed to do.
+        launch(
+            mode: mode,
+            push: "Satellites",
+            pushDelay: pushDelay,
+            args: ["-domovoi-dropin-mic", micSeam]
+        )
     }
 
     /// The summary line, which only a landed roster read can produce: the

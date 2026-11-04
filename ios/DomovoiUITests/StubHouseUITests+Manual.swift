@@ -1620,35 +1620,39 @@ extension StubHouseUITests {
     /// the map with the cards moving. If forever-animating nodes do hang
     /// XCUITest, that is the one case that hangs.
     ///
-    /// ``StubHouseUITests/launch(mode:paired:server:port:strip:push:pushDelay:)``
-    /// takes no extra launch arguments and lives in a shared file this item
-    /// may not edit, so this is that launch with the manual's own knobs on it
-    /// — written out rather than wrapped, because `launchArguments` has to be
-    /// set before `launch()`. An `args:` parameter on the shared helper would
-    /// replace this; it is in DECISIONS under "Needs a shared change".
+    /// This is
+    /// ``StubHouseUITests/launch(mode:paired:server:port:strip:push:pushDelay:args:)``
+    /// with the manual's own knobs on it. It used to be that function's body
+    /// written out again, because `launchArguments` has to be set before
+    /// `launch()` and the shared helper took no extra arguments; the `args:`
+    /// parameter this unit's DECISIONS asked for landed in the same batch, so
+    /// only the knobs are left here.
     @MainActor
     private func manualLaunch(
         mode: String = StubHouseUITests.ordinaryTypeSize,
         scrambleMS: Int? = nil,
         float: Bool = false
     ) -> XCUIApplication {
-        let app = XCUIApplication()
-        app.launchArguments = [
-            "-domovoi-server", "127.0.0.1:6601",
-            "-domovoi-token", Self.token,
-            "-domovoi-audit-push", "Manual",
-            "-domovoi-audit-push-delay", "\(Self.pushDelay)",
-            "-UIPreferredContentSizeCategoryName", mode,
-            // DEBUG-only on the app's side, read once at launch, so neither
-            // can leak into the next case.
-            float ? "-domovoi-manual-float-on" : "-domovoi-manual-float-off",
-        ]
+        // **`launch(args:)` and not a copy of its body.** This wrote the whole
+        // launcher out again because `launchArguments` must be set before
+        // `launch()` and there was no way to add one argument — a duplicate
+        // every case in this file goes through, so load-bearing and silently
+        // drifting from the real one. The `args:` parameter landed on the
+        // transfers unit's branch in this same batch (this unit's REPORT asked
+        // for it), so the duplicate is gone on the integration.
+        //
+        // Both seams are DEBUG-only on the app's side and read once at launch,
+        // so neither can leak into the next case.
+        var seams = [float ? "-domovoi-manual-float-on" : "-domovoi-manual-float-off"]
         if let scrambleMS {
-            app.launchArguments += ["-domovoi-manual-scramble", "\(scrambleMS)"]
+            seams += ["-domovoi-manual-scramble", "\(scrambleMS)"]
         }
-        app.launch()
-        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 30))
-        return app
+        return launch(
+            mode: mode,
+            push: "Manual",
+            pushDelay: Self.pushDelay,
+            args: seams
+        )
     }
 
     /// An element by its **whole** label, of any kind.

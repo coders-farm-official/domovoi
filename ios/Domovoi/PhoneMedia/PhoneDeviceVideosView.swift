@@ -258,7 +258,7 @@ struct PhoneVideoTile: View {
                 // One branch, not two: ``PhoneUploadModel/offersUpload(_:)``
                 // is `!item.isDir` since the transfers unit's streaming
                 // upload took the 64 MiB ceiling out, so the `else` that drew
-                // `PhoneUploadTooBigNote` was unreachable.
+                // `PhoneUploadTooBigNote` was unreachable; it is deleted now.
                 if let uploads, !item.isDir, uploads.offersUpload(item) {
                     PhoneUploadRowButton(
                         state: uploads.state(for: PhoneUploadKey.of(item, uploads.kind)),

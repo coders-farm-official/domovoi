@@ -169,7 +169,7 @@ struct PhoneMediaRowView: View {
     ///
     /// **No size branch any more.** ``PhoneUploadModel/offersUpload(_:)`` is
     /// `!item.isDir` since the transfers unit's streaming upload took the
-    /// 64 MiB ceiling out, so the `else` that drew `PhoneUploadTooBigNote`
+    /// 64 MiB ceiling out, so the `else` that drew `PhoneUploadTooBigNote` (deleted now)
     /// with the size in it was unreachable code describing a rule that no
     /// longer exists. Kept as an `if` on `offersUpload` rather than inlined,
     /// because that is still the model's question to answer and a later rule

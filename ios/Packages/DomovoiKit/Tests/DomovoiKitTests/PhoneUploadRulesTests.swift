@@ -329,26 +329,19 @@ final class PhoneUploadRulesTests: XCTestCase {
         )
     }
 
-    /// The ceiling's **sentence** outlives the ceiling (D43).
-    ///
-    /// `PhoneMediaError.tooBig` is no longer thrown by anything: the upload
-    /// streams off disk and never measures the file. The case and its wording
-    /// stay because `PhoneUploadRowButton`'s `PhoneUploadTooBigNote` and
-    /// `PhoneMediaListModel` still render them, and those are the phone-media
-    /// unit's to remove — a dangling `case` in a public enum is a compile
-    /// error in somebody else's file. So this case guards the text and says,
-    /// in one place, that nothing reaches it.
-    ///
-    /// The size is a literal rather than `PhoneUploadModel.cap + 1`, because
-    /// that static is gone. 65 MiB: what the old ceiling would have refused.
-    func testTheOldCeilingsSentenceStillReadsRightThoughNothingThrowsIt() {
-        let size: Int64 = 68_157_440
-        XCTAssertEqual(
-            phoneUploadFailureText("big.mov", PhoneMediaError.tooBig(name: "big.mov", size: size)),
-            PhoneMediaStrings.tooBigToUpload(size)
-        )
-        XCTAssertTrue(PhoneMediaStrings.tooBigToUpload(size).contains("65"))
-    }
+    // `testTheOldCeilingsSentenceStillReadsRightThoughNothingThrowsIt` stood
+    // here. It asserted `phoneUploadFailureText` wrote
+    // `PhoneMediaStrings.tooBigToUpload(_:)` for `PhoneMediaError.tooBig`, and
+    // its own doc said nothing threw that case: it guarded the wording of a
+    // sentence no screen could draw. The whole chain is deleted on the
+    // integration — the case, its arm here, the arm in the `LocalizedError`
+    // conformance, the sentence and `PhoneUploadTooBigNote` — so there is no
+    // text left to guard.
+    //
+    // What a ceiling coming back would fail is
+    // `testPhoneMedia_EveryFileHasAnUploadControlNow`, which counts the upload
+    // controls on a 200 MB row and looks for those words as a literal
+    // (`StubPhoneMedia.tooBigPrefix`).
 
     // There used to be a `testTheUploadCeilingIsTheSameNumberAsTheDownloadCeiling`
     // here, asserting `PhoneUploadModel.cap == FileSaveModel.cap` — one

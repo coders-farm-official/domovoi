@@ -206,25 +206,13 @@ struct PhoneUploadRefusedCard: View {
     }
 }
 
-/// What a row too big to upload says instead of having a control.
-///
-/// **Unreachable since D43**, and left defined on purpose. There is no
-/// ceiling in this app any more — ``PhoneUploadModel/offersUpload(_:)`` is
-/// true for every file — so nothing draws this. Its two call sites
-/// (`PhoneMediaRowView.swift:98`, `PhoneDeviceVideosView.swift:245`) belong
-/// to the player unit's files, which this unit may not edit, and a branch
-/// calling a view that no longer exists is a branch that does not compile.
-/// So the view stays until that unit takes the call sites out; it is noted in
-/// `design-notes/ios/batch-2026-11-03/transfers/DECISIONS.md` under "Needs a
-/// shared change".
-struct PhoneUploadTooBigNote: View {
-
-    let size: Int64?
-
-    var body: some View {
-        Text(PhoneMediaStrings.tooBigToUpload(size ?? 0))
-            .font(.caption)
-            .foregroundStyle(Color.fgMuted)
-            .fixedSize(horizontal: false, vertical: true)
-    }
-}
+// `PhoneUploadTooBigNote` stood here and is **gone**. It was the line a row
+// over the old 64 MiB ceiling drew instead of an upload control, and D43 took
+// the ceiling out: `PhoneUploadModel.offersUpload(_:)` is `!item.isDir` for
+// every file, because the upload streams off disk and never measures it. The
+// view's own doc said it stayed only until its two call sites went, and they
+// are gone with the branches that drew them (`PhoneMediaRowView.swift`,
+// `PhoneDeviceVideosView.swift`, the player unit's files) — so it is deleted
+// on the integration, in one change with `PhoneMediaError.tooBig` and
+// `PhoneMediaStrings.tooBigToUpload`, because either half alone does not
+// compile.

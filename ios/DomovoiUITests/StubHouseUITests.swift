@@ -4811,18 +4811,13 @@ enum ChatStringsUnderTest {
 
     /// ``ChatStrings/showEarlier`` — the transcript's cap (D64).
     ///
-    /// The Chat item could not add it here (this file is another unit's this
-    /// batch) and declared `ChatBatchUnderTest.showEarlier` in its own file
-    /// instead, asking for it to be folded in by whoever owned this one next
-    /// (batch REPORT, chat's "Needs a shared change"). So: here it is, and
-    /// `StubHouseUITests+Chat.swift`'s own copy and the
-    /// `ChatBatchUnderTest` enum around it can go with it the day the two
-    /// branches are in one tree — **not before**, since nothing on this
-    /// branch defines that enum and nothing on that one defines this.
-    ///
-    /// Its sibling `ChatBatchUnderTest.talk` has no home here: it is
-    /// ``ChatMoreStrings/talk``, and `ChatMoreStringsUnderTest` is in the
-    /// ChatMore item's file, which is not this unit's either.
+    /// The Chat item could not add it here (this file was another unit's in
+    /// the 2026-11-03 batch) and declared `ChatBatchUnderTest.showEarlier` in
+    /// its own file instead, asking for it to be folded in. The integration is
+    /// where both branches are in one tree, so this is the only copy now and
+    /// that enum is gone; its sibling `talk` went to
+    /// `ChatMoreStringsUnderTest`, in the ChatMore item's file, because it is
+    /// ``ChatMoreStrings/talk`` and not a Chat string at all.
     static let showEarlier = "show earlier"
 
     /// ``ShellStrings/unavailableNote(label:isChat:aiEnabled:)`` for a house

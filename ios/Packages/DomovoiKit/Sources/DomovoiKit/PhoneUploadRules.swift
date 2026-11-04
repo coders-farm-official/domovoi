@@ -280,14 +280,14 @@ public enum PhoneMediaError: Error, Equatable, Sendable {
     /// is in iCloud and not downloaded, the file was deleted since the page
     /// was listed.
     case unreadable(name: String)
-    /// Over the ceiling the app used to draw, and **unreachable since
-    /// D43**: there is no such ceiling any more, so nothing throws this and
-    /// no control is drawn on such a row. It is still defined because its
-    /// two call sites belong to files this unit may not edit; the report's
-    /// "Needs a shared change" says what goes with it. (The reference to
-    /// `PhoneUploadModel.cap` that stood here pointed at a deleted symbol —
-    /// REVIEW-1 note 9.)
-    case tooBig(name: String, size: Int64)
+
+    // There was a `tooBig(name:size:)` here, for a file over the 64 MiB
+    // ceiling the app used to draw. D43 took the ceiling out — the upload
+    // streams off disk and never measures the file — so nothing threw it, and
+    // it is deleted on the integration with `PhoneUploadTooBigNote` and
+    // `PhoneMediaStrings.tooBigToUpload`. The server can still refuse a file
+    // for its size, but that arrives as a 403 or a 413 and is worded by
+    // `uploadRefused(_:)`/`uploadFailed(_:)` below, never by this.
 }
 
 /// The toast for a failed upload (`DeviceUpload.kt:192`).
@@ -301,8 +301,6 @@ public func phoneUploadFailureText(_ name: String, _ error: any Error) -> String
         switch mine {
         case .unreadable(let named):
             return PhoneMediaStrings.cannotReadOnThisPhone(named)
-        case .tooBig(_, let size):
-            return PhoneMediaStrings.tooBigToUpload(size)
         }
     }
     guard let api = error as? DomovoiError else {

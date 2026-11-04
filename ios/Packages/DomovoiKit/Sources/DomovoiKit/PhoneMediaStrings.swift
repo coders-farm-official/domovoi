@@ -179,22 +179,25 @@ public enum PhoneMediaStrings {
     /// The name the Music door is called in a toast (`DeviceUpload.kt:69`).
     public static let musicDestination = "Music"
 
-    // MARK: - the ceiling, which Android has not got
+    // MARK: - the ceiling, which Android never had and this app no longer has
 
-    /// A row the app will not pull into memory gets **no upload control** and
-    /// this line. **iOS-only** — Android streams the bytes from the content
-    /// uri and has no ceiling (`PhoneUpload.kt:29`).
-    ///
-    /// **Nothing in this app draws it any more**: D43 took the phone's own
-    /// ceiling out, and `PhoneUploadTooBigNote`'s two call sites went with it.
-    /// It stays because `PhoneMediaError.tooBig` stays (`PhoneUploadRules.swift`,
-    /// the transfers unit's), and because the server can still refuse a file
-    /// for its size. The sentence it used to cite, `FileStrings.tooBigToSave`,
-    /// was deleted by that unit — the reference went with it rather than
-    /// pointing at nothing (transfers' own “needs a shared change”, review 2).
-    public static func tooBigToUpload(_ size: Int64) -> String {
-        "too big to upload from a phone (\(fmtBytes(size))) — on the dashboard"
-    }
+    // `tooBigToUpload(_:)` stood here — "too big to upload from a phone (…)
+    // — on the dashboard", an iOS-only sentence for a row the app would not
+    // pull into memory. Android streams the bytes from the content uri and
+    // has no ceiling (`PhoneUpload.kt:29`), and since D43 neither does this:
+    // the upload streams off disk, `PhoneUploadModel.offersUpload(_:)` is
+    // `!item.isDir`, and nothing threw `PhoneMediaError.tooBig`.
+    //
+    // The reason it survived D43 was a false one, written in its own doc: that
+    // "the server can still refuse a file for its size". A server refusal is a
+    // 403 or a 413 and is worded by `uploadRefused(_:)` or `uploadFailed(_:)`
+    // above — no path reached this. It is deleted on the integration with
+    // `PhoneMediaError.tooBig`, its arm in `phoneUploadFailureText`, the arm in
+    // `PhoneMediaError`'s `LocalizedError` conformance and
+    // `PhoneUploadTooBigNote`, because no one of those compiles without the
+    // rest. `StubPhoneMedia.tooBigPrefix` keeps the words as a literal, so
+    // `testPhoneMedia_EveryFileHasAnUploadControlNow` still fails if a ceiling
+    // comes back.
 
     // MARK: - the switch
 

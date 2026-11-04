@@ -433,8 +433,6 @@ extension PhoneMediaError: LocalizedError {
         switch self {
         case .unreadable:
             return PhoneMediaStrings.folderNoLongerReadable
-        case .tooBig(_, let size):
-            return PhoneMediaStrings.tooBigToUpload(size)
         }
     }
 }
