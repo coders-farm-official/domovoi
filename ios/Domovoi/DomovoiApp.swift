@@ -152,13 +152,29 @@ struct DomovoiApp: App {
     /// no placeholder of its own, and both cannot be true of the same hint).
     /// What is actually known:
     ///
-    ///  * The scope, counted rather than quoted: `grep -rn "axis: .vertical"
-    ///    ios/Domovoi/` returns 38 lines, and 14 of them are doc comments
-    ///    (this one included) explaining the rule about `submitLabel`. The
-    ///    fields are **24, in 18 files** — the multi-line shape this app uses
-    ///    wherever the audit failed a single line. None of those files is this
-    ///    unit's. (Review 2 reported 36 in 20 from the unfiltered grep; the
-    ///    conclusion is the same and the number is not.)
+    ///  * The scope, counted line by line rather than quoted: `grep -rn
+    ///    "axis: .vertical" ios/Domovoi/` returns **38 lines in 21 files**,
+    ///    and **21 of those lines are comments** (this one included)
+    ///    explaining the rule about `submitLabel`. The fields are **17, in 15
+    ///    files** — the multi-line shape this app uses wherever the audit
+    ///    failed a single line — and only
+    ///    `Calendar/CalendarEventEditorView.swift` has more than one (three).
+    ///    Six of the 21 files are comment-only: this one,
+    ///    `Printing/PrintSheetView.swift`,
+    ///    `PhoneMedia/PhoneDeviceChrome.swift`,
+    ///    `MusicMore/MusicAddToPlaylistSheet.swift` (whose own comment says
+    ///    "which this is not"), `People/PersonMemoryTabView.swift` and
+    ///    `News/NewsTopicsView.swift`. None of the 15 is this unit's.
+    ///    (Review 2 reported 36 in 20 and the first fix pass 24 in 18, both
+    ///    from a grep that was not split into code and comment; the per-file
+    ///    list in DECISIONS §3a was wrong with it. The conclusion is the same
+    ///    and the numbers were not.)
+    ///
+    ///    **This 17 is not the 39 below.** The 39 is files with *any*
+    ///    `TextField`, which is the proxy's reach; the 17 is the vertical-axis
+    ///    subset, which is this leg's fallback cost. Two populations, two
+    ///    numbers, and a sentence saying so because a reader meeting them
+    ///    forty lines apart read them as one figure that had drifted.
     ///  * Which view SwiftUI builds for them, and whether the prompt inside it
     ///    is a `UILabel` the proxy can reach or something SwiftUI draws
     ///    itself, is UIKit's business. **This file cannot assert it**, and
@@ -170,14 +186,14 @@ struct DomovoiApp: App {
     ///
     /// So the leg is **measured, not argued**:
     /// `testShell_TheHintInkIsReadableOnAVerticalField` opens Music at AX5,
-    /// where its field becomes `axis: .vertical` (`MusicView.swift:686-688`),
+    /// where its field becomes `axis: .vertical` (`MusicView.swift:688`),
     /// and reads the hint's own pixels. Apple's grey measures about 1.7:1
     /// there and this ink about 6.7:1, so that case is the answer either way.
     ///
     /// **If it fails, the fix is not a narrower class here.** It is
     /// `TextField(…, prompt: Text(hint).foregroundColor(Color.fgMuted))` at
-    /// those 24 call sites, which is SwiftUI's own way of colouring a prompt,
-    /// keeps the hint the field's prompt, and costs an edit in 18 files this
+    /// those 17 call sites, which is SwiftUI's own way of colouring a prompt,
+    /// keeps the hint the field's prompt, and costs an edit in 15 files this
     /// unit does not own. That instruction is in
     /// `design-notes/ios/batch-2026-11-03/shell/DECISIONS.md` under "Needs a
     /// shared change" so that the train's fixer has it in hand and does not
@@ -190,7 +206,10 @@ struct DomovoiApp: App {
     /// in there is UIKit's business, not something this file can assert**.
     /// `UITextField` has historically drawn its own text through
     /// `UITextFieldLabel`, a `UILabel` subclass; if it still does on the
-    /// train's iOS, this turns typed text `fgMuted` as well, in all 39 files.
+    /// train's iOS, this turns typed text `fgMuted` as well, in all **39
+    /// files with a `TextField`** — the proxy's whole reach, and not the 17
+    /// vertical-axis fields counted in the section above.
+    ///
     /// An earlier version of this comment argued that it could not — a claim
     /// about a private view tree with no reading behind it, which is the
     /// shape of reasoning this track's ledger says to treat as a review
@@ -204,14 +223,22 @@ struct DomovoiApp: App {
     ///  * the same field with a word **typed** into it, whose darkest pixel is
     ///    the typed glyph — the primary ink reads near 20:1 on white and this
     ///    muted one would read about 7, so a floor of 10 tells them apart;
-    ///  * Music's field at AX5, where it becomes `axis: .vertical` and is a
-    ///    `UITextView` (`MusicView.swift:686-688`) — the other class this
-    ///    proxy names, and the size a hint matters most at.
+    ///  * Music's field at AX5, where it becomes `axis: .vertical`
+    ///    (`MusicView.swift:688`) — **the leg whose backing class this file
+    ///    does not assert**, four paragraphs up, and the size a hint matters
+    ///    most at. The reading is the answer either way: if the proxy reaches
+    ///    that field the ink measures about 6.7:1 there, and if it does not,
+    ///    about 1.7:1 and DECISIONS §3a is the fallback. (This bullet said
+    ///    "and is a `UITextView`" until the second fix pass — the exact
+    ///    sentence the paragraphs above withdraw, left standing thirty-five
+    ///    lines below them, so one doc comment contradicted itself.)
     ///
     /// If the typed reading ever fails, the fix is not this proxy with a
     /// narrower class: it is `TextField(…, prompt: Text(hint).foregroundColor(…))`
     /// at the call sites, which is SwiftUI's own way of colouring a prompt and
-    /// costs an edit in each of the 39 files.
+    /// costs an edit in each of the 39 files with a `TextField` — the whole
+    /// reach, because a typed-text regression is not confined to the
+    /// vertical-axis subset.
     private static func drawHintsInTheMutedInk() {
         UILabel.appearance(whenContainedInInstancesOf: [UITextField.self])
             .textColor = HintInk.ink
@@ -488,6 +515,14 @@ extension Color {
     /// still under the 4.5:1 body text needs.
     ///
     /// **6.08:1** on white, **6.30:1** on the dark canvas.
+    ///
+    /// **This is an ink, not a fill.** A destructive button filled with it
+    /// draws its own label at 3.08:1 in dark mode, which is why
+    /// `DropInCallSheet` shipped `.bordered` with `.tint(Color.errInk)`; the
+    /// fill is ``Color/danger`` with ``Color/dangerFg`` on it. The note is
+    /// here because there is no `Color.err` or `Color.errFill` to grep for —
+    /// the stylesheet calls the pair `--danger`, so this target does too, and
+    /// anyone looking for Android's `colors.err` lands on this token first.
     static let errInk = Color(UIColor { traits in
         traits.userInterfaceStyle == .dark
             ? UIColor(red: 1.0000, green: 0.3718, blue: 0.3577, alpha: 1)   // oklch(0.70 0.20 25)
@@ -497,45 +532,31 @@ extension Color {
     /// `--danger`: the **fill** a destructive button is drawn in — hang up,
     /// delete, forget — with ``Color/dangerFg`` for the text on it.
     ///
-    /// The rooms unit asked for this one by name: Android fills its hang-up
-    /// button with `colors.err` and draws white on it
-    /// (`PhoneDropinCall.kt:180-183`), this target had the ink token and
-    /// nothing to pair it with, and a `.borderedProminent` button tinted with
-    /// an ink token draws its own label at 3.08:1 — so `DropInCallSheet`
-    /// shipped a `.bordered` button instead (their DECISIONS). This is the
-    /// pair, and `web/static/colors_and_type.css:176-179` already had it under
-    /// the comment "Destructive buttons (delete, forget): fill + the text on
-    /// it".
+    /// **The sRGB and the three ratios live in ``DangerInk`` and nowhere
+    /// else**, the way ``Color/fgMuted`` is ``HintInk``. The first pass wrote
+    /// them out here with the arithmetic in this comment and nothing
+    /// recomputing it — the defect `HintInk`'s own stale 7.72:1 was (review 1,
+    /// S6), found again in this token by review 3's S5. `ShellFoldTests`
+    /// recomputes all three from the kit's constants now. That type's doc
+    /// comment carries the reasoning: why the stylesheet's pair and not
+    /// Android's white (white on the dark fill is 2.99:1), and why it is two
+    /// tokens.
     ///
-    /// **The stylesheet's pair and not Android's white**, because the
-    /// arithmetic says white does not survive dark mode: the fill is
-    /// `oklch(0.70 0.20 25)` there, `#FF5F5B`, and white on it is **2.99:1**.
-    /// The stylesheet's own `--danger-fg` flips with the theme instead, and
-    /// the pair measures **5.91:1** light and **6.53:1** dark (arithmetic,
-    /// WCAG, from the two tokens' sRGB). That is why this is two tokens rather
-    /// than "use white".
-    ///
-    /// In light mode the fill is the same colour as ``Color/errInk``
-    /// (`oklch(0.52 0.19 25)` is both `--danger` and `--err-ink`), which is
-    /// why tinting a prominent button with the ink looked right in light mode
-    /// and read 3.08:1 in dark.
-    static let danger = Color(UIColor { traits in
-        traits.userInterfaceStyle == .dark
-            ? UIColor(red: 1.0000, green: 0.3718, blue: 0.3577, alpha: 1)   // oklch(0.70 0.20 25)
-            : UIColor(red: 0.7451, green: 0.1339, blue: 0.1637, alpha: 1)   // oklch(0.52 0.19 25)
-    })
+    /// **It has no caller yet**, which is written down rather than left to be
+    /// discovered: the one caller is `ios/Domovoi/Rooms/DropInCallSheet.swift`
+    /// — the rooms unit's file, still `.bordered` with `.tint(Color.errInk)` —
+    /// and the exact edit is in
+    /// `design-notes/ios/batch-2026-11-03/shell/DECISIONS.md` §3b. If rooms
+    /// declines, these two and ``DangerInk`` go.
+    static let danger = Color(DangerInk.fill)
 
     /// `--danger-fg`: the text drawn **on** ``Color/danger``, the same way
     /// ``Color/brandFg`` is the text on the amber.
     ///
     /// Near-white on the light theme's deep red (**5.91:1**) and near-black on
     /// the dark theme's bright one (**6.53:1**). Never `.white` on both: that
-    /// is the 2.99:1 the pair exists to avoid.
-    static let dangerFg = Color(UIColor { traits in
-        traits.userInterfaceStyle == .dark
-            ? UIColor(red: 0.0953, green: 0.0308, blue: 0.0271, alpha: 1)   // oklch(0.16 0.03 25)
-            : UIColor(red: 0.9912, green: 0.9863, blue: 0.9784, alpha: 1)   // oklch(0.99 0.003 80)
-    })
+    /// is the 2.99:1 the pair exists to avoid. Both numbers are
+    /// ``DangerInk``'s, and recomputed there.
 }
 
 #Preview {

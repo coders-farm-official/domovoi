@@ -101,12 +101,114 @@ public enum HintInk {
     /// takes — a proxy wants a `UIColor`, not a `Color`, which is why the
     /// token's one spelling lives in this package.
     ///
+    /// (``DangerInk`` below is the second token this file carries, for the
+    /// same reason: a number written down and read by nothing is how a token
+    /// drifts.)
+    ///
     /// Dynamic, like every colour in this app: a hint has to follow the theme
     /// the rest of the field's text follows, and a static colour here would be
     /// a near-black hint on the dark canvas.
     public static let ink = UIColor { traits in
         let rgb = traits.userInterfaceStyle == .dark ? dark : light
         return UIColor(
+            red: CGFloat(rgb.red),
+            green: CGFloat(rgb.green),
+            blue: CGFloat(rgb.blue),
+            alpha: 1
+        )
+    }
+    #endif
+}
+
+/// The **fill** a destructive button is drawn in, and the text on it:
+/// `--danger` and `--danger-fg` from `web/static/colors_and_type.css:176-179`,
+/// under that file's own comment "Destructive buttons (delete, forget): fill +
+/// the text on it".
+///
+/// ### Why it is here and not only in the app target
+///
+/// The rooms unit asked for a destructive fill by name under its own "needs a
+/// shared change": Android fills its hang-up button with `colors.err` and
+/// draws white on it (`PhoneDropinCall.kt:180-183`), this target had
+/// ``Color/errInk`` and nothing to pair it with, and a `.borderedProminent`
+/// button tinted with an **ink** token drew its own label at 3.08:1 — so
+/// `DropInCallSheet` shipped `.bordered` with `.tint(Color.errInk)` instead.
+/// ``Color/danger`` and ``Color/dangerFg`` are the pair.
+///
+/// Review 3's S5 was right about the shape of what was wrong with that: the
+/// two tokens were declared in the app target with their three ratios in a doc
+/// comment and **nothing recomputing any of them**, which is the same defect
+/// `HintInk`'s own 7.72:1 was (review 1, S6). So the sRGB lives here, once,
+/// the app target's tokens are built from it, and `ShellFoldTests` recomputes
+/// all three numbers from these constants.
+///
+/// ### Why two tokens and not "use white"
+///
+/// Android's white does not survive the dark theme. The dark fill is
+/// `oklch(0.70 0.20 25)` = `#FF5F5B`, and white on it is **2.99:1** —
+/// ``whiteOnTheDarkFillRatio``, under the 4.5:1 any label needs. The
+/// stylesheet flips the label colour with the theme instead, and the pair
+/// measures **5.91:1** light and **6.53:1** dark.
+///
+/// In light mode the fill is the same colour as ``Color/errInk``
+/// (`oklch(0.52 0.19 25)` is both `--danger` and `--err-ink`), which is why
+/// tinting a prominent button with the ink looked right in light mode and read
+/// 3.08:1 in dark.
+///
+/// ### Who calls it
+///
+/// Nobody yet, and that is written down rather than hidden: the one caller is
+/// `ios/Domovoi/Rooms/DropInCallSheet.swift`, which is the rooms unit's file,
+/// and the edit is in
+/// `design-notes/ios/batch-2026-11-03/shell/DECISIONS.md` §3b. **A seam with
+/// no caller is its own defect class on this track** — a seam built, tested
+/// and never read is how `TokenVault` shipped with eleven tests and no call
+/// site — so if rooms declines, this type and the two tokens go rather than
+/// sit here being arithmetic nobody draws.
+public enum DangerInk {
+
+    /// `oklch(0.52 0.19 25)` as sRGB: `--danger`, light. The same colour as
+    /// `--err-ink` in this theme.
+    public static let fillLight = (red: 0.7451, green: 0.1339, blue: 0.1637)
+
+    /// `oklch(0.70 0.20 25)` as sRGB: `--danger`, dark. `#FF5F5B`.
+    public static let fillDark = (red: 1.0000, green: 0.3718, blue: 0.3577)
+
+    /// `oklch(0.99 0.003 80)` as sRGB: `--danger-fg`, light — near-white on
+    /// the light theme's deep red.
+    public static let textLight = (red: 0.9912, green: 0.9863, blue: 0.9784)
+
+    /// `oklch(0.16 0.03 25)` as sRGB: `--danger-fg`, dark — near-black on the
+    /// dark theme's bright one.
+    public static let textDark = (red: 0.0953, green: 0.0308, blue: 0.0271)
+
+    /// ``textLight`` on ``fillLight``. Arithmetic, WCAG, and the name says so
+    /// — `HintInk.worstMeasuredRatio` claimed a reading for a computed number
+    /// once already (review 1, N1).
+    public static let lightArithmeticRatio = 5.91
+
+    /// ``textDark`` on ``fillDark``, likewise.
+    public static let darkArithmeticRatio = 6.53
+
+    /// Plain white on ``fillDark`` — **the number this pair exists to avoid**,
+    /// and the reason `--danger-fg` flips with the theme instead of being
+    /// Android's white. Recomputed with the other two, because a figure that
+    /// justifies a decision is the one worth checking.
+    public static let whiteOnTheDarkFillRatio = 2.99
+
+    #if canImport(UIKit)
+    /// The fill, dynamic: ``Color/danger`` is this.
+    public static let fill = UIColor { traits in
+        colour(traits.userInterfaceStyle == .dark ? fillDark : fillLight)
+    }
+
+    /// The text on it, dynamic: ``Color/dangerFg`` is this.
+    public static let text = UIColor { traits in
+        colour(traits.userInterfaceStyle == .dark ? textDark : textLight)
+    }
+
+    private static func colour(_ rgb: (red: Double, green: Double, blue: Double)) -> UIColor {
+        UIColor(
             red: CGFloat(rgb.red),
             green: CGFloat(rgb.green),
             blue: CGFloat(rgb.blue),

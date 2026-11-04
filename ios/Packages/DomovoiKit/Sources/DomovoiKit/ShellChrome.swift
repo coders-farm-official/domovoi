@@ -263,13 +263,27 @@ public func shellChrome(
 /// branch as well, and the UI cases that do catch it need a train.
 ///
 /// So the decision moves here, where `swift test` reaches it on a machine with
-/// no Simulator: the two view bodies each ask this one question and draw the
-/// answer. A sabotage of the **rule** now fails `ShellFoldTests` today. A
-/// sabotage of a view *body* still cannot be caught without a compiler for
-/// views — `testShell_TheHeaderScrollsAwayOnHome`,
-/// `…OnAPushedScreen`, `…OnTheLocalShell` and
-/// `testShell_OrdinaryTypeSizesKeepTheBandAboveTheStack` are the four cases
-/// that catch it, and they need the train. That limit is in
+/// no Simulator: the three view bodies each ask this one question and draw the
+/// answer. A sabotage of the **rule** fails `ShellFoldTests`.
+///
+/// ### That was not enough, and what was added
+///
+/// Moving the rule here caught a sabotage *of the rule*. Review 3 re-applied
+/// review 2's own sabotage — the two **view bodies**, rule untouched — and
+/// `ShellFoldTests` stayed 18 of 18 green: a rule with a reading and two call
+/// sites with none is not answer 29 having a reading.
+///
+/// So the bodies are read too, as source text, by
+/// `ShellFoldViewBodyTests`: the gate above `ShellTopBar` in both shells must
+/// be ``drawsBarAboveTheStack``, no body may name a case of this type, every
+/// ``forHeader(drawn:isAccessibilitySize:)`` must be asked with the
+/// environment's type size, and the `AuditStrip.topBar` wiring must still be
+/// in all three places. That file says what it cannot catch — anything that
+/// keeps the shape and changes the meaning. The four cases that read the real
+/// screens, `testShell_TheHeaderScrollsAwayOnHome`, `…OnAPushedScreen`,
+/// `…OnTheLocalShell` and
+/// `testShell_OrdinaryTypeSizesKeepTheBandAboveTheStack`, still need a train,
+/// and that limit is in
 /// `design-notes/ios/batch-2026-11-03/shell/REPORT.md`.
 public enum ShellHeaderFold: String, Equatable, Sendable, CaseIterable {
 
@@ -304,12 +318,6 @@ public enum ShellHeaderFold: String, Equatable, Sendable, CaseIterable {
     /// above the stack.
     public var drawsBarAboveTheStack: Bool { self == .barAboveTheStack }
 
-    /// Whether the toolbar pill is drawn — the pill is the bar's, or the
-    /// toolbar's, never both: two `switch server` controls on one screen is
-    /// the bar still being drawn with the toolbar item under it, which is what
-    /// `testShell_TheHeaderScrollsAwayOnTheLocalShell` counts.
-    public var drawsTheToolbarPill: Bool { self == .titleInsideTheStack }
-
     /// Whether the header belongs **inside** a `NavigationStack`, which is
     /// what ``LocalShellView`` asks: that shell is a `TabView`, so a fold
     /// means a stack per tab, and below the accessibility sizes a tab is a
@@ -317,6 +325,12 @@ public enum ShellHeaderFold: String, Equatable, Sendable, CaseIterable {
     public var putsTheHeaderInsideTheStack: Bool { self == .titleInsideTheStack }
 
     /// The stack's navigation title, or nil when the header is not the title.
+    ///
+    /// A non-nil answer is also **"the toolbar pill is drawn"**:
+    /// `ShellScrollAwayChrome.body` hangs the title and the toolbar item in
+    /// one branch, so this is the one question it asks. There was a
+    /// `drawsTheToolbarPill` beside it until review 3's N2 — gated inside that
+    /// branch, where it was always true — and it left with the gate.
     ///
     /// The trimming is here rather than at the call site because it is part of
     /// the rule: ``ShellStrings/localTopbar`` carries two leading spaces for a

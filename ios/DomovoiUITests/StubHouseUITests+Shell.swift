@@ -199,6 +199,27 @@ extension StubHouseUITests {
             "the `connect` pill is not in a navigation bar on the local shell at "
                 + "AX5, so it is not the thing that scrolls away with the page"
         )
+        // **Reading 6 on this screen too.** This case counts pills directly
+        // rather than going through ``assertTheHeaderScrollsAway`` — the local
+        // shell's pill is the one word `connect` and not the composed prefix
+        // that helper matches — and until review 3's N1 that meant the AX5
+        // audit never ran here, while the `label='connect'` clause in
+        // ``assertTheChromeAuditsAtAX5`` matched nothing on either screen it
+        // *was* called from. S1's account said three screens. It does now:
+        // one swipe to collapse the large title into the translucent inline
+        // bar, which is the surface the reading is about, then the audit.
+        if let page = tallestScrollView(app) {
+            page.swipeUp(velocity: .slow)
+        } else {
+            XCTFail(
+                "no scroll view on the local shell at AX5 — the tab's page is not "
+                    + "the stack's content, so the large title cannot collapse and "
+                    + "the audit below would measure the expanded bar"
+            )
+        }
+        if #available(iOS 17.0, *) {
+            try assertTheChromeAuditsAtAX5(app, crumb: crumb, named: "shell-local-ax5-audited")
+        }
     }
 
     /// What "the header scrolls away" means, as four readings and no opinions.
@@ -223,16 +244,27 @@ extension StubHouseUITests {
     ///    45%, so a page left at the old window fails whatever caused it — a
     ///    `safeAreaInset` some later unit adds, the plugin band growing — and
     ///    not only `ShellTopBar` being drawn again, which reading 1 catches.
-    /// 5. **The page grew, and what it did not get is accounted for.** The
-    ///    brief asked for "the header gone and the window grown" and review 2
-    ///    was right that the grown half was a `print`. Two assertions now: the
-    ///    page does not **shrink** across the swipe, and everything the page
-    ///    does *not* hold after it — the window minus the page minus the
-    ///    collapsed navigation bar — is under ``unaccountedChromeShare``. The
-    ///    second is the discriminating one: chrome that is neither
+    /// 5. **What the page did not get is accounted for** — and, cheaply, that
+    ///    it did not shrink. The brief asked for "the header gone and the
+    ///    window grown"; review 2 was right that the grown half was a `print`,
+    ///    and **review 3 was right that the assertion which replaced it is not
+    ///    a growth assertion.** `pageAfter > pageBefore - 1` is satisfied by
+    ///    `pageAfter == pageBefore`, which is what it will usually be: a
+    ///    collapsing large title moves the scroll view's *content offset*, not
+    ///    its frame. So the honest account is one assertion that matters and
+    ///    one that guards a corner. The one that matters is the **ceiling**:
+    ///    everything the page does not hold after the swipe — the window minus
+    ///    the page minus the collapsed navigation bar — is under
+    ///    ``unaccountedChromeShare``, which chrome that is neither
     ///    `ShellTopBar` nor big enough to break the 45% floor has nowhere to
-    ///    hide in it. The phone bar measured 146 of 852 points (17%) at AX5
-    ///    and the safe areas take about 6%, so the share is 28%.
+    ///    hide in. The phone bar measured 146 of 852 points (17%) at AX5 and
+    ///    the safe areas take about 6%, so the share is 28%. The one that
+    ///    guards a corner is the non-shrink: a page that *loses* room as the
+    ///    header folds away has a real cause and nothing else here sees it.
+    ///    A reading that the window **grew** would have to compare two
+    ///    launches, which is
+    ///    ``testShell_OrdinaryTypeSizesKeepTheBandAboveTheStack()``'s shape
+    ///    and not this helper's; REPORT's limits say so.
     /// 6. **Apple's audit, at AX5, on the collapsed bar** — and only the
     ///    chrome's own leaves are asserted on. ``ShellPillToolbarButton``'s
     ///    doc comment claimed the large-title bar's background is the system
@@ -245,7 +277,10 @@ extension StubHouseUITests {
     ///    toolbar pill fails; everything else is printed and left to the unit
     ///    that owns the screen, because Home, Videos and the local shell are
     ///    not this unit's and N4's mistake was failing a case for another
-    ///    unit's work.
+    ///    unit's work. A finding Apple returns with **no element** is asserted
+    ///    on as well, separately: that is how a contrast finding against the
+    ///    collapsed bar arrives (I002, R002 and R003), and a filter over
+    ///    labels cannot see it (review 3, S4).
     ///
     /// The swipe is `.slow` on the page's own scroll view and not on the app:
     /// a plain `swipeUp()` steps over rows, and a swipe on the app can land on
@@ -337,10 +372,18 @@ extension StubHouseUITests {
                 + "room: a `safeAreaInset` added since, or chrome that is not "
                 + "inside the page's scroll view."
         )
-        // Reading 5. **Grew**, asserted rather than printed (review 2). A
-        // point of slack for rounding: the claim is that the page does not
-        // lose room when the header folds away, and a page that came back a
-        // pixel short of itself is not that defect.
+        // Reading 5, first half: the page **does not shrink** across the
+        // swipe. Not "grew", and the account of this case said "grew" until
+        // review 3's S3 — `pageAfter > pageBefore - 1` is satisfied by
+        // `pageAfter == pageBefore`, and that is what it will usually be: a
+        // large title collapsing moves a scroll view's **content offset**, not
+        // its frame, so the frame the swipe returns is the frame it started
+        // with. This is therefore a cheap guard, not the headline — the
+        // headline is reading 4's floor, and the discriminating new reading is
+        // the unaccounted-chrome ceiling below. It is kept because a page that
+        // *loses* room when the header folds away is a real defect with a real
+        // cause (a `safeAreaInset` reacting to the collapse), and nothing else
+        // here would see it.
         XCTAssertGreaterThan(
             pageAfter.height,
             pageBefore.height - 1,
@@ -441,6 +484,35 @@ extension StubHouseUITests {
                 + "same class of surface that measured `Color.warnInk` at "
                 + "4.21:1 on the `.quaternary` capsule the word had to be "
                 + "moved off (`ShellChromeViews.swift`). Picture attached."
+        )
+        // **The shape that filter cannot see.** Apple returns contrast
+        // findings with `element: nil` routinely — I002's own diagnosis says
+        // exactly that of R002 and R003, "the allowance swallowed it" — and an
+        // anonymous finding carries no crumb, no pill prefix and no
+        // `label='connect'`, so the filter above would print it and pass. The
+        // leaf most likely to arrive that way here is the one this reading
+        // exists for: a warning glyph on a translucent collapsed bar.
+        //
+        // The cost, taken deliberately: Home and Videos are other units'
+        // screens, so an anonymous finding can be theirs and this can red for
+        // their work — the opposite trade from the assertion above. A shell
+        // case that cannot see the shape this track keeps getting is worth
+        // less than one that occasionally names the wrong owner, and the
+        // message says how to tell: **read the picture, not the line.**
+        let anonymous = rest.filter { $0.hasSuffix("| element: nil") }
+        XCTAssertEqual(
+            anonymous,
+            [],
+            "Apple returned \(anonymous.count) finding(s) it could not "
+                + "attribute on \(name): \(anonymous). `floorAndRest` has "
+                + "already taken out the two known anonymous headlines, so "
+                + "these are findings of some other kind with no element — "
+                + "which is how a contrast finding against the collapsed bar's "
+                + "own glyph arrives (I002, R002 and R003). **Read the "
+                + "attached picture to attribute it.** A row of Home's or "
+                + "Videos' belongs to that unit, and this allowance grows by "
+                + "that signature and no other; the large title or the toolbar "
+                + "pill is this unit's and is the defect reading 6 is for."
         )
     }
 

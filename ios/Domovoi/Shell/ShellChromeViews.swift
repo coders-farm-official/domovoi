@@ -452,9 +452,11 @@ struct ShellScrollAwayChrome: ViewModifier {
     /// Both halves of answer 29 are one rule in ``ShellHeaderFold``, read
     /// here and in ``WorkspaceView/stack``: review 2's sabotage took the
     /// branch off this body and the size gate off that `if` together, and no
-    /// check that runs on Windows read either. A nil title is "apply no title
-    /// at all" — an empty one still reserves the large bar's height on every
-    /// screen in the app, which is the alternative N3 rejected.
+    /// check that runs on Windows read either. Both bodies are read as source
+    /// now, by `ShellFoldViewBodyTests` — a nil title here is "apply no title
+    /// at all", and an empty one would still reserve the large bar's height on
+    /// every screen in the app, which is the alternative N3 rejected.
+    ///
     /// The rule, asked once per body. A computed property rather than a `let`
     /// inside the `ViewBuilder`, to match the rest of this file.
     private var fold: ShellHeaderFold {
@@ -466,13 +468,22 @@ struct ShellScrollAwayChrome: ViewModifier {
 
     @ViewBuilder
     func body(content: Content) -> some View {
+        // **One question, asked once.** A non-nil title *is* the fold putting
+        // the header inside the stack, so the pill's only remaining gate is
+        // whether there is a pill. There used to be a second
+        // `fold.drawsTheToolbarPill` here, inside this branch — where it was
+        // always true, so it decided nothing and read as a guard that did
+        // (review 3, N2). The property is gone with it; the invariant it was
+        // there to state (the bar's pill or the toolbar's, never both) is
+        // asserted in `ShellFoldTests` over the two properties the views
+        // actually read.
         if let title = fold.navigationTitle(crumb: crumb) {
             content
                 .navigationTitle(title)
                 .navigationBarTitleDisplayMode(.large)
                 .toolbar {
                     ToolbarItem(placement: .topBarTrailing) {
-                        if let pill, fold.drawsTheToolbarPill {
+                        if let pill {
                             ShellPillToolbarButton(pill: pill, onTap: onPill)
                         }
                     }

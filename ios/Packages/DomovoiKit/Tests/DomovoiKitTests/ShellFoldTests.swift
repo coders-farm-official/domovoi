@@ -1,9 +1,14 @@
 import XCTest
 @testable import DomovoiKit
 
-/// The three pieces of pure `DomovoiKit` value logic this batch's shell unit
-/// wrote: the folded plugin band's words, the toolbar pill's composed label,
-/// and the hint ink's numbers.
+/// The pure `DomovoiKit` value logic this batch's shell unit wrote: the folded
+/// plugin band's words, the toolbar pill's composed label, the hint ink's
+/// numbers, the destructive pair's, answer 29's header rule and answer 6's
+/// inline-fallback guard.
+///
+/// The three view *bodies* that draw answer 29's answer are read separately,
+/// by `ShellFoldViewBodyTests` — this file reads the rule, and a rule with a
+/// reading and two call sites without one is what review 3 caught.
 ///
 /// ### Why this file exists at all
 ///
@@ -223,6 +228,61 @@ final class ShellFoldTests: XCTestCase {
         )
     }
 
+    // MARK: - the destructive pair's three ratios (the rooms unit's ask)
+
+    /// ``DangerInk``'s two written-down ratios, recomputed from its own sRGB.
+    ///
+    /// Review 3's S5: the pair was declared in the app target with its three
+    /// numbers in a doc comment and **nothing recomputing any of them** —
+    /// `HintInk`'s stale 7.72:1 all over again, one review later. So the sRGB
+    /// moved into the kit and this is the caller it now has. Rounded to two
+    /// decimals, which is how the doc comment and DECISIONS §3b write them.
+    func testTheDestructivePairMeetsTheRatiosItClaims() {
+        XCTAssertEqual(
+            DangerInk.lightArithmeticRatio,
+            Self.rounded(Self.contrast(DangerInk.textLight, DangerInk.fillLight)),
+            "the light pair reads "
+                + "\(Self.contrast(DangerInk.textLight, DangerInk.fillLight)), not "
+                + "the \(DangerInk.lightArithmeticRatio) this type claims"
+        )
+        XCTAssertEqual(
+            DangerInk.darkArithmeticRatio,
+            Self.rounded(Self.contrast(DangerInk.textDark, DangerInk.fillDark)),
+            "the dark pair reads "
+                + "\(Self.contrast(DangerInk.textDark, DangerInk.fillDark)), not "
+                + "the \(DangerInk.darkArithmeticRatio) this type claims"
+        )
+        // Both over the 4.5:1 a label on a button needs, which is the point of
+        // the pair and not only of the arithmetic.
+        XCTAssertGreaterThan(DangerInk.lightArithmeticRatio, 4.5)
+        XCTAssertGreaterThan(DangerInk.darkArithmeticRatio, 4.5)
+    }
+
+    /// **The number the pair exists to avoid**: plain white on the dark fill.
+    ///
+    /// Android draws white on `colors.err` (`PhoneDropinCall.kt:180-183`) and
+    /// the decision not to copy that rests entirely on this figure, so this is
+    /// the one most worth recomputing. It must also be a *failing* ratio — if
+    /// it ever came out over 4.5 the whole reason for a second token would be
+    /// gone, and the decision would be wrong rather than the number.
+    func testWhiteOnTheDarkFillIsTheFailureTheSecondTokenAvoids() {
+        let white = (red: 1.0, green: 1.0, blue: 1.0)
+        XCTAssertEqual(
+            DangerInk.whiteOnTheDarkFillRatio,
+            Self.rounded(Self.contrast(white, DangerInk.fillDark)),
+            "white on the dark destructive fill reads "
+                + "\(Self.contrast(white, DangerInk.fillDark)), not the "
+                + "\(DangerInk.whiteOnTheDarkFillRatio) the decision cites"
+        )
+        XCTAssertLessThan(
+            DangerInk.whiteOnTheDarkFillRatio,
+            4.5,
+            "white on the dark fill now passes, so `--danger-fg` flipping with "
+                + "the theme is no longer a legibility fix and DECISIONS §3b is "
+                + "arguing for two tokens on a number that stopped saying it"
+        )
+    }
+
     // MARK: - which shape the header takes (owner answer 29)
 
     /// The rule, both sides of the accessibility boundary.
@@ -233,10 +293,13 @@ final class ShellFoldTests: XCTestCase {
     /// and the full `DomovoiKit` suite stayed green, because `pkgtest.sh`
     /// builds the package and `appcheck.sh` is broken on the base branch too.
     /// The decision is ``ShellHeaderFold`` now and the views draw its answer,
-    /// so a sabotage of the **rule** fails here today. A sabotage inside a
-    /// view body still needs a train — `testShell_TheHeaderScrollsAwayOnHome`
-    /// and its three siblings are the cases that catch it, and the limit is
-    /// written in `REPORT.md`.
+    /// so a sabotage of the **rule** fails here.
+    ///
+    /// It is only half the reading, and review 3 proved it: re-applying
+    /// review 2's own sabotage — the two **view bodies**, rule untouched —
+    /// left this file 18 of 18 green. `ShellFoldViewBodyTests` is the other
+    /// half; it reads the three bodies as source text and fails on that
+    /// sabotage. A train is still what reads the real screens.
     func testTheHeaderIsABarBelowTheAccessibilitySizesAndATitleAbove() {
         XCTAssertEqual(
             .barAboveTheStack,
@@ -256,7 +319,6 @@ final class ShellFoldTests: XCTestCase {
         let bar = ShellHeaderFold.forHeader(drawn: true, isAccessibilitySize: false)
         XCTAssertNil(bar.navigationTitle(crumb: "domovoi / home"))
         XCTAssertTrue(bar.drawsBarAboveTheStack)
-        XCTAssertFalse(bar.drawsTheToolbarPill)
         XCTAssertFalse(bar.putsTheHeaderInsideTheStack)
     }
 
@@ -276,7 +338,6 @@ final class ShellFoldTests: XCTestCase {
             "the local shell's title keeps the bar's leading spaces"
         )
         XCTAssertFalse(folded.drawsBarAboveTheStack)
-        XCTAssertTrue(folded.drawsTheToolbarPill)
         XCTAssertTrue(folded.putsTheHeaderInsideTheStack)
     }
 
@@ -291,7 +352,7 @@ final class ShellFoldTests: XCTestCase {
             let fold = ShellHeaderFold.forHeader(drawn: false, isAccessibilitySize: accessibility)
             XCTAssertEqual(.noHeaderAtAll, fold)
             XCTAssertFalse(fold.drawsBarAboveTheStack)
-            XCTAssertFalse(fold.drawsTheToolbarPill)
+            XCTAssertFalse(fold.putsTheHeaderInsideTheStack)
             XCTAssertNil(fold.navigationTitle(crumb: "domovoi / home"))
         }
     }
@@ -300,11 +361,22 @@ final class ShellFoldTests: XCTestCase {
     /// `switch server` controls on one screen is the bar still being drawn
     /// with the toolbar item under it, which is the shape
     /// `testShell_TheHeaderScrollsAwayOnTheLocalShell` counts on the screen.
+    ///
+    /// **Stated over the two properties the view bodies actually read.** It
+    /// used to be `drawsBarAboveTheStack && drawsTheToolbarPill`, and that
+    /// second property had no caller left once the dead gate came out of
+    /// `ShellScrollAwayChrome.body` — a seam read only by the test that
+    /// asserted it, which on this track is its own defect class. A non-nil
+    /// `navigationTitle(crumb:)` *is* the toolbar pill being drawn: it is the
+    /// branch the body takes to hang the title and the toolbar item together.
     func testTheBarAndTheToolbarNeverBothCarryThePill() {
         for fold in ShellHeaderFold.allCases {
             XCTAssertFalse(
-                fold.drawsBarAboveTheStack && fold.drawsTheToolbarPill,
-                "\(fold.rawValue) draws the pill twice"
+                fold.drawsBarAboveTheStack
+                    && fold.navigationTitle(crumb: "domovoi / home") != nil,
+                "\(fold.rawValue) draws the pill twice: `ShellTopBar` above the "
+                    + "stack carries it and the toolbar item under it carries it "
+                    + "again"
             )
         }
     }
@@ -354,6 +426,11 @@ final class ShellFoldTests: XCTestCase {
             "the identifier `StubHouseUITests+Shell.swift` asserts absent has "
                 + "changed, so that case now asserts the absence of nothing"
         )
+    }
+
+    /// Two decimals, the precision every ratio in this project is written at.
+    private static func rounded(_ ratio: Double) -> Double {
+        (ratio * 100).rounded() / 100
     }
 
     /// WCAG 2.1's contrast ratio between two sRGB colours, 0–1 per channel.
