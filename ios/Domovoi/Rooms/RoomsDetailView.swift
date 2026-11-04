@@ -269,6 +269,64 @@ struct RoomsRoomScreen: View {
             hold = RoomsScreenHold(model, roomID: open.roomID)
             reads = model.reads(for: open.roomID)
         }
+        // **The hand-off is HERE as well as on ``RoomsView``, because this is
+        // the screen that is in front.** Train I004's six reds, one cause.
+        //
+        // Every write this screen makes ends in ``RoomsModel/say(_:)``, and
+        // ``RoomsModel/toast`` was handed to the shell's pill in exactly one
+        // place: ``RoomsView``'s `.onChange(of: rooms?.toast)`. D56 pushed
+        // the room on top of ``RoomsView``, and a covered view does not get
+        // its body re-evaluated while it is covered — so the hand-off ran
+        // when the room was popped, by which time ``takeToast()`` had
+        // nothing anyone had seen. From the outside that is a write that
+        // says nothing.
+        //
+        // **This is the same fact as "the `onChange` stays live", not the
+        // opposite of it** — ``RoomsView``'s ``RoomsView/visible`` carries
+        // the other end of it and review round 1 read the two as
+        // contradicting. A push does not end the covered view's identity:
+        // its modifiers stay attached and the closure does fire, which is
+        // exactly why ``HomeView``'s one-sided guard was a bug. What a push
+        // defers is *when*: the delivery waits for the next body evaluation,
+        // and for a covered destination that is the pop. So the closure runs
+        // late, with `visible` still false (body evaluation precedes
+        // `onAppear`) — the guard is necessary, and a sentence meant for the
+        // pill arrived after the screen that said it was gone.
+        //
+        // Measured, rather than argued from SwiftUI's rules:
+        //
+        //  * I002 (the room swapped in place, ``RoomsView`` on screen) —
+        //    `testRooms_AnnounceToOneRoomSaysWhatHappened`,
+        //    `…VolumeSendsTheLevelOnce`, `…TimerScopeSwitchSticks`,
+        //    `…QuietHoursCustomNeedsTwoClockTimes`,
+        //    `…CancellingATimerRemovesIt` and
+        //    `…RecentlyPlayedShowsSourceAndAdd` all passed.
+        //  * I004 (the room pushed, D56) — all six failed on the toast and
+        //    nothing else, while `testRooms_BroadcastReportsWhoTookIt`, whose
+        //    toast is raised from the **roster**, still passed.
+        //  * The clock-time refusal proves it is the hand-off and not the
+        //    write: ``RoomsModel/saveQuietHours(_:mode:)`` says
+        //    ``RoomsStrings/timesLookLike`` synchronously, with no request at
+        //    all, and the train's log shows the `Save` tap synthesised and
+        //    the field still reading `7:5` twenty seconds later
+        //    (`I004/ALL/testRooms_QuietHoursCustomNeedsTwoClockTimes.log`).
+        //
+        // Both hand-offs are safe together: ``RoomsModel/takeToast()`` clears
+        // as it reads, so whichever view is on screen takes the sentence and
+        // the other one sees nil and returns. ``RoomsView``'s stays because
+        // the broadcast card is on the roster and raises toasts with no room
+        // open at all.
+        //
+        // The honest limit, which is this screen's own cover rather than the
+        // roster's: ``RoomsDropInRow`` presents a sheet over this screen, and
+        // a toast raised while that sheet is up would be deferred the same
+        // way. Nothing raises one there — every outcome of a call is a line
+        // inside the sheet (``DropInCallSheet``) — and the shell's pill is
+        // drawn under a page sheet anyway (`MusicView.swift:300-309`).
+        .onChange(of: model.toast) { _, said in
+            guard said != nil, let text = model.takeToast() else { return }
+            shell.showToast(text)
+        }
     }
 }
 
