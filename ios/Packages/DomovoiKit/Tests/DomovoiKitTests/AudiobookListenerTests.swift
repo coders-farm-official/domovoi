@@ -134,7 +134,7 @@ final class AudiobookListenerTests: XCTestCase {
         let place = SavedStateBox()
         let listeners = PlayerListenerStore(place: place)
         let client = Self.client()
-        StubURLProtocol.dispatch { _ in .json(#"{"position_sec":0,"speed":1.0}"#) }
+        Self.answerEverything(#"{"position_sec":0,"speed":1.0}"#)
 
         let remote = try XCTUnwrap(
             ApiBookPositionRemote(
@@ -176,7 +176,7 @@ final class AudiobookListenerTests: XCTestCase {
     func testContinueFromTheKitchenAsksForTheListenersPlaces() async throws {
         let listeners = PlayerListenerStore(place: SavedStateBox())
         listeners.set("9")
-        StubURLProtocol.dispatch { _ in .json("[]") }
+        Self.answerEverything("[]")
         let remote = try XCTUnwrap(
             ApiBookPositionRemote(
                 client: Self.client(),
@@ -190,12 +190,17 @@ final class AudiobookListenerTests: XCTestCase {
 
         let asked = StubURLProtocol.recorded.compactMap { $0.url?.absoluteString }
             .filter { $0.contains("/positions") }
+        // `first`, not `[0]`: a subscript on an empty array is a *fatal*
+        // error, which takes the whole test process with it and loses every
+        // other case's result — the Swift trap this track has already paid
+        // for ([[ios-app-track]]).
+        let went = try XCTUnwrap(asked.first, "the other-places read never went out")
         XCTAssertEqual(1, asked.count, "the other-places read was asked \(asked.count) times")
         XCTAssertTrue(
-            asked[0].contains("person_id=9"),
-            "the other-places read went out as \(asked[0]) — without the "
-                + "listener the server answers the unidentified one's rows, so "
-                + "a place the kitchen saved under a person is invisible"
+            went.contains("person_id=9"),
+            "the other-places read went out as \(went) — without the listener "
+                + "the server answers the unidentified one's rows, so a place "
+                + "the kitchen saved under a person is invisible"
         )
     }
 
@@ -276,6 +281,30 @@ final class AudiobookListenerTests: XCTestCase {
             clock: { 0 },
             configuration: StubURLProtocol.session(timeout: 1)
         ).client
+    }
+
+    /// Answer every route with `body` — **except `/api/health`, which gets a
+    /// real signed identity**.
+    ///
+    /// Not a nicety. The client will not send the household token to a server
+    /// that has not proved the pinned key (``IdentityGate``), so a dispatcher
+    /// that answered JSON to the health probe too made every device-tier
+    /// request below fail *before it was ever sent*: the first version of
+    /// these two cases measured zero requests and read as "the listener is not
+    /// on the wire", which is the same sentence the real defect produced.
+    /// `PlayerHouse` answers health the same way and for the same reason.
+    private static func answerEverything(_ body: String) {
+        StubURLProtocol.dispatch { request in
+            guard
+                let url = request.url,
+                let parts = URLComponents(url: url, resolvingAgainstBaseURL: false)
+            else { return .json("{}", status: 404) }
+            if parts.path == "/api/health" {
+                let challenge = (parts.queryItems ?? []).first { $0.name == "challenge" }?.value
+                return .json((try? TestIdentity.real.healthBody(challenge: challenge)) ?? "{}")
+            }
+            return .json(body)
+        }
     }
 
     /// Whether each request that reached the stub carried a `person_id`, in
