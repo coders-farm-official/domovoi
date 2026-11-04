@@ -72,18 +72,24 @@ import WebKit
 /// 1. **Navigation** is refused off-origin —
 ///    ``DocumentsWebEditorCoordinator/webView(_:decidePolicyFor:decisionHandler:)``
 ///    is `shouldOverrideUrlLoading` (`:283-288`), and it covers sub-frames as
-///    well as the main one. A refused link also *says so*
+///    well as the main one. **The main frame takes http(s) on this server and
+///    nothing else**, exactly as Android's does: a `data:` or `blob:`
+///    document is refused there and allowed only in a sub-frame, which is the
+///    seam `:293` is about. A refused link also *says so*
 ///    (``DocumentsStrings/editorStayedHere``), where Android's returns true
 ///    and leaves the tap looking broken.
 /// 2. **The session ends** the moment the condition that admitted it stops
-///    holding: the active server changes, the pinned identity changes, or the
-///    server stops being ours. Android refuses the next request; this refuses
-///    every further request at once, by taking the page down and saying why
+///    holding: the active server changes, or the pinned identity does.
+///    Android refuses the next request; this refuses every further request at
+///    once, by taking the page down and saying why
 ///    (``DocumentsWebEditorModel/recheck(_:)``). For the case the intercept
-///    was written about — "the network changed under an open file" — that is
-///    the stricter answer. For a page that is already the household's own
+///    was written about — "a different house is on that address now" — that
+///    is the stricter answer. For a page that is already the household's own
 ///    page fetching its own origin, there is nothing else the intercept was
-///    stopping.
+///    stopping. A proof that has merely **not come back yet** (`.unproven`)
+///    is not one of the conditions, and ``DocumentsWebEditorModel/recheck(_:)``
+///    says at length why not: ending the session there costs unsaved text
+///    for a probe that is still in flight.
 ///
 /// Three things of Android's `lockDown` (`:263-274`) need nothing here:
 /// `file:`/`content:` access is not something a remote page can ask
@@ -99,13 +105,22 @@ import WebKit
 ///   `project.yml`, which this unit does not own this batch, and the page's
 ///   own picker would otherwise open a file input that does nothing. It is
 ///   listed in `batch-2026-11-03/documents/DECISIONS.md` as a shared change.
-/// * **No `saveFile` and no `print`** — the bridge does not define them, so
-///   `doc_editor.jsx` falls back to what a browser does
-///   (`doc_editor.jsx:1717`, `:1741`). Share-as-Word needs the share sheet
-///   that belongs to the transfers unit's save-to-device seam, and printing
-///   is the Printing unit's `PrintSheetView`. A bridge method that answered
-///   and did nothing would be the misleading control one level below the
-///   button.
+/// * **No Save and no dirty mark in this host's own chrome.** The page owns
+///   the document's state and its autosave and draws both itself; a second
+///   Save up here would be a button whose state this host cannot know.
+///
+/// `saveFile` and `print` **are** on the bridge, and this paragraph used to
+/// say they were not — that they belonged to the transfers unit's share seam
+/// and the Printing unit's sheet, and that a bridge method answering them
+/// here would be a misleading control. That argument was the wrong way round
+/// and the code was corrected (commit "the editor page's Download menu works
+/// on the phone") before this comment was: `deliverFile`
+/// (`doc_editor.jsx:1739`) and `printDocument` (`:1714`) fall back to an
+/// `<a download>` click and `window.print()`, and a `WKWebView` ignores
+/// **both**, silently. The Download menu that does nothing is the misleading
+/// control; the two bridge methods are what stop it, and
+/// ``DocumentsWebEditorModel/hand(name:mime:base64:)`` and
+/// ``DocumentsWebEditorModel/printPage(html:title:)`` say how.
 struct DocumentsWebEditorView: View {
 
     let entry: FileEntry
@@ -164,7 +179,9 @@ struct DocumentsWebEditorView: View {
         // The second half of the origin rule (see the type's note): the
         // session ends when what admitted it stops being true. `inputs` is
         // `Equatable` and observable, so this fires on a changed server
-        // address, a changed identity and a server that stopped being ours.
+        // address and on a changed identity — and on an `.unproven` probe
+        // too, which ``DocumentsWebEditorModel/recheck(_:)`` deliberately
+        // does nothing about.
         .onChange(of: model.inputs) { _, now in host?.recheck(now) }
         // And on a network change, because the gate's proof is per network
         // and `inputs` can be identical across one.
@@ -377,7 +394,16 @@ final class DocumentsWebEditorModel {
         // Captured before the await and compared after it: a cover dismissed
         // and reopened on another server while this was in flight must not
         // get the first server's handoff ([[read-after-await-wrong-key]]).
-        guard model.container.store.serverURL == address else { return }
+        //
+        // It is a **refusal and not a bare return**: `prepare(in:)` is called
+        // once, from the view's `task`, so leaving `state` at `.preparing`
+        // leaves a spinner nothing can clear — ``recheck(_:)`` only acts on
+        // `.ready`. The sentence is the one ``recheck(_:)`` gives for a server
+        // that moved, because that is what happened.
+        guard model.container.store.serverURL == address else {
+            state = .refused(DocumentsStrings.editorNoServer)
+            return
+        }
         let token: String?
         do {
             token = try client.tokenForDownload(page)
@@ -416,11 +442,21 @@ final class DocumentsWebEditorModel {
     /// are injected, and the one thing it *asks for* — `close()` — is the
     /// message handler, because nothing waits on its answer.
     ///
-    /// `deviceToken()` still answers **once**: the closure drops the value on
-    /// the first call, which is `AtomicReference.getAndSet(null)`
-    /// (`:328`). It is the same guarantee for the same reason — nothing that
-    /// runs later in the page, and nothing in a page it is navigated to, can
-    /// ask again.
+    /// `deviceToken()` answers **once**, and once per *host* rather than once
+    /// per document — which is Android's `AtomicReference.getAndSet(null)`
+    /// (`:328`), one reference living beside the WebView for as long as it
+    /// does. The closure's `t = ''` is only half of that: a `WKUserScript`
+    /// re-runs `.atDocumentStart` for **every** main-frame document, with a
+    /// fresh `var t`, so a reload or any same-origin navigation would hand the
+    /// token over again and `location.reload()` would be the whole of the
+    /// defeat. (It did, until this round's review.)
+    ///
+    /// So the hand-over is recorded on the host: a token that actually left
+    /// the bridge posts `tokenTaken`, and
+    /// ``DocumentsWebEditorModel/tokenWasHandedOver()`` swaps the injected
+    /// script for a token-less one, which every later document gets instead.
+    /// A token the page never read is still there for the next document, as
+    /// Android's un-taken `AtomicReference` is.
     ///
     /// Every value goes in as a JSON literal rather than a quoted string: a
     /// token is opaque bytes from the server, and building JavaScript by
@@ -430,7 +466,11 @@ final class DocumentsWebEditorModel {
         (function () {
           var t = \(jsString(token));
           window.DomovoiAppBridge = {
-            deviceToken: function () { var v = t; t = ''; return v; },
+            deviceToken: function () {
+              var v = t; t = '';
+              if (v) { post({ name: 'tokenTaken' }); }
+              return v;
+            },
             deviceId: function () { return \(jsString(deviceID ?? "")); },
             darkTheme: function () { return \(dark ? "true" : "false"); },
             close: function () { post({ name: 'close' }); },
@@ -458,6 +498,31 @@ final class DocumentsWebEditorModel {
     static let maxShareBase64 = maxShareBytes / 3 * 4 + 4
     /// `MAX_PRINT_CHARS` (`:379`).
     static let maxPrintCharacters = 48 * 1024 * 1024
+
+    /// The page read the token: from here on every document this view loads
+    /// gets a bridge with an empty one.
+    ///
+    /// This is the host-side half of the one-shot — Android's
+    /// `AtomicReference` survives a navigation and an injected `var t` does
+    /// not. The bridge is still injected, and still answers `deviceId()`,
+    /// `darkTheme()`, `close()`, `saveFile` and `print`: a reloaded page that
+    /// lost its Download menu as well would be a second bug, and `doc_page.jsx`
+    /// reads an empty token as "not paired", which is the truth.
+    ///
+    /// `webView.configuration` hands back a copy of the configuration but the
+    /// **same** `userContentController` object, which is what
+    /// ``DocumentsWebEditorHost/dismantleUIView(_:coordinator:)`` already
+    /// relies on to break the handler's retain cycle.
+    func tokenWasHandedOver() {
+        guard case .ready(let handoff) = state,
+              let controller = webView?.configuration.userContentController else { return }
+        controller.removeAllUserScripts()
+        controller.addUserScript(WKUserScript(
+            source: Self.bridgeScript(token: "", deviceID: handoff.deviceID, dark: handoff.dark),
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: true
+        ))
+    }
 
     // MARK: - the page handing something back
 
@@ -494,6 +559,23 @@ final class DocumentsWebEditorModel {
     /// styled and with its pictures in it, so a markup formatter is the right
     /// one: it lays out exactly that document rather than re-rendering the
     /// view.
+    ///
+    /// ### Two presentations, because the app ships for both devices
+    ///
+    /// `present(animated:completionHandler:)` is the **iPhone-only** form: on
+    /// an iPad it returns false and nothing appears, which is Download → PDF
+    /// silently doing nothing on a device `project.yml:54` builds for
+    /// (`TARGETED_DEVICE_FAMILY: "1,2"`). `isPrintingAvailable` does not catch
+    /// it — printing *is* available on an iPad — so the idiom is asked
+    /// directly and the popover form is used there. This was the
+    /// control-that-cannot-do-what-it-says case in the very method written to
+    /// avoid one.
+    ///
+    /// Presented from the middle of the key window: the control is the page's
+    /// own menu item inside a `WKWebView` and this host does not know where it
+    /// was drawn, so there is no anchor to borrow. With no key window at all —
+    /// a scene mid-transition — nothing is presented, as
+    /// ``PhonePhotosSource/chooseMore()`` does for the same reason.
     func printPage(html: String, title: String) {
         guard !html.isEmpty, html.count <= Self.maxPrintCharacters else { return }
         // Belt and braces: the framework is always there on iOS, and a
@@ -506,7 +588,16 @@ final class DocumentsWebEditorModel {
         let controller = UIPrintInteractionController.shared
         controller.printInfo = info
         controller.printFormatter = UIMarkupTextPrintFormatter(markupText: html)
-        _ = controller.present(animated: true, completionHandler: nil)
+        guard UIDevice.current.userInterfaceIdiom == .pad else {
+            _ = controller.present(animated: true, completionHandler: nil)
+            return
+        }
+        guard let window = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .flatMap(\.windows)
+            .first(where: \.isKeyWindow) else { return }
+        let middle = CGRect(x: window.bounds.midX, y: window.bounds.midY, width: 1, height: 1)
+        _ = controller.present(from: middle, in: window, animated: true, completionHandler: nil)
     }
 
     /// `safeFileName` (`:416`) with `shareMime` (`:410`) folded in.
@@ -592,9 +683,20 @@ final class DocumentsWebEditorModel {
     /// * the **active server changed** — the page is on an origin that is no
     ///   longer the house, holding a token the house issued;
     /// * the **identity changed** (`.mismatch`) — something is answering on
-    ///   that address and it is not the Domovoi this phone pinned;
-    /// * the server **stopped being ours** (`notOurs`, which is `.mismatch`
-    ///   or `.unproven`) — the proof the gate took has gone.
+    ///   that address and it is not the Domovoi this phone pinned.
+    ///
+    /// ### `.unproven` is deliberately not one of them
+    ///
+    /// `inputs.notOurs` is **`.mismatch` or `.unproven`** (`AppContainer.swift:1096-1098`),
+    /// and an earlier version of this ended the session on it. `.unproven` is
+    /// a probe that has not answered yet — a phone that has just changed
+    /// network, a house that is slow — so that version blanked the page,
+    /// threw away whatever was unsaved in it, and said "This phone isn't
+    /// paired with the home server", which is not what had happened. Android
+    /// refuses **one request** in that state (`WebEditorHost.kt:297-298`) and
+    /// leaves the page and its text exactly where they are; so does this now.
+    /// `.mismatch` — a different house on the address — still ends it at
+    /// once, which is the case the per-request check was written about.
     ///
     /// Room mode and a refused token are not here, and do not need to be:
     /// both are states `prepare(in:)` asks about through
@@ -605,7 +707,7 @@ final class DocumentsWebEditorModel {
     func recheck(_ inputs: AppContainer.ShellInputs) {
         guard case .ready(let handoff) = state else { return }
         let moved = inputs.serverURL != handoff.serverURL
-        guard moved || inputs.identityChanged || inputs.notOurs else { return }
+        guard moved || inputs.identityChanged else { return }
         webView?.stopLoading()
         // Blank it before the sentence replaces it: a page left rendered for
         // a frame is a page that can still be typed into, and its next save
@@ -742,11 +844,47 @@ final class DocumentsWebEditorCoordinator: NSObject, WKNavigationDelegate, WKScr
             decisionHandler(.cancel)
             return
         }
-        // The page's own `data:` and `blob:` URIs — an embedded picture, a
-        // document the editor built in memory — never touch the network, and
-        // `about:blank` is what a blanked view is. `:293` says the same of
-        // the first two.
-        if let scheme = url.scheme?.lowercased(), ["data", "blob", "about"].contains(scheme) {
+        // **Android refuses every non-http(s) NAVIGATION.**
+        // `shouldOverrideUrlLoading` parses with `toHttpUrlOrNull()` and
+        // `?: return true` (`WebEditorHost.kt:284`) — returning true is the
+        // refusal. `data:` and `blob:` are allowed in
+        // `shouldInterceptRequest` (`:293`) and only there, which is the
+        // **subresource** seam: an embedded picture the page fetches, not a
+        // document it navigates to.
+        //
+        // An earlier version of this method read `:293` as covering
+        // navigations as well and allowed `data:`, `blob:` and `about:` in
+        // any frame. That widened the lock rather than porting it: the bridge
+        // is re-injected into whatever main-frame document loads
+        // (`forMainFrameOnly:`, `makeUIView`), so a main-frame navigation to
+        // a `data:` document was an opaque origin being handed a bridge of
+        // its own — and `sanitize.py:179` stripping `data:` hrefs out of
+        // document content was the only thing between that and the household
+        // token leaving the phone.
+        let scheme = url.scheme?.lowercased() ?? ""
+        // `?? true`: no target frame is a `window.open` / `target="_blank"`,
+        // which this host draws no view for (`setSupportMultipleWindows(false)`,
+        // `:268`) and which gets the **strict** rule rather than the lenient
+        // one. An off-origin one still falls to the guard below and still
+        // says so, which is what the origin-lock case taps.
+        let mainFrame = navigationAction.targetFrame?.isMainFrame ?? true
+        if mainFrame {
+            // `about:` in the main frame, and it is this host's own doing:
+            // ``DocumentsWebEditorModel/recheck(_:)`` blanks the view with
+            // `loadHTMLString("", baseURL: nil)`, which arrives here as a
+            // navigation to `about:blank`. Cancelled, the page it is taking
+            // down would stay on screen and stay typeable.
+            if scheme == "about" {
+                decisionHandler(.allow)
+                return
+            }
+        } else if ["data", "blob", "about"].contains(scheme) {
+            // A sub-frame is as close as `decidePolicyFor` comes to Android's
+            // subresource seam, and the editor uses both schemes there: a
+            // `blob:` iframe for its print copy, `data:` for a picture. The
+            // bridge is not injected into a sub-frame and
+            // ``userContentController(_:didReceive:)`` refuses messages from
+            // one, so nothing in here holds the token or can ask for it.
             decisionHandler(.allow)
             return
         }
@@ -762,29 +900,43 @@ final class DocumentsWebEditorCoordinator: NSObject, WKNavigationDelegate, WKScr
         decisionHandler(.allow)
     }
 
-    /// The three things the page asks the app for: `close()` (`:331`),
-    /// `saveFile` (`:335`) and `print` (`:344`).
+    /// The four things the page asks the app for: `close()` (`:331`),
+    /// `saveFile` (`:335`), `print` (`:344`) and the one message that is this
+    /// port's own — `tokenTaken`, which is how the one-shot survives a
+    /// navigation (see ``DocumentsWebEditorModel/bridgeScript(token:deviceID:dark:)``).
     ///
     /// Nothing else is accepted. An unknown `name` is a page doing something
     /// this host was not built for, and acting on it would be acting on
     /// whatever the page says — which is the rule for everything that
     /// arrives from inside a web view.
     ///
-    /// The arguments are read defensively and the methods themselves refuse
+    /// **The main frame only.** A handler added to the content controller is
+    /// reachable from every frame, including the `data:`/`blob:` iframes the
+    /// navigation policy allows — and the bridge is deliberately *not*
+    /// injected into those (`forMainFrameOnly: true`), because an iframe the
+    /// page embeds has no business holding the token. `message.frameInfo.isMainFrame`
+    /// is the one property that makes those two halves agree; an earlier
+    /// version of this comment said it was "not something this host can pin
+    /// to the main frame", which was simply wrong, and left `saveFile`,
+    /// `print` and `close` drivable from an embedded frame.
+    ///
+    /// The arguments are still read defensively and the methods still refuse
     /// what they cannot use (an empty body, an over-long one, bytes that are
-    /// not base64): a message handler is reachable by any script the page
-    /// runs, and `message.frameInfo` is not something this host can pin to
-    /// the main frame on its own.
+    /// not base64): the main frame is the page, and the page is the server's,
+    /// not this app's.
     func userContentController(
         _ userContentController: WKUserContentController,
         didReceive message: WKScriptMessage
     ) {
         guard message.name == DocumentsWebEditorModel.bridgeName,
+              message.frameInfo.isMainFrame,
               let body = message.body as? [String: Any],
               let name = body["name"] as? String else { return }
         switch name {
         case "close":
             onClose()
+        case "tokenTaken":
+            host.tokenWasHandedOver()
         case "saveFile":
             host.hand(
                 name: (body["file"] as? String) ?? "",

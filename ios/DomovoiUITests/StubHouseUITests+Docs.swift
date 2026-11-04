@@ -34,11 +34,19 @@ import XCTest
 /// URL (``DocumentsPath/documentPage(rel:)`` says why at length). None of
 /// that is visible from outside, so the stub page draws a marker for each way
 /// it can be wrong: `NO-TOKEN-ON-THE-PAGE-REQUEST` (the host did not put the
-/// token on the request it made), `TOKEN-HANDED-TWICE` (the bridge is not
-/// one-shot, where Android's is a `getAndSet(null)`), `NO-BRIDGE-ON-THIS-PAGE`
-/// (the user script never ran) and `PAGE-COULD-NOT-READ` (the token did not
-/// satisfy the read). ``StubHouseUITests/docsHandoffMarkers`` is the list, and
-/// every web-editor case asserts all four are absent.
+/// token on the request it made), `TOKEN-HANDED-TWICE` (the bridge handed it
+/// over twice inside one document, where Android's is a `getAndSet(null)`),
+/// `NO-BRIDGE-ON-THIS-PAGE` (the user script never ran),
+/// `PAGE-COULD-NOT-READ` (the token did not satisfy the read) and
+/// `NO-DOWNLOAD-ON-THE-BRIDGE` (the Download menu fell back to a browser's
+/// way of doing it, which a `WKWebView` ignores).
+/// ``StubHouseUITests/docsHandoffMarkers`` is the list, and every web-editor
+/// case asserts all five are absent.
+///
+/// A sixth, `TOKEN-AFTER-RELOAD`, is drawn only on the page's **second** load
+/// and belongs to ``testDocs_ASecondDocumentGetsNoToken`` alone: the one-shot
+/// has to survive a navigation, and within one document it always looked as
+/// though it did.
 extension StubHouseUITests {
 
     // MARK: - the formatted-document editor
@@ -104,6 +112,56 @@ extension StubHouseUITests {
         XCTAssertTrue(notice.waitForExistence(timeout: 30),
                       "the page's own 'somebody else is editing' line never drew")
         evidence(app, "docs-03-also-editing")
+    }
+
+    /// The one-shot token survives a **navigation** — the half an injected
+    /// script cannot keep on its own.
+    ///
+    /// Android's `AtomicReference.getAndSet(null)` (`WebEditorHost.kt:323`)
+    /// lives beside the WebView and answers once for as long as it does. A
+    /// `WKUserScript` injected `.atDocumentStart` re-runs for **every**
+    /// main-frame document with a fresh `var t`, so the guarantee this host's
+    /// comment claimed — "nothing in a page it is navigated to can ask again"
+    /// — was defeated by one `location.reload()`, and `TOKEN-HANDED-TWICE`
+    /// could not see it because that marker only ever asks twice inside one
+    /// document. Round 1's review found it; this is the case that would have.
+    ///
+    /// The fixture's **Open again** button navigates the page to itself with
+    /// `&again=1`, and the second load says which it got:
+    /// `TOKEN-WITHHELD-ON-RELOAD` or `TOKEN-AFTER-RELOAD`. The two names share
+    /// no substring, because ``containing(_:_:)`` matches `label CONTAINS` and
+    /// a `NO-` prefix on the good one would answer a query for the bad one.
+    ///
+    /// Two of ``docsHandoffMarkers`` are **expected** on that second load and
+    /// so are not asserted absent here: a page-initiated navigation carries
+    /// none of the headers the host put on its own request, so the second
+    /// document is served unpaired (`NO-TOKEN-ON-THE-PAGE-REQUEST`) and
+    /// cannot read the file (`PAGE-COULD-NOT-READ`). That *is* the port —
+    /// a second document on this origin is as unpaired as it is on Android.
+    @MainActor
+    func testDocs_ASecondDocumentGetsNoToken() throws {
+        guard let app = documentsOpen() else { return }
+        XCTAssertTrue(documentsTap(app, "Letter to the council"), "the document's row never built")
+        XCTAssertTrue(containing(app, "COUNCIL-BY-THE-DOC-ROUTE").waitForExistence(timeout: 30),
+                      "the web editor never drew the document")
+        // The first load took the token, which is what arms the host's side of
+        // the one-shot: nothing is withheld from a page that never asked.
+        XCTAssertFalse(containing(app, "TOKEN-HANDED-TWICE").exists,
+                       "the bridge answered twice inside the first document")
+
+        app.buttons["Open again"].firstMatch.tap()
+        let withheld = containing(app, "TOKEN-WITHHELD-ON-RELOAD")
+        XCTAssertTrue(
+            withheld.waitForExistence(timeout: 25),
+            "the second load never said what the bridge handed it — the tree is:\n\(app.debugDescription)"
+        )
+        evidence(app, "docs-11-second-document")
+        XCTAssertFalse(containing(app, "TOKEN-AFTER-RELOAD").exists,
+                       "the household token was handed to a second document")
+        // The page is still the house's own page in the same host: the editor
+        // did not fall over and the navigation was not refused.
+        XCTAssertTrue(app.buttons["Save in page"].exists,
+                      "the second document is not the editor page at all")
     }
 
     // MARK: - the sheets the phone reads itself

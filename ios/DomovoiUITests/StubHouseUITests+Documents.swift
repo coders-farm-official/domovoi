@@ -608,9 +608,8 @@ extension StubHouseUITests {
     ///   the `/doc` answer and nowhere else, and the page can only have it
     ///   if the token reached it through the bridge rather than through the
     ///   URL. A page that got no token shows `PAGE-COULD-NOT-READ` instead,
-    ///   and the fixture's own three markers (`NO-TOKEN-ON-THE-PAGE-REQUEST`,
-    ///   `TOKEN-HANDED-TWICE`, `NO-BRIDGE-ON-THIS-PAGE`) each name one way
-    ///   the handoff can be wrong;
+    ///   and ``docsHandoffMarkers`` names the other four ways the handoff can
+    ///   be wrong;
     /// * **the page saved** — through `PUT /api/documents/doc`, with the
     ///   token, and the word it wrote is on screen when the file is opened
     ///   again;
@@ -669,14 +668,25 @@ extension StubHouseUITests {
         evidence(app, "documents-18c-formatted-reopened")
     }
 
-    /// The fixture's three handoff markers, which the stub editor page draws
-    /// when the token did not arrive, arrived twice, or there was no bridge
-    /// at all. Every web-editor case asserts all three are absent.
-    /// `NO-DOWNLOAD-ON-THE-BRIDGE` is the fifth and the one that is not
-    /// about the token: it is the branch `doc_editor.jsx` takes for its
-    /// Download menu when the bridge has no `saveFile`/`print` — an
-    /// `<a download>` click and `window.print()`, both of which a
-    /// `WKWebView` ignores silently.
+    /// The **five** markers the stub editor page draws about its own handoff,
+    /// each one naming a different way the port can be wrong. Every
+    /// web-editor case asserts all five are absent.
+    ///
+    /// Four are about the token: it never arrived on the page request
+    /// (`NO-TOKEN-ON-THE-PAGE-REQUEST`, which only the server can see), the
+    /// bridge handed it over twice inside one document
+    /// (`TOKEN-HANDED-TWICE`), the injected script never ran at all
+    /// (`NO-BRIDGE-ON-THIS-PAGE`), or the token did not satisfy the read
+    /// (`PAGE-COULD-NOT-READ`). The fifth is not about the token:
+    /// `NO-DOWNLOAD-ON-THE-BRIDGE` is the branch `doc_editor.jsx` takes for
+    /// its Download menu when the bridge has no `saveFile`/`print` — an
+    /// `<a download>` click and `window.print()`, both of which a `WKWebView`
+    /// ignores silently.
+    ///
+    /// `TOKEN-AFTER-RELOAD` is deliberately **not** in this list: it is only
+    /// drawn on the page's second load, and
+    /// ``testDocs_ASecondDocumentGetsNoToken`` is the one case that asks for
+    /// one.
     static let docsHandoffMarkers = [
         "NO-TOKEN-ON-THE-PAGE-REQUEST",
         "TOKEN-HANDED-TWICE",

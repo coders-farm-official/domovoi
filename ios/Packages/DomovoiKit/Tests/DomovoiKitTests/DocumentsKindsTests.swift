@@ -72,7 +72,7 @@ final class DocumentsKindsTests: XCTestCase {
     /// This case said the opposite until 2026-11-03, when the editor was
     /// built; it is the package-level twin of
     /// `testDocuments_AFormattedDocumentStaysReadOnly`, which the same change
-    /// replaced with `testDocs_AFormattedDocumentOpensAndSaves`.
+    /// replaced with `testDocuments_AFormattedDocumentOpensInTheEditor`.
     func testAFormattedDocumentAndAWordFileOpenTheWebEditor() {
         let documents = FileLibrary.documents
         XCTAssertEqual(.web, DocumentsKinds.editor(for: entry("Letter to the council.html"), in: documents))

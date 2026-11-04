@@ -231,7 +231,9 @@ public final class DocumentsSheetModel {
     /// changes under it, so a guard keyed on "which file" would be a seam
     /// with no caller — the defect class [[reasoning-that-hides-a-bug]]
     /// records, and what this model shipped with. See
-    /// `overnight/documents/DECISIONS.md`.
+    /// `overnight/documents/DECISIONS.md` ("The file epoch is removed from
+    /// both document models"). ``readOnThisPhone(because:)`` is held to the
+    /// same rule and says so where it compares.
     private var generation = 0
 
     public init(
@@ -370,18 +372,39 @@ public final class DocumentsSheetModel {
     /// The server could not give a grid: fetch the file's bytes and read it
     /// here (owner answer 22).
     ///
-    /// `because` is the server's own failure, and it is what the editor shows
-    /// if this does not work either — the first failure is the useful one. A
-    /// fallback that reported its own trouble instead would turn "the house
-    /// is unreachable" into "this file is not a spreadsheet".
+    /// ### Which failure is shown, and it is not always the server's
+    ///
+    /// `because` is the server's own failure, and it is the right sentence
+    /// while the **fetch** is what went wrong: "the house is unreachable" is
+    /// not improved by "this file is not a spreadsheet".
+    ///
+    /// Once the bytes are in hand it is the other way round, and an earlier
+    /// version of this method had it wrong in a way worth naming. It parsed
+    /// with `try?` and reported `because` whatever happened — so a 32 MB
+    /// workbook, an archive claiming to unpack to gigabytes, a cell count past
+    /// the window and a file that is not a zip at all were all reported as the
+    /// server's 500, and four of ``DocumentsSheetTrouble``'s five sentences
+    /// were written and reachable from nothing
+    /// ([[reasoning-that-hides-a-bug]]: the comment arguing the omission was
+    /// safe is the review target, and it was this one). The reader's own
+    /// refusal is what a person can act on — open it on the dashboard, fix the
+    /// file — so that is what is drawn.
     ///
     /// The parse runs off the main actor: a full window is sixty thousand
     /// cells of XML scanning, which would hold the editor's first frame.
     private func readOnThisPhone(because said: String) async {
-        // Captured BEFORE the await, every one of them: the file this read is
-        // about and the generation it started at. A retry can be in flight
-        // alongside this, and a grid landing under the wrong file is the top
-        // defect class on this track ([[read-after-await-wrong-key]]).
+        // Captured BEFORE the await: the file this read is about, so the
+        // request asks for one path and not a later one, and the generation it
+        // started at, which is what tells a stale answer from a current one
+        // ([[read-after-await-wrong-key]]).
+        //
+        // **`generation` and not `entry.rel`** for the comparison afterwards.
+        // `entry` is `public private(set)` and assigned once, in `init` — one
+        // model per presentation, as ``generation``'s own note says — so
+        // `asked == entry.rel` cannot fail, and a dead half of a guard reads
+        // like a file-identity check that is not there. `generation` moves
+        // whenever ``show(_:from:)`` puts a newer grid on screen, which is
+        // the race there is.
         let asked = entry.rel
         let base = generation
         let call = send
@@ -389,18 +412,25 @@ public final class DocumentsSheetModel {
         do {
             bytes = try await call("GET", DocumentsPath.raw(rel: asked), nil)
         } catch {
-            guard asked == entry.rel else { return }
+            // The guard the old `asked == entry.rel` was standing in for: a
+            // retry that already landed a grid must not be replaced by this
+            // one's failure.
+            guard base == generation else { return }
             load = .failed(DocumentsStrings.couldNotLoad(said))
             return
         }
-        let parsed = await Task.detached {
-            try? DocumentsSheetParser.grid(of: bytes, named: asked)
-        }.value
-        guard asked == entry.rel, base == generation else { return }
-        guard let parsed else {
-            load = .failed(DocumentsStrings.couldNotLoad(said))
+        let parsed: DocumentsSheetGrid
+        do {
+            parsed = try await Task.detached {
+                try DocumentsSheetParser.grid(of: bytes, named: asked)
+            }.value
+        } catch {
+            guard base == generation else { return }
+            load = .failed((error as? DocumentsSheetTrouble)?.message
+                ?? DocumentsStrings.couldNotLoad(said))
             return
         }
+        guard base == generation else { return }
         show(parsed, from: .thisPhone)
     }
 
