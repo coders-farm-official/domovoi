@@ -1071,19 +1071,29 @@ final class CalendarWindowTests: XCTestCase {
         await settle(for: house.arrived, what: "november's grid read")
 
         model.show(.agenda)
+        let fetchesBefore = model.events.fetches
         house.release.set(true)
-        await settleUntil({ !model.rangePending }, "the agenda's second read")
+
+        // **Both halves, and the second is what makes this case a case.**
+        // `!rangePending` is true the instant the month's reply is released,
+        // because it has not landed yet and the agenda's own page is still in
+        // hand — so a settle on that predicate alone returns before anything
+        // this case is about has happened. Measured: with the repair unwired
+        // the suite stayed at 109 tests and 0 failures, and this was the case
+        // that should have failed. What is waited for instead is the page in
+        // hand being the agenda's own **second** read: the month's reply has
+        // to have landed for there to be one.
+        let home = calendarWindow(mode: .agenda, anchor: day(2026, 11, 4), in: chicago)
+        await settleUntil(
+            { model.events.data?.window == home && model.events.fetches > fetchesBefore },
+            "the agenda's second read"
+        )
 
         XCTAssertFalse(house.ranOut.current, "the park timed out, so this asserts nothing")
+        XCTAssertFalse(model.rangePending, "the agenda is still spinning")
         XCTAssertFalse(model.isLoading, "the agenda is still spinning")
         XCTAssertEqual([1, 2, 3], model.all.map(\.id))
         XCTAssertEqual(CalendarViewMode.agenda, model.mode)
-        XCTAssertEqual(
-            calendarWindow(mode: .agenda, anchor: day(2026, 11, 4), in: chicago),
-            model.events.data?.window,
-            "the page in hand is still the month grid's: nothing re-read the "
-                + "range on screen after a page landed that could not draw it"
-        )
     }
 
     // MARK: - REVIEW-2: what the page in hand is, and is not, evidence of
