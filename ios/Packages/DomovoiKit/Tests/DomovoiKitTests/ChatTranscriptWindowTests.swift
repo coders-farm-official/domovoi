@@ -336,30 +336,34 @@ final class AssistantPhoneTranscriptWindowTests: XCTestCase {
         model.showEarlier()
         XCTAssertEqual("message 901", model.transcriptPage.drawn.first?.text)
         model.send("and one more thing")
-        // The person's own message is saved before the model is asked, so it
-        // is in the transcript as soon as `send` returns.
+        // The person's own message is saved before the model is asked, and the
+        // reply's empty row is appended in the same turn — so the transcript
+        // is already 1,002 long and the last row is the reply being written.
+        // The question is the one before it, and both are inside the window.
+        let sent = model.transcriptPage
         XCTAssertEqual(
-            "message 901", model.transcriptPage.drawn.first?.text,
+            "message 901", sent.drawn.first?.text,
             "a send walked the top of a window somebody was reading"
         )
-        XCTAssertEqual(
-            "and one more thing", model.transcriptPage.drawn.last?.text,
-            "a send into a windowed conversation is not on screen"
+        XCTAssertTrue(
+            sent.drawn.contains { $0.text == "and one more thing" },
+            "a send into a windowed conversation is not on screen: \(sent.drawn.count) drawn"
         )
-        // And again once the reply has actually landed, which is 1,002
-        // messages: the thousand, the question and the answer. Waited for by
-        // the count rather than by `sending`, so a loop that ran before the
-        // reply's task started cannot make this case pass by measuring
-        // nothing.
-        for _ in 0..<600 where model.transcriptPage.all.count < 1002 {
+        XCTAssertEqual(1001, sent.lastIndex, "the question and its reply are not both appended")
+
+        // And again once the reply has actually been written, which is what
+        // `sending` going false means here. Asserted on the reply's own words
+        // so that a loop which measured an empty row cannot pass this.
+        for _ in 0..<600 where model.sending {
             try? await Task.sleep(for: .milliseconds(5))
         }
-        XCTAssertEqual(
-            1002, model.transcriptPage.all.count,
-            "the fake engine's reply never landed, so nothing was measured under it"
+        let settled = model.transcriptPage
+        XCTAssertFalse(
+            (settled.drawn.last?.text ?? "").isEmpty,
+            "the fake engine's reply never arrived, so nothing was measured under it"
         )
         XCTAssertEqual(
-            "message 901", model.transcriptPage.drawn.first?.text,
+            "message 901", settled.drawn.first?.text,
             "the reply walked the top of a window somebody was reading"
         )
     }
