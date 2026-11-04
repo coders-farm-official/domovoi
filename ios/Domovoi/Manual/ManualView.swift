@@ -39,19 +39,16 @@ import SwiftUI
 ///   `Canvas` and redraws every wire with it, 60 times a second for as long
 ///   as the map is open. A wire runs centre to centre between two ~104-point
 ///   cards, so the part of it that would have moved is the part the cards
-///   cover. ``ManualMapStage/wires(_:size:)`` has the measurement, and the
-///   reason only the level on **top** of the stack floats at all.
+///   cover. ``ManualMapStage/wires(_:size:)`` has the measurement.
 /// * **There is no 280 ms zoom between levels.** Android animates its camera
-///   inside one composition (`MOVE_MS`, `:549`); here each level is a screen,
-///   so the move is the stack's push transition. ``ManualMapStage/body`` says
-///   so, and the question of whether to rebuild the zoom on top of the stack
-///   is in DECISIONS.
-/// * **A swipe back goes up a level below the accessibility sizes only**
-///   (answer 32). The levels are a `NavigationStack` of the manual's own
-///   (``levelStack(_:_:)``), and at an accessibility size this screen puts
-///   its bar and its page in one scroll view — where a navigation stack has
-///   no height to lay out in. There `zoom out` and the crumbs are the way up,
-///   which is what they were at every size before.
+///   inside one composition (`MOVE_MS`, `:549`); here a level change swaps
+///   the page under the bar. ``ManualMapStage/body`` says so, and the
+///   question of whether to rebuild the zoom is in DECISIONS.
+/// * **A swipe back leaves the manual; it does not go up a level** — which
+///   is answer 32 unbuilt, and the reason is in ``ready(_:cached:_:)``. The
+///   way up is `zoom out` and the crumbs (``ManualCrumbs``), which is what
+///   Android draws beside its system back (`ManualScreen.kt:456`) and what
+///   this screen has had at every size since it was written.
 ///
 /// **A `route:` link the app cannot open is plain text, never a link.** That
 /// is ``ManualModel/linkIsLive(kind:target:)`` — ported from
@@ -173,13 +170,6 @@ struct ManualView: View {
                     // two nested vertical scrolls would fight for the same
                     // drag, and the inner one would be the 90-point slot
                     // this branch exists to get rid of.
-                    //
-                    // And **without the level stack**, which is the one place
-                    // answer 32 does not reach: a `NavigationStack` inside a
-                    // `ScrollView` has no height of its own to lay out in.
-                    // Here `zoom out` and the crumbs are the way up and the
-                    // swipe-back leaves the manual, which is what every level
-                    // did before. Written up in DECISIONS.
                     level(doc, manual, at: manual.place, scrolls: false)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -187,67 +177,44 @@ struct ManualView: View {
         } else {
             ManualTopBar(manual: manual)
             if cached { cachedLine }
-            levelStack(doc, manual)
+            // **One level, swapped in place — not a `NavigationStack` of the
+            // manual's own.** Answer 32 ("swipe back goes up a level") was
+            // built that way and train I003 measured what it costs: every
+            // one of the twenty cases that reach this branch failed, and the
+            // one that cannot reach it
+            // (`testManual_AServerWithNoManualOffersTheDashboard`, which
+            // stops at `.noManual`) passed.
+            //
+            // What the Simulator did, read off the trees and the screenshot
+            // in `overnight-trains/I003/ALL/att/testManual_*`: the route
+            // pushed, this screen drew its top bar while the document was
+            // loading — `"start here"` is in the tree at t≈15.4 s, one second
+            // after the seeded push — and the moment the document landed and
+            // this branch mounted the inner `NavigationStack`, the **outer**
+            // push unwound. The shell's breadcrumb still read
+            // `domovoi / manual` (``NavigationState/route`` is `path.last`,
+            // so `ShellModel.path` was still `[.manual]`) over a tree that
+            // held nothing but Home. A nested stack inside a
+            // `navigationDestination` of a homogeneous-path stack is not a
+            // shape SwiftUI supports, and it does not fail by drawing wrong:
+            // it takes the route's screen away.
+            //
+            // So the levels are the screen's own state again and `zoom out`
+            // and the crumbs (``ManualCrumbs``) are the way up, which is what
+            // they were before the batch and what the accessibility branch
+            // above never stopped doing. The swipe-back pops the route, as on
+            // every other screen.
+            //
+            // Answer 32 is not dead, it is **blocked**: it needs
+            // ``ShellModel/path`` to be a `NavigationPath` (or `Route` to
+            // carry a manual level), so that the manual pushes its levels
+            // onto the stack that is already there instead of bringing a
+            // second one. That is one change in a file this item may not
+            // touch, it fixes the same wall ``AudiobookDetailView`` and
+            // People hit, and it is written up in this fix's REPORT under
+            // "for others".
+            level(doc, manual, at: manual.place, scrolls: true)
         }
-    }
-
-    /// The manual's own levels, **as a navigation stack**, so a swipe back
-    /// goes up a level and only Start here leaves the manual — Kamron's
-    /// answer 32.
-    ///
-    /// ### Why the manual brings a stack of its own
-    ///
-    /// The workspace's stack is `NavigationStack(path: $model.path)` and
-    /// ``ShellModel/path`` is `[Route]` (`ShellModel.swift:497`). A
-    /// *typed* path can only carry its own element type: a
-    /// `navigationDestination(for: ManualPlace.self)` declared inside it
-    /// resolves, but nothing can push a `ManualPlace` onto an array of
-    /// `Route`, and a `NavigationLink(value:)` of another type is inert.
-    /// ``AudiobookDetailView`` hit the same wall for an `Int64` and drew its
-    /// own back row instead; People's `MAP.md` planned a
-    /// `navigationDestination` and gave it up for the same reason. Making the
-    /// shell's path a `NavigationPath` would fix it for every screen at once
-    /// and is in DECISIONS under "Needs a shared change"; this item may not
-    /// touch `ShellModel.swift`, so the manual carries its levels on a stack
-    /// of its own, inside the route's screen.
-    ///
-    /// The path is ``ManualModel/levels``, the chain `start → map → topic →
-    /// piece`, which is ``ManualModel/up()``'s own walk — so the gesture and
-    /// `zoom out` are the same move and cannot disagree. Two ways up is what
-    /// Android has (`ManualScreen.kt:456` draws `zoom out` beside the system
-    /// back).
-    ///
-    /// ### The bar stays outside it
-    ///
-    /// One ``ManualTopBar`` above the stack, not one per level. A bar per
-    /// level would mean two or three `map` pills and three search fields in
-    /// the tree at once — the covered ones unhittable — and every query in
-    /// this item's cases takes a `firstMatch`. It is also the shell's own
-    /// shape: `VStack { ShellTopBar; NavigationStack { … } }`
-    /// (`WorkspaceView.swift:117`).
-    ///
-    /// The inner stack's **own** navigation bar is hidden: the route already
-    /// has one above it, with the back button that leaves the manual, and two
-    /// bars for one screen is chrome nobody asked for.
-    private func levelStack(_ doc: ManualDoc, _ manual: ManualModel) -> some View {
-        NavigationStack(path: levelPath(manual)) {
-            level(doc, manual, at: .start, scrolls: true)
-                .toolbar(.hidden, for: .navigationBar)
-                .navigationDestination(for: ManualPlace.self) { pushed in
-                    level(doc, manual, at: pushed, scrolls: true)
-                        .toolbar(.hidden, for: .navigationBar)
-                }
-        }
-    }
-
-    /// ``ManualModel/levels`` as a binding: read it, and a pop writes the
-    /// shorter chain back through ``ManualModel/open(levels:)``, which puts
-    /// ``ManualModel/place`` on the level that is now on top.
-    private func levelPath(_ manual: ManualModel) -> Binding<[ManualPlace]> {
-        Binding(
-            get: { manual.levels },
-            set: { manual.open(levels: $0) }
-        )
     }
 
     @ViewBuilder private func page(_ manual: ManualModel) -> some View {
@@ -322,10 +289,13 @@ struct ManualView: View {
 
     /// One level, drawn.
     ///
-    /// `at` is passed in rather than read off the model: each screen of
-    /// ``levelStack(_:_:)`` draws the level it was pushed **as**, so a
-    /// covered level keeps drawing its own page while the one above it is on
-    /// screen. `scrolls` is whether the level brings its own scroll view,
+    /// `at` is passed in rather than read off the model, and it is kept that
+    /// way now the inner stack is gone (``ready(_:cached:_:)``): a page that
+    /// is told which level it draws can be keyed on it
+    /// (``ManualMapStage/levelKey``, ``ManualMapStage/place``), where a page
+    /// that reads `manual.place` for itself cannot tell "I am the map" from
+    /// "the map is what is on screen". Both callers pass `manual.place`
+    /// today. `scrolls` is whether the level brings its own scroll view,
     /// which is ``ready(_:cached:_:)``'s decision and nothing else's.
     @ViewBuilder private func level(
         _ doc: ManualDoc,

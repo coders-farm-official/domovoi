@@ -29,14 +29,18 @@ import XCTest
 // with the cards moving, so a quiescence problem costs that case and not the
 // screen.
 //
-// **A level is a screen on a stack of the manual's own** (answer 32), below
-// the accessibility sizes. So the level *underneath* the one on screen is
-// still in the tree, unhittable: `the map's nodes exist` is not the same
-// claim as `the map is what is on screen`, and "this page is gone" is a wait
-// (``manualGone(_:timeout:)``) rather than a read on the next line, because a
-// pop animates. The one ``ManualTopBar`` sits **above** that stack, so there
-// is still exactly one `map` pill and one search field for a `firstMatch` to
-// find.
+// **A level is the screen's own state, swapped under one ``ManualTopBar``.**
+// It was an entry on a `NavigationStack` of the manual's own for one batch —
+// answer 32, "swipe back goes up a level" — and train I003 measured that a
+// second stack inside the shell's pushed route takes the route's screen
+// away: all twenty cases here that reach a loaded document failed, and the
+// one that stops before it passed. The measurement and the shared change
+// that unblocks the answer are in ``ManualView/ready(_:cached:_:)``. For
+// these cases it means: only one level is in the tree at a time, the swipe
+// back leaves the manual from every level, and `zoom out` and the crumbs are
+// the way up. "This page is gone" is still a wait
+// (``manualGone(_:timeout:)``) rather than a read on the next line, because
+// the swap animates.
 //
 // **`@SceneStorage` outlives a launch.** The screen keeps which level it was
 // on the way Android's `rememberSaveable` does, and on iOS that survives a
@@ -203,13 +207,11 @@ extension StubHouseUITests {
             manualNode(app, StubManual.plugins).waitForExistence(timeout: 10),
             "`zoom out` from a piece did not go back to its topic's cluster"
         )
-        // **Waited for, not read once.** The levels are a navigation stack of
-        // the manual's own now (answer 32, ``ManualView``'s `levelStack`), so
-        // the cluster underneath exists the moment the piece opens and the
-        // line above is answered before the pop has finished animating. The
-        // claim is unchanged — the piece's page must be gone after `zoom
-        // out`, and a `zoom out` that did nothing still fails this — it is
-        // just given the pop's 350 ms to happen in.
+        // **Waited for, not read once.** The swap between two levels
+        // animates, so the piece's page is still in the tree for a moment
+        // after `zoom out` has done its work. The claim is unchanged — the
+        // page must be gone, and a `zoom out` that did nothing still fails
+        // this — it is just given the transition's time to happen in.
         XCTAssertTrue(
             manualGone(app.buttons[StubManual.nextPlugins].firstMatch),
             "the piece's page was still drawn after `zoom out`"
@@ -368,84 +370,40 @@ extension StubHouseUITests {
         evidence(app, "manual-float-still-driveable")
     }
 
-    /// **Answer 32**: a swipe back from a piece goes up to its topic, and
-    /// does not leave the manual.
-    ///
-    /// Two things say it, and they say different halves:
-    ///
-    ///  * the piece's page is **gone** — so the swipe did something;
-    ///  * the `map` pill is **still there** — so what it did was not pop the
-    ///    route. Before this, the gesture popped the route like every other
-    ///    screen's and the manual was replaced by Home.
-    ///
-    /// The topic's own nodes cannot say it: the cluster is the screen
-    /// underneath the piece, so its nodes exist either way.
-    @MainActor
-    func testManual_ASwipeFromAPieceGoesUpToItsTopic() throws {
-        control("reset-fixtures", "{}", port: 6601, what: "the manual fixture's seed")
-        let app = manualLaunch()
+    // **`testManual_ASwipeFromAPieceGoesUpToItsTopic` stood here and is
+    // gone**, with the behaviour it guarded.
+    //
+    // It asserted answer 32's first half — a swipe back from a piece lands
+    // on its topic's cluster and does not leave the manual — which was built
+    // by giving the manual a `NavigationStack` of its own. Train I003
+    // measured that that stack takes the whole route's screen away
+    // (``ManualView/ready(_:cached:_:)``), so the stack is gone and the
+    // swipe pops the route again, from every level. The case is deleted
+    // rather than rewritten to assert the pop: a case that pinned the
+    // behaviour the owner asked to change would have to be deleted again the
+    // day the shared change lands, and the way up that does exist —
+    // `zoom out` from a piece to its topic's cluster, with the piece's page
+    // gone afterwards — is already asserted in
+    // ``testManual_MapOpensATopicThenAPiece()``.
+    //
+    // It comes back, unchanged, with the shared change: see this fix's
+    // REPORT under "for others".
 
-        XCTAssertTrue(
-            manualOpenTopic(app, topic: StubManual.roomsTopic),
-            "the map never opened the topic's cluster"
-        )
-        let piece = manualNode(app, StubManual.piRoom)
-        XCTAssertTrue(piece.waitForExistence(timeout: 15), "the cluster drew no piece node")
-        piece.tap()
-        XCTAssertTrue(
-            app.buttons[StubManual.nextPlugins].firstMatch.waitForExistence(timeout: 15),
-            "the piece's page never opened"
-        )
-        evidence(app, "manual-swipe-on-the-piece")
-
-        // The system's edge swipe. `dx: 0.01` and not 0: the drag has to
-        // start inside the app's frame for the gesture recogniser at its
-        // leading edge to see it.
-        app.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.5))
-            .press(
-                forDuration: 0.08,
-                thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5))
-            )
-
-        XCTAssertTrue(
-            manualGone(app.buttons[StubManual.nextPlugins].firstMatch),
-            "a swipe back from a piece left its page on screen"
-        )
-        XCTAssertTrue(
-            manualGone(app.staticTexts[StubManual.piRoom].firstMatch),
-            "a swipe back from a piece left the piece's heading and crumb on screen"
-        )
-        evidence(app, "manual-swipe-went-up-a-level")
-        XCTAssertTrue(
-            app.buttons[StubManual.mapPill].firstMatch.exists,
-            "a swipe back from a piece left the manual altogether instead of "
-                + "going up a level — it popped the route, which is what it did "
-                + "before answer 32"
-        )
-        XCTAssertTrue(
-            manualNode(app, StubManual.plugins).exists,
-            "the topic's cluster is not what the swipe landed on"
-        )
-    }
-
-    /// **Answer 32, the other half**: a swipe back from **Start here** leaves
-    /// the manual, because Start here is the top of it.
+    /// A swipe back from **Start here** leaves the manual.
     ///
-    /// The brief's DONE is "the system swipe-back pops a level **and only the
-    /// top level leaves the manual**".
-    /// ``testManual_ASwipeFromAPieceGoesUpToItsTopic()`` proves the first
-    /// half; this is the second, and it is the riskier one. Start here is the
-    /// inner `NavigationStack`'s **root**, with its own bar hidden
-    /// (``ManualView/levelStack(_:_:)``), so the route's
-    /// `interactivePopGestureRecognizer` has to win against an inner
-    /// recogniser that has nothing to pop — which is exactly where a nested
-    /// navigation controller's edge gesture is known to go dead. A manual
-    /// nobody can swipe out of would be a regression answer 32 paid for with
-    /// a feature.
+    /// Written for answer 32's second half — "the system swipe-back pops a
+    /// level and only the top level leaves the manual" — and it is the half
+    /// that survived the answer being rolled back
+    /// (``ManualView/ready(_:cached:_:)``): the route's own
+    /// `interactivePopGestureRecognizer` is the only one on this screen
+    /// again, so this is the claim that it still fires at all. It is worth
+    /// keeping either way. A manual nobody can swipe out of is the
+    /// regression a second recogniser would cause, and this case is what
+    /// would catch it when answer 32 is built again on the shell's own path.
     ///
     /// Two assertions, each a different failure:
     ///
-    ///  * the `map` pill is **gone** — the manual left. A dead inner gesture
+    ///  * the `map` pill is **gone** — the manual left. A swallowed gesture
     ///    leaves it there and fails here;
     ///  * the house's name is on screen — what it left *to* is Home.
     ///    `stub house` is ``houseName(in:)``, the one thing only a completed
@@ -464,9 +422,8 @@ extension StubHouseUITests {
         XCTAssertTrue(pill.exists, "the manual's top bar is not on screen")
         evidence(app, "manual-swipe-on-start-here")
 
-        // The same gesture as the piece's case, from the same place: `dx:
-        // 0.01` and not 0, so the drag starts inside the app's frame where
-        // the leading-edge recogniser can see it.
+        // `dx: 0.01` and not 0, so the drag starts inside the app's frame
+        // where the leading-edge recogniser can see it.
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.5))
             .press(
                 forDuration: 0.08,
@@ -476,9 +433,8 @@ extension StubHouseUITests {
         XCTAssertTrue(
             manualGone(pill),
             "a swipe back on Start here did not leave the manual — the top "
-                + "bar is still there. The manual's own `NavigationStack` is "
-                + "at its root with its bar hidden, and its recogniser has "
-                + "swallowed the route's"
+                + "bar is still there, so the route's own pop gesture never "
+                + "fired"
         )
         XCTAssertTrue(
             houseName(in: app).waitForExistence(timeout: 20),
@@ -493,12 +449,13 @@ extension StubHouseUITests {
     /// Android re-scrambles every node on every level change, `zoom out`
     /// included: `levelKey` is one value in one composition
     /// (`ManualScreen.kt:593`) and every node's `LaunchedEffect(key, text)`
-    /// (`:686`) re-fires when it changes. Answer 32 put the levels on a
-    /// stack, which keeps the covered level **mounted** — so the first build
-    /// of this re-showed a map whose names had settled minutes ago, and the
-    /// ornament Kamron called "meant to impress" ran on the way down only.
-    /// That is review 2's S2, and ``ManualModel/arrivals(of:)`` read through
-    /// ``ManualMapStage/levelKey`` is the fix.
+    /// (`:686`) re-fires when it changes. iOS does not get that for free —
+    /// the first build of this re-showed a map whose names had settled
+    /// minutes ago, and the ornament Kamron called "meant to impress" ran on
+    /// the way down only. That is review 2's S2, and
+    /// ``ManualModel/arrivals(of:)`` read through ``ManualMapStage/levelKey``
+    /// is the fix: the key counts the arrival, so coming back up restarts
+    /// the effect whatever SwiftUI decided about the view's identity.
     ///
     /// **What makes this a test and not a screenshot.** The drawn glyphs are
     /// nobody's label and nobody's value, on purpose
@@ -506,9 +463,9 @@ extension StubHouseUITests {
     /// *whether* a scramble is in flight — ``ManualMapNode/scrambleState``,
     /// published as a value and only to a launch that asked for a slow
     /// scramble. The sequence asserted here is settled → **scrambling** →
-    /// settled on one element, and the middle one is the claim: with the key
-    /// unchanged by the pop the centre node never leaves `"settled"` and this
-    /// case fails on that wait.
+    /// settled on one element, and the middle one is the claim: with the
+    /// arrival left out of the key the centre node never leaves `"settled"`
+    /// and this case fails on that wait.
     @MainActor
     func testManual_GoingBackUpALevelScramblesTheNamesAgain() throws {
         control("reset-fixtures", "{}", port: 6601, what: "the manual fixture's seed")
@@ -535,26 +492,24 @@ extension StubHouseUITests {
             "the map's first scramble never finished"
         )
 
-        // Down a level. The map stays mounted underneath, and its count must
-        // NOT move: a covered stage that re-scrambled would spend the effect
-        // behind the screen on top of it and be settled again by the time it
-        // was seen.
+        // Down a level. Going down must NOT count an arrival at the level
+        // left behind: a stage that re-scrambled while something was over it
+        // would spend the effect out of sight and be settled again by the
+        // time anybody came back to it.
         let topic = manualNode(app, StubManual.roomsTopic)
         XCTAssertTrue(topic.waitForExistence(timeout: 15), "the map drew no ring topic")
         topic.tap()
         let out = app.buttons[StubManual.zoomOut].firstMatch
         XCTAssertTrue(out.waitForExistence(timeout: 15), "the topic's cluster never opened")
         // **Whether this is a claim at all depends on the tree, so it is
-        // written as the implication and not as a wait.** A
-        // `UINavigationController` removes the disappeared view controller's
-        // view once a push completes, so a covered stage's elements are
-        // normally *absent* — and `manualValue` would then poll a
-        // non-existent element and time out, failing this case for a reason
-        // that has nothing to do with the claim (review 3's F4). What is true
-        // either way is the implication: if the covered map is still in the
-        // tree, it must still read `"settled"`. The negative itself —
-        // pushing a cluster does not count an arrival at the level underneath
-        // it, so the covered stage never restarts — is pinned where it can be
+        // written as the implication and not as a wait.** One level is
+        // mounted at a time now, so the map's elements are normally *absent*
+        // here — and `manualValue` would then poll a non-existent element
+        // and time out, failing this case for a reason that has nothing to
+        // do with the claim (review 3's F4). What is true either way is the
+        // implication: if the map is still in the tree, it must still read
+        // `"settled"`. The negative itself — going down does not count an
+        // arrival at the level left behind — is pinned where it can be
         // asserted, at the package layer, in
         // `ManualAnswersTests.testArrivingAtALevelAgainIsANewArrival`.
         if centre.exists {
@@ -566,15 +521,13 @@ extension StubHouseUITests {
         }
         evidence(app, "manual-up-a-level-before")
 
-        // And back up, which is the half the stack ate.
+        // And back up, which is the half review 2 found missing.
         out.tap()
         XCTAssertTrue(
             manualValue(centre, is: "scrambling", timeout: 15),
             "`zoom out` back to the map did not scramble its names again: the "
-                + "centre node's value stayed settled. A level is a stack "
-                + "entry and the one underneath is never torn down, so "
-                + "nothing restarts the effect unless the key counts the "
-                + "arrival"
+                + "centre node's value stayed settled — nothing restarts "
+                + "the effect unless the key counts the arrival"
         )
         evidence(app, "manual-up-a-level-scrambling-again")
         XCTAssertTrue(
@@ -1696,10 +1649,10 @@ extension StubHouseUITests {
 
     /// Wait for an element to stop existing.
     ///
-    /// Needed since the levels became a navigation stack of the manual's own:
-    /// a pop takes about 350 ms to animate and the screen underneath is
-    /// already in the tree, so "the piece's page is gone" is a claim with a
-    /// wait in it rather than a read taken on the next line.
+    /// A level change animates, so "the piece's page is gone" is a claim
+    /// with a wait in it rather than a read taken on the next line — the
+    /// page that is leaving is still in the tree for a few hundred
+    /// milliseconds after the control that replaced it was tapped.
     ///
     /// ``XCTWaiter`` and not `wait(for:timeout:)`, for this file's standing
     /// reason: `setUp` sets `continueAfterFailure = false` and the built-in

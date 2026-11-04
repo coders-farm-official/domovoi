@@ -223,13 +223,11 @@ struct ManualMapStage: View {
         // **No 280 ms camera animation, because there is no camera move to
         // animate.** Android keeps one `ManualMap` composition and animates
         // `focus` inside it (`MOVE_MS`, `ManualScreen.kt:549`). Here a level
-        // is a screen: below the accessibility sizes it is an entry on the
-        // manual's own `NavigationStack` (``ManualView/levelStack(_:_:)``) and
-        // `focus` is a `let` on a view built per level, so it cannot change
-        // within one stage's lifetime; at an accessibility size the level is a
-        // different arm of a `@ViewBuilder` switch, which SwiftUI gives a
-        // different identity. Either way the level change is a *transition*
-        // between two stages, not a value change inside one.
+        // change is a different arm of ``ManualView``'s `@ViewBuilder`
+        // switch, which SwiftUI gives a different identity, and `focus` is a
+        // `let` on a view built per level, so it cannot change within one
+        // stage's lifetime. The level change is a *transition* between two
+        // stages, not a value change inside one.
         //
         // An `.animation(…, value: focus?.id)` stood here until the review
         // pointed out it could never fire. It is gone rather than kept with a
@@ -272,15 +270,14 @@ struct ManualMapStage: View {
     /// two ~104-point cards, so the part of it that would move is the part
     /// covered by the cards.
     ///
-    /// **And that cost is one stage's, which it was not when the review read
-    /// it.** Answer 32 made a level a stack entry, so on a piece's page the
-    /// `.map` and `.topic` stages are still mounted under it — three
-    /// `GeometryReader`s, and before this they were three sets of
-    /// `repeatForever` offsets running behind two covered screens, which is
-    /// roughly double what this decision was costed against. Only the stage
-    /// on **top** floats now (``isOnTop``); a covered one's cards sit exactly
-    /// where the geometry put them, at no cost at all, and start bobbing again
-    /// when the level comes back. The wires never followed either way.
+    /// **And that cost is one stage's.** One level is mounted at a time —
+    /// the inner stack that kept covered levels alive is gone
+    /// (``ManualView/ready(_:cached:_:)``) — so there is one
+    /// `GeometryReader` and one set of `repeatForever` offsets, which is
+    /// what this decision was costed against. ``isOnTop`` still gates the
+    /// float and is still worth its line: it is the gate that makes the cost
+    /// one stage's whatever mounts a second one, and it is `true` for the
+    /// level on screen either way. The wires never followed in any case.
     ///
     /// Hidden from VoiceOver — it is a drawing of the links the nodes beside
     /// it already are.
@@ -360,7 +357,7 @@ struct ManualMapStage: View {
                         reduceMotion: reduceMotion,
                         // `5.5 + (i % 4) * 0.9` seconds (`:562`), or zero
                         // — Reduce Motion, a UI case that turned the float
-                        // off, or a level the stack has **covered**. All
+                        // off, or a level nothing is looking at. All
                         // three gates and the reason for each are in
                         // ``manualNodeFloatPeriod(at:reduceMotion:floatOn:onTop:)``,
                         // in DomovoiKit rather than in this ternary because
@@ -402,16 +399,18 @@ struct ManualMapStage: View {
     /// and the whole level retypes itself. That is the ornament on the way
     /// *up* as much as on the way down.
     ///
-    /// A `NavigationStack` does not give it for free. The level below the one
-    /// on screen stays mounted (answer 32), so popping back re-shows a stage
-    /// whose scramble finished long ago and whose `.task(id:)` the pop does
-    /// not restart — each level scrambled once, the first time it was
-    /// reached, which is the review's finding and half of what Kamron asked
-    /// for. ``ManualModel/arrivals(of:)`` is the missing half: a pop counts
-    /// an arrival at the level it lands on, this key changes, and the task
-    /// restarts. Pushing *into* a cluster leaves this level's count alone, so
-    /// a covered stage does not spend its scramble behind the screen on top
-    /// of it.
+    /// SwiftUI does not. Two sibling clusters are the same arm of
+    /// ``ManualView``'s `@ViewBuilder` switch with a different `focus`, so
+    /// the view is reused rather than rebuilt; and while the levels were a
+    /// `NavigationStack` of the manual's own the level below the one on
+    /// screen stayed mounted, so a pop restarted nothing at all. Either way
+    /// each level scrambled once, the first time it was reached, which is
+    /// the review's finding and half of what Kamron asked for.
+    /// ``ManualModel/arrivals(of:)`` is the missing half: coming back up
+    /// counts an arrival at the level it lands on, this key changes, and the
+    /// task restarts. Going *down* leaves the level left behind with its
+    /// count alone, so a stage nobody is looking at does not spend its
+    /// scramble out of sight.
     ///
     /// `#` separates them because a topic's id is a slug and cannot contain
     /// one, so `map#2` is unambiguous and readable in a log.
@@ -493,8 +492,8 @@ struct ManualMapNode: View {
     /// Which level this card belongs to **and which arrival at it**, so the
     /// name scrambles again each time a level opens — on the way up as well
     /// as down — and not on every redraw. The Kotlin's `levelKey` (`:593`,
-    /// passed to `MapNode` at `:633`), with the arrival count that a
-    /// `NavigationStack` makes necessary; ``ManualMapStage/levelKey`` has the
+    /// passed to `MapNode` at `:633`), with the arrival count that SwiftUI's
+    /// view reuse makes necessary; ``ManualMapStage/levelKey`` has the
     /// reasoning.
     let levelKey: String
 
@@ -504,8 +503,8 @@ struct ManualMapNode: View {
     /// How long one bob takes, and how far into it this card starts
     /// (`bob`, `:559`: `5.5 + (i % 4) * 0.9` seconds at `:562`, phased by
     /// `i * 0.7` at `:563`). **Zero period means the card is still** —
-    /// Reduce Motion, a UI case with the float off, or a level the stack has
-    /// covered, and the caller decides which (``ManualMapStage``).
+    /// Reduce Motion, a UI case with the float off, or a level that is not
+    /// the one on screen, and the caller decides which (``ManualMapStage``).
     let floatPeriod: Double
     let floatPhase: Double
 
@@ -643,21 +642,21 @@ struct ManualMapNode: View {
         // above its own position.
         .offset(y: floats ? (floating ? -5 : 5) : 0)
         .animation(floatAnimation, value: floating)
-        // **`onChange` and not `onAppear`, and the reason is the stack.** A
-        // covered level stays mounted and stops floating (``floatPeriod`` is
-        // handed down as zero), so `floats` goes false and true again over
-        // this card's lifetime — and an `onAppear` that set `floating = true`
-        // once would leave the revealed card pinned at the top of its arc
-        // with nothing left to animate. Driving `floating` *from* `floats`
-        // gives the repeating animation a value change every time the level
-        // comes back, which is what starts it again; `initial: true` is the
-        // first appearance, exactly what `onAppear` did.
+        // **`onChange` and not `onAppear`.** ``floatPeriod`` can go to zero
+        // and back over one card's lifetime — a level that stops being the
+        // one on screen stops floating (``ManualMapStage/isOnTop``) — so
+        // `floats` goes false and true again, and an `onAppear` that set
+        // `floating = true` once would leave the card pinned at the top of
+        // its arc with nothing left to animate. Driving `floating` *from*
+        // `floats` gives the repeating animation a value change every time
+        // the card starts bobbing again; `initial: true` is the first
+        // appearance, exactly what `onAppear` did.
         .onChange(of: floats, initial: true) { _, now in floating = now }
     }
 
     /// Whether this card bobs at all. Zero period is a still card — Reduce
-    /// Motion, a UI case that turned the float off, or a level the stack has
-    /// covered.
+    /// Motion, a UI case that turned the float off, or a level that is not
+    /// the one on screen.
     private var floats: Bool { floatPeriod > 0 }
 
     /// One bob, forever, or nothing at all.
@@ -957,8 +956,8 @@ struct ManualScrambleName: View {
     ///
     /// Android's names scramble "as the level opens" with no transition at
     /// all: `focus` changes inside one composition (`ManualScreen.kt:593`) and
-    /// every node is on screen throughout. Here a level is a stack entry, and
-    /// a push or a pop takes about **350 ms** (measured in
+    /// every node is on screen throughout. Here a level change swaps one
+    /// page for another, which takes about **350 ms** (measured in
     /// `StubHouseUITests+Manual.swift`'s `manualGone(_:)`) against a scramble
     /// that ships at 216 ms — so the straight port spent the whole ornament
     /// while the stage was still sliding, which is review 3's F3 and the

@@ -10,9 +10,11 @@ import Observation
 /// the view can be made to draw all four. ``saved`` is the string
 /// `@SceneStorage` keeps, which is the same promise `rememberSaveable` makes
 /// — it survives a process death and dies with the app's removal.
-/// `Hashable` because a level is a **value on a navigation stack** of its own
-/// now (``ManualModel/levels``, answer 32): `navigationDestination(for:)` and
-/// `NavigationLink(value:)` both ask for it.
+/// `Hashable` because a level is a **dictionary key**
+/// (``ManualModel/arrivalCounts``), and because the chain in
+/// ``ManualModel/levels`` is written to be a navigation path the day the
+/// shell's own path can carry it — `navigationDestination(for:)` and
+/// `NavigationLink(value:)` both ask for `Hashable`.
 public enum ManualPlace: Equatable, Hashable, Sendable {
     case start
     case map
@@ -412,19 +414,22 @@ public final class ManualModel {
     /// `LaunchedEffect(key, text)` (`:686`) re-fires for all of them whenever
     /// `focus` changes — which `zoom out` and the system back both do.
     ///
-    /// Answer 32 put the manual's levels on a `NavigationStack`
-    /// (``levels``), and a stack does not tear the level underneath down: the
-    /// map's page is still mounted while a cluster is on top of it, so going
-    /// back up re-shows a view whose scramble has long since finished and
-    /// whose `.task(id:)` is not restarted by the pop. The ornament Kamron
-    /// called "meant to impress" ran on the way down and never again, which
-    /// is the review's finding.
+    /// iOS does not get it for free, because a level's page is not always a
+    /// new view. `.map` and `.topic(id)` are two arms of one `@ViewBuilder`
+    /// switch, so the map gives way to a cluster by identity and the
+    /// `.task(id:)` restarts — but one cluster to its sibling is the *same*
+    /// arm with a different `focus`, and a stack entry, back when there was
+    /// a stack, kept the covered level mounted so a pop restarted nothing at
+    /// all. The ornament Kamron called "meant to impress" ran on the way
+    /// down and never again, which is review 2's S2.
     ///
     /// So a level's page keys its scramble on *which* level it draws **and
-    /// which arrival at it** (`ManualMapView.swift`'s `levelKey`). Popping
-    /// back to the map bumps the map's count, the key changes, the task
-    /// restarts; pushing a cluster leaves the map's count alone, so the
-    /// covered page does not spend its scramble behind the one on screen.
+    /// which arrival at it** (`ManualMapView.swift`'s `levelKey`): going back
+    /// up bumps that level's count, the key changes, and the task restarts
+    /// whatever SwiftUI decided about the view's identity. It is the half
+    /// that does not depend on how the levels are mounted, which is why it
+    /// stayed when the inner `NavigationStack` went
+    /// (``ManualView/ready(_:cached:_:)``).
     ///
     /// Read through ``arrivals(of:)``. It is `0` before the first arrival,
     /// which is the value a freshly mounted page sees — and a fresh page runs
@@ -737,9 +742,10 @@ public final class ManualModel {
 
     /// `up` (`ManualScreen.kt:308`), and the system back on Android.
     ///
-    /// Two ways up here, as on Android: `zoom out` in the crumbs calls this,
-    /// and the swipe-back gesture pops ``levels`` — which is the same move,
-    /// because that array is this function's own chain (answer 32).
+    /// `zoom out` in the crumbs calls this, and so does a tap on a crumb
+    /// above the one we are on. The swipe-back gesture is **not** a third
+    /// way up: it pops the route and leaves the manual, which is answer 32
+    /// blocked on a shared change — ``levels`` says what that change is.
     public func up() {
         land(on: parent(of: place))
     }
@@ -769,16 +775,24 @@ public final class ManualModel {
     /// `[]` on Start here, `[.map]` on the map, `[.map, .topic]` in a
     /// cluster, `[.map, .topic, .piece]` on a piece's page.
     ///
-    /// This is the array the screen's own `NavigationStack` is given
-    /// (`ManualView.swift`), so the system's swipe-back pops **one level**
-    /// and only the top of the manual leaves it — Kamron's answer 32. It is
-    /// *computed* from ``place`` rather than stored beside it: two sources of
-    /// truth for where the screen is would be the defect this app has already
-    /// paid for twice, and `place` is what the pills, the crumbs, the search
-    /// and `@SceneStorage` all read and write. Popping writes back through
-    /// ``open(levels:)``, and the recomputed chain then equals what was
-    /// written, which is the contract a `NavigationStack` path binding asks
-    /// for.
+    /// **Nothing in the app binds this today, and that is a measured
+    /// retreat rather than an oversight.** It was written to be the path of
+    /// a `NavigationStack` of the manual's own, so that the system's
+    /// swipe-back popped one level — Kamron's answer 32 — and train I003
+    /// showed that a second stack inside the shell's pushed route takes the
+    /// route's screen away (``ManualView/ready(_:cached:_:)`` has the
+    /// measurement). The chain is kept, with the package tests that pin it,
+    /// because the shared change that unblocks answer 32 is to push these
+    /// values onto the shell's own path: this is the array that change
+    /// needs, and `up()` is one step of the same walk.
+    ///
+    /// It is *computed* from ``place`` rather than stored beside it: two
+    /// sources of truth for where the screen is would be the defect this app
+    /// has already paid for twice, and `place` is what the pills, the
+    /// crumbs, the search and `@SceneStorage` all read and write. A pop
+    /// writes back through ``open(levels:)``, and the recomputed chain then
+    /// equals what was written, which is the contract a `NavigationStack`
+    /// path binding asks for.
     ///
     /// The walk is bounded: the four levels are a chain, ``parent(of:)``
     /// reaches `.start` in at most three steps, and the count is capped so a
@@ -796,7 +810,9 @@ public final class ManualModel {
     /// The screen's stack popped or pushed: the level on top is where we are.
     ///
     /// An empty array is Start here, which is what a pop-to-root gesture
-    /// hands over.
+    /// hands over. The other half of ``levels``, and like it waiting on the
+    /// shared change — see that property for why nothing in the app calls
+    /// this today.
     public func open(levels: [ManualPlace]) {
         land(on: levels.last ?? .start)
     }
