@@ -8,10 +8,15 @@ import Foundation
 /// which is why it is here rather than waiting for the first screen that
 /// scrolls.
 ///
-/// The `Pager` itself, the server's `limit`/`cursor` contract and the
-/// re-read-on-event wiring are `android/.../net/Paging.kt` and belong with the
-/// first paged screen (I1-D or later). What this batch owes map §1.9 is the
-/// three facts that are about **navigation**:
+/// **The `Pager` has landed**, in `Pager.swift`, with the server's
+/// `limit`/`cursor` contract and the re-read-on-event wiring — Music's
+/// library is the first paged screen. The sentence here used to say those
+/// "belong with the first paged screen (I1-D or later)", which was true when
+/// it was written and is retracted rather than deleted, because a reader who
+/// believed it would go looking in the wrong file.
+///
+/// What stays here is the three facts that are about **navigation**, which
+/// are this file's own (map §1.9):
 ///
 /// 1. **A route holds nothing.** Android's pager is created inside the screen
 ///    by `rememberPager` (`ui/components/Paged.kt:48`) and dies with it, so

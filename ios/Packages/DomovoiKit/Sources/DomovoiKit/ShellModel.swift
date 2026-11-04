@@ -196,6 +196,13 @@ public final class ShellModel {
     /// building many models over one container leaks a closure per model.
     private var networkSink: Int?
 
+    /// The container's token-health sink, for the same reason as
+    /// ``networkSink``. See ``TokenHealth``'s `changed` note for what this
+    /// being absent cost.
+    private var tokenHealthSink: Int?
+
+    private var selectionSink: Int?
+
     /// - Parameters:
     ///   - probe: one question to the server, for the reachability loop.
     ///     Android's `api.answers()`.
@@ -243,6 +250,19 @@ public final class ShellModel {
         }
         self.networkSink = container.onNetworkChange { [weak self] in
             Task { @MainActor in self?.networkChanged() }
+        }
+        // A refused token or a new wait changes which screen this is, and a
+        // `429` on an ordinary read is not one of ``refresh()``'s triggers —
+        // so without this the `.waiting` card had nothing to raise it.
+        self.tokenHealthSink = container.onTokenHealthChange { [weak self] in
+            Task { @MainActor in self?.refresh() }
+        }
+        // And the one the connection dialog needs: its picker writes the
+        // store directly, through ``ServerTrustGate``, so without this a
+        // person who picked their house watched nothing happen —
+        // `ShellModelTest.testPickingAServerMovesTheAppWithNobodyCallingRefresh`.
+        self.selectionSink = container.onServerSelectionChange { [weak self] in
+            Task { @MainActor in self?.refresh() }
         }
         // A launch straight onto a waiting card has to count down too, and
         // the first `.active` is not a return, so `scenePhaseChanged` will
@@ -900,6 +920,17 @@ public final class ShellModel {
     /// can say — which is the state an app built without one is in.
     private let deviceSelf: (@Sendable () -> DeviceSelf)?
 
+    /// What this install calls itself on the wire, or nil when nothing can
+    /// say.
+    ///
+    /// Read by the room queue, whose every request carries `device_id`: the
+    /// server decides from it whether this phone may edit the queue, and a
+    /// request without one would be refused the household's view of who
+    /// queued what. One id per install, so it comes from the one place that
+    /// already holds it rather than being minted a second time beside the
+    /// screen that needs it.
+    public var deviceID: String? { deviceSelf?().deviceID }
+
     /// The device register's sender, or nil when there is nothing to send.
     ///
     /// **This is the thing I1-C part 2's F9 left a hole for.** It wrote the
@@ -1020,6 +1051,14 @@ public final class ShellModel {
         if let networkSink {
             container.removeNetworkChangeSink(networkSink)
             self.networkSink = nil
+        }
+        if let tokenHealthSink {
+            container.removeTokenHealthChangeSink(tokenHealthSink)
+            self.tokenHealthSink = nil
+        }
+        if let selectionSink {
+            container.removeServerSelectionSink(selectionSink)
+            self.selectionSink = nil
         }
     }
 

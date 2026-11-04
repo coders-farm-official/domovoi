@@ -52,6 +52,22 @@ public struct ForgetActiveServerAsk: Equatable, Sendable {
 }
 
 public let forgetServerTitle = "forget this server?"
+
+/// What VoiceOver says for the address on the forget card.
+///
+/// Apple's accessibility audit flags the bare address as not human-readable,
+/// and it is right about this one: on that card the address is a line of text
+/// by itself, under a heading that does not name it, so "127.0.0.1:6601" is
+/// the whole announcement. The visible text is not changed by this — the
+/// point of showing an address there is that it can be compared with the
+/// dashboard character by character.
+///
+/// Not in the Kotlin. Android draws the same card and has the same gap; it is
+/// recorded with the other defects the port found rather than fixed during a
+/// soak.
+public func forgetServerAddressLabel(_ address: String) -> String {
+    "the server at \(address)"
+}
 public let forgetServerCancel = "cancel"
 public let forgetServerConfirm = "forget"
 

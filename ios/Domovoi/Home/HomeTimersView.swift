@@ -21,14 +21,24 @@ import SwiftUI
 /// minute wrong. The date and today's grouping use the phone's. Two clocks,
 /// and this is the one that is not the obvious one.
 ///
-/// ### Neither alert-hint row is here
+/// ### One alert-hint row is here now, and the other never will be
 ///
-/// Owner decision, 2026-10-30, settled rather than deferred: `Timer alerts
-/// are off on this phone` and `Timers may ring a few minutes late on this
-/// phone` are not ported, because this app schedules no local notifications
-/// and a row offering to turn on an alert that will never ring is the
-/// misleading control the owner has ruled out. `HomeTimers.swift`'s header
-/// carries the reasoning and the price of bringing it back.
+/// The owner decision of 2026-10-30 left both rows out — `Timer alerts are
+/// off on this phone` and `Timers may ring a few minutes late on this phone`
+/// — because this app scheduled no local notifications, so a row offering to
+/// turn on an alert that would never ring was the misleading control the
+/// owner has ruled out. It named its own condition: *if local timer alerts
+/// are ever built here, the row comes back with them and not before.*
+///
+/// The overnight `alerts` item built them (``AlertsCenter``,
+/// `DomovoiKit/AlertsEngine.swift`), so the condition is met and the first
+/// row is back, one line below — ``AlertsHintRowView``, drawn above the first
+/// timer row as `HomeSections.kt:396-407` draws it.
+///
+/// The **second** row stays out for good: there is no exact-alarm grant on an
+/// iPhone, so that sentence would describe nothing and its `allow alarms`
+/// link would open nothing (`StubHouseUITests+Alerts.swift`'s
+/// `testAlerts_NoLateRingRowOrAllowAlarmsLink` is what keeps it out).
 ///
 /// ### What a person has to confirm on a screen
 ///
@@ -55,6 +65,11 @@ struct HomeTimersView: View {
     /// (`alpha 0.7`, `HomeSections.kt:460`).
     let onlineRooms: Set<String>
 
+    /// **Whether the rooms read landed at all**, which `onlineRooms` cannot
+    /// say: empty means "every room is offline" and "nobody could ask" alike,
+    /// and the dim is only right for the first. See ``dimForOfflineRoom(_:)``.
+    let roomsKnown: Bool
+
     /// `+N more` has been tapped. `@State` in ``HomeView``, as Android's
     /// `rememberSaveable` is in the screen, and it never collapses again.
     let expanded: Bool
@@ -73,6 +88,11 @@ struct HomeTimersView: View {
     @Environment(\.horizontalSizeClass) private var sizeClass
 
     @Environment(\.dynamicTypeSize) private var typeSize
+
+    /// The alerts' hint model, put into the environment by ``DomovoiApp``
+    /// (``AlertsAppWiring``). Nil in a preview, which is why it is optional
+    /// and not a parameter.
+    @Environment(\.alertsHintModel) private var alertsHint
 
     private var compact: Bool { ShellWidth(sizeClass) == .compact }
 
@@ -101,6 +121,16 @@ struct HomeTimersView: View {
                 onAction: onMore
             ) {
                 VStack(alignment: .leading, spacing: 14) {
+                    // `AlertHintRow`, above the first timer row, which is
+                    // `HomeSections.kt:396-407`'s position exactly. One of
+                    // the two cases only — see ``AlertsHintRowView`` for the
+                    // exact-alarm sentence that has no iPhone counterpart.
+                    // `shown` is read here and not only inside the row so
+                    // that a card with no hint gets no 14-point gap where
+                    // the row would be.
+                    if let alertsHint, alertsHint.shown {
+                        AlertsHintRowView(model: alertsHint)
+                    }
                     ForEach(shownTimers, id: \.id) { timer in
                         row(timer)
                     }
@@ -180,9 +210,34 @@ struct HomeTimersView: View {
                 // `alpha 0.7` when the room is not online
                 // (`HomeSections.kt:460`): the timer is still running, but the
                 // room it will ring in is not there to ring.
+                //
+                // **Only when the rooms read landed.** `fgMuted` is 6.60:1 on
+                // this card and about 3.0:1 at `.opacity(0.7)`, so the dim is
+                // below the contrast floor — and when `/api/satellites` fails
+                // every timer's room is "not online" merely because nobody
+                // could ask. The audit found exactly that: the `rooms-down`
+                // house was the only one of seven states to report a contrast
+                // failure, reproducibly, and its rooms read is the only thing
+                // it has that the clean states do not (2026-10-30).
+                //
+                // Unknown is not offline. The same mistake, in the other
+                // direction, is one of the thirteen defects this port found in
+                // the shipping Android app: a green tick for a health read
+                // that never happened.
                 .foregroundStyle(Color.fgMuted)
-                .opacity(roomIsOnline(timer) ? 1 : 0.7)
+                .opacity(dimForOfflineRoom(timer) ? 0.7 : 1)
         }
+    }
+
+    /// Whether to dim this timer's room: only when the rooms read landed
+    /// **and** said the room is not online.
+    ///
+    /// With no rooms to compare against, `roomIsOnline` is false for every
+    /// timer in the house, which is how a failed read became an unreadable
+    /// label. See the contrast note at the call site.
+    private func dimForOfflineRoom(_ timer: HomeTimer) -> Bool {
+        guard roomsKnown else { return false }
+        return !roomIsOnline(timer)
     }
 
     /// A timer with no room is not a timer whose room is offline, so the

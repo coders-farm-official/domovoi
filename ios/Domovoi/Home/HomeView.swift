@@ -301,6 +301,10 @@ struct HomeView: View {
             serverNowMs: home.serverNowMs,
             shared: shared,
             onlineRooms: Set(rooms.filter(\.online).map(\.roomID)),
+            // The read landed if it produced rows. A house with no rooms at
+            // all has no timers in rooms either, so the two readings of
+            // "empty" only diverge where it does not matter.
+            roomsKnown: !rooms.isEmpty,
             expanded: timersExpanded,
             onMore: { timersExpanded = true },
             onCancel: { cancel($0, in: home) },
