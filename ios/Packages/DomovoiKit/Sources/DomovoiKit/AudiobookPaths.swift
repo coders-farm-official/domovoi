@@ -104,6 +104,41 @@ public enum AudiobookPath {
     /// This phone's slot in a book, for this listener. `device_id` is
     /// **required** by the route; `person_id` names whose place it is, and
     /// without one it is the unidentified listener's.
+    /// The whole book as one file to keep (`audiobooks.py:353`).
+    ///
+    /// Not the audio route with `download=1` — that is **one chapter**
+    /// (`:314`), which for a folder book is one file of forty. This route is
+    /// the book: a single-file book comes back as itself, a folder book as a
+    /// stored (uncompressed) zip the server builds and then deletes. Both
+    /// arrive as an `attachment`, which is what ``SaveToDeviceModel`` needs in
+    /// order to hand the file on rather than render it.
+    public static func download(_ id: Int64) -> String {
+        "/api/audiobooks/\(id)/download"
+    }
+
+    /// What to call the file the person keeps.
+    ///
+    /// The server names it too (`safe_download_name`), but
+    /// ``SaveToDeviceModel`` writes to a path it chose before the first byte
+    /// arrives, so the name is decided here. The extension matters: a folder
+    /// book is a **zip** whatever its chapters are, and `file_ext` is null for
+    /// one (`audiobooks.py:218-230`) — which is why this takes `isFolder`
+    /// rather than trusting an absent extension to mean "unknown".
+    ///
+    /// `.m4b` for a single-file book with no extension at all: a file iOS
+    /// cannot open by name is a file the share sheet offers nothing for, and
+    /// an audiobook that is not a folder is an audio file.
+    public nonisolated static func downloadName(
+        title: String,
+        isFolder: Bool,
+        fileExt: String?
+    ) -> String {
+        if isFolder { return title + ".zip" }
+        let ext = (fileExt ?? "").lowercased()
+        if ext.isEmpty { return title + ".m4b" }
+        return ext.hasPrefix(".") ? title + ext : title + "." + ext
+    }
+
     public static func position(_ id: Int64, deviceID: String, personID: String? = nil) -> String {
         "/api/audiobooks/\(id)/position?device_id=\(esc(deviceID))\(person(personID))"
     }

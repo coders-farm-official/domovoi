@@ -30,16 +30,24 @@ import SwiftUI
 /// rule forbids. The empty library says where to put files instead, and
 /// points at the `reindex` that is here.
 ///
-/// **Save to phone**, the save badge, the progress bar and `discard what was
-/// saved` (`:300`, `BookPage.kt:175-212`). All six are the phone's shelf.
+/// **The phone's shelf** — the save badge on every card, the per-book progress
+/// bar and `discard what was saved` (`:300`, `BookPage.kt:175-212`) — is a
+/// managed library of saved books, and is still the PhoneMedia item's.
 /// ``AudiobooksModel/shelf`` is the seam and it is nil here, which draws
-/// nothing rather than a dead pill.
+/// nothing rather than a dead pill. What **is** here since the 2026-11-03
+/// batch is the one-off (D47): `save to this device` on a book's own page,
+/// which fetches the book — a zip, for a folder book — and hands it to the
+/// share sheet.
 ///
-/// **A "listening as" chip** (`:205`, `:334-344`). Nothing on iOS stores a
-/// listener person, so the chip could only ever read `listening as …`. Every
-/// position this screen reads or writes is therefore the server's
-/// *unidentified* listener's slot, which is a different row from a person's.
-/// DECISIONS §1 puts the question to the owner.
+/// ### The listener arrived in the 2026-11-03 batch
+///
+/// Android's hint chip (`:205`, `:334-344`) is drawn under the header, and
+/// **nothing at all** when no listener has been picked, which is Android's own
+/// `?: return`. The selector it hints at is in Settings → Phones & browsers,
+/// where Android keeps it too (`ConnectionPanel.kt:350-378`), and the person
+/// reaches every position this screen reads and writes (D11) — so a place is
+/// no longer recorded against the server's *unidentified* listener unless that
+/// is what was chosen.
 ///
 /// **Remove from server (admin)** (`BookPage.kt:226-239`). Two independent
 /// blockers, either sufficient; ``AudiobookDetailModel`` states both.
@@ -87,6 +95,15 @@ struct AudiobooksView: View {
     /// `onChange` live.
     @State private var visible = false
 
+    /// The household, for the "listening as" chip. Android reads the same
+    /// list on this screen (`AudiobooksScreen.kt:336`).
+    @State private var listeners: PlayerListenerModel?
+
+    /// The one save in flight, held here and not on the book's page: a save
+    /// of a six-hour book outlives the back button, and ``SaveToDeviceModel``
+    /// is one transfer at a time by design.
+    @State private var saves: SaveToDeviceModel?
+
     @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
@@ -94,10 +111,15 @@ struct AudiobooksView: View {
             Group {
                 if let books {
                     if let page, openBook != nil {
-                        AudiobookDetailView(detail: page, library: books) {
-                            openBook = nil
-                            self.page = nil
-                        }
+                        AudiobookDetailView(
+                            detail: page,
+                            library: books,
+                            onBack: {
+                                openBook = nil
+                                self.page = nil
+                            },
+                            saves: saves
+                        )
                     } else {
                         library(books)
                     }
@@ -133,6 +155,13 @@ struct AudiobooksView: View {
             // Built here and not in `init`, for ``HomeView``'s reason: the
             // model needs the container and a `@State` initialiser runs
             // before the view has one.
+            if listeners == nil {
+                listeners = PlayerListenerModel(in: model.container, listeners: model.listeners)
+            }
+            if saves == nil {
+                saves = SaveToDeviceModel(in: model.container)
+            }
+            listeners?.start()
             if books == nil {
                 let listeners = model.listeners
                 books = AudiobooksModel(
@@ -177,6 +206,30 @@ struct AudiobooksView: View {
         .onDisappear {
             visible = false
             books?.stop()
+            listeners?.stop()
+        }
+        // The file is here: hand it over. ``SaveToDeviceModel/taken()``
+        // deletes the copy, because an app that leaves a six-hour book in a
+        // directory iOS clears "at some point" is an app holding somebody's
+        // gigabyte.
+        //
+        // **On this view and not on the book's page**, so that going back
+        // mid-save does not take the sheet with it.
+        .sheet(isPresented: Binding(
+            get: { if case .ready = saves?.state { return true } else { return false } },
+            set: { if !$0 { saves?.taken() } }
+        )) {
+            if case .ready(let url, _) = saves?.state {
+                FileShareSheet(url: url)
+            }
+        }
+        // A failed save goes to the shell's toast, which outlives this screen
+        // — ``FilesView`` and ``PodcastEpisodesSheet`` both do the same.
+        .onChange(of: saves?.state) { _, state in
+            if case .failed(let why) = state {
+                model.showToast(why)
+                saves?.taken()
+            }
         }
         // **The toast is the shell's**, drawn over the whole app
         // (`AppShellView.swift:36`), because a toast about a reindex that
@@ -195,6 +248,7 @@ struct AudiobooksView: View {
             openBook = nil
             page = nil
             books?.serverChanged()
+            saves?.serverChanged()
             // **The adapter is re-asked for, not kept.** The player itself
             // is the app's one player and survives the move —
             // ``ShellModel/refresh()`` has already told it, which is what
@@ -225,6 +279,7 @@ struct AudiobooksView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 16) {
                     header(books)
+                    listeningAsChip
                     searchField(books)
                     sortChips(books)
                     list(books)
@@ -245,6 +300,29 @@ struct AudiobooksView: View {
                 }
                 books.toppedTheList()
             }
+        }
+    }
+
+    /// Android's hint chip (`AudiobooksScreen.kt:205`, `:333-344`):
+    /// `listening as <name>`, and **nothing at all** when no listener has been
+    /// picked — Android's own `val id = listenerId ?: return`. A chip reading
+    /// `listening as nobody` would be a line of furniture on every phone in
+    /// the house that has never touched the setting.
+    ///
+    /// Under the header rather than at the foot: a `LazyVStack`'s foot is not
+    /// built until it is scrolled to, so on a library of two hundred books it
+    /// is nowhere (the finding that moved the podcast sheet's chip in train
+    /// S004).
+    @ViewBuilder
+    private var listeningAsChip: some View {
+        if let listeners, listeners.showsChip {
+            Text(listeners.chip)
+                .font(.caption)
+                .foregroundStyle(Color.brandInk)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 10)
+                .frame(minHeight: 28)
+                .background(.quaternary.opacity(0.3), in: Capsule())
         }
     }
 

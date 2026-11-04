@@ -33,6 +33,14 @@ struct AudiobookDetailView: View {
 
     let onBack: () -> Void
 
+    /// The one save in flight, or nil on a page with no server.
+    ///
+    /// **The shell's, not this page's.** ``AudiobooksView`` holds it, because
+    /// a save of a six-hour book outlives the back button — a `Task` owned by
+    /// a page that goes away is a `Task` cancelled half a gigabyte in. It is
+    /// also why there is one: ``SaveToDeviceModel`` is one transfer at a time.
+    var saves: SaveToDeviceModel?
+
     @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
@@ -172,26 +180,66 @@ struct AudiobookDetailView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    // MARK: - the one action
+    // MARK: - the two actions
 
-    /// `play` / `resume` (`:173`), and nothing beside it.
+    /// `play` / `resume` (`:173`) and `save to this device` (`:175-212`).
     ///
-    /// Android draws a save control next to this one in every case
-    /// (`:175-212`); all five of its states belong to the phone's shelf,
-    /// which this app has not got, so there is one button here. It is absent
-    /// altogether for a book with no playable file and while nothing can play
-    /// audio on this phone (``AudiobookDetailModel/canPlay``).
+    /// Android's save control has five states and they are its **shelf's** —
+    /// a managed library of saved books with a discard, which this app has not
+    /// got. What is here is the one-off: fetch the book and hand it to the
+    /// share sheet, so it lands wherever the person keeps things (D47). A
+    /// folder book arrives as the zip the server builds.
+    ///
+    /// `play` is absent for a book with no playable file and on a phone that
+    /// cannot play audio (``AudiobookDetailModel/canPlay``); the save is not,
+    /// because keeping a file needs no engine. So either control may be the
+    /// only one here, and the row lays itself out around whichever is drawn.
+    ///
+    /// **A column at an accessibility size**, as every two-control row in this
+    /// app is: `play` and a progress bar side by side at AX5 put the bar at
+    /// about forty points wide.
     @ViewBuilder
     private var actions: some View {
-        if detail.canPlay {
-            Button(detail.playWord) {
-                detail.playOrResume()
+        if detail.canPlay || saves != nil {
+            let layout = typeSize.isAccessibilitySize
+                ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
+                : AnyLayout(HStackLayout(alignment: .center, spacing: 12))
+            layout {
+                if detail.canPlay {
+                    Button(detail.playWord) {
+                        detail.playOrResume()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(Color.brand)
+                    .foregroundStyle(Color.brandFg)
+                }
+                if let saves, let book = detail.book {
+                    SaveToDeviceButton(
+                        state: saves.state,
+                        onTap: { save(book, with: saves) },
+                        onCancel: { saves.cancel() }
+                    )
+                }
             }
-            .buttonStyle(.borderedProminent)
-            .tint(Color.brand)
-            .foregroundStyle(Color.brandFg)
             .padding(.vertical, 8)
         }
+    }
+
+    /// Fetch the whole book and let ``AudiobooksView``'s share sheet hand it
+    /// over.
+    ///
+    /// The name is built from the row rather than read off the response: the
+    /// model writes to a path it chose before the first byte arrives
+    /// (``AudiobookPath/downloadName(title:isFolder:fileExt:)``).
+    private func save(_ book: AudiobookRow, with saves: SaveToDeviceModel) {
+        saves.save(
+            path: AudiobookPath.download(book.id),
+            named: FileSaveModel.safeName(AudiobookPath.downloadName(
+                title: book.displayTitle,
+                isFolder: book.isFolder,
+                fileExt: book.fileExt
+            ))
+        )
     }
 
     // MARK: - the chapters

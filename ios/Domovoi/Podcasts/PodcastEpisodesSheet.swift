@@ -342,7 +342,7 @@ struct PodcastEpisodesSheet: View {
         guard let saves else { return }
         saves.save(
             path: PodcastPath.audio(episodeID: episode.id, download: true),
-            named: FileSaveModel.safeName(for: PodcastEpisodes.fileName(episode))
+            named: FileSaveModel.safeName(PodcastEpisodes.fileName(episode))
         )
     }
 
