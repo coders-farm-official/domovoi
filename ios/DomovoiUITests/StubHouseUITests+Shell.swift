@@ -1349,11 +1349,15 @@ extension StubHouseUITests {
         let (music, musicLanded) = openMusicForAHint()
         XCTAssertTrue(musicLanded, "music never drew — no field to read a hint in")
         try assertTheHintIsReadable(music, StubShell.musicHint, named: "shell-hint-music")
-        // **The other half of the same proxy**, on the same field: a
-        // `UILabel` appearance proxy cannot be narrowed to a placeholder, and
-        // whether `UITextField` draws its own text through a `UILabel`
-        // subclass is UIKit's business. So the typed text is read too
-        // (review 1, S3).
+        // **The control that says this recoloured the hint and not the
+        // text**, on the same field. It was written for the appearance proxy,
+        // which could not be narrowed to a placeholder and so might have
+        // caught `UITextFieldLabel` with it (review 1, S3). The proxy is gone
+        // — I004 measured that it recoloured nothing at all — and
+        // `ShellHintInkAppearance` writes the ink into the placeholder's own
+        // `NSAttributedString`, which cannot reach typed text by
+        // construction. The reading stays: "by construction" is the kind of
+        // sentence this track keeps a ledger of.
         try assertTypedTextKeepsThePrimaryInk(music, StubShell.musicHint, named: "shell-typed-music")
 
         let (videos, videosLanded) = openVideos()
@@ -1369,16 +1373,20 @@ extension StubHouseUITests {
     /// readings above never reach it — review 1's S3, and it was right: both
     /// fields it measured were `.roundedBorder` single-line ones.
     ///
-    /// **This case is the only answer there is about that leg.** Whether the
-    /// `UITextView` appearance proxy in `DomovoiApp.init` reaches a prompt
-    /// SwiftUI may be drawing itself is not something either file can assert
-    /// (review 2's must finding), so it is read instead: Apple's grey measures
-    /// about 1.7:1 in a field and this ink about 6.7:1, far enough apart that
-    /// a 4.5 floor cannot confuse them. If this goes red, the fix is **not** a
-    /// different class in the proxy — it is
+    /// **This case is the only answer there is about that leg**, and in train
+    /// I004 it answered: `hint ink rgb(188, 188, 193) on rgb(242, 242, 247) —
+    /// 1.70:1`, Apple's grey, with the appearance proxy that was supposed to
+    /// override it in place. The same train's hierarchy also settled the class
+    /// the proxy was guessing at — `TextField … placeholderValue: 'search
+    /// title, artist, album, path…'` at AX5, a `UITextField` and not a
+    /// `UITextView` — so the vertical leg and the single-line one are one
+    /// mechanism, which is what `ShellHintInkAppearance` now swaps. Apple's
+    /// grey measures about 1.7:1 in a field and this ink about 6.7:1, far
+    /// enough apart that a 4.5 floor cannot confuse them. If this goes red,
+    /// the fix is
     /// `TextField(…, prompt: Text(hint).foregroundColor(Color.fgMuted))` at
-    /// the 24 vertical-axis call sites in 18 files, which is in DECISIONS.md
-    /// under "Needs a shared change" because none of those files is this
+    /// the 17 vertical-axis call sites in 15 files, which is in
+    /// gx-shell/REPORT.md because none of those files is this
     /// unit's.
     ///
     /// No audit here. Music at AX5 is `MusicMore`'s screen to audit, and a
@@ -1393,20 +1401,24 @@ extension StubHouseUITests {
             music,
             StubShell.musicHint,
             named: "shell-hint-music-ax5",
-            // **Not asserted, because it is not known.** This used to say a
-            // `UITextView` has no placeholder of its own, which contradicted
-            // `DomovoiApp.swift`'s claim that a vertical-axis field *is* a
-            // `UITextView` with a `UILabel` in it — review 2's must finding,
-            // and both sentences were about a private view tree neither file
-            // had read. What is certain is that `placeholderValue` is a
-            // `UITextField` property and this element may be a `textView`, so
-            // asking for it here would fail on the class rather than on the
-            // colour. The element carries the hint as its **label** — the
-            // lookup above asserts that, and an overlay `Text` in place of a
-            // prompt would not produce it — and the ink is read off the
-            // screen's own pixels either way, which is the reading that
-            // answers the question.
-            readsPlaceholder: false,
+            // **Asserted now, because train I004 settled the class.** This was
+            // false with a paragraph explaining that `placeholderValue` is a
+            // `UITextField` property, that the element here "may be a
+            // `textView`", and that asking for it would fail on the class
+            // rather than on the colour — one of two contradicting guesses
+            // about a private view tree (review 2's must finding).
+            //
+            // I004 attached the hierarchy: this element is
+            // `TextField, {{24.0, 300.7}, {345.0, 125.3}}, label: 'search
+            // title, artist, album, path…', placeholderValue: 'search title,
+            // artist, album, path…'` at AX5, where
+            // `MusicView.searchField` is `axis: .vertical`. A `UITextField`
+            // with a real placeholder, 125 points tall. So the hint is the
+            // field's own prompt on this leg too, and that is worth asserting
+            // rather than assuming: it is the half of answer 65 an overlay
+            // `Text` would break, and this is the only case that reaches the
+            // vertical field at all.
+            readsPlaceholder: true,
             audits: false
         )
     }
@@ -1550,12 +1562,46 @@ extension StubHouseUITests {
             "the hint measures " + String(format: "%.2f", reading.ratio)
                 + ":1 (ink \(reading.ink) on \(reading.paper)) — Apple's "
                 + "placeholder grey reads about 1.7:1 there, so this is still "
-                + "the system colour and the appearance proxy in "
-                + "`DomovoiApp.init` did not take"
+                + "the system colour: `ShellHintInkAppearance`'s swap of "
+                + "`UITextField`'s two placeholder setters did not reach this "
+                + "field. The fallback is "
+                + "`prompt: Text(hint).foregroundColor(Color.fgMuted)` at the "
+                + "call sites, in gx-shell/REPORT.md"
         )
         guard audits else { return }
         let (_, rest) = Self.floorAndRest(try auditIssues(app, name))
-        XCTAssertEqual(rest, [], "attributed audit findings on \(name): \(rest)")
+        // **Scoped to the field, and to anything the audit cannot attribute.**
+        //
+        // This asserted `rest == []` over the whole screen and had **never
+        // run**: train I003 failed this case at the screenshot crop and I004
+        // at the contrast reading, both before this line. The screen it would
+        // have graded is ``MusicView``, which is the music unit's, and I004
+        // measured three contrast findings on its cards —
+        // `testMusicMore_AuditThePlaylistsTab` reds on exactly
+        // `label='parlour'`, `label='playing in parlour'` and
+        // `label='Veldrassen Overture'` in that train, in that unit's own
+        // case. So they are held, attributed, and not this case's: a hint case
+        // failing for them is review 1's N4 mistake (a shell case red for
+        // another screen's row), and it would also have hidden this reading
+        // behind somebody else's fix.
+        //
+        // What stays strict: a finding that **names the field** — the one
+        // thing this case is about, and the shape a hint drawn as an overlay
+        // or in a colour the audit dislikes would arrive as — and any finding
+        // the audit could not attribute at all, which cannot be given to
+        // another screen by inspection.
+        let mine = rest.filter { $0.contains("label='\(hint)'") || $0.hasSuffix("| element: nil") }
+        for line in rest where !mine.contains(line) {
+            print("SHELL [\(name)] the screen's own row, not the field's: \(line)")
+        }
+        XCTAssertEqual(
+            mine,
+            [],
+            "Apple's audit names the hint field on \(name), or returned a "
+                + "finding it could not attribute: \(mine). The lines printed "
+                + "beside this one are the host screen's own rows and belong to "
+                + "its unit; these do not."
+        )
     }
 
     /// The same field with a word **typed** into it: the darkest pixel is now
@@ -1608,10 +1654,12 @@ extension StubHouseUITests {
             "a word typed into the field measures "
                 + String(format: "%.2f", reading.ratio)
                 + ":1 (ink \(reading.ink) on \(reading.paper)), under "
-                + "\(StubShell.typedInkFloor):1 — the appearance proxy in "
-                + "`DomovoiApp.init` is recolouring the field's own text and "
-                + "not only its hint, in all 39 files with a `TextField`. The "
-                + "fix is not a narrower class: it is "
+                + "\(StubShell.typedInkFloor):1 — `ShellHintInkAppearance` is "
+                + "reaching the field's own text and not only its hint, in all "
+                + "39 files with a `TextField`. It writes the ink into the "
+                + "placeholder's own `NSAttributedString`, so if this is red "
+                + "the two setters are not the separate slots UIKit documents "
+                + "them as, and the fix is "
                 + "`prompt: Text(hint).foregroundColor(…)` at the call sites."
         )
     }
