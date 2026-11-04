@@ -149,8 +149,9 @@ final class FilesModelTests: XCTestCase {
             }
         }
 
-        /// `film.mkv` is four gigabytes, so one row of Documents is over the
-        /// save cap and the rest are not.
+        /// `film.mkv` is four gigabytes. It used to be the row over the save
+        /// cap, which is what made it interesting; since D47 it is the row
+        /// that proves there is no cap, and the size stays for that.
         static func size(_ name: String) -> Int64 {
             name == "film.mkv" ? 4 * 1024 * 1024 * 1024 : 4096
         }
@@ -777,7 +778,10 @@ final class FilesModelTests: XCTestCase {
     }
 
     /// The verbs the rows show, per library: the same `.md` is read in
-    /// Documents and saved in Music, and the four-gigabyte film is neither.
+    /// Documents and saved in Music, and the four-gigabyte film is **saved
+    /// like anything else** since D47 — it used to be the one row with no
+    /// verb at all, because `FileSaveModel` pulled a save into memory and
+    /// refused over 64 MiB.
     func testTheVerbsAreWhatThisAppCanActuallyDo() async throws {
         let (model, _, _) = rig()
         await started(model)
@@ -793,7 +797,10 @@ final class FilesModelTests: XCTestCase {
         XCTAssertEqual("read", try verb("Letter to the council.html"))
         XCTAssertEqual("view", try verb("photo.jpg"))
         XCTAssertEqual("save to device", try verb("scan.pdf"))
-        XCTAssertNil(try verb("film.mkv"), "four gigabytes has no control at all")
+        XCTAssertEqual(
+            "save to device", try verb("film.mkv"),
+            "a four-gigabyte film is a save like any other now that the bytes go to disk"
+        )
 
         let letter = try XCTUnwrap(model.entries.state.items.first { $0.name.hasPrefix("Letter") })
         XCTAssertEqual("Letter to the council", letter.displayTitle)
@@ -807,6 +814,12 @@ final class FilesModelTests: XCTestCase {
 
     /// A read or a view also offers the save in its menu; a save does not
     /// offer itself twice, and a folder is not saveable at all.
+    ///
+    /// `film.mkv` answers false here for the **opposite** reason it used to:
+    /// its tap was nothing at all when it was over the cap, and its tap is
+    /// now the save itself, so there is nothing to put in the menu either
+    /// way. A case that keeps passing while its reason inverts is exactly the
+    /// kind this project writes down rather than leaves to be re-derived.
     func testTheMenuOffersASaveOnlyWhereTheTapIsNotOne() async throws {
         let (model, _, _) = rig()
         await started(model)
