@@ -398,23 +398,39 @@ final class AudiobookListenerTests: XCTestCase {
     /// appearance.
     ///
     /// The listener is one value for the install (`Prefs.kt:115`) and three
-    /// views hold three of these models — the Settings picker and the two hint
-    /// chips. ``PlayerListenerModel/start()`` is where a screen appearing
-    /// re-reads it, so this is what makes the chip on Podcasts name the person
-    /// picked in Settings without a relaunch.
+    /// views hold three ``PlayerListenerModel``s over **one**
+    /// ``PlayerListenerStore`` — the shell's (`ShellModel.listeners`), which
+    /// is the shape this drives: the Settings picker writes through the shell,
+    /// and the two hint chips are on other screens.
+    /// ``PlayerListenerModel/start()`` is where a screen appearing re-reads
+    /// it, so this is what makes the chip on Podcasts name the person picked
+    /// in Settings without a relaunch.
+    ///
+    /// **One store, not two over one `SavedState`.** The first version of this
+    /// case built a second store over the same box and failed, which is the
+    /// store's design showing through rather than a bug: it caches the value
+    /// at `init` and `personID` answers the cache, because every position
+    /// request reads it off the main actor and a `UserDefaults` hit per
+    /// request is not what `Prefs.kt:115` does either. Two stores over one box
+    /// therefore cannot see each other's writes — and the app has exactly one,
+    /// which is why `ShellModel` owns it and the views are handed it.
     func testAnotherScreensPickIsTakenOnAppearance() {
-        let place = SavedStateBox()
-        let settingsPicker = PlayerListenerStore(place: place)
-        let chip = PlayerListenerModel(
-            in: Self.container(), listeners: PlayerListenerStore(place: place)
-        )
+        let store = PlayerListenerStore(place: SavedStateBox())
+        let settings = PlayerListenerModel(in: Self.container(), listeners: store)
+        let chip = PlayerListenerModel(in: Self.container(), listeners: store)
         XCTAssertNil(chip.personID)
         XCTAssertFalse(chip.showsChip, "a phone that has picked nobody draws a chip")
 
-        // Settings writes; the chip's screen has not appeared since.
-        settingsPicker.set("2")
-        chip.start()
+        // Settings writes — the store, as `ShellModel.listenerChanged` does —
+        // and takes it into its own mirror. The chip's screen has not appeared
+        // since, so its mirror is still nil.
+        store.set("2")
+        settings.adopt()
+        XCTAssertEqual("2", settings.personID)
+        XCTAssertNil(chip.personID, "another screen's model moved without appearing")
 
+        // Now it appears.
+        chip.start()
         XCTAssertEqual("2", chip.personID)
         XCTAssertTrue(chip.showsChip)
     }
