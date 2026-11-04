@@ -1948,13 +1948,30 @@ extension StubHouseUITests {
     ///  4. Train **I002** audited this screen before answer 34 and reported
     ///     nothing; the paragraph, the fixture and the type size are
     ///     otherwise unchanged.
+    ///  5. **A paragraph of this exact shape, unwashed, audits clean in the
+    ///     same train.** Start here's fencepost is a `361 × 64.3` static text
+    ///     too (`manual-audit-start`'s tree, `{{16.0, 316.0}, {361.0, 64.3}}`),
+    ///     and sampled in that rectangle it holds two colours worth counting:
+    ///     white 84.4% and `(0,0,0)` 9.0%, so its **lowest** pair is 21:1 and
+    ///     there is nothing under 4.5:1 in it anywhere. `manual-audit-start`
+    ///     came back with no contrast finding. Same shape, same width, same
+    ///     prose, one difference — the wash patches — and the finding follows
+    ///     the wash, not the frame's size. (Re-sampled here: wash
+    ///     `(245,243,240)` over 31,360 px of the failing element, wash against
+    ///     page 1.108:1.)
     ///
     /// This is the R001 shape again (`testManual_AuditsClean`'s note: "It was
     /// never a colour") with the opposite ending — there the audit's
     /// attribution was inconsistent and the cause turned out to be a frame;
-    /// here the frame **is** the cause and there is nothing to repaint. The
-    /// alternative is to stop washing runs inline, which is the answer Kamron
-    /// gave. It is in `gx-manual/DECISIONS.md` for him.
+    /// here the frame is a **paragraph's own** four lines and what the
+    /// heuristic objects to is a background inside it, so there is nothing to
+    /// repaint. Reading 5 is also what separates this from the map's two
+    /// findings, which looked like the same story and were not: there the
+    /// element's frame was twelve times its own content and the fix was to
+    /// take that element out of the tree (``ManualMapNode``'s second line).
+    /// Here the element is honest and the allowance is the only answer short
+    /// of dropping the wash, which is the answer Kamron gave. It is in
+    /// `gx-manual/DECISIONS.md` for him, with the cost.
     @MainActor
     private func manualAudit(
         _ app: XCUIApplication,
