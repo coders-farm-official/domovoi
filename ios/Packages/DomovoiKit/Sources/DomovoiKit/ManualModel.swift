@@ -743,9 +743,15 @@ public final class ManualModel {
     /// `up` (`ManualScreen.kt:308`), and the system back on Android.
     ///
     /// `zoom out` in the crumbs calls this, and so does a tap on a crumb
-    /// above the one we are on. The swipe-back gesture is **not** a third
-    /// way up: it pops the route and leaves the manual, which is answer 32
-    /// blocked on a shared change — ``levels`` says what that change is.
+    /// above the one we are on. **On iOS those are the only callers.** The
+    /// swipe-back gesture is not a third way up: it pops the route and
+    /// leaves the manual.
+    ///
+    /// On Android the system back *is* a caller —
+    /// `BackHandler(enabled = at != "start") { up() }`
+    /// (`ManualScreen.kt:315`) — so the two platforms differ here, and the
+    /// difference is answer 32 blocked on a shared change, not a port
+    /// decision. ``levels`` says what that change is.
     public func up() {
         land(on: parent(of: place))
     }
@@ -775,8 +781,15 @@ public final class ManualModel {
     /// `[]` on Start here, `[.map]` on the map, `[.map, .topic]` in a
     /// cluster, `[.map, .topic, .piece]` on a piece's page.
     ///
-    /// **Nothing in the app binds this today, and that is a measured
-    /// retreat rather than an oversight.** It was written to be the path of
+    /// **Nothing in the app binds this today — this is a tested, public
+    /// seam with no call site**, which is the shape this track has been
+    /// bitten by before (a `TokenVault` nobody read). It is kept knowingly,
+    /// and the package tests around it
+    /// (`ManualAnswersTests`, "answer 32: the chain of levels") must never
+    /// be read as evidence that a swipe-back goes up a level. It does not:
+    /// see ``up()``. That is a measured retreat rather than an oversight.
+    ///
+    /// It was written to be the path of
     /// a `NavigationStack` of the manual's own, so that the system's
     /// swipe-back popped one level — Kamron's answer 32 — and train I003
     /// showed that a second stack inside the shell's pushed route takes the

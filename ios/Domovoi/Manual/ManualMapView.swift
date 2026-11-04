@@ -17,8 +17,12 @@ import SwiftUI
 // Two things of Android's are **not** here, both measured and both written
 // up where they happen: the wires do not follow the float
 // (``ManualMapStage/wires(_:size:)``), and there is no 280 ms camera zoom
-// between levels, because answer 32 made a level a screen on a stack and
-// there is no single camera left to move (``ManualMapStage/body``).
+// between levels, because a level change is a different arm of
+// ``ManualView``'s `@ViewBuilder` switch — a transition between two stages,
+// not a value change inside one, so there is no camera to move
+// (``ManualMapStage/body``, which has the whole reason). That held before
+// answer 32 was attempted and it holds now that the attempt is reverted;
+// the stack never came into it.
 // ---------------------------------------------------------------------------
 
 /// A world position and the scale the thing at it is drawn at — `Pos`

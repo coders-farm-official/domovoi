@@ -409,6 +409,38 @@ extension StubHouseUITests {
     ///    `stub house` is ``houseName(in:)``, the one thing only a completed
     ///    config read on Home can draw, so a swipe that unwound to a blank
     ///    root or to the pairing screen fails too.
+    ///
+    /// ### Its I003 failure is NOT the other nineteen's — read it on its own
+    ///
+    /// Do not read this case as fixed because the other nineteen were. In
+    /// I003 it failed with a different symptom: the `start here` pill's
+    /// `waitForExistence` *succeeded* at `t = 14.47s`, and the very next
+    /// query — `control.exists` inside ``manualToTop(_:until:flicks:)``,
+    /// which unlike `waitForExistence`'s `existsNoRetry` predicate waits for
+    /// the app to go **idle** first — hung, retried at `45.54s` and
+    /// `76.55s`, and ended at `106.57s` with "Failed to get matching
+    /// snapshots: Timed out while evaluating UI query". No tree was printed
+    /// (a query that throws does not come back into Swift, so the guard's
+    /// `app.debugDescription` never ran).
+    ///
+    /// The train's screen recording is the evidence the tree is not, and it
+    /// **refutes** the first reading of this case ("caught mid-unwind"):
+    /// `att/testManual_ASwipeFromStartHereLeavesTheManual/Screen_Recording_*.mp4`
+    /// shows the manual fully drawn — `domovoi / manual`, both pills, the
+    /// whole Start here page — and then **unchanged, pixel for pixel, to the
+    /// end of the recording**. It is the only one of the twenty whose last
+    /// frame is the manual: in the other nineteen the last frame is Home
+    /// under a `domovoi / manual` breadcrumb (measured over all twenty last
+    /// frames; this one is also the only recording longer than 46 s).
+    ///
+    /// So in this run the route did **not** unwind. The screen stopped
+    /// changing and the app stopped reporting idle at the same instant the
+    /// document landed and the inner stack mounted — the same trigger, stuck
+    /// rather than resolved, which is what an unsupported stack shape is
+    /// entitled to do. Removing the stack removes that trigger, and that is
+    /// the whole claim: if this case fails again, it is a second finding and
+    /// the thing to look at is what is holding the app un-idle, not a popped
+    /// route.
     @MainActor
     func testManual_ASwipeFromStartHereLeavesTheManual() throws {
         control("reset-fixtures", "{}", port: 6601, what: "the manual fixture's seed")

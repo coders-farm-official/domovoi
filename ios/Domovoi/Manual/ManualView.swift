@@ -46,9 +46,17 @@ import SwiftUI
 ///   question of whether to rebuild the zoom is in DECISIONS.
 /// * **A swipe back leaves the manual; it does not go up a level** — which
 ///   is answer 32 unbuilt, and the reason is in ``ready(_:cached:_:)``. The
-///   way up is `zoom out` and the crumbs (``ManualCrumbs``), which is what
-///   Android draws beside its system back (`ManualScreen.kt:456`) and what
-///   this screen has had at every size since it was written.
+///   only way up here is `zoom out` and the crumbs (``ManualCrumbs``).
+///
+///   **This diverges from Android, and from the specification**, until the
+///   shared change in this fix's REPORT lands. Android has *both* ways up:
+///   `zoom out` in the crumbs (`ManualScreen.kt:456`) **and** its system
+///   back, which is wired to the same `up()` —
+///   `BackHandler(enabled = at != "start") { up() }`
+///   (`ManualScreen.kt:315`). Answer 32 asked for the second one here, the
+///   first attempt at it took the whole screen away (train I003, twenty
+///   cases), and no case asserts the gesture now. Do not read this bullet
+///   as "Android does it this way too": it does not.
 ///
 /// **A `route:` link the app cannot open is plain text, never a link.** That
 /// is ``ManualModel/linkIsLive(kind:target:)`` — ported from
@@ -199,11 +207,33 @@ struct ManualView: View {
             // shape SwiftUI supports, and it does not fail by drawing wrong:
             // it takes the route's screen away.
             //
-            // So the levels are the screen's own state again and `zoom out`
-            // and the crumbs (``ManualCrumbs``) are the way up, which is what
-            // they were before the batch and what the accessibility branch
-            // above never stopped doing. The swipe-back pops the route, as on
-            // every other screen.
+            // That is nineteen of the twenty, and the trains' screen
+            // recordings show it happening: in
+            // `att/testManual_StartHereDrawsTheServersDocument` the manual is
+            // whole in one frame and Home is in the next, with the breadcrumb
+            // still reading `domovoi / manual`. The twentieth
+            // (`testManual_ASwipeFromStartHereLeavesTheManual`) got the other
+            // outcome of the same shape: its recording ends on a manual that
+            // never changes again, and the app stopped reporting idle, so
+            // every query after that timed out. Stuck instead of unwound.
+            //
+            // So the levels are the screen's own state and `zoom out` and the
+            // crumbs (``ManualCrumbs``) are the only way up — which is what
+            // the accessibility branch above never stopped doing, and what
+            // this branch did for the whole batch bar one commit: the stack
+            // was `90385cce`'s single structural change to this function
+            // (`git diff 09f4e729 e27b0adf` on this file is that, plus the
+            // `at place:` parameter, plus comments), and removing it leaves
+            // the `at place:` parameter in. It is NOT "the shape before the
+            // batch": this whole screen is new in this batch.
+            //
+            // The swipe-back therefore pops the route, as on every other
+            // screen — and **unlike Android**, whose system back calls the
+            // same `up()` the crumbs do
+            // (`BackHandler(enabled = at != "start") { up() }`,
+            // `ManualScreen.kt:315`). That divergence from the specification
+            // is exactly what answer 32 asked to close, so this is a retreat
+            // with a shared change behind it, not a port decision.
             //
             // Answer 32 is not dead, it is **blocked**: it needs
             // ``ShellModel/path`` to be a `NavigationPath` (or `Route` to
