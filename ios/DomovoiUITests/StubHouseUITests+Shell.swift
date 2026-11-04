@@ -15,12 +15,22 @@ import XCTest
 ///     changes** (``testShell_OrdinaryTypeSizesKeepTheBandAboveTheStack()``).
 ///  3. **Every text-field hint is readable**, measured off the screen's own
 ///     pixels rather than asserted (``testShell_TheHintInkIsReadable()``).
-///  4. One plugin band — which **no case here can reach**, and
-///     `design-notes/ios/batch-2026-11-03/shell/REPORT.md` says why in full:
-///     both plugin routes are capability-gated and the stub's
-///     `/api/capabilities` publishes a flat list iOS does not decode, so
-///     Images and Stations are invisible on this house. The fold is a
-///     compile-level change until that six-line fixture fix lands.
+///  4. **One plugin band**, on both screens it folded together and in both of
+///     its shapes (`…ThePluginBandNamesThePlugin…`,
+///     `…ThePluginBandIsOneRowAtTheLargestTypeSize`).
+///
+/// The fourth had no case at all when review 1 read this branch, and that
+/// review's one uncaught sabotage was in the band's words. The reason was the
+/// house, not the fold: both plugin routes are capability-gated and
+/// `/api/capabilities` published a **flat** list iOS does not decode, so
+/// Images and Stations were invisible here. `fixtures/stations.py` closed
+/// that on 2026-11-03 — it wraps that one route additively and appends a
+/// `plugins` array built from every loaded module's `PLUGIN` dict — so the
+/// band is reachable now, verified by curl against a local house:
+/// `plugins` carries `imagegen`/`Image Generation` and `radio`/`Radio
+/// Stations`, both `Coders Farm`, with `features.ai` and the flat list
+/// untouched. The kit half of the fold has package tests as well
+/// (`ShellFoldTests`), which is the verdict that can be had without a train.
 ///
 /// ### The one thing to know before reading a failure here
 ///
@@ -62,6 +72,36 @@ extension StubHouseUITests {
         /// The floor Apple's audit asks of body text, and what ``HintInk``
         /// claims against the app's own field background (6.67:1).
         static let contrastFloor = 4.5
+
+        /// What a **typed** glyph must clear, which is a different question
+        /// from the hint's floor: the primary ink reads near 20:1 on a white
+        /// field and the muted ink about 7, so a reading under this means the
+        /// appearance proxy in `DomovoiApp.init` recoloured the field's own
+        /// text and not only its placeholder (review 1, S3).
+        static let typedInkFloor = 10.0
+
+        /// The two plugins the stub house's manifest publishes
+        /// (`fixtures/images.py`'s and `fixtures/stations.py`'s `PLUGIN`),
+        /// spelt out rather than imported like every other string here.
+        ///
+        /// **Two of them, which is what makes the band's reading
+        /// discriminating**: a band that read `plugins.first` instead of the
+        /// plugin declaring its own capability would name Image Generation on
+        /// Stations.
+        static let imagegenName = "Image Generation"
+        static let stationsName = "Radio Stations"
+        static let publisher = "Coders Farm"
+
+        /// ``PluginBandStrings/badge``, ``by(_:)``, ``manageLabel(name:)`` and
+        /// ``collapsedLabel(name:publisher:)`` — the words one band draws now.
+        static let pluginBadge = "plugin"
+        static func by(_ who: String) -> String { "by \(who)" }
+        static func manageLabel(_ name: String) -> String {
+            "manage \(name) on the dashboard's Plugins page"
+        }
+        static func collapsedBand(_ name: String, _ who: String) -> String {
+            "\(name), plugin, by \(who)"
+        }
     }
 
     // MARK: - 29. the header scrolls away at the accessibility sizes
@@ -86,6 +126,28 @@ extension StubHouseUITests {
         let (app, landed) = openVideos(StubShell.ax5)
         XCTAssertTrue(landed, "the videos list never answered — no count line drew")
         try assertTheHeaderScrollsAway(app, crumb: StubShell.videosCrumb, named: "shell-videos-ax5")
+
+        // **The back control is not named after the screen it leaves.**
+        // Review 1's S1: one `crumb` was handed to the stack's root *and* to
+        // its destinations, and a `UINavigationBar` builds the pushed
+        // screen's back button out of the ROOT's navigation item — so with
+        // the open route in both places, the way out of Videos was called
+        // `domovoi / videos`.
+        //
+        // The honest limit of this reading: UIKit shortens a back button to
+        // `Back` when the previous title does not fit, and at AX5 it usually
+        // will, so this asserts the **negative** — never the pushed screen's
+        // own crumb — rather than the home crumb it would otherwise be.
+        let named = app.navigationBars.buttons.allElementsBoundByIndex
+            .filter { $0.exists && $0.label == StubShell.videosCrumb }
+        XCTAssertEqual(
+            named.count,
+            0,
+            "a navigation-bar control on the pushed Videos screen is labelled "
+                + "`\(StubShell.videosCrumb)` — the stack's root is titled "
+                + "after the open route, so the control for leaving Videos is "
+                + "named Videos and VoiceOver says `back to domovoi / videos`"
+        )
     }
 
     /// The **local** shell at AX5 — the third screen, and a different
@@ -145,9 +207,15 @@ extension StubHouseUITests {
     /// 3. **It collapses.** The navigation bar is shorter after one swipe than
     ///    before it. Both numbers go in the message either way, because the
     ///    number is the finding.
-    /// 4. **The page gets the room.** The tallest scroll view on the screen —
-    ///    the page, not the phone bar's horizontal one — is measured before
-    ///    and after, and reported.
+    /// 4. **The page gets the room**, which is the headline and is therefore
+    ///    asserted and not only printed (review 1, S2). The tallest scroll
+    ///    view on the screen — the page, not the phone bar's horizontal one —
+    ///    is measured before and after, and after the swipe it must hold more
+    ///    than ``pageFloorShare`` of the window. The measurement answer 29
+    ///    exists for is **102 of 852 points**, 12% of the window; the floor is
+    ///    45%, so a page left at the old window fails whatever caused it — a
+    ///    `safeAreaInset` some later unit adds, the plugin band growing — and
+    ///    not only `ShellTopBar` being drawn again, which reading 1 catches.
     ///
     /// The swipe is `.slow` on the page's own scroll view and not on the app:
     /// a plain `swipeUp()` steps over rows, and a swipe on the app can land on
@@ -223,7 +291,27 @@ extension StubHouseUITests {
                 + "swipe: it collapsed but not to the inline bar, so the page's "
                 + "window is \(Int(pageAfter.height)) of \(Int(app.frame.height))"
         )
+        // The headline, pinned. A share of the window and not a number of
+        // points, because the train boots whatever device it boots and 852 is
+        // one phone's height.
+        let floor = app.frame.height * Self.pageFloorShare
+        XCTAssertGreaterThan(
+            pageAfter.height,
+            floor,
+            "the page is \(Int(pageAfter.height)) of \(Int(app.frame.height)) "
+                + "points on \(name) after a swipe, under the \(Int(floor))-point "
+                + "floor — answer 29 is about this number: it was 102 of 852 "
+                + "with the header above the stack (train S001). The navigation "
+                + "bar collapsed (\(Int(barBefore.height)) → "
+                + "\(Int(barAfter.height))), so something else is taking the "
+                + "room: a `safeAreaInset` added since, or chrome that is not "
+                + "inside the page's scroll view."
+        )
     }
+
+    /// How much of the window the page must hold once the header has scrolled
+    /// away. 45% of 852 is 383 points; the shell at AX5 left it 102.
+    private static let pageFloorShare: CGFloat = 0.45
 
     /// The **page's** scroll view: the tallest one on screen.
     ///
@@ -356,14 +444,187 @@ extension StubHouseUITests {
                 + "is what the `ZStack` did, and it is what a presentation is "
                 + "supposed to end."
         )
+        // **Everything else the audit attributed, except the card's own.**
+        //
+        // This was `rest == []`, which is a tripwire for another unit's work:
+        // ``ForgetServerCard`` belongs to the player unit, and a finding
+        // against the card itself would have failed *this* case, whose subject
+        // is what is **behind** a dialog (review 1, N4). So the card's own
+        // vocabulary is named and anything outside it is a stranger — which is
+        // stricter than the old sweep, not weaker: a view behind the card that
+        // the `behind` filter above does not know about still fails here, and
+        // it would have been swallowed by a filter written the other way round.
+        // ``ForgetServerCard``'s own leaves, by the words they carry:
+        // `forget this server?`, the address under it (`the server at …`, the
+        // label Apple's audit asked for), the paragraph's opening, `cancel`
+        // and `forget`. **`the server at ` and not the bare address**: the
+        // pill behind the card says `127.0.0.1:6601` as well, which is why the
+        // bare address is in the `behind` list above, and a filter that let
+        // either one through would stop telling them apart.
+        let cardsOwn = [
+            ShellStringsUnderTest.forgetServerTitle,
+            "the server at ",
+            "This phone will forget ",
+            ShellStringsUnderTest.forget,
+            "cancel",
+        ]
+        let strangers = rest.filter { line in
+            !cardsOwn.contains { line.contains($0) }
+        }
         XCTAssertEqual(
-            rest,
+            strangers,
             [],
-            "attributed findings with the forget dialog up: \(rest). None of "
-                + "them is behind the card (that is asserted above), so each is "
-                + "the card's own."
+            "the audit attributed findings to views that are neither the forget "
+                + "card's nor on the list this case knows to look for: "
+                + "\(strangers). The card's own findings, which belong to "
+                + "whoever owns `ForgetServerCard`, were \(rest)."
         )
     }
+
+    // MARK: - 58. one plugin band, on both the screens it folded
+
+    /// The band above Images and the band above Stations are now one view, and
+    /// this is the first case in the repository to open either of them.
+    ///
+    /// ### What it discriminates
+    ///
+    /// The stub's manifest publishes **two** plugins, so every reading here
+    /// could be wrong in a way that is visible: `imagegen`/`Image Generation`
+    /// and `radio`/`Radio Stations`, both published by `Coders Farm`. A band
+    /// that read `plugins.first` rather than the plugin declaring the screen's
+    /// own capability would name Image Generation above Stations — so each
+    /// screen asserts its own plugin's name **and the other plugin's absence**.
+    ///
+    /// ### Stations gains `manage` here, and that is the point
+    ///
+    /// `StationsPluginBand` left the link out while the https-interstitial
+    /// question was open; owner answer 28 closes it, and one band cannot
+    /// answer it two ways (`design-notes/.../shell/DECISIONS.md` §10). So the
+    /// link's full label is asserted on Stations, where it did not exist
+    /// before the fold.
+    @MainActor
+    func testShell_ThePluginBandNamesThePluginAboveBothScreens() throws {
+        // The fixture modules share one house for the whole run and Images'
+        // own control route can empty its `PLUGIN` dict, which would leave
+        // this screen with no band at all.
+        control("reset-fixtures", "{}", port: 6601, what: "every fixture back to its seed")
+
+        let images = launch(push: "Images", pushDelay: Self.pushDelay)
+        XCTAssertTrue(
+            images.staticTexts[StubShell.imagegenName].waitForExistence(timeout: 40),
+            "no `\(StubShell.imagegenName)` above Images. Either the push "
+                + "bounced back to Home — the route is capability-gated, and it "
+                + "is visible only because `fixtures/stations.py` adds the "
+                + "`plugins` array to `/api/capabilities` — or the band drew "
+                + "nothing. Tree and picture attached."
+        )
+        evidence(images, "shell-band-images")
+        XCTAssertTrue(
+            images.staticTexts[StubShell.by(StubShell.publisher)].exists,
+            "the band does not draw `\(StubShell.by(StubShell.publisher))` "
+                + "(`PluginFrame.kt:144`)"
+        )
+        XCTAssertTrue(
+            images.staticTexts[StubShell.pluginBadge].exists,
+            "the bordered `plugin` badge is not drawn (`PluginFrame.kt:152`)"
+        )
+        XCTAssertTrue(
+            anything(images, labelled: StubShell.manageLabel(StubShell.imagegenName)).exists,
+            "no `manage` link naming the plugin. It is drawn only when there "
+                + "is a server address to open, and this launch has one."
+        )
+        XCTAssertFalse(
+            images.staticTexts[StubShell.stationsName].exists,
+            "`\(StubShell.stationsName)` is named above Images — the band took "
+                + "the manifest's first plugin instead of the one declaring "
+                + "this screen's capability"
+        )
+
+        let stations = launch(push: "Stations", pushDelay: Self.pushDelay)
+        XCTAssertTrue(
+            stations.staticTexts[StubShell.stationsName].waitForExistence(timeout: 40),
+            "no `\(StubShell.stationsName)` above Stations — the folded band's "
+                + "other call site (`StationsView.swift:86`) drew nothing"
+        )
+        evidence(stations, "shell-band-stations")
+        XCTAssertTrue(
+            anything(stations, labelled: StubShell.manageLabel(StubShell.stationsName)).exists,
+            "Stations has no `manage` link. The fold gave it one (owner answer "
+                + "28); before it, this was the one difference between the two "
+                + "copies that was not layout."
+        )
+        XCTAssertFalse(
+            stations.staticTexts[StubShell.imagegenName].exists,
+            "`\(StubShell.imagegenName)` is named above Stations"
+        )
+    }
+
+    /// At the accessibility sizes the band is **one row**, and what it stops
+    /// drawing it says instead.
+    ///
+    /// The measurement this answers: the band took **256 of 852 points** at
+    /// AX5 on a 393-point phone, which with the old header's 300 and the phone
+    /// bar's 146 left the page a 102-point window (train S001,
+    /// `testImages_AtTheLargestTypeSize`). Answer 29 asks chrome to scroll
+    /// away; what the band can do in its own file is stop eating a third of
+    /// the screen, and answer 62 already approved this shape for the source
+    /// switch.
+    ///
+    /// Three readings:
+    ///
+    ///  1. the row's own label is the whole band in one sentence — the name,
+    ///     the badge and the publisher (``PluginBandStrings/collapsedLabel``,
+    ///     the value review 1's sabotage gutted with nothing to catch it);
+    ///  2. the badge and the publisher line are **not drawn** as leaves of
+    ///     their own, which is what "collapsed" means and what reading 1
+    ///     alone would not prove;
+    ///  3. the row is under ``bandRowCeiling`` points tall, with the number in
+    ///     the message, because 256 points of band is the thing it replaces.
+    @MainActor
+    func testShell_ThePluginBandIsOneRowAtTheLargestTypeSize() throws {
+        control("reset-fixtures", "{}", port: 6601, what: "every fixture back to its seed")
+        let app = launch(mode: StubShell.ax5, push: "Images", pushDelay: Self.pushDelay)
+        let said = StubShell.collapsedBand(StubShell.imagegenName, StubShell.publisher)
+        let row = anything(app, labelled: said)
+        XCTAssertTrue(
+            row.waitForExistence(timeout: 40),
+            "nothing on Images at AX5 is labelled `\(said)`. That sentence is "
+                + "the collapsed band: at these sizes the badge and the "
+                + "publisher are not drawn, so they are said. Tree attached — "
+                + "if the row is there with a shorter label, "
+                + "`PluginBandStrings.collapsedLabel` stopped composing it."
+        )
+        evidence(app, "shell-band-images-ax5")
+        XCTAssertFalse(
+            app.staticTexts[StubShell.pluginBadge].exists,
+            "the `plugin` badge is still drawn at AX5 — the band did not "
+                + "collapse, and at 256 points it is a third of the window"
+        )
+        XCTAssertFalse(
+            app.staticTexts[StubShell.by(StubShell.publisher)].exists,
+            "`\(StubShell.by(StubShell.publisher))` is still drawn as its own "
+                + "line at AX5 — the collapse is only half done"
+        )
+        print(
+            "SHELL [shell-band-images-ax5] collapsed band "
+                + "\(Int(row.frame.height)) points of \(Int(app.frame.height))"
+        )
+        XCTAssertLessThan(
+            row.frame.height,
+            Self.bandRowCeiling,
+            "the collapsed band is \(Int(row.frame.height)) points tall of "
+                + "\(Int(app.frame.height)) — over the "
+                + "\(Int(Self.bandRowCeiling))-point ceiling. The expanded band "
+                + "measured 256 at AX5, which is what one row is here to "
+                + "replace; the same collapse on the source switch measured 164 "
+                + "down to 59."
+        )
+    }
+
+    /// What one row of the band may cost at AX5. One line of `.subheadline`
+    /// plus 20 points of padding is well under this; the three-leaf band it
+    /// replaces measured 256.
+    private static let bandRowCeiling: CGFloat = 200
 
     // MARK: - 65. the hint ink
 
@@ -390,20 +651,72 @@ extension StubHouseUITests {
         let (music, musicLanded) = openMusicForAHint()
         XCTAssertTrue(musicLanded, "music never drew — no field to read a hint in")
         try assertTheHintIsReadable(music, StubShell.musicHint, named: "shell-hint-music")
+        // **The other half of the same proxy**, on the same field: a
+        // `UILabel` appearance proxy cannot be narrowed to a placeholder, and
+        // whether `UITextField` draws its own text through a `UILabel`
+        // subclass is UIKit's business. So the typed text is read too
+        // (review 1, S3).
+        try assertTypedTextKeepsThePrimaryInk(music, StubShell.musicHint, named: "shell-typed-music")
 
         let (videos, videosLanded) = openVideos()
         XCTAssertTrue(videosLanded, "the videos list never answered")
         try assertTheHintIsReadable(videos, StubShell.videosHint, named: "shell-hint-videos")
     }
 
+    /// The **vertical-axis** field, which is the other class the proxy names
+    /// (`UITextView`) and the size the hint matters most at.
+    ///
+    /// Music's search field becomes `TextField(…, axis: .vertical)` only at an
+    /// accessibility size (`MusicView.swift:686-688`), so the single-line
+    /// readings above never reach that leg of `DomovoiApp.init` — review 1's
+    /// S3, and it was right: both fields it measured were `.roundedBorder`
+    /// single-line ones.
+    ///
+    /// No audit here. Music at AX5 is `MusicMore`'s screen to audit, and a
+    /// finding against it would fail this case for another unit's work — the
+    /// mistake N4 found in the dialog case.
+    @MainActor
+    @available(iOS 17.0, *)
+    func testShell_TheHintInkIsReadableOnAVerticalField() throws {
+        let (music, landed) = openMusicForAHint(StubShell.ax5)
+        XCTAssertTrue(landed, "music never drew at AX5 — no vertical field to read")
+        try assertTheHintIsReadable(
+            music,
+            StubShell.musicHint,
+            named: "shell-hint-music-ax5",
+            // A `UITextView` has no placeholder of its own: SwiftUI draws the
+            // prompt itself, and `placeholderValue` is empty on some iOS
+            // versions. The element still carries the hint as its **label**,
+            // which the lookup above asserts and an overlay `Text` in place of
+            // a prompt would not produce.
+            readsPlaceholder: false,
+            audits: false
+        )
+    }
+
     /// Music, pushed, waiting on its own crumb — written here rather than
     /// borrowed from another unit's `+Tag` file, so a train that drops that
     /// branch does not drop this case with it.
     @MainActor
-    private func openMusicForAHint() -> (app: XCUIApplication, landed: Bool) {
-        let app = launch(push: "Music", pushDelay: Self.pushDelay)
-        let crumb = app.staticTexts[ShellStringsUnderTest.musicCrumb]
+    private func openMusicForAHint(
+        _ mode: String = StubHouseUITests.ordinaryTypeSize
+    ) -> (app: XCUIApplication, landed: Bool) {
+        let app = launch(mode: mode, push: "Music", pushDelay: Self.pushDelay)
+        // At AX5 the crumb is the navigation bar's title rather than
+        // ``ShellTopBar``'s text, so the landing check asks for it wherever it
+        // is drawn — that is answer 29, measured by the cases above.
+        let crumb = anything(app, labelled: ShellStringsUnderTest.musicCrumb)
         return (app, crumb.waitForExistence(timeout: 40))
+    }
+
+    /// The field with this hint, whichever class it is drawn as: a
+    /// single-line `TextField` is a `textField` and `axis: .vertical` is a
+    /// `textView`, and which one a size produces is the view's business.
+    @MainActor
+    private func hintField(_ app: XCUIApplication, _ hint: String) -> XCUIElement {
+        let single = app.textFields[hint]
+        if single.waitForExistence(timeout: 20) { return single }
+        return app.textViews[hint]
     }
 
     @MainActor
@@ -411,24 +724,29 @@ extension StubHouseUITests {
     private func assertTheHintIsReadable(
         _ app: XCUIApplication,
         _ hint: String,
-        named name: String
+        named name: String,
+        readsPlaceholder: Bool = true,
+        audits: Bool = true
     ) throws {
-        let field = app.textFields[hint]
+        let field = hintField(app, hint)
         XCTAssertTrue(
-            field.waitForExistence(timeout: 20),
-            "no field labelled `\(hint)` — tree attached"
+            field.exists,
+            "no field labelled `\(hint)` as either a text field or a text view "
+                + "— tree attached"
         )
         evidence(app, name)
         // **The hint is the field's own prompt, and this is what says so.**
         // The alternative fix — an overlay `Text` in place of the placeholder —
         // leaves `placeholderValue` empty, and cases read it.
-        XCTAssertEqual(
-            field.placeholderValue,
-            hint,
-            "the field's `placeholderValue` is \(field.placeholderValue ?? "nil") "
-                + "and not `\(hint)`: the hint has stopped being the field's "
-                + "prompt, which is what an overlay does"
-        )
+        if readsPlaceholder {
+            XCTAssertEqual(
+                field.placeholderValue,
+                hint,
+                "the field's `placeholderValue` is \(field.placeholderValue ?? "nil") "
+                    + "and not `\(hint)`: the hint has stopped being the field's "
+                    + "prompt, which is what an overlay does"
+            )
+        }
         guard let reading = inkContrast(app, in: field.frame.insetBy(dx: 3, dy: 3)) else {
             XCTFail("could not read \(name)'s pixels — no screenshot to measure")
             return
@@ -446,8 +764,62 @@ extension StubHouseUITests {
                 + "the system colour and the appearance proxy in "
                 + "`DomovoiApp.init` did not take"
         )
+        guard audits else { return }
         let (_, rest) = Self.floorAndRest(try auditIssues(app, name))
         XCTAssertEqual(rest, [], "attributed audit findings on \(name): \(rest)")
+    }
+
+    /// The same field with a word **typed** into it: the darkest pixel is now
+    /// a typed glyph, and it must still be the primary ink.
+    ///
+    /// This is the failure mode the proxy's own comment used to argue away.
+    /// `UILabel.appearance(whenContainedInInstancesOf: [UITextField.self])`
+    /// recolours every contained `UILabel`, and `UITextField` has drawn its
+    /// own text through `UITextFieldLabel` — a `UILabel` subclass — for most
+    /// of its life. If it still does, every one of the app's 39 fields types
+    /// in `fgMuted`, which is 7:1 on white where the primary ink is near 20:1.
+    /// So the floor is ``StubShell/typedInkFloor`` and the two are far apart.
+    ///
+    /// The reading is conservative in the direction that matters: antialiasing
+    /// makes the darkest glyph pixel *lighter* than the ink, so a pass is a
+    /// pass with room, and a muted-ink failure cannot read as a pass.
+    @MainActor
+    @available(iOS 17.0, *)
+    private func assertTypedTextKeepsThePrimaryInk(
+        _ app: XCUIApplication,
+        _ hint: String,
+        named name: String
+    ) throws {
+        let field = hintField(app, hint)
+        XCTAssertTrue(field.exists, "no field labelled `\(hint)` to type into")
+        field.tap()
+        // A word of upper-case stems, which is the most ink a short string can
+        // put in a field: the measurement is of one pixel, and a `.` would
+        // give it almost nothing to find.
+        field.typeText("HOLLOW")
+        evidence(app, name)
+        // Read live: the keyboard coming up moves the page under a pushed
+        // screen, and a frame captured before the tap is a box somewhere else.
+        guard let reading = inkContrast(app, in: field.frame.insetBy(dx: 3, dy: 3)) else {
+            XCTFail("could not read \(name)'s pixels — no screenshot to measure")
+            return
+        }
+        print(
+            "SHELL [\(name)] typed ink \(reading.ink) on \(reading.paper) — "
+                + String(format: "%.2f", reading.ratio) + ":1"
+        )
+        XCTAssertGreaterThan(
+            reading.ratio,
+            StubShell.typedInkFloor,
+            "a word typed into the field measures "
+                + String(format: "%.2f", reading.ratio)
+                + ":1 (ink \(reading.ink) on \(reading.paper)), under "
+                + "\(StubShell.typedInkFloor):1 — the appearance proxy in "
+                + "`DomovoiApp.init` is recolouring the field's own text and "
+                + "not only its hint, in all 39 files with a `TextField`. The "
+                + "fix is not a narrower class: it is "
+                + "`prompt: Text(hint).foregroundColor(…)` at the call sites."
+        )
     }
 
     /// The darkest and the lightest pixel inside a rectangle of the screen, and
