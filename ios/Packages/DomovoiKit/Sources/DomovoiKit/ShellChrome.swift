@@ -247,3 +247,149 @@ public func shellChrome(
         )
     }
 }
+
+/// Which shape the shell's header takes — the whole of owner answer 29 as a
+/// value, so that a test can read it.
+///
+/// ### Why this is a type and not two `if`s in a view
+///
+/// Answer 29 lives in two view bodies: ``WorkspaceView``'s `stack` decides
+/// whether to draw `ShellTopBar` above the `NavigationStack`, and
+/// `ShellScrollAwayChrome.body` decides whether to hang a large navigation
+/// title and a toolbar pill inside it. Review 2's sabotage removed **both**
+/// halves at once — the size gate off the bar, the branch off the modifier —
+/// and nothing in the repository noticed: `pkgtest.sh` builds the package
+/// only, `appcheck.sh` (the app-target type-checker) is broken on the base
+/// branch as well, and the UI cases that do catch it need a train.
+///
+/// So the decision moves here, where `swift test` reaches it on a machine with
+/// no Simulator: the two view bodies each ask this one question and draw the
+/// answer. A sabotage of the **rule** now fails `ShellFoldTests` today. A
+/// sabotage of a view *body* still cannot be caught without a compiler for
+/// views — `testShell_TheHeaderScrollsAwayOnHome`,
+/// `…OnAPushedScreen`, `…OnTheLocalShell` and
+/// `testShell_OrdinaryTypeSizesKeepTheBandAboveTheStack` are the four cases
+/// that catch it, and they need the train. That limit is in
+/// `design-notes/ios/batch-2026-11-03/shell/REPORT.md`.
+public enum ShellHeaderFold: String, Equatable, Sendable, CaseIterable {
+
+    /// Below the accessibility sizes: ``ShellTopBar`` above the stack, which
+    /// is Android's one bar over one stack (`AppShell.kt:1021`) and what every
+    /// screen in the app has always drawn.
+    case barAboveTheStack
+
+    /// At the accessibility sizes: the breadcrumb as the stack's own large
+    /// navigation title and the pill as a toolbar item, so UIKit scrolls them
+    /// away with the page. The band measured 300 of 852 points up there and
+    /// cannot scroll away from above a `NavigationStack` (train S001).
+    case titleInsideTheStack
+
+    /// Neither: the `AuditStrip.topBar` diagnostic variant, whose whole job is
+    /// the shell *without* its header. It has to lose the title and the
+    /// toolbar item too, or at AX5 it is identical to the control and the
+    /// bisect loses it (review 1, N5).
+    case noHeaderAtAll
+
+    /// The one question both view bodies ask.
+    ///
+    /// - Parameters:
+    ///   - drawn: false only for the `AuditStrip.topBar` variant.
+    ///   - isAccessibilitySize: `dynamicTypeSize.isAccessibilitySize`.
+    public static func forHeader(drawn: Bool, isAccessibilitySize: Bool) -> ShellHeaderFold {
+        guard drawn else { return .noHeaderAtAll }
+        return isAccessibilitySize ? .titleInsideTheStack : .barAboveTheStack
+    }
+
+    /// Whether ``WorkspaceView`` and ``LocalShellView`` draw `ShellTopBar`
+    /// above the stack.
+    public var drawsBarAboveTheStack: Bool { self == .barAboveTheStack }
+
+    /// Whether the toolbar pill is drawn — the pill is the bar's, or the
+    /// toolbar's, never both: two `switch server` controls on one screen is
+    /// the bar still being drawn with the toolbar item under it, which is what
+    /// `testShell_TheHeaderScrollsAwayOnTheLocalShell` counts.
+    public var drawsTheToolbarPill: Bool { self == .titleInsideTheStack }
+
+    /// Whether the header belongs **inside** a `NavigationStack`, which is
+    /// what ``LocalShellView`` asks: that shell is a `TabView`, so a fold
+    /// means a stack per tab, and below the accessibility sizes a tab is a
+    /// screen with no stack, no navigation bar and no title at all.
+    public var putsTheHeaderInsideTheStack: Bool { self == .titleInsideTheStack }
+
+    /// The stack's navigation title, or nil when the header is not the title.
+    ///
+    /// The trimming is here rather than at the call site because it is part of
+    /// the rule: ``ShellStrings/localTopbar`` carries two leading spaces for a
+    /// bar that draws them beside a dot, and **a screen reader reads a title,
+    /// not a layout**. A nil is "apply no title at all", which is not the same
+    /// as an empty one — an empty large title still reserves the large bar's
+    /// height on every screen in the app.
+    public func navigationTitle(crumb: String) -> String? {
+        guard self == .titleInsideTheStack else { return nil }
+        return crumb.trimmingCharacters(in: .whitespaces)
+    }
+}
+
+/// Whether a ``DialogCard`` draws itself inline because its presentation never
+/// arrived — owner answer 6's guard, as a value.
+///
+/// ### What it is for
+///
+/// Answer 6 made `DialogCard` present a `fullScreenCover`, so that UIKit takes
+/// the page out of the window and there is nothing behind the card to read at
+/// 35% or to audit. `AlertsHintLifecycle` presents its card in a cover of its
+/// own, so that one is a cover **inside** a cover; if SwiftUI drops an inner
+/// presentation requested during the outer transition, the outer cover shows a
+/// host that draws nothing — a blank screen with no control and no dismiss
+/// gesture. The card is therefore drawn inline once a deadline has passed with
+/// no cover.
+///
+/// ### What the fallback costs, said out loud
+///
+/// Inline is **the shape every call site shipped before answer 6**: the scrim
+/// over the page, with the whole screen still behind it in the accessibility
+/// tree. So a dropped presentation trades a dead end for the contrast and
+/// tree findings answer 6 removed — a hard, visible failure for an
+/// intermittent accessibility regression that only an audit on that screen
+/// would see (review 2). It is the better trade and it is not free, which is
+/// why it is written here and in DECISIONS §1 rather than left as "a card
+/// late".
+///
+/// ### Why a deadline
+///
+/// Nothing in SwiftUI reports a dropped presentation, and
+/// `@Environment(\.isPresented)` answers true for a pushed `NavigationStack`
+/// destination as well as for a sheet — which is where `RouteScreen.swift`'s
+/// card lives. A normal presentation takes about a third of a second.
+public enum DialogPresentationGuard {
+
+    /// How long the presentation gets before the card is drawn inline:
+    /// 1.5 seconds, four to five times a normal presentation, so the deadline
+    /// is quiet in every case that works.
+    public static let lostAfterNanoseconds: UInt64 = 1_500_000_000
+
+    /// The accessibility identifier the inline fallback carries, and nothing
+    /// else in the app does.
+    ///
+    /// Here rather than on `DialogCard` because that type is generic and a
+    /// generic type cannot hold a static stored property — and because the
+    /// identifier is only useful beside the rule. Every case that asserts
+    /// there is nothing behind a dialog asserts this is **absent**: that is
+    /// what says the case measured the presentation rather than the fallback,
+    /// and it is the one reading the fallback can have without a way to
+    /// provoke a dropped presentation.
+    public static let inlineFallbackIdentifier = "shell-dialog-inline-fallback"
+
+    /// Whether the card is drawn inline, beside the host.
+    ///
+    /// - Parameters:
+    ///   - coverAppeared: the cover's own content has appeared at least once.
+    ///   - deadlinePassed: ``lostAfterNanoseconds`` elapsed with no cover.
+    ///
+    /// A cover that arrives **late** takes the screen back: it is opaque and
+    /// on top, and this returns false again the moment it appears, so the two
+    /// cards are never both the thing a person is looking at.
+    public static func cardIsInline(coverAppeared: Bool, deadlinePassed: Bool) -> Bool {
+        deadlinePassed && !coverAppeared
+    }
+}

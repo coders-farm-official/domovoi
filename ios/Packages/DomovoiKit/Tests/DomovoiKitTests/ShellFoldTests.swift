@@ -223,6 +223,139 @@ final class ShellFoldTests: XCTestCase {
         )
     }
 
+    // MARK: - which shape the header takes (owner answer 29)
+
+    /// The rule, both sides of the accessibility boundary.
+    ///
+    /// This is the reading review 2's uncaught sabotage asked for: it undid
+    /// answer 29 in **both** view bodies at once — the size gate off
+    /// `WorkspaceView`'s `if`, the branch off `ShellScrollAwayChrome.body` —
+    /// and the full `DomovoiKit` suite stayed green, because `pkgtest.sh`
+    /// builds the package and `appcheck.sh` is broken on the base branch too.
+    /// The decision is ``ShellHeaderFold`` now and the views draw its answer,
+    /// so a sabotage of the **rule** fails here today. A sabotage inside a
+    /// view body still needs a train — `testShell_TheHeaderScrollsAwayOnHome`
+    /// and its three siblings are the cases that catch it, and the limit is
+    /// written in `REPORT.md`.
+    func testTheHeaderIsABarBelowTheAccessibilitySizesAndATitleAbove() {
+        XCTAssertEqual(
+            .barAboveTheStack,
+            ShellHeaderFold.forHeader(drawn: true, isAccessibilitySize: false)
+        )
+        XCTAssertEqual(
+            .titleInsideTheStack,
+            ShellHeaderFold.forHeader(drawn: true, isAccessibilitySize: true)
+        )
+    }
+
+    /// Below the accessibility sizes there is **no title at all**, which is not
+    /// the same as an empty one: an empty large title still reserves the large
+    /// navigation bar's height on every screen in the app, and that is the
+    /// alternative REPORT's N3 rejected.
+    func testBelowTheAccessibilitySizesThereIsNoTitleAndNoToolbarPill() {
+        let bar = ShellHeaderFold.forHeader(drawn: true, isAccessibilitySize: false)
+        XCTAssertNil(bar.navigationTitle(crumb: "domovoi / home"))
+        XCTAssertTrue(bar.drawsBarAboveTheStack)
+        XCTAssertFalse(bar.drawsTheToolbarPill)
+        XCTAssertFalse(bar.putsTheHeaderInsideTheStack)
+    }
+
+    /// At them it is the breadcrumb, **trimmed**.
+    ///
+    /// `ShellStrings.localTopbar` carries two leading spaces for a bar that
+    /// draws them beside a dot; a screen reader reads a title, not a layout.
+    /// The trimming is part of the rule rather than something a call site
+    /// remembers, which is why it is asserted here with the string that has
+    /// the spaces in it.
+    func testAtTheAccessibilitySizesTheTitleIsTheTrimmedBreadcrumb() {
+        let folded = ShellHeaderFold.forHeader(drawn: true, isAccessibilitySize: true)
+        XCTAssertEqual("domovoi / home", folded.navigationTitle(crumb: "domovoi / home"))
+        XCTAssertEqual(
+            "domovoi / local media",
+            folded.navigationTitle(crumb: ShellStrings.localTopbar),
+            "the local shell's title keeps the bar's leading spaces"
+        )
+        XCTAssertFalse(folded.drawsBarAboveTheStack)
+        XCTAssertTrue(folded.drawsTheToolbarPill)
+        XCTAssertTrue(folded.putsTheHeaderInsideTheStack)
+    }
+
+    /// The `AuditStrip.topBar` variant loses the header at **every** size.
+    ///
+    /// Review 1's N5: that variant's whole job is the shell without its
+    /// header, and when the fold put the header in the navigation bar the
+    /// variant became identical to the control at AX5 — so the bisect that
+    /// variant exists for lost its one difference.
+    func testTheHeaderlessVariantHasNoHeaderAtEitherSize() {
+        for accessibility in [false, true] {
+            let fold = ShellHeaderFold.forHeader(drawn: false, isAccessibilitySize: accessibility)
+            XCTAssertEqual(.noHeaderAtAll, fold)
+            XCTAssertFalse(fold.drawsBarAboveTheStack)
+            XCTAssertFalse(fold.drawsTheToolbarPill)
+            XCTAssertNil(fold.navigationTitle(crumb: "domovoi / home"))
+        }
+    }
+
+    /// The pill is the bar's **or** the toolbar's, never both: two
+    /// `switch server` controls on one screen is the bar still being drawn
+    /// with the toolbar item under it, which is the shape
+    /// `testShell_TheHeaderScrollsAwayOnTheLocalShell` counts on the screen.
+    func testTheBarAndTheToolbarNeverBothCarryThePill() {
+        for fold in ShellHeaderFold.allCases {
+            XCTAssertFalse(
+                fold.drawsBarAboveTheStack && fold.drawsTheToolbarPill,
+                "\(fold.rawValue) draws the pill twice"
+            )
+        }
+    }
+
+    // MARK: - the dialog's inline fallback (owner answer 6)
+
+    /// The guard, on all four of its inputs.
+    ///
+    /// Review 2: the fallback review 1 asked for had no test on any path. It
+    /// is a value now, so both paths have one — and the one that matters is
+    /// the **late** cover: a presentation that arrives after the deadline
+    /// takes the screen back, because it is opaque and on top, so the two
+    /// cards are never both the thing a person is looking at.
+    func testTheCardIsInlineOnlyWhenTheDeadlinePassedWithNoCover() {
+        XCTAssertTrue(
+            DialogPresentationGuard.cardIsInline(coverAppeared: false, deadlinePassed: true),
+            "the deadline passed with no cover and the card is not drawn: that "
+                + "is the blank undismissable screen the guard exists for"
+        )
+        XCTAssertFalse(
+            DialogPresentationGuard.cardIsInline(coverAppeared: false, deadlinePassed: false),
+            "the card is inline before the deadline, so every dialog in the app "
+                + "draws twice for a second and a half"
+        )
+        XCTAssertFalse(
+            DialogPresentationGuard.cardIsInline(coverAppeared: true, deadlinePassed: false),
+            "the presentation arrived and the card is inline as well"
+        )
+        XCTAssertFalse(
+            DialogPresentationGuard.cardIsInline(coverAppeared: true, deadlinePassed: true),
+            "a cover that arrived LATE leaves the inline card up behind it"
+        )
+    }
+
+    /// The deadline is a second and a half, and the identifier is the one the
+    /// UI cases spell out.
+    ///
+    /// Both are numbers-and-strings written in one place and read in another,
+    /// which on this branch has already been wrong once (`HintInk`'s 7.72).
+    /// A normal presentation takes about a third of a second, so the deadline
+    /// has to be several times that and nowhere near a person's patience.
+    func testTheDeadlineIsQuietForAWorkingPresentation() {
+        XCTAssertEqual(1_500_000_000, DialogPresentationGuard.lostAfterNanoseconds)
+        XCTAssertEqual(
+            "shell-dialog-inline-fallback",
+            DialogPresentationGuard.inlineFallbackIdentifier,
+            "the identifier `StubHouseUITests+Shell.swift` asserts absent has "
+                + "changed, so that case now asserts the absence of nothing"
+        )
+    }
+
     /// WCAG 2.1's contrast ratio between two sRGB colours, 0–1 per channel.
     /// The same arithmetic the UI case does on the screen's own pixels, so the
     /// two readings are comparable.

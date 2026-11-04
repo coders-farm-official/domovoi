@@ -140,10 +140,48 @@ struct DomovoiApp: App {
     /// for the cases that read it, and VoiceOver keeps one element where an
     /// overlay would give it two with the same words.
     ///
-    /// Both classes, because SwiftUI uses both: a plain `TextField` is backed
-    /// by `UITextField`, and `TextField(…, axis: .vertical)` — the multi-line
-    /// shape this app uses wherever the audit failed a single line — by
-    /// `UITextView`.
+    /// ### The vertical-axis fields, and what is NOT known about them
+    ///
+    /// The proxy names two classes. The single-line leg is settled: a plain
+    /// `TextField` is a `UITextField`, the hint is its `placeholder`, and
+    /// `XCUIElement.placeholderValue` reads it back — a case does.
+    ///
+    /// The `axis: .vertical` leg is **not settled, and this comment used to
+    /// claim it was** (review 2's must finding: it asserted the field is
+    /// "backed by `UITextView`" while the UI case asserted a `UITextView` has
+    /// no placeholder of its own, and both cannot be true of the same hint).
+    /// What is actually known:
+    ///
+    ///  * The scope, counted rather than quoted: `grep -rn "axis: .vertical"
+    ///    ios/Domovoi/` returns 38 lines, and 14 of them are doc comments
+    ///    (this one included) explaining the rule about `submitLabel`. The
+    ///    fields are **24, in 18 files** — the multi-line shape this app uses
+    ///    wherever the audit failed a single line. None of those files is this
+    ///    unit's. (Review 2 reported 36 in 20 from the unfiltered grep; the
+    ///    conclusion is the same and the number is not.)
+    ///  * Which view SwiftUI builds for them, and whether the prompt inside it
+    ///    is a `UILabel` the proxy can reach or something SwiftUI draws
+    ///    itself, is UIKit's business. **This file cannot assert it**, and
+    ///    the same shape of reasoning — a sentence about a private view tree
+    ///    with no reading behind it — is what review 1's S3 struck out of this
+    ///    comment the first time.
+    ///  * `UITextView` is named in the proxy because it costs nothing if it is
+    ///    the wrong class and covers the leg if it is the right one.
+    ///
+    /// So the leg is **measured, not argued**:
+    /// `testShell_TheHintInkIsReadableOnAVerticalField` opens Music at AX5,
+    /// where its field becomes `axis: .vertical` (`MusicView.swift:686-688`),
+    /// and reads the hint's own pixels. Apple's grey measures about 1.7:1
+    /// there and this ink about 6.7:1, so that case is the answer either way.
+    ///
+    /// **If it fails, the fix is not a narrower class here.** It is
+    /// `TextField(…, prompt: Text(hint).foregroundColor(Color.fgMuted))` at
+    /// those 24 call sites, which is SwiftUI's own way of colouring a prompt,
+    /// keeps the hint the field's prompt, and costs an edit in 18 files this
+    /// unit does not own. That instruction is in
+    /// `design-notes/ios/batch-2026-11-03/shell/DECISIONS.md` under "Needs a
+    /// shared change" so that the train's fixer has it in hand and does not
+    /// have to re-derive it from a doc comment.
     ///
     /// ### What this could recolour besides the hint, and what reads it
     ///
@@ -454,6 +492,49 @@ extension Color {
         traits.userInterfaceStyle == .dark
             ? UIColor(red: 1.0000, green: 0.3718, blue: 0.3577, alpha: 1)   // oklch(0.70 0.20 25)
             : UIColor(red: 0.7451, green: 0.1339, blue: 0.1637, alpha: 1)   // oklch(0.52 0.19 25)
+    })
+
+    /// `--danger`: the **fill** a destructive button is drawn in — hang up,
+    /// delete, forget — with ``Color/dangerFg`` for the text on it.
+    ///
+    /// The rooms unit asked for this one by name: Android fills its hang-up
+    /// button with `colors.err` and draws white on it
+    /// (`PhoneDropinCall.kt:180-183`), this target had the ink token and
+    /// nothing to pair it with, and a `.borderedProminent` button tinted with
+    /// an ink token draws its own label at 3.08:1 — so `DropInCallSheet`
+    /// shipped a `.bordered` button instead (their DECISIONS). This is the
+    /// pair, and `web/static/colors_and_type.css:176-179` already had it under
+    /// the comment "Destructive buttons (delete, forget): fill + the text on
+    /// it".
+    ///
+    /// **The stylesheet's pair and not Android's white**, because the
+    /// arithmetic says white does not survive dark mode: the fill is
+    /// `oklch(0.70 0.20 25)` there, `#FF5F5B`, and white on it is **2.99:1**.
+    /// The stylesheet's own `--danger-fg` flips with the theme instead, and
+    /// the pair measures **5.91:1** light and **6.53:1** dark (arithmetic,
+    /// WCAG, from the two tokens' sRGB). That is why this is two tokens rather
+    /// than "use white".
+    ///
+    /// In light mode the fill is the same colour as ``Color/errInk``
+    /// (`oklch(0.52 0.19 25)` is both `--danger` and `--err-ink`), which is
+    /// why tinting a prominent button with the ink looked right in light mode
+    /// and read 3.08:1 in dark.
+    static let danger = Color(UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? UIColor(red: 1.0000, green: 0.3718, blue: 0.3577, alpha: 1)   // oklch(0.70 0.20 25)
+            : UIColor(red: 0.7451, green: 0.1339, blue: 0.1637, alpha: 1)   // oklch(0.52 0.19 25)
+    })
+
+    /// `--danger-fg`: the text drawn **on** ``Color/danger``, the same way
+    /// ``Color/brandFg`` is the text on the amber.
+    ///
+    /// Near-white on the light theme's deep red (**5.91:1**) and near-black on
+    /// the dark theme's bright one (**6.53:1**). Never `.white` on both: that
+    /// is the 2.99:1 the pair exists to avoid.
+    static let dangerFg = Color(UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? UIColor(red: 0.0953, green: 0.0308, blue: 0.0271, alpha: 1)   // oklch(0.16 0.03 25)
+            : UIColor(red: 0.9912, green: 0.9863, blue: 0.9784, alpha: 1)   // oklch(0.99 0.003 80)
     })
 }
 

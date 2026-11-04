@@ -92,6 +92,13 @@ extension StubHouseUITests {
         static let stationsName = "Radio Stations"
         static let publisher = "Coders Farm"
 
+        /// ``DialogPresentationGuard/inlineFallbackIdentifier``: the
+        /// identifier `DialogCard` puts on the card when it gives up waiting
+        /// for its presentation and draws inline. Spelt out here like every
+        /// other string in these files, and asserted **absent** wherever a
+        /// case's subject is what a presentation takes out of the window.
+        static let inlineFallback = "shell-dialog-inline-fallback"
+
         /// ``PluginBandStrings/badge``, ``by(_:)``, ``manageLabel(name:)`` and
         /// ``collapsedLabel(name:publisher:)`` — the words one band draws now.
         static let pluginBadge = "plugin"
@@ -216,6 +223,29 @@ extension StubHouseUITests {
     ///    45%, so a page left at the old window fails whatever caused it — a
     ///    `safeAreaInset` some later unit adds, the plugin band growing — and
     ///    not only `ShellTopBar` being drawn again, which reading 1 catches.
+    /// 5. **The page grew, and what it did not get is accounted for.** The
+    ///    brief asked for "the header gone and the window grown" and review 2
+    ///    was right that the grown half was a `print`. Two assertions now: the
+    ///    page does not **shrink** across the swipe, and everything the page
+    ///    does *not* hold after it — the window minus the page minus the
+    ///    collapsed navigation bar — is under ``unaccountedChromeShare``. The
+    ///    second is the discriminating one: chrome that is neither
+    ///    `ShellTopBar` nor big enough to break the 45% floor has nowhere to
+    ///    hide in it. The phone bar measured 146 of 852 points (17%) at AX5
+    ///    and the safe areas take about 6%, so the share is 28%.
+    /// 6. **Apple's audit, at AX5, on the collapsed bar** — and only the
+    ///    chrome's own leaves are asserted on. ``ShellPillToolbarButton``'s
+    ///    doc comment claimed the large-title bar's background is the system
+    ///    background, which is the surface `Color.warnInk` was measured
+    ///    against; review 2 pointed out that once the large title collapses —
+    ///    which this helper makes it do — UIKit draws the inline bar as a
+    ///    translucent material over the scrolling page, the same class of
+    ///    surface that measured `warnInk` at 4.21:1 on the `.quaternary`
+    ///    capsule. So it is measured. A finding naming the breadcrumb or the
+    ///    toolbar pill fails; everything else is printed and left to the unit
+    ///    that owns the screen, because Home, Videos and the local shell are
+    ///    not this unit's and N4's mistake was failing a case for another
+    ///    unit's work.
     ///
     /// The swipe is `.slow` on the page's own scroll view and not on the app:
     /// a plain `swipeUp()` steps over rows, and a swipe on the app can land on
@@ -306,6 +336,96 @@ extension StubHouseUITests {
                 + "\(Int(barAfter.height))), so something else is taking the "
                 + "room: a `safeAreaInset` added since, or chrome that is not "
                 + "inside the page's scroll view."
+        )
+        // Reading 5. **Grew**, asserted rather than printed (review 2). A
+        // point of slack for rounding: the claim is that the page does not
+        // lose room when the header folds away, and a page that came back a
+        // pixel short of itself is not that defect.
+        XCTAssertGreaterThan(
+            pageAfter.height,
+            pageBefore.height - 1,
+            "the page SHRANK across the swipe, \(Int(pageBefore.height)) → "
+                + "\(Int(pageAfter.height)) of \(Int(app.frame.height)) on "
+                + "\(name): the navigation bar collapsed and the room it gave "
+                + "up went to something other than the page"
+        )
+        // …and what the page did not get is accounted for. This is the
+        // reading that catches chrome which is neither `ShellTopBar` nor large
+        // enough to break the 45% floor.
+        let unaccounted = app.frame.height - pageAfter.height - barAfter.height
+        let allowed = app.frame.height * Self.unaccountedChromeShare
+        print(
+            "SHELL [\(name)] off the page: \(Int(unaccounted)) points beside "
+                + "the \(Int(barAfter.height))-point bar, of "
+                + "\(Int(app.frame.height))"
+        )
+        XCTAssertLessThan(
+            unaccounted,
+            allowed,
+            "\(Int(unaccounted)) points of the \(Int(app.frame.height)) are "
+                + "neither the page nor the collapsed navigation bar on "
+                + "\(name), over the \(Int(allowed))-point allowance. The phone "
+                + "bar is 146 of 852 at AX5 and the safe areas about 6%; "
+                + "anything past that is chrome outside the page's scroll "
+                + "view, which is what answer 29 is about."
+        )
+        // Reading 6. The audit at AX5, with the large title collapsed into the
+        // inline bar — the surface `ShellPillToolbarButton`'s comment used to
+        // assert about. Only the chrome's own leaves are asserted on.
+        if #available(iOS 17.0, *) {
+            try assertTheChromeAuditsAtAX5(app, crumb: crumb, named: "\(name)-audited")
+        }
+    }
+
+    /// How much of the window may be neither the page nor the collapsed
+    /// navigation bar: the phone bar (146 of 852, 17%, train S001) plus the
+    /// safe areas (about 6%), rounded up to 28%.
+    private static let unaccountedChromeShare: CGFloat = 0.28
+
+    /// Apple's audit on a folded shell, classified so that it reads **this
+    /// unit's** chrome and nothing else.
+    ///
+    /// The screens this runs on (Home and the pushed Videos list) belong to
+    /// other units, and a finding against one of their rows must not fail a
+    /// shell case — that is the
+    /// mistake N4 found in the dialog case. So: every finding is printed, the
+    /// measured floor is split off as everywhere else, and the assertion is
+    /// over the findings that **name the chrome** — the breadcrumb that is now
+    /// a large title, or the toolbar pill that carries the address, the
+    /// warning and the status word.
+    ///
+    /// What it is for: `warnInk` is 5.73:1 on white and 4.21:1 on the
+    /// `.quaternary` capsule it had to be moved off, and the collapsed inline
+    /// navigation bar is a translucent material over whatever the page has
+    /// scrolled under it. Whether the warning glyph survives that was an
+    /// argument in a comment until this reading existed.
+    @MainActor
+    @available(iOS 17.0, *)
+    private func assertTheChromeAuditsAtAX5(
+        _ app: XCUIApplication,
+        crumb: String,
+        named name: String
+    ) throws {
+        let (floor, rest) = Self.floorAndRest(try auditIssues(app, name))
+        print("SHELL [\(name)] audit: floor \(floor), rest \(rest.count) — \(rest)")
+        // The chrome's two leaves, by the words only they carry. The pill's
+        // label begins with `switch server, ` and the title is the breadcrumb;
+        // `connect` is the local shell's pill, which has no status word.
+        let chromes = rest.filter { line in
+            line.contains(crumb.trimmingCharacters(in: .whitespaces))
+                || line.contains(StubShell.toolbarPillPrefix)
+                || line.contains("label='connect'")
+        }
+        XCTAssertEqual(
+            chromes,
+            [],
+            "Apple's audit names the shell's own folded chrome on \(name): "
+                + "\(chromes). The large title and the toolbar pill are drawn "
+                + "on the navigation bar's surface, and at AX5 the collapsed "
+                + "bar is a translucent material over the page — which is the "
+                + "same class of surface that measured `Color.warnInk` at "
+                + "4.21:1 on the `.quaternary` capsule the word had to be "
+                + "moved off (`ShellChromeViews.swift`). Picture attached."
         )
     }
 
@@ -408,6 +528,24 @@ extension StubHouseUITests {
                 + "from inside a `NavigationStack` destination. Picture attached."
         )
         evidence(app, "shell-forget-card")
+
+        // **The presentation is what was measured, not the fallback.**
+        // `DialogCard` draws the card inline if the cover has not arrived in
+        // 1.5 seconds (`DialogPresentationGuard`), and inline is the
+        // pre-answer-6 shape: the page still behind the card. Every assertion
+        // below would then be measuring the guard rather than the fix, and the
+        // case would go red for the wrong reason. So the fallback's own
+        // identifier is asserted absent, which is the one reading a dropped
+        // presentation can have from a UI case — it cannot be provoked.
+        XCTAssertFalse(
+            app.descendants(matching: .any)[StubShell.inlineFallback].exists,
+            "the dialog is `DialogCard`'s INLINE FALLBACK, not its "
+                + "presentation: the `fullScreenCover` did not arrive within "
+                + "1.5s, so the page is still behind the card and the readings "
+                + "below are about the guard. If the Alerts card is on screen, "
+                + "this is the cover-inside-a-cover DECISIONS §1 calls a merge "
+                + "blocker. Picture attached."
+        )
 
         XCTAssertEqual(
             app.buttons.matching(
@@ -664,14 +802,25 @@ extension StubHouseUITests {
         try assertTheHintIsReadable(videos, StubShell.videosHint, named: "shell-hint-videos")
     }
 
-    /// The **vertical-axis** field, which is the other class the proxy names
-    /// (`UITextView`) and the size the hint matters most at.
+    /// The **vertical-axis** field: the leg of answer 65 that nothing had
+    /// measured, and the size the hint matters most at.
     ///
     /// Music's search field becomes `TextField(…, axis: .vertical)` only at an
     /// accessibility size (`MusicView.swift:686-688`), so the single-line
-    /// readings above never reach that leg of `DomovoiApp.init` — review 1's
-    /// S3, and it was right: both fields it measured were `.roundedBorder`
-    /// single-line ones.
+    /// readings above never reach it — review 1's S3, and it was right: both
+    /// fields it measured were `.roundedBorder` single-line ones.
+    ///
+    /// **This case is the only answer there is about that leg.** Whether the
+    /// `UITextView` appearance proxy in `DomovoiApp.init` reaches a prompt
+    /// SwiftUI may be drawing itself is not something either file can assert
+    /// (review 2's must finding), so it is read instead: Apple's grey measures
+    /// about 1.7:1 in a field and this ink about 6.7:1, far enough apart that
+    /// a 4.5 floor cannot confuse them. If this goes red, the fix is **not** a
+    /// different class in the proxy — it is
+    /// `TextField(…, prompt: Text(hint).foregroundColor(Color.fgMuted))` at
+    /// the 24 vertical-axis call sites in 18 files, which is in DECISIONS.md
+    /// under "Needs a shared change" because none of those files is this
+    /// unit's.
     ///
     /// No audit here. Music at AX5 is `MusicMore`'s screen to audit, and a
     /// finding against it would fail this case for another unit's work — the
@@ -685,11 +834,19 @@ extension StubHouseUITests {
             music,
             StubShell.musicHint,
             named: "shell-hint-music-ax5",
-            // A `UITextView` has no placeholder of its own: SwiftUI draws the
-            // prompt itself, and `placeholderValue` is empty on some iOS
-            // versions. The element still carries the hint as its **label**,
-            // which the lookup above asserts and an overlay `Text` in place of
-            // a prompt would not produce.
+            // **Not asserted, because it is not known.** This used to say a
+            // `UITextView` has no placeholder of its own, which contradicted
+            // `DomovoiApp.swift`'s claim that a vertical-axis field *is* a
+            // `UITextView` with a `UILabel` in it — review 2's must finding,
+            // and both sentences were about a private view tree neither file
+            // had read. What is certain is that `placeholderValue` is a
+            // `UITextField` property and this element may be a `textView`, so
+            // asking for it here would fail on the class rather than on the
+            // colour. The element carries the hint as its **label** — the
+            // lookup above asserts that, and an overlay `Text` in place of a
+            // prompt would not produce it — and the ink is read off the
+            // screen's own pixels either way, which is the reading that
+            // answers the question.
             readsPlaceholder: false,
             audits: false
         )

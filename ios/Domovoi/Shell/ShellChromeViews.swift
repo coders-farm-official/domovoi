@@ -338,9 +338,27 @@ struct PhoneBarView: View {
 ///
 /// **The warning is drawn, not only spoken.** `unverified` is the one of the
 /// three that is a warning rather than a status, so it keeps a glyph.
-/// ``Color/warnInk`` is 5.73:1 on white, and the large-title navigation bar's
-/// background is the system background — the surface that ink was measured
-/// against, unlike the `.quaternary` capsule the word had to be moved off of.
+///
+/// ### The glyph's surface is a reading, not a claim
+///
+/// This said the large-title navigation bar's background is the system
+/// background — "the surface that ink was measured against, unlike the
+/// `.quaternary` capsule the word had to be moved off of". Review 2 was right
+/// that it is an argument about UIKit's own drawing with nothing behind it: as
+/// soon as the large title **collapses**, which is the whole point of answer
+/// 29 and what the cases make it do, UIKit draws the inline bar as a
+/// translucent material over the page scrolling under it. That is the same
+/// class of surface that measured ``Color/warnInk`` at **4.21:1** on the
+/// `.quaternary` capsule (`ShellChromeViews.swift:134-146`), and
+/// `--warn-ink` is not ours to darken — the stylesheet is the spec.
+///
+/// So it is measured instead: `assertTheHeaderScrollsAway` runs Apple's audit
+/// at AX5 **after** the swipe that collapses the title, and fails on any
+/// finding naming the breadcrumb or this pill (the rest belongs to whoever
+/// owns the screen). If the glyph comes back flagged, the fix is the shape the
+/// capsule got: the warning leaves the bar's material for the canvas — a glyph
+/// in the page's own chrome, or `unverified` spoken by
+/// ``ShellPill/toolbarAccessibilityLabel`` alone, which it already is.
 struct ShellPillToolbarButton: View {
 
     let pill: ShellPill
@@ -431,15 +449,30 @@ struct ShellScrollAwayChrome: ViewModifier {
 
     @Environment(\.dynamicTypeSize) private var typeSize
 
+    /// Both halves of answer 29 are one rule in ``ShellHeaderFold``, read
+    /// here and in ``WorkspaceView/stack``: review 2's sabotage took the
+    /// branch off this body and the size gate off that `if` together, and no
+    /// check that runs on Windows read either. A nil title is "apply no title
+    /// at all" — an empty one still reserves the large bar's height on every
+    /// screen in the app, which is the alternative N3 rejected.
+    /// The rule, asked once per body. A computed property rather than a `let`
+    /// inside the `ViewBuilder`, to match the rest of this file.
+    private var fold: ShellHeaderFold {
+        ShellHeaderFold.forHeader(
+            drawn: drawn,
+            isAccessibilitySize: typeSize.isAccessibilitySize
+        )
+    }
+
     @ViewBuilder
     func body(content: Content) -> some View {
-        if drawn && typeSize.isAccessibilitySize {
+        if let title = fold.navigationTitle(crumb: crumb) {
             content
-                .navigationTitle(crumb.trimmingCharacters(in: .whitespaces))
+                .navigationTitle(title)
                 .navigationBarTitleDisplayMode(.large)
                 .toolbar {
                     ToolbarItem(placement: .topBarTrailing) {
-                        if let pill {
+                        if let pill, fold.drawsTheToolbarPill {
                             ShellPillToolbarButton(pill: pill, onTap: onPill)
                         }
                     }

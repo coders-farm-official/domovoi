@@ -35,9 +35,20 @@ struct LocalShellView: View {
 
     @Environment(\.dynamicTypeSize) private var typeSize
 
+    /// Answer 29's rule, from ``ShellHeaderFold`` — the same one
+    /// ``WorkspaceView`` reads, so the two shells cannot fold at different
+    /// sizes. This shell has no `AuditStrip` variant, so the header is always
+    /// drawn.
+    private var headerFold: ShellHeaderFold {
+        ShellHeaderFold.forHeader(
+            drawn: true,
+            isAccessibilitySize: typeSize.isAccessibilitySize
+        )
+    }
+
     var body: some View {
         VStack(spacing: 0) {
-            if !typeSize.isAccessibilitySize {
+            if headerFold.drawsBarAboveTheStack {
                 ShellTopBar(
                     leading: ShellStrings.localTopbar,
                     pill: model.chrome.pill,
@@ -84,7 +95,7 @@ struct LocalShellView: View {
     /// the tab is exactly what it was — no stack, no navigation bar, no title.
     @ViewBuilder private func tab(_ route: Route) -> some View {
         let screen = LocalPhoneScreen(model: model, route: route)
-        if typeSize.isAccessibilitySize {
+        if headerFold.putsTheHeaderInsideTheStack {
             NavigationStack {
                 screen
                     .shellScrollAwayChrome(

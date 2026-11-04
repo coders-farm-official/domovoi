@@ -121,7 +121,14 @@ struct WorkspaceView: View {
     /// changes.
     private var stack: some View {
         VStack(spacing: 0) {
-            if AuditStrip.active != .topBar && !typeSize.isAccessibilitySize {
+            // **The question is asked in `DomovoiKit`, not here.** Review 2
+            // sabotaged both halves of answer 29 in the view bodies — the
+            // size gate off this `if`, the branch off
+            // ``ShellScrollAwayChrome`` — and nothing in the repository
+            // caught it: `pkgtest.sh` builds the package only. So the rule is
+            // ``ShellHeaderFold``, which `ShellFoldTests` reads today, and
+            // these two bodies draw its answer.
+            if headerFold.drawsBarAboveTheStack {
                 ShellTopBar(
                     leading: crumb,
                     pill: model.chrome.pill,
@@ -169,6 +176,16 @@ struct WorkspaceView: View {
     /// (``crumb(for:)``), because a navigation item belongs to the screen that
     /// carries it and not to the shell.
     private var crumb: String { crumb(for: model.navigation.route) }
+
+    /// Which shape the header takes here, from ``ShellHeaderFold`` — the one
+    /// place answer 29's rule is written, and the one a package test can read.
+    /// ``AuditStrip/topBar`` is the variant with no header at all.
+    private var headerFold: ShellHeaderFold {
+        ShellHeaderFold.forHeader(
+            drawn: AuditStrip.active != .topBar,
+            isAccessibilitySize: typeSize.isAccessibilitySize
+        )
+    }
 
     /// One screen's breadcrumb. Taken apart from ``crumb`` by review 1's S1:
     /// one value handed to both the stack's root and its destinations is one

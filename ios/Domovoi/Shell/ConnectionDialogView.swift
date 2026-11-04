@@ -455,8 +455,20 @@ private struct ServerRow: View {
 /// `NavigationStack` destination as well as a sheet, which is where
 /// `RouteScreen.swift:273`'s card lives. Normal presentations take about a
 /// third of a second, so a second and a half is quiet in every case that
-/// works, and in the one that does not it is the difference between a card
-/// late and an app a person has to kill.
+/// works.
+///
+/// **What the fallback costs, which "a card late" did not say.** Inline is the
+/// pre-answer-6 shape exactly: the 35% scrim over the page, with the whole
+/// screen still behind it in the accessibility tree and still being sampled
+/// through the scrim. So when it fires it hands back the contrast and tree
+/// findings answer 6 removed — it trades a hard, visible failure (a blank
+/// screen, a picture attached to a train) for an intermittent accessibility
+/// regression that only an audit on that screen would notice (review 2). That
+/// is the better trade for a person holding the phone and it is not free, so
+/// it is written here, in ``DialogPresentationGuard`` and in DECISIONS §1
+/// rather than left as a card arriving late. The way not to pay it at all is
+/// the one-line Alerts fix the same §1 calls a merge blocker: with no cover
+/// inside a cover there is no presentation to drop.
 ///
 /// **This does not make the Alerts fix optional.** One line in
 /// `AlertsHintRowView.body` ends the nesting itself, that file is not this
@@ -477,13 +489,37 @@ struct DialogCard<Content: View>: View {
     /// it is opaque and on top — rather than racing one flag.
     @State private var presentationLost = false
 
-    /// How long the presentation gets before the card is drawn inline.
-    private static var lostAfter: UInt64 { 1_500_000_000 }
+    /// How long the presentation gets before the card is drawn inline —
+    /// ``DialogPresentationGuard/lostAfterNanoseconds``, which is where the
+    /// number and the reason for it are written and where `ShellFoldTests`
+    /// reads them.
+    private static var lostAfter: UInt64 { DialogPresentationGuard.lostAfterNanoseconds }
 
     var body: some View {
         ZStack {
             hostOfNothing
-            if presentationLost && !coverAppeared { card }
+            // **The rule is ``DialogPresentationGuard``, not an `&&` here.**
+            // Review 2: this guard had no test on any path, and what it
+            // reproduces when it fires — the page still behind the card, which
+            // is the pre-answer-6 shape — is the thing
+            // `testShell_ADialogLeavesNothingBehindIt` forbids. The decision is
+            // a value in the package now, where both paths have a test today,
+            // and that case asserts the fallback did **not** fire by looking
+            // for ``Self/inlineFallbackIdentifier``.
+            if DialogPresentationGuard.cardIsInline(
+                coverAppeared: coverAppeared,
+                deadlinePassed: presentationLost
+            ) {
+                // `.contain` and not a bare identifier: an identifier on a
+                // `ZStack` that is not itself an accessibility element can be
+                // dropped from the tree, and a marker that is sometimes in the
+                // tree is worse than none. A container keeps the card's own
+                // leaves reachable — the card is what a person is reading —
+                // and gives the marker an element of its own.
+                card
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier(Self.inlineFallbackIdentifier)
+            }
         }
         .fullScreenCover(isPresented: .constant(true)) {
             card.onAppear { coverAppeared = true }
@@ -496,6 +532,21 @@ struct DialogCard<Content: View>: View {
             guard !Task.isCancelled else { return }
             if !coverAppeared { presentationLost = true }
         }
+    }
+
+    /// The identifier the **inline fallback** carries, and nothing else does
+    /// — ``DialogPresentationGuard/inlineFallbackIdentifier``.
+    ///
+    /// It lives in the package because a **generic** type cannot hold a static
+    /// stored property, and because the reason for it belongs beside the rule:
+    /// a dropped presentation cannot be provoked from a UI case, so this is
+    /// the other half of the reading. Every case that asserts there is nothing
+    /// behind a dialog also asserts this is absent, which is what says the
+    /// case measured the presentation and not the fallback. Without it, a
+    /// branch that fired every time would show up only as a contrast finding
+    /// somebody else's screen is blamed for.
+    private static var inlineFallbackIdentifier: String {
+        DialogPresentationGuard.inlineFallbackIdentifier
     }
 
     /// The host: it takes no hits and says nothing, so the `ZStack` a call
