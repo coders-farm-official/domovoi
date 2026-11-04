@@ -66,8 +66,13 @@ final class PodcastPlayTests: XCTestCase {
     /// pre-review commit failed 2 of 6 on each. The cause is in its own rig —
     /// `sleep: { _ in }` into ``BookTimeout/bounded(ms:sleep:)``, which races
     /// `work()` against an *instant* timeout in a task group, so the loser is
-    /// whichever child the scheduler happens to run second. It is logged for
-    /// the unit that owns that file (`DECISIONS.md` §7.6).
+    /// whichever child the scheduler happens to run second.
+    ///
+    /// **Fixed in the fix pass of 2026-11-04**: ``BookTimeout/heldShut(yields:)``
+    /// is the sleep a case that does not want the bound to fire passes
+    /// instead, and `AudiobooksModelTests`' rig and its three planner cases
+    /// pass it now. This `tearDown` is hygiene and was never the fix, which
+    /// is what its own comment got wrong first.
     override func tearDown() async throws {
         for _ in 0..<settleYieldLimit { await Task.yield() }
         StubURLProtocol.reset()

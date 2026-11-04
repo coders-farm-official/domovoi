@@ -100,10 +100,16 @@ final class AudiobooksModelTests: XCTestCase {
             store: store,
             remote: { remote },
             clock: { nowMs },
-            // The bound's own timer, opened at once: a test that really
-            // waited three seconds for a hung read would be a test nobody
-            // runs.
-            sleep: { _ in }
+            // **Held shut, not opened at once.** `sleep: { _ in }` stood
+            // here and was the cause of this class's intermittent red:
+            // ``BookTimeout/bounded(ms:sleep:_:)`` returns whichever child
+            // lands first, so an instant sleep is a timeout that wins on a
+            // coin toss — measured at 4 failures in 8 runs of
+            // `testOpeningABookTakesTheServersPlaceWhenOnlyItHasOne` alone in
+            // the process. ``BookTimeout/heldShut(yields:)`` yields instead
+            // of waiting on a clock, so a case still costs no real time, and
+            // the leg that answers is always the read.
+            sleep: BookTimeout.heldShut()
         )
     }
 
@@ -375,7 +381,10 @@ final class AudiobooksModelTests: XCTestCase {
             server: Self.away,
             sync: places,
             remote: slot,
-            sleep: { _ in }
+            // Held shut for the rig's reason above: with an instant sleep the
+            // reason a plan has no offer is a coin toss between the read and
+            // the bound, and these cases are about the read.
+            sleep: BookTimeout.heldShut()
         )
 
         XCTAssertEqual(600, plan.positionSec)
@@ -405,7 +414,10 @@ final class AudiobooksModelTests: XCTestCase {
             server: Self.home,
             sync: places,
             remote: slot,
-            sleep: { _ in }
+            // Held shut for the rig's reason above: with an instant sleep the
+            // reason a plan has no offer is a coin toss between the read and
+            // the bound, and these cases are about the read.
+            sleep: BookTimeout.heldShut()
         )
 
         let offer = try XCTUnwrap(plan.offer)
@@ -425,7 +437,10 @@ final class AudiobooksModelTests: XCTestCase {
             server: Self.home,
             sync: places,
             remote: slot,
-            sleep: { _ in }
+            // Held shut for the rig's reason above: with an instant sleep the
+            // reason a plan has no offer is a coin toss between the read and
+            // the bound, and these cases are about the read.
+            sleep: BookTimeout.heldShut()
         )
 
         XCTAssertNil(plan.offer)

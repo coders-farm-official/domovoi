@@ -17,7 +17,40 @@ import Foundation
 /// A helper rather than two copies of the task group: the bound is the thing
 /// that keeps a server out of reach from holding up play, and a second copy
 /// is a second chance to write a different number into it.
+///
+/// ### The `sleep` a test must NOT pass
+///
+/// `bounded` returns **whichever child lands first**, so a `sleep` that
+/// returns immediately is a timeout that always wins — or rather wins
+/// whenever the scheduler runs it second, which is a coin toss. That is what
+/// `sleep: { _ in }` in a rig buys: a case that passes four times in eight.
+/// It cost `AudiobooksModelTests.testOpeningABookTakesTheServersPlaceWhenOnlyItHasOne`
+/// an intermittent red measured on the Mac on 2026-11-04 — 4 of 8 runs alone
+/// in the process — and a round of misdiagnosis before that, in which the
+/// flake was blamed on work leaking between test classes.
+///
+/// ``heldShut`` is the sleep a case that does not want the bound to fire
+/// passes instead. It lives here rather than in a test file so that the next
+/// rig finds it instead of writing `{ _ in }` again.
 enum BookTimeout {
+
+    /// A `sleep` the caller can hold shut: it yields rather than waiting on a
+    /// clock, so a case costs no real time, and it ends only on cancellation
+    /// — which is what ``bounded(ms:sleep:_:)`` does to the losing child.
+    ///
+    /// **Bounded, not infinite.** `yields` is a ceiling far above anything a
+    /// case waits for, and reaching it lets the timeout fire. An unbounded
+    /// loop would turn a `work` that never finishes into a run that hangs
+    /// forever rather than one that fails, and a hung train is worse evidence
+    /// than a red one.
+    static func heldShut(yields: Int = 50_000) -> @Sendable (Int64) async throws -> Void {
+        { _ in
+            for _ in 0..<yields {
+                try Task.checkCancellation()
+                await Task.yield()
+            }
+        }
+    }
 
     static func bounded<Value: Sendable>(
         ms: Int64,
