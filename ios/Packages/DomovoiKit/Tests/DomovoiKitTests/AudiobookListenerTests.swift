@@ -1,3 +1,4 @@
+import Observation
 import XCTest
 @testable import DomovoiKit
 
@@ -271,7 +272,11 @@ final class AudiobookListenerTests: XCTestCase {
 
     /// A client over the stub, with a token so a device-tier route is not
     /// refused before it is recorded.
-    private static func client() -> DomovoiClient {
+    private static func client() -> DomovoiClient { container().client }
+
+    /// The same house as a container, for the cases that build a
+    /// ``PlayerListenerModel`` — which needs one for its `/api/people` read.
+    private static func container() -> AppContainer {
         let store = InMemoryShellStore(serverURL: "http://10.0.0.42:6369", token: "household-abc")
         store.trustServer("http://10.0.0.42:6369", identity: TestIdentity.real.pin)
         return AppContainer(
@@ -280,7 +285,7 @@ final class AudiobookListenerTests: XCTestCase {
             lock: HouseholdLock(),
             clock: { 0 },
             configuration: StubURLProtocol.session(timeout: 1)
-        ).client
+        )
     }
 
     /// Answer every route with `body` — **except `/api/health`, which gets a
@@ -321,4 +326,97 @@ final class AudiobookListenerTests: XCTestCase {
             return (url.query ?? "").contains("person_id")
         }
     }
+
+    // MARK: - the picker's own tick follows the pick (review 1)
+
+    /// Picking a person **registers as a change** on the model the picker
+    /// draws from.
+    ///
+    /// Review 1's S1: ``PlayerListenerModel`` read `personID` straight through
+    /// ``PlayerListenerStore``, which is a plain `final class` over a `Mutex`
+    /// (it has to be — it is `Sendable` and read off the main actor by every
+    /// position request). So a view drawing the tick or a chip was registered
+    /// against nothing, and what made the UI follow a pick was the
+    /// `model.showToast(…)` written on the next line, which mutates
+    /// ``ShellModel/toast`` and re-renders the whole shell with it. Drop that
+    /// toast, or move the shell's toast into its own overlay subtree, and the
+    /// tick silently stops following the pick — while the Simulator case goes
+    /// on passing for the wrong reason.
+    ///
+    /// `withObservationTracking` is the only thing that can say this: it
+    /// registers on exactly what a `body` would and reports whether the write
+    /// reached it. An `XCTAssertEqual` on the value afterwards would pass
+    /// either way, which is how this shipped.
+    func testPickingAPersonIsAnObservedChange() {
+        let place = SavedStateBox()
+        let listeners = PlayerListenerStore(place: place)
+        let model = PlayerListenerModel(in: Self.container(), listeners: listeners)
+
+        let changed = Shared(false)
+        withObservationTracking {
+            _ = model.personID
+        } onChange: {
+            changed.set(true)
+        }
+
+        // The write a picker makes: the store (and the player) through the
+        // shell, then the model's own mirror.
+        listeners.set("2")
+        model.adopt()
+
+        XCTAssertTrue(
+            changed.current,
+            "a pick is not an observed change on the model the picker draws from, "
+                + "so the tick follows it only by accident — see S1"
+        )
+        XCTAssertEqual("2", model.personID)
+    }
+
+    /// And the mirror cannot disagree with the store about a blank.
+    ///
+    /// ``PlayerListenerStore/set(_:)`` trims and turns an empty string into
+    /// nil — `person_id=` empty is a third key to the server, not an absent
+    /// one — and ``PlayerListenerModel/adopt()`` takes no argument precisely
+    /// so it cannot apply a different rule. A mirror holding `"  "` while the
+    /// store holds nil would draw a tick against a person who is not being
+    /// saved under.
+    func testTheMirrorTakesTheStoresOwnTidying() {
+        let listeners = PlayerListenerStore(place: SavedStateBox())
+        let model = PlayerListenerModel(in: Self.container(), listeners: listeners)
+
+        for blank in ["", "   ", "\n"] {
+            listeners.set(blank)
+            model.adopt()
+            XCTAssertNil(model.personID, "a blank became a person called nothing")
+        }
+        listeners.set("  9 ")
+        model.adopt()
+        XCTAssertEqual("9", model.personID, "the mirror kept the untrimmed id")
+    }
+
+    /// A pick made on **another screen** is taken on this one's next
+    /// appearance.
+    ///
+    /// The listener is one value for the install (`Prefs.kt:115`) and three
+    /// views hold three of these models — the Settings picker and the two hint
+    /// chips. ``PlayerListenerModel/start()`` is where a screen appearing
+    /// re-reads it, so this is what makes the chip on Podcasts name the person
+    /// picked in Settings without a relaunch.
+    func testAnotherScreensPickIsTakenOnAppearance() {
+        let place = SavedStateBox()
+        let settingsPicker = PlayerListenerStore(place: place)
+        let chip = PlayerListenerModel(
+            in: Self.container(), listeners: PlayerListenerStore(place: place)
+        )
+        XCTAssertNil(chip.personID)
+        XCTAssertFalse(chip.showsChip, "a phone that has picked nobody draws a chip")
+
+        // Settings writes; the chip's screen has not appeared since.
+        settingsPicker.set("2")
+        chip.start()
+
+        XCTAssertEqual("2", chip.personID)
+        XCTAssertTrue(chip.showsChip)
+    }
 }
+

@@ -148,6 +148,32 @@ public final class AudiobookDetailModel {
         return library.canPlay(book)
     }
 
+    /// Whether `save to this device` is drawn at all.
+    ///
+    /// **A player is not needed — a file is.** Keeping a copy needs no audio
+    /// engine, which is why this is not ``canPlay``; but the route that
+    /// serves the copy needs something to serve. A folder book whose `files`
+    /// name nothing has no audio in its folder, and
+    /// `GET /api/audiobooks/{id}/download` answers **404 "book folder has no
+    /// audio files"** for it (`web/backend/api/audiobooks.py:388-393`). A
+    /// button that always fails is the control
+    /// [[no-misleading-controls]] forbids, so it is absent rather than
+    /// failing on the tap.
+    ///
+    /// ``BookRules/parts(_:)`` is the same predicate ``AudiobooksModel/canPlay(_:)``
+    /// uses for the play control — one reading of "this book names a file",
+    /// so the two controls cannot disagree about the same book.
+    ///
+    /// **Android draws its save ungated** (`BookPage.kt:174-181`): on that
+    /// phone, tapping it on Sabriel starts a download that 404s and reports a
+    /// failure. That divergence is a line in
+    /// `design-notes/ios/ANDROID-DEFECTS-FOUND-BY-IOS.md`, written up in this
+    /// unit's DECISIONS — not a reason to ship the same control here.
+    public var canSave: Bool {
+        guard let book else { return false }
+        return !BookRules.parts(book).isEmpty
+    }
+
     public var chapters: [BookChapter] {
         book.map(BookRules.chapters) ?? []
     }

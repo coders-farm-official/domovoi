@@ -137,11 +137,16 @@ struct PodcastEpisodesSheet: View {
                 set: { if !$0 { podcasts.cancelResume() } }
             ),
             presenting: podcasts.resuming
-        ) { asked in
+            // `{ _ in }`, not `{ asked in … }`: the three buttons act on the
+            // model, which holds the ask itself, so the builder has no use for
+            // the value. It ended in a bare `_ = asked` to silence the unused
+            // binding, which put a non-view statement at the end of a
+            // `ViewBuilder` — legal, and a thing the next reader has to stop
+            // and work out.
+        ) { _ in
             Button(PodcastStrings.resume) { podcasts.resume() }
             Button(PodcastStrings.startOver) { podcasts.startOver() }
             Button(PodcastStrings.cancel, role: .cancel) { podcasts.cancelResume() }
-            _ = asked
         } message: { asked in
             Text(asked.said)
         }

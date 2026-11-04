@@ -379,8 +379,13 @@ struct StationsPhonePlayback: StationsPlayback {
     /// The row is always one the server has stamped: the model POSTs `/play`
     /// first and hands on the row that answered, which is how a directory hit
     /// that was never saved gets an id.
+    /// The return — the room this play here paused — is discarded on
+    /// purpose: ``PlayerModel/say`` is what names it, once the room has
+    /// answered the pause, and it arrives in the shell's toast. A sentence
+    /// composed here would have to claim the pause landed before the room had
+    /// said so, which is the thing `MusicScreen.kt:567-570` is careful about.
     @MainActor
     func play(station: StationsRow) {
-        player?.play([PlayerItem.fromStation(id: Int64(station.id), name: station.name)])
+        _ = player?.play([PlayerItem.fromStation(id: Int64(station.id), name: station.name)])
     }
 }

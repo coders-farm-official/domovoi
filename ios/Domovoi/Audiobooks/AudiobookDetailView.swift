@@ -191,16 +191,20 @@ struct AudiobookDetailView: View {
     /// folder book arrives as the zip the server builds.
     ///
     /// `play` is absent for a book with no playable file and on a phone that
-    /// cannot play audio (``AudiobookDetailModel/canPlay``); the save is not,
-    /// because keeping a file needs no engine. So either control may be the
-    /// only one here, and the row lays itself out around whichever is drawn.
+    /// cannot play audio (``AudiobookDetailModel/canPlay``). The save does not
+    /// need the phone to be able to play — keeping a file needs no engine —
+    /// but it does need the book to **name** one
+    /// (``AudiobookDetailModel/canSave``): the download route answers 404 for
+    /// a folder book whose files name nothing, so a save drawn there would be
+    /// a control that always fails. So either control may be the only one
+    /// here, and the row lays itself out around whichever is drawn.
     ///
     /// **A column at an accessibility size**, as every two-control row in this
     /// app is: `play` and a progress bar side by side at AX5 put the bar at
     /// about forty points wide.
     @ViewBuilder
     private var actions: some View {
-        if detail.canPlay || saves != nil {
+        if detail.canPlay || (saves != nil && detail.canSave) {
             let layout = typeSize.isAccessibilitySize
                 ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
                 : AnyLayout(HStackLayout(alignment: .center, spacing: 12))
@@ -213,7 +217,7 @@ struct AudiobookDetailView: View {
                     .tint(Color.brand)
                     .foregroundStyle(Color.brandFg)
                 }
-                if let saves, let book = detail.book {
+                if let saves, detail.canSave, let book = detail.book {
                     SaveToDeviceButton(
                         state: saves.state,
                         onTap: { save(book, with: saves) },

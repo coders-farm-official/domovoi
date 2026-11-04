@@ -657,10 +657,11 @@ public enum PodcastRules {
     /// and pressed stop. A non-finite or negative position — arithmetic over
     /// an optional from the wire — never prompts.
     ///
-    /// **No caller today**: the resume prompt is drawn only if the player
-    /// engine lands (DECISIONS.md). The rule is here because it is the one
-    /// line of this feature a test can pin without an audio engine, and
-    /// because the views stage must not re-derive `> 5` from memory.
+    /// ``PodcastsModel/play(_:)`` is the caller, since review 1 of the
+    /// 2026-11-03 batch. It had none before that and the model re-derived the
+    /// decision as `> 0`, which is a resume dialog in front of somebody who
+    /// pressed play and pressed stop — exactly what the boundary above is
+    /// written down to prevent. A rule with no caller is not a rule.
     public static func offersResume(positionSec: Double) -> Bool {
         guard positionSec.isFinite else { return false }
         return positionSec > resumeThresholdSec

@@ -722,12 +722,38 @@ extension StubHouseUITests {
             app.buttons[StubAudiobooks.sabrielPart].exists,
             "a chapter row is a button on a book nothing can play"
         )
-        // The save, which answers a different question from the play.
-        XCTAssertTrue(
+        // The save, which answers a different question from the play — and
+        // the answer is the same one here, for a different reason.
+        //
+        // `save to device` needs no audio engine; it does need the book to
+        // **name a file**. Sabriel is a folder book whose `files` name
+        // nothing, so `GET /api/audiobooks/11/download` walks a folder with no
+        // audio in it and answers **404 "book folder has no audio files"**
+        // (`web/backend/api/audiobooks.py:388-393`). A button that always
+        // fails is the control [[no-misleading-controls]] forbids.
+        //
+        // **This case asserted the opposite until review 1 of this batch**, and
+        // the fixture let it: `fixtures/player.py` answered 200 for every book
+        // id, so the case passed over a control that could never work on the
+        // real house. Both are fixed — the fixture 404s for this book now
+        // (`BOOKS_WITH_NO_AUDIO`), and the control is gated on
+        // ``AudiobookDetailModel/canSave``.
+        //
+        // Android draws its save ungated (`BookPage.kt:174-181`) and so starts
+        // a download that fails; that divergence is a line in
+        // `design-notes/ios/ANDROID-DEFECTS-FOUND-BY-IOS.md`.
+        XCTAssertFalse(
             app.buttons[StubAudiobooks.saveControl].exists,
-            "a book with nothing playable offers no `\(StubAudiobooks.saveControl)` "
-                + "either — keeping the file needs no engine, and the absence "
-                + "assertions above would pass over a lost save control"
+            "a book whose files name nothing offers `\(StubAudiobooks.saveControl)`, "
+                + "and the route it would call answers 404 for exactly this book"
+        )
+        // And the discriminating half, so this is not an assertion that the
+        // save control was simply lost: it **is** there on a book that has a
+        // file, which is what `testAudiobooks_NoControlPromisesWhatThisAppCannotDo`
+        // asserts on Dune's page in the same run.
+        XCTAssertTrue(
+            app.staticTexts[StubAudiobooks.sabrielNarrator].exists,
+            "the page itself is gone, so the absences above say nothing"
         )
     }
 
@@ -974,7 +1000,16 @@ extension StubHouseUITests {
         // has never picked a listener shows nothing at all, which is
         // Android's `val id = listenerId ?: return`. A chip reading
         // "listening as nobody" is the thing this asserts against.
-        XCTAssertTrue(StubAudiobooks.houseHasNoListener)
+        //
+        // **The precondition is that no listener is picked on this
+        // install**, which is a phone that has never been to Settings →
+        // Phones & browsers. It was asserted as
+        // `XCTAssertTrue(StubAudiobooks.houseHasNoListener)` over a
+        // `static let … = true`: a tautology that tested nothing and read as
+        // coverage in a case whose job is to prove what is and is not drawn.
+        // Both are gone. What keeps the precondition true is
+        // `testPlayer_ThePersonPickerNamesTheListenerOnPodcasts`, which puts
+        // the install back before it judges anything.
         XCTAssertFalse(
             containing(app, StubAudiobooks.listenerChip).exists,
             "the library drew a listening-as chip with no listener picked"
@@ -1465,6 +1500,12 @@ enum StubAudiobooks {
 
     // The nine seeded books.
     static let dune = "Dune"
+
+    /// Dune's row id (`fixtures/audiobooks.py`), as it appears in a path and
+    /// in the position probe. It is the one book with a **seeded place**
+    /// (`positions`, `(7, None)`), which is why the listener case opens it:
+    /// a book the house knows a place for is a book whose page reads one.
+    static let duneID = "7"
     static let hobbit = "The Hobbit"
     static let piranesi = "Piranesi"
     static let sabriel = "Sabriel"
@@ -1607,11 +1648,6 @@ enum StubAudiobooks {
 
     /// The chip's prefix (`PlayerStrings.listeningAsChip(_:)`).
     static let listenerChip = "listening as"
-
-    /// The stub house has **no listener picked**, which is a phone that has
-    /// never been to Settings → Phones & browsers. The chip is hidden
-    /// entirely in that state, which is Android's own `?: return`.
-    static let houseHasNoListener = true
 
     /// The screen's heading, which is the first thing the list draws and the
     /// mark the Dynamic Type case scrolls back up to before it measures.

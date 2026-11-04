@@ -408,26 +408,6 @@ public enum MusicCastOutcome: Equatable, Sendable {
         queued: Bool
     )
 
-    /// Nothing happened, and this is why.
-    ///
-    /// **Added by the player unit (2026-11-03), and the reason is worth
-    /// keeping.** The cases above are `CastOutcome`'s branch for branch, and
-    /// Android has no refusal case because its `castTo`/`castFrom`
-    /// *throw* — `NothingToCast`, or an `ApiException` — and the cast menu
-    /// catches and shows `CastPlanner.refusal(...)`. ``MusicLocalQueueModel``
-    /// ports that by checking `MusicCastPlanner.refusal` **before**
-    /// it asks the engine, so the "this queue is all podcasts" answer never
-    /// needed a case.
-    ///
-    /// What did need one is the **POST that failed**. The engine behind this
-    /// protocol is ``PlayerModel``, whose own ``PlayerCastOutcome`` has
-    /// `refused(note:)` for exactly that, and mapping it onto `here(left:
-    /// nil, …)` would have reported "on this device" for a cast that did not
-    /// happen — a sentence that is true about the audio and a lie about what
-    /// the person asked for. ``MusicLocalQueueModel`` puts ``note`` straight
-    /// into its toast, so the reason arrives as it does on Android.
-    case refused(note: String)
-
     /// A cast that went to `room` from this phone, nothing left behind and
     /// nothing paused: the ordinary case, and the one the defaults in the
     /// Kotlin stood for.
@@ -461,9 +441,6 @@ public enum MusicCastOutcome: Equatable, Sendable {
             if !queued { return "back on this device · nothing queued · paused \(left)" }
             if !leftWasPlaying { return "back on this device, paused · \(left) wasn't playing" }
             return "back on this device, paused · paused \(left)"
-
-        case .refused(let note):
-            return note
         }
     }
 }

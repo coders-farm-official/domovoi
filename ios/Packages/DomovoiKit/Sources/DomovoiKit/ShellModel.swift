@@ -1090,8 +1090,18 @@ public final class ShellModel {
     /// asking whether it may draw a play control. `AVAudioSession` is touched
     /// only by ``PlayerModel/play(_:startAt:resumeSec:speed:)`` itself, so
     /// merely building one is silent; building it at launch anyway would put
-    /// an `MPRemoteCommandCenter` handler and four `NotificationCenter`
-    /// observers in place for a player nobody asked for.
+    /// four `NotificationCenter` observers and the mic arbiter's hook in place
+    /// for a player nobody asked for. (**Not** an `MPRemoteCommandCenter`
+    /// handler, which an earlier draft of this sentence claimed:
+    /// ``MPNowPlayingPublisher/wireIfNeeded()`` runs from `publish` and
+    /// `setEnabled` only — `PlayerNowPlaying.swift:55`, `:77` — so the lock
+    /// screen is wired by the first *play*, not by the build.)
+    ///
+    /// "First use" is as wide as a screen **asking** whether it may draw a
+    /// play control: `RouteScreen.swift`'s `stations` slot reads this on a
+    /// visit to Stations, before anything is tapped. That is the intent — the
+    /// question "may I draw play?" cannot be answered without the answer — and
+    /// it is still not launch.
     ///
     /// ### Why the storage is `@ObservationIgnored`
     ///
@@ -1116,10 +1126,15 @@ public final class ShellModel {
         heldPlayer = made
         // The scope is settled **before** anything can be queued, so the
         // first item is stamped with the house it came from.
-        let scope = playerScope
-        playerServer = scope
-        made.serverChanged(to: scope)
+        made.serverChanged(to: playerScope)
         made.listenerPersonID = listeners.personID
+        // Where the player's own late sentences go. The two that come back
+        // with nobody holding the question — a room's answer to the pause a
+        // play here sent it, and a fire-and-forget room control that failed —
+        // reach the person through the shell's toast, which is the one surface
+        // that outlives the screen the tap was on. ``PlayerModel/say`` says
+        // which two and why it is not every refusal.
+        made.say = { [weak self] note in self?.showToast(note) }
         return made
     }
 
@@ -1140,7 +1155,6 @@ public final class ShellModel {
     @ObservationIgnored public private(set) var playerBuilds = 0
 
     @ObservationIgnored private var heldPlayer: PlayerModel?
-    @ObservationIgnored private var playerServer: PlayerServerScope?
 
     private let buildPlayer: ShellPlayerBuilder
 
@@ -1169,14 +1183,15 @@ public final class ShellModel {
     ///
     /// Called from ``refresh()``, which is where every address change already
     /// arrives, and a no-op when the house has not moved.
+    /// **The shell keeps no copy of the scope.** It held one until this
+    /// review: a field that merged the old spelling with the new
+    /// (``PlayerServerScope/merge(_:)``), was stored, and was then read by
+    /// nothing — the *unmerged* scope went to the player, which merges against
+    /// its own held one anyway (`PlayerModel.serverChanged`). Dead state that
+    /// reads as if the shell were tracking something is worse than no state:
+    /// the next reader believes it.
     private func playerServerChanged() {
-        guard let heldPlayer else { return }
-        let now = playerScope
-        // The same house at a new address, or an identity pinned since: the
-        // scope is merged so the two spellings stay one house
-        // (``PlayerServerScope/merge(_:)``) and the queue is kept.
-        playerServer = playerServer.map { $0.isSameServer(as: now) ? $0.merge(now) : now } ?? now
-        heldPlayer.serverChanged(to: now)
+        heldPlayer?.serverChanged(to: playerScope)
     }
 
     /// Who the house's resume positions are saved under, on this phone.

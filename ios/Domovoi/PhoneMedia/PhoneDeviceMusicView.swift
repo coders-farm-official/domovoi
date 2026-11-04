@@ -125,12 +125,24 @@ struct PhoneDeviceMusicView: View {
     /// The queue is built **in the closure**, when the tap happens, not when
     /// the row is drawn: a lazy list would otherwise map every visible row's
     /// whole folder into `PlayerItem`s on every scroll.
+    ///
+    /// Which is also why the row can be **gone** by the time the closure runs:
+    /// the folder is re-read while the list is on screen. ``PhoneMediaListModel/playQueue(around:)``
+    /// answers nil for that, and this says so rather than starting whatever is
+    /// now at the top of the folder — a different song from the one under the
+    /// thumb.
     private func tap(_ item: PhoneMediaItem, _ device: PhoneDevicePage) -> (() -> Void)? {
         if item.isDir { return { device.list.enter(item) } }
         guard let player, device.list.canPlay(item) else { return nil }
         return {
-            let queue = device.list.playQueue(around: item)
-            player.play(queue.items, startAt: queue.index)
+            guard let queue = device.list.playQueue(around: item) else {
+                model.showToast(PhoneMediaStrings.thatTrackIsGone)
+                return
+            }
+            // The paused room, if this phone was casting, is named by
+            // ``PlayerModel/say`` in the shell's toast once the room has
+            // answered the pause — not here, where the answer has not arrived.
+            _ = player.play(queue.items, startAt: queue.index)
         }
     }
 }

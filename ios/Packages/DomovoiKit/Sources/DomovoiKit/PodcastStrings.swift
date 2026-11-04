@@ -254,20 +254,23 @@ public enum PodcastStrings {
     /// The play button's VoiceOver label (`PodcastsEpisodes.kt:229`).
     public static let play = "play"
 
-    /// The resume dialog's title, which names what is being resumed.
-    ///
-    /// Android's dialog has no title and relies on the sentence under it
-    /// (`PodcastsScreen.kt:316`). **iOS-only**: an `alert` without a title
-    /// draws its message as the title in a smaller face, and a person
-    /// returning to a back catalogue needs to know *which* episode is being
-    /// offered. IOS-ONLY-STRINGS.md.
-    public static func resumeTitle(_ episode: String) -> String { episode }
+    // `resumeTitle(_:)` was here: an identity function over the episode's
+    // title, for the resume alert's own title. It had no caller — the alert
+    // passes `podcasts.resuming?.title` straight in
+    // (`PodcastEpisodesSheet.swift`) — and a function that returns its
+    // argument is not a string table entry, it is a comment. The reason it
+    // existed is worth keeping, so here it is: Android's dialog has **no**
+    // title (`PodcastsScreen.kt:316`), and an iOS `alert` without one draws
+    // its message as the title in a smaller face, so the episode's name is
+    // the title here. That is in IOS-ONLY-STRINGS.md.
 
     /// The resume prompt's words (`PodcastsScreen.kt:316-343`).
     ///
-    /// Drawn by ``PodcastResumeDialog`` since the 2026-11-03 batch: the owner
-    /// of the player is ``ShellModel/player`` (D49), so an episode plays here
-    /// and a saved place is something to be asked about.
+    /// Drawn by the `.alert` in `PodcastEpisodesSheet` since the 2026-11-03
+    /// batch — **not** by a `PodcastResumeDialog`, which this comment named
+    /// and which does not exist. The owner of the player is
+    /// ``ShellModel/player`` (D49), so an episode plays here and a saved place
+    /// is something to be asked about.
     public static func youWereAt(_ position: String) -> String {
         "You were at \(position)."
     }

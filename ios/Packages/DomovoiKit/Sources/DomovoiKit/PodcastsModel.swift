@@ -206,8 +206,16 @@ public final class PodcastsModel {
         Task { @MainActor [weak self] in
             let place = await player.fetchPosition(item)
             guard let self, self.stillHome(epoch) else { return }
-            guard place.positionSec > 0 else {
-                player.play([item], speed: place.speed)
+            // `if (pos > 5)` (`PodcastsScreen.kt:226`), through the rule that
+            // was written for it. It was `> 0` here until review 1 of this
+            // batch, which is the dialog in front of somebody who pressed play
+            // and pressed stop — and it left ``PodcastRules/offersResume(positionSec:)``
+            // with no caller while its own comment said the two agreed.
+            guard PodcastRules.offersResume(positionSec: place.positionSec) else {
+                // The room this paused, if any, is named by
+                // ``PlayerModel/say`` once the room has answered — in the
+                // shell's toast, which outlives this sheet. Hence the discard.
+                _ = player.play([item], speed: place.speed)
                 return
             }
             self.resuming = PodcastResume(
@@ -220,10 +228,12 @@ public final class PodcastsModel {
     }
 
     /// Carry on from the saved place (`PodcastsScreen.kt:331`).
+    ///
+    /// The paused room is ``PlayerModel/say``'s to name, as in ``play(_:)``.
     public func resume() {
         guard let asked = resuming, let player else { return }
         resuming = nil
-        player.play([asked.item], resumeSec: asked.positionSec, speed: asked.speed)
+        _ = player.play([asked.item], resumeSec: asked.positionSec, speed: asked.speed)
     }
 
     /// From the top (`PodcastsScreen.kt:337`).
@@ -232,7 +242,7 @@ public final class PodcastsModel {
     public func startOver() {
         guard let asked = resuming, let player else { return }
         resuming = nil
-        player.play([asked.item], resumeSec: 0, speed: asked.speed)
+        _ = player.play([asked.item], resumeSec: 0, speed: asked.speed)
     }
 
     /// The dialog went away without a choice (`BookUi.kt:167`'s

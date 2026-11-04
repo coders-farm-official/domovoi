@@ -391,4 +391,117 @@ final class PlayerOwnerTests: XCTestCase {
         XCTAssertEqual("listening as Kamron", PlayerStrings.listeningAsChip("Kamron"))
         XCTAssertEqual("listening as …", PlayerStrings.listeningAsChip(nil))
     }
+
+    // MARK: - 4. the player's late sentences reach a person (review 1)
+
+    /// The shell gives the player somewhere to speak, and that somewhere is
+    /// the shell's own toast.
+    ///
+    /// Review 1's S2. ``PlayerModel/play(_:startAt:resumeSec:speed:)`` returns
+    /// the room it paused "so a consumer can say 'paused office'", and every
+    /// one of the five new callers discarded it; the room's answer to the pause
+    /// landed in ``PlayerModel/trouble``, whose own doc says it is "taken by
+    /// the screen", and **no screen took it**. So a person casting to the
+    /// kitchen tapped play on an episode, the kitchen went silent, and nothing
+    /// said why — where Android's `playHereAndSay` says it
+    /// (`MusicScreen.kt:575-588`).
+    ///
+    /// The fix is one wire rather than five call sites, because the sentence
+    /// arrives **after** the tap: the shell's toast is the one surface that
+    /// outlives the screen the tap was on.
+    func testThePlayerIsGivenTheShellsToastToSpeakThrough() {
+        let rig = Rig(serverURL: houseA)
+        guard let player = rig.model.player else { return XCTFail("no player was built") }
+
+        XCTAssertNotNil(
+            player.say,
+            "the player has nowhere to say what the room answered, so a room "
+                + "paused by a play here goes quiet with nothing said"
+        )
+        player.say?("playing \"Decades\" on this device · paused kitchen")
+        XCTAssertEqual(
+            "playing \"Decades\" on this device · paused kitchen",
+            rig.model.toast?.text
+        )
+    }
+
+    /// End to end: a play here **while casting** names the room it paused, and
+    /// names what started.
+    ///
+    /// The sentence is `CastPlan.kt:169`'s, composed in
+    /// ``PlayerStrings/playHereNote(playing:room:paused:)`` — and the
+    /// `playing` half is the title of the thing that started, which is what
+    /// Android passes (`MusicScreen.kt:576`). It said a bare "playing on this
+    /// device" until this review, a sentence a person cannot place.
+    ///
+    /// It arrives only once the room has answered the pause, which is the
+    /// whole reason it is a toast and not a return value: *"so it never says
+    /// 'paused office' over a pause the core says didn't happen"*
+    /// (`MusicScreen.kt:567-570`).
+    func testAPlayHereWhileCastingNamesTheRoomAndTheTrack() async {
+        let house = PlayerHouse()
+        house.install()
+        let rig = Rig(serverURL: houseA)
+        guard let player = rig.model.player else { return XCTFail("no player was built") }
+
+        player.play([PlayerSeed.transmission])
+        let went = await player.cast(to: "kitchen")
+        guard case .toRoom = went else {
+            return XCTFail("the cast did not go to the room: \(went)")
+        }
+
+        // The play here. `Decades` is a different song from the one the room
+        // has, so the sentence cannot read right by naming the wrong item.
+        let left = player.play([PlayerSeed.decades])
+        XCTAssertEqual("kitchen", left, "the play here did not report the room it left")
+
+        await settle(
+            until: { rig.model.toast?.text.contains("paused kitchen") == true },
+            "the room's answer to the pause"
+        )
+        let said = rig.model.toast?.text ?? ""
+        XCTAssertTrue(
+            said.contains("Decades"),
+            "the sentence does not name what started: \(said)"
+        )
+        XCTAssertTrue(
+            said.hasPrefix("playing \"Decades\" on this device"),
+            "the sentence is not `MusicScreen.kt:576`'s: \(said)"
+        )
+    }
+
+    /// A play here that left **no** room says nothing.
+    ///
+    /// The other half of the same rule, and the one that keeps a tap to one
+    /// sentence: the screen's own "playing X on this device" is what a person
+    /// reads when nothing was paused, and a second toast from the player would
+    /// be the app saying the same thing twice.
+    func testAPlayHereThatLeftNoRoomSaysNothing() async {
+        let house = PlayerHouse()
+        house.install()
+        let rig = Rig(serverURL: houseA)
+        guard let player = rig.model.player else { return XCTFail("no player was built") }
+
+        XCTAssertNil(player.play([PlayerSeed.decades]), "a room was reported where there was none")
+        for _ in 0..<settleYieldLimit { await Task.yield() }
+        XCTAssertNil(
+            rig.model.toast,
+            "the player spoke over a play here that paused nothing: "
+                + (rig.model.toast?.text ?? "")
+        )
+    }
+
+    /// Yield until `done`, rather than sleeping.
+    private func settle(
+        until done: @MainActor () -> Bool,
+        _ what: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async {
+        for _ in 0..<settleYieldLimit {
+            if done() { return }
+            await Task.yield()
+        }
+        XCTFail("\(what) never settled in \(settleYieldLimit) yields", file: file, line: line)
+    }
 }

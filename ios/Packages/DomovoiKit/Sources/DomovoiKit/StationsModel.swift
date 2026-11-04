@@ -244,12 +244,12 @@ public final class StationsModel {
 
     /// Why no row plays, or nil when they do.
     ///
-    /// Said once, on the page, where the play controls would be. A build with
-    /// no engine draws no play affordance anywhere
+    /// Said once, on the page, where the play controls would be. A phone
+    /// with no player draws no play affordance anywhere
     /// (``StationsPlayback/canPlay``), and an omission with nothing said
     /// about it reads as a screen that failed to draw.
     public var playbackNote: String? {
-        playback.canPlay ? nil : StationsStrings.playingIsNotBuiltYet
+        playback.canPlay ? nil : StationsStrings.playingNeedsAHouse
     }
 
     /// The submit button's word (`StationSearch.kt:222`).

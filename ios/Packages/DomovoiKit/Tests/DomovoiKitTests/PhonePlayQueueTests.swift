@@ -163,18 +163,25 @@ final class PhonePlayQueueTests: XCTestCase {
         XCTAssertEqual(list.rows.state.items.count, 4, "the page itself keeps all four rows")
 
         let queue = list.playQueue(around: onDisk("02 atmosphere.mp3"))
-        XCTAssertEqual(queue.items.map(\.title), ["01 transmission.mp3", "02 atmosphere.mp3"])
+        XCTAssertEqual(queue?.items.map(\.title), ["01 transmission.mp3", "02 atmosphere.mp3"])
         XCTAssertEqual(
-            queue.index, 1,
+            queue?.index, 1,
             "the tapped track is the second PLAYABLE row, not the fourth row of the page"
         )
     }
 
-    /// A tap on a row this folder no longer holds — a page that was re-read
-    /// under the person's thumb — starts at the top rather than off the end.
-    /// `firstIndex` returning nil is the case `coerceAtLeast(0)` covers on
-    /// Android.
-    func testATrackThatIsNoLongerInTheFolderStartsAtTheTop() async {
+    /// A tap on a row this folder no longer holds — a page re-read under the
+    /// person's thumb — starts **nothing**.
+    ///
+    /// **This case pinned the opposite until review 1 of this batch.** It
+    /// asserted `index == 0` over two rows, which is Android's
+    /// `coerceAtLeast(0)` faithfully ported: a tap on a track that is gone
+    /// plays *track one* instead. That is a different song from the one under
+    /// the thumb, with nothing said about it, and the three honest answers are
+    /// to play what was asked for, to play nothing, or to say something —
+    /// never to play something else. The screen says
+    /// ``PhoneMediaStrings/thatTrackIsGone``.
+    func testATrackThatIsNoLongerInTheFolderStartsNothing() async {
         let source = QueueSource(
             [onDisk("01 transmission.mp3"), onDisk("02 atmosphere.mp3")],
             libs: [library("phone:folder:/a", "Recordings")]
@@ -183,9 +190,17 @@ final class PhonePlayQueueTests: XCTestCase {
         list.start()
         await settle()
 
-        let queue = list.playQueue(around: onDisk("99 gone.mp3"))
-        XCTAssertEqual(queue.index, 0)
-        XCTAssertEqual(queue.items.count, 2)
+        XCTAssertNil(
+            list.playQueue(around: onDisk("99 gone.mp3")),
+            "a tap on a track the folder no longer holds built a queue, which "
+                + "means it started a song nobody asked for"
+        )
+        // The discriminating half: the folder itself is fine, and a row that
+        // IS there still plays. Without this the assertion above would pass on
+        // a model that had stopped playing anything at all.
+        let queue = list.playQueue(around: onDisk("02 atmosphere.mp3"))
+        XCTAssertEqual(queue?.index, 1, "the row that is there no longer plays either")
+        XCTAssertEqual(queue?.items.count, 2)
     }
 
     /// Two folders can hold a file with the same name, and a phone row's id is
@@ -214,10 +229,11 @@ final class PhonePlayQueueTests: XCTestCase {
         list.start()
         await settle()
 
-        XCTAssertEqual(list.playQueue(around: mine).index, 1)
-        XCTAssertEqual(
-            list.playQueue(around: theirs).index, 0,
-            "the same path in a DIFFERENT library is not this row"
+        XCTAssertEqual(list.playQueue(around: mine)?.index, 1)
+        XCTAssertNil(
+            list.playQueue(around: theirs),
+            "the same path in a DIFFERENT library is not this row, so nothing "
+                + "plays — it used to start this folder's first track instead"
         )
     }
 
@@ -235,7 +251,7 @@ final class PhonePlayQueueTests: XCTestCase {
         list.start()
         await settle()
 
-        let entry = try? XCTUnwrap(list.playQueue(around: onDisk("quenlo lullaby.mp3")).items.first)
+        let entry = list.playQueue(around: onDisk("quenlo lullaby.mp3"))?.items.first
         XCTAssertEqual(entry?.kind, .device)
         XCTAssertEqual(entry?.title, "quenlo lullaby.mp3")
         XCTAssertEqual(entry?.durationSec, 212)
@@ -259,16 +275,24 @@ final class PhonePlayQueueTests: XCTestCase {
         list.start()
         await settle()
 
-        let items = list.playQueue(around: onDisk("01 transmission.mp3")).items
+        let items = list.playQueue(around: onDisk("01 transmission.mp3"))?.items ?? []
         XCTAssertEqual(items.count, 2)
-        XCTAssertNotEqual(items[0].uid, items[1].uid)
+        XCTAssertNotEqual(items.first?.uid, items.dropFirst().first?.uid)
     }
 
-    /// Nothing playable in the folder is an empty queue, not a queue of one
-    /// unopenable entry — and ``PlayerModel/play(_:startAt:resumeSec:speed:)``
-    /// returns early on an empty list, so the tap does nothing rather than
-    /// starting silence.
-    func testAFolderWithNoAudioGivesAnEmptyQueue() async {
+    /// Nothing playable in the folder is **no queue at all**, not a queue of
+    /// one unopenable entry.
+    ///
+    /// It was an empty queue until review 1 of this batch, which
+    /// ``PlayerModel/play(_:startAt:resumeSec:speed:)`` returns early on — so
+    /// the tap did nothing either way. Nil says the same thing one step
+    /// earlier and in one place: there is no row here to start.
+    ///
+    /// No row in this folder is tappable anyway
+    /// (``PhoneMediaListModel/canPlay(_:)`` is false for a document and for a
+    /// folder, and ``PhoneDeviceMusicView`` draws such a row with no tap at
+    /// all), so this is the belt to that braces.
+    func testAFolderWithNoAudioGivesNoQueue() async {
         let source = QueueSource(
             [onDisk("sleeve notes.txt", kind: .docText), onDisk("artwork", isDir: true)],
             libs: [library("phone:folder:/a", "Recordings")]
@@ -277,6 +301,6 @@ final class PhonePlayQueueTests: XCTestCase {
         list.start()
         await settle()
 
-        XCTAssertTrue(list.playQueue(around: onDisk("sleeve notes.txt", kind: .docText)).items.isEmpty)
+        XCTAssertNil(list.playQueue(around: onDisk("sleeve notes.txt", kind: .docText)))
     }
 }

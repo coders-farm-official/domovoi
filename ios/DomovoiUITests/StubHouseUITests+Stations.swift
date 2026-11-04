@@ -115,8 +115,13 @@ extension StubHouseUITests {
         static let subtitleAfterTwoStars = "25 favorited · 3 recent · tap a station to play it"
         static let subtitleAfterAForget = "22 favorited · 3 recent"
         static let playingTail = "tap a station to play it"
+        /// What the page says where the play controls would be, on a phone
+        /// with **no device id** — the only state that reaches it since D46.
+        /// Unreachable in the stub house, which claims a device id as part of
+        /// pairing, so every case here asserts it is **absent**; it is spelt
+        /// out so that a build which drew it over rows that play fails.
         static let noPlayback =
-            "playing on this phone isn't built yet — favoriting, sampling and detections all work"
+            "a station plays here once this phone has joined a domovoi — favoriting, sampling and detections all work"
         static let importIsAnAdminJob =
             "importing the FCC FM list is an admin job — do it on the dashboard"
         static let recent = "Recent"

@@ -124,6 +124,18 @@ public enum PlayerStrings {
     public static let playingOnThisDevice = "playing on this device"
     public static let onThisDevice = "on this device"
 
+    /// The same, naming what started: `playing "Decades" on this device`.
+    ///
+    /// `MusicScreen.kt:576` — Android's `playHereAndSay` builds exactly this
+    /// and hands it to `CastPlanner.playHereNote` as the `playing` half, so
+    /// the one toast a tap produces reads
+    /// `playing "Decades" on this device · paused kitchen`.
+    /// ``MusicMoreStrings/playingHere(_:)`` is the player tab's own name for
+    /// it and calls through to here, so there is one spelling of it.
+    public static func playingNamedOnThisDevice(_ title: String) -> String {
+        "playing \"\(title)\" on this device"
+    }
+
     public static func didNotCast(room: String) -> String {
         "didn't cast to \(room) · playing on this device instead"
     }
@@ -208,11 +220,14 @@ public enum PlayerStrings {
     /// has to be in it. IOS-ONLY-STRINGS.md.
     public static func playNamed(_ what: String) -> String { "play \(what)" }
 
-    /// A row whose file the house has not got. The control is **absent**, not
-    /// greyed: Android disables it (`PodcastsEpisodes.kt:223`), and this
-    /// project's rule is that a control which cannot do what it says is not
-    /// drawn at all.
-    public static let noFileYet = "the house has not got this one yet"
+    // `noFileYet` was here — "the house has not got this one yet", written
+    // for a row whose audio the house has not downloaded. It had no caller and
+    // is gone: the control for such a row is **absent**, not greyed (Android
+    // disables it, `PodcastsEpisodes.kt:223`), and what the row says instead
+    // is its own meta line: `PodcastEpisode.metaLine` appends the server's own
+    // `download_status` for a row with no file (`· queued`, `· failed`), which
+    // says *why* rather than restating it. A string with no caller reads as a
+    // sentence somebody sees.
 
     // MARK: - §6.5 "Listening as" (`ConnectionPanel.kt:350-378`)
 

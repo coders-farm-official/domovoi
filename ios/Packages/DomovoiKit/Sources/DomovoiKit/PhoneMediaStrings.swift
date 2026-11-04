@@ -94,6 +94,16 @@ public enum PhoneMediaStrings {
     /// since the 2026-11-03 batch (D46), and this line is not drawn there.
     public static let noPhonePlayerYet = "a phone track plays here once this phone has joined a domovoi — until then this side browses"
 
+    /// A tap on a phone track the folder no longer holds.
+    ///
+    /// **iOS-only.** Android has no sentence for it because it has no case for
+    /// it: `LocalMediaScreens.kt:158-166` clamps a missing index to zero and
+    /// plays track one instead, which is a different song with nothing said.
+    /// Nothing is started here, and this is said — the project's rule is that
+    /// a control does what it says or is not there, and "plays something else"
+    /// is neither. IOS-ONLY-STRINGS.md.
+    public static let thatTrackIsGone = "that track is not in this folder any more"
+
     // MARK: - the upload button and its card
 
     /// `DeviceUpload.kt:344`.

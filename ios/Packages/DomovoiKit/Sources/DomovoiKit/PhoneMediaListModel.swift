@@ -297,11 +297,23 @@ public final class PhoneMediaListModel {
     /// **Only rows that can play are in it.** A folder or a document between
     /// two tracks would be an entry the engine could not open, and `next`
     /// would stop on it.
-    public func playQueue(around item: PhoneMediaItem) -> (items: [PlayerItem], index: Int) {
+    ///
+    /// **Nil when the tapped row is no longer in the folder** — a page re-read
+    /// under the person's thumb between the draw and the tap. Android clamps
+    /// (`firstIndex` nil, then `coerceAtLeast(0)`) and so starts **track one**:
+    /// a different song from the one that was tapped, with no word about it.
+    /// That was ported here and review 1 of this batch called it, rightly: of
+    /// the three honest answers — play what was asked for, play nothing, say
+    /// something — clamping is the one that is none of them, and it is the
+    /// behaviour [[no-misleading-controls]] is about. The caller says
+    /// ``PhoneMediaStrings/thatTrackIsGone`` instead. The divergence is a line
+    /// in `design-notes/ios/ANDROID-DEFECTS-FOUND-BY-IOS.md`.
+    public func playQueue(around item: PhoneMediaItem) -> (items: [PlayerItem], index: Int)? {
         let playable = rows.state.items.filter(canPlay)
-        let items = playable.map(Self.queueEntry)
-        let at = playable.firstIndex { $0.id == item.id && $0.libraryID == item.libraryID } ?? 0
-        return (items, max(0, at))
+        guard let at = playable.firstIndex(where: {
+            $0.id == item.id && $0.libraryID == item.libraryID
+        }) else { return nil }
+        return (playable.map(Self.queueEntry), at)
     }
 
     /// One phone track as a queue entry.
@@ -319,11 +331,16 @@ public final class PhoneMediaListModel {
     /// The id is a hash of the row's own id, because `fromDeviceAudio` takes
     /// an `Int64` and a phone row's id is a relative path. It has only to be
     /// stable within one queue (``PlayerItem/uid``); the `src` is what plays.
+    ///
+    /// `magnitude` and not `abs`: `abs(Int.min)` **traps**, and seeded hashing
+    /// makes that a one-in-2⁶⁴ crash on a tap rather than one that never
+    /// happens. `magnitude` is the same number everywhere else and costs
+    /// nothing.
     private static func queueEntry(_ item: PhoneMediaItem) -> PlayerItem {
         var url = ""
         if case .file(let at) = item.origin { url = at.absoluteString }
         return PlayerItem.fromDeviceAudio(
-            id: Int64(bitPattern: UInt64(abs(item.id.hashValue))),
+            id: Int64(bitPattern: UInt64(item.id.hashValue.magnitude)),
             title: item.name,
             durationSec: item.durationSec,
             uri: url

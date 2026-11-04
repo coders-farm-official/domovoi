@@ -111,7 +111,14 @@ struct PhonesAndBrowsersPanel: View {
         return Menu {
             ForEach(listeners.options) { option in
                 Button {
+                    // The store and the player first, then this card's own
+                    // observed mirror of it: ``PlayerListenerStore`` is a
+                    // `Mutex` and not `@Observable`, so without `adopt()` the
+                    // tick below would follow the pick only because the toast
+                    // on the next line re-renders the whole shell — which is
+                    // not something this card may depend on.
                     model.listenerChanged(to: option.personID)
+                    listeners.adopt()
                     model.showToast(listeners.toast(for: option))
                 } label: {
                     // A tick rather than a highlight: a menu row's selected

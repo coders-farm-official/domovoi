@@ -295,7 +295,9 @@ extension StubHouseUITests {
     /// ``PlayerListenerModel`` directly and `PlayerServerPositionsTests` hold
     /// the `person_id` on the query and the body; what none of them can say
     /// is that the picker in Settings and the chip on a *different screen*
-    /// are reading the same record. They are two views over one install-wide
+    /// are reading the same record, and that the person picked reaches the
+    /// **bytes the phone sends** — which the stub house records and this case
+    /// reads back (step 2b). They are two views over one install-wide
     /// store (`prefs.listenerPersonId`, `Prefs.kt:115`), and a second store
     /// built somewhere by accident would leave every package test passing
     /// while the chip stayed silent.
@@ -313,6 +315,27 @@ extension StubHouseUITests {
     /// picked anybody. Leaving Chevy picked would redden Podcasts and
     /// Audiobooks from here to the end of the run, so this case puts the
     /// install back and **asserts that it did**.
+    ///
+    /// ### Nothing between the pick and the restore asserts
+    ///
+    /// `setUp` sets `continueAfterFailure = false`
+    /// (`StubHouseUITests.swift:153`), so **one failed assertion ends the
+    /// method where it stands**. Until review 1 of this batch the chip and
+    /// the probe were asserted between the pick and the restore, so a failure
+    /// in either left Chevy picked on the install — and XCTest runs selectors
+    /// alphabetically, so every `testPodcasts_*` and `testAudiobooks_*` case
+    /// that asserts the chip is **absent** runs after this one and would have
+    /// failed for this one's reason: one failure becoming a page of them,
+    /// pointing at the wrong unit.
+    ///
+    /// So the two findings are **gathered** into `chipDrew` and `asks`, the
+    /// install is put back, and only then are they judged. Every helper used
+    /// in between is assertion-free by construction — `openPodcasts`,
+    /// `openAudiobooks(reset: false)`, `openBook` and `evidence` all return or
+    /// attach rather than assert, and ``positionAsks()`` answers an empty list
+    /// rather than failing. A teardown block would be the other way to do it;
+    /// it is not used here because its closure is `@Sendable` and
+    /// `XCTestCase` is not `Sendable`, so `self` could not be captured.
     ///
     /// ### Why Chevy
     ///
@@ -368,22 +391,79 @@ extension StubHouseUITests {
         evidence(settings, "player-30-listening-as-chevy")
         settings.terminate()
 
+        // The install now holds a listener, and keeps holding one across
+        // `-domovoi-server`. From here to `putTheListenerBack()` **nothing
+        // asserts**: see "Nothing between the pick and the restore asserts".
+
         // 2. Podcasts, on a **fresh launch**: the chip names them.
         let (podcasts, landed) = openPodcasts()
-        XCTAssertTrue(landed, "Podcasts never drew, so the chip cannot be read")
-        XCTAssertTrue(
-            containing(podcasts, PlayerListenerUnderTest.chipChevy)
-                .waitForExistence(timeout: 25),
-            "Podcasts draws no `\(PlayerListenerUnderTest.chipChevy)` chip after a "
-                + "listener was picked in Settings — the two surfaces are not "
-                + "reading one store — tree follows\n" + podcasts.debugDescription
-        )
+        let chipDrew = landed
+            && containing(podcasts, PlayerListenerUnderTest.chipChevy)
+                .waitForExistence(timeout: 25)
+        let podcastsTree = podcasts.debugDescription
         evidence(podcasts, "player-31-chip-names-chevy")
         podcasts.terminate()
 
-        // 3. Put the install back, and say so if it did not go back: every
-        //    other case in this suite is written against a phone with no
-        //    listener picked.
+        // 2b. The bytes. A chip is a label; this is the thing the feature is
+        //     for — `person_id` on the request the phone actually sends.
+        //     `AudiobookListenerTests` holds the query's shape and the
+        //     remote's per-request read, but only the real app against the
+        //     real route can say that the id the picker wrote is the id that
+        //     leaves the phone. The stub house records every ask in order
+        //     (`fixtures/audiobooks.py`, `position_asks`), and that probe had
+        //     no reader at all until this review.
+        //
+        //     `reset: false` on purpose: a reset would empty the very list
+        //     this step reads, and the seed is already in place from step 1's
+        //     launches.
+        let (books, booksLanded) = openAudiobooks(reset: false)
+        let bookDrew = booksLanded && openBook(books, StubAudiobooks.dune)
+        let reads = positionAsks()
+            .filter { $0["method"] == "GET" && $0["book"] == StubAudiobooks.duneID }
+        evidence(books, "player-32-person-id-on-the-wire")
+        books.terminate()
+
+        // 3. Put the install back **before judging anything**: every other
+        //    case in this suite is written against a phone with no listener
+        //    picked, and an assertion above this line would end the method
+        //    with Chevy still on the install.
+        putTheListenerBack()
+
+        // 4. Now the verdicts.
+        XCTAssertTrue(
+            chipDrew,
+            "Podcasts draws no `\(PlayerListenerUnderTest.chipChevy)` chip after a "
+                + "listener was picked in Settings — the two surfaces are not "
+                + "reading one store — tree follows\n" + podcastsTree
+        )
+        XCTAssertTrue(bookDrew, "Dune's page never drew, so no position was read")
+        XCTAssertFalse(
+            reads.isEmpty,
+            "the book's page read no position at all, so this case says nothing "
+                + "about the listener on the wire"
+        )
+        XCTAssertEqual(
+            PlayerListenerUnderTest.chevyID, reads.last?["person_id"],
+            "the position read went up under "
+                + (reads.last?["person_id"] ?? "no person")
+                + " with \(PlayerListenerUnderTest.chevy) picked — a place saved "
+                + "under the unidentified listener is a different row from "
+                + "theirs (`spoken_audio.py:145-147`), which is the whole of D11"
+        )
+    }
+
+    /// Put the install's listener back to "me (this device)".
+    ///
+    /// Step 3 of the picker case, lifted out and called **before** any of
+    /// that case's verdicts, so a failing verdict cannot end the method with
+    /// a person still picked on the install.
+    ///
+    /// It asserts nothing about having *found* a listener — only that it
+    /// **leaves** the install on the nil row, which is the state every other
+    /// case in the suite is written against. That the choice survived a
+    /// relaunch is step 2's claim, made by the chip, and is not re-made here.
+    @MainActor
+    func putTheListenerBack() {
         let back = launch(push: "Settings")
         XCTAssertTrue(
             reachPhonesAndBrowsersFromSettings(back),
@@ -393,12 +473,14 @@ extension StubHouseUITests {
         )
         let again = back.buttons[PlayerListenerUnderTest.card]
         XCTAssertTrue(again.waitForExistence(timeout: 20), "the picker is gone")
-        XCTAssertEqual(
-            PlayerListenerUnderTest.chevy, again.value as? String,
-            "the picker does not read `\(PlayerListenerUnderTest.chevy)` on a new "
-                + "launch — the choice did not survive, which is the thing the "
-                + "chip above was supposed to prove"
-        )
+        // Already back: the inline step 3 ran and this is its teardown. That
+        // the choice survives a relaunch is asserted by the chip in step 2,
+        // so nothing is lost by returning here — and insisting on finding
+        // Chevy would make a passing case fail in its own teardown.
+        guard again.value as? String != PlayerListenerUnderTest.thisDevice else {
+            back.terminate()
+            return
+        }
         again.tap()
         let me = back.buttons[PlayerListenerUnderTest.thisDevice]
         XCTAssertTrue(
@@ -412,6 +494,38 @@ extension StubHouseUITests {
             "the listener was left on a person, and every chip-absent case after "
                 + "this one will fail for that reason and not their own"
         )
+        back.terminate()
+    }
+
+    /// Every position ask the stub house has been sent this run, in order.
+    ///
+    /// `GET /api/_test/audiobooks-position-asks` — the probe
+    /// `fixtures/audiobooks.py` serves, which had no reader at all until
+    /// review 1 of this batch. Each row is flattened to strings rather than
+    /// decoded, so that a `person_id` the app sent as a **number** and one it
+    /// sent as a **string** read differently here: `"2"` against `2` is
+    /// exactly the confusion the route's `Optional[int]` turns into a 422,
+    /// and a probe that normalised them would hide it.
+    ///
+    /// **It asserts nothing and throws nothing**: its one caller runs it
+    /// before putting the install's listener back, where a failure would end
+    /// the method with a person still picked. A house that did not answer
+    /// gives an empty list, and the caller's own `XCTAssertFalse(reads
+    /// .isEmpty)` — after the restore — is what reports it.
+    @MainActor
+    func positionAsks() -> [[String: String]] {
+        guard let answer = try? fetchOpen(
+            "/api/_test/audiobooks-position-asks", range: nil
+        ), answer.code == 200 else { return [] }
+        let object = try? JSONSerialization.jsonObject(with: answer.body)
+        let rows = ((object as? [String: Any])?["asks"] as? [[String: Any]]) ?? []
+        return rows.map { row in
+            var flat: [String: String] = [:]
+            for (key, value) in row where !(value is NSNull) {
+                flat[key] = String(describing: value)
+            }
+            return flat
+        }
     }
 
     /// Get to **Settings → Phones & browsers** on a **paired** phone.
@@ -515,6 +629,12 @@ enum PlayerListenerUnderTest {
     /// `fixtures/people.py`'s second person, chosen because the name appears
     /// nowhere else in the app's chrome.
     static let chevy = "Chevy"
+
+    /// Their row id (`fixtures/people.py:104`), as the stub house records it
+    /// off the query: a **string of the number**, because that is what
+    /// `person_id=2` on a URL is. `"Chevy"` arriving here instead would be
+    /// the app sending a name where the route types an int.
+    static let chevyID = "2"
 
     /// ``ShellStrings/listeningAs(_:)`` for them.
     static let pickedChevy = "listening as Chevy"

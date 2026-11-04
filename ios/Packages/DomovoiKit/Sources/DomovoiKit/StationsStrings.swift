@@ -32,7 +32,7 @@ public enum StationsStrings {
     /// **iOS-only.** Android's sentence ends `· tap a station to play it`,
     /// and a screen whose rows do not play must not say that: it is the one
     /// instruction on the page, and following it would do nothing. The two
-    /// counts are unchanged, and ``playingIsNotBuiltYet`` says what is
+    /// counts are unchanged, and ``playingNeedsAHouse`` says what is
     /// missing rather than leaving the omission to be guessed at
     /// ([[no-misleading-controls]]).
     public static func subtitleWithoutPlaying(favorites: Int, recent: Int) -> String {
@@ -47,15 +47,18 @@ public enum StationsStrings {
     /// one would read as a screen that had failed rather than one that is
     /// honest about what it does. Everything else on it works.
     ///
-    /// **"isn't built yet" is the wrong half of this sentence now** and is
-    /// kept on purpose: D46 built it, and what a person on this screen needs
-    /// to know is that it will not play *here*, not why. Rewording it is a
-    /// change to a line a Simulator case matches on exactly, and the case for
-    /// the state it describes (a phone with no device id) is not one the
-    /// stub house can reach yet — the stub house claims a device id as part
-    /// of pairing. Written down in the player unit's DECISIONS.
-    public static let playingIsNotBuiltYet =
-        "playing on this phone isn't built yet — favoriting, sampling and detections all work"
+    /// **It said `playing on this phone isn't built yet` until review 1 of the
+    /// 2026-11-03 batch, and by then that was false.** D46 built it; what
+    /// makes ``StationsPlayback/canPlay`` false now is a phone with **no
+    /// device id**, because the one player in the app is keyed to one
+    /// (``ShellModel/player``). The old sentence was kept on the argument that
+    /// a Simulator case matched it exactly — and this unit had already removed
+    /// both matches, so nothing was left standing but a false statement on a
+    /// reachable screen. ``PhoneMediaStrings/noPhonePlayerYet`` says the same
+    /// thing about the same state, in the same words, for the same reason.
+    public static let playingNeedsAHouse =
+        "a station plays here once this phone has joined a domovoi — "
+        + "favoriting, sampling and detections all work"
 
     /// Where Android draws `import fcc fm` (`StationsScreen.kt:191`).
     ///

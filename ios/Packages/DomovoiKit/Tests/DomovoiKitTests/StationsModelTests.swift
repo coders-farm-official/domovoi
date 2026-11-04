@@ -996,21 +996,33 @@ final class StationsModelTests: XCTestCase {
 
     // MARK: - what a build with no engine says (views stage)
 
-    /// With no engine the header says the counts and **not** how to play.
+    /// With no player the header says the counts and **not** how to play.
     ///
     /// The view asks these two for exactly one reason: the subtitle's tail is
     /// an instruction, and a page whose rows do not play must not carry it.
     /// Both go back to Android's wording the moment a witness that can play
     /// is handed in, which is the other half asserted here.
-    func testWithNoEngineTheHeaderSaysTheCountsAndNotHowToPlay() async throws {
+    ///
+    /// The note's words changed in review 1 of the 2026-11-03 batch and the
+    /// case was renamed with them: `canPlay == false` used to mean a build
+    /// with no audio engine and now means a phone with **no device id**, so a
+    /// sentence reading "isn't built yet" was false. The whole sentence is
+    /// pinned, not a prefix: this is the one place that says what the page
+    /// tells a person who cannot play, and it has been wrong once already.
+    func testWithNoPlayerTheHeaderSaysTheCountsAndNotHowToPlay() async throws {
         let silent = StationsPlaybackSpy(canPlay: false)
         let (quiet, _, _, _) = rig(playback: silent)
         await started(quiet)
 
         XCTAssertEqual("23 favorited · 3 recent", quiet.subtitle)
         XCTAssertEqual(
-            "playing on this phone isn't built yet — favoriting, sampling and detections all work",
+            "a station plays here once this phone has joined a domovoi — "
+                + "favoriting, sampling and detections all work",
             quiet.playbackNote
+        )
+        XCTAssertFalse(
+            quiet.playbackNote?.contains("built yet") ?? false,
+            "the page told the person playing here is unbuilt, which D46 built"
         )
 
         let (loud, _, _, _) = rig(playback: StationsPlaybackSpy(canPlay: true))

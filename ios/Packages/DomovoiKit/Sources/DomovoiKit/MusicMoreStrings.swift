@@ -110,8 +110,13 @@ public enum MusicMoreStrings {
     public static let playHereLabel = "play on this phone"
 
     /// What a start on this phone says (`MusicScreen.kt:583`).
+    ///
+    /// One spelling of it: ``PlayerStrings/playingNamedOnThisDevice(_:)`` is
+    /// the same sentence, and the player uses it as the first half of the
+    /// combined `… · paused kitchen` note. Two literals would drift, and the
+    /// drift would show as one tap saying two different things.
     public static func playingHere(_ title: String) -> String {
-        "playing \"\(title)\" on this device"
+        PlayerStrings.playingNamedOnThisDevice(title)
     }
 
     public static let playInRoomLabel = "play in room"

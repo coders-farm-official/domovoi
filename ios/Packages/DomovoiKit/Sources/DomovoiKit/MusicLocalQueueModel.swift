@@ -182,11 +182,23 @@ public final class MusicLocalQueueModel {
 
     /// Play these library tracks on this phone, starting at `startAt`.
     ///
-    /// `playHereAndSay` (`MusicScreen.kt:575-588`) is Android's shape, minus
-    /// the "paused office" half: this takes the whole queue rather than one
-    /// track, and ``MusicMorePlayerEngine/playTracks(_:startAt:)`` leaves the
-    /// room it was casting to on the way — which is the player's own
-    /// `leaveRoom`, so the room is paused and this phone starts, never both.
+    /// `playHereAndSay` (`MusicScreen.kt:575-588`) is Android's shape,
+    /// including the "paused office" half: this takes the whole queue rather
+    /// than one track, and ``MusicMorePlayerEngine/playTracks(_:startAt:)``
+    /// leaves the room it was casting to on the way — which is the player's
+    /// own `leaveRoom`, so the room is paused and this phone starts, never
+    /// both.
+    ///
+    /// **Who says what, and when.** Android toasts `playing "X" on this
+    /// device` *at once* when no room was being cast to, and otherwise waits
+    /// for the room to answer its pause and says both halves in one sentence,
+    /// "so it never says 'paused office' over a pause the core says didn't
+    /// happen" (`MusicScreen.kt:567-570`). The same split here: this sets the
+    /// tab's own toast only when nothing was left, and the combined sentence
+    /// arrives from ``PlayerModel/say`` — which the shell routes to its toast
+    /// — once the pause has answered. Both toasts for one tap would be the
+    /// screen saying the same thing twice and contradicting itself if the
+    /// pause failed.
     ///
     /// Returns whether anything was handed over, so a caller can tell a
     /// refusal from a start without reading the toast.
@@ -198,8 +210,8 @@ public final class MusicLocalQueueModel {
     public func playHere(_ tracks: [LibraryTrack], startAt: Int = 0) -> Bool {
         guard let engine, !tracks.isEmpty else { return false }
         let at = min(max(startAt, 0), tracks.count - 1)
-        engine.playTracks(tracks, startAt: at)
-        toast = MusicMoreStrings.playingHere(tracks[at].displayTitle)
+        let left = engine.playTracks(tracks, startAt: at)
+        if left == nil { toast = MusicMoreStrings.playingHere(tracks[at].displayTitle) }
         return true
     }
 

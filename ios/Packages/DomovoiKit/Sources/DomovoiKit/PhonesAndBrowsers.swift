@@ -380,13 +380,44 @@ public final class PlayerListenerModel {
 
     private let listeners: PlayerListenerStore
 
+    /// Who this phone saves under, or nil for "me (this device)".
+    ///
+    /// **A stored mirror of the store, and that is the point.**
+    /// ``PlayerListenerStore`` is a plain `final class` over a `Mutex` — it
+    /// has to be, because it is `Sendable` and read off the main actor by
+    /// every position request — so a `var` that read straight through it
+    /// would register no view against a change. A tick in the dropdown and a
+    /// chip on two screens are drawn from this, and until the review they
+    /// followed a pick only because the toast written on the same line
+    /// mutated ``ShellModel/toast`` and re-rendered the whole shell with
+    /// them. Drop that toast, or move the shell's toast into its own overlay
+    /// subtree, and the tick would silently stop following the pick while the
+    /// Simulator case went on passing.
+    ///
+    /// The store stays the truth — it is what a request reads, per request
+    /// (`ApiPositionRemote.kt:27`) — and this is re-synced from it in
+    /// ``start()`` and in ``adopt()``, never written independently. Three
+    /// views hold three of these models and the store is one value for the
+    /// install, so a pick made in Settings reaches the other two screens on
+    /// their next appearance, which is when `start()` runs.
+    public private(set) var personID: String?
+
     public init(in container: AppContainer, listeners: PlayerListenerStore) {
         self.listeners = listeners
+        self.personID = listeners.personID
         let client = container.client
         self.people = ApiRead(in: container) {
             try await client.get(PeoplePath.roster, as: [Person].self)
         }
     }
+
+    /// Take whatever the store now holds.
+    ///
+    /// Called after a pick — by the picker, next to ``ShellModel/listenerChanged(to:)``,
+    /// which is what actually writes — rather than taking the id as an
+    /// argument, so this and the store cannot disagree about a blank or an
+    /// untrimmed value (``PlayerListenerStore/set(_:)`` tidies both).
+    public func adopt() { personID = listeners.personID }
 
     /// The screen appeared.
     ///
@@ -396,6 +427,10 @@ public final class PlayerListenerModel {
     /// them is a chip under a lazy list's header: a bare `refresh()` here
     /// would ask `/api/people` again on every appearance of every one of them.
     public func start() {
+        // The listener is one value for the install and this is one of three
+        // models that mirror it, so a pick made in Settings is taken here on
+        // the next appearance of this screen.
+        adopt()
         if people.data == nil, people.error == nil {
             people.refresh()
         } else {
@@ -404,9 +439,6 @@ public final class PlayerListenerModel {
     }
 
     public func stop() { people.stop() }
-
-    /// Who this phone saves under, or nil for "me (this device)".
-    public var personID: String? { listeners.personID }
 
     /// The dropdown's rows.
     public var options: [ListenerOption] { listenerOptions(people: people.data ?? []) }
