@@ -129,8 +129,8 @@ private val monDayYrFmt = DateTimeFormatter.ofPattern("MMM d, yyyy", Locale.US)
 private val dayFullFmt = DateTimeFormatter.ofPattern("EEEE, MMMM d", Locale.US)
 
 /**
- * The instant a wall-clock time names, in UTC: "2026-07-10T19:30:00Z" for
- * 2:30pm on a phone set to New York.
+ * The instant a wall-clock time names, in UTC: "2026-07-10T18:30:00Z" for
+ * 2:30pm in July on a phone set to New York.
  *
  * What the house is told when an event is saved (D13 / ledger #27). The
  * dashboard posts `new Date(...).toISOString()` (web/static/calendar.jsx:36)
