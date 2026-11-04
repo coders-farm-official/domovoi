@@ -17,13 +17,13 @@ import UIKit
 /// * **No Save at all** where this phone may not write (a read-only library,
 ///   or a device an admin has blocked). ``DocumentsNoSaveNote`` says so in the
 ///   button's place ([[no-misleading-controls]]).
-/// * **No formatted-document or Word editor.** `.html`, `.htm` and `.docx`
-///   never reach this view: ``DocumentsKinds/editor(for:in:)`` answers nil for
-///   them and their rows keep today's read-only reader, whose
-///   "read-only — editing is on the dashboard" line stays true of exactly the
-///   files that still reach it. See `overnight/documents/DECISIONS.md`.
-/// * **No pictures, co-editing, print or share-as-Word.** They are bridge
-///   calls from the dashboard's WebView page, which is not ported.
+/// * **No pictures, co-editing, print or share-as-Word.** Those belong to
+///   the formatted-document editor, which is the dashboard's own page in a
+///   `WKWebView` (``DocumentsWebEditorHost``) and gets them from the page.
+///   This view is the native one, and the only files that reach it are the
+///   ones where there is nothing to lose: `.html`, `.htm` and `.docx` go to
+///   the WebView host (``DocumentsKinds/editor(for:in:)``), and a `.md` stays
+///   here because markdown **is** text.
 struct DocumentsTextEditorView: View {
 
     let entry: FileEntry

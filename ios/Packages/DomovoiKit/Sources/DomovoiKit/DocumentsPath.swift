@@ -14,12 +14,19 @@ import Foundation
 ///
 /// ### What is not here, and why there is no control for it
 ///
-/// * `/presence/{rel}` — the sheet editor's "somebody else has this open"
-///   heartbeat. This app has no co-editing and no stale-save choice, so a
-///   notice it could draw is one nothing can act on, and the heartbeat would
-///   have a phone writing to the house every fifteen seconds for it.
-/// * `/doc-save-as`, `/export/*`, `/convert/docx`, `/drawings/*` — features
-///   of the dashboard's WebView editors, which are not ported.
+/// * `/presence/{rel}` — the "somebody else has this open" heartbeat, for
+///   the **native** editors. They have no co-editing and no stale-save
+///   choice, so a notice they could draw is one nothing can act on, and the
+///   heartbeat would have a phone writing to the house every fifteen seconds
+///   for it. The formatted-document editor is a different story and needs no
+///   entry here: it is the dashboard's own page in a `WKWebView`
+///   (``DocumentsWebEditorHost``), and the page calls `/presence` itself and
+///   draws the notice itself, over the collab layer it already carries
+///   (`web/static/collab_ui.jsx`). That is the whole argument for hosting the
+///   page rather than rebuilding it.
+/// * `/doc-save-as`, `/export/*`, `/convert/docx`, `/drawings/*` — asked for
+///   by those pages too, and so not addresses this app builds. `/drawings/*`
+///   has no editor on either phone at all.
 /// * `/delete` and `/download-zip` — **admin** tier (`documents.py:808`,
 ///   `:836`), and a phone has no admin session: they answer 401 every time,
 ///   the same reason ``FilePath/deleteNeedsAnAdmin`` is drawn by nothing.
@@ -57,6 +64,45 @@ public enum DocumentsPath {
 
     /// `POST /api/documents/create` — `+ New`.
     public static let create = "/api/documents/create"
+
+    /// `GET /api/documents/raw/{rel_path}` — the file's own bytes
+    /// (`documents.py:2166`), on the same daily read tier as `/sheet`.
+    ///
+    /// One caller: the grid editor's fallback, when `/sheet` could not answer
+    /// for a `.csv` or an `.xlsx` and the phone reads it with
+    /// ``DocumentsSheetParser`` instead (owner answer 22). It is **not** how
+    /// this app downloads a file — `FilePath.download` is, and saving a file
+    /// onto the phone goes through that, through the client, with the token in
+    /// a header. This route exists for the dashboard's `window.open`, and a
+    /// `.html` served from it comes back as an inert download rather than a
+    /// page precisely so a browser cannot run it on the dashboard's origin;
+    /// the bytes are the same either way, which is all the parser wants.
+    public static func raw(rel: String) -> String {
+        "/api/documents/raw/\(FilePath.escPath(rel))"
+    }
+
+    /// `GET /doc.html?path={rel}` — **not an API route**: the dashboard's own
+    /// editor page, which ``DocumentsWebEditorHost`` loads in a `WKWebView`
+    /// (`web/static/doc.html`, `doc_page.jsx`).
+    ///
+    /// It is here rather than in the view for the same reason every other
+    /// address in this file is: one place builds it, one escaping rule, and
+    /// a path with a `#` or a `+` in it cannot be spelt two ways.
+    ///
+    /// `?path=` and not `#path=`: that is what `doc_page.jsx:23` reads
+    /// (`new URLSearchParams(window.location.search)`). Android's `Sheet`
+    /// kind uses a fragment and its `Document` kind uses a query
+    /// (`WebEditorHost.kt:100`), and this host is the document one.
+    ///
+    /// **The token is never in it.** `doc_page.jsx` accepts a
+    /// `?device_token=` for a browser that holds none, and that branch is
+    /// exactly what this app must not use: the bridge hands the token to the
+    /// page in memory instead (``DocumentsWebEditorHost``), as Android's does
+    /// — the one place in this app that puts a token in a URL is
+    /// ``VideoStream``, and it says at length why it has to.
+    public static func documentPage(rel: String) -> String {
+        "/doc.html?path=\(FilePath.esc(rel))"
+    }
 
     // MARK: - the bodies
 

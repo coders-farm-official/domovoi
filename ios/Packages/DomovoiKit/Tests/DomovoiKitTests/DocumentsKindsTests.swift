@@ -62,15 +62,25 @@ final class DocumentsKindsTests: XCTestCase {
         XCTAssertEqual(.sheet, DocumentsKinds.editor(for: entry("rows.csv"), in: documents))
     }
 
-    /// The WebView host is not ported, so the files it owned open **no**
-    /// editor and keep today's read-only reader. An editor claiming an
-    /// `.html` would 415 on every save (`_assert_text_editor_may_write`
-    /// refuses `_FORMATTED_EXTS` outright).
-    func testAFormattedDocumentAndAWordFileOpenNoEditor() {
+    /// A formatted document and a Word file open the **WebView host** (owner
+    /// answer 21): the dashboard's own editor page, which saves through
+    /// `PUT /api/documents/doc` — the one route that takes those two
+    /// extensions. The native text editor must never claim them, because
+    /// `_assert_text_editor_may_write` refuses `_FORMATTED_EXTS` and `.docx`
+    /// outright, so a `.text` answer here would be a 415 on every save.
+    ///
+    /// This case said the opposite until 2026-11-03, when the editor was
+    /// built; it is the package-level twin of
+    /// `testDocuments_AFormattedDocumentStaysReadOnly`, which the same change
+    /// replaced with `testDocs_AFormattedDocumentOpensAndSaves`.
+    func testAFormattedDocumentAndAWordFileOpenTheWebEditor() {
         let documents = FileLibrary.documents
-        XCTAssertNil(DocumentsKinds.editor(for: entry("Letter to the council.html"), in: documents))
-        XCTAssertNil(DocumentsKinds.editor(for: entry("page.htm"), in: documents))
-        XCTAssertNil(DocumentsKinds.editor(for: entry("contract.docx"), in: documents))
+        XCTAssertEqual(.web, DocumentsKinds.editor(for: entry("Letter to the council.html"), in: documents))
+        XCTAssertEqual(.web, DocumentsKinds.editor(for: entry("page.htm"), in: documents))
+        XCTAssertEqual(.web, DocumentsKinds.editor(for: entry("contract.docx"), in: documents))
+        // And nowhere but Documents: the page reads `/api/documents/doc`,
+        // which resolves inside the documents folder only.
+        XCTAssertNil(DocumentsKinds.editor(for: entry("page.html"), in: "core:music"))
     }
 
     func testTheOtherCategoriesOpenNothing() {
@@ -103,6 +113,7 @@ final class DocumentsKindsTests: XCTestCase {
     func testThePillNamesTheEditor() {
         XCTAssertEqual("text", DocumentsEditorKind.text.pill)
         XCTAssertEqual("markdown", DocumentsEditorKind.markdown.pill)
+        XCTAssertEqual("document", DocumentsEditorKind.web.pill)
         XCTAssertEqual("sheet", DocumentsEditorKind.sheet.pill)
     }
 

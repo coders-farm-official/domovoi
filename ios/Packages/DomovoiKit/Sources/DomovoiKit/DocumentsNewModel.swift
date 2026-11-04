@@ -8,15 +8,19 @@ import Observation
 ///
 /// * **Drawing** is left out on both sides: neither app has a drawing editor,
 ///   and a new `.excalidraw` would open in nothing (`NewDocument.kt:17-21`).
-/// * **Document** (`kind: "doc"`, which makes an `.html`) is left out **on
-///   iOS only**, because the formatted-document editor is the WebView host
-///   that is not ported: the file would be made and then have nowhere to
-///   open. A person who wants a formatted document makes it on the
-///   dashboard; a person who wants a markdown one types `notes.md` into Text
-///   file, which the server takes verbatim (`documents.py:772-785`) and this
-///   app opens in the markdown editor. Recorded in
-///   `overnight/documents/DECISIONS.md`.
+/// * **Document** (`kind: "doc"`, which makes an `.html`,
+///   `documents.py:758`) **is here now.** It was left out while the
+///   formatted-document editor was not ported — a file made with nowhere to
+///   open is the misleading control in its purest form — and owner answer 21
+///   built that editor (``DocumentsEditorKind/web``), so the kind came back
+///   with it. The order below is Android's menu order
+///   (`NewDocument.kt:22-34`): Document, Spreadsheet, Text file.
+///
+/// A person who wants a **markdown** file still types `notes.md` into Text
+/// file, whose name the server takes verbatim (`documents.py:772-785`) — and
+/// not into Document, which would append `.html` to it.
 public enum DocumentsNewKind: String, CaseIterable, Equatable, Sendable, Identifiable {
+    case document
     case spreadsheet
     case text
 
@@ -25,6 +29,7 @@ public enum DocumentsNewKind: String, CaseIterable, Equatable, Sendable, Identif
     /// `kind` for `POST /api/documents/create`.
     public var api: String {
         switch self {
+        case .document: return "doc"
         case .spreadsheet: return "sheet"
         case .text: return "text"
         }
@@ -32,6 +37,7 @@ public enum DocumentsNewKind: String, CaseIterable, Equatable, Sendable, Identif
 
     public var label: String {
         switch self {
+        case .document: return "Document"
         case .spreadsheet: return "Spreadsheet"
         case .text: return "Text file"
         }
@@ -40,6 +46,7 @@ public enum DocumentsNewKind: String, CaseIterable, Equatable, Sendable, Identif
     /// The line under the label in the menu.
     public var hint: String {
         switch self {
+        case .document: return "Formatted document · .html"
         case .spreadsheet: return "Workbook · .xlsx"
         case .text: return "Plain text · name as typed"
         }
@@ -49,6 +56,7 @@ public enum DocumentsNewKind: String, CaseIterable, Equatable, Sendable, Identif
     /// it.
     public var prompt: String {
         switch self {
+        case .document: return "new document"
         case .spreadsheet: return "new spreadsheet"
         case .text: return "new text file"
         }
@@ -56,20 +64,29 @@ public enum DocumentsNewKind: String, CaseIterable, Equatable, Sendable, Identif
 
     public var placeholder: String {
         switch self {
+        case .document: return "e.g. Letter to the council"
         case .spreadsheet: return "e.g. Budget"
         case .text: return "e.g. shopping.txt"
         }
     }
 
     /// The SF Symbol the menu row draws. Android's are
-    /// `Outlined.TableChart` and `AutoMirrored.Outlined.Article`
-    /// (`FilesScreen.kt:564-566`); these are the closest Apple glyphs, and
-    /// the same two ``FileRowView`` already uses for a sheet and a text file,
-    /// so one file does not get two different pictures in one screen.
+    /// `Outlined.Article`, `Outlined.TableChart` and
+    /// `AutoMirrored.Outlined.Article` (`FilesScreen.kt:564-566`); these are
+    /// the closest Apple glyphs, and each one is **the glyph
+    /// ``FilesView/entryGlyph(_:)`` already draws for the file this kind
+    /// makes**, so a file does not get two different pictures in one screen.
+    ///
+    /// `.text` moved from `doc.text` to `doc.plaintext` when Document arrived
+    /// and took `doc.text`: `doc.text` is the row glyph for a formatted
+    /// document (`FilesView.swift:598`) and `doc.plaintext` is the row glyph
+    /// for a `doc-text` (`:606`), so the two were the wrong way round
+    /// already — one of them just had nothing to collide with.
     public var glyph: String {
         switch self {
+        case .document: return "doc.text"
         case .spreadsheet: return "tablecells"
-        case .text: return "doc.text"
+        case .text: return "doc.plaintext"
         }
     }
 }

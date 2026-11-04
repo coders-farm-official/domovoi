@@ -133,16 +133,29 @@ public enum DocumentsSheetLoad: Equatable, Sendable {
 ///
 /// `SheetEditor.kt:61`'s `SheetEditorOverlay`, as a model.
 ///
-/// ### Nothing is parsed on this phone
+/// ### Two ways to a grid, and the server's is first
 ///
-/// Android has 1,220 lines of spreadsheet code — `XlsxSheet.kt`,
-/// `MiniXml.kt`, `CsvSheet.kt` — and **none of it is ported**, because its
-/// only Files-side caller there is `PhoneFileSource.kt` and this app has no
-/// phone-folder file source yet. For a file in the house the server sends the
-/// grid and takes the grid, patching the workbook cell by changed cell at its
-/// end so formatting, other sheets and charts survive. Porting a parser with
-/// no call site is the seam-with-no-caller defect, not a feature; see
-/// `overnight/documents/DECISIONS.md`.
+/// `GET /api/documents/sheet` is asked first and always: openpyxl reads the
+/// workbook there, and `PUT /sheet` patches the file cell by changed cell so
+/// formatting, other sheets and charts survive a save. That is the route the
+/// server keeps "for the phone app's own grid editor" (`documents.py:1314`)
+/// and nothing here replaces it.
+///
+/// When it cannot answer — an older core with no `/sheet` route, a 500 out of
+/// openpyxl, a 200 that is not this route's answer — the phone now reads the
+/// file itself: `GET /api/documents/raw` for the bytes and
+/// ``DocumentsSheetParser`` for the grid (owner answer 22, the port of
+/// `XlsxSheet.kt`, `MiniXml.kt` and `CsvSheet.kt`). ``source`` is what tells
+/// them apart, and a grid that came from the phone is **read-only**: saving
+/// it would mean patching the workbook's bytes and sending them back, and
+/// there is no route from a phone that takes them ([[no-misleading-controls]]
+/// — the Save is not drawn, and ``DocumentsStrings/sheetReadOnThisPhone`` is
+/// what is there instead).
+///
+/// A **415 is not a failure** and does not reach the fallback: it is the
+/// server's answer that this is a `.xls` or an `.ods`, which the phone's
+/// parser does not read either, so the editor says so and offers the download
+/// as it always did.
 ///
 /// ### What is not, and why there is no control for it
 ///
@@ -177,6 +190,25 @@ public final class DocumentsSheetModel {
     public private(set) var saving = false
     public private(set) var saveFailure: String?
     public private(set) var toast: String?
+
+    /// Where the grid on screen came from.
+    public enum Source: Equatable, Sendable {
+        /// `GET /api/documents/sheet` answered. Editable and saveable.
+        case server
+        /// The server could not answer and the phone parsed
+        /// `GET /api/documents/raw` itself. Read-only — see the type's note.
+        case thisPhone
+    }
+
+    public private(set) var source: Source = .server
+
+    /// The sentence above a grid the phone read for itself, or nil for the
+    /// ordinary case. Drawn by ``DocumentsSheetEditorView``, which has no
+    /// other way to know: the grid looks the same either way, and that is
+    /// exactly why it has to be said.
+    public var note: String? {
+        source == .thisPhone ? DocumentsStrings.sheetReadOnThisPhone : nil
+    }
 
     /// After a save landed: Files reloads the folder (a save changes the
     /// file's size and time).
@@ -228,9 +260,18 @@ public final class DocumentsSheetModel {
 
     public var dirty: Bool { grid != loadedGrid }
 
-    public var canSave: Bool { canWrite && dirty && !saving && load == .ready }
+    /// A grid the phone read for itself can never be saved, whatever the
+    /// library allows: see ``source``.
+    public var canSave: Bool { canWrite && source == .server && dirty && !saving && load == .ready }
 
-    public var offersSave: Bool { canWrite && load == .ready }
+    public var offersSave: Bool { canWrite && source == .server && load == .ready }
+
+    /// Whether a cell takes typing at all.
+    ///
+    /// A grid nothing can save is a grid nothing should let you type into:
+    /// the keystrokes would look like edits and go nowhere, which is the same
+    /// rule as the Save that is not drawn.
+    public var canEdit: Bool { canWrite && source == .server }
 
     public var title: String { entry.displayTitle }
 
@@ -287,38 +328,81 @@ public final class DocumentsSheetModel {
             do {
                 let body = try await call("GET", path, nil)
                 guard let self else { return }
-                guard let read = try? DomovoiClient.decode(body, as: DocumentsSheetGrid.self) else {
-                    self.load = .failed(DocumentsStrings.couldNotLoad(DocumentsEditorModel.notDomovoi))
+                guard let read = try? DomovoiClient.decode(body, as: DocumentsSheetGrid.self),
+                      // A 200 with no `rows` key is **not an empty sheet** —
+                      // see ``DocumentsSheetGrid/hadRows``. Opened as one, it
+                      // shows a blank grid for a file that still has content,
+                      // and the first keystroke saves the blankness back over
+                      // it.
+                      read.hadRows else {
+                    await self.readOnThisPhone(because: DocumentsEditorModel.notDomovoi)
                     return
                 }
-                // A 200 with no `rows` key is **not an empty sheet** — see
-                // ``DocumentsSheetGrid/hadRows``. Opened as one, it shows a
-                // blank grid for a file that still has content, and the first
-                // keystroke saves the blankness back over it.
-                guard read.hadRows else {
-                    self.load = .failed(DocumentsStrings.couldNotLoad(DocumentsEditorModel.notDomovoi))
-                    return
-                }
-                self.maxRows = read.maxRows
-                self.maxCols = read.maxCols
-                let padded = read.padded
-                self.grid = padded
-                self.loadedGrid = padded
-                self.generation += 1
-                self.load = .ready
+                self.show(read, from: .server)
             } catch {
                 guard let self else { return }
                 // A 415 is the server's **answer**: this sheet type is not
                 // one it round-trips (`_assert_sheet_editor_may_write`).
                 // Android treats its own `SheetUnsupported` and a 415 the
-                // same way (`SheetEditor.kt:88`).
+                // same way (`SheetEditor.kt:88`), and the phone's parser does
+                // not read a `.xls` or an `.ods` either, so there is nothing
+                // to fall back to.
                 if (error as? DomovoiError)?.failure?.status == 415 {
                     self.load = .unsupported
                 } else {
-                    self.load = .failed(DocumentsStrings.couldNotLoad(FilesModel.why(error)))
+                    await self.readOnThisPhone(because: FilesModel.why(error))
                 }
             }
         }
+    }
+
+    /// Put a grid on screen, from either source.
+    private func show(_ read: DocumentsSheetGrid, from source: Source) {
+        maxRows = read.maxRows
+        maxCols = read.maxCols
+        let padded = read.padded
+        grid = padded
+        loadedGrid = padded
+        generation += 1
+        self.source = source
+        load = .ready
+    }
+
+    /// The server could not give a grid: fetch the file's bytes and read it
+    /// here (owner answer 22).
+    ///
+    /// `because` is the server's own failure, and it is what the editor shows
+    /// if this does not work either — the first failure is the useful one. A
+    /// fallback that reported its own trouble instead would turn "the house
+    /// is unreachable" into "this file is not a spreadsheet".
+    ///
+    /// The parse runs off the main actor: a full window is sixty thousand
+    /// cells of XML scanning, which would hold the editor's first frame.
+    private func readOnThisPhone(because said: String) async {
+        // Captured BEFORE the await, every one of them: the file this read is
+        // about and the generation it started at. A retry can be in flight
+        // alongside this, and a grid landing under the wrong file is the top
+        // defect class on this track ([[read-after-await-wrong-key]]).
+        let asked = entry.rel
+        let base = generation
+        let call = send
+        let bytes: Data
+        do {
+            bytes = try await call("GET", DocumentsPath.raw(rel: asked), nil)
+        } catch {
+            guard asked == entry.rel else { return }
+            load = .failed(DocumentsStrings.couldNotLoad(said))
+            return
+        }
+        let parsed = await Task.detached {
+            try? DocumentsSheetParser.grid(of: bytes, named: asked)
+        }.value
+        guard asked == entry.rel, base == generation else { return }
+        guard let parsed else {
+            load = .failed(DocumentsStrings.couldNotLoad(said))
+            return
+        }
+        show(parsed, from: .thisPhone)
     }
 
     // MARK: - saving

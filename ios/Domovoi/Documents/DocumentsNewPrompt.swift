@@ -5,12 +5,16 @@ import SwiftUI
 ///
 /// `FilesScreen.kt:542-591`. Android offers four (Document, Spreadsheet,
 /// Drawing, Text file) and already draws only three — there is no drawing
-/// editor on either side (`NewDocument.kt:17-21`). Here it is two:
-/// **Document** is left out because the formatted-document editor is the
-/// dashboard's WebView page, which is not ported, so a new `.html` would be
-/// made and then have nowhere to open. A person who wants a markdown file
-/// types `notes.md` into **Text file**, whose name the server takes verbatim
-/// (`documents.py:772-785`). See `overnight/documents/DECISIONS.md`.
+/// editor on either side (`NewDocument.kt:17-21`) — and so does this, the
+/// same three, in the same order.
+///
+/// **Document is here now.** It was left out while the formatted-document
+/// editor was unported, because a new `.html` would have been made and then
+/// had nowhere to open; owner answer 21 built that editor
+/// (``DocumentsWebEditorHost``), so the kind came back with it. A person who
+/// wants a **markdown** file still types `notes.md` into **Text file**, whose
+/// name the server takes verbatim (`documents.py:772-785`) — Document would
+/// append `.html` to it. See `batch-2026-11-03/documents/DECISIONS.md`.
 ///
 /// ### What is not, and why there is no control for it
 ///

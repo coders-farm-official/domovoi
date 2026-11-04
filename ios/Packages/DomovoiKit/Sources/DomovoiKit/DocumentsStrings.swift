@@ -72,6 +72,66 @@ public enum DocumentsStrings {
     /// dashboard's own page in a WebView and shows that page's wording.
     public static let tooBigToEdit = "too big to edit here"
 
+    // MARK: - a sheet the phone read for itself (owner answer 22)
+
+    /// What the grid says above itself when the server could not answer for
+    /// the file and the phone parsed the bytes instead. **iOS-only** — on
+    /// Android the phone's parser only ever reads a file on the phone, which
+    /// this app has none of, so there is no sentence to port.
+    public static let sheetReadOnThisPhone =
+        "The house couldn't open this sheet, so it was read on this phone — changes have to be saved on the dashboard."
+
+    /// The bytes are not the format the name claims. `why` is the reader's
+    /// own short reason, which is the only part a person can act on (open it
+    /// on the dashboard, or fix the file).
+    public static func notASheetFile(_ why: String) -> String {
+        "This file isn't a spreadsheet this phone can read — \(why)."
+    }
+
+    /// Past ``DocumentsSheetLimits/maxFileBytes``.
+    public static func sheetTooBig(_ megabytes: Int) -> String {
+        "This spreadsheet is over \(megabytes) MB, which is more than this phone opens — open it on the dashboard."
+    }
+
+    /// Past ``DocumentsSheetLimits/maxUnzippedBytes`` — the archive is small
+    /// and claims to unpack to far more.
+    public static func sheetUnpacksTooBig(_ megabytes: Int) -> String {
+        "This workbook unpacks to more than \(megabytes) MB, which is more than this phone opens."
+    }
+
+    public static let sheetHasTooManyCells =
+        "This workbook has more cells than this phone reads — open it on the dashboard."
+
+    // MARK: - the formatted-document editor (owner answer 21)
+
+    /// The pill beside the file's name in the WebView host. Android's host
+    /// draws the dashboard's own page with no pill of its own, so this is
+    /// iOS-only and is the word the file's category already is.
+    public static let pillDocument = "document"
+
+    /// No server is configured on this phone, so there is no page to open.
+    /// `WebEditorHost.kt:156`, verbatim.
+    public static let editorNoServer = "No server is set up on this phone."
+
+    /// This phone holds no token the house would accept, so the editor does
+    /// not open at all. `WebEditorHost.kt:166` with its `${kind.noun}`
+    /// filled in, since this host opens documents only.
+    public static let editorNotPaired =
+        "This phone isn't paired with the home server, so it can't open documents."
+
+    /// The identity gate would not let the token out, or the server asked for
+    /// a wait. `WebEditorHost.kt:169`, with the reason the gate gave.
+    public static func editorNotReached(_ why: String) -> String {
+        "Couldn't reach the home server safely: \(why)"
+    }
+
+    /// What the host says when the page tried to go somewhere that is not the
+    /// house. **iOS-only**: Android refuses the navigation silently
+    /// (`shouldOverrideUrlLoading` returns true and nothing is drawn), which
+    /// leaves a tapped link looking broken. The refusal is the same; saying
+    /// it is the difference.
+    public static let editorStayedHere = "that link isn't on your home server, so it wasn't opened"
+
     /// Why an opened file has no Save button: the library is read-only, or an
     /// admin has blocked this device. **iOS-only** — Android draws the button
     /// and toasts the refusal afterwards, which is the control this app does

@@ -33,7 +33,10 @@ final class DocumentsNewTests: XCTestCase {
     /// editor is the WebView host this port leaves out, so it would make a
     /// file with nowhere to open.
     func testTheKindsAreTheOnesThisAppCanOpen() {
-        XCTAssertEqual([.spreadsheet, .text], DocumentsNewKind.allCases)
+        XCTAssertEqual([.document, .spreadsheet, .text], DocumentsNewKind.allCases)
+        XCTAssertEqual("Document", DocumentsNewKind.document.label)
+        XCTAssertEqual("Formatted document · .html", DocumentsNewKind.document.hint)
+        XCTAssertEqual("new document", DocumentsNewKind.document.prompt)
         XCTAssertEqual("Spreadsheet", DocumentsNewKind.spreadsheet.label)
         XCTAssertEqual("Workbook · .xlsx", DocumentsNewKind.spreadsheet.hint)
         XCTAssertEqual("new spreadsheet", DocumentsNewKind.spreadsheet.prompt)

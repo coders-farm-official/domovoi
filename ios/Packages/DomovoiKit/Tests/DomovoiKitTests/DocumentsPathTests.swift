@@ -134,6 +134,6 @@ final class DocumentsPathTests: XCTestCase {
     /// The two kinds this app offers, and the two `kind` values the server
     /// takes for them (`CreateRequest:616`).
     func testTheKindsAreTheServers() {
-        XCTAssertEqual(["sheet", "text"], DocumentsNewKind.allCases.map(\.api))
+        XCTAssertEqual(["doc", "sheet", "text"], DocumentsNewKind.allCases.map(\.api))
     }
 }

@@ -8,16 +8,19 @@ import SwiftUI
 /// and the three refusals — is ``DocumentsSheetModel``'s; this file is the
 /// chrome and the cells.
 ///
-/// ### Nothing is parsed on this phone
+/// ### Two ways to a grid, and one of them is read-only
 ///
-/// Android carries 1,220 lines of spreadsheet code (`XlsxSheet.kt`,
-/// `MiniXml.kt`, `CsvSheet.kt`) and **none of it is ported**: its only
-/// Files-side caller there is `PhoneFileSource.kt`, and this app has no
-/// phone-folder file source. The server sends the grid and takes the grid,
-/// patching the workbook cell by changed cell so formatting, other sheets and
-/// charts survive — `/api/documents/sheet` is the route it keeps "for the
-/// phone app's own grid editor" (`documents.py:1314`). See
-/// `overnight/documents/DECISIONS.md`.
+/// `/api/documents/sheet` is asked first and is what a save goes back
+/// through — the route the server keeps "for the phone app's own grid editor"
+/// (`documents.py:1314`), where openpyxl patches the workbook cell by changed
+/// cell so formatting, other sheets and charts survive.
+///
+/// When that route cannot answer, the phone reads the file itself
+/// (``DocumentsSheetParser``, owner answer 22) and the grid is drawn with
+/// ``DocumentsSheetModel/note`` above it and **no Save**: there is no route a
+/// phone can PUT a workbook's bytes to, so an editable grid would be one
+/// whose edits went nowhere. Its cells are disabled for the same reason
+/// ([[no-misleading-controls]]).
 ///
 /// ### What is not, and why there is no control for it
 ///
@@ -30,7 +33,9 @@ import SwiftUI
 /// * **No co-editing notice.** `/api/documents/presence` exists and is not
 ///   called: a "somebody else has this open" line this app cannot act on is
 ///   noise, and the heartbeat behind it would have a phone writing to the
-///   house every fifteen seconds.
+///   house every fifteen seconds. (The formatted-document editor **does**
+///   show one, because it is the dashboard's own page and the page draws it —
+///   ``DocumentsWebEditorHost``.)
 /// * **No Save** in a read-only library or on a blocked device —
 ///   ``DocumentsNoSaveNote`` in its place.
 struct DocumentsSheetEditorView: View {
@@ -53,6 +58,20 @@ struct DocumentsSheetEditorView: View {
                 )
                 .padding(.horizontal, 16)
                 .padding(.top, 8)
+
+                if let said = sheet?.note {
+                    // Not an error and not a toast: the grid looks exactly
+                    // the same whichever source it came from, so the one
+                    // thing that tells them apart has to stay on screen for
+                    // as long as the grid does.
+                    Text(said)
+                        .font(.footnote)
+                        .foregroundStyle(Color.warnInk)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 16)
+                        .padding(.top, 6)
+                }
 
                 if let said = sheet?.saveFailure {
                     // 413 (a row past the column cap), 409 (an `.xlsx` with
@@ -191,7 +210,13 @@ struct DocumentsSheetEditorView: View {
                 ForEach(0..<sheet.grid.count, id: \.self) { row in
                     DocumentsSheetRow(sheet: sheet, row: row)
                 }
-                if !sheet.offersSave {
+                // Only when the **library or the device** is the reason. A
+                // grid the phone read for itself has no Save either, and
+                // ``DocumentsSheetModel/note`` has already said why above the
+                // grid — two sentences for one absence, one of them wrong
+                // ("this phone can't change files here" is untrue of a
+                // Documents folder this phone writes to every other day).
+                if !sheet.offersSave, sheet.note == nil {
                     DocumentsNoSaveNote()
                         .padding(.horizontal, 16)
                         .padding(.vertical, 10)
@@ -299,7 +324,10 @@ struct DocumentsSheetCellField: View {
         .font(.footnote)
         .autocorrectionDisabled()
         .textInputAutocapitalization(.never)
-        .disabled(!sheet.canWrite)
+        // ``DocumentsSheetModel/canEdit``, not `canWrite`: a grid the phone
+        // parsed for itself cannot be saved, so its cells do not take typing
+        // either.
+        .disabled(!sheet.canEdit)
         .padding(.horizontal, 6)
         // Width is set, height is not: `minHeight` is the floor and the
         // text decides the rest, so a cell grows with the type size.
