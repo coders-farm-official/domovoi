@@ -529,21 +529,27 @@ struct ManualMapNode: View {
         // shows does not move.
         //
         // Nothing moves under Reduce Motion: the caller passes a zero period,
-        // and `nil` animation is the same cut the 280 ms zoom takes.
-        // A still card sits **exactly** where the geometry put it: the zero
-        // arm is not decoration. Without it, `floating` flipping with no
-        // animation would leave every node 5 points above its own position
-        // under Reduce Motion.
+        // and no animation at all is the same cut the 280 ms zoom takes.
+        //
+        // The zero arm of the offset is not decoration either — a still card
+        // has to sit **exactly** where the geometry put it, and without it
+        // `floating` flipping unanimated would leave every node 5 points
+        // above its own position.
         .offset(y: floatPeriod <= 0 ? 0 : (floating ? -5 : 5))
-        .animation(
-            floatPeriod <= 0
-                ? nil
-                : .easeInOut(duration: floatPeriod)
-                    .delay(floatPhase)
-                    .repeatForever(autoreverses: true),
-            value: floating
-        )
+        .animation(floatAnimation, value: floating)
         .onAppear { floating = true }
+    }
+
+    /// One bob, forever, or nothing at all.
+    ///
+    /// Written out rather than built inside `.animation(…)`: a chain of
+    /// implicit members in the arm of a ternary whose other arm is `nil` is
+    /// more inference than this needs to ask for.
+    private var floatAnimation: Animation? {
+        guard floatPeriod > 0 else { return nil }
+        return .easeInOut(duration: floatPeriod)
+            .delay(floatPhase)
+            .repeatForever(autoreverses: true)
     }
 
     /// The subtitle with the `preview` and `plugin` words folded into it
@@ -659,37 +665,40 @@ struct ManualScrambleName: View {
             // when the level changes, and when the document changes under it,
             // and at no other time. A `.task(id:)` is cancelled and restarted
             // on exactly those two.
-            .task(id: "\(levelKey)\u{1}\(text)") { await scramble() }
-    }
-
-    private func scramble() async {
-        guard !reduceMotion else {
-            shown = text
-            return
-        }
-        let letters = Array(text)
-        let steps = ManualScrambleClock.steps
-        for frame in 0...steps {
-            // `i < frame / steps * length` (`:692`): the name settles from
-            // the left, a slice at a time.
-            let settled = Int(Double(frame) / Double(steps) * Double(letters.count))
-            shown = String(
-                letters.enumerated().map { at, letter in
-                    at < settled || letter == " "
-                        ? letter
-                        : (manualScrambleGlyphs.randomElement() ?? letter)
+            //
+            // The loop is written **here** rather than in a method of its
+            // own: this app's screens all drive their timers inside the
+            // closure (`ChatMoreTalkView.swift:97`), and a `private func …
+            // async` that writes `@State` is the one shape Swift 6's
+            // isolation checking has an opinion about.
+            .task(id: "\(levelKey)\u{1}\(text)") {
+                guard !reduceMotion else {
+                    shown = text
+                    return
                 }
-            )
-            do {
-                try await Task.sleep(for: ManualScrambleClock.frame)
-            } catch {
-                // Cancelled — the level closed or the document changed. The
-                // real name is restored below either way, so a cancelled
-                // scramble never leaves glyphs on screen.
-                break
+                let letters = Array(text)
+                let steps = ManualScrambleClock.steps
+                for frame in 0...steps {
+                    // `i < frame / steps * length` (`:692`): the name settles
+                    // from the left, a slice at a time.
+                    let settled = Int(
+                        Double(frame) / Double(steps) * Double(letters.count)
+                    )
+                    shown = String(
+                        letters.enumerated().map { at, letter in
+                            at < settled || letter == " "
+                                ? letter
+                                : (manualScrambleGlyphs.randomElement() ?? letter)
+                        }
+                    )
+                    // `try?` and a cancellation check, not `do/catch`: a
+                    // cancelled sleep must leave the loop, and the real name
+                    // goes back on screen below whichever way it left.
+                    try? await Task.sleep(for: ManualScrambleClock.frame)
+                    if Task.isCancelled { break }
+                }
+                shown = text
             }
-        }
-        shown = text
     }
 }
 
