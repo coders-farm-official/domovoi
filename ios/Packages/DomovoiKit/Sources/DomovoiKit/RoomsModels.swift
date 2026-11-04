@@ -28,20 +28,23 @@ import Foundation
 /// Which room a pushed room screen is for.
 ///
 /// Kamron, answer 56: "take the recommendation: a room opens as its own
-/// pushed screen with swipe back." A `NavigationStack` path is typed, so a
-/// push needs a `Hashable` value — and this is a **wrapper around the room
-/// id** rather than the id itself for one reason: `String` is the obvious
-/// type for some other screen in this app to push one day, and two
-/// `navigationDestination(for: String.self)` declarations in one stack is a
-/// runtime warning and a silent last-one-wins. ``RoomsSatellite`` is not it
-/// either, because the value in a path outlives the roster row it came from
-/// and a room that went offline while its screen was up would then be pushed
-/// under its old state (``RoomsDetailView`` keeps the live row instead).
+/// pushed screen with swipe back." This is what names the room the pushed
+/// screen is for: a **wrapper around the room id** rather than the id itself,
+/// so that the thing a room screen is handed cannot be mistaken for any other
+/// screen's `String`. ``RoomsSatellite`` is not it either, because this value
+/// outlives the roster row it came from and a room that went offline while
+/// its screen was up would then be read from its old state
+/// (``RoomsDetailView`` keeps the live row instead).
 ///
-/// It is **not** a `Route` case and it adds no second path to the shell:
-/// SwiftUI resolves a `navigationDestination` declared anywhere inside the
-/// stack's content, so ``RoomsView`` declares this one itself and no shared
-/// file changes. ``RoomsView``'s own doc comment has the rest.
+/// It is **not** a navigation-path element, which is what it was built to be
+/// and could not be. The shell's stack is `NavigationStack(path: $model.path)`
+/// and ``ShellModel/path`` is `[Route]`; a typed path holds only its own
+/// element type, so `NavigationLink(value: RoomsOpenRoom(…))` was inert and
+/// train I003 measured the consequence on twenty-four cases. ``RoomsView``
+/// pushes ``RoomsRoomScreen`` as a destination instead and hands it one of
+/// these; its doc comment has the whole reading. It stays `Hashable` and
+/// `Codable` because it is cheap and because the shared change that would
+/// make it a path element again (a `NavigationPath` shell) wants both.
 public struct RoomsOpenRoom: Hashable, Sendable, Identifiable, Codable {
 
     public let roomID: String

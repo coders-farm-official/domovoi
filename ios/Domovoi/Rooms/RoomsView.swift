@@ -59,28 +59,52 @@ import SwiftUI
 /// gesture, because a `NavigationStack(path:)` over `[Route]` takes no other
 /// value and this item could not add one.
 ///
-/// It needs no shared change after all. **A `navigationDestination` is
-/// resolved by the nearest enclosing stack wherever inside its content it is
-/// declared**, so this view declares `.navigationDestination(for:
-/// RoomsOpenRoom.self)` itself and the cards are `NavigationLink(value:)`s.
-/// The system's back button and swipe-back pop it; there is no `Route` case,
-/// no second `path` on ``ShellModel``, and ``WorkspaceView`` and
-/// ``RouteScreen`` are untouched. Both mountings are inside the same
-/// `NavigationStack` (`RouteScreen.swift:147-154` and `:390-392`), so both
-/// get the push and neither of those lines changes.
+/// The push is a **destination-based** `NavigationLink`: the card is the
+/// link's label and the link carries ``RoomsRoomScreen`` itself. The system's
+/// back button and swipe-back pop it; there is no `Route` case, no second
+/// `path` on ``ShellModel``, and ``WorkspaceView`` and ``RouteScreen`` are
+/// untouched. Both mountings are inside the same `NavigationStack`
+/// (`RouteScreen.swift:147-154` and `:390-392`), so both get the push and
+/// neither of those lines changes.
 ///
-/// **One declaration, in a view that is mounted once.** Two
-/// `navigationDestination`s for one type in one stack is a runtime warning
-/// and a silent last-one-wins; `navigate(.satellites)` resolves to the
-/// Settings section (`Route.swift:137-139`), so the route slot and the
-/// section are never on screen together and only one of them declares it at a
-/// time. ``RoomsOpenRoom`` is a wrapper for a related reason, which it
-/// states: the id's own type would collide with any other screen that pushed
-/// a `String`.
+/// ### Why not `navigationDestination(for:)` and `NavigationLink(value:)`
 ///
-/// It is also **not** inside a lazy container, which Apple's documentation
-/// forbids: the roster is a plain `VStack` (see ``panel``) and the Settings
-/// page a plain `ScrollView`, by decisions taken for other reasons.
+/// Because it does not work here, and train **I003** measured it: every one
+/// of this unit's twenty-four cases that opens a room failed on its first
+/// step, "the kitchen card did not open", and the tree each one printed shows
+/// the tap landing on the right card and the Settings page still on screen
+/// with a navigation bar that has a back button and **no title**
+/// (`overnight-trains/I003/ALL/testRooms_OpeningARoomShowsItsOverview.log`).
+///
+/// The declaration was fine; the *path* is not. This view is inside
+/// `NavigationStack(path: $model.path)` and ``ShellModel/path`` is
+/// `[Route]` (`ShellModel.swift:515`) — a **typed** path can only ever hold
+/// its own element type, so a `navigationDestination(for: RoomsOpenRoom.self)`
+/// resolves and then has nothing to resolve *from*: no `RoomsOpenRoom` can be
+/// appended to an array of `Route`, and a value-based link whose value cannot
+/// go on the path is inert. It draws, it highlights, it takes the tap, and
+/// nothing happens. Two other items had already hit this wall and written it
+/// down — ``AudiobookDetailView`` for an `Int64`
+/// (`AudiobooksView.swift:81-85`), ``ManualView`` for a `ManualPlace`
+/// (`ManualView.swift:198-212`) — and this item's two reviews checked that
+/// the declaration was single and not lazy without checking the path's
+/// element type.
+///
+/// A destination-based link needs no path element at all: it pushes onto the
+/// enclosing stack directly, which is also what it did under `NavigationView`
+/// and the one `NavigationLink` initialiser iOS 16 did **not** deprecate
+/// (only the `isActive:` and `tag:selection:` forms went). So `path` keeps
+/// reporting the route the person is on and the room is one push above it.
+///
+/// The proper fix is one line in a file this item may not touch — make
+/// ``ShellModel/path`` a `NavigationPath`, which is the heterogeneous kind —
+/// and it would give Manual, Audiobooks, People and this screen a real
+/// typed push each. It is in `DECISIONS.md` under "Needs a shared change",
+/// as it has been since the overnight build.
+///
+/// ``RoomsOpenRoom`` stays: it is what names the room a pushed screen is for
+/// and it is the value ``RoomsRoomScreen`` takes. It is no longer a path
+/// element.
 struct RoomsView: View {
 
     let model: ShellModel
@@ -168,16 +192,12 @@ struct RoomsView: View {
 
     @ViewBuilder
     private var content: some View {
+        // No `navigationDestination` here: the push is the link's own
+        // destination, for the reason this type's doc comment measures. On
+        // the destination side the model is told which room is open and the
+        // room screen holds it up for as long as it is on screen; the pop is
+        // the system's.
         mounting
-            // **The push, declared here and nowhere else** (D56). On the
-            // destination side the model is told which room is open and the
-            // room screen holds it up for as long as it is on screen; the
-            // pop is the system's.
-            .navigationDestination(for: RoomsOpenRoom.self) { open in
-                if let rooms {
-                    RoomsRoomScreen(shell: model, model: rooms, open: open)
-                }
-            }
     }
 
     @ViewBuilder
@@ -260,7 +280,29 @@ struct RoomsView: View {
                     // (`SatellitesScreen.kt:195`), and a `NavigationLink`
                     // reports as a button to VoiceOver and to a test's
                     // `app.buttons` query.
-                    NavigationLink(value: RoomsOpenRoom(room.roomID)) {
+                    //
+                    // **The destination, not a value** — see this type's doc
+                    // comment: the shell's path is `[Route]`, so a
+                    // `NavigationLink(value: RoomsOpenRoom(…))` had nowhere
+                    // to go and train I003 measured twenty-four cases dying
+                    // on a tap that did nothing.
+                    //
+                    // The destination is built with the row's id and the
+                    // model, both of which outlive the row — `rooms` is the
+                    // screen's one ``RoomsModel`` and `roomID` is a `String`
+                    // — so an eagerly built `RoomsRoomScreen` holds nothing
+                    // a redraw can pull out from under it. It also does no
+                    // work until it appears: every read and the hold are
+                    // taken in its `onAppear` (`RoomsDetailView.swift:267`),
+                    // which is what makes one of these per row per clock
+                    // tick free.
+                    NavigationLink {
+                        RoomsRoomScreen(
+                            shell: model,
+                            model: rooms,
+                            open: RoomsOpenRoom(room.roomID)
+                        )
+                    } label: {
                         RoomsCardView(
                             room: room,
                             extraSec: rooms.extraSec,
