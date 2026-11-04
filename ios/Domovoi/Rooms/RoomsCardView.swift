@@ -5,10 +5,21 @@ import SwiftUI
 ///
 /// Three lines of fact and no controls: the dot with the room's id and its
 /// status pill; what it is playing, how far in, and the clock; and the footer,
-/// which is the Wi-Fi link and when the room was last heard from. The whole
-/// card is the button that opens the room, which is Android's too
-/// (`:195`) — there is nothing else on it to tap, so a separate `open`
-/// control would be a second way to do one thing.
+/// which is the Wi-Fi link and when the room was last heard from.
+///
+/// ### The card is the link's label, not a button of its own (D56)
+///
+/// The whole card opens the room, which is Android's behaviour too (`:195`) —
+/// there is nothing else on it to tap, so a separate `open` control would be
+/// a second way to do one thing. What changed with D56 is **who** draws the
+/// control: a room is now a pushed screen, so ``RoomsView`` wraps this in a
+/// `NavigationLink(value:)` and the card itself is just the label. A `Button`
+/// here as well would be a button inside a button — two overlapping targets,
+/// and two elements in the accessibility tree answering to one name, which is
+/// exactly what sends a test's tap to the wrong one.
+///
+/// The combining and the `.isButton` trait stay here, on the label, so
+/// VoiceOver still reads the room and its state as one thing to open.
 ///
 /// ### `last_seen_at`, not `last_connected_at`
 ///
@@ -31,24 +42,19 @@ struct RoomsCardView: View {
     /// that every row of one frame says the same time.
     let nowMs: Int64
 
-    let onOpen: () -> Void
-
     @Environment(\.dynamicTypeSize) private var typeSize
 
     private var elapsed: Double { roomsElapsedSec(room.nowPlaying, extraSec: extraSec) }
 
     var body: some View {
-        Button(action: onOpen) {
-            VStack(alignment: .leading, spacing: 8) {
-                identity
-                song
-                footer
-            }
-            .padding(16)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(.rect)
+        VStack(alignment: .leading, spacing: 8) {
+            identity
+            song
+            footer
         }
-        .buttonStyle(.plain)
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(.rect)
         .background(
             .quaternary.opacity(0.4),
             in: RoundedRectangle(cornerRadius: 16, style: .continuous)

@@ -97,9 +97,18 @@ public enum RoomsApi {
     public static func volume(_ id: String) -> String { room(id) + "/volume" }
 
     /// `POST` — no web gate; the core's `/v1/admin/dropin/end` is **device**
-    /// tier (`:1507`; `main.py:2718-2721`). This is the one drop-in control
-    /// the phone draws.
+    /// tier (`:1507`; `main.py:2718-2721`). Ending a call somebody else began
+    /// is the one thing a phone needs from the admin pair.
     public static func dropInEnd(_ id: String) -> String { room(id) + "/dropin/end" }
+
+    /// `GET` — device tier (`:1520-1530`): where the core's drop-in socket
+    /// listens, so this phone can open one itself (D54,
+    /// ``DropInCallModel``). "Requires the household device token …; the
+    /// phone presents the same token again on the WebSocket upgrade"
+    /// (`:1537-1538`).
+    public static func dropInPhoneInfo(_ id: String) -> String {
+        room(id) + "/dropin/phone-info"
+    }
 
     /// A JSON body, built **before** the await so that what is sent cannot
     /// change under the request.
@@ -441,6 +450,30 @@ extension RoomsModel {
     /// matcher (`domovoi/main.py:5782-5788`), so the honest thing when it is
     /// refused is to say what the house said — and the mark is taken back,
     /// because nothing was queued.
+    ///
+    /// ### D55 is waiting on the server, and this is why the sentence stays
+    ///
+    /// Kamron, answer 55: "no fulfiller means no button and no error: the
+    /// server computes `can_add` against the fulfiller allowlist, so both
+    /// phones draw it honestly." That is a **server** change, and the route
+    /// on this branch does not have it: `can_add=(external and not
+    /// in_library and bool(r.title or r.url))`
+    /// (`web/backend/api/satellites.py:1040-1043`), with a docstring still
+    /// saying "the frontend shows the button only while a fulfiller
+    /// capability is registered" (`:999-1000`). It is built on
+    /// `wf/ios-b-android`, which never merges to main.
+    ///
+    /// This method had the refusal deleted on the strength of that answer,
+    /// and review round 1 was right that it is premature: until the server
+    /// half lands, `+ add` is drawn in a house with no fulfiller and this is
+    /// the one sentence that says why the press failed. So it is back,
+    /// unchanged, and the deletion is one line to make the day `can_add`
+    /// means what answer 55 says — written up in DECISIONS under "Needs a
+    /// shared change".
+    ///
+    /// ``RoomsPlayed/canAdd`` is still the only condition that draws the
+    /// button: it is right under both arrangements, and it is the half that
+    /// becomes the whole rule when the server's lands.
     public func addToLibrary(_ room: RoomsSatellite, _ row: RoomsPlayed) {
         guard row.canAdd else { return }
         let reads = reads(for: room.roomID)
@@ -473,6 +506,11 @@ extension RoomsModel {
                 // is Chat's reader for exactly this — the `{"detail": …}`
                 // FastAPI sends — so there is one way to take a refusal's
                 // words out of a body rather than two.
+                //
+                // **Kept, pending the server half of D55** (see this
+                // method's doc): on this branch `can_add` does not consult
+                // the fulfiller allowlist, so this refusal is still reachable
+                // and still the only explanation a person gets.
                 let detail = serverDetail(in: (error as? DomovoiError)?.failure?.body)
                 self.say(detail ?? roomsFailure("add", error))
                 // Nothing was queued, so the optimistic mark goes back.

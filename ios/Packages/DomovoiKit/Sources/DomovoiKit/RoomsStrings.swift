@@ -81,10 +81,25 @@ public enum RoomsStrings {
     public static let tabTimers = "timers"
     public static let tabSettings = "settings"
 
-    /// The close control's label. Android's is an icon with no words
-    /// (`SatelliteDetail.kt:129`); every icon-only control here carries an
-    /// accessibility label, so this is **iOS only**.
-    public static let closeRoom = "close this room"
+    /// **There is no `close this room` any more (D56).** A room is its own
+    /// pushed screen and the system's back button and swipe-back gesture
+    /// close it, so a control of ours beside them would be a second way to do
+    /// one thing — which is the reason ``RoomsCardView`` has no separate
+    /// `open` button either. ``RoomsView`` has the whole note.
+    ///
+    /// The navigation bar's title for a pushed room: the room's own id, which
+    /// is what Android's detail header draws (`SatelliteDetail.kt:129`).
+    public static func roomTitle(_ room: String) -> String { room }
+
+    /// **iOS only.** A pushed room can outlive its row — the roster is
+    /// re-read on four pushes and a room can be renamed or forgotten on the
+    /// dashboard while this screen is up. Android cannot reach this state:
+    /// its detail is the roster's own list item, so the item going away takes
+    /// the detail with it. ``RoomsRoomScreen`` says so rather than drawing
+    /// the row it last had.
+    public static func roomIsGone(_ room: String) -> String {
+        "\(room) is not on the house's list of rooms any more"
+    }
 
     // MARK: - the overview tab
 
@@ -227,13 +242,20 @@ public enum RoomsStrings {
     /// `SatOverviewTab.kt:551` — the escaped quotes are part of it.
     public static let dropInHelp = "live two-way audio — say \"hang up\" or use the button to end"
 
-    /// **iOS only.** Android draws a peer picker and a `start` button; the
-    /// core's `/v1/admin/dropin/start` is admin *security* tier
+    /// **iOS only, and reworded for D54.** Android draws a peer picker and a
+    /// `start` button for a call between two *rooms*; the core's
+    /// `/v1/admin/dropin/start` is admin *security* tier
     /// (`domovoi/main.py:2649-2658`) and the web hop forwards this phone's
-    /// household token, so from here it can only fail. The fact is kept, the
-    /// control is not.
+    /// household token, so from here it can only fail. Kamron settled it
+    /// (answers 5 and 53): "phones never create room-to-room drop-ins; a
+    /// phone can only drop into a room", and Android's button comes out too.
+    ///
+    /// The old wording said "this phone can end a call but not begin one",
+    /// which stopped being true the moment ``DropInCallModel`` landed: this
+    /// phone can begin one, into this room, with the button right below the
+    /// sentence. So the sentence now says which call it is about.
     public static let dropInStartIsOnTheDashboard =
-        "starting a drop-in needs the dashboard — this phone can end a call but not begin one"
+        "starting a call between two rooms needs the dashboard — from here this phone can join this room"
 
     // MARK: - maintenance (facts only: both buttons are admin)
 

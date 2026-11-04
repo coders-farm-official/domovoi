@@ -32,6 +32,20 @@ import XCTest
 ///  * ``testRooms_VolumeSendsTheLevelOnce`` drags from the fallback 50 rather
 ///    than from a reported level.
 ///
+/// The one exception is D54's cases. A phone can only drop into a room whose
+/// microphone can do two-way audio, and `full_duplex` is on the roster row
+/// and nowhere else — so against the house there is no room this phone could
+/// call. The control is still **drawn** for such a room, and `disabled`, with
+/// ``RoomsStrings/noAecMic`` the line above it saying why (Android composes
+/// its button after the `!s.full_duplex` arm too, `SatOverviewTab.kt:564`,
+/// and the gate is `roomsPhoneDropInEnabled(_:callIsBusy:)`) — so what the
+/// house's roster cannot give a case is a drop-in it can **press**.
+/// `fixtures/rooms.py` therefore claims `/api/satellites` **conditionally**,
+/// as `fixtures/manual.py` already does: unless a case arms `rooms-roster`
+/// the fixture answers False for that path and the request falls through to
+/// the house, so nothing else on this screen — or on Home — changes.
+/// ``roomsOpen(mode:pushDelay:roster:micSeam:)`` is where it is armed.
+///
 /// ### The other item that claims these paths stands down, and the house
 /// really serves ours
 ///
@@ -55,13 +69,33 @@ extension StubHouseUITests {
     /// The fixtures are reset **first**: cases share one house for a whole run
     /// and this screen's fixture remembers volume levels, a flipped timer
     /// scope and a cancelled timer.
+    /// `roster` arms the fixture's own roster **before the launch**, which is
+    /// the only way a room with an echo-cancelling array reaches this screen:
+    /// the house's roster sends no `full_duplex` (see this extension's note),
+    /// and a room without it draws the drop-in control `disabled` under
+    /// ``RoomsStrings/noAecMic`` — honest, and not something a case can
+    /// press. The fixture answers that path only when it is armed and
+    /// otherwise leaves it to the house, so every case that passes nothing
+    /// here sees what it saw before (`fixtures/rooms.py`, `_roster`).
     @MainActor
     func roomsOpen(
         mode: String = StubHouseUITests.ordinaryTypeSize,
-        pushDelay: Double = 3
+        pushDelay: Double = 3,
+        roster: String? = nil,
+        micSeam: String? = nil
     ) -> XCUIApplication {
         control("reset-fixtures", "{}", port: 6601, what: "the Rooms fixtures")
-        let app = launch(mode: mode, push: "Satellites", pushDelay: pushDelay)
+        if let roster {
+            control(
+                "rooms-roster",
+                "{\"how\": \"\(roster)\"}",
+                port: 6601,
+                what: "a roster with an echo-cancelling room on it"
+            )
+        }
+        let app = micSeam == nil
+            ? launch(mode: mode, push: "Satellites", pushDelay: pushDelay)
+            : roomsLaunch(mode: mode, pushDelay: pushDelay, micSeam: micSeam!)
         let summary = roomsSummaryText(app)
         if !summary.waitForExistence(timeout: 30) {
             // The tree, not a sentence about what is missing: a claim about
@@ -70,6 +104,36 @@ extension StubHouseUITests {
             print("=== ROOMS DID NOT DRAW — tree follows ===")
             print(app.debugDescription)
         }
+        return app
+    }
+
+    /// ``launch(mode:paired:server:port:strip:push:pushDelay:)`` with one more
+    /// launch argument on it: ``DropInTestSeam``'s.
+    ///
+    /// **A copy and not a parameter**, deliberately. `launch` is in
+    /// `StubHouseUITests.swift`, which this item does not own, and one more
+    /// optional parameter there is a line every other item in this batch
+    /// would have to merge around for the sake of two cases. The body is
+    /// `launch`'s, and the only thing it adds is the one argument: if `launch`
+    /// grows a step, this has to grow it too, which is the cost of not
+    /// touching the shared file.
+    @MainActor
+    func roomsLaunch(mode: String, pushDelay: Double, micSeam: String) -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-domovoi-server", "127.0.0.1:6601",
+            "-domovoi-token", Self.token,
+            "-domovoi-audit-push", "Satellites",
+            "-domovoi-audit-push-delay", "\(pushDelay)",
+            "-UIPreferredContentSizeCategoryName", mode,
+            // The microphone, the audio session and the engine, replaced by
+            // stand-ins. Everything else about the call is the app's own —
+            // ``DropInTestSeam`` has the argument for why this exists and
+            // what it is not allowed to do.
+            "-domovoi-dropin-mic", micSeam,
+        ]
+        app.launch()
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 30))
         return app
     }
 
@@ -85,6 +149,16 @@ extension StubHouseUITests {
     /// **Not `firstMatch` on a label that merely contains the name**: the
     /// detail's own header contains it too, and a query that matched either
     /// would pass on a screen that never opened.
+    ///
+    /// ### What says it opened, since D56
+    ///
+    /// A room is its own **pushed screen** now (Kamron, answer 56, by
+    /// recommendation), so there is no `close this room` button left to wait
+    /// for. The marker is ``roomsPushedTitle(_:_:)`` — the pushed screen's
+    /// own inline navigation title, which is the room's id
+    /// (``RoomsRoomScreen``). That is a true statement that the push landed
+    /// and it is not one of the things any case then asserts: the roster
+    /// draws the room's name on a **card**, never in a navigation bar.
     @MainActor
     func roomsOpenRoom(_ app: XCUIApplication, _ room: String) -> Bool {
         let card = app.buttons
@@ -96,13 +170,63 @@ extension StubHouseUITests {
             return false
         }
         card.tap()
-        let closer = app.buttons[RoomsStringsUnderTest.closeRoom]
-        guard closer.waitForExistence(timeout: 20) else {
+        guard roomsPushedTitle(app, room).waitForExistence(timeout: 20) else {
             print("=== \(room) DID NOT OPEN — tree follows ===")
             print(app.debugDescription)
             return false
         }
         return true
+    }
+
+    /// The pushed room screen's own navigation title.
+    @MainActor
+    func roomsPushedTitle(_ app: XCUIApplication, _ room: String) -> XCUIElement {
+        app.navigationBars.staticTexts[room]
+    }
+
+    /// Leave a pushed room the way a person does, and say whether the roster
+    /// came back.
+    ///
+    /// `swipe: true` is the **edge drag** — the interactive pop D56 is for.
+    /// A press of a twelfth of a second and then a drag across the window:
+    /// shorter and it is a tap on whatever sits at the left edge, and a
+    /// `swipeRight()` flick starts at the window's centre, which is inside
+    /// ``RoomsTabStrip`` and gets eaten by it (this file's
+    /// ``roomsBring(_:into:vertical:flicks:)`` note).
+    ///
+    /// `swipe: false` taps the back button instead, which is what the cases
+    /// that merely need to be back on the roster use: the gesture is the
+    /// thing under test in exactly one case, and everywhere else it would be
+    /// a second way to fail for a reason that is not the case's own.
+    @MainActor
+    func roomsLeaveRoom(_ app: XCUIApplication, _ room: String, swipe: Bool) -> Bool {
+        let title = roomsPushedTitle(app, room)
+        if swipe {
+            let window = app.windows.firstMatch
+            let edge = window.coordinate(withNormalizedOffset: CGVector(dx: 0.004, dy: 0.5))
+            edge.press(
+                forDuration: 0.08,
+                thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5))
+            )
+        } else {
+            let back = app.navigationBars.buttons.firstMatch
+            guard back.waitForExistence(timeout: 20) else {
+                print("=== NO BACK BUTTON OVER \(room) — tree follows ===")
+                print(app.debugDescription)
+                return false
+            }
+            back.tap()
+        }
+        // Both halves, and not just the title going: a pop that landed
+        // somewhere else entirely would also take the title away.
+        let deadline = Date().addingTimeInterval(15)
+        while Date() < deadline {
+            if !title.exists && roomsSummaryText(app).exists { return true }
+            usleep(300_000)
+        }
+        print("=== \(room) DID NOT POP (swipe: \(swipe)) — tree follows ===")
+        print(app.debugDescription)
+        return false
     }
 
     /// The two scroll views an opened room has, told apart by their height.
@@ -374,6 +498,26 @@ extension StubHouseUITests {
         return false
     }
 
+    /// The other direction: wait until nothing on screen carries `text`.
+    ///
+    /// **Why a wait and not one `XCTAssertFalse`.** Review round 2 found both
+    /// drop-in cases ending on `app.buttons[dropInFromThisPhone].firstMatch`,
+    /// which is the row **behind** the sheet (NIGHT-RULES §5) — so they
+    /// passed whether the sheet had gone or not. The sheet's own line is what
+    /// discriminates, and a sheet dismisses with an animation, so its absence
+    /// has to be given the same patience its arrival gets.
+    @MainActor
+    func roomsWaitGone(_ app: XCUIApplication, _ text: String, timeout: Double = 20) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if !containing(app, text).exists { return true }
+            usleep(150_000)
+        }
+        print("=== “\(text)” NEVER WENT AWAY — tree follows ===")
+        print(app.debugDescription)
+        return false
+    }
+
     /// Read one of the fixture's own readback routes, as text.
     ///
     /// ``control(_:_:port:what:)`` posts and asserts a 200; this is the other
@@ -393,6 +537,47 @@ extension StubHouseUITests {
         wait(for: [answered], timeout: 15)
         print("ASK \(route) -> \(said)")
         return said
+    }
+
+    /// `dropin_seen.frames` as a number, from the same readback
+    /// ``roomsAsk(_:port:)`` returns as text.
+    ///
+    /// Read rather than asserted-on-as-text because the one thing a case
+    /// needs from it is **growth**: "more frames arrived after X than before
+    /// it" is the only statement that separates a drawn sheet from a running
+    /// call, and it cannot be made by looking for a substring. Parsed by
+    /// hand, not through `JSONDecoder`, to keep this file free of a type for
+    /// one integer; −1 when the key is missing, so a broken readback fails a
+    /// comparison instead of passing one.
+    @MainActor
+    func roomsFrameCount(port: Int = 6601) -> Int {
+        let said = roomsAsk("rooms-dropin", port: port)
+        guard let at = said.range(of: "\"frames\":") else { return -1 }
+        let digits = said[at.upperBound...]
+            .drop(while: { $0 == " " })
+            .prefix(while: { $0.isNumber })
+        return Int(digits) ?? -1
+    }
+
+    /// Wait until the house has counted **more than** `n` microphone frames,
+    /// and answer the count it reached.
+    ///
+    /// A frame is 30 ms, so "some have arrived" is true within a moment of a
+    /// call going live — but not necessarily in the same instant the sheet
+    /// says `live`, and a read that happened to land first would make a case
+    /// about a working call fail for a reason that is not the case's. The
+    /// poll is the honest shape: it is the growth that is being asserted, and
+    /// a port where nothing travels still fails, on the deadline.
+    @MainActor
+    func roomsFramesPast(_ n: Int, timeout: Double = 20) -> Int {
+        var last = -1
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            last = roomsFrameCount()
+            if last > n { return last }
+            usleep(400_000)
+        }
+        return last
     }
 
     // MARK: - the roster
@@ -503,13 +688,24 @@ extension StubHouseUITests {
         )
     }
 
-    /// Opening a room shows **that room's** overview.
+    /// Opening a room shows **that room's** overview, as a pushed screen a
+    /// swipe takes back.
     ///
     /// The read rows name the room the card was for, and the two unknown
     /// branches are asserted as such: the house's roster sends no `voice` and
     /// no `mpd_ports`, so `registry default` and the em dash are the honest
     /// readings — and a port that invented a default would draw a voice name
     /// here.
+    ///
+    /// ### D56, and why the gesture is asserted here and nowhere else
+    ///
+    /// Kamron, answer 56, by recommendation: a room is its own pushed screen
+    /// with swipe-back, not a panel with a `close this room` button. Three
+    /// things make that true and all three are asserted here — a navigation
+    /// bar over the room, **no** `close this room` anywhere, and the edge
+    /// drag landing back on the roster. The other cases use the back button
+    /// (``roomsLeaveRoom(_:_:swipe:)``), because a flaky gesture in twelve
+    /// cases is twelve ways to fail for a reason that is not theirs.
     @MainActor
     func testRooms_OpeningARoomShowsItsOverview() throws {
         let app = roomsOpen()
@@ -531,6 +727,36 @@ extension StubHouseUITests {
             containing(app, "kitchen-pi").exists,
             "the health read's host name is not on screen — this is the value "
                 + "only this room's own health document carries"
+        )
+        // The push itself: a navigation bar carrying this room's id, which
+        // only a pushed destination draws.
+        XCTAssertTrue(
+            roomsPushedTitle(app, "kitchen").exists,
+            "the room is on screen without a navigation title — it was drawn "
+                + "in place of the roster rather than pushed over it"
+        )
+        // And the control D56 removed. A panel that still had it would pass
+        // every other assertion in this case.
+        XCTAssertFalse(
+            app.buttons["close this room"].exists,
+            "`close this room` is still drawn — a pushed screen is left by "
+                + "the back button or the edge swipe, and a second way out "
+                + "that says something else is the control Kamron's rule is "
+                + "about"
+        )
+        XCTAssertTrue(
+            roomsLeaveRoom(app, "kitchen", swipe: true),
+            "the edge swipe did not take the room back to the roster"
+        )
+        // Back on the roster, and the room can be opened again: a pop that
+        // left the model stopped would draw a roster that never re-read.
+        XCTAssertTrue(
+            roomsWaitFor(app, RoomsStringsUnderTest.activeNow),
+            "the roster is not live again after the swipe back"
+        )
+        XCTAssertTrue(
+            roomsOpenRoom(app, "kitchen"),
+            "the kitchen would not open a second time after a swipe back"
         )
     }
 
@@ -875,12 +1101,35 @@ extension StubHouseUITests {
         )
     }
 
-    /// Recently played shows each row's source, and `+ add` only where the
-    /// server said it may.
+    /// The recently-played rows name their source, and `+ add` is drawn
+    /// **only where the server says it can be**.
     ///
-    /// The refused state is the second half: `can_add` is computed without
-    /// consulting a fulfiller, so the honest thing when the house refuses is
-    /// to say **what the house said**.
+    /// ### Three readings of one screen
+    ///
+    ///  1. **A refused add says what the house said**, and the optimistic
+    ///     mark goes back. `can_add` on this branch's server is computed
+    ///     *without* consulting a fulfiller
+    ///     (`web/backend/api/satellites.py:1040-1043`) while the core's gate
+    ///     is a fulfiller's URL matcher (`domovoi/main.py:5782-5788`), so a
+    ///     403 is reachable from a row the server offered, and its own
+    ///     sentence is the only one that tells a person what to do about it.
+    ///  2. **One** `+ add` where the server says so, and pressing it queues
+    ///     the track. Two buttons would mean the library row had one, which
+    ///     is the "+ add on every row" port.
+    ///  3. **No button at all** for a house whose rows all carry
+    ///     `can_add=false`, and nothing said about it.
+    ///
+    /// ### Where D55 got to, and why half of it is here
+    ///
+    /// Kamron, answer 55: "no fulfiller means no button and no error: the
+    /// server computes `can_add` against the fulfiller allowlist, so both
+    /// phones draw it honestly." Reading 3 is that behaviour, and the app
+    /// already does its half — the condition is `can_add` and only `can_add`.
+    /// Reading 1 is what is still true until the **server's** half lands
+    /// (it is built on `wf/ios-b-android`, which never merges to main): this
+    /// unit had deleted the refusal sentence on the strength of the answer,
+    /// review round 1 was right that it was premature, and it is back. On the
+    /// day `can_add` consults the allowlist, reading 1 is the case to delete.
     @MainActor
     func testRooms_RecentlyPlayedShowsSourceAndAdd() throws {
         let app = roomsOpen()
@@ -894,19 +1143,70 @@ extension StubHouseUITests {
         let adds = app.buttons
             .matching(NSPredicate(format: "label == %@", RoomsStringsUnderTest.add))
         evidence(app, "rooms-23-played")
-        // **One** row may be added, and the server says which: two buttons
-        // would mean the library row had one too.
+        // **One** may be added, and the server says which.
         XCTAssertEqual(
             adds.count,
             1,
             "there are \(adds.count) `add` buttons for one addable row"
         )
-        // The server's own refusal wording, not a generic failure.
-        control("rooms-add", "{\"how\":\"no-fulfiller\"}", port: 6601, what: "the add refusal")
+
+        // **Reading 1, first**, because it has to be: a successful add leaves
+        // the row reading `queued` and the button disabled
+        // (`RoomsHistoryViews.swift`, `add`), and a refusal puts the mark
+        // back — so refusing first is what leaves `+ add` pressable for
+        // reading 2.
+        control("rooms-add", "{\"how\":\"refused\"}", port: 6601, what: "the add refusal")
         adds.element(boundBy: 0).tap()
         XCTAssertTrue(
-            roomsWaitFor(app, RoomsStringsUnderTest.noFulfiller),
-            "a refused add did not say what the house said about it"
+            roomsWaitFor(app, RoomsStringsUnderTest.addRefusedDetail),
+            "a refused add did not say what the house said about it — the "
+                + "server's own sentence is the only one that says what to do"
+        )
+        evidence(app, "rooms-23-played-refused")
+        // The mark went back, so the row can be asked for again. `+ add` and
+        // not `queued`: a row left marked after a refusal is a row nothing
+        // was queued for, saying it was.
+        XCTAssertTrue(
+            adds.element(boundBy: 0).waitForExistence(timeout: 20),
+            "the row still reads `queued` after an add that was refused"
+        )
+
+        // Reading 2: the same press against a house that accepts it.
+        control("rooms-add", "{\"how\":null}", port: 6601, what: "an add that is accepted")
+        adds.element(boundBy: 0).tap()
+        XCTAssertTrue(
+            roomsWaitFor(app, RoomsStringsUnderTest.queuedForDownload),
+            "pressing `add` said nothing about what happened to the track"
+        )
+
+        // Reading 3: the same house with no fulfiller installed — `can_add`
+        // is false on every row, so there is nothing to draw.
+        control("rooms-can-add", "{\"can_add\": false}", port: 6601, what: "a house with no fulfiller")
+        XCTAssertTrue(
+            roomsLeaveRoom(app, "kitchen", swipe: false),
+            "the kitchen would not pop, so the second reading never happened"
+        )
+        XCTAssertTrue(roomsOpenRoom(app, "kitchen"), "the kitchen card did not open a second time")
+        XCTAssertTrue(roomsTab(app, RoomsStringsUnderTest.tabRecentlyPlayed), "no recently-played tab")
+        XCTAssertTrue(roomsWaitFor(app, "Lost Mariner"), "the external row is missing the second time")
+        evidence(app, "rooms-23-played-no-fulfiller")
+        let none = app.buttons
+            .matching(NSPredicate(format: "label == %@", RoomsStringsUnderTest.add))
+        XCTAssertEqual(
+            none.count,
+            0,
+            "\(none.count) `add` buttons are drawn for a house whose server "
+                + "offered none — a button that would fail every time"
+        )
+        // And **no explanation**, because there is nothing to explain: a row
+        // the server did not offer is a row the screen says nothing about.
+        // The refusal sentence of reading 1 belongs to a press, and there is
+        // nothing here to press.
+        XCTAssertFalse(
+            containing(app, "no fulfiller").exists,
+            "the screen explains a missing fulfiller although nothing was "
+                + "pressed — answer 55 is that it says nothing and draws "
+                + "nothing"
         )
     }
 
@@ -969,6 +1269,360 @@ extension StubHouseUITests {
         )
     }
 
+    /// **D54, end to end**: this phone drops into a room, the house hears it,
+    /// and `hang up` ends the call.
+    ///
+    /// ### What is real here and what is not
+    ///
+    /// Real: the control, the `dropin/phone-info` read, the socket address
+    /// built from that read, the household token on the upgrade, the frames
+    /// travelling, the sheet's states, `mute`, `hang up`, and the house's own
+    /// record of what arrived. Stood in for: the microphone prompt, the audio
+    /// session and `AVAudioEngine` — the three things that need hardware
+    /// (``DropInTestSeam``).
+    ///
+    /// The readback is what makes "the room hears this phone" a measurement:
+    /// a sheet that says `live` while nothing leaves the device looks exactly
+    /// like a working call from the outside, and that is the failure this
+    /// case is for. `frames` is asserted as **more than none** and never as a
+    /// count — 30 ms a frame against a Simulator under load is a different
+    /// number every run.
+    @MainActor
+    func testRooms_DropInFromThisPhoneIsHeardAndHungUp() throws {
+        let app = roomsOpen(roster: "full-duplex", micSeam: "pump")
+        XCTAssertTrue(roomsOpenRoom(app, "kitchen"), "the kitchen card did not open")
+        XCTAssertTrue(
+            roomsWaitFor(app, RoomsStringsUnderTest.dropInLabel),
+            "the overview has no drop-in section"
+        )
+        let drop = app.buttons[RoomsStringsUnderTest.dropInFromThisPhone].firstMatch
+        XCTAssertTrue(
+            drop.waitForExistence(timeout: 20),
+            "a room with an echo-cancelling array offers no way to drop into it "
+                + "from this phone"
+        )
+        evidence(app, "rooms-27-dropin-control")
+        drop.tap()
+        // The sheet, by the line that is only on it.
+        XCTAssertTrue(
+            roomsWaitFor(app, RoomsStringsUnderTest.twoWayAudioKitchen, timeout: 30),
+            "tapping `drop in from this phone` opened no call"
+        )
+        XCTAssertTrue(
+            roomsWaitFor(app, RoomsStringsUnderTest.livePrefix, timeout: 30),
+            "the call never went live — the house sends `dropin_start` as soon "
+                + "as the socket is up"
+        )
+        evidence(app, "rooms-27-dropin-live")
+
+        // **Apple's audit, on the sheet** — review round 1 asked for this,
+        // and the file's own header is the reason: the last dialog-shaped
+        // view measured on this screen produced five `Contrast failed`
+        // findings against views *behind* its scrim (train S009), which is
+        // why ``DropInCallSheet`` is a real presentation and not a card in a
+        // `ZStack`. That claim is only worth what a measurement says, so it
+        // is measured, here, with the call live.
+        //
+        // Classified exactly as ``testRooms_Audit`` classifies the roster and
+        // the room: `rest` is the defects, and the floor is the platform's
+        // anonymous Dynamic Type findings. Printed rather than pinned,
+        // because a sheet over a pushed screen is a shape nothing on this
+        // track has measured before and the first train is what measures it;
+        // an attributed finding fails the case from the first run.
+        if #available(iOS 17.0, *) {
+            let sheet = try auditIssues(app, "rooms-dropin-sheet")
+            let split = Self.floorAndRest(sheet)
+            print("ROOMS AUDIT dropin-sheet floor=\(split.floor) rest=\(split.rest.count)")
+            XCTAssertTrue(
+                split.rest.isEmpty,
+                "Apple's audit has findings against the drop-in call sheet "
+                    + "beyond the measured floor: "
+                    + split.rest.joined(separator: " / ")
+            )
+        }
+
+        // The house's own record: the room it was asked for, this phone's id
+        // on the query, the household token on the upgrade, and frames.
+        let seen = roomsAsk("rooms-dropin")
+        XCTAssertTrue(
+            seen.contains("\"room\": \"kitchen\""),
+            "the socket did not open on the room that was tapped: \(seen)"
+        )
+        XCTAssertTrue(
+            seen.contains("\"token\": true"),
+            "the upgrade carried no household token, so a real core would "
+                + "answer `unauthorized`: \(seen)"
+        )
+        XCTAssertFalse(
+            seen.contains("\"phone_id\": null"),
+            "the socket carried no `phone_id`, which is what makes "
+                + "`initiator_busy` work: \(seen)"
+        )
+        XCTAssertFalse(
+            seen.contains("\"frames\": 0"),
+            "the call is live and nothing has left this phone — the room "
+                + "would hear silence: \(seen)"
+        )
+
+        // Mute is offered while the call is on, and only then.
+        let mute = app.buttons[RoomsStringsUnderTest.mute].firstMatch
+        XCTAssertTrue(mute.waitForExistence(timeout: 10), "a live call offers no mute")
+        mute.tap()
+        XCTAssertTrue(
+            app.buttons[RoomsStringsUnderTest.unmute].firstMatch.waitForExistence(timeout: 10),
+            "muting did not offer the way back"
+        )
+
+        let hangUp = app.buttons[RoomsStringsUnderTest.hangUp].firstMatch
+        XCTAssertTrue(hangUp.exists, "a live call cannot be ended in one tap")
+        hangUp.tap()
+        evidence(app, "rooms-27-dropin-ended")
+        // **The sheet went away**, which is a different statement from "the
+        // row behind it is there": review round 2 found this case closing on
+        // the row, which exists throughout. The sheet's own line is the only
+        // thing that says the presentation is down.
+        XCTAssertTrue(
+            roomsWaitGone(app, RoomsStringsUnderTest.twoWayAudioKitchen),
+            "`hang up` left the call sheet on screen"
+        )
+        // The house was **told**, rather than the socket being dropped: the
+        // room's end of a call that is merely abandoned stays open until the
+        // core's silence timeout.
+        let after = roomsAsk("rooms-dropin")
+        XCTAssertTrue(
+            after.contains("\"ended\": true"),
+            "hanging up did not send `dropin_end` to the house: \(after)"
+        )
+        // And the screen is the room again, with the control offered afresh.
+        XCTAssertTrue(
+            drop.waitForExistence(timeout: 20),
+            "after a call there is no way to start another"
+        )
+    }
+
+    /// A refused microphone is a **sentence that says where to turn it on**,
+    /// and nothing is opened.
+    ///
+    /// The other half of "a refusal is a sentence, never a silent failure".
+    /// The arbiter's half — the player already holding the microphone — is
+    /// pinned in `DropInCallModelTests`
+    /// (`testTheMicBeingTakenIsASentenceAndNothingIsOpened`): nothing a UI
+    /// case can do from this screen takes the microphone first.
+    @MainActor
+    func testRooms_DropInSaysWhereToTurnTheMicrophoneOn() throws {
+        let app = roomsOpen(roster: "full-duplex", micSeam: "deny")
+        XCTAssertTrue(roomsOpenRoom(app, "kitchen"), "the kitchen card did not open")
+        let drop = app.buttons[RoomsStringsUnderTest.dropInFromThisPhone].firstMatch
+        XCTAssertTrue(drop.waitForExistence(timeout: 20), "no drop-in control to press")
+        drop.tap()
+        XCTAssertTrue(
+            roomsWaitFor(app, RoomsStringsUnderTest.micRefused, timeout: 30),
+            "a refused microphone said nothing about where to turn it on"
+        )
+        evidence(app, "rooms-28-dropin-refused")
+        // **Nothing was opened.** The house never saw a socket, so a port
+        // that asked for the microphone and connected anyway would fail here
+        // rather than in a log nobody reads.
+        let seen = roomsAsk("rooms-dropin")
+        XCTAssertTrue(
+            seen.contains("\"sockets\": 0"),
+            "a socket was opened although the microphone was refused: \(seen)"
+        )
+        // The way out of a call that never started is the same one button.
+        let close = app.buttons[RoomsStringsUnderTest.close].firstMatch
+        XCTAssertTrue(close.waitForExistence(timeout: 10), "the failed call cannot be dismissed")
+        close.tap()
+        // Gone, not merely "the row is there" — see ``roomsWaitGone``.
+        XCTAssertTrue(
+            roomsWaitGone(app, RoomsStringsUnderTest.micRefused),
+            "`close` left the refusal on screen"
+        )
+        XCTAssertTrue(
+            drop.waitForExistence(timeout: 20),
+            "closing the failed call did not come back to the room"
+        )
+    }
+
+    /// **A room already in a drop-in with somebody else offers no way in.**
+    ///
+    /// The must finding of review round 1. The core answers `target_busy` for
+    /// a room whose `in_call_with` is set (`domovoi/phone_dropin.py:78-79`),
+    /// and Android's own term is `s.online && s.full_duplex &&
+    /// s.in_call_with == null` (`PhoneDropinCall.kt:81`) — so the button has
+    /// to be unavailable there, and it was drawn live, because the only gate
+    /// it had read this phone's own call state.
+    ///
+    /// ### Unavailable and not absent, which is the whole of the assertion
+    ///
+    /// The row has to **exist** in the `.inCall` branch: gating its existence
+    /// on `in_call_with` would unmount the call sheet the instant the roster
+    /// reported *this* phone's own call, which is the hazard Android's
+    /// "always composed" comment is about (``RoomsOverviewView``'s drop-in
+    /// note). So the two halves are asserted together: the control is there,
+    /// and it cannot be pressed. A case that only looked for absence would
+    /// pass against the port that reintroduces that hazard.
+    ///
+    /// The `in-call` roster is the fixture arm that was shipped for this and
+    /// never used by a case (`fixtures/rooms.py`, `_roster`): the kitchen
+    /// carries `full_duplex` **and** `in_call_with: study`.
+    @MainActor
+    func testRooms_DropInIsNotOfferedWhileTheRoomIsInACall() throws {
+        let app = roomsOpen(roster: "in-call")
+        XCTAssertTrue(roomsOpenRoom(app, "kitchen"), "the kitchen card did not open")
+        // The branch we are in, by the line only it draws.
+        XCTAssertTrue(
+            roomsWaitFor(app, RoomsStringsUnderTest.inCallWithStudy),
+            "the roster says the kitchen is in a call with the study and the "
+                + "overview does not"
+        )
+        let drop = app.buttons[RoomsStringsUnderTest.dropInFromThisPhone].firstMatch
+        XCTAssertTrue(
+            drop.waitForExistence(timeout: 20),
+            "the drop-in row is not drawn for a room that is in a call — "
+                + "gating its existence on `in_call_with` is what unmounts "
+                + "the sheet on this phone's own call"
+        )
+        evidence(app, "rooms-29-dropin-busy")
+        XCTAssertFalse(
+            drop.isEnabled,
+            "`drop in from this phone` is pressable on a room already in a "
+                + "drop-in with another peer, where the core can only answer "
+                + "`target_busy`"
+        )
+        // The room's own control is the one that is live here, and it is a
+        // different thing: it ends the call the two rooms are in.
+        XCTAssertTrue(
+            app.buttons[RoomsStringsUnderTest.hangUp].firstMatch.exists,
+            "a room in a call offers no `hang up`"
+        )
+    }
+
+    /// **The call survives the room reporting it** — review round 2's must
+    /// finding, which no case could see.
+    ///
+    /// A phone's drop-in shows up in the roster about a second after it
+    /// starts: `domovoi/phone_dropin.py:144-147` puts the call into
+    /// `active_dropins` and `web/backend/api/satellites.py:2011-2018` derives
+    /// `in_call_with` from exactly that list. So the drop-in section crosses
+    /// from ``RoomsDropInState/idle`` to ``RoomsDropInState/inCall`` **while
+    /// this phone's own sheet is up**, and that is the one state change the
+    /// call has to live through. Android says so in the comment this port is
+    /// built on ("gating on in_call_with would unmount the active call dialog
+    /// the instant the room reports it's in a call — which is this very
+    /// call", `SatOverviewTab.kt:559-563`); round 2 found this app drawing
+    /// the row inside two branches of a `switch`, which is two structural
+    /// identities and so the same unmount by another name.
+    ///
+    /// ### How the roster is made to move, since the fixture's is static
+    ///
+    /// `POST /api/_test/rooms-roster {"how": "in-call"}` is read on **every**
+    /// roster request (`fixtures/rooms.py`, `_roster`), so arming it mid-call
+    /// changes what the next read answers; the house pushes
+    /// `satellites.wifi.changed` every three seconds
+    /// (`stubhouse.py:2010-2017`) and that is one of
+    /// ``RoomsModel/rosterEvents``, so the next read is a few seconds away
+    /// with nothing to tap. The flip is then undone, so the branch is crossed
+    /// **both ways** under one sheet — and so that the `hang up` at the end is
+    /// unambiguous: while the roster says `in call with study` there are two
+    /// buttons with that label on screen, the room's and the sheet's.
+    ///
+    /// What discriminates: the sheet's own line, which is drawn nowhere else,
+    /// and the house's frame count, which only grows while the socket is
+    /// open. A port that unmounts the sheet fails on the line; one that keeps
+    /// a sheet whose call was hung up on connect fails on the count.
+    @MainActor
+    func testRooms_TheCallSurvivesTheRoomReportingIt() throws {
+        let app = roomsOpen(roster: "full-duplex", micSeam: "pump")
+        XCTAssertTrue(roomsOpenRoom(app, "kitchen"), "the kitchen card did not open")
+        let drop = app.buttons[RoomsStringsUnderTest.dropInFromThisPhone].firstMatch
+        XCTAssertTrue(drop.waitForExistence(timeout: 20), "no drop-in control to press")
+        drop.tap()
+        XCTAssertTrue(
+            roomsWaitFor(app, RoomsStringsUnderTest.twoWayAudioKitchen, timeout: 30),
+            "tapping `drop in from this phone` opened no call"
+        )
+        XCTAssertTrue(
+            roomsWaitFor(app, RoomsStringsUnderTest.livePrefix, timeout: 30),
+            "the call never went live"
+        )
+        let before = roomsFramesPast(0)
+        XCTAssertGreaterThan(before, 0, "the call is live and nothing has left this phone")
+
+        // The room now reports the call — this very call.
+        control(
+            "rooms-roster",
+            "{\"how\": \"in-call\"}",
+            port: 6601,
+            what: "a roster that reports this phone's own call"
+        )
+        XCTAssertTrue(
+            roomsWaitFor(app, RoomsStringsUnderTest.inCallWithStudy, timeout: 40),
+            "the roster never reported the call, so this case proved nothing "
+                + "— the state socket's push is what re-reads it"
+        )
+        // `29b`, inside the drop-in family and after `29-dropin-busy`:
+        // `rooms-30-` is the Dynamic Type pair's (`rooms-30-type-…`), and two
+        // cases sharing a sequence number stop the evidence being a reading
+        // order even though the filenames differ.
+        evidence(app, "rooms-29b-dropin-roster-flipped")
+        // The sheet is still the thing in front, and the call is still on.
+        XCTAssertTrue(
+            containing(app, RoomsStringsUnderTest.twoWayAudioKitchen).exists,
+            "the roster reporting this phone's own call took the call sheet "
+                + "down — the row is drawn in more than one branch again"
+        )
+        XCTAssertTrue(
+            containing(app, RoomsStringsUnderTest.livePrefix).exists,
+            "the call stopped being live when the room reported it"
+        )
+        let seen = roomsAsk("rooms-dropin")
+        XCTAssertFalse(
+            seen.contains("\"ended\": true"),
+            "`dropin_end` went to the house because the roster reported the "
+                + "call — Android's \"killing the call on connect\": \(seen)"
+        )
+
+        // And back: the room stops reporting it, which crosses the branch the
+        // other way under the same sheet.
+        control(
+            "rooms-roster",
+            "{\"how\": \"full-duplex\"}",
+            port: 6601,
+            what: "a roster that no longer reports the call"
+        )
+        XCTAssertTrue(
+            roomsWaitGone(app, RoomsStringsUnderTest.inCallWithStudy, timeout: 40),
+            "the roster never stopped reporting the call"
+        )
+        XCTAssertTrue(
+            containing(app, RoomsStringsUnderTest.twoWayAudioKitchen).exists,
+            "the room stopping reporting the call took the sheet down"
+        )
+        // The frames kept travelling across both crossings, which is the
+        // measurement that separates "the sheet is still drawn" from "the
+        // call is still up".
+        XCTAssertGreaterThan(
+            roomsFramesPast(before),
+            before,
+            "no microphone frame reached the house after the roster moved, so "
+                + "the sheet is drawn over a call that is no longer running"
+        )
+
+        // One `hang up` on screen now, and it is the sheet's.
+        let hangUp = app.buttons[RoomsStringsUnderTest.hangUp].firstMatch
+        XCTAssertTrue(hangUp.waitForExistence(timeout: 20), "the live call cannot be ended")
+        hangUp.tap()
+        XCTAssertTrue(
+            roomsWaitGone(app, RoomsStringsUnderTest.twoWayAudioKitchen),
+            "`hang up` left the call sheet on screen"
+        )
+        let after = roomsAsk("rooms-dropin")
+        XCTAssertTrue(
+            after.contains("\"ended\": true"),
+            "hanging up did not send `dropin_end` to the house: \(after)"
+        )
+    }
+
     /// The health read's two maintenance lines, and the room that has neither.
     @MainActor
     func testRooms_RebootNeededSaysWhatToDo() throws {
@@ -998,7 +1652,10 @@ extension StubHouseUITests {
         // **The other room draws none of it**: `study` answers
         // `{"latest": null}`, so a panel built from a stale read would show
         // the kitchen's reason here.
-        app.buttons[RoomsStringsUnderTest.closeRoom].firstMatch.tap()
+        XCTAssertTrue(
+            roomsLeaveRoom(app, "kitchen", swipe: false),
+            "the kitchen would not pop, so the study was never reached"
+        )
         XCTAssertTrue(roomsOpenRoom(app, "study"), "the study card did not open")
         XCTAssertTrue(
             roomsWaitFor(app, RoomsStringsUnderTest.upgradeIsOnTheDashboard),
@@ -1185,9 +1842,10 @@ extension StubHouseUITests {
         )
         evidence(app, "rooms-20b-volume-offline")
 
-        let closer = app.buttons[RoomsStringsUnderTest.closeRoom]
-        XCTAssertTrue(closer.exists, "no close control on the study")
-        closer.tap()
+        XCTAssertTrue(
+            roomsLeaveRoom(app, "study", swipe: false),
+            "the study would not pop, so the kitchen was never reached"
+        )
         XCTAssertTrue(roomsOpenRoom(app, "kitchen"), "the kitchen card did not open")
         let live = app.sliders.firstMatch
         XCTAssertTrue(live.waitForExistence(timeout: 20), "the kitchen has no volume slider")
@@ -1264,6 +1922,37 @@ extension StubHouseUITests {
             roomsSummaryText(app).waitForExistence(timeout: 30),
             "the roster did not draw, so there is nothing to audit"
         )
+        // **D57.** `back to Rooms & devices` is the foot of every Settings
+        // section (`RouteScreen.swift:296`), and the audit used to fail its
+        // contrast — a finding this case excused as the shell's.
+        //
+        // It was not the shell's and it was not a colour. The button sits at
+        // the bottom of a page that is taller than the window, so it is drawn
+        // **straddling the viewport's edge**: Apple's contrast check samples
+        // what it can see of an element, and half a button against whatever
+        // is past the clip is not a measurement of the button. Brought wholly
+        // onto the window it passes, at the same tint, on the same screen.
+        // (The same shape as the finding in `audit-reports-one-issue`: when a
+        // finding will not attribute, look at the picture.)
+        //
+        // So the fix is here rather than in `DomovoiApp.swift`'s ink, and
+        // ``roomsOursOnly(_:)`` excuses nothing any more. Kamron's rule reads
+        // the other way round too: the tint is honest, and a case that
+        // quietly dropped a finding against a real control is the thing that
+        // hides the next one.
+        if let page = roomsScrollView(app, strip: false) {
+            let foot = app.buttons[ShellStringsUnderTest.backToRooms]
+            XCTAssertTrue(foot.waitForExistence(timeout: 20), "the Settings section has no foot")
+            XCTAssertTrue(
+                roomsBring(foot, into: page, vertical: true),
+                "`back to Rooms & devices` could not be brought wholly onto "
+                    + "the window, so the audit would measure a clipped "
+                    + "button again and report a contrast failure that is the "
+                    + "measurement's and not the button's"
+            )
+        } else {
+            XCTFail("no settings page to scroll the section foot into")
+        }
         evidence(app, "rooms-31-audit-roster")
         let roster = try auditIssues(app, "rooms-roster")
         let rosterSplit = Self.floorAndRest(roster)
@@ -1300,35 +1989,47 @@ extension StubHouseUITests {
             "the Rooms roster's anonymous floor is \(rosterSplit.floor), not the "
                 + "measured 0: " + roster.joined(separator: " | ")
         )
+        //
+        // **This number was measured before D56**, when the detail was drawn
+        // inside the pushed Settings screen; the room is now a second push,
+        // so Settings and Home are both beneath it and the count of bars the
+        // audit cannot attribute may be higher. Review round 1 flagged it and
+        // it is right: the first train to run this is the measurement, and
+        // the `print` above is where to read it. An equality rather than a
+        // bound, for the reason the shared helper gives
+        // (`StubHouseUITests.swift:957-962`): a floor that *grew* is the
+        // thing worth seeing, and a `<=` would hide exactly the direction
+        // this change can move it in.
         XCTAssertEqual(
             detailSplit.floor,
             Self.knownPushedBarFloor,
             "an opened room's anonymous floor is \(detailSplit.floor), not the "
-                + "known \(Self.knownPushedBarFloor): " + detail.joined(separator: " | ")
+                + "known \(Self.knownPushedBarFloor) — which was measured "
+                + "before D56 made the room its own push, so if the \(detailSplit.floor) "
+                + "is all `element: nil` bar findings this is the number to "
+                + "re-pin: " + detail.joined(separator: " | ")
         )
     }
 
-    /// Drop the one audit finding that belongs to a view this item does not
-    /// own, and say how many were dropped.
+    /// **Nothing is dropped any more** (D57).
     ///
-    /// Apple fails the contrast of **`back to Rooms & devices`** — the button
-    /// `RouteScreen.swift:296` draws at the foot of *every* Settings section,
-    /// in the accent colour, 20.3 points tall. It is the shell's control, not
-    /// this screen's: NIGHT-RULES §2 says this item may replace only its own
-    /// `// slot:` line in that file, and a tint change there would land on
-    /// eleven other sections nobody measured tonight. It is written up in
-    /// `overnight/rooms/DECISIONS.md` under "Needs a shared change".
+    /// This used to hide one finding: `Contrast failed` against
+    /// `back to Rooms & devices`, excused as the shell's control in a file
+    /// this item may not retint. It was neither the shell's fault nor a
+    /// colour — the button was drawn half past the bottom of the window, and
+    /// a contrast check samples what it can see. ``testRooms_Audit`` now
+    /// brings it wholly onto the window before it asks Apple anything, and
+    /// the finding is gone at the same tint.
     ///
-    /// Matched by **label and headline together**, so this hides exactly that
-    /// finding: a second contrast failure, or a hit-area failure against the
-    /// same button, still fails the audit. Nothing of this screen's own is
-    /// excused here.
+    /// Kept as a function rather than deleted at its three call sites: the
+    /// shape of this screen's audit is "the floor, and everything else is a
+    /// defect", and a named step that answers *everything* says so better
+    /// than a silent absence would. A later finding that really does belong
+    /// to another item gets its filter here, with the measurement that says
+    /// why.
     @MainActor
     func roomsOursOnly(_ found: [String]) -> [String] {
-        found.filter { line in
-            !(line.hasPrefix("Contrast failed")
-                && line.contains("label='\(ShellStringsUnderTest.backToRooms)'"))
-        }
+        found
     }
 }
 
@@ -1346,7 +2047,6 @@ enum RoomsStringsUnderTest {
 
     static let activeNow = "active now"
     static let noMusic = "no music"
-    static let closeRoom = "close this room"
 
     static let roomIDLabel = "room id"
     static let registryDefault = "registry default"
@@ -1416,12 +2116,47 @@ enum RoomsStringsUnderTest {
     static let less = "less"
 
     static let add = "add"
-    /// The stub's own refusal, surfaced as the server wrote it.
-    static let noFulfiller = "no fulfiller plugin is installed"
+    /// ``RoomsStrings/queuedForDownload(_:)`` for the external row — the
+    /// stub's `add-by-url` answer when nothing is armed.
+    static let queuedForDownload = "queued for download: Lost Mariner"
+
+    /// The stub's 403, surfaced **as the server wrote it**
+    /// (`fixtures/rooms.py`, `rooms-add {"how":"refused"}`).
+    ///
+    /// Reachable because `can_add` on this branch's server does not consult
+    /// the fulfiller allowlist, which is the server half of D55 that has not
+    /// landed. This is the sentence the app shows in its place; review round
+    /// 1 found it deleted ahead of that change.
+    static let addRefusedDetail = "no fulfiller recognises that address"
 
     static let dropInLabel = "drop in"
     static let hangUp = "hang up"
     static let noAecMic = "this room's mic can't do drop-in"
+    /// ``RoomsStrings/inCallWith(_:)`` for the `in-call` roster arm, whose
+    /// kitchen is in a call with `study` (`fixtures/rooms.py`, `_roster`).
+    static let inCallWithStudy = "in call with study"
+
+    // MARK: - a call from this phone (``DropInStrings``)
+
+    /// ``DropInStrings/dropInFromThisPhone`` — the control D54 added.
+    static let dropInFromThisPhone = "drop in from this phone"
+    /// ``DropInStrings/twoWayAudio(room:)`` for the kitchen. **The dash is
+    /// U+2014** and the sentence is on the call sheet and nowhere else, which
+    /// is what makes it the marker for "the call is up".
+    static let twoWayAudioKitchen = "two-way audio with the kitchen room — speakerphone is on"
+    /// ``DropInStrings/live(_:)``'s start, without the clock. Matched as a
+    /// prefix because the seconds move while the case reads them.
+    static let livePrefix = "live ·"
+    static let mute = "mute"
+    static let unmute = "unmute"
+    /// ``DropInStrings/close`` — what the one leave button says once the call
+    /// is over, or never started.
+    static let close = "close"
+    /// ``DropInStrings/micRefused``. **The chevron is U+203A**, and the
+    /// sentence has to name where the switch is: a refusal that only says
+    /// "no" is the silent failure Kamron's rule is about.
+    static let micRefused =
+        "Domovoi needs the microphone to drop in. Turn it on in Settings › Domovoi."
 
     static let rebootNeeded = "reboot needed"
     static let bootNetworkStep = "boot network step"

@@ -305,6 +305,18 @@ struct RoomsConversationTurn: View {
 /// fail every time — which is where no-misleading-controls bites — and because
 /// a refusal shows **the server's own words** rather than "add failed"
 /// (``RoomsModel/addToLibrary(_:_:)``).
+///
+/// ### D55 is this condition, and the server has not landed it yet
+///
+/// Kamron, answer 55: "no fulfiller means no button and no error: the server
+/// computes `can_add` against the fulfiller allowlist, so both phones draw it
+/// honestly." Then `can_add` alone is the whole rule and the refusal
+/// sentence has nothing left to say — but the change is the **server's**, and
+/// the route on this branch still computes `can_add` without the allowlist
+/// (`web/backend/api/satellites.py:1040-1043`). This unit had deleted the
+/// refusal on the strength of the answer; review round 1 was right that it is
+/// premature, so it is back until the server half lands. Nothing here changes
+/// on that day: the condition is already `can_add` and only `can_add`.
 struct RoomsPlayedView: View {
 
     let model: RoomsModel

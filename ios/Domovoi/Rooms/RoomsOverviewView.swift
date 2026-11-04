@@ -17,17 +17,27 @@ import SwiftUI
 ///   and ``RoomsStrings/upgradeIsOnTheDashboard`` says where the buttons are.
 ///   Android's confirm dialogs, its press ledger, its six-minute upgrade clock
 ///   and its outcome sentences (`SatUpgrade.kt`) go with them.
-/// * **Starting a drop-in**: the peer picker and `start`
+/// * **Starting a drop-in between two ROOMS**: the peer picker and `start`
 ///   (`SatOverviewTab.kt:467-560`). The core's `/v1/admin/dropin/start` is
 ///   admin *security* (`domovoi/main.py:2649-2658`), so from this phone it
-///   could only fail. **`hang up` is drawn** — `/v1/admin/dropin/end` is
-///   device tier (`main.py:2718-2721`).
-/// * **"Drop in from this phone"** (`PhoneDropinRow`, `PhoneDropinCall.kt:61`):
-///   permitted, deferred, no audio layer in this app at all.
+///   could only fail — and Kamron settled it rather than leaving it to the
+///   tier (answers 5 and 53): "phones never create room-to-room drop-ins",
+///   and Android's button comes out too. **`hang up` is drawn** —
+///   `/v1/admin/dropin/end` is device tier (`main.py:2718-2721`).
+///
+/// **"Drop in from this phone" is drawn** (`PhoneDropinRow`,
+/// `PhoneDropinCall.kt:61`): Kamron, answer 54. ``RoomsDropInRow`` is the
+/// control and the call sheet; it is a device-tier socket of its own
+/// (`main.py:7056`) and the only call it opens is this phone's into this
+/// room.
 ///
 /// Every write is ``RoomsModel``'s, never this view's: a section that holds
 /// the request loses it when the tab changes under it.
 struct RoomsOverviewView: View {
+
+    /// For the drop-in row: this phone's device id and the client it calls
+    /// with (D54).
+    let shell: ShellModel
 
     let model: RoomsModel
     let reads: RoomsRoomModel
@@ -352,8 +362,53 @@ struct RoomsOverviewView: View {
 
     // MARK: - drop in (`DropInSection`, `SatOverviewTab.kt:467`)
 
-    /// The state, `hang up` when there is a call, and one line saying where
-    /// starting one is done.
+    /// The state, `hang up` when there is a call, one line saying where a
+    /// call between two *rooms* is started, and — always, whatever the state
+    /// — "drop in from this phone".
+    ///
+    /// ### Why the row is drawn ONCE, outside the switch
+    ///
+    /// Because Android draws it once, outside the `when`, and says why in a
+    /// comment worth quoting in full (`SatOverviewTab.kt:559-564`): "Always
+    /// composed — gating on in_call_with would unmount the active call
+    /// dialog the instant the room reports it's in a call (which is this very
+    /// call), and the dialog's onDispose hangs up, killing the call on
+    /// connect. The button self-disables during any call; the dialog stays up
+    /// until the user hangs up."
+    ///
+    /// **Drawing it inside two branches of the switch is not the same thing**,
+    /// which review round 2 found and the version of this comment it found
+    /// got wrong. Branches of a `switch` inside a `@ViewBuilder` are distinct
+    /// structural identities, so crossing from `.idle` to `.inCall` destroys
+    /// the `.idle` row and builds a new one — and ``RoomsDropInRow``'s
+    /// `@State showing` belongs to that identity, so the sheet goes with it.
+    /// The roster really does cross that branch while this phone's own call is
+    /// live: `domovoi/phone_dropin.py:144-147` puts the phone's call into
+    /// `active_dropins`, `web/backend/api/satellites.py:2011-2018` computes
+    /// `in_call_with` from exactly that list, and
+    /// ``roomsDropInState(_:)`` answers `.inCall` the moment it is non-nil.
+    /// Either outcome is a bug: `onDismiss` fires and hangs the call up on
+    /// connect, or it does not and there is a live microphone in somebody's
+    /// kitchen with no sheet, no elapsed time and no `mute`.
+    ///
+    /// One position in this `VStack` is one identity, so the row survives
+    /// every state the room goes through.
+    ///
+    /// ### Including `.noAec`, which is also Android
+    ///
+    /// `PhoneDropinRow` is composed after the `when`'s `!s.full_duplex` arm as
+    /// well, so a room with no echo-cancelling array draws the button
+    /// **disabled** on both phones. That is not a control that cannot do what
+    /// it says — it is unavailable, and the sentence saying why
+    /// (``RoomsStrings/noAecMic``) is the line directly above it.
+    ///
+    /// **The row's own gate is Android's, term for term**:
+    /// ``roomsPhoneDropInEnabled(_:callIsBusy:)`` is
+    /// `s.online && s.full_duplex && s.in_call_with == null`
+    /// (`PhoneDropinCall.kt:81`) plus this phone's own call state, which the
+    /// roster lags by a second. Review round 1 found the version that gated
+    /// only on this phone's call: a room already in a drop-in with a third
+    /// party offered a button whose every press could only get `target_busy`.
     @ViewBuilder
     private var dropIn: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -378,8 +433,10 @@ struct RoomsOverviewView: View {
                     .foregroundStyle(Color.fgMuted)
                     .fixedSize(horizontal: false, vertical: true)
             case .noAec:
-                // A fact about the hardware, not a refusal of this phone's:
-                // this room cannot do drop-in at all.
+                // A fact about the hardware: the core would answer
+                // `target_no_aec` (`phone_dropin.py:84-85`), so this is the
+                // reason the row below is unavailable, written where it can
+                // be read. Android draws the same pair.
                 Text(RoomsStrings.noAecMic)
                     .font(.footnote)
                     .foregroundStyle(Color.fgMuted)
@@ -390,6 +447,8 @@ struct RoomsOverviewView: View {
                     .foregroundStyle(Color.fgMuted)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            // Outside the switch, and that is the whole point — see above.
+            RoomsDropInRow(shell: shell, model: model, room: room)
         }
     }
 
