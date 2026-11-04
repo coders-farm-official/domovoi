@@ -365,9 +365,10 @@ extension StubHouseUITests {
             "\(Int(unaccounted)) points of the \(Int(app.frame.height)) are "
                 + "neither the page nor the collapsed navigation bar on "
                 + "\(name), over the \(Int(allowed))-point allowance. The phone "
-                + "bar is 146 of 852 at AX5 and the safe areas about 6%; "
-                + "anything past that is chrome outside the page's scroll "
-                + "view, which is what answer 29 is about."
+                + "bar is 146 of 852 at AX5 and the two safe areas about 93 "
+                + "between them; anything past that is chrome outside the "
+                + "page's scroll view, which is what answer 29 is about — it "
+                + "was 706 points off the page before the fold."
         )
         // Reading 6. The audit at AX5, with the large title collapsed into the
         // inline bar — the surface `ShellPillToolbarButton`'s comment used to
@@ -378,9 +379,23 @@ extension StubHouseUITests {
     }
 
     /// How much of the window may be neither the page nor the collapsed
-    /// navigation bar: the phone bar (146 of 852, 17%, train S001) plus the
-    /// safe areas (about 6%), rounded up to 28%.
-    private static let unaccountedChromeShare: CGFloat = 0.28
+    /// navigation bar: the phone bar (146 of 852 at AX5, train S001) plus the
+    /// two safe areas (59 and 34 on that phone) is 239 points, 28% — so the
+    /// allowance is **34%**, 50 points of slack, because whether a SwiftUI
+    /// scroll view's frame is inset by a safe area or spans behind it is not
+    /// something this file can assert and a reading that false-reds on a
+    /// rounding is worth nothing.
+    ///
+    /// What each reading catches, since neither catches everything: the shape
+    /// answer 29 fixes left **706** of 852 points off the page (83%) and
+    /// `ShellTopBar` alone is 300 (35%), so this allowance catches both. A
+    /// 256-point plugin band on its own would clear 34% if the page's scroll
+    /// view spans behind the safe areas — reading 4's 45% floor is what
+    /// catches that one (852 − 239 − 256 − 44 = 313, 37%), and the band has a
+    /// 200-point ceiling of its own in
+    /// ``testShell_ThePluginBandIsOneRowAtTheLargestTypeSize()``. Three
+    /// readings, each with a shape it is the one to catch.
+    private static let unaccountedChromeShare: CGFloat = 0.34
 
     /// Apple's audit on a folded shell, classified so that it reads **this
     /// unit's** chrome and nothing else.
