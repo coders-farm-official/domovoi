@@ -64,12 +64,6 @@ public enum FileStrings {
     /// `FilesScreen.kt:1162`.
     public static let importInto = "import into a library"
 
-    /// What a row says instead of offering a save it cannot do.
-    /// **iOS-only** — see ``FileSaveModel/cap``.
-    public static func tooBigToSave(_ size: Int64) -> String {
-        "too big to save from a phone (\(fmtBytes(size))) — on the dashboard"
-    }
-
     /// Why there is no Delete in this screen's menus. **iOS-only**, and said
     /// once at the foot of the list rather than per row — `whereDeletingLives`
     /// says why it is not in the menus themselves. See
@@ -161,8 +155,10 @@ public enum FileStrings {
 
     // MARK: - saving a file to the device
 
-    public static func saving(_ name: String) -> String { "saving \"\(name)\"…" }
-    public static func couldNotSave(_ why: String) -> String { "couldn't save: \(why)" }
+    // `saving(_:)` and `couldNotSave(_:)` used to live here. They are
+    // ``TransferStrings``' now, word for word: four screens draw the same
+    // save control since D47, and a sentence in two enums is a sentence that
+    // can be changed in one of them.
     public static let share = "share"
 
     // MARK: - reading a document

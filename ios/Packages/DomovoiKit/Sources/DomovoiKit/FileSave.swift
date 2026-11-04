@@ -1,88 +1,78 @@
 import Foundation
 import Observation
 
-/// Saving one of the house's files onto this phone.
+/// Saving one of the house's files onto this phone, Files-shaped.
 ///
 /// Android's row calls `DownloadManager` and the system takes it from there
 /// (`ServerFileTransfer.download`). iOS has no such thing: the app fetches
 /// the bytes itself and hands the person a **file**, which is what the share
 /// sheet is for — Save to Files, AirDrop, Mail, or straight into another app.
 ///
-/// ### Why the bytes come through the client, and the cap that follows
+/// ### What this type is now
 ///
-/// `/api/files/download` is a device-tier read, so the request has to carry
-/// the household token. It carries it in a **header**, through
-/// ``DomovoiClient``, exactly as every other read does — which also means it
-/// goes through the redirect rules and the token-health observation that
-/// client is, and no URL this app builds ever has a token in it (the one
-/// exception, and its reasons, are in ``VideoStream``).
+/// A thin front end over ``SaveToDeviceModel``, which is the shared one all
+/// four screens use. This one exists for the shape Files has: it takes a
+/// ``FileEntry`` and a library id and works out the path and the name, which
+/// is what ``FilesModel`` has to hand and what the other three screens have
+/// not.
 ///
-/// The cost is that ``DomovoiClient/raw(method:path:body:contentType:trackPairing:timeout:)``
-/// answers with `Data`: the whole file arrives in memory. A streaming
-/// download would need a second request path of its own — `URLSession`'s
-/// download task, outside `perform`, and so outside the hop rules, the
-/// identity gate and the health observation. Writing that for one row's menu
-/// item, and getting one of those three subtly wrong, is a worse trade than
-/// a ceiling, so there is a ceiling: ``cap``.
+/// ### The ceiling is gone (D47)
 ///
-/// A file over it gets **no control at all** and a line saying how big it is
-/// and where to get it (``FileStrings/tooBigToSave(_:)``), under the owner's
-/// standing rule about controls that cannot do what they say
-/// ([[no-misleading-controls]]). The ceiling is the honest part of this
-/// design, not the part to be embarrassed about: every document, photo,
-/// spreadsheet and song in a house is under it, and a film is not something
-/// to pull through a phone's memory.
+/// This file used to document a 64 MiB ceiling and the reason for it: `raw`
+/// answers with `Data`, so the whole file arrived in memory and a second copy
+/// was written for the share sheet. Its own doc comment named the fix —
+/// "`URLSession`'s download task, outside `perform`" — and
+/// ``DomovoiClient/downloadFile(path:into:trackPairing:onProgress:)`` is
+/// that, except that it stayed **inside** the client's machinery rather than
+/// outside it (read that file for why that is the better half of the trade).
+/// So there is no ``cap``, no size test before the fetch, and no row that
+/// says a file is too big: every file in a house can be saved, with a
+/// percentage while it comes and a way to stop it.
 @MainActor
 @Observable
 public final class FileSaveModel {
 
-    /// The largest file this app will fetch whole.
-    ///
-    /// Sixty-four mebibytes, chosen against what it has to hold: `Data` plus
-    /// the copy the share sheet reads from, on a phone that may be holding a
-    /// video player and a page of thumbnails as well. It is a deliberate
-    /// product limit with a message of its own, not a guess at a crash point.
-    public static let cap: Int64 = 64 * 1024 * 1024
-
     /// Where saved copies are written before the person is handed one.
     ///
     /// The app's own temporary directory: iOS empties it, and
-    /// ``clearTheSpool()`` empties it on the way in so that one file is in
+    /// ``emptySpool()`` empties it on the way in so that one file is in
     /// flight at a time and nothing accumulates.
     public static let spool = "domovoi-saved"
 
-    public enum State: Equatable, Sendable {
-        case idle
-        /// The display name of the file being fetched.
-        case fetching(String)
-        /// A file on this phone, and what to call it when sharing.
-        case ready(URL, String)
-        case failed(String)
+    /// One state for every screen that saves, so the shared control
+    /// (`SaveToDeviceButton`) draws one thing.
+    public typealias State = SaveToDeviceModel.State
+
+    /// The shared model. Public because ``FilesView`` draws the shared
+    /// control from it and because a screen with no `FileEntry` uses the
+    /// shared one directly.
+    public let saver: SaveToDeviceModel
+
+    public var state: State { saver.state }
+
+    public init(saver: SaveToDeviceModel) {
+        self.saver = saver
     }
 
-    public private(set) var state: State = .idle
-
-    /// Which server the file in flight belongs to.
+    /// The seam the package tests drive: a fetch that answers with bytes.
     ///
-    /// A fetch that lands after the app has moved house must not be handed
-    /// to the person as the new house's file: a library id and a path are
-    /// both reusable, so the answer would look right.
-    /// [[read-after-await-wrong-key]].
-    private var epoch = 0
-
-    private let fetch: @Sendable (String) async throws -> Data
-
-    public init(fetch: @Sendable @escaping (String) async throws -> Data) {
-        self.fetch = fetch
+    /// **Not a production path** — ``init(in:)`` is — and it is here rather
+    /// than in the test file because the alternative is every one of those
+    /// tests building a `URLProtocol` stub to assert a decision that has
+    /// nothing to do with HTTP. The bytes it is given are small by
+    /// construction (a test writes them inline), so this does not re-open the
+    /// memory question the streaming path exists to close: it writes what it
+    /// is handed straight to `into` and never holds a second copy.
+    public convenience init(fetch: @Sendable @escaping (String) async throws -> Data) {
+        self.init(saver: SaveToDeviceModel(fetch: { path, into, _ in
+            let bytes = try await fetch(path)
+            try bytes.write(to: into, options: .atomic)
+            return into
+        }))
     }
 
     public convenience init(in container: AppContainer) {
-        let client = container.client
-        self.init(fetch: { path in
-            // Sixty seconds: a big document over a slow Wi-Fi link is worth
-            // waiting for, and the default is tuned for a screen's reads.
-            try await client.raw(method: "GET", path: path, timeout: 60)
-        })
+        self.init(saver: SaveToDeviceModel(in: container))
     }
 
     /// Fetch `entry` from `libraryID` and write it where the share sheet can
@@ -92,34 +82,13 @@ public final class FileSaveModel {
     /// rather than queued, because the sheet that opens can only be about one
     /// file and the person has not said which.
     public func save(_ entry: FileEntry, from libraryID: String) {
-        guard case .idle = state else { return }
-        if let size = entry.size, size > Self.cap {
-            // Nothing should be able to ask for this — no control is drawn
-            // for a file over the cap — so it is a refusal rather than a
-            // fetch, and it says the same sentence the row would have.
-            state = .failed(FileStrings.tooBigToSave(size))
-            return
-        }
-        let name = Self.safeName(for: entry)
-        state = .fetching(entry.displayTitle)
-        let mine = epoch
-        let path = FilePath.download(libraryID: libraryID, rel: entry.rel)
-        // The closure, not `self?.fetch`: `try await self?.fetch(path) ?? Data()`
-        // compiles, reads well, and writes an EMPTY FILE to the person's
-        // phone whenever the model has gone away mid-fetch.
-        let read = fetch
-        Task { @MainActor [weak self] in
-            do {
-                let bytes = try await read(path)
-                guard let self, mine == self.epoch else { return }
-                let url = try Self.write(bytes, named: name)
-                self.state = .ready(url, name)
-            } catch {
-                guard let self, mine == self.epoch else { return }
-                self.state = .failed(FileStrings.couldNotSave(FilesModel.why(error)))
-            }
-        }
+        saver.save(
+            path: FilePath.download(libraryID: libraryID, rel: entry.rel),
+            named: Self.safeName(for: entry)
+        )
     }
+
+    public func cancel() { saver.cancel() }
 
     /// The person is done with the sheet: forget the file and remove the
     /// copy.
@@ -129,17 +98,9 @@ public final class FileSaveModel {
     /// been given the one they asked for. Leaving them to pile up in a
     /// directory iOS clears "at some point" is how an app comes to be holding
     /// a gigabyte of somebody's documents.
-    public func taken() {
-        if case .ready(let url, _) = state {
-            try? FileManager.default.removeItem(at: url)
-        }
-        state = .idle
-    }
+    public func taken() { saver.taken() }
 
-    public func serverChanged() {
-        epoch += 1
-        taken()
-    }
+    public func serverChanged() { saver.serverChanged() }
 
     /// The name the copy is written under: the file's own basename, with
     /// anything that could point somewhere else taken out.
@@ -150,8 +111,15 @@ public final class FileSaveModel {
     /// produce a path that is a directory. So the last path component is
     /// taken (by both separators — a Windows house's names hold
     /// backslashes), and `.` and `..` fall back to a word.
-    static func safeName(for entry: FileEntry) -> String {
+    public static func safeName(for entry: FileEntry) -> String {
         let raw = entry.name.isEmpty ? entry.rel : entry.name
+        return safeName(raw)
+    }
+
+    /// The same, for a screen whose row is not a ``FileEntry`` — a video, an
+    /// episode, a chapter. Shared so there is one copy of the hardening
+    /// rather than four.
+    public static func safeName(_ raw: String) -> String {
         let tail = raw.split(whereSeparator: { $0 == "/" || $0 == "\\" }).last.map(String.init) ?? ""
         let trimmed = tail.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty || trimmed == "." || trimmed == ".." { return FileStrings.unnamedFile }
@@ -160,12 +128,22 @@ public final class FileSaveModel {
         return String(trimmed.map { $0 == ":" || $0 == "\0" ? "_" : $0 })
     }
 
-    static func write(_ bytes: Data, named name: String) throws -> URL {
+    /// The spool, emptied. One file is in flight at a time.
+    ///
+    /// Separated from ``write(_:named:)`` because the streaming path needs
+    /// the **directory** before the bytes exist: `downloadFile` is handed a
+    /// destination inside it and the system moves the finished file there.
+    @discardableResult
+    public static func emptySpool() throws -> URL {
         let spool = FileManager.default.temporaryDirectory
             .appendingPathComponent(Self.spool, isDirectory: true)
         try? FileManager.default.removeItem(at: spool)
         try FileManager.default.createDirectory(at: spool, withIntermediateDirectories: true)
-        let url = spool.appendingPathComponent(name, isDirectory: false)
+        return spool
+    }
+
+    static func write(_ bytes: Data, named name: String) throws -> URL {
+        let url = try emptySpool().appendingPathComponent(name, isDirectory: false)
         try bytes.write(to: url, options: .atomic)
         return url
     }

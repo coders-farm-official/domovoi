@@ -222,7 +222,7 @@ public final class FilesModel {
 
     /// What tapping this row does.
     public func action(for entry: FileEntry) -> FileKinds.FileAction {
-        FileKinds.action(for: entry, in: currentLibrary, saveCap: FileSaveModel.cap)
+        FileKinds.action(for: entry, in: currentLibrary)
     }
 
     /// The word for it, or nil when there is nothing to tap.
@@ -244,12 +244,11 @@ public final class FilesModel {
     ///
     /// Not when the tap already saves — one row, one save — and not for a
     /// folder, which this app cannot save at all
-    /// (``FileKinds/action(for:in:saveCap:)`` says why), and not for a file
-    /// over the cap, which gets a line instead of a control.
+    /// (``FileKinds/action(for:in:)`` says why).
     public func offersSave(_ entry: FileEntry) -> Bool {
         switch action(for: entry) {
         case .read, .view: return true
-        case .open, .save, .tooBig: return false
+        case .open, .save: return false
         }
     }
 
@@ -477,11 +476,6 @@ public final class FilesModel {
             viewing = entry
         case .save:
             saveToDevice(entry)
-        case .tooBig:
-            // Nothing draws a control for this, so nothing can call it. It is
-            // a case rather than a `default` so that a fifth action cannot be
-            // added without this switch being read again.
-            break
         }
     }
 

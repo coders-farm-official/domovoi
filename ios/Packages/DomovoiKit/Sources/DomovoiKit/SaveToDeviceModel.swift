@@ -1,0 +1,238 @@
+import Foundation
+import Observation
+
+/// Saving one of the house's files onto this phone, of any size.
+///
+/// The model behind the one save control four screens draw — Files, Videos,
+/// and (the player unit's rows) Audiobooks and Podcasts. Android has no such
+/// type: there `DownloadManager` takes a URL and the system does the rest
+/// (`DeviceDownloads.enqueueWithToken`, `VideosScreen.kt:216`). iOS has no
+/// public Downloads folder and no system downloader an app may hand a
+/// credentialled request to, so the app carries the file itself and hands the
+/// person the result through the share sheet.
+///
+/// ### What it is, in one line each
+///
+/// * The bytes come down ``DomovoiClient/downloadFile(path:into:trackPairing:onProgress:)``,
+///   which writes them to disk as they arrive. **Nothing proportional to the
+///   file is in memory**, which is what D47 asked for and what removes the
+///   64 MiB ceiling ``FileSaveModel`` used to draw.
+/// * The copy is written into ``FileSaveModel/spool``, which is emptied on
+///   the way in, so one file is in flight at a time and nothing accumulates.
+/// * ``taken()`` deletes it. The person already has the one they asked for,
+///   and an app that leaves copies in a directory iOS clears "at some point"
+///   is an app holding a gigabyte of somebody's documents.
+/// * ``cancel()`` stops a transfer. A multi-gigabyte save that cannot be
+///   stopped is a phone with no way out of a mistake, and Android's
+///   notification has a cancel.
+///
+/// ### The epoch, and why it is not optional
+///
+/// A fetch that lands after the app has moved house must not be handed over:
+/// a library id and a path are both reusable, so the answer would look right
+/// under a server that never had the file. The epoch is captured **before**
+/// the `await` and checked after it ([[read-after-await-wrong-key]]);
+/// `SaveToDeviceModelTests` switches house *inside* the round trip, which is
+/// the only way that test means anything.
+///
+/// ### What is not, and why there is no control for it
+///
+/// * **No queue.** One save at a time: a second tap while one is in flight is
+///   ignored, because the share sheet that opens can only be about one file
+///   and the person has not said which. Android's `DownloadManager` queues
+///   because the system owns the notification; here the sheet is the
+///   completion, and two sheets cannot both be it.
+/// * **No background transfer.** A background `URLSession` would survive the
+///   app being suspended, and it is the right answer for a film — but it
+///   needs its own session, its own delegate outside the client, and a
+///   relaunch path that finds the finished file and works out which screen
+///   asked for it. It is written down in
+///   `design-notes/ios/batch-2026-11-03/transfers/DECISIONS.md` rather than
+///   half-built: a save stops when the person leaves the app, and the control
+///   says it is saving while they are in it, which is true.
+@MainActor
+@Observable
+public final class SaveToDeviceModel {
+
+    public enum State: Equatable, Sendable {
+        case idle
+        /// The display name of the file, and how far it has got as a fraction
+        /// of 1 — nil while nothing knows the total (a server that declared
+        /// no `Content-Length`).
+        case fetching(String, Double?)
+        /// A file on this phone, and what to call it when sharing.
+        case ready(URL, String)
+        case failed(String)
+    }
+
+    public private(set) var state: State = .idle
+
+    /// Which server the file in flight belongs to. See the note on the type.
+    private var epoch = 0
+
+    /// The transfer, so ``cancel()`` has something to stop. Held by the
+    /// model and not by a row: a lazy row is recycled while it scrolls and a
+    /// `Task` on one is cancelled mid-file (the standing rule, which cost a
+    /// real bug on this track).
+    private var running: Task<Void, Never>?
+
+    /// The fetch, injected so a test can drive every branch without a server.
+    ///
+    /// It takes the destination rather than answering with bytes, because
+    /// that is the shape that cannot hold a file in memory: a closure
+    /// returning `Data` would have put the ceiling straight back.
+    private let fetch: @Sendable (
+        _ path: String,
+        _ into: URL,
+        _ onProgress: @Sendable @escaping (Int64, Int64) -> Void
+    ) async throws -> URL
+
+    public init(
+        fetch: @Sendable @escaping (
+            _ path: String,
+            _ into: URL,
+            _ onProgress: @Sendable @escaping (Int64, Int64) -> Void
+        ) async throws -> URL
+    ) {
+        self.fetch = fetch
+    }
+
+    public convenience init(in container: AppContainer) {
+        let client = container.client
+        self.init(fetch: { path, into, onProgress in
+            try await client.downloadFile(path: path, into: into, onProgress: onProgress)
+        })
+    }
+
+    // MARK: - the tap
+
+    /// Fetch `path` and write it where the share sheet can read it.
+    ///
+    /// - Parameters:
+    ///   - path: the server path, built by whichever screen asked —
+    ///     ``FilePath/download(libraryID:rel:)`` for a library file,
+    ///     ``VideoPath/stream(_:download:)`` with `download: true` for a
+    ///     video (which is what Android asks for too,
+    ///     `VideosScreen.kt:222`).
+    ///   - named: what to call the copy. **Already hardened** by
+    ///     ``FileSaveModel/safeName(for:)`` or by the caller's own
+    ///     equivalent: the name comes from the server, and a server is a
+    ///     thing that can be wrong or hostile.
+    public func save(path: String, named: String) {
+        guard case .idle = state else { return }
+        state = .fetching(named, nil)
+        let mine = epoch
+        let read = fetch
+        // Captured before the `await`, all of it. A late answer read against
+        // whatever the model holds when it lands is the defect this type's
+        // note is about.
+        let name = named
+        let where_ = path
+        running = Task { @MainActor [weak self] in
+            let box = TransferProgressBox()
+            do {
+                let spool = try FileSaveModel.emptySpool()
+                let into = spool.appendingPathComponent(name, isDirectory: false)
+                // The progress closure runs on a `URLSession` thread, so it
+                // puts the numbers in a lock and hops to the main actor to
+                // draw them. It reads `mine`, never the model's `epoch`: a
+                // tick that lands after a server switch must not move the
+                // new house's bar.
+                let url = try await read(where_, into) { sent, total in
+                    box.note(sent: sent, of: total)
+                    Task { @MainActor [weak self] in
+                        guard let self, mine == self.epoch else { return }
+                        guard case .fetching = self.state else { return }
+                        self.state = .fetching(name, box.share)
+                    }
+                }
+                guard let self, mine == self.epoch else { return }
+                self.state = .ready(url, name)
+            } catch is CancellationError {
+                guard let self, mine == self.epoch else { return }
+                self.state = .idle
+            } catch {
+                guard let self, mine == self.epoch else { return }
+                if (error as? DomovoiError)?.wasCancelled == true {
+                    self.state = .idle
+                    return
+                }
+                self.state = .failed(TransferStrings.couldNotSave(FilesModel.why(error)))
+            }
+        }
+    }
+
+    /// Stop the transfer the person started.
+    ///
+    /// Back to `.idle` and not to `.failed`: they asked for it, and a red
+    /// sentence about a thing somebody chose is noise. The half-written file
+    /// is dropped by ``DomovoiClient/downloadFile(path:into:trackPairing:onProgress:)``'s
+    /// own failure path, and the spool is emptied by the next save anyway.
+    public func cancel() {
+        guard case .fetching = state else { return }
+        running?.cancel()
+        running = nil
+        state = .idle
+    }
+
+    /// The person is done with the sheet: forget the file and remove the
+    /// copy. See the note on the type.
+    public func taken() {
+        if case .ready(let url, _) = state {
+            try? FileManager.default.removeItem(at: url)
+        }
+        state = .idle
+    }
+
+    /// The app moved house: whatever is in flight belonged to the last one.
+    public func serverChanged() {
+        epoch += 1
+        running?.cancel()
+        running = nil
+        taken()
+    }
+}
+
+/// Two numbers from a `URLSession` thread, read on the main actor.
+///
+/// A plain `var` captured by the progress closure would be a data race the
+/// compiler cannot see through a `@Sendable` closure, and the one here is
+/// cheap to get right: the callback fires per chunk and writes two words.
+final class TransferProgressBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var sent: Int64 = 0
+    private var total: Int64 = -1
+
+    func note(sent bytes: Int64, of all: Int64) {
+        lock.withLock {
+            sent = bytes
+            total = all
+        }
+    }
+
+    /// How far it has got, 0...1 — or nil when the total is unknown, which is
+    /// what ``transferPercent(sent:of:)`` decides and this does not decide
+    /// twice.
+    var share: Double? {
+        let (bytes, all) = lock.withLock { (sent, total) }
+        guard let percent = transferPercent(sent: bytes, of: all) else { return nil }
+        return Double(percent) / 100
+    }
+}
+
+extension DomovoiError {
+
+    /// Whether this is the transport's own "cancelled".
+    ///
+    /// ``DomovoiClient/transportError(_:)`` maps `URLError.cancelled` to
+    /// `.unreachable("cancelled")`, which is right for a read — a cancelled
+    /// read is a read that did not happen — but a **save** the person stopped
+    /// must not then say "couldn't save: cancelled" at them. Matched on the
+    /// one string that function produces rather than on a new error case,
+    /// because adding a case to a public enum is a change every `switch` over
+    /// it has to be read for.
+    var wasCancelled: Bool {
+        if case .unreachable(let why) = self { return why == "cancelled" }
+        return false
+    }
+}

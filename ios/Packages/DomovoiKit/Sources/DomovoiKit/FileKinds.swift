@@ -144,40 +144,34 @@ public enum FileKinds {
         case view
 
         /// Fetch the bytes and hand the person a file (the share sheet).
-        case save
-
-        /// Bigger than this app will pull into memory — no control, and a
-        /// line saying so with the size.
         ///
-        /// See ``FileSaveModel/cap`` for why there is a ceiling at all. The
-        /// size is carried so the message can name it: "too big" without a
-        /// number is the kind of refusal that reads as a bug.
-        case tooBig(Int64)
+        /// **Any size.** There used to be a fifth case, `tooBig`, for a file
+        /// over ``FileSaveModel``'s 64 MiB ceiling; the save streams to disk
+        /// now (D47, ``SaveToDeviceModel``) so there is no ceiling and no
+        /// row that refuses.
+        case save
     }
 
     /// The action for `entry` in `library`.
     ///
-    /// - Parameter saveCap: the largest file this app will fetch whole
-    ///   (``FileSaveModel/cap``). A row with no `size` at all is **not**
-    ///   capped: the server not saying how big a file is is not evidence that
-    ///   it is enormous, and refusing it would make every older server's
-    ///   files unsaveable.
+    /// **No size argument.** It took a `saveCap` until D47: a file over
+    /// ``FileSaveModel``'s 64 MiB ceiling answered `tooBig` and the row drew
+    /// a line instead of a control. The save streams to disk now
+    /// (``SaveToDeviceModel``), so a row's size decides nothing here and the
+    /// four answers are about what the file *is*.
     ///
     /// A folder is always ``FileAction/open`` — including in a library this
     /// app may not write to, because listing is a read and reads are never
     /// blocked. It is never ``FileAction/save``, which is the one thing
     /// Android's row can do that this one cannot: there a folder downloads as
-    /// a server-built zip, whose size nothing knows until it arrives, and a
-    /// cap cannot be applied to a number that does not exist yet.
+    /// a server-built zip, and this app has nothing to unpack one with.
     public static func action(
         for entry: FileEntry,
-        in library: FileLibrary?,
-        saveCap: Int64
+        in library: FileLibrary?
     ) -> FileAction {
         if entry.isDir { return .open }
         if entry.kind == "image" { return .view }
         if library?.id == FileLibrary.documents, entry.kind == "doc-text" { return .read }
-        if let size = entry.size, size > saveCap { return .tooBig(size) }
         return .save
     }
 
@@ -185,15 +179,16 @@ public enum FileKinds {
     /// action and the first line of its menu.
     ///
     /// `FilesScreen.kt:1095`'s rule, which this keeps: **the label never
-    /// promises something the tap does not do**. A ``FileAction/tooBig(_:)``
-    /// has no verb at all, because there is nothing to tap.
+    /// promises something the tap does not do**. Optional still, although
+    /// every case now has a word: the one that had none was `tooBig`, and a
+    /// non-optional return here would mean a fifth action could not be added
+    /// without one.
     public static func verb(_ action: FileAction) -> String? {
         switch action {
         case .open: return FileStrings.verbOpen
         case .read: return FileStrings.verbRead
         case .view: return FileStrings.verbView
         case .save: return FileStrings.verbSave
-        case .tooBig: return nil
         }
     }
 }
