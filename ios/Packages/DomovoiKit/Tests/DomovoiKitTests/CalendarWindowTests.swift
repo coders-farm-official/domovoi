@@ -1276,10 +1276,19 @@ final class CalendarWindowTests: XCTestCase {
             "`today` asked for nothing and left the box pointed a month back"
         )
 
-        let fetchesBefore = model.events.fetches
+        // Waited for at the **house** and not on ``ApiRead/fetches``, which
+        // moves inside `refresh()` before the task it starts has run: a
+        // settle on it returns before the request has been dispatched, and
+        // the query read back is then the walk's last one.
+        let asksBefore = house.asked.current.count
         container.stateEventArrived(StateEvent(type: "calendar.events.changed", frame: "{}"))
         await settleUntil(
-            { model.events.fetches == fetchesBefore + 1 }, "the push's re-read"
+            { house.asked.current.count > asksBefore }, "the push's re-read"
+        )
+        XCTAssertEqual(
+            asksBefore + 1,
+            house.asked.current.count,
+            "the push made more than one read"
         )
         XCTAssertEqual(
             query(home),
