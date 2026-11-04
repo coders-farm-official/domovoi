@@ -138,6 +138,84 @@ final class ManualAnswersTests: XCTestCase {
         model.stop()
     }
 
+    /// **Answer 30 on the way back up**: a level arrived at again is a new
+    /// arrival, and that is what makes the names scramble a second time.
+    ///
+    /// Android re-scrambles every node on every level change because its
+    /// `levelKey` lives in one composition (`ManualScreen.kt:593`) and
+    /// `focus` changing re-fires every `LaunchedEffect(key, text)` (`:686`)
+    /// — `zoom out` and the system back included. Answer 32 put the levels on
+    /// a `NavigationStack`, which keeps the covered level **mounted**: the
+    /// pop re-shows a stage whose scramble finished long ago and restarts no
+    /// task, so each level scrambled exactly once for the life of the screen.
+    ///
+    /// ``ManualMapStage/levelKey`` is `"<level>#<arrival>"`, so this counter
+    /// is the whole mechanism. The two properties it has to have:
+    ///
+    ///  * **arriving somewhere new counts**, up as well as down, so the key
+    ///    changes and the task restarts;
+    ///  * **staying where you are does not**, because Android's `levelKey`
+    ///    does not change when you re-tap the level you are on, and a covered
+    ///    stage must not spend its scramble behind the screen above it.
+    func testArrivingAtALevelAgainIsANewArrival() {
+        let model = rig()
+        XCTAssertEqual(0, model.arrivals(of: .map), "nothing has been arrived at yet")
+
+        // Down: the map, then a cluster.
+        model.open(levels: [.map])
+        XCTAssertEqual(1, model.arrivals(of: .map))
+        model.open(levels: [.map, .topic("rooms-and-devices")])
+        XCTAssertEqual(1, model.arrivals(of: .topic("rooms-and-devices")))
+        XCTAssertEqual(
+            1, model.arrivals(of: .map),
+            "pushing a cluster must NOT count an arrival at the map underneath "
+                + "it — the covered stage would scramble behind the screen on "
+                + "top of it and be settled again by the time it was seen"
+        )
+
+        // Back up, which is the half the stack ate.
+        model.up()
+        XCTAssertEqual(.map, model.place)
+        XCTAssertEqual(
+            2, model.arrivals(of: .map),
+            "`zoom out` back to the map is a second arrival at it, which is "
+                + "what re-scrambles its names — without this the ornament runs "
+                + "on the way down only"
+        )
+
+        // And a pop written back through the stack's binding is the same move.
+        model.open(levels: [.map, .topic("rooms-and-devices")])
+        model.open(levels: [.map])
+        XCTAssertEqual(
+            3, model.arrivals(of: .map),
+            "a swipe-back pops through `open(levels:)`, and the gesture and "
+                + "`zoom out` cannot be allowed to disagree"
+        )
+
+        // Staying put is not an arrival. A `NavigationStack` writes its path
+        // back more than once for one gesture, and every write that lands on
+        // the level already on screen must be a no-op — otherwise a stage
+        // re-scrambles for a pop that did not happen.
+        model.open(levels: [.map])
+        XCTAssertEqual(
+            3, model.arrivals(of: .map),
+            "opening the level already on screen is no move, as Android's "
+                + "unchanged `levelKey` is no move"
+        )
+
+        // Every way in counts, including the one that skips the levels
+        // between: a search result opens a piece from Start here.
+        XCTAssertEqual(0, model.arrivals(of: .piece("pi-room")))
+        model.open(levels: [.map, .piece("pi-room")])
+        XCTAssertEqual(1, model.arrivals(of: .piece("pi-room")))
+        model.restore(saved: ManualPlace.topic("music-and-media").saved)
+        XCTAssertEqual(
+            1, model.arrivals(of: .topic("music-and-media")),
+            "the level a previous launch was on is arrived at once"
+        )
+        model.stop()
+    }
+
     // MARK: - answer 33: the third state has words
 
     /// **The case the sabotage `checklistUnknown = ""` fails.**
@@ -342,10 +420,19 @@ final class ManualAnswersTests: XCTestCase {
             "the first frame has nothing settled, and the spaces are still spaces"
         )
         XCTAssertEqual(
+            "Ro### # #######",
+            manualScrambleFrame(of: letters, frame: 1) { "#" },
+            "one frame in, `1/8 * 15 = 1.875` of the name is itself: every "
+                + "index below 1.875, which is TWO characters. A truncation to "
+                + "`Int(1.875) = 1` settles one, and that was the review's "
+                + "off-by-one"
+        )
+        XCTAssertEqual(
             "Rooms & #######",
             manualScrambleFrame(of: letters, frame: 4) { "#" },
-            "halfway through, `frame / steps` of the name is itself: "
-                + "Int(4/8 * 15) = 7 characters"
+            "halfway through, `frame / steps` of the name is itself: every "
+                + "index below `4/8 * 15 = 7.5`, which is eight characters "
+                + "(the eighth is the space, kept either way)"
         )
         XCTAssertEqual(
             text,
@@ -360,7 +447,11 @@ final class ManualAnswersTests: XCTestCase {
                 "frame \(frame) changed the character count, which is what "
                     + "would move the card's wrap points"
             )
-            let settled = Int(Double(frame) / Double(manualScrambleSteps) * Double(letters.count))
+            // Android's comparison is `i < frame/steps * length` on floats,
+            // so the number settled is that quotient rounded **up**: every
+            // whole index strictly below it.
+            let reached = Double(frame) / Double(manualScrambleSteps) * Double(letters.count)
+            let settled = Int(reached.rounded(.up))
             XCTAssertTrue(
                 drawn.hasPrefix(String(letters.prefix(settled))),
                 "frame \(frame) did not settle from the left"
@@ -381,6 +472,64 @@ final class ManualAnswersTests: XCTestCase {
             manualScrambleFrame(of: letters, frame: -1) { "#" }
         )
         XCTAssertEqual("", manualScrambleFrame(of: [], frame: 0) { "#" })
+    }
+
+    /// The settle is Android's **float** comparison, not a truncation of it.
+    ///
+    /// `ManualScreen.kt:692` is
+    /// `i < frame.toFloat() / steps * text.length`. The first port wrote
+    /// `Int(...)` and then `at < settled`, which is the same number floored:
+    /// one character fewer settled at every frame whose quotient is not
+    /// whole. This pins the **sequence** rather than the arithmetic that
+    /// produces it, so re-introducing the truncation fails here and not only
+    /// in a comment.
+    ///
+    /// How many characters a frame has settled is read back off the drawn
+    /// string: the glyph is the constant `#`, which `Rooms & devices` does
+    /// not contain, so the run of leading characters that still equal the real
+    /// name IS the settled count — and a space inside that run matches itself,
+    /// which is what makes frame 4's eighth character countable.
+    func testTheSettleIsAndroidsFloatComparison() {
+        let text = "Rooms & devices"
+        let letters = Array(text)
+        XCTAssertEqual(15, letters.count, "the arithmetic below is this name's")
+        XCTAssertFalse(text.contains("#"), "the glyph has to be absent from the name")
+
+        func settledCount(_ frame: Int) -> Int {
+            let drawn = Array(manualScrambleFrame(of: letters, frame: frame) { "#" })
+            var at = 0
+            while at < letters.count, at < drawn.count, drawn[at] == letters[at] { at += 1 }
+            return at
+        }
+
+        // Android, frame by frame, for 15 characters over 8 steps.
+        XCTAssertEqual(
+            [0, 2, 4, 6, 8, 10, 12, 14, 15],
+            (0...manualScrambleSteps).map(settledCount),
+            "the settle is not Android's. Its float comparison gives "
+                + "0/2/4/6/8/10/12/14/15; a truncation gives "
+                + "0/1/3/5/7/9/11/13/15 — one character behind at frames 1 "
+                + "through 7"
+        )
+
+        // The property behind the sequence, for any name and any frame: a
+        // character is itself exactly when its index is below the quotient,
+        // never when it merely reaches the floor of it.
+        for name in ["Rooms & devices", "Music & media", "abc", "a", "ten chars."] {
+            let chars = Array(name)
+            for frame in 0...manualScrambleSteps {
+                let reached =
+                    Double(frame) / Double(manualScrambleSteps) * Double(chars.count)
+                let drawn = Array(manualScrambleFrame(of: chars, frame: frame) { "#" })
+                for (at, letter) in chars.enumerated() where letter != " " {
+                    XCTAssertEqual(
+                        Double(at) < reached, drawn[at] == letter,
+                        "\(name.debugDescription) frame \(frame): character \(at) "
+                            + "settled against `at < \(reached)`"
+                    )
+                }
+            }
+        }
     }
 
     /// The alphabet, as Android writes it (`GLYPHS`, `ManualScreen.kt:169`).

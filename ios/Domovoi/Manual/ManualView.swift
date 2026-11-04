@@ -34,12 +34,18 @@ import SwiftUI
 /// `design-notes/ios/overnight/manual/DECISIONS.md`:
 ///
 /// * **The dashed wires do not follow the float.** The nodes bob (answer 31,
-///   `ManualScreen.kt:570`) on one `repeatForever` animation each, which the
+///   `ManualScreen.kt:559`) on one `repeatForever` animation each, which the
 ///   render server runs without a redraw; Android reads its float inside the
 ///   `Canvas` and redraws every wire with it, 60 times a second for as long
 ///   as the map is open. A wire runs centre to centre between two ~104-point
 ///   cards, so the part of it that would have moved is the part the cards
-///   cover. ``ManualMapStage/wires(_:size:)`` has the measurement.
+///   cover. ``ManualMapStage/wires(_:size:)`` has the measurement, and the
+///   reason only the level on **top** of the stack floats at all.
+/// * **There is no 280 ms zoom between levels.** Android animates its camera
+///   inside one composition (`MOVE_MS`, `:549`); here each level is a screen,
+///   so the move is the stack's push transition. ``ManualMapStage/body`` says
+///   so, and the question of whether to rebuild the zoom on top of the stack
+///   is in DECISIONS.
 /// * **A swipe back goes up a level below the accessibility sizes only**
 ///   (answer 32). The levels are a `NavigationStack` of the manual's own
 ///   (``levelStack(_:_:)``), and at an accessibility size this screen puts
@@ -342,6 +348,10 @@ struct ManualView: View {
                     manual: manual,
                     focus: nil,
                     reduceMotion: reduceMotion,
+                    // The place is the one this page was asked for and not
+                    // the map it fell back to drawing: this page IS the
+                    // level, and ``ManualMapPage/place`` says which.
+                    place: place,
                     scrolls: scrolls
                 )
             }
@@ -351,6 +361,7 @@ struct ManualView: View {
                 manual: manual,
                 focus: nil,
                 reduceMotion: reduceMotion,
+                place: place,
                 scrolls: scrolls
             )
         case .topic(let id):
@@ -359,6 +370,7 @@ struct ManualView: View {
                 manual: manual,
                 focus: doc.topic(id),
                 reduceMotion: reduceMotion,
+                place: place,
                 scrolls: scrolls
             )
         }

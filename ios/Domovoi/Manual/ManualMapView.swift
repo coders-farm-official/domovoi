@@ -12,8 +12,13 @@ import SwiftUI
 // Kamron's answers 30 and 31: the name scrambles into place
 // (``ManualScrambleName``) and the cards float (``ManualMapNode``'s
 // `floatPeriod`). Both stop under Reduce Motion, as the Kotlin's `reduce`
-// branches do, and so does the 280 ms zoom. What is **not** ported is the
-// wires following the float — see ``ManualMapStage/wires(_:size:)``.
+// branches do (`ManualScreen.kt:687`, `:560`).
+//
+// Two things of Android's are **not** here, both measured and both written
+// up where they happen: the wires do not follow the float
+// (``ManualMapStage/wires(_:size:)``), and there is no 280 ms camera zoom
+// between levels, because answer 32 made a level a screen on a stack and
+// there is no single camera left to move (``ManualMapStage/body``).
 // ---------------------------------------------------------------------------
 
 /// A world position and the scale the thing at it is drawn at — `Pos`
@@ -160,6 +165,13 @@ struct ManualMapStage: View {
     let focus: ManualTopic?
     let reduceMotion: Bool
 
+    /// Which level this stage was pushed as — see ``ManualMapPage/place``.
+    ///
+    /// Two things read it, and neither can be derived from ``focus``:
+    /// ``levelKey`` (which arrival at this level the scramble keys on) and
+    /// ``isOnTop`` (whether this stage's cards float at all).
+    let place: ManualPlace
+
     /// A phone's node is one size for every node, so the rows never run into
     /// each other (`PHONE_NODE_DP`, `:161`).
     ///
@@ -208,10 +220,24 @@ struct ManualMapStage: View {
         .overlay {
             RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(.quaternary)
         }
-        // One animation over the camera and the node set, keyed on the level:
-        // 280 ms, the Kotlin's `MOVE_MS`, and a cut when the platform says
-        // this person does not want things to move.
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.28), value: focus?.id)
+        // **No 280 ms camera animation, because there is no camera move to
+        // animate.** Android keeps one `ManualMap` composition and animates
+        // `focus` inside it (`MOVE_MS`, `ManualScreen.kt:549`). Here a level
+        // is a screen: below the accessibility sizes it is an entry on the
+        // manual's own `NavigationStack` (``ManualView/levelStack(_:_:)``) and
+        // `focus` is a `let` on a view built per level, so it cannot change
+        // within one stage's lifetime; at an accessibility size the level is a
+        // different arm of a `@ViewBuilder` switch, which SwiftUI gives a
+        // different identity. Either way the level change is a *transition*
+        // between two stages, not a value change inside one.
+        //
+        // An `.animation(…, value: focus?.id)` stood here until the review
+        // pointed out it could never fire. It is gone rather than kept with a
+        // comment explaining it: a modifier that cannot run is not an
+        // ornament this screen has, and the question of whether the zoom is
+        // worth rebuilding on top of a stack is in DECISIONS for Kamron.
+        // Reduce Motion is still honoured by the two ornaments that do run —
+        // the scramble and the float.
     }
 
     /// `shown` (`ManualScreen.kt:544`): the centre and its ring at level one,
@@ -245,6 +271,16 @@ struct ManualMapStage: View {
     /// cost answer 31 was not worth, and a wire runs centre to centre between
     /// two ~104-point cards, so the part of it that would move is the part
     /// covered by the cards.
+    ///
+    /// **And that cost is one stage's, which it was not when the review read
+    /// it.** Answer 32 made a level a stack entry, so on a piece's page the
+    /// `.map` and `.topic` stages are still mounted under it — three
+    /// `GeometryReader`s, and before this they were three sets of
+    /// `repeatForever` offsets running behind two covered screens, which is
+    /// roughly double what this decision was costed against. Only the stage
+    /// on **top** floats now (``isOnTop``); a covered one's cards sit exactly
+    /// where the geometry put them, at no cost at all, and start bobbing again
+    /// when the level comes back. The wires never followed either way.
     ///
     /// Hidden from VoiceOver — it is a drawing of the links the nodes beside
     /// it already are.
@@ -322,15 +358,20 @@ struct ManualMapStage: View {
                         height: nh,
                         levelKey: levelKey,
                         reduceMotion: reduceMotion,
-                        // `5.5 + (i % 4) * 0.9` seconds (`:561`). Zero is
-                        // still, which is what Reduce Motion asks for — and
-                        // what ``ManualFloatClock`` asks for while a UI case
-                        // is driving this screen.
-                        floatPeriod: reduceMotion || !ManualFloatClock.on
+                        // `5.5 + (i % 4) * 0.9` seconds (`:562`). Zero is
+                        // still, which is what Reduce Motion asks for, what
+                        // ``ManualFloatClock`` asks for while a UI case is
+                        // driving this screen — and what a **covered** level
+                        // gets: the stack keeps every level below the one on
+                        // screen mounted, and three stages' worth of
+                        // `repeatForever` behind two covered screens is not
+                        // what answer 31 was costed at
+                        // (``wires(_:size:)``).
+                        floatPeriod: reduceMotion || !ManualFloatClock.on || !isOnTop
                             ? 0
                             : manualFloatPeriod(at: at),
                         // Android phases the sine by `i * 0.7` seconds
-                        // (`:562`). Here it is a one-shot delay on a
+                        // (`:563`). Here it is a one-shot delay on a
                         // repeating animation, so the wrap in
                         // ``manualFloatPhase(at:)`` is load-bearing: it is
                         // how long a card stands still before its first bob.
@@ -347,9 +388,40 @@ struct ManualMapStage: View {
         }
     }
 
-    /// Which level is on screen, for the scramble's `.task(id:)` — the
-    /// Kotlin's `levelKey` (`:620`).
-    private var levelKey: String { focus?.id ?? "map" }
+    /// The key the names' scramble restarts on: **which level this stage
+    /// draws, and which arrival at it** — the Kotlin's `levelKey` (`:593`,
+    /// handed to every `MapNode` at `:633`) with a count after it.
+    ///
+    /// Android gets the arrival for free. `levelKey` is `focus ?: "map"` in
+    /// one composition, so when `focus` changes — down into a cluster or back
+    /// out of it — every node's `LaunchedEffect(key, text)` (`:686`) re-fires
+    /// and the whole level retypes itself. That is the ornament on the way
+    /// *up* as much as on the way down.
+    ///
+    /// A `NavigationStack` does not give it for free. The level below the one
+    /// on screen stays mounted (answer 32), so popping back re-shows a stage
+    /// whose scramble finished long ago and whose `.task(id:)` the pop does
+    /// not restart — each level scrambled once, the first time it was
+    /// reached, which is the review's finding and half of what Kamron asked
+    /// for. ``ManualModel/arrivals(of:)`` is the missing half: a pop counts
+    /// an arrival at the level it lands on, this key changes, and the task
+    /// restarts. Pushing *into* a cluster leaves this level's count alone, so
+    /// a covered stage does not spend its scramble behind the screen on top
+    /// of it.
+    ///
+    /// `#` separates them because a topic's id is a slug and cannot contain
+    /// one, so `map#2` is unambiguous and readable in a log.
+    private var levelKey: String {
+        "\(focus?.id ?? "map")#\(manual.arrivals(of: place))"
+    }
+
+    /// Whether this stage is the level on top of the manual.
+    ///
+    /// Only the top one floats — see ``wires(_:size:)``. It is a comparison
+    /// of two `ManualPlace`s and not "is my focus the model's focus", so the
+    /// `.piece` fallback (``ManualView``'s map for a piece the document lost)
+    /// is on top when it is on top.
+    private var isOnTop: Bool { manual.place == place }
 
     /// What a key in ``ManualMapGeo`` draws (`:603`).
     private func node(of id: String) -> ManualMapNodeContent? {
@@ -414,17 +486,22 @@ struct ManualMapNode: View {
     let node: ManualMapNodeContent
     let height: CGFloat
 
-    /// Which level this card belongs to, so the name scrambles again each
-    /// time a level opens and not on every redraw — the Kotlin's `levelKey`
-    /// (`:620`, passed to `MapNode` at `:637`).
+    /// Which level this card belongs to **and which arrival at it**, so the
+    /// name scrambles again each time a level opens — on the way up as well
+    /// as down — and not on every redraw. The Kotlin's `levelKey` (`:593`,
+    /// passed to `MapNode` at `:633`), with the arrival count that a
+    /// `NavigationStack` makes necessary; ``ManualMapStage/levelKey`` has the
+    /// reasoning.
     let levelKey: String
 
     /// Whether this person asked for less movement: no scramble, no float.
     let reduceMotion: Bool
 
     /// How long one bob takes, and how far into it this card starts
-    /// (`bob`, `:559`: `5.5 + (i % 4) * 0.9` seconds, phased by `i * 0.7`).
-    /// Zero period means the card is still.
+    /// (`bob`, `:559`: `5.5 + (i % 4) * 0.9` seconds at `:562`, phased by
+    /// `i * 0.7` at `:563`). **Zero period means the card is still** —
+    /// Reduce Motion, a UI case with the float off, or a level the stack has
+    /// covered, and the caller decides which (``ManualMapStage``).
     let floatPeriod: Double
     let floatPhase: Double
 
@@ -434,9 +511,9 @@ struct ManualMapNode: View {
     /// standing rule, and the icon sits beside a name that grows.
     @ScaledMetric(relativeTo: .body) private var glyph: CGFloat = 15
 
-    /// Flipped once, in `onAppear`, so the repeating animation below has a
-    /// value change to animate — ``PrinterStatusDot``'s shape, which is this
-    /// app's one other thing that never stops moving.
+    /// Flipped whenever ``floats`` changes, so the repeating animation below
+    /// has a value change to animate — ``PrinterStatusDot``'s shape, which is
+    /// this app's one other thing that never stops moving.
     @State private var floating = false
 
     /// Whether the name is mid-scramble, written by ``ManualScrambleName``.
@@ -514,7 +591,7 @@ struct ManualMapNode: View {
                 )
         }
         // The Kotlin's `contentDescription = listOfNotNull(title, sub)
-        // .joinToString(": ")` (`:650`), so a node reads as one thing rather
+        // .joinToString(": ")` (`:655`), so a node reads as one thing rather
         // than as two labels and a pair of pills.
         //
         // **This is also what keeps the scramble out of VoiceOver's way.** The
@@ -551,16 +628,33 @@ struct ManualMapNode: View {
         // shows does not move.
         //
         // Nothing moves under Reduce Motion: the caller passes a zero period,
-        // and no animation at all is the same cut the 280 ms zoom takes.
+        // which is the same cut Android's own `bob` takes (`:560`,
+        // `if (reduce || id !in shown) return 0f`). The caller passes zero for
+        // a **covered** level too, so only the stage on top of the manual's
+        // stack is animating anything (``ManualMapStage/wires(_:size:)``).
         //
         // The zero arm of the offset is not decoration either — a still card
         // has to sit **exactly** where the geometry put it, and without it
         // `floating` flipping unanimated would leave every node 5 points
         // above its own position.
-        .offset(y: floatPeriod <= 0 ? 0 : (floating ? -5 : 5))
+        .offset(y: floats ? (floating ? -5 : 5) : 0)
         .animation(floatAnimation, value: floating)
-        .onAppear { floating = true }
+        // **`onChange` and not `onAppear`, and the reason is the stack.** A
+        // covered level stays mounted and stops floating (``floatPeriod`` is
+        // handed down as zero), so `floats` goes false and true again over
+        // this card's lifetime — and an `onAppear` that set `floating = true`
+        // once would leave the revealed card pinned at the top of its arc
+        // with nothing left to animate. Driving `floating` *from* `floats`
+        // gives the repeating animation a value change every time the level
+        // comes back, which is what starts it again; `initial: true` is the
+        // first appearance, exactly what `onAppear` did.
+        .onChange(of: floats, initial: true) { _, now in floating = now }
     }
+
+    /// Whether this card bobs at all. Zero period is a still card — Reduce
+    /// Motion, a UI case that turned the float off, or a level the stack has
+    /// covered.
+    private var floats: Bool { floatPeriod > 0 }
 
     /// One bob, forever, or nothing at all.
     ///
@@ -570,7 +664,7 @@ struct ManualMapNode: View {
     /// cycle: a card with a 4.9 s phase would hold still at the top or the
     /// bottom of its arc for 4.9 s between bobs, which is a stutter, not a
     /// stagger. Android's bob is a continuous sine with the phase inside it
-    /// (`5f * sin(2π(t + i*0.7)/dur)`, `ManualScreen.kt:561-563`) and never
+    /// (`5f * sin(2π(t + i*0.7)/dur)`, `ManualScreen.kt:562-563`) and never
     /// pauses. Delaying the repeating animation as a whole is the closest
     /// SwiftUI gets: the card waits once, then bobs forever.
     ///
@@ -578,7 +672,7 @@ struct ManualMapNode: View {
     /// implicit members in the arm of a ternary whose other arm is `nil` is
     /// more inference than this needs to ask for.
     private var floatAnimation: Animation? {
-        guard floatPeriod > 0 else { return nil }
+        guard floats else { return nil }
         return .easeInOut(duration: floatPeriod)
             .repeatForever(autoreverses: true)
             .delay(floatPhase)
@@ -737,7 +831,7 @@ enum ManualFloatClock {
 /// `minHeight` with no `lineLimit`, so it would have grown and taken the
 /// stage with it. Android cannot have that bug because its node is a fixed
 /// height and its name is `maxLines = 2, overflow = Ellipsis`
-/// (`ManualScreen.kt:667`, `:703`); this port keeps neither, on purpose, so
+/// (`ManualScreen.kt:653`, `:703`); this port keeps neither, on purpose, so
 /// that a name can grow with Dynamic Type. The overlay is how it keeps both
 /// things.
 ///
@@ -752,14 +846,14 @@ enum ManualFloatClock {
 /// overlay is hidden from accessibility outright, and the control these sit in
 /// carries `"<title>: <subtitle>"` (``ManualMapNode``), so the glyph run is
 /// not any element's label or value for a single frame. Android's scramble
-/// *is* its node's text, which is why its `contentDescription` at `:650` is
+/// *is* its node's text, which is why its `contentDescription` at `:655` is
 /// what saves it there too — here it is said three times, because a case that
 /// reaches a node by its name (``manualNode``, every map case in this item)
 /// must not be racing an animation.
 ///
-/// Under Reduce Motion the name is drawn straight — the same cut the 280 ms
-/// zoom takes (``ManualMapStage``), and Android's own `reduce` branch
-/// (`:686`).
+/// Under Reduce Motion the name is drawn straight — Android's own `reduce`
+/// branch (`:687`), and the same cut the float takes
+/// (``ManualMapNode/floatPeriod``).
 struct ManualScrambleName: View {
 
     let text: String
@@ -796,7 +890,7 @@ struct ManualScrambleName: View {
                         .accessibilityHidden(true)
                 }
             }
-            // `LaunchedEffect(key, text)` (`:685`): the name scrambles again
+            // `LaunchedEffect(key, text)` (`:686`): the name scrambles again
             // when the level changes, and when the document changes under it,
             // and at no other time. A `.task(id:)` is cancelled and restarted
             // on exactly those two.
@@ -833,7 +927,14 @@ struct ManualScrambleName: View {
         scrambling = true
         for frame in 0...ManualScrambleClock.steps {
             glyphs = manualScrambleFrame(of: letters, frame: frame) {
-                manualScrambleGlyphs.randomElement() ?? " "
+                // `#` and not `" "` for the never-taken arm: the alphabet is
+                // a non-empty literal (``manualScrambleGlyphs``) so
+                // `randomElement()` cannot be nil, but a **space** is the one
+                // character the effect's own invariant forbids inserting —
+                // the spaces never move — and a fallback that contradicts an
+                // invariant two files away is a trap for whoever edits the
+                // alphabet next. `#` is in the alphabet.
+                manualScrambleGlyphs.randomElement() ?? "#"
             }
             try? await Task.sleep(for: ManualScrambleClock.frame)
             if Task.isCancelled { break }

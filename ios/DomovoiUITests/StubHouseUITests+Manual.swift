@@ -428,6 +428,149 @@ extension StubHouseUITests {
         )
     }
 
+    /// **Answer 32, the other half**: a swipe back from **Start here** leaves
+    /// the manual, because Start here is the top of it.
+    ///
+    /// The brief's DONE is "the system swipe-back pops a level **and only the
+    /// top level leaves the manual**".
+    /// ``testManual_ASwipeFromAPieceGoesUpToItsTopic()`` proves the first
+    /// half; this is the second, and it is the riskier one. Start here is the
+    /// inner `NavigationStack`'s **root**, with its own bar hidden
+    /// (``ManualView/levelStack(_:_:)``), so the route's
+    /// `interactivePopGestureRecognizer` has to win against an inner
+    /// recogniser that has nothing to pop — which is exactly where a nested
+    /// navigation controller's edge gesture is known to go dead. A manual
+    /// nobody can swipe out of would be a regression answer 32 paid for with
+    /// a feature.
+    ///
+    /// Two assertions, each a different failure:
+    ///
+    ///  * the `map` pill is **gone** — the manual left. A dead inner gesture
+    ///    leaves it there and fails here;
+    ///  * the house's name is on screen — what it left *to* is Home.
+    ///    `stub house` is ``houseName(in:)``, the one thing only a completed
+    ///    config read on Home can draw, so a swipe that unwound to a blank
+    ///    root or to the pairing screen fails too.
+    @MainActor
+    func testManual_ASwipeFromStartHereLeavesTheManual() throws {
+        control("reset-fixtures", "{}", port: 6601, what: "the manual fixture's seed")
+        let app = manualLaunch()
+
+        // `@SceneStorage` keeps the level across a launch, so this is not
+        // tidiness: a run that came in on the map would be swiping a level
+        // that is *meant* to stay inside the manual.
+        XCTAssertTrue(manualStart(app), "the manual never drew Start here")
+        let pill = app.buttons[StubManual.mapPill].firstMatch
+        XCTAssertTrue(pill.exists, "the manual's top bar is not on screen")
+        evidence(app, "manual-swipe-on-start-here")
+
+        // The same gesture as the piece's case, from the same place: `dx:
+        // 0.01` and not 0, so the drag starts inside the app's frame where
+        // the leading-edge recogniser can see it.
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.5))
+            .press(
+                forDuration: 0.08,
+                thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5))
+            )
+
+        XCTAssertTrue(
+            manualGone(pill),
+            "a swipe back on Start here did not leave the manual — the top "
+                + "bar is still there. The manual's own `NavigationStack` is "
+                + "at its root with its bar hidden, and its recogniser has "
+                + "swallowed the route's"
+        )
+        XCTAssertTrue(
+            houseName(in: app).waitForExistence(timeout: 20),
+            "the swipe left the manual but Home is not what it landed on"
+        )
+        evidence(app, "manual-swipe-left-the-manual")
+    }
+
+    /// **Answer 30 on the way up**: going back up a level scrambles that
+    /// level's names again.
+    ///
+    /// Android re-scrambles every node on every level change, `zoom out`
+    /// included: `levelKey` is one value in one composition
+    /// (`ManualScreen.kt:593`) and every node's `LaunchedEffect(key, text)`
+    /// (`:686`) re-fires when it changes. Answer 32 put the levels on a
+    /// stack, which keeps the covered level **mounted** — so the first build
+    /// of this re-showed a map whose names had settled minutes ago, and the
+    /// ornament Kamron called "meant to impress" ran on the way down only.
+    /// That is review 2's S2, and ``ManualModel/arrivals(of:)`` read through
+    /// ``ManualMapStage/levelKey`` is the fix.
+    ///
+    /// **What makes this a test and not a screenshot.** The drawn glyphs are
+    /// nobody's label and nobody's value, on purpose
+    /// (``ManualScrambleName``), so the only thing the tree can carry is
+    /// *whether* a scramble is in flight — ``ManualMapNode/scrambleState``,
+    /// published as a value and only to a launch that asked for a slow
+    /// scramble. The sequence asserted here is settled → **scrambling** →
+    /// settled on one element, and the middle one is the claim: with the key
+    /// unchanged by the pop the centre node never leaves `"settled"` and this
+    /// case fails on that wait.
+    @MainActor
+    func testManual_GoingBackUpALevelScramblesTheNamesAgain() throws {
+        control("reset-fixtures", "{}", port: 6601, what: "the manual fixture's seed")
+        // 600 ms a frame: 5.4 s a level, which is the slack a case needs to
+        // be inside an effect that ships at 216 ms.
+        let app = manualLaunch(scrambleMS: 600)
+
+        // From Start here, so the map's nodes are built by the tap below and
+        // the first scramble is this case's to watch.
+        XCTAssertTrue(manualStart(app), "the manual never drew Start here")
+        let pill = app.buttons[StubManual.mapPill].firstMatch
+        XCTAssertTrue(pill.waitForExistence(timeout: 30), "the manual never drew its top bar")
+        XCTAssertTrue(manualToTop(app, until: pill), "the `map` pill was not reachable")
+        pill.tap()
+
+        // The centre node is drawn on the **map** level and on no other: a
+        // cluster's hub is its topic's card, so this element cannot be
+        // confused with anything the level above draws.
+        let centre = app.buttons[StubManual.centreNodeLabel].firstMatch
+        XCTAssertTrue(centre.waitForExistence(timeout: 20), "the map drew no centre node")
+        XCTAssertTrue(
+            manualValue(centre, is: "settled", timeout: 25),
+            "the map's first scramble never finished"
+        )
+
+        // Down a level. The map stays mounted underneath, and its count must
+        // NOT move: a covered stage that re-scrambled would spend the effect
+        // behind the screen on top of it and be settled again by the time it
+        // was seen.
+        let topic = manualNode(app, StubManual.roomsTopic)
+        XCTAssertTrue(topic.waitForExistence(timeout: 15), "the map drew no ring topic")
+        topic.tap()
+        let out = app.buttons[StubManual.zoomOut].firstMatch
+        XCTAssertTrue(out.waitForExistence(timeout: 15), "the topic's cluster never opened")
+        XCTAssertTrue(
+            manualValue(centre, is: "settled", timeout: 5),
+            "pushing a cluster re-scrambled the covered map underneath it — "
+                + "the effect would be over before anybody came back to see it"
+        )
+        evidence(app, "manual-up-a-level-before")
+
+        // And back up, which is the half the stack ate.
+        out.tap()
+        XCTAssertTrue(
+            manualValue(centre, is: "scrambling", timeout: 15),
+            "`zoom out` back to the map did not scramble its names again: the "
+                + "centre node's value stayed settled. A level is a stack "
+                + "entry and the one underneath is never torn down, so "
+                + "nothing restarts the effect unless the key counts the "
+                + "arrival"
+        )
+        evidence(app, "manual-up-a-level-scrambling-again")
+        XCTAssertTrue(
+            manualValue(centre, is: "settled", timeout: 25),
+            "the second scramble never finished"
+        )
+        XCTAssertTrue(
+            manualExact(app, StubManual.centreNodeLabel).exists,
+            "the centre node lost its name after the second scramble"
+        )
+    }
+
     /// **Answer 33**: a server whose document predates `checklist_unknown`
     /// still says "can't tell from here".
     ///
@@ -1551,7 +1694,7 @@ extension StubHouseUITests {
     /// A node on the map, by the start of its label.
     ///
     /// A node's label is the Kotlin's `"<title>: <subtitle>"`
-    /// (`ManualScreen.kt:650`), so an exact subscript cannot reach one — and
+    /// (`ManualScreen.kt:655`), so an exact subscript cannot reach one — and
     /// `firstMatch` over `.any` would take the container the node sits in.
     /// Buttons only, and by prefix.
     @MainActor
@@ -1684,7 +1827,7 @@ enum StubManual {
     static let whatItIs = "What it is"
     static let talking = "Talking to it"
     /// A node's **whole** label: the Kotlin's `"<title>: <subtitle>"`
-    /// (`ManualScreen.kt:650`), which is what the scramble must not change.
+    /// (`ManualScreen.kt:655`), which is what the scramble must not change.
     static let centreNodeLabel = "Domovoi: your home"
     static let roomsTopicLabel = "Rooms & devices: where it listens"
     /// `ManualStrings.next("next", piece: "What plugins add")` — the footer

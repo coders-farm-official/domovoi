@@ -260,6 +260,20 @@ struct ManualMapPage: View {
     let manual: ManualModel
     let focus: ManualTopic?
     let reduceMotion: Bool
+
+    /// **Which level this page was pushed as**, handed down rather than
+    /// derived from ``focus``.
+    ///
+    /// ``ManualMapStage`` needs two things that `focus` cannot answer: which
+    /// arrival at this level the scramble should key on, and whether this
+    /// page is the one on top of the manual's stack (only the top level's
+    /// cards float). Deriving it would get the `.piece` fallback wrong —
+    /// ``ManualView`` draws a map for a piece the document no longer has, and
+    /// that page's `focus` is `nil` while its place is `.piece(…)`, so a
+    /// derived place would call the top level covered and hold its cards
+    /// still.
+    let place: ManualPlace
+
     /// See ``ManualStartPage/scrolls``.
     var scrolls: Bool = true
 
@@ -270,7 +284,8 @@ struct ManualMapPage: View {
                     doc: doc,
                     manual: manual,
                     focus: focus,
-                    reduceMotion: reduceMotion
+                    reduceMotion: reduceMotion,
+                    place: place
                 )
                 // The topic's own introduction at level two, the document's
                 // map hint at level one, nothing when the document has

@@ -401,6 +401,55 @@ public final class ManualModel {
 
     public private(set) var place: ManualPlace = .start
 
+    /// How many times each level has been **arrived at**, counting only the
+    /// times the screen actually moved — the map's own arrival counter.
+    ///
+    /// ### Why a counter, and why it is not decoration
+    ///
+    /// Android's node names scramble on every level change, up as well as
+    /// down: `levelKey` is computed in **one** composition
+    /// (`ManualScreen.kt:593`) and handed to every `MapNode` (`:633`), so
+    /// `LaunchedEffect(key, text)` (`:686`) re-fires for all of them whenever
+    /// `focus` changes — which `zoom out` and the system back both do.
+    ///
+    /// Answer 32 put the manual's levels on a `NavigationStack`
+    /// (``levels``), and a stack does not tear the level underneath down: the
+    /// map's page is still mounted while a cluster is on top of it, so going
+    /// back up re-shows a view whose scramble has long since finished and
+    /// whose `.task(id:)` is not restarted by the pop. The ornament Kamron
+    /// called "meant to impress" ran on the way down and never again, which
+    /// is the review's finding.
+    ///
+    /// So a level's page keys its scramble on *which* level it draws **and
+    /// which arrival at it** (`ManualMapView.swift`'s `levelKey`). Popping
+    /// back to the map bumps the map's count, the key changes, the task
+    /// restarts; pushing a cluster leaves the map's count alone, so the
+    /// covered page does not spend its scramble behind the one on screen.
+    ///
+    /// Read through ``arrivals(of:)``. It is `0` before the first arrival,
+    /// which is the value a freshly mounted page sees — and a fresh page runs
+    /// its `.task` on appear anyway, so zero needs no special case.
+    public private(set) var arrivalCounts: [ManualPlace: Int] = [:]
+
+    /// Move to a level, and count the arrival.
+    ///
+    /// **Every write of ``place`` goes through here**, which is the point:
+    /// four call sites wrote it directly before (``go(_:)``, ``up()``,
+    /// ``open(levels:)`` and ``restore(saved:)``) and a counter maintained at
+    /// three of four is worse than none. Arriving where we already are is not
+    /// an arrival: re-tapping the node of the level on screen is no move on
+    /// Android either, because its `levelKey` does not change.
+    private func land(on next: ManualPlace) {
+        guard next != place else { return }
+        place = next
+        arrivalCounts[next, default: 0] += 1
+    }
+
+    /// How many times this level has been arrived at this session.
+    public func arrivals(of place: ManualPlace) -> Int {
+        arrivalCounts[place] ?? 0
+    }
+
     /// What is typed in the search field. Android has **no debounce** here —
     /// `remember(query, visible) { searchManual(...) }` runs the search on
     /// every keystroke over a document already in memory (`ManualScreen.kt:370`)
@@ -672,17 +721,17 @@ public final class ManualModel {
     /// `go` (`ManualScreen.kt:300`): an id to a level, following an alias.
     public func go(_ id: String) {
         guard let doc else {
-            place = .start
+            land(on: .start)
             return
         }
         if id == "map" {
-            place = .map
+            land(on: .map)
         } else if doc.topic(id) != nil {
-            place = .topic(id)
+            land(on: .topic(id))
         } else if let piece = doc.piece(id) {
-            place = .piece(piece.aliasOf ?? id)
+            land(on: .piece(piece.aliasOf ?? id))
         } else {
-            place = .start
+            land(on: .start)
         }
     }
 
@@ -692,7 +741,7 @@ public final class ManualModel {
     /// and the swipe-back gesture pops ``levels`` — which is the same move,
     /// because that array is this function's own chain (answer 32).
     public func up() {
-        place = parent(of: place)
+        land(on: parent(of: place))
     }
 
     /// The level above this one. Factored out of ``up()`` so that the gesture
@@ -749,7 +798,7 @@ public final class ManualModel {
     /// An empty array is Start here, which is what a pop-to-root gesture
     /// hands over.
     public func open(levels: [ManualPlace]) {
-        place = levels.last ?? .start
+        land(on: levels.last ?? .start)
     }
 
     /// Picking a search result: open it, clear the field (`ManualScreen.kt:387`).
@@ -767,7 +816,7 @@ public final class ManualModel {
 
     /// Restore the level a previous launch was on (`@SceneStorage`).
     public func restore(saved: String) {
-        place = ManualPlace(saved: saved)
+        land(on: ManualPlace(saved: saved))
     }
 
     /// The next **visible** sibling of this piece, for the page's footer

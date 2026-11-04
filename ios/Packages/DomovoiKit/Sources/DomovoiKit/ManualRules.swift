@@ -719,6 +719,25 @@ public let manualScrambleSteps = 8
 ///  * a **space is never replaced**, so the word shapes stay where they are;
 ///  * the character **count never changes**, at any frame.
 ///
+/// ### The comparison is a `Double`, and the first port's truncation was a
+/// character behind
+///
+/// The Kotlin compares an index against a **float**:
+/// `i < frame.toFloat() / steps * text.length`. The first port wrote
+/// `Int(Double(frame) / Double(steps) * Double(letters.count))` and then
+/// `at < settled`, which is `floor` of the same number — one character fewer
+/// settled at every frame where the quotient is not whole. For
+/// `Rooms & devices` (15 characters, `steps = 8`) frame 4 is `7.5`: Android
+/// settles every `i < 7.5`, which is **eight** characters, and the truncation
+/// settled seven. Frame by frame Android is 0/2/4/6/8/10/12/14/15 and the
+/// truncation was 0/1/3/5/7/9/11/13/15 — one behind at frames 1 through 7,
+/// equal only at the ends.
+///
+/// One glyph for 24 ms is cosmetic; the defect the review named was that this
+/// comment claimed the two were the same line. They are now, and
+/// `ManualAnswersTests.testTheSettleIsAndroidsFloatComparison` pins the
+/// sequence rather than the arithmetic that produced it.
+///
 /// `glyph` is the picker — `{ manualScrambleGlyphs.randomElement()! }` in the
 /// view, a constant in a test, which is the only way an effect built on
 /// `Random` can be asserted on at all.
@@ -730,10 +749,10 @@ public func manualScrambleFrame(
 ) -> String {
     let steps = max(steps, 1)
     let frame = min(max(frame, 0), steps)
-    let settled = Int(Double(frame) / Double(steps) * Double(letters.count))
+    let settled = Double(frame) / Double(steps) * Double(letters.count)
     return String(
         letters.enumerated().map { at, letter in
-            at < settled || letter == " " ? letter : glyph()
+            Double(at) < settled || letter == " " ? letter : glyph()
         }
     )
 }
@@ -741,13 +760,13 @@ public func manualScrambleFrame(
 // MARK: - the float, as arithmetic
 
 /// How long one bob takes for the card at this index in the map's geometry:
-/// `5.5 + (i % 4) * 0.9` seconds (`bob`, `ManualScreen.kt:561`).
+/// `5.5 + (i % 4) * 0.9` seconds (`bob`, `ManualScreen.kt:562`).
 public func manualFloatPeriod(at index: Int) -> Double {
     5.5 + Double(index % 4) * 0.9
 }
 
 /// How far into its bob a card starts — Android's `i * 0.7` seconds
-/// (`:562`), **wrapped at eight**.
+/// (`:563`), **wrapped at eight**.
 ///
 /// Android's phase is an offset inside a sine that is already running, so an
 /// unbounded `i * 0.7` only ever picks a point on the curve. Here it is a
