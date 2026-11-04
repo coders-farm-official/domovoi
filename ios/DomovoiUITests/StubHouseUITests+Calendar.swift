@@ -329,10 +329,10 @@ extension StubHouseUITests {
     /// The POST, the 201's `id`, and the selection that follows it.
     ///
     /// The toast is asserted **first**: it is up for 2.4 seconds
-    /// (`ShellStrings.toastMs`). `event #14` is the discriminating half —
-    /// the id comes out of the 201's own body (`calendar.py:110`) and not
-    /// from a re-read, so a screen that selected the row by guessing would
-    /// open the wrong sheet or none.
+    /// (`ShellStrings.toastMs`). ``StubCalendar/createdNumber`` is the
+    /// discriminating half — the id comes out of the 201's own body
+    /// (`calendar.py:110`) and not from a re-read, so a screen that selected
+    /// the row by guessing would open the wrong sheet or none.
     @MainActor
     func testCalendar_NewEventCreatesAndSelectsIt() throws {
         let (app, landed) = openCalendar()
@@ -349,12 +349,15 @@ extension StubHouseUITests {
             .matching(NSPredicate(format: "label == %@", CalendarWords.eventCreated))
             .firstMatch
         let said = toast.waitForExistence(timeout: 20)
-        let numbered = app.staticTexts["event #14"].firstMatch.waitForExistence(timeout: 20)
+        let numbered = app.staticTexts[StubCalendar.createdNumber]
+            .firstMatch
+            .waitForExistence(timeout: 20)
         evidence(app, "calendar-05-created")
         XCTAssertTrue(said, "nothing was said about the create")
         XCTAssertTrue(
             numbered,
-            "the new event was not selected as `event #14` — the 201's `id` was not read"
+            "the new event was not selected as `\(StubCalendar.createdNumber)` — the "
+                + "201's `id` was not read"
         )
         XCTAssertTrue(
             containing(app, StubCalendar.created).exists,
@@ -1004,6 +1007,9 @@ extension StubHouseUITests {
         // train S007 and the editor's sheet cuts nothing at all.
         let agenda = try calendarAudit(app, "calendar-agenda", edges: edges)
         evidence(app, "calendar-17-audit-agenda")
+        // `CalWords` is the week's file, which this target compiles too; the
+        // toggle's first word is spelt once, there.
+        calendarStillOn(app, CalWords.agenda, "agenda")
 
         app.buttons[CalendarWords.month].tap()
         XCTAssertTrue(
@@ -1012,6 +1018,7 @@ extension StubHouseUITests {
         )
         let month = try calendarAudit(app, "calendar-month", edges: edges)
         evidence(app, "calendar-17-audit-month")
+        calendarStillOn(app, CalendarWords.month, "month")
 
         app.buttons[CalendarWords.day].tap()
         XCTAssertTrue(
@@ -1020,6 +1027,7 @@ extension StubHouseUITests {
         )
         let day = try calendarAudit(app, "calendar-day", edges: edges)
         evidence(app, "calendar-17-audit-day")
+        calendarStillOn(app, CalendarWords.day, "day")
 
         app.buttons[CalendarWords.newEvent].tap()
         XCTAssertTrue(
@@ -1028,6 +1036,11 @@ extension StubHouseUITests {
         )
         let editor = try calendarAudit(app, "calendar-editor", edges: edges)
         evidence(app, "calendar-17-audit-editor")
+        XCTAssertTrue(
+            app.textFields[CalendarWords.titleLabel].exists,
+            "the editor closed under its own audit, so those findings are the "
+                + "agenda's and not the editor's — see `calendarStillOn(_:_:_:)`"
+        )
 
         let floor = agenda.floor + month.floor + day.floor + editor.floor
         let unexplained =
@@ -1067,6 +1080,45 @@ extension StubHouseUITests {
         }
         print("AUDIT calendar [\(name)] floor \(split.floor), unexplained \(unexplained.count)")
         return (split.floor, unexplained)
+    }
+
+    /// The view this audit was launched for is **still the view on screen**.
+    ///
+    /// Train I003 reported fourteen `Contrast failed` and five
+    /// `Potentially inaccessible text` against Calendar, several of them on
+    /// ordinary black text on a white page — `Calendar`, `early train`,
+    /// `today` — which no colour in this screen can produce; the same leaves
+    /// had drawn the same colours in train I002 with nothing found at all.
+    /// The picture beside each finding said what the tree diff could not: the
+    /// evidence taken after the `day` audit and after the `editor` audit both
+    /// showed the **agenda**, with `agenda` selected in the toggle and the
+    /// row clocks a minute later than the agenda audit's. The screen was
+    /// being rebuilt under the audit — ``CalendarScreenView`` keeps its
+    /// ``CalendarModel`` in `@State` and builds it in `.task`, so a view
+    /// whose identity changes comes back with a fresh model: `.agenda`, no
+    /// draft, nothing selected, and a fresh read. An audit that samples a
+    /// screen mid-rebuild reports the repaint rather than the colours.
+    ///
+    /// That rebuild is not this screen's to fix (it took `the kitchen card
+    /// did not open` and `the map pill did not open the map` down with it, on
+    /// branches that share nothing with this one but the shell). What is this
+    /// case's to fix is saying so: each state states, after its audit, that
+    /// it is still the state that was audited, so the next run reports one
+    /// rebuild instead of nineteen findings nobody can attribute.
+    ///
+    /// **Its blind spot, said out loud:** a rebuild comes back on `.agenda`,
+    /// so this cannot see one that happened during the *agenda's* own audit —
+    /// the toggle reads the same either way. The agenda's eight findings in
+    /// I003 are the ones this leaves unattributed, and the week, month, day
+    /// and editor are the four it catches.
+    @MainActor
+    func calendarStillOn(_ app: XCUIApplication, _ word: String, _ what: String) {
+        XCTAssertTrue(
+            app.buttons[word].firstMatch.isSelected,
+            "the screen left the \(what) under its own audit — the findings above "
+                + "are not the \(what)'s. The screen's `@State` was thrown away and "
+                + "rebuilt mid-audit; see `calendarStillOn(_:_:_:)`."
+        )
     }
 
     /// Whether one audit line is one this screen has **measured** an answer
@@ -1287,6 +1339,22 @@ enum StubCalendar {
 
     /// What the create case types.
     static let created = "garden waste pickup"
+
+    /// The id the fixture gives the first event a run creates.
+    ///
+    /// **16, not 14.** `fixtures/calendar.py` seeds ids 1-13 and reserves 14
+    /// and 15 for `porch light` and `attic hatch`, the open-ended pair answer
+    /// 17 needs (`_open_ended`, served only while the `open-ended` control is
+    /// on), so its `next_id` is 16. The case was written when the seed
+    /// stopped at 13 and kept asserting `event #14` after the pair was
+    /// reserved; it failed in train I003 against a sheet that was open on the
+    /// right event and numbered 16.
+    ///
+    /// Still written out rather than read back from the app: the whole point
+    /// of the assertion is that the id came from the 201's own body and was
+    /// not guessed, so a screen that guessed must have a number to be wrong
+    /// about.
+    static let createdNumber = "event #16"
 
     /// The fixture's own 500 detail.
     static let failDetail = "the calendar table is unavailable"
