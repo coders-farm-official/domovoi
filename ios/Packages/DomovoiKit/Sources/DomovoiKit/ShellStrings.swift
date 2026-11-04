@@ -385,3 +385,49 @@ public enum ShellStrings {
     public static func listeningAs(_ name: String) -> String { "listening as \(name)" }
     public static let listeningAsThisDevice = "listening as this device"
 }
+
+/// The plugin band's words: the band above a screen a plugin brought with it
+/// (`android/.../ui/components/PluginFrame.kt`, `PluginScreenFrame`).
+///
+/// **One band, so one copy of its words** (owner answer 58: "fold the two
+/// plugin bands into one view"). They were written twice the same night, into
+/// ``ImagesStrings`` and ``StationsStrings``, by the two items that each built
+/// a band; the two copies are identical and both are now unread. Deleting them
+/// is a one-line change in two files this unit does not own —
+/// `design-notes/ios/batch-2026-11-03/shell/DECISIONS.md`.
+///
+/// They live beside the shell's strings because the band is the shell's now:
+/// ``PluginBandView`` is in `ios/Domovoi/Shell/`, and a shared view reaching
+/// into one screen's strings enum is how the next copy gets written.
+public enum PluginBandStrings {
+
+    /// `PluginFrame.kt:152`, the bordered badge.
+    public static let badge = "plugin"
+
+    /// `PluginFrame.kt:144`. Never a bare `by`: the caller passes a publisher
+    /// it has already checked is non-blank (``ImagesBand/publisher``).
+    public static func by(_ publisher: String) -> String { "by \(publisher)" }
+
+    /// `PluginFrame.kt:178`, the word.
+    public static let manage = "manage"
+
+    /// `:181`, the link's screen-reader label. The word `manage` alone names
+    /// neither the plugin nor where the link goes.
+    public static func manageLabel(name: String) -> String {
+        "manage \(name) on the dashboard's Plugins page"
+    }
+
+    /// The collapsed row's screen-reader label, at the accessibility type
+    /// sizes where the band is one row (owner answer 29, and the shape
+    /// answer 62 already approved for the source switch).
+    ///
+    /// **An iOS-only composition of existing words, no new ones**: the badge
+    /// and `by <publisher>` are not drawn at those sizes, so they are said
+    /// instead. Nothing of the band is lost to a screen reader by the
+    /// collapse.
+    public static func collapsedLabel(name: String, publisher: String?) -> String {
+        var said = [name, badge]
+        if let publisher { said.append(by(publisher)) }
+        return said.joined(separator: ", ")
+    }
+}

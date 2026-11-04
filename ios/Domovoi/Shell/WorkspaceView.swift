@@ -16,6 +16,12 @@ struct WorkspaceView: View {
     @Bindable var model: ShellModel
     @Environment(\.horizontalSizeClass) private var width
 
+    /// Read here and not only inside ``ShellScrollAwayChrome`` because this
+    /// view decides whether ``ShellTopBar`` is drawn at all: at the
+    /// accessibility sizes the header is the navigation bar's large title and
+    /// a band above the stack as well would be the header twice.
+    @Environment(\.dynamicTypeSize) private var typeSize
+
     /// Seeded once and only once: a `NavigationStack` whose path is refilled
     /// behind the person's back cannot be navigated out of.
     @State private var seededPush = false
@@ -103,11 +109,28 @@ struct WorkspaceView: View {
     /// The navigation bar keeps its back button, below our bar rather than
     /// inside it. On the root there is no title and no toolbar, so it
     /// collapses to nothing and Home looks as it did.
+    ///
+    /// ### At the accessibility sizes there is no bar here at all
+    ///
+    /// Owner answer 29. The band measured 300 of 852 points at AX5 and it
+    /// cannot scroll away from up here — it is above the `NavigationStack`,
+    /// not inside any page's scroll view. So at those sizes it is not drawn,
+    /// and ``ShellScrollAwayChrome`` puts the same two things inside the stack
+    /// where UIKit scrolls them away for us: the breadcrumb as a large
+    /// navigation title, the pill as a toolbar item. Below them nothing
+    /// changes.
     private var stack: some View {
         VStack(spacing: 0) {
-            if AuditStrip.active != .topBar {
+            // **The question is asked in `DomovoiKit`, not here.** Review 2
+            // sabotaged both halves of answer 29 in the view bodies — the
+            // size gate off this `if`, the branch off
+            // ``ShellScrollAwayChrome`` — and nothing in the repository
+            // caught it: `pkgtest.sh` builds the package only. So the rule is
+            // ``ShellHeaderFold``, which `ShellFoldTests` reads today, and
+            // these two bodies draw its answer.
+            if headerFold.drawsBarAboveTheStack {
                 ShellTopBar(
-                    leading: "\(ShellStrings.homeCrumb) / \(model.navigation.route.label.lowercased())",
+                    leading: crumb,
                     pill: model.chrome.pill,
                     onPill: { model.openConnection() }
                 ) {
@@ -116,11 +139,59 @@ struct WorkspaceView: View {
             }
             NavigationStack(path: $model.path) {
                 stackRoot
+                    // Applied to the stack's root here rather than inside
+                    // ``stackRoot``'s `switch`, so that every ``AuditStrip``
+                    // variant gets the same chrome as the shell it is a
+                    // variant of — except ``AuditStrip/topBar``, whose whole
+                    // job is to take the header away.
+                    .shellScrollAwayChrome(
+                        // **``startRoute`` and not the open route.** The root
+                        // is Home, whatever is pushed on top of it, and a
+                        // `UINavigationBar` builds the pushed screen's back
+                        // button and VoiceOver's "back to …" out of the
+                        // *root's* navigation item: with the open route here,
+                        // the control for leaving Videos was named after
+                        // Videos, and the root's own large title was wrong
+                        // through every push and pop animation (review 1, S1).
+                        crumb: crumb(for: startRoute),
+                        pill: model.chrome.pill,
+                        onPill: { model.openConnection() },
+                        drawn: AuditStrip.active != .topBar
+                    )
                     .navigationDestination(for: Route.self) { route in
                         destination(route)
                     }
             }
         }
+    }
+
+    /// The breadcrumb, written once: ``ShellTopBar``'s leading string below
+    /// the accessibility sizes and the navigation title above them, so the two
+    /// chromes cannot drift into saying different things about where a person
+    /// is.
+    ///
+    /// ``ShellTopBar``'s copy is the **open** route, which is what Android's
+    /// `Topbar` draws (`AppShell.kt:1021`): one bar above one stack, saying
+    /// where the person is. Each screen *inside* the stack gets its own
+    /// (``crumb(for:)``), because a navigation item belongs to the screen that
+    /// carries it and not to the shell.
+    private var crumb: String { crumb(for: model.navigation.route) }
+
+    /// Which shape the header takes here, from ``ShellHeaderFold`` — the one
+    /// place answer 29's rule is written, and the one a package test can read.
+    /// ``AuditStrip/topBar`` is the variant with no header at all.
+    private var headerFold: ShellHeaderFold {
+        ShellHeaderFold.forHeader(
+            drawn: AuditStrip.active != .topBar,
+            isAccessibilitySize: typeSize.isAccessibilitySize
+        )
+    }
+
+    /// One screen's breadcrumb. Taken apart from ``crumb`` by review 1's S1:
+    /// one value handed to both the stack's root and its destinations is one
+    /// value too few.
+    private func crumb(for route: Route) -> String {
+        "\(ShellStrings.homeCrumb) / \(route.label.lowercased())"
     }
 
     /// The stack's root. ``AuditStrip/root`` is the only way to audit a pushed
@@ -159,6 +230,25 @@ struct WorkspaceView: View {
                 RouteScreen(model: model, route: route)
             }
         }
+        // The pushed screen's own chrome: at the accessibility sizes this is
+        // where the breadcrumb and the pill are, because up above the stack
+        // they cannot scroll away. **No per-screen file changes** — every
+        // pushed screen in the app arrives through this one function.
+        //
+        // `route`, the destination's own argument, and not
+        // ``ShellModel/navigation``'s: they are the same screen while this one
+        // is on top, and they are **not** the same while a deeper screen is
+        // pushed over it — this title is what that screen's back button will
+        // be named after.
+        .shellScrollAwayChrome(
+            crumb: crumb(for: route),
+            pill: model.chrome.pill,
+            onPill: { model.openConnection() },
+            drawn: AuditStrip.active != .topBar
+        )
+        // The `navBar` variant hides the bar the chrome above now lives in,
+        // which is what that variant is for: it takes one piece of the shell
+        // away, and at the accessibility sizes the bar *is* the header.
         if AuditStrip.active == .navBar {
             screen.toolbar(.hidden, for: .navigationBar)
         } else {
@@ -191,6 +281,13 @@ enum AuditStrip: String {
     /// ``ShellTopBar`` — the breadcrumb and the connection pill. Roots have
     /// it too, so if this is the answer the eight are an *interaction* with
     /// being pushed rather than the bar's own defect.
+    ///
+    /// **It means "the shell without its header", not "without that one
+    /// view".** Since owner answer 29 the header is ``ShellTopBar`` below the
+    /// accessibility sizes and ``ShellScrollAwayChrome``'s large title and
+    /// toolbar pill above them, so this variant takes whichever of the two
+    /// this launch would have drawn (`stack`, `destination(_:)`). Without
+    /// that it was the control at AX5, measuring the same number twice.
     case topBar
     /// ``PhoneBarView`` — four tabs, each an icon and a caption. Eight
     /// leaves, which is a suspicious coincidence, and it is the one piece
@@ -200,6 +297,11 @@ enum AuditStrip: String {
     /// once already at 8 by hand; kept as the harness's control, so a run
     /// where *this* one moves means the harness is wired differently from
     /// that attempt rather than that the answer changed.
+    ///
+    /// **At the accessibility sizes it takes the header with it**, because
+    /// since answer 29 the header lives in that bar. So at AX5 this variant
+    /// removes two pieces and ``topBar`` removes one; a run that compares the
+    /// two has to read it that way (review 1, N5).
     case navBar
     /// The stack's **root**, replaced by nothing. Home stays mounted
     /// underneath a push, so its views are the only thing a pushed screen
