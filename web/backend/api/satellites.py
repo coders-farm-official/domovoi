@@ -44,6 +44,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import text
 
 from domovoi.admin_auth import (
+    AuthCheckUnavailable,
     check_admin_request,
     check_device_request,
     require_admin_mutation,
@@ -1055,15 +1056,26 @@ async def _urls_allowed_by_fulfillers(urls: list[str]) -> dict[str, bool]:
     ``_acquisition_availability``: a core that does not answer leaves the
     dict EMPTY, and an absent url is not a positive answer, so the button
     is not drawn rather than drawn on a guess.
+
+    That route is on the DEVICE tier — it runs plugin code, so it is not
+    open to the LAN — and this hop presents the household token the web
+    process holds on its own behalf (``service_auth_headers``), not the
+    caller's credentials: the answer is core registry state, identical
+    for every caller, and WHICH caller is asking was already settled by
+    ``check_admin_request`` at this hop. A web process with no household
+    credential (a fresh install, a DB hiccup) therefore gets a 401 and,
+    like an unreachable core, an empty dict: no button, and no error for
+    anyone to read.
     """
     import httpx
 
-    from web.backend.domovoi_client import domovoi_url
+    from web.backend.domovoi_client import domovoi_url, service_auth_headers
 
     url = f"{domovoi_url().rstrip('/')}/v1/acquisitions/url-allowed"
     try:
+        headers = await service_auth_headers()
         async with httpx.AsyncClient(timeout=2.0) as client:
-            r = await client.post(url, json={"urls": urls})
+            r = await client.post(url, json={"urls": urls}, headers=headers)
         r.raise_for_status()
         answer = (r.json() or {}).get("allowed") or {}
         return {u: v is True for u, v in answer.items()}
@@ -1196,7 +1208,15 @@ async def list_recently_played(
             # fulfiller's own matcher, so ask per url. `== "ok"` is the
             # same line check_outbound_fetch draws (admin_auth.py:1976):
             # `cookie-only` and `pre-setup` do not pass it.
-            caller_is_admin = await check_admin_request(request) == "ok"
+            #
+            # A DB that answered the row read above and not this check is a
+            # hiccup between the two: the honest answer is then "not an
+            # admin session", which asks the allowlist like any other
+            # caller, rather than a 500 for a page whose rows are in hand.
+            try:
+                caller_is_admin = await check_admin_request(request) == "ok"
+            except AuthCheckUnavailable:
+                caller_is_admin = False
             if not caller_is_admin:
                 urls = sorted({r.url for r in raw if r.url and _reacquirable(r)})
                 if urls:

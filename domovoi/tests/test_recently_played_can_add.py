@@ -25,6 +25,14 @@ Three questions, in the order the route asks them, cheapest first:
 Step 3 is the allowlist D55 names, and the half a round-2 review found
 missing: the registry-wide flag said yes while the gate a device-token
 phone actually meets said no.
+
+Step 3's HTTP hop is stubbed in every case here (``_allowlist``), because
+what these cases are about is which question the route asks for which row
+and which caller. That the stub's shape is the shape the core really
+answers with — the path, the request key ``urls``, the response key
+``allowed`` — is pinned next door, in
+``test_acquisitions_url_allowed.py``, which drives the real helper against
+the real route with nothing in between.
 """
 
 from __future__ import annotations
@@ -33,6 +41,8 @@ from typing import Any
 
 from fastapi import Request
 from sqlalchemy import text
+
+from domovoi.admin_auth import AuthCheckUnavailable
 
 from domovoi import egress
 from domovoi.db.session import session_scope
@@ -455,5 +465,35 @@ async def test_nothing_installed_never_asks_the_allowlist(monkeypatch) -> None:
             rows = await _rows(monkeypatch, True, [], allow=True, asked=asked)
             assert rows["Ode to the Beelink"].can_add is False
             assert asked == []
+    finally:
+        await _clean()
+
+
+@requires_db
+async def test_a_db_hiccup_in_the_admin_check_is_rows_without_a_button(
+    monkeypatch,
+) -> None:
+    """``check_admin_request`` raises ``AuthCheckUnavailable`` when the DB
+    does not answer it. The rows above it are already read by then, so the
+    page is not a 500: the caller is treated as what it provably is — not
+    an admin session — and the allowlist decides, exactly as for a phone.
+    """
+    await _clean()
+    try:
+        await _seed()
+
+        async def unavailable(request, session=None):  # noqa: ANN001
+            raise AuthCheckUnavailable()
+
+        monkeypatch.setattr(sat_api, "check_admin_request", unavailable)
+        asked: list[list[str]] = []
+        rows = await _rows(monkeypatch, True, [], allow=True, asked=asked)
+        # Rows, not an exception — and the allowlist was still asked, so the
+        # button that survives is one the core agreed to.
+        assert rows["Ode to the Beelink"].can_add is True
+        assert asked == [["https://example.invalid/watch?v=vid-canadd"]]
+
+        rows = await _rows(monkeypatch, True, [], allow=False)
+        assert rows["Ode to the Beelink"].can_add is False
     finally:
         await _clean()

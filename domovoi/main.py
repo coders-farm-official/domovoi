@@ -5954,7 +5954,10 @@ class _UrlAllowedBody(BaseModel):
     urls: list[str] = Field(default_factory=list, max_length=500)
 
 
-@app.post("/v1/acquisitions/url-allowed")
+@app.post(
+    "/v1/acquisitions/url-allowed",
+    dependencies=[Depends(require_device)],
+)
 async def acquisitions_url_allowed(body: _UrlAllowedBody) -> dict[str, Any]:
     """Which of these URLs a registered fulfiller's ``url_matcher``
     allowlist recognizes — the question add-by-url's §7.3 outbound-fetch
@@ -5975,21 +5978,36 @@ async def acquisitions_url_allowed(body: _UrlAllowedBody) -> dict[str, Any]:
     Batched: the caller has a page of rows, and one request per row would
     be a round trip each. Repeats collapse — the answer is keyed by url.
 
-    SECURITY. A read with no side effects: it calls the registered
-    matchers (pure predicates over a string) and nothing else — no
-    outbound fetch, no queue row, and it does NOT spend add-by-url's
-    per-source rate limit, so asking cannot use up a caller's budget.
-    Open to the LAN like its sibling ``GET /v1/acquisitions``, which
-    already names the installed ``fulfillers``, and the answer is what
-    pressing the button would have told the caller anyway. A url nothing
-    recognizes is simply ``false``; a matcher that raises is ``false``
-    too (``ACQUISITIONS.url_allowed_by_fulfillers`` logs it).
+    SECURITY — the DEVICE tier, and a worker thread. What this route runs
+    is third-party code: every url goes through each registered
+    fulfiller's ``url_matcher``, a plugin callable the core does not
+    control, cannot time out, and must not take on trust (a matcher that
+    raises is already ``false``, logged by
+    ``ACQUISITIONS.url_allowed_by_fulfillers`` — but one that is merely
+    slow, a backtracking regex over a page of 500 urls, would hold the
+    event loop and with it voice, satellites and timers). So:
+
+    * ``require_device`` — the household token or an admin Bearer, which
+      is what the one caller holds: the web process asks on its OWN
+      behalf (``service_auth_headers``), because the answer is registry
+      state, the same for every caller, and the per-caller half of
+      add-by-url's gate (admin session or not) is decided at the web hop.
+      An unauthenticated LAN client gets nothing from here. This is the
+      one way it differs from its sibling ``GET /v1/acquisitions``, which
+      names the installed ``fulfillers`` without running any of them;
+    * the whole batch runs in a worker thread
+      (``asyncio.to_thread``), so a pathological matcher costs one thread
+      and not the loop.
+
+    Still no side effects: no outbound fetch, no queue row, and it does
+    NOT spend add-by-url's per-source rate limit, so asking cannot use up
+    a caller's budget for pressing. A url nothing recognizes is simply
+    ``false``.
     """
-    return {
-        "allowed": {
-            u: ACQUISITIONS.url_allowed_by_fulfillers(u) for u in body.urls
-        }
-    }
+    def _answer() -> dict[str, bool]:
+        return {u: ACQUISITIONS.url_allowed_by_fulfillers(u) for u in body.urls}
+
+    return {"allowed": await asyncio.to_thread(_answer)}
 
 
 # ─── Plugin runtime introspection (design §4.14, §12) ─────────────────────
