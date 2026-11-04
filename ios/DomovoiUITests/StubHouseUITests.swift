@@ -2295,8 +2295,13 @@ final class StubHouseUITests: XCTestCase {
             // the poster tile the caption belongs to. The count line and the
             // headings are static text and nothing else, so they are not
             // excused by this.
+            // Bounded at a hundred characters before the query is made: a
+            // label longer than 128 raises NSInternalInconsistencyException
+            // and takes the whole run with it (train S001). A tile's caption
+            // is a filename; anything longer than this is not one, and is
+            // better reported than queried.
             if line.hasPrefix("Text clipped"), let said = label(in: line),
-               app.buttons[said].exists {
+               said.count <= 100, app.buttons[said].exists {
                 return false
             }
             return true
