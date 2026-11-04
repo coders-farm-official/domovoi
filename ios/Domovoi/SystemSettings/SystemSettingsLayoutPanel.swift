@@ -440,8 +440,10 @@ private struct SystemSettingsBarRow: View {
             // the measured allowance is zero because no text leaf straddles
             // the scroll edge.
             //
-            // Two measurements from that train put it on this line, and both
-            // are in the run's own log:
+            // Two measurements from that train put it in **this panel**, and
+            // both are in the run's own log. Neither puts it on this line: see
+            // "What this does not establish" below, which is the honest
+            // reading and the one the unit's REPORT.md carries.
             //
             //  * **It is this panel's, not the chrome's.** The same train
             //    audited `About & updates` through the identical shell, twice:
@@ -468,10 +470,33 @@ private struct SystemSettingsBarRow: View {
             // So the ordinal alone goes to `Color.primary`, exactly as written
             // above. `fgMuted` is untouched here (the glyph beside it keeps
             // it, and so does ``ShellStrings/alwaysFirst``) and untouched
-            // everywhere else. Near-black leaves no mid-tone blend that can
-            // fall under 4.5:1, so if this finding comes back the ordinal is
-            // eliminated rather than suspected again — which is the point of
-            // changing one leaf and nothing else.
+            // everywhere else.
+            //
+            // ### What this does not establish
+            //
+            // **This is a controlled change, not a proven fix.** The finding
+            // is anonymous, and a second leaf of this panel has the identical
+            // signature and was not examined before the colour was changed:
+            // in the bare run the spare chips sit 12 points lower than in the
+            // composed one, which leaves `Images` and `News` at y = 773.2
+            // against a painted edge at y = 770 — **wholly outside the
+            // viewport**, with no pixels to sample and no element reported.
+            // These chips have carried a contrast finding on this panel twice
+            // already: train S005's cut slab of button fill (`1.00:1`,
+            // measured — it is why the style above is an outline and not
+            // `.bordered`) and I004's own composed run, which named
+            // `Podcasts` at `(62.33, 760.83, 70.33, 20.33)` where the edge
+            // halved it. Both candidates yield exactly one anonymous finding
+            // in the bare run, so that run's counts cannot separate them.
+            //
+            // What the change buys is a decision next train rather than
+            // another suspicion: near-black leaves no mid-tone blend that can
+            // fall under 4.5:1, so if the finding comes back the ordinal is
+            // eliminated and the clipped chips are what is left — and the
+            // case now prints every text leaf of the page with its frame and
+            // its relation to the painted edge, so the answer is in the log
+            // either way. The visual cost is one leaf: the position number in
+            // each row is as dark as the route's name beside it.
             Text("\(index + 1)")
                 .font(.caption.monospaced())
                 .foregroundStyle(Color.primary)
