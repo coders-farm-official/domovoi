@@ -293,7 +293,7 @@ extension StubHouseUITests {
                 + "the \(Int(StubShell.minimalBackControlWidth))-point allowance. It "
                 + "measured 86.3 with its word in train I004, so this is the word "
                 + "back: `ShellScrollAwayChrome.body` is not applying "
-                + "`navigationBarBackButtonDisplayMode(.minimal)` at the "
+                + "`toolbarRole(.editor)` at the "
                 + "accessibility sizes, and Apple's audit will report it as an "
                 + "unattributable `Text clipped` on every pushed screen again"
         )
@@ -946,7 +946,7 @@ extension StubHouseUITests {
                 + "points whatever size is asked for and which is not an "
                 + "accessibility element of its own — so the audit names it "
                 + "and XCUITest cannot. It came off in `ShellScrollAwayChrome` "
-                + "(`navigationBarBackButtonDisplayMode`) and "
+                + "(`toolbarRole(.editor)`) and "
                 + "`testShell_TheBackButtonDropsItsWordAtTheLargestTypeSize` "
                 + "holds it; if that case is red too, this line is the same "
                 + "defect and not a second one."

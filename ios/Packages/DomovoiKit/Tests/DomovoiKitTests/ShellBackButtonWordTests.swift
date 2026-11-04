@@ -63,26 +63,30 @@ final class ShellBackButtonWordTests: XCTestCase {
         )
     }
 
-    /// The body applies the display mode, once, from the rule.
+    /// The body applies the toolbar role, once, from the rule.
     ///
-    /// Not `contains(".minimal")` alone: a body that pinned `.minimal` at
-    /// every size would satisfy that and would take the word off the bar for
+    /// Not `contains(".editor")` alone: a body that pinned `.editor` at every
+    /// size would satisfy that and would take the word off the bar for
     /// everybody. The reading is the whole expression.
-    func testTheChromeBodyAsksTheRuleForTheDisplayMode() {
+    ///
+    /// `ToolbarRole.editor` is the documented SwiftUI spelling of "a back
+    /// button with no label"; `UINavigationItem.backButtonDisplayMode` is
+    /// UIKit's and SwiftUI does not surface it, which `appcheck` said out loud
+    /// when this was first written the other way.
+    func testTheChromeBodyAsksTheRuleForTheToolbarRole() {
         XCTAssertEqual(
             ShellFoldViewBodyTests.occurrences(
-                of: "navigationBarBackButtonDisplayMode(",
+                of: "toolbarRole(",
                 in: Self.chrome
             ).count,
             1,
-            "ShellChromeViews.swift applies "
-                + "`navigationBarBackButtonDisplayMode` "
-                + "\(ShellFoldViewBodyTests.occurrences(of: "navigationBarBackButtonDisplayMode(", in: Self.chrome).count) "
+            "ShellChromeViews.swift applies `toolbarRole` "
+                + "\(ShellFoldViewBodyTests.occurrences(of: "toolbarRole(", in: Self.chrome).count) "
                 + "time(s), not once. One modifier, on the one chain every "
                 + "shell screen goes through, is the whole of this fix"
         )
         let applied = ShellFoldViewBodyTests.arguments(
-            ofCallsTo: "navigationBarBackButtonDisplayMode(",
+            ofCallsTo: "toolbarRole(",
             in: Self.chrome
         ).first
         XCTAssertNotNil(applied, "the modifier is applied with no argument this file can read")
@@ -93,17 +97,17 @@ final class ShellBackButtonWordTests: XCTestCase {
             ) || applied.contains(
                 "ShellBackButtonWord.isDrawn(isAccessibilitySize: typeSize.isAccessibilitySize)"
             ),
-            "the display mode is `\(applied)`. It must be "
+            "the toolbar role is `\(applied)`. It must be "
                 + "`ShellBackButtonWord.isDrawn(isAccessibilitySize:)` asked "
                 + "with the `@Environment(\\.dynamicTypeSize)` value — a "
                 + "literal, or the rule asked with a constant, is the shape "
                 + "review 2's sabotage of answer 29 took twice"
         )
         XCTAssertTrue(
-            applied.contains(".default") && applied.contains(".minimal"),
-            "the display mode is `\(applied)` and does not name both arms. "
-                + "`.default` is the word beside the chevron and `.minimal` is "
-                + "the chevron alone; a body naming only one of them has "
+            applied.contains(".automatic") && applied.contains(".editor"),
+            "the toolbar role is `\(applied)` and does not name both arms. "
+                + "`.automatic` is the word beside the chevron and `.editor` "
+                + "is the chevron alone; a body naming only one of them has "
                 + "stopped choosing"
         )
     }

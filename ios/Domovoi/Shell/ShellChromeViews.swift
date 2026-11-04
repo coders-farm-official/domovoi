@@ -597,10 +597,22 @@ struct ShellScrollAwayChrome: ViewModifier {
             //
             // Roots have the large title and the toolbar pill too, so both of
             // those are eliminated by the same readings.
-            .navigationBarBackButtonDisplayMode(
+            //
+            // **`toolbarRole` and not `navigationBarBackButtonDisplayMode`**:
+            // the latter is `UINavigationItem`'s and SwiftUI does not surface
+            // it (`appcheck`: "value of type 'some View' has no member"). The
+            // documented SwiftUI spelling of "a back button with no label" is
+            // `ToolbarRole.editor`. Its other effect on iPhone is that an
+            // *inline* title sits leading rather than centred, which is where
+            // the large title above it already is — so the bar reads the same
+            // through the collapse instead of the word jumping to the middle.
+            // The toolbar pill is unaffected: it is placed `.topBarTrailing`
+            // explicitly, and the role only moves items whose placement is
+            // automatic.
+            .toolbarRole(
                 ShellBackButtonWord.isDrawn(
                     isAccessibilitySize: typeSize.isAccessibilitySize
-                ) ? .default : .minimal
+                ) ? .automatic : .editor
             )
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
