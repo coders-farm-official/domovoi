@@ -313,7 +313,15 @@ extension StubHouseUITests {
             // The toggle is nudged sideways first at AX5, where `week` is the
             // third of four scaling words (``calTapViewWord(_:_:flicks:)``).
             guard calTapViewWord(app, CalWords.week) else { return nil }
-            let line = app.staticTexts[CalWords.nothingOn]
+            // **`.firstMatch`, because a week has more than one empty day.**
+            // The fixture's week leaves four days with nothing on them, so
+            // the bare subscript is an ambiguous query: `exists` tolerates
+            // that, but `frame` and the scroll inside ``calendarScroll`` need
+            // a single snapshot and raise "Multiple matching elements found"
+            // (train I003). The first one is the same day at both sizes — the
+            // week's order is the fixture's and does not depend on the type
+            // size — so the two heights are still one element's.
+            let line = app.staticTexts[CalWords.nothingOn].firstMatch
             guard calendarScroll(app, to: line, flicks: 20) else { return nil }
             return line.frame.height
         }
@@ -368,6 +376,12 @@ extension StubHouseUITests {
         )
         let week = try calendarAudit(app, "cal-week", edges: edges)
         evidence(app, "cal-04-audit-week")
+        // Train I003's evidence for this line showed the **agenda**, with
+        // `agenda` selected, while the audit beside it had the week's forty
+        // anonymous findings: the screen was rebuilt between the two. Say so
+        // here rather than leaving the next reader to compare a picture with
+        // a count — ``calendarStillOn(_:_:_:)`` carries the whole account.
+        calendarStillOn(app, CalWords.week, "week")
         print("AUDIT cal week: floor \(week.floor), unexplained \(week.unexplained.count)")
         XCTAssertEqual(
             [], week.unexplained,
