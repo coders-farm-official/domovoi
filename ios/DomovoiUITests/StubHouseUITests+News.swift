@@ -767,9 +767,12 @@ extension StubHouseUITests {
 
     /// Three audits of this screen: the page as it lands, the page with the
     /// remove dialog up, and the foot of the page — a third of which is below
-    /// the fold when it lands. **Each in its own app process**, because a
-    /// process that has walked one of these passes does not reliably survive
-    /// the next (the body says what S002, S005 and S011 each lost to that).
+    /// the fold when it lands. **In two app processes** — the page and its
+    /// foot in one, the dialog in the other — because a process that has
+    /// walked these passes does not reliably survive, and neither does a
+    /// third launch (the body says what S002, S005, S011 and R004 each lost,
+    /// and what R004's own recording and its sibling unit say about whose
+    /// fault the last one was).
     ///
     /// **The first pass is the screen's, and it has to come first.** This
     /// case used to raise the dialog *before* its only audit, and
@@ -798,11 +801,19 @@ extension StubHouseUITests {
     /// (``floorAndRest(_:)``), and the floor is printed rather than pinned —
     /// a total would hide a new finding the moment one of the floor's went
     /// away.
+    ///
+    /// The one anonymous finding that is *not* floor and not a defect is a
+    /// `Contrast failed` for a leaf an edge has halved, and it is allowed
+    /// one-for-one against ``newsCutLeaves(_:)``'s count for that pass — a
+    /// number this case measures from the app and prints, never a total it
+    /// carries. R003: one cut leaf and one such finding on the page, three
+    /// and three at the foot, none and none behind the dialog.
     @MainActor
     func testNews_PassesApplesAccessibilityAudit() throws {
         resetNewsHouse()
 
-        // **One audit pass per app process.**
+        // **Two app processes: the page and its foot in one, the dialog in
+        // the other.**
         //
         // Train S011 lost this case in the third pass: the foot audit ran,
         // and partway through reading its findings' elements the app was
@@ -819,10 +830,9 @@ extension StubHouseUITests {
         // reason this case terminates its app at all. A third pass moved the
         // death inside the case.
         //
-        // So each pass now gets its own launch, runs one audit, and is put
-        // down before the next one starts. Nothing is audited less: the page
-        // as it lands, the confirmation, and the foot are all still walked —
-        // each by a process that has walked nothing else.
+        // So each pass got its own launch, ran one audit, and was put down
+        // before the next one started. Nothing is audited less: the page as
+        // it lands, the confirmation, and the foot are all still walked.
         //
         // **Train I001 lost it again, and not to an audit.** `Lost connection
         // to the application (pid 71471)` at t = 13.47s, inside the *first*
@@ -839,6 +849,37 @@ extension StubHouseUITests {
         // a two-hour Simulator. Nothing here is changed for it: this is the
         // crowd death I1H2-SIM-REPORT.md run 11 could not pin, and a case
         // cannot be written around a process that is taken from it.
+        //
+        // **R004 lost the third launch, and the run says it was not this
+        // case's doing.** The page pass classified (`floor=0 rest=0 leaves an
+        // edge cuts in half=1`) and the dialog pass classified (`floor=8
+        // rest=0 the hidden page's text=7`); the third process came up,
+        // reached `news-person-heading` at t = 67.92s, and was gone by
+        // t = 68.5s — `Lost connection to the application (pid 89100)` on the
+        // `news-story-meta-301` wait, with no crash report. The run's own
+        // screen recording is what settles what was in the frame: frames at
+        // t = 67.75, 68.0 and 68.25 are the News page drawn whole and still —
+        // chip rail, briefing, category grid, phone bar — no dialog, no
+        // banner, no alert, and at t = 68.5 the Simulator is on Springboard.
+        // The page the audit was about to read was fine.
+        //
+        // And it is not this case's: **the same train lost
+        // `testPhoneMedia_AProgressRingShowsWhileAnUploadRuns` to the
+        // identical signature after a *single* launch** (`Lost connection …
+        // (pid 91621)`, R004/SourceSwitch), on another screen in another
+        // unit, plus `testTheFilesListTextGrowsAtAX5` beside it. Three cases,
+        // two units, one train. No count of launches in this file explains a
+        // one-launch case dying the same way.
+        //
+        // So this is not fixed here; the exposure is reduced. This was R004's
+        // longest case by far at 89.7s — the two casualties beside it ran
+        // 42.7s and 54.4s — and a third of that was the third launch and its
+        // twelve-second push. The page and the foot now share one process:
+        // the same three audits run, with the same classifiers and the same
+        // per-pass measured counts, in two launches instead of three. Two
+        // audits in one process is the shape S002 and S005 ran through; the
+        // three S011 died on is not back, and the terminate that S002's
+        // leftover bought is still here.
         var findings: [String] = []
         var mishaps: [String] = []
         var pins: [String] = []
@@ -882,10 +923,20 @@ extension StubHouseUITests {
             // six. The waits stay — auditing a half-built page is its own
             // defect and the dialog and foot passes have no equivalent — but
             // what makes a finding anonymous here is not how late it runs.
-            // Five of the six were the chip leaves, by count and by S005's
-            // own attribution of them, and those are now out of the tree; a
-            // sixth that arrives anonymous is an unknown this case reports
-            // rather than discounts.
+            //
+            // **R003 settled what the sixth was, and it is the chip the rail
+            // cuts.** With the leaves gone this pass reported exactly one
+            // `Contrast failed`, anonymous, and the run's own tree shows the
+            // audit exactly one half-drawn leaf: `news-chip-alex ` at
+            // x = 345.7–437.0 in a chip rail that ends at x = 377. S005 named
+            // that very cut back when the avatar bubble was still an element
+            // (`label='A' frame=(357.7, 225.3, 28, 28)`, the initial the
+            // scroller halves); round 3 took the bubble out of the tree, so
+            // the same cut now arrives with nothing to name. The run's
+            // screenshot is what attributes it — the fourth chip is drawn as
+            // a circle and no word. ``newsCutLeaves(_:)`` counts it, one
+            // anonymous contrast finding is allowed per cut leaf, and a
+            // second one still fails this case.
             _ = newsElement(app, "news-story-meta-301").waitForExistence(timeout: 25)
             _ = app.buttons["news-category-entertainment"].waitForExistence(timeout: 10)
             let settled = XCTestExpectation(description: "the page settled before the audit")
@@ -893,50 +944,19 @@ extension StubHouseUITests {
 
             pins += newsChipRowIsOneElement(app)
             findings += try auditNews(app, "news", "the page")
-        } catch {
-            mishaps.append("the page audit could not be run: \(error)")
-        }
 
-        // ### 2. The remove confirmation, which hides everything above it.
-        do {
-            let (app, landed) = openNews()
-            defer { app.terminate() }
-            if !landed {
-                mishaps.append("News never drew a person's heading for the dialog pass")
-            }
-            let remove = app.buttons["news-remove-topic-tech"]
-            if revealNews(app, remove) {
-                remove.tap()
-                if newsElement(app, "news-remove-ask").waitForExistence(timeout: 10) {
-                    evidence(app, "news-12-audited-dialog")
-                    findings += try auditNews(
-                        app,
-                        "news-dialog",
-                        "the remove confirmation",
-                        behindADialog: true
-                    )
-                    app.buttons["news-remove-cancel"].tap()
-                } else {
-                    mishaps.append("the remove confirmation never came up")
-                }
-            } else {
-                mishaps.append("the remove control was not reachable")
-            }
-        } catch {
-            mishaps.append("the dialog audit could not be run: \(error)")
-        }
-
-        // ### 3. The foot of the page.
-        do {
-            let (app, landed) = openNews()
-            defer { app.terminate() }
-            if !landed {
-                mishaps.append("News never drew a person's heading for the foot pass")
-            }
-            // Same settling as the page pass, for the same reason: an audit
-            // against a half-built page attributes nothing.
-            _ = newsElement(app, "news-story-meta-301").waitForExistence(timeout: 25)
-
+            // ### 1b. The foot of the page — walked by this same process.
+            //
+            // R004's lost third launch is why this is no longer a launch of
+            // its own; the measurement that settles whose fault that was is
+            // in the comment at the top of this case. Nothing about the pass
+            // itself changes: the page audit above has run, nothing has been
+            // tapped, and every number this pass stands on — the viewport
+            // (``newsPageViewport(_:)``) and the leaves the edges cut
+            // (``newsCutLeaves(_:)``) — is measured again inside
+            // ``auditNews(_:_:_:behindADialog:allowingLeavesCutByAnEdge:)``
+            // after the swipes below, so it reads this scroll position and
+            // not the one the page pass read.
             // **The foot of the page, audited on screen.** The page pass
             // covers what the viewport holds, and this screen is 1111 points
             // of content in a 677-point scroll view: every topic row, every
@@ -990,11 +1010,66 @@ extension StubHouseUITests {
             // Nothing is classified for any of it: a `Contrast failed`
             // naming an element of this screen fails this case.
             // `integration/news.md` round 3 carries the numbers.
+            //
+            // **What R003's foot pass did report is the top edge, three
+            // times.** One named finding — the `Categories give broad
+            // coverage…` sentence at y = 47, above the viewport, which
+            // ``newsOutsideTheViewport(_:_:)`` discounts — and three
+            // anonymous `Contrast failed`. The tree says what the audit was
+            // shown in halves: scrolled to the foot, the first row of
+            // category chips sits at y = 92.7 against a scroll view whose top
+            // edge is y = 93.3, so `news-category-world`, `-national` and
+            // `-tech` are each cut by six tenths of a point and what is left
+            // of them is drawn in the navigation bar's own band. The run's
+            // screenshot shows it plainly: that band holds `Back` and a wash
+            // of the picked chip's amber, and not one of the three words is
+            // legible. Three cut leaves, three anonymous findings, and the
+            // six chips below them — identical ink, same pass — measured
+            // 5.07:1 and audited clean. ``newsCutLeaves(_:)`` carries the
+            // count; a fourth anonymous finding fails this case.
             for _ in 0..<12 { app.swipeUp(velocity: .slow) }
             evidence(app, "news-12-audited-foot")
             findings += try auditNews(app, "news-foot", "the foot of the page")
         } catch {
-            mishaps.append("the foot audit could not be run: \(error)")
+            mishaps.append("the page and foot audits could not be run: \(error)")
+        }
+
+        // ### 2. The remove confirmation, which hides everything above it.
+        do {
+            let (app, landed) = openNews()
+            defer { app.terminate() }
+            if !landed {
+                mishaps.append("News never drew a person's heading for the dialog pass")
+            }
+            let remove = app.buttons["news-remove-topic-tech"]
+            if revealNews(app, remove) {
+                remove.tap()
+                if newsElement(app, "news-remove-ask").waitForExistence(timeout: 10) {
+                    evidence(app, "news-12-audited-dialog")
+                    findings += try auditNews(
+                        app,
+                        "news-dialog",
+                        "the remove confirmation",
+                        behindADialog: true,
+                        // **This pass is allowed nothing anonymous.** The
+                        // page is `.accessibilityHidden` behind the scrim, so
+                        // it offers the audit no elements at all — which is
+                        // why its findings are `Potentially inaccessible
+                        // text` and not contrast — and R003's dialog tree has
+                        // no leaf either edge cuts (measured: 0). An
+                        // allowance here would buy nothing and hide the one
+                        // thing this pass exists to catch.
+                        allowingLeavesCutByAnEdge: false
+                    )
+                    app.buttons["news-remove-cancel"].tap()
+                } else {
+                    mishaps.append("the remove confirmation never came up")
+                }
+            } else {
+                mishaps.append("the remove control was not reachable")
+            }
+        } catch {
+            mishaps.append("the dialog audit could not be run: \(error)")
         }
 
         XCTAssertEqual([], mishaps, "the audit never reached what it was meant to look at")
@@ -1009,14 +1084,16 @@ extension StubHouseUITests {
             findings,
             "Apple's audit has findings beyond the measured anonymous floor, "
                 + "the content the viewport has clipped away, the two meta "
-                + "lines measured to scale, and the page this app hides "
-                + "behind a dialog. Nothing else is discounted: a "
-                + "`Contrast failed` naming a category chip, `saved feed` or "
-                + "a person chip is this screen's to fix — R001 named ten of "
-                + "them and R002 named none, with only this screen's own ring "
-                + "changed in between (the foot pass's comment carries that "
-                + "measurement). An anonymous one is an unknown, and the page "
-                + "pass's comment says what the six used to be"
+                + "lines measured to scale, the page this app hides behind a "
+                + "dialog, and one anonymous `Contrast failed` per leaf an "
+                + "edge was measured cutting in half on that pass (the `CUT "
+                + "::` lines in the log name them). Nothing else is "
+                + "discounted: a `Contrast failed` naming a category chip, "
+                + "`saved feed` or a person chip is this screen's to fix — "
+                + "R001 named ten of them and R002 named none, with only this "
+                + "screen's own ring changed in between (the foot pass's "
+                + "comment carries that measurement). An anonymous one beyond "
+                + "the cut count is an unknown this case reports"
         )
     }
 
@@ -1138,6 +1215,97 @@ extension StubHouseUITests {
         return box.maxY > viewport.maxY || box.minY < viewport.minY
     }
 
+    /// A `Contrast failed` the audit would not attribute — the shape, not the
+    /// permission to ignore one. ``auditNews(_:_:_:behindADialog:allowingLeavesCutByAnEdge:)``
+    /// allows these **only** up to the number of leaves ``newsCutLeaves(_:)``
+    /// measured an edge cutting in half on that very pass.
+    static func newsAnonymousContrast(_ line: String) -> Bool {
+        line.hasPrefix("Contrast failed") && line.hasSuffix("| element: nil")
+    }
+
+    /// The leaves this screen is showing the audit in **halves**: the ones an
+    /// edge runs through, measured from the app at audit time and returned as
+    /// text so no live element escapes onto the path that reads the findings
+    /// (the reason ``newsPageViewport(_:)`` is taken early — train S011).
+    ///
+    /// Two edges cut on this screen, and both are counted:
+    ///
+    /// * the **page** scroll view's top and bottom. Scrolled to the foot, its
+    ///   top edge at y = 93.3 runs through the first row of category chips at
+    ///   y = 92.7 — by six tenths of a point — and those three chips are then
+    ///   drawn in the band the navigation bar occupies;
+    /// * the **people chip row's** right edge. That scroller is 361 points
+    ///   wide over 421 points of chips, so the last chip always hangs over
+    ///   it; the row's own frame has to be inside the page viewport first,
+    ///   which is what keeps it from being counted on a pass that has
+    ///   scrolled the row away.
+    ///
+    /// ### Why a half-drawn leaf is a `Contrast failed`
+    ///
+    /// Half an element has no pixels an audit can read, and this track has
+    /// measured the shape three times over. ``testTheVideosGridAudits``
+    /// classifies it for a grid row the bottom edge halves;
+    /// ``testSystemSettings_AppLayoutPassesApplesAccessibilityAudit`` for a
+    /// row of chips the same edge halves — Apple named `Podcasts` in R001 and
+    /// left the others with no element at all, which is the same split News
+    /// gets. S012 saw both attributions of one leaf: Home's now-playing line,
+    /// cut by the same edge, came back named in one run and `element: nil` in
+    /// the next, from the same pixels.
+    ///
+    /// R003's own numbers, which is why this is a classifier and not a
+    /// sentence: the page pass showed the audit **one** cut leaf
+    /// (`news-chip-alex `, 345.7–437.0 against a rail ending at 377) and
+    /// reported **one** anonymous `Contrast failed`; the foot pass showed it
+    /// **three** (`news-category-world`, `-national`, `-tech`) and reported
+    /// **three**; the dialog pass showed it **none** and reported **none**.
+    /// The uncut siblings of those chips were measured on that run's own
+    /// screenshot at 151,88,0 on 242,242,247 — **5.07:1** — so it is not the
+    /// ink: `business`, `science`, `sports`, `health`, `politics` and
+    /// `entertainment` are the identical control on the identical pass and
+    /// audit clean.
+    ///
+    /// **Narrow on purpose, and it is a count rather than a licence.** One
+    /// anonymous `Contrast failed` more than there are cut leaves still fails
+    /// this case, as does any other anonymous headline, and a named finding
+    /// is still placed by its own frame.
+    @MainActor
+    private func newsCutLeaves(_ app: XCUIApplication) -> [String] {
+        let scrollers = app.scrollViews.allElementsBoundByIndex
+        guard let page = scrollers.max(by: { $0.frame.height < $1.frame.height }) else {
+            return []
+        }
+        let viewport = page.frame
+        guard viewport.height > 0 else { return [] }
+
+        // Both queries resolved once. Every one of these is a round trip to
+        // the app, and this runs three times a case.
+        let controls = app.buttons.allElementsBoundByIndex
+        let leaves = app.staticTexts.allElementsBoundByIndex + controls
+        var cut = leaves.filter { leaf in
+            let box = leaf.frame
+            guard box.height > 0 else { return false }
+            return (box.minY < viewport.minY && box.maxY > viewport.minY)
+                || (box.minY < viewport.maxY && box.maxY > viewport.maxY)
+        }
+
+        // The people chip row lying on its side — strictly shorter than the
+        // page, and only while the page is actually showing it.
+        if let rail = scrollers.min(by: { $0.frame.height < $1.frame.height })?.frame,
+            rail.height > 0,
+            rail.height < viewport.height,
+            rail.minY >= viewport.minY,
+            rail.maxY <= viewport.maxY
+        {
+            cut += controls.filter { leaf in
+                let box = leaf.frame
+                guard box.height > 0, box.intersects(rail) else { return false }
+                return (box.minX < rail.minX && box.maxX > rail.minX)
+                    || (box.minX < rail.maxX && box.maxX > rail.maxX)
+            }
+        }
+        return cut.map { Self.oneLine($0) }
+    }
+
     /// The frame of the page's own scroll view — the taller of the two on
     /// this screen, the other being the people chip row lying on its side.
     ///
@@ -1222,16 +1390,25 @@ extension StubHouseUITests {
         _ app: XCUIApplication,
         _ name: String,
         _ what: String,
-        behindADialog: Bool = false
+        behindADialog: Bool = false,
+        allowingLeavesCutByAnEdge cutAllowed: Bool = true
     ) throws -> [String] {
         // **Measured before the audit runs, while the app is certainly
         // there.** Reading it per finding put a live query to the app on the
         // path that reads the audit's results; see
-        // ``newsOutsideTheViewport(_:_:)``.
+        // ``newsOutsideTheViewport(_:_:)``. ``newsCutLeaves(_:)`` is taken on
+        // the same line and for the same reason, and it comes back as text so
+        // that printing it cannot put a query there either.
         let viewport = newsPageViewport(app)
+        let cut = cutAllowed ? newsCutLeaves(app) : []
+        // Printed every pass, allowed for or not: a case that goes red here
+        // next train needs to know what the edges were cutting, and a pass
+        // whose count has changed is the first thing to read.
+        for leaf in cut { print("NEWS AUDIT [\(what)] CUT :: \(leaf)") }
         let split = Self.floorAndRest(try auditIssues(app, name))
         var counts: [String: Int] = [:]
         var rest: [String] = []
+        var anonymousAllowed = cut.count
         for found in split.rest {
             // In this order, and each one narrow: a line no classifier claims
             // lands in `rest` and fails the caller.
@@ -1241,6 +1418,11 @@ extension StubHouseUITests {
                 counts["measured scaling false positives", default: 0] += 1
             } else if behindADialog, Self.newsHiddenPageText(found) {
                 counts["the hidden page's text", default: 0] += 1
+            } else if Self.newsAnonymousContrast(found), anonymousAllowed > 0 {
+                // One per cut leaf and no more — the count is this pass's own
+                // measurement, printed above, not a tolerance.
+                anonymousAllowed -= 1
+                counts["leaves an edge cuts in half", default: 0] += 1
             } else {
                 rest.append(found)
             }
