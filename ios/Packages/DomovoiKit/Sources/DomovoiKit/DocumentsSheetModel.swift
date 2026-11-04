@@ -282,23 +282,22 @@ public final class DocumentsSheetModel {
     /// `0 → "A"`, `26 → "AA"`, `27 → "AB"` — `colName`
     /// (`SheetModel.kt:128`), which is the column header and the first half
     /// of a cell's address.
-    public static func columnName(_ index: Int) -> String {
-        guard index >= 0 else { return "" }
-        var n = index + 1
-        var out = ""
-        while n > 0 {
-            let remainder = (n - 1) % 26
-            out.append(Character(UnicodeScalar(UInt8(65 + remainder))))
-            n = (n - 1) / 26
-        }
-        return String(out.reversed())
+    ///
+    /// `nonisolated`, and delegating: the table itself lives in
+    /// ``DocumentsSheetParser/columnName(_:)`` because the `.xlsx` reader
+    /// needs column names **off** the main actor to translate a shared
+    /// formula, and `@MainActor` on this class isolates its static members
+    /// too (the compiler said so). Two copies of a column-name table is how
+    /// a grid's header comes to disagree with its cells, so there is one.
+    public nonisolated static func columnName(_ index: Int) -> String {
+        DocumentsSheetParser.columnName(index)
     }
 
     /// `"B12"` — the address a cell's accessibility label needs, because a
     /// grid of unlabelled text fields is unreadable to VoiceOver. Android's
     /// `refOf` (`SheetModel.kt:144`); its grid has a row-number gutter and
     /// no per-cell label at all, which is a gap on that side.
-    public static func address(row: Int, column: Int) -> String {
+    public nonisolated static func address(row: Int, column: Int) -> String {
         "\(columnName(column))\(row + 1)"
     }
 
