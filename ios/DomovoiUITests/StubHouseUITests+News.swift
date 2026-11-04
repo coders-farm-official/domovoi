@@ -1159,7 +1159,50 @@ extension StubHouseUITests {
                         // thing this pass exists to catch.
                         allowingLeavesCutByAnEdge: false
                     )
-                    app.buttons["news-remove-cancel"].tap()
+                    // **The dialog has to still be there to be dismissed**,
+                    // and in train I003 it was not. Two snapshots, five
+                    // seconds apart, and nothing between them but the audit:
+                    //
+                    // * `news-12-audited-dialog` (t = 68.57): the dialog is
+                    //   up — `news-remove-ask`, `news-remove-cancel`,
+                    //   `news-remove-confirm` — and the page behind it is
+                    //   `.accessibilityHidden`, its scroll content an empty
+                    //   `{{0, -341.7}, {393, 1111.7}}` with no leaves. That
+                    //   is the correct modal shape, so nothing was wrong yet.
+                    // * The failed `tap()`'s own input dump (t = 73.07): no
+                    //   `news-remove-cancel` anywhere, and the page back and
+                    //   whole — `news-remove-topic-tech`, `news-expand-tech`,
+                    //   both person chips, both story rows.
+                    //
+                    // So the dialog closed itself during its own audit and
+                    // the detail screen behind it survived intact. Nothing in
+                    // `NewsPersonModel` clears `confirmingRemoval` without
+                    // also tearing `detail` down — `stop()` does both
+                    // (`NewsPersonModel.swift:432-444`) and `cancelRemoval()`
+                    // / `confirmRemoval(_:)` only run from the dialog's own
+                    // buttons — so the presentation was dropped from above,
+                    // the same instability that put `testPrinting_PanelAudit`
+                    // and the About and App-layout audits back on the
+                    // Settings index inside one case.
+                    //
+                    // An unguarded `tap()` reports that as "Failed to tap",
+                    // which says nothing about what happened. This is **not**
+                    // an allowance: the mishap list is asserted empty, so the
+                    // case is still red — it is red with the reason in it,
+                    // and with the tree beside it.
+                    let cancel = app.buttons["news-remove-cancel"]
+                    if cancel.exists {
+                        cancel.tap()
+                    } else {
+                        evidence(app, "news-12-dialog-vanished")
+                        mishaps.append(
+                            "the remove confirmation went away during its own audit — "
+                                + "news-remove-ask still on screen: "
+                                + "\(newsElement(app, "news-remove-ask").exists), the page "
+                                + "behind it still drawing its rows: "
+                                + "\(app.buttons["news-remove-topic-tech"].exists)"
+                        )
+                    }
                 } else {
                     mishaps.append("the remove confirmation never came up")
                 }
