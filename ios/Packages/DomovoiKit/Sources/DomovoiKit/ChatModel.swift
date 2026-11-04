@@ -517,6 +517,15 @@ public final class ChatModel {
 
     public var canSend: Bool { composerOffered && !sending }
 
+    /// Show one page more of the open thread (``ChatTranscriptWindow``, D64).
+    ///
+    /// On the model and not on the view's own copy of the transcript, because
+    /// ``transcript`` is `private(set)`: the window is the model's state, and
+    /// it has to survive a redraw.
+    public func showEarlier() {
+        transcript.showEarlier()
+    }
+
     /// What the screen says in place of the whole conversation when the house's
     /// AI features are off (`RouteNotes.kt:10`, already ported as
     /// ``ShellStrings/unavailableNote(label:isChat:aiEnabled:)``).

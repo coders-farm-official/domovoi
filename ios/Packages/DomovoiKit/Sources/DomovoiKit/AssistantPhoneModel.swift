@@ -242,6 +242,9 @@ public final class AssistantPhoneModel {
         visits += 1
         stopped = false
         live = nil
+        // A different conversation opens at its newest page: the window is a
+        // reading position in the one that was open.
+        transcriptWindow.reset()
         guard let found = store.load(id) else {
             toast = AssistantStrings.writeFailed(ChatStrings.verbOpenChat)
             load()
@@ -258,6 +261,7 @@ public final class AssistantPhoneModel {
         visits += 1
         stopped = false
         live = nil
+        transcriptWindow.reset()
         conversation = store.create(now: nowMs())
     }
 
@@ -266,6 +270,7 @@ public final class AssistantPhoneModel {
         visits += 1
         conversation = nil
         live = nil
+        transcriptWindow.reset()
         load()
     }
 
@@ -276,6 +281,31 @@ public final class AssistantPhoneModel {
             out.append(AssistantMessage(from: .domovoi, text: live, at: nowMs()))
         }
         return out
+    }
+
+    /// How much of ``transcript`` is drawn (``ChatTranscriptWindow``, D64).
+    ///
+    /// The same cap as the house's conversation, for the same reason and with
+    /// the same page: this transcript is eager too (``transcript`` is read
+    /// whole on every redraw and the view builds a bubble for each message),
+    /// and a conversation kept on this phone grows for as long as the person
+    /// keeps using it — there is no server trimming it.
+    public private(set) var transcriptWindow = ChatTranscriptWindow()
+
+    /// How many messages are hidden above the window; zero for a conversation
+    /// drawn whole. The "show earlier" control's gate.
+    public var earlierCount: Int { transcriptWindow.earlierCount(of: transcript.count) }
+
+    /// Show one page more of this conversation.
+    public func showEarlier() {
+        transcriptWindow.showEarlier(of: transcript.count)
+    }
+
+    /// The messages the view builds: the window's, newest last
+    /// (``ChatTranscript/drawn`` is the same shape on the house's side).
+    public var drawnTranscript: ArraySlice<AssistantMessage> {
+        let all = transcript
+        return all.dropFirst(transcriptWindow.firstDrawn(of: all.count))
     }
 
     /// Where the window divider goes, as an index into ``transcript``; nil for

@@ -39,6 +39,22 @@ public enum ChatStrings {
     /// `ChatHome.kt:502`, the send button's label for VoiceOver.
     public static let send = "send"
 
+    /// The transcript's cap (D64). **iOS-only**: Android has no such control,
+    /// because its transcript is a `LazyColumn` (`ChatScreen.kt:973`) and a
+    /// lazy list needs no cap. This app's is eager on purpose — train R002's
+    /// measurement is in ``ChatTranscriptWindow`` — so the cap is what stands
+    /// in for the laziness, and Kamron's own words for it are the label
+    /// (answer 64: "cap the transcript (last N plus 'show earlier')").
+    public static let showEarlier = "show earlier"
+
+    /// What VoiceOver reads on ``showEarlier``: the same words, with how many
+    /// messages are above the window. A count, because "show earlier" on its
+    /// own does not say whether it is one message or nine hundred — and
+    /// singular where it is one (answer 48's rule about `1 chapters`).
+    public static func showEarlierNote(hidden: Int) -> String {
+        hidden == 1 ? "show earlier, 1 more above" : "show earlier, \(hidden) more above"
+    }
+
     /// `ChatHome.kt:513` and `:582`, a row's own two labels.
     public static let openRow = "open"
     public static let rowActions = "chat actions"
