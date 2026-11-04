@@ -1,6 +1,6 @@
 import Foundation
 
-/// The three sentences this app says that Android has no words for.
+/// The four sentences this app says that Android has no words for.
 ///
 /// **Drafts, awaiting Kamron's wording.** They are written down here, in one
 /// place and nowhere else, so that rewording either is a one-line change and
@@ -15,6 +15,11 @@ import Foundation
 ///    that reports the answer (TN3179); a refusal surfaces only as every
 ///    connection failing, which ``Discovery/isLocalNetworkDenied(_:)`` reads
 ///    off `NWPath.unsatisfiedReason`. Android asks for no such permission.
+///  - **``nothingAnsweredYet(port:)``** is iOS-only for the same reason:
+///    it exists only because the first sweep of an install can be the one
+///    Apple's prompt is interrupting, and Android has no such prompt. Its
+///    twin ``ShellStrings/nothingAnswered(port:)`` is Android's sentence and
+///    is still said once the permission question is settled.
 ///  - **``noAddressYet``** is not iOS-only: Android has the same hole and says
 ///    "nothing answered on port 6369" about a sweep that probed nothing
 ///    (`ANDROID-SHELL-MAP.md` §3.1, `Discovery.localIpv4()` returning null).
@@ -46,6 +51,30 @@ public enum IOSOnlyStrings {
     /// The dash is an em dash, U+2014.
     public static let localNetworkDenied =
         "local network access is off — allow it in Settings, then rescan"
+
+    /// Nothing answered, on an install where nothing ever has — so the
+    /// permission is still an explanation and the person's server is not
+    /// accused of anything.
+    ///
+    /// **What it may claim, and what it must not.** The app cannot tell
+    /// whether Local Network access was granted (TN3179), so the sentence
+    /// cannot assert that it was refused: it says *if*. Nor may it leave out
+    /// the fact it does have — that nothing answered on the port — because
+    /// that is the one thing the sweep measured, and a person whose backend
+    /// really is down has to be able to get there from this line. Hence both
+    /// halves, the fact first.
+    ///
+    /// The twin for a settled install is ``ShellStrings/nothingAnswered(port:)``,
+    /// which does ask about the web backend, and may: by then something has
+    /// answered this install at least once, so the permission is not it.
+    ///
+    /// The dash is an em dash, U+2014, and the port is interpolated from
+    /// ``Discovery/defaultPort`` as Android's sentence interpolates
+    /// `Discovery.DEFAULT_PORT`.
+    public static func nothingAnsweredYet(port: Int = Discovery.defaultPort) -> String {
+        "nothing answered on port \(port) — if iOS asked about local network "
+            + "access, allow it and rescan; or add an address below"
+    }
 
     /// On Wi-Fi or Ethernet, but with no site-local IPv4 — a lease that has
     /// not arrived, or an IPv6-only network. Nothing was probed, so nothing

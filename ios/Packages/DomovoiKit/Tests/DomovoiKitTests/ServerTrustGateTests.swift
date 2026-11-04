@@ -210,4 +210,7 @@ final class RefusingShellStore: ShellStore {
     func isTokenRejected(_ url: String) -> Bool { inner.isTokenRejected(url) }
     func markTokenRejected(_ url: String) { inner.markTokenRejected(url) }
     func clear(_ url: String) { inner.clear(url) }
+
+    var localNetworkHasAnswered: Bool { inner.localNetworkHasAnswered }
+    func noteLocalNetworkAnswered() { inner.noteLocalNetworkAnswered() }
 }
