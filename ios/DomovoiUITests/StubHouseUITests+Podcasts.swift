@@ -24,7 +24,7 @@ import XCTest
 /// case was written as an absence and is inverted rather than deleted. What a
 /// Simulator still cannot add is whether `AVPlayer` reached `.readyToPlay`:
 /// `testPlayer_TheStubHousePlaysTheFixturesAudio` owns the bytes and
-/// `PodcastPlayTests` owns the resume arithmetic — eleven cases over a real
+/// `PodcastPlayTests` owns the resume arithmetic — twelve cases over a real
 /// ``PlayerModel``, added in review 1 of this batch. This sentence named
 /// `PodcastsModelTests` while that file had no case naming play or resume,
 /// which is the kind of pointer that stops the next reader looking (M2).
