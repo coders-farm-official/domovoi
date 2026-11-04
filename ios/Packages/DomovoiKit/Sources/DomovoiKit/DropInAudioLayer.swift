@@ -160,6 +160,27 @@ public final class DropInAudioEngine: DropInAudio, @unchecked Sendable {
     /// and its nodes are documented safe to drive from one thread at a time,
     /// and the capture callback touches nothing else.
     private let lock = NSLock()
+
+    /// The **player node's own** lock, held across every call that touches
+    /// `player` while it is attached — ``play(_:)``'s `scheduleBuffer` and
+    /// ``stop()``'s `detach`.
+    ///
+    /// A second lock and not ``lock``, because ``lock`` cannot be held across
+    /// a teardown: `removeTap(onBus:)` blocks until an in-flight tap block
+    /// returns, and that block is ``captured(_:into:)``, which takes ``lock``
+    /// — one lock across both would deadlock the first hang-up that landed
+    /// mid-buffer.
+    ///
+    /// Review round 1 found the race this closes: a frame arriving from the
+    /// socket during a hang-up read `running` under the lock, released it, and
+    /// then scheduled onto a node `stop()` had already detached. The order
+    /// here is the fix: ``stop()`` clears `running` **before** it detaches, so
+    /// a ``play(_:)`` that gets this lock afterwards bails on `running`, and
+    /// one that already holds it finishes scheduling before the detach can
+    /// start. Nothing ever holds this and then asks for ``lock`` in the other
+    /// direction: ``stop()`` has released ``lock`` before it comes here.
+    private let playLock = NSLock()
+
     private let engine = AVAudioEngine()
     private let player = AVAudioPlayerNode()
     private var cutter = DropInFrameCutter()
@@ -265,6 +286,11 @@ public final class DropInAudioEngine: DropInAudio, @unchecked Sendable {
     }
 
     public func play(_ pcm: Data) {
+        // ``playLock`` first and for the whole of this, so the node cannot be
+        // detached between the `running` check and the schedule. See that
+        // property for why it is a second lock.
+        playLock.lock()
+        defer { playLock.unlock() }
         lock.lock()
         let live = running
         lock.unlock()
@@ -301,13 +327,42 @@ public final class DropInAudioEngine: DropInAudio, @unchecked Sendable {
         cutter.reset()
         converter = nil
         lock.unlock()
+        // `running` is already false, so a ``play(_:)`` that takes
+        // ``playLock`` from here on schedules nothing.
         engine.inputNode.removeTap(onBus: 0)
+        // **Not under ``lock``**: `removeTap` waits for an in-flight tap
+        // block, and that block takes ``lock``.
+        playLock.lock()
         player.stop()
         engine.stop()
         engine.detach(player)
+        playLock.unlock()
     }
 }
 #endif
+
+// ---------------------------------------------------------------------------
+// The stand-ins, and the one launch argument that reaches them — DEBUG ONLY
+// ---------------------------------------------------------------------------
+//
+// **`#if DEBUG`, which review round 1 was right about.** Everything below is
+// test apparatus: two stand-in capture paths and the argument that selects
+// them. Shipped unconditionally it meant a release build launched with
+// `-domovoi-dropin-mic pump` would skip the microphone permission request and
+// stream synthetic audio into a room — apparatus reachable from outside the
+// app in a build Kamron hands to anyone.
+//
+// Every other launch-argument seam in this app is already gated this way, and
+// they are the precedent followed here: `AuditStrip.active` /
+// `AuditStrip.seededRoute` ("Nil in any build that could ship",
+// `WorkspaceView.swift:239-258`), `ChatMoreAudio.talkSeconds`
+// (`ChatMoreAudio.swift:25-36`) and `PhoneDeviceSources` (`:210`).
+//
+// What this costs: nothing a person or a train can tell. The UI cases build
+// Debug (`StubHouseUITests` drives the Debug app), `swift test` builds the
+// package Debug, and the only non-DEBUG caller — `RoomsDropInRow`'s switch —
+// is inside its own `#if DEBUG` and falls through to the real engine.
+#if DEBUG
 
 /// What the package's tests drive: it records what it was asked for, hands
 /// frames over on demand, and refuses only when told to.
@@ -465,6 +520,11 @@ public final class PumpedDropInAudio: DropInAudio, @unchecked Sendable {
 ///
 /// ### What keeps it honest
 ///
+/// * It **does not exist in a build that could ship**: this whole type and
+///   both stand-ins are inside the file's `#if DEBUG`, so there is nothing to
+///   reach. A launch argument alone was not enough and review round 1 said so:
+///   a release build started with `-domovoi-dropin-mic pump` would have
+///   skipped the permission request and streamed synthetic audio into a room.
 /// * It is a **launch argument**, like `-domovoi-server` and
 ///   `-domovoi-audit-strip` (`DomovoiApp.swift:103-117`) — the app never sets
 ///   it, there is no setting and no debug menu, and a person cannot reach it.
@@ -499,3 +559,5 @@ public enum DropInTestSeam: String, Sendable {
         return DropInTestSeam(rawValue: arguments[at + 1])
     }
 }
+
+#endif  // DEBUG — the stand-ins and the seam

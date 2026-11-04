@@ -349,6 +349,41 @@ public func roomsDropInState(_ room: RoomsSatellite) -> RoomsDropInState {
     return room.fullDuplex ? .idle : .noAec
 }
 
+/// Whether "drop in from this phone" can do what it says (D54).
+///
+/// Android's own enable term, field for field: `val enabled = s.online &&
+/// s.full_duplex && s.in_call_with == null` (`PhoneDropinCall.kt:81`), plus
+/// one more this phone knows and the roster does not.
+///
+/// ### Why `inCallWith == nil` is in here, and why it was the bug
+///
+/// The core answers `target_busy` for a room that is already in a drop-in
+/// with somebody else (`domovoi/phone_dropin.py:78-79`), so a button offered
+/// then can only fail — Kamron's no-misleading-controls rule exactly. Review
+/// round 1 found this drawn enabled: the row is deliberately present in the
+/// `.inCall` branch (so the roster reporting *this* call a second after it
+/// starts cannot unmount the sheet, ``RoomsOverviewView``'s note), and the
+/// only term gating it read this phone's own call state, which says nothing
+/// about a call between the room and a third party.
+///
+/// ### Why `callIsBusy` is in here as well, and Android has no equivalent
+///
+/// The roster reports this phone's own call about a second after it starts,
+/// so for that second `inCallWith` is still nil while a call is live. Android
+/// does not need the extra term because its row is recomposed from a state
+/// flow it also drives; here the honest answer is to ask both — the room's
+/// roster row, and whether this phone is in a call at all
+/// (``DropInCallModel/State/isBusy``).
+///
+/// `fullDuplex` is asked although ``roomsDropInState(_:)`` already draws
+/// nothing for a `.noAec` room: the `.inCall` branch is reached for a room
+/// with no echo-cancelling array too (a peer is checked first), and a room
+/// that cannot do two-way audio gets `target_no_aec`
+/// (`phone_dropin.py:84-85`).
+public func roomsPhoneDropInEnabled(_ room: RoomsSatellite, callIsBusy: Bool) -> Bool {
+    room.online && room.fullDuplex && room.inCallWith == nil && !callIsBusy
+}
+
 // MARK: - sessions and turns
 
 /// A session's length, from its first to its last activity

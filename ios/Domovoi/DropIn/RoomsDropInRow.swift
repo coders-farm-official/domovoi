@@ -46,14 +46,19 @@ struct RoomsDropInRow: View {
     private var call: DropInCallModel? { model.call }
 
     /// A call this phone is in, with any room (``DropInCallModel/State/isBusy``).
-    ///
-    /// The button is unavailable for the whole of one, which is Android's
-    /// `enabled = s.online && s.full_duplex && s.in_call_with == null`
-    /// (`PhoneDropinCall.kt:81`) read off this phone's own state rather than
-    /// off the roster — the roster reports *this* call a second after it
-    /// starts, which is the trap Android's "always composed" comment is about
-    /// (``RoomsOverviewView``'s drop-in note).
     private var busy: Bool { call?.state.isBusy ?? false }
+
+    /// Whether this button can do what it says —
+    /// ``roomsPhoneDropInEnabled(_:callIsBusy:)``, which is Android's own
+    /// enable term plus this one.
+    ///
+    /// **It is not `!busy` on its own, which review round 1 found.** That
+    /// reads only *this phone's* call, and the row is drawn in the `.inCall`
+    /// branch as well — so a room already in a drop-in with another peer
+    /// offered a live button whose every press can only get `target_busy`
+    /// (`domovoi/phone_dropin.py:78-79`). The rule and the whole argument for
+    /// it are in DomovoiKit, where a case can reach them.
+    private var canDropIn: Bool { roomsPhoneDropInEnabled(room, callIsBusy: busy) }
 
     var body: some View {
         Button {
@@ -68,11 +73,12 @@ struct RoomsDropInRow: View {
         }
         .buttonStyle(.bordered)
         .tint(Color.brandInk)
-        // A room that is not connected cannot be dropped into: the core
-        // answers `target_offline` (`phone_dropin.py:80-81`). Unavailable
-        // rather than absent, because the room is on screen and the reason is
-        // its status pill two lines up.
-        .disabled(!room.online || busy)
+        // Unavailable rather than absent, because the room is on screen and
+        // the reason is on it: the status pill two lines up for a room that
+        // is not connected (`target_offline`, `phone_dropin.py:80-81`), and
+        // the `in call with X` line directly above for a room that is busy
+        // with somebody else (`target_busy`, `:78-79`).
+        .disabled(!canDropIn)
         .sheet(isPresented: $showing, onDismiss: hangUp) {
             if let call {
                 DropInCallSheet(call: call, room: room.roomID) {
@@ -94,36 +100,7 @@ struct RoomsDropInRow: View {
         if let existing = model.call {
             call = existing
         } else {
-            // The three hardware pieces, and the stand-ins a UI case on a
-            // Simulator puts in their place. ``DropInTestSeam`` has the whole
-            // argument for why there is a seam here at all and what keeps it
-            // honest; the short of it is that the microphone prompt is a
-            // system alert, so without this there is no UI coverage of this
-            // feature — and that every decision below the hardware stays the
-            // app's own either way.
-            let audio: any DropInAudio
-            let session: PlayerAudioSessionControl
-            let permission: any DropInMicPermission
-            switch DropInTestSeam.asked(ProcessInfo.processInfo.arguments) {
-            case nil:
-                audio = DropInAudioEngine()
-                permission = AVAudioMicPermission()
-                // **Our own instance of the session control, deliberately.**
-                // `AVAudioSession.sharedInstance()` is process-wide, so the
-                // category this sets has exactly the right effect on the one
-                // real session; only `active` is per-instance, and it answers
-                // "did *this* object activate something", which is what the
-                // release path needs and what a shared object could not say.
-                session = AVAudioSessionControl()
-            case .deny:
-                audio = RecordingDropInAudio()
-                permission = FixedMicPermission(false)
-                session = RecordingPlayerAudioSession()
-            case .pump:
-                audio = PumpedDropInAudio()
-                permission = FixedMicPermission(true)
-                session = RecordingPlayerAudioSession()
-            }
+            let (audio, session, permission) = hardware()
             call = DropInCallModel(
                 client: shell.container.client,
                 transport: URLSessionDropInTransport(),
@@ -142,10 +119,49 @@ struct RoomsDropInRow: View {
         Task { await call.start(room: room.roomID) }
     }
 
+    /// The engine, the audio session and the microphone prompt — and, **only
+    /// in a build that cannot ship**, the stand-ins a UI case puts in their
+    /// place.
+    ///
+    /// ``DropInTestSeam`` has the whole argument for why there is a seam here
+    /// at all and what keeps it honest; the short of it is that the
+    /// microphone prompt is a system alert, so without this there is no UI
+    /// coverage of this feature — and that every decision below the hardware
+    /// stays the app's own either way.
+    ///
+    /// Review round 1 asked for the `#if DEBUG`, and both halves of the seam
+    /// carry it now: outside a debug build there is no reference to the
+    /// stand-ins here and no ``DropInTestSeam`` for a launch argument to
+    /// reach. A function rather than three `var`s so that a release build has
+    /// nothing it declares and never writes.
+    ///
+    /// **Our own instance of the session control, deliberately.**
+    /// `AVAudioSession.sharedInstance()` is process-wide, so the category
+    /// this sets has exactly the right effect on the one real session; only
+    /// `active` is per-instance, and it answers "did *this* object activate
+    /// something", which is what the release path needs and what a shared
+    /// object could not say.
+    private func hardware() -> (any DropInAudio, PlayerAudioSessionControl, any DropInMicPermission) {
+        #if DEBUG
+        switch DropInTestSeam.asked(ProcessInfo.processInfo.arguments) {
+        case .deny:
+            return (RecordingDropInAudio(), RecordingPlayerAudioSession(), FixedMicPermission(false))
+        case .pump:
+            return (PumpedDropInAudio(), RecordingPlayerAudioSession(), FixedMicPermission(true))
+        case nil:
+            break
+        }
+        #endif
+        return (DropInAudioEngine(), AVAudioSessionControl(), AVAudioMicPermission())
+    }
+
     /// Closing the sheet hangs up and clears the state, which is Android's
     /// `onClose` (`PhoneDropinCall.kt:101-105`) and its dispose net.
+    ///
+    /// ``DropInCallModel/abandon()`` is the same two steps with the reason
+    /// written down: the room is **told**, rather than the socket being
+    /// dropped and the room left open until the core's silence timeout.
     private func hangUp() {
-        call?.hangUp()
-        call?.reset()
+        call?.abandon()
     }
 }

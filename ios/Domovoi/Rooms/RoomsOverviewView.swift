@@ -380,9 +380,19 @@ struct RoomsOverviewView: View {
     /// `.inCall` branch as well as the `.idle` one — the branch decides what
     /// the row's **button** says, not whether the row exists. So the roster
     /// reporting `in_call_with` a second later changes a label and unmounts
-    /// nothing, and the button is `disabled` while any call is on, which is
-    /// Android's `enabled = s.online && s.full_duplex && s.in_call_with == null`
-    /// (`PhoneDropinCall.kt:81`) by another route.
+    /// nothing.
+    ///
+    /// **The row's own gate is Android's, term for term**, and it has to be:
+    /// drawing the row in both branches means `in_call_with` cannot gate
+    /// whether it exists, so it gates whether the button is available.
+    /// ``roomsPhoneDropInEnabled(_:callIsBusy:)`` is
+    /// `s.online && s.full_duplex && s.in_call_with == null`
+    /// (`PhoneDropinCall.kt:81`) plus this phone's own call state, which the
+    /// roster lags by a second. Review round 1 found the version of this
+    /// comment that claimed `disabled(busy)` was Android's gate "by another
+    /// route": it was not — it read only this phone's call, so a room already
+    /// in a drop-in with a third party offered a button that could only get
+    /// `target_busy`.
     @ViewBuilder
     private var dropIn: some View {
         VStack(alignment: .leading, spacing: 6) {

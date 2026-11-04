@@ -36,27 +36,47 @@ struct DropInCallSheet: View {
     @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
-        VStack(spacing: 14) {
-            Text(DropInStrings.spoken(room))
-                .font(.title2)
-                .accessibilityAddTraits(.isHeader)
-                .fixedSize(horizontal: false, vertical: true)
-            status
-            controls
-            Text(DropInStrings.twoWayAudio(room: room))
-                .font(.caption)
-                .foregroundStyle(Color.fgMuted)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
+        // **A scroll view, and a detent that grows** — review round 1 found
+        // the bug this fixes. The content was a fixed-height `.medium` sheet
+        // with no way to scroll it, and at an accessibility type size this
+        // is a `.title2` heading, a wrapping status line, two 44-point
+        // buttons **stacked** and a wrapping `.caption` inside 24 points of
+        // padding: taller than half a phone, and the thing clipped off the
+        // bottom is `hang up` — the only way out of a live microphone in
+        // somebody's kitchen.
+        //
+        // `.scrollBounceBehavior(.basedOnSize)` so the ordinary size still
+        // feels like a card and not a scroller.
+        ScrollView {
+            VStack(spacing: 14) {
+                Text(DropInStrings.spoken(room))
+                    .font(.title2)
+                    .accessibilityAddTraits(.isHeader)
+                    .fixedSize(horizontal: false, vertical: true)
+                status
+                controls
+                Text(DropInStrings.twoWayAudio(room: room))
+                    .font(.caption)
+                    .foregroundStyle(Color.fgMuted)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(24)
+            .frame(maxWidth: .infinity, alignment: .center)
         }
-        .padding(24)
-        .frame(maxWidth: .infinity, alignment: .center)
+        .scrollBounceBehavior(.basedOnSize)
         // A sheet that cannot be swiped away by accident: this one holds a
         // live microphone in a room, so the way out is the button that says
         // what it does. `interactiveDismissDisabled` only while the call is
         // on — once it has ended there is nothing to protect.
         .interactiveDismissDisabled(call.state.isBusy)
-        .presentationDetents([.medium])
+        // Past `isAccessibilitySize` there is **only** `.large`, so the sheet
+        // opens at the height that holds the buttons; below it, `.medium` is
+        // the smallest and so the one it opens at, and `.large` is there to
+        // be dragged to. Not a `selection:` binding pinned to a constant —
+        // that would draw a grabber the sheet snaps back from, which is a
+        // control that cannot do what it says.
+        .presentationDetents(typeSize.isAccessibilitySize ? [.large] : [.medium, .large])
     }
 
     /// `connecting…`, the ringing sentence, `live · 0:05`, `call ended`, or

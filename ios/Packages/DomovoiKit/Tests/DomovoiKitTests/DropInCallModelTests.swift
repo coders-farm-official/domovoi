@@ -623,7 +623,7 @@ final class DropInCallModelTests: XCTestCase {
 
     // MARK: - RoomsModel: the hold a pushed room screen needs (D56)
 
-    private func roomsRig() -> (RoomsModel, InMemoryShellStore) {
+    private func roomsRig() -> (RoomsModel, InMemoryShellStore, AppContainer) {
         StubURLProtocol.dispatch { request in
             guard let parts = request.url.flatMap({
                 URLComponents(url: $0, resolvingAgainstBaseURL: false)
@@ -634,6 +634,15 @@ final class DropInCallModelTests: XCTestCase {
             }
             if parts.path == "/api/satellites" {
                 return .json(#"[{"room_id":"kitchen","status":"online"}]"#)
+            }
+            // So a case can put a **live drop-in call** on this model, which
+            // is what ``testPoppingARoomDoesNotStopTheModel`` needs: the
+            // deferral it is about exists to stop a pop hanging one up.
+            if parts.path == "/api/satellites/kitchen/dropin/phone-info" {
+                return .json(
+                    #"{"room_id":"kitchen","domovoi_host":null,"domovoi_port":6370,"#
+                        + #""ws_path":"/v1/dropin/kitchen","audio_sample_rate":16000}"#
+                )
             }
             return .json("{}")
         }
@@ -651,7 +660,7 @@ final class DropInCallModelTests: XCTestCase {
             nowMs: { 0 },
             wait: { _ in try await Task.sleep(for: .seconds(3_600)) }
         )
-        return (model, store)
+        return (model, store, container)
     }
 
     /// **The push must not stop the screen it is pushed on top of.**
@@ -665,7 +674,7 @@ final class DropInCallModelTests: XCTestCase {
     /// Both orders, because SwiftUI guarantees neither.
     func testAPushedRoomKeepsTheModelRunningInEitherOrder() async {
         for roomFirst in [true, false] {
-            let (model, _) = roomsRig()
+            let (model, _, _) = roomsRig()
             model.hold()                                  // the roster appeared
             XCTAssertTrue(model.onScreen)
 
@@ -691,7 +700,7 @@ final class DropInCallModelTests: XCTestCase {
     /// Leaving Rooms altogether, with a room still pushed, **does** stop it:
     /// "a route holds nothing".
     func testLeavingRoomsWithARoomOpenStopsTheModel() async {
-        let (model, _) = roomsRig()
+        let (model, _, _) = roomsRig()
         model.hold()
         model.hold()
 
@@ -708,14 +717,59 @@ final class DropInCallModelTests: XCTestCase {
     /// The stop is deferred one turn of the main actor for this: without it,
     /// a pop in that order drops every per-room read — and ends a live
     /// drop-in call — for the length of an animation.
+    ///
+    /// ### This case could not tell, and that is what review round 1 caught
+    ///
+    /// Replacing the deferral with a plain `stop()` left this green: it
+    /// asserted `onScreen`, and the `hold()` that stands for the roster
+    /// coming back runs `if !onScreen { start() }` — so `onScreen` reads true
+    /// whether or not the stop ran in between. The whole mechanism could be
+    /// deleted and the suite passed.
+    ///
+    /// So it now asserts the **harm**, which is what the deferral is for and
+    /// the only thing a sabotage cannot leave behind:
+    ///
+    ///  * a **live drop-in call is still live**. `stop()` calls
+    ///    ``DropInCallModel/abandon()``, which hangs up — so under the
+    ///    sabotage the call is `.idle`, the socket is closed, the microphone
+    ///    is handed back and the room gets `dropin_end`, for a pop;
+    ///  * the open room's reads are the **same object**. `stop()` empties
+    ///    `byRoom`, and ``RoomsModel/openReads`` builds a fresh
+    ///    ``RoomsRoomModel`` on the next read — so every tab the pushed
+    ///    screen had loaded is asked for again;
+    ///  * and the event sink is still registered, which the restart would
+    ///    have replaced.
     func testPoppingARoomDoesNotStopTheModel() async {
-        let (model, _) = roomsRig()
+        let (model, _, container) = roomsRig()
         // The push, in full: the roster appears, the room screen appears on
         // top of it, and the roster's `onDisappear` fires behind it.
         model.hold()
         model.hold()
         model.release()
         XCTAssertEqual(model.holderCount, 1)
+
+        // A room open with its reads built, and a **live call** on it — the
+        // two things the deferred stop is protecting.
+        model.open("kitchen")
+        let readsBefore = model.openReads
+        XCTAssertNotNil(readsBefore, "no open room, so the reads cannot be the assertion")
+
+        let transport = FakeDropInTransport()
+        let call = DropInCallModel(
+            client: container.client,
+            transport: transport,
+            audio: RecordingDropInAudio(),
+            session: RecordingPlayerAudioSession(),
+            permission: FixedMicPermission(true),
+            phoneID: "ios-7f3a",
+            tick: { _ in try await Task.sleep(for: .seconds(3_600)) }
+        )
+        model.adopt(call: call)
+        await call.start(room: "kitchen")
+        await settleUntil({ transport.events.current != nil }, "the socket opened")
+        transport.events.current?.opened()
+        transport.events.current?.text(#"{"type":"dropin_start","peer_room":"kitchen"}"#)
+        await settleUntil({ call.state.isLive }, "the call went live")
 
         // The pop, in the order where the count passes through zero.
         model.release()                                   // the room screen went
@@ -724,16 +778,130 @@ final class DropInCallModelTests: XCTestCase {
 
         XCTAssertTrue(model.onScreen, "popping a room stopped the whole screen")
         XCTAssertEqual(model.holderCount, 1)
+        XCTAssertTrue(
+            call.state.isLive,
+            "popping a room ended a live drop-in call — state \(call.state), "
+                + "\(transport.link.text.current.count) frame(s) sent and "
+                + "\(transport.link.closes.current) close(s)"
+        )
+        XCTAssertEqual(
+            transport.link.closes.current,
+            0,
+            "the call's socket was closed by a pop"
+        )
+        XCTAssertFalse(
+            transport.link.text.current.contains(DropInFrame.endFrame),
+            "`dropin_end` went to the room because somebody popped a screen"
+        )
+        XCTAssertTrue(
+            model.openReads === readsBefore,
+            "the open room's reads were dropped and rebuilt by a pop, so "
+                + "every tab the pushed screen had loaded is asked for again"
+        )
+
+        // Hand the microphone back: ``PlayerMicArbiter/shared`` is one
+        // object for the whole suite, and a lease left outstanding here is a
+        // refusal in whatever case runs next.
+        call.abandon()
+    }
+
+    /// **Leaving the screen tells the room**, rather than dropping the socket.
+    ///
+    /// Review round 1's should finding. ``RoomsModel/stop()`` called
+    /// `reset()`, which closes the socket with no frame — so the room's end
+    /// of a call somebody abandoned by changing tab stayed open until the
+    /// core's silence timeout, microphone and all. Android's dispose net,
+    /// which that code's own comment cites, calls `hangUp()`
+    /// (`PhoneDropinCall.kt:125-127`), and `hangUp()` sends
+    /// ``DropInFrame/endFrame`` first (`DropinCallClient.kt:216-220`).
+    ///
+    /// Both ways out of the screen, because they are two call sites: leaving
+    /// Rooms (`stop()`) and moving house (`serverChanged()` — where the
+    /// socket is still the old house's and still open).
+    func testLeavingTheScreenTellsTheRoomTheCallIsOver() async {
+        for byMovingHouse in [false, true] {
+            let (model, _, container) = roomsRig()
+            model.hold()
+            let transport = FakeDropInTransport()
+            let call = DropInCallModel(
+                client: container.client,
+                transport: transport,
+                audio: RecordingDropInAudio(),
+                session: RecordingPlayerAudioSession(),
+                permission: FixedMicPermission(true),
+                phoneID: "ios-7f3a",
+                tick: { _ in try await Task.sleep(for: .seconds(3_600)) }
+            )
+            model.adopt(call: call)
+            await call.start(room: "kitchen")
+            await settleUntil({ transport.events.current != nil }, "the socket opened")
+            transport.events.current?.opened()
+            transport.events.current?.text(#"{"type":"dropin_start","peer_room":"kitchen"}"#)
+            await settleUntil({ call.state.isLive }, "the call went live")
+            XCTAssertTrue(
+                transport.link.text.current.isEmpty,
+                "something was sent before the screen went away"
+            )
+
+            if byMovingHouse {
+                model.serverChanged()
+            } else {
+                model.release()
+                await settleUntil({ !model.onScreen }, "the model stopped")
+            }
+
+            XCTAssertEqual(
+                transport.link.text.current,
+                [DropInFrame.endFrame],
+                "the room was not told the call was over (moving house: "
+                    + "\(byMovingHouse)), so its microphone stays open until "
+                    + "the core's silence timeout"
+            )
+            XCTAssertEqual(transport.link.closes.current, 1, "the socket was left open")
+            XCTAssertEqual(call.state, .idle, "the call was not put down")
+            StubURLProtocol.reset()
+        }
+    }
+
+    /// Re-entering the room that is already open **changes nothing**.
+    ///
+    /// The pushed screen's `onAppear` drives this, and a repeated `onAppear`
+    /// must not put the tab strip back to `overview` under somebody reading
+    /// the timers tab. It used to be driven from `.task` for that reason,
+    /// which review round 1 showed could not be squared with
+    /// `hold()`/`release()` living on `onAppear`/`onDisappear` — so one pair
+    /// of callbacks drives all four now, and this is what makes it safe.
+    func testOpeningTheRoomThatIsAlreadyOpenKeepsTheTab() async {
+        let (model, _, _) = roomsRig()
+        model.hold()
+        model.open("kitchen")
+        model.select(.timers)
+        let reads = model.openReads
+        XCTAssertEqual(model.tab, .timers)
+
+        model.open("kitchen")
+
+        XCTAssertEqual(model.tab, .timers, "re-entering the open room reset the tab strip")
+        XCTAssertTrue(model.openReads === reads, "and it rebuilt the room's reads")
+
+        // A **different** room still opens, tab and all: the guard is "this
+        // room is already open", not "a room is already open".
+        model.open("office")
+        XCTAssertEqual(model.openRoomID, "office")
+        XCTAssertEqual(model.tab, .overview)
     }
 
     /// `+ add` is the server's answer and nothing else (D55): a row the
     /// server did not offer cannot be added, however it is asked for.
     ///
-    /// The guard is in ``RoomsModel/addToLibrary(_:_:)`` and this is what
-    /// pins it now that the missing-fulfiller refusal path is gone — there is
-    /// no sentence left to tell a refused add from an add nobody made.
+    /// The guard is in ``RoomsModel/addToLibrary(_:_:)``. It is the half of
+    /// D55 the app can keep today: the server does not compute `can_add`
+    /// against the fulfiller allowlist yet
+    /// (`web/backend/api/satellites.py:1040-1043`), so the refusal sentence
+    /// is still reachable and still there — but a row the server never
+    /// offered is never sent, under either arrangement.
     func testARowTheServerDidNotOfferIsNeverAdded() async {
-        let (model, _) = roomsRig()
+        let (model, _, _) = roomsRig()
         model.hold()
         let room = RoomsSatellite(roomID: "kitchen", status: "online")
         let row = RoomsPlayed(id: 9, source: "library", title: "Marmalade Skies", canAdd: false)
@@ -746,6 +914,66 @@ final class DropInCallModelTests: XCTestCase {
             "an add went out for a row the server said could not be added"
         )
         XCTAssertNil(model.toast, "something was said about an add that was never made")
+    }
+
+    // MARK: - the control's own gate (D54)
+
+    /// **"Drop in from this phone" is available only when it can work.**
+    ///
+    /// Review round 1's first must finding. The button is drawn in the
+    /// `.inCall` branch as well as the `.idle` one — it has to be, or the
+    /// roster reporting *this* phone's own call a second after it starts
+    /// would unmount the sheet — and the only term gating it was this
+    /// phone's own call state, which says nothing about a call between the
+    /// room and a third party. So it was live on a room where the core can
+    /// only answer `target_busy` (`domovoi/phone_dropin.py:78-79`).
+    ///
+    /// ``roomsPhoneDropInEnabled(_:callIsBusy:)`` is Android's term
+    /// (`PhoneDropinCall.kt:81`) plus the one the roster's lag needs. Each
+    /// refusal is driven on its own, so a gate that collapsed to one
+    /// condition fails here rather than on a phone.
+    func testDropInFromThisPhoneIsOnlyOfferedWhereItCanWork() {
+        func room(
+            status: String = "online",
+            fullDuplex: Bool = true,
+            inCallWith: String? = nil
+        ) -> RoomsSatellite {
+            RoomsSatellite(
+                roomID: "kitchen",
+                status: status,
+                fullDuplex: fullDuplex,
+                inCallWith: inCallWith
+            )
+        }
+
+        XCTAssertTrue(
+            roomsPhoneDropInEnabled(room(), callIsBusy: false),
+            "an online room with an echo-cancelling array and no call cannot "
+                + "be dropped into"
+        )
+        XCTAssertFalse(
+            roomsPhoneDropInEnabled(room(inCallWith: "study"), callIsBusy: false),
+            "a room already in a drop-in with another peer offered a button "
+                + "whose every press can only get `target_busy`"
+        )
+        XCTAssertFalse(
+            roomsPhoneDropInEnabled(room(status: "offline"), callIsBusy: false),
+            "an offline room offered a button that can only get `target_offline`"
+        )
+        // `full_duplex` absent on the wire decodes as `false`
+        // (``RoomsSatellite/fullDuplex``), so this is also the case of a
+        // roster that never said — which is every roster the house sends
+        // today.
+        XCTAssertFalse(
+            roomsPhoneDropInEnabled(room(fullDuplex: false), callIsBusy: false),
+            "a room with no echo-cancelling array offered a button that can "
+                + "only get `target_no_aec`"
+        )
+        XCTAssertFalse(
+            roomsPhoneDropInEnabled(room(), callIsBusy: true),
+            "a second call was offered while this phone is already in one — "
+                + "`initiator_busy`, and the roster is a second behind"
+        )
     }
 
     // MARK: - the UI-case seam

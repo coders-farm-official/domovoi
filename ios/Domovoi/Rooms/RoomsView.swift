@@ -99,6 +99,11 @@ struct RoomsView: View {
     /// the view stays in the hierarchy with its `onChange` live.
     @State private var visible = false
 
+    /// Whether this view is one of ``RoomsModel``'s holders. See the
+    /// `onAppear` below: it keeps `hold()`/`release()` balanced however many
+    /// times the two callbacks arrive for one appearance.
+    @State private var held = false
+
     var body: some View {
         content
             // **Both halves in `onAppear`/`onDisappear`, which is a change
@@ -115,15 +120,23 @@ struct RoomsView: View {
             // model needs the container, and a `@State` initialiser runs
             // before the view has one it can rely on. `onAppear` runs with
             // the view fully configured, so `model.container` is there.
+            //
+            // ``held`` is the same guard ``RoomsRoomScreen`` carries, for the
+            // same reason: a repeated `onAppear` must not hold twice, or the
+            // count never reaches zero and the screen never stops.
             .onAppear {
                 visible = true
                 if rooms == nil {
                     rooms = RoomsModel(in: model.container)
                 }
+                guard !held else { return }
+                held = true
                 rooms?.hold()
             }
             .onDisappear {
                 visible = false
+                guard held else { return }
+                held = false
                 rooms?.release()
             }
             // **The toast is the shell's**, drawn over the whole app

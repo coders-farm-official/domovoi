@@ -300,21 +300,23 @@ struct RoomsConversationTurn: View {
 /// The recently-played tab — `SatRecentlyPlayedTab` (`SatHistoryTabs.kt:279`).
 ///
 /// `+ add` is drawn on a row the server says `can_add` for, and **only**
-/// there — and that is now the whole rule (D55).
+/// there. It is kept although the route's gate is a fulfiller's URL allowlist
+/// rather than `can_add` (`domovoi/main.py:5782-5788`), because it does not
+/// fail every time — which is where no-misleading-controls bites — and because
+/// a refusal shows **the server's own words** rather than "add failed"
+/// (``RoomsModel/addToLibrary(_:_:)``).
+///
+/// ### D55 is this condition, and the server has not landed it yet
 ///
 /// Kamron, answer 55: "no fulfiller means no button and no error: the server
 /// computes `can_add` against the fulfiller allowlist, so both phones draw it
-/// honestly." `GET …/recently-played` consults the allowlist
-/// (`web/backend/api/satellites.py:985-1044`), so a row that carries
-/// `can_add` is a row a fulfiller recognises.
-///
-/// What this comment used to say, and no longer can: that the button was
-/// *kept* although the route's gate was a fulfiller's URL matcher rather than
-/// `can_add` (`domovoi/main.py:5782-5788`), on the grounds that it did not
-/// fail *every* time — and that the missing-fulfiller refusal was surfaced in
-/// the server's own words. There is no missing-fulfiller refusal to surface
-/// any more, so ``RoomsModel/addToLibrary(_:_:)`` has dropped that path
-/// rather than keeping a sentence nothing can produce.
+/// honestly." Then `can_add` alone is the whole rule and the refusal
+/// sentence has nothing left to say — but the change is the **server's**, and
+/// the route on this branch still computes `can_add` without the allowlist
+/// (`web/backend/api/satellites.py:1040-1043`). This unit had deleted the
+/// refusal on the strength of the answer; review round 1 was right that it is
+/// premature, so it is back until the server half lands. Nothing here changes
+/// on that day: the condition is already `can_add` and only `can_add`.
 struct RoomsPlayedView: View {
 
     let model: RoomsModel

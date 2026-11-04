@@ -245,7 +245,19 @@ public final class RoomsModel {
         openRoomID.map { reads(for: $0) }
     }
 
+    /// Open a room, **idempotently**.
+    ///
+    /// Already-open is a no-op and that is the point: a pushed screen's
+    /// `onAppear` may fire more than once for one push, and re-running this
+    /// would put the tab strip back to `overview` under somebody reading the
+    /// timers tab and re-issue the overview's reads. ``RoomsDetailScreen``
+    /// used to dodge that by opening from `.task` instead, and review round 1
+    /// was right that the two did not add up — `.task`'s own justification
+    /// said a sheet can fire `onAppear` again, and `hold()`/`release()` were
+    /// on that same `onAppear`. One mechanism now drives all four, and this
+    /// is what makes it safe.
     public func open(_ roomID: String) {
+        guard openRoomID != roomID else { return }
         openRoomID = roomID
         tab = .overview
         let reads = reads(for: roomID)
@@ -408,7 +420,13 @@ public final class RoomsModel {
     /// tier exists to prevent.
     public func stop() {
         onScreen = false
-        call?.reset()
+        // ``DropInCallModel/abandon()`` and **not** `reset()`: the room is
+        // told the call is over. `reset()` drops the socket silently, and the
+        // room's end then stays open until the core's silence timeout — which
+        // is the opposite of what the sentence above claims this does. Review
+        // round 1 found it; Android's net sends the frame too
+        // (`PhoneDropinCall.kt:125-127`).
+        call?.abandon()
         tickLoop?.cancel(); tickLoop = nil
         volumeDebounce?.cancel(); volumeDebounce = nil
         if let eventSink {
@@ -446,7 +464,10 @@ public final class RoomsModel {
         volumeDebounce?.cancel(); volumeDebounce = nil
         // A call to the old house's `kitchen` is a call to a room this phone
         // is no longer in a position to be in, and both houses can have one.
-        call?.reset()
+        // `abandon()` rather than `reset()`, for ``stop()``'s reason: the
+        // socket is still the OLD house's and still open, so the old room is
+        // told rather than left listening to nobody.
+        call?.abandon()
         call = nil
         openRoomID = nil
         tab = .overview

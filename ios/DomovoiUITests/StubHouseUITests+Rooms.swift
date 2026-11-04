@@ -1038,25 +1038,32 @@ extension StubHouseUITests {
     /// The recently-played rows name their source, and `+ add` is drawn
     /// **only where the server says it can be**.
     ///
-    /// ### D55: no fulfiller means no button and no error
+    /// ### Three readings of one screen
+    ///
+    ///  1. **A refused add says what the house said**, and the optimistic
+    ///     mark goes back. `can_add` on this branch's server is computed
+    ///     *without* consulting a fulfiller
+    ///     (`web/backend/api/satellites.py:1040-1043`) while the core's gate
+    ///     is a fulfiller's URL matcher (`domovoi/main.py:5782-5788`), so a
+    ///     403 is reachable from a row the server offered, and its own
+    ///     sentence is the only one that tells a person what to do about it.
+    ///  2. **One** `+ add` where the server says so, and pressing it queues
+    ///     the track. Two buttons would mean the library row had one, which
+    ///     is the "+ add on every row" port.
+    ///  3. **No button at all** for a house whose rows all carry
+    ///     `can_add=false`, and nothing said about it.
+    ///
+    /// ### Where D55 got to, and why half of it is here
     ///
     /// Kamron, answer 55: "no fulfiller means no button and no error: the
     /// server computes `can_add` against the fulfiller allowlist, so both
-    /// phones draw it honestly" (`satellites.py:985-1044`). So this case is
-    /// the same screen twice and the whole of the behaviour is the count:
-    ///
-    ///  * with a fulfiller, **one** button — the external row's. Two would
-    ///    mean the library row had one, which is the "+ add on every row"
-    ///    port;
-    ///  * with none, **no** button anywhere, and nothing said about it. There
-    ///    is no sentence left to look for, so the absence is asserted
-    ///    together with an empty screen: a port that kept the old refusal
-    ///    would draw the button and then say "no fulfiller plugin is
-    ///    installed" when it was pressed, and that is what this case is
-    ///    against.
-    ///
-    /// The add is pressed in the first half, because a button that is drawn
-    /// and does nothing is the other way to fail answer 55.
+    /// phones draw it honestly." Reading 3 is that behaviour, and the app
+    /// already does its half — the condition is `can_add` and only `can_add`.
+    /// Reading 1 is what is still true until the **server's** half lands
+    /// (it is built on `wf/ios-b-android`, which never merges to main): this
+    /// unit had deleted the refusal sentence on the strength of the answer,
+    /// review round 1 was right that it was premature, and it is back. On the
+    /// day `can_add` consults the allowlist, reading 1 is the case to delete.
     @MainActor
     func testRooms_RecentlyPlayedShowsSourceAndAdd() throws {
         let app = roomsOpen()
@@ -1076,14 +1083,38 @@ extension StubHouseUITests {
             1,
             "there are \(adds.count) `add` buttons for one addable row"
         )
+
+        // **Reading 1, first**, because it has to be: a successful add leaves
+        // the row reading `queued` and the button disabled
+        // (`RoomsHistoryViews.swift`, `add`), and a refusal puts the mark
+        // back — so refusing first is what leaves `+ add` pressable for
+        // reading 2.
+        control("rooms-add", "{\"how\":\"refused\"}", port: 6601, what: "the add refusal")
+        adds.element(boundBy: 0).tap()
+        XCTAssertTrue(
+            roomsWaitFor(app, RoomsStringsUnderTest.addRefusedDetail),
+            "a refused add did not say what the house said about it — the "
+                + "server's own sentence is the only one that says what to do"
+        )
+        evidence(app, "rooms-23-played-refused")
+        // The mark went back, so the row can be asked for again. `+ add` and
+        // not `queued`: a row left marked after a refusal is a row nothing
+        // was queued for, saying it was.
+        XCTAssertTrue(
+            adds.element(boundBy: 0).waitForExistence(timeout: 20),
+            "the row still reads `queued` after an add that was refused"
+        )
+
+        // Reading 2: the same press against a house that accepts it.
+        control("rooms-add", "{\"how\":null}", port: 6601, what: "an add that is accepted")
         adds.element(boundBy: 0).tap()
         XCTAssertTrue(
             roomsWaitFor(app, RoomsStringsUnderTest.queuedForDownload),
             "pressing `add` said nothing about what happened to the track"
         )
 
-        // The same house with no fulfiller installed: `can_add` is false on
-        // every row, so there is nothing to draw.
+        // Reading 3: the same house with no fulfiller installed — `can_add`
+        // is false on every row, so there is nothing to draw.
         control("rooms-can-add", "{\"can_add\": false}", port: 6601, what: "a house with no fulfiller")
         XCTAssertTrue(
             roomsLeaveRoom(app, "kitchen", swipe: false),
@@ -1101,13 +1132,15 @@ extension StubHouseUITests {
             "\(none.count) `add` buttons are drawn for a house whose server "
                 + "offered none — a button that would fail every time"
         )
-        // And no explanation, because there is nothing to explain: the old
-        // refusal wording is gone from the app, so a screen that still says
-        // it is a screen still carrying the path D55 deleted.
+        // And **no explanation**, because there is nothing to explain: a row
+        // the server did not offer is a row the screen says nothing about.
+        // The refusal sentence of reading 1 belongs to a press, and there is
+        // nothing here to press.
         XCTAssertFalse(
             containing(app, "no fulfiller").exists,
-            "the screen explains a missing fulfiller — answer 55 is that it "
-                + "says nothing and draws nothing"
+            "the screen explains a missing fulfiller although nothing was "
+                + "pressed — answer 55 is that it says nothing and draws "
+                + "nothing"
         )
     }
 
@@ -1216,6 +1249,32 @@ extension StubHouseUITests {
         )
         evidence(app, "rooms-27-dropin-live")
 
+        // **Apple's audit, on the sheet** — review round 1 asked for this,
+        // and the file's own header is the reason: the last dialog-shaped
+        // view measured on this screen produced five `Contrast failed`
+        // findings against views *behind* its scrim (train S009), which is
+        // why ``DropInCallSheet`` is a real presentation and not a card in a
+        // `ZStack`. That claim is only worth what a measurement says, so it
+        // is measured, here, with the call live.
+        //
+        // Classified exactly as ``testRooms_Audit`` classifies the roster and
+        // the room: `rest` is the defects, and the floor is the platform's
+        // anonymous Dynamic Type findings. Printed rather than pinned,
+        // because a sheet over a pushed screen is a shape nothing on this
+        // track has measured before and the first train is what measures it;
+        // an attributed finding fails the case from the first run.
+        if #available(iOS 17.0, *) {
+            let sheet = try auditIssues(app, "rooms-dropin-sheet")
+            let split = Self.floorAndRest(sheet)
+            print("ROOMS AUDIT dropin-sheet floor=\(split.floor) rest=\(split.rest.count)")
+            XCTAssertTrue(
+                split.rest.isEmpty,
+                "Apple's audit has findings against the drop-in call sheet "
+                    + "beyond the measured floor: "
+                    + split.rest.joined(separator: " / ")
+            )
+        }
+
         // The house's own record: the room it was asked for, this phone's id
         // on the query, the household token on the upgrade, and frames.
         let seen = roomsAsk("rooms-dropin")
@@ -1302,6 +1361,60 @@ extension StubHouseUITests {
         XCTAssertTrue(
             drop.waitForExistence(timeout: 20),
             "closing the failed call did not come back to the room"
+        )
+    }
+
+    /// **A room already in a drop-in with somebody else offers no way in.**
+    ///
+    /// The must finding of review round 1. The core answers `target_busy` for
+    /// a room whose `in_call_with` is set (`domovoi/phone_dropin.py:78-79`),
+    /// and Android's own term is `s.online && s.full_duplex &&
+    /// s.in_call_with == null` (`PhoneDropinCall.kt:81`) — so the button has
+    /// to be unavailable there, and it was drawn live, because the only gate
+    /// it had read this phone's own call state.
+    ///
+    /// ### Unavailable and not absent, which is the whole of the assertion
+    ///
+    /// The row has to **exist** in the `.inCall` branch: gating its existence
+    /// on `in_call_with` would unmount the call sheet the instant the roster
+    /// reported *this* phone's own call, which is the hazard Android's
+    /// "always composed" comment is about (``RoomsOverviewView``'s drop-in
+    /// note). So the two halves are asserted together: the control is there,
+    /// and it cannot be pressed. A case that only looked for absence would
+    /// pass against the port that reintroduces that hazard.
+    ///
+    /// The `in-call` roster is the fixture arm that was shipped for this and
+    /// never used by a case (`fixtures/rooms.py`, `_roster`): the kitchen
+    /// carries `full_duplex` **and** `in_call_with: study`.
+    @MainActor
+    func testRooms_DropInIsNotOfferedWhileTheRoomIsInACall() throws {
+        let app = roomsOpen(roster: "in-call")
+        XCTAssertTrue(roomsOpenRoom(app, "kitchen"), "the kitchen card did not open")
+        // The branch we are in, by the line only it draws.
+        XCTAssertTrue(
+            roomsWaitFor(app, RoomsStringsUnderTest.inCallWithStudy),
+            "the roster says the kitchen is in a call with the study and the "
+                + "overview does not"
+        )
+        let drop = app.buttons[RoomsStringsUnderTest.dropInFromThisPhone].firstMatch
+        XCTAssertTrue(
+            drop.waitForExistence(timeout: 20),
+            "the drop-in row is not drawn for a room that is in a call — "
+                + "gating its existence on `in_call_with` is what unmounts "
+                + "the sheet on this phone's own call"
+        )
+        evidence(app, "rooms-29-dropin-busy")
+        XCTAssertFalse(
+            drop.isEnabled,
+            "`drop in from this phone` is pressable on a room already in a "
+                + "drop-in with another peer, where the core can only answer "
+                + "`target_busy`"
+        )
+        // The room's own control is the one that is live here, and it is a
+        // different thing: it ends the call the two rooms are in.
+        XCTAssertTrue(
+            app.buttons[RoomsStringsUnderTest.hangUp].firstMatch.exists,
+            "a room in a call offers no `hang up`"
         )
     }
 
@@ -1671,11 +1784,25 @@ extension StubHouseUITests {
             "the Rooms roster's anonymous floor is \(rosterSplit.floor), not the "
                 + "measured 0: " + roster.joined(separator: " | ")
         )
+        //
+        // **This number was measured before D56**, when the detail was drawn
+        // inside the pushed Settings screen; the room is now a second push,
+        // so Settings and Home are both beneath it and the count of bars the
+        // audit cannot attribute may be higher. Review round 1 flagged it and
+        // it is right: the first train to run this is the measurement, and
+        // the `print` above is where to read it. An equality rather than a
+        // bound, for the reason the shared helper gives
+        // (`StubHouseUITests.swift:957-962`): a floor that *grew* is the
+        // thing worth seeing, and a `<=` would hide exactly the direction
+        // this change can move it in.
         XCTAssertEqual(
             detailSplit.floor,
             Self.knownPushedBarFloor,
             "an opened room's anonymous floor is \(detailSplit.floor), not the "
-                + "known \(Self.knownPushedBarFloor): " + detail.joined(separator: " | ")
+                + "known \(Self.knownPushedBarFloor) — which was measured "
+                + "before D56 made the room its own push, so if the \(detailSplit.floor) "
+                + "is all `element: nil` bar findings this is the number to "
+                + "re-pin: " + detail.joined(separator: " | ")
         )
     }
 
@@ -1784,14 +1911,25 @@ enum RoomsStringsUnderTest {
     static let less = "less"
 
     static let add = "add"
-    /// ``RoomsStrings/queuedForDownload(_:)`` for the external row, which is
-    /// the only outcome the stub's `add-by-url` answers with now that the
-    /// missing-fulfiller branch is gone (D55).
+    /// ``RoomsStrings/queuedForDownload(_:)`` for the external row — the
+    /// stub's `add-by-url` answer when nothing is armed.
     static let queuedForDownload = "queued for download: Lost Mariner"
+
+    /// The stub's 403, surfaced **as the server wrote it**
+    /// (`fixtures/rooms.py`, `rooms-add {"how":"refused"}`).
+    ///
+    /// Reachable because `can_add` on this branch's server does not consult
+    /// the fulfiller allowlist, which is the server half of D55 that has not
+    /// landed. This is the sentence the app shows in its place; review round
+    /// 1 found it deleted ahead of that change.
+    static let addRefusedDetail = "no fulfiller recognises that address"
 
     static let dropInLabel = "drop in"
     static let hangUp = "hang up"
     static let noAecMic = "this room's mic can't do drop-in"
+    /// ``RoomsStrings/inCallWith(_:)`` for the `in-call` roster arm, whose
+    /// kitchen is in a call with `study` (`fixtures/rooms.py`, `_roster`).
+    static let inCallWithStudy = "in call with study"
 
     // MARK: - a call from this phone (``DropInStrings``)
 

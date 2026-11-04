@@ -132,15 +132,24 @@ struct RoomsRoomScreen: View {
     let model: RoomsModel
     let open: RoomsOpenRoom
 
+    /// Whether **this** view is the one holding ``RoomsModel`` up.
+    ///
+    /// The guard that makes `onAppear`/`onDisappear` safe to receive twice.
+    /// `@State`, so it belongs to this view's identity: one push, one hold,
+    /// one release, whatever order and however many times the two callbacks
+    /// arrive.
+    @State private var held = false
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 if let room = model.openRoom, room.roomID == open.roomID {
                     RoomsDetailView(shell: shell, model: model, room: room)
                 } else if let room = model.rooms.first(where: { $0.roomID == open.roomID }) {
-                    // The model has not been told yet (the `.task` below runs
-                    // after the first frame). Draw the row we have rather
-                    // than a spinner that lasts one frame.
+                    // The model has not been told yet: `body` is evaluated
+                    // before the `onAppear` below runs, so the first frame
+                    // asks for a room nothing has opened. Draw the row we
+                    // have rather than a spinner that lasts one frame.
                     RoomsDetailView(shell: shell, model: model, room: room)
                 } else {
                     // The room left the roster while this screen was up — a
@@ -159,13 +168,31 @@ struct RoomsRoomScreen: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .navigationTitle(RoomsStrings.roomTitle(open.roomID))
         .navigationBarTitleDisplayMode(.inline)
-        // `.task` and not `onAppear`: this must run **once per push**, and a
-        // sheet presented over this screen can fire `onAppear` again — which
-        // would reset the tab strip to `overview` under somebody reading the
-        // timers tab.
-        .task { model.open(open.roomID) }
-        .onAppear { model.hold() }
+        // **All four on one mechanism**, which review round 1 was right to
+        // pull on. It used to be `model.open(_:)` from `.task` — justified by
+        // "a sheet presented over this screen can fire `onAppear` again" —
+        // and `hold()`/`release()` from `onAppear`/`onDisappear`, under a
+        // sheet this very screen presents (``RoomsDropInRow``). Both halves
+        // cannot be right: if an extra `onAppear` can arrive, it took the
+        // holder count to 2 and the model never stopped; if it cannot, the
+        // reason for `.task` was never there.
+        //
+        // So: one pair of callbacks, made safe against arriving more than
+        // once. ``held`` is this view's own, so a second `onAppear` holds
+        // nothing twice and a second `onDisappear` releases nothing twice —
+        // the count is balanced whatever SwiftUI does. And
+        // ``RoomsModel/open(_:)`` is idempotent, so re-entering cannot put
+        // the tab strip back to `overview`, which is the one harm `.task`
+        // was there to prevent.
+        .onAppear {
+            guard !held else { return }
+            held = true
+            model.open(open.roomID)
+            model.hold()
+        }
         .onDisappear {
+            guard held else { return }
+            held = false
             model.release()
             model.close()
         }

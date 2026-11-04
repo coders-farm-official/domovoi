@@ -351,6 +351,27 @@ public final class DropInCallModel {
         if !failed { state = .ended(reason: "ended") }
     }
 
+    /// **Tell the room, then go back to nothing.** What leaving the screen
+    /// does, and Android's dispose net (`PhoneDropinCall.kt:125-127`:
+    /// `onDispose { client.hangUp() }`).
+    ///
+    /// Review round 1 found this: ``RoomsModel/stop()`` and
+    /// ``RoomsModel/serverChanged()`` called ``reset()``, which drops the
+    /// socket without a frame — so the room's end of a call somebody
+    /// abandoned by changing tab stayed open until the core's silence
+    /// timeout, microphone and all. Android's net, which that code's own
+    /// comment cites, calls `hangUp()` and does send the frame.
+    ///
+    /// The two halves rather than ``hangUp()`` alone: `hangUp()` leaves
+    /// `.ended`, which is a sentence on a sheet nobody is looking at any
+    /// more, and the room id and the clock behind it. Nothing is sent when
+    /// there is no socket — ``DropInOutbound`` holds nil and the send is a
+    /// no-op — so this is safe on a call that never started.
+    public func abandon() {
+        hangUp()
+        reset()
+    }
+
     /// Back to nothing (`DropinCallClient.kt:222-225`), which is what closing
     /// the sheet does.
     public func reset() {

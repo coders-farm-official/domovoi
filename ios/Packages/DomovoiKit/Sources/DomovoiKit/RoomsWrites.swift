@@ -444,23 +444,36 @@ extension RoomsModel {
     /// `SatHistoryTabs.kt:294`).
     ///
     /// The row is marked queued optimistically and the four outcomes are
-    /// ``roomsAddToast(_:title:)``'s.
+    /// ``roomsAddToast(_:title:)``'s. A **refusal shows the server's own
+    /// words**: `can_add` is computed without consulting a fulfiller
+    /// (`satellites.py:1035-1045`) while the core's gate is a fulfiller's URL
+    /// matcher (`domovoi/main.py:5782-5788`), so the honest thing when it is
+    /// refused is to say what the house said — and the mark is taken back,
+    /// because nothing was queued.
     ///
-    /// ### There is no missing-fulfiller path here any more (D55)
+    /// ### D55 is waiting on the server, and this is why the sentence stays
     ///
     /// Kamron, answer 55: "no fulfiller means no button and no error: the
     /// server computes `can_add` against the fulfiller allowlist, so both
-    /// phones draw it honestly." `can_add` now consults the allowlist
-    /// (`web/backend/api/satellites.py:985-1044`), so a row the server
-    /// offered is a row a fulfiller recognises — and this method used to
-    /// carry the other half of the old arrangement: it surfaced the server's
-    /// own refusal text ("no fulfiller plugin is installed") in place of a
-    /// generic failure, and took the optimistic mark back. **That path is
-    /// dead**, so it is gone rather than kept as a sentence nothing can
-    /// produce. What is left is the honest condition — ``RoomsPlayed/canAdd``
-    /// and nothing else — and ``roomsFailure(_:_:)``'s ordinary wording for
-    /// an add that really did fail (a house that went away mid-request, a
-    /// 500).
+    /// phones draw it honestly." That is a **server** change, and the route
+    /// on this branch does not have it: `can_add=(external and not
+    /// in_library and bool(r.title or r.url))`
+    /// (`web/backend/api/satellites.py:1040-1043`), with a docstring still
+    /// saying "the frontend shows the button only while a fulfiller
+    /// capability is registered" (`:999-1000`). It is built on
+    /// `wf/ios-b-android`, which never merges to main.
+    ///
+    /// This method had the refusal deleted on the strength of that answer,
+    /// and review round 1 was right that it is premature: until the server
+    /// half lands, `+ add` is drawn in a house with no fulfiller and this is
+    /// the one sentence that says why the press failed. So it is back,
+    /// unchanged, and the deletion is one line to make the day `can_add`
+    /// means what answer 55 says — written up in DECISIONS under "Needs a
+    /// shared change".
+    ///
+    /// ``RoomsPlayed/canAdd`` is still the only condition that draws the
+    /// button: it is right under both arrangements, and it is the half that
+    /// becomes the whole rule when the server's lands.
     public func addToLibrary(_ room: RoomsSatellite, _ row: RoomsPlayed) {
         guard row.canAdd else { return }
         let reads = reads(for: room.roomID)
@@ -487,7 +500,19 @@ extension RoomsModel {
                 self.reads(for: roomID).played.refresh()
             } catch {
                 guard let self, self.stillHome(epoch) else { return }
-                self.say(roomsFailure("add", error))
+                // The server's own refusal, not "add failed": its sentence
+                // ("no fulfiller plugin is installed") is the only one that
+                // tells a person what to do about it. ``serverDetail(in:)``
+                // is Chat's reader for exactly this — the `{"detail": …}`
+                // FastAPI sends — so there is one way to take a refusal's
+                // words out of a body rather than two.
+                //
+                // **Kept, pending the server half of D55** (see this
+                // method's doc): on this branch `can_add` does not consult
+                // the fulfiller allowlist, so this refusal is still reachable
+                // and still the only explanation a person gets.
+                let detail = serverDetail(in: (error as? DomovoiError)?.failure?.body)
+                self.say(detail ?? roomsFailure("add", error))
                 // Nothing was queued, so the optimistic mark goes back.
                 self.reads(for: roomID).queuedAdds.remove(rowID)
             }
