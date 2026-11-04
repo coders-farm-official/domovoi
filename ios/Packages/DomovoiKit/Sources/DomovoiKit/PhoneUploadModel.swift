@@ -135,6 +135,15 @@ public final class PhoneUploadModel {
     ///
     /// A map and not the set it used to be: nothing could report a percent
     /// when the body was built in memory, and now everything can.
+    ///
+    /// **Written with `updateValue(_:forKey:)`, never with `running[key] =`.**
+    /// The value is itself optional (nil = in flight, no percent yet), and
+    /// subscript assignment of nil to a dictionary of optionals *removes the
+    /// key*. Written the obvious way, every upload vanished from this map the
+    /// moment it started: the second tap on a row started a second upload,
+    /// the ring never drew, and a tick with no declared total deleted a
+    /// running upload mid-file. Caught by
+    /// `testASecondTapDoesNotStartASecondUpload`.
     private var running: [String: Int?] = [:]
 
     /// Which house an in-flight upload belongs to.
@@ -351,7 +360,7 @@ public final class PhoneUploadModel {
             return
         }
         let key = PhoneUploadKey.of(item, kind)
-        guard running[key] == nil else {
+        guard !running.keys.contains(key) else {
             // The running upload took its own file before its `await`, so
             // this pick is nobody's and must not be left on disk: the key is
             // the row's ORIGIN, which for a pick is `/picked/<name>` with no
@@ -388,7 +397,8 @@ public final class PhoneUploadModel {
                 deviceID: deviceID
             ))
         }
-        running[key] = nil
+        // In flight, with no percent yet. See the note on `running`.
+        running.updateValue(nil, forKey: key)
         toast = PhoneMediaStrings.uploadingTo(item.name, to.whereItLands)
 
         // Captured BEFORE the await, every one of them: which house this is
@@ -503,7 +513,7 @@ public final class PhoneUploadModel {
     /// app has moved house must not move a new house's ring.
     private func note(_ key: String, _ mine: Int, sent: Int64, of total: Int64) {
         guard mine == epoch, running.keys.contains(key) else { return }
-        running[key] = transferPercent(sent: sent, of: total)
+        running.updateValue(transferPercent(sent: sent, of: total), forKey: key)
     }
 
     // MARK: - the request

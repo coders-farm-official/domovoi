@@ -119,7 +119,18 @@ public final class SaveToDeviceModel {
     ///     equivalent: the name comes from the server, and a server is a
     ///     thing that can be wrong or hostile.
     public func save(path: String, named: String) {
-        guard case .idle = state else { return }
+        // Refused only while one is **in flight**, which is the "no queue"
+        // rule on the type. It used to be `guard case .idle`, and that was a
+        // control that could not do what it said: `failed` and `ready` both
+        // draw the tap again, so a save that failed could be tapped for ever
+        // and start nothing ([[no-misleading-controls]]). Caught by
+        // `testASaveCanBeTriedAgainAfterItFailed`.
+        if case .fetching = state { return }
+        if case .ready(let held, _) = state {
+            // Asked for another file without closing the sheet: the copy in
+            // hand is this app's and goes now rather than at some point.
+            try? FileManager.default.removeItem(at: held)
+        }
         state = .fetching(named, nil)
         let mine = epoch
         let read = fetch
@@ -153,7 +164,17 @@ public final class SaveToDeviceModel {
                 let spool = try FileSaveModel.emptySpool()
                 let into = spool.appendingPathComponent(name, isDirectory: false)
                 let url = try await read(where_, into, onProgress)
-                guard let self, mine == self.epoch else { return }
+                // `Task.isCancelled` as well as the epoch, and a file to
+                // delete on either. A transfer that finishes in the moment
+                // between the person tapping stop and the transport noticing
+                // would otherwise hand the file over anyway — the share sheet
+                // opening on a save somebody had just cancelled — and leave a
+                // gigabyte in the spool until the next save cleared it.
+                // Caught by `testStoppingASaveGoesQuietRatherThanRed`.
+                guard let self, mine == self.epoch, !Task.isCancelled else {
+                    try? FileManager.default.removeItem(at: url)
+                    return
+                }
                 self.state = .ready(url, name)
             } catch is CancellationError {
                 guard let self, mine == self.epoch else { return }
