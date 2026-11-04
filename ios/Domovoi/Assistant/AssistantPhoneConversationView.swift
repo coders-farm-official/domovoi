@@ -34,16 +34,62 @@ struct AssistantPhoneConversationView: View {
 
     @Environment(\.dynamicTypeSize) private var typeSize
 
+    /// The place this conversation is in, for its header row to say (D63).
+    /// Nil on a phone with one place — ``AssistantConversationPlaceKey``.
+    @Environment(\.assistantConversationPlace) private var place
+
     var body: some View {
         VStack(spacing: 0) {
-            titleRow
-            Divider()
+            if !chromeScrolls { chrome }
             if phone.isEmptyConversation {
                 emptyChat
             } else {
                 transcript
             }
             composer
+        }
+    }
+
+    /// Whether this conversation's own chrome — the title row, the place chip
+    /// and the rule under them — is drawn **inside** the scrolling half
+    /// rather than pinned above it.
+    ///
+    /// ### At an accessibility size it has to be, and D63 is why
+    ///
+    /// The band above this screen is gone (``AssistantPlaceSwitch``, D63) and
+    /// the chip is in the header row instead, which is Android's shape. On a
+    /// 393-point screen at AX5 that is a straight swap of 80 points of band
+    /// for about the same again inside the row — the chip's `.caption` is 44
+    /// points a line there and "on home server · shared with the household"
+    /// is three of them — so moving it alone would have handed the transcript
+    /// back nothing, and train R001 measured what "nothing" is on this
+    /// screen: a `ScrollView` **6.7 points tall** holding 860 points of
+    /// content, a chat with no room to show one line of itself.
+    ///
+    /// What actually makes room is this: at an accessibility size the chrome
+    /// becomes the first rows of the scrolling half and goes with it, so that
+    /// half is given the whole of what is left over the composer. It is
+    /// Kamron's answer 29 — "yes: shell chrome (header and plugin band)
+    /// scrolls away at accessibility sizes, app-wide" — applied to the chrome
+    /// this screen owns rather than the shell's, and it is the same trade
+    /// Android makes in the same place by a blunter rule: `ChatHeader`
+    /// returns **nothing at all** when the keyboard has left the window short
+    /// (`ChatHome.kt:710`, and `ThreadTitleRow`'s own note at
+    /// `ChatScreen.kt:1235-1253` has the measurement that bought it). Android
+    /// can drop the row outright because system back still leaves the chat;
+    /// on this app the chevron is the only way out of a conversation, so the
+    /// row is kept and moved rather than dropped.
+    ///
+    /// **Below an accessibility size nothing changes.** The row is pinned,
+    /// where every train has run with it, and the chip costs it the 44 points
+    /// the band used to cost the screen one row up.
+    private var chromeScrolls: Bool { typeSize.isAccessibilitySize }
+
+    /// The title row, the place, and the rule under them.
+    @ViewBuilder private var chrome: some View {
+        VStack(spacing: 0) {
+            titleRow
+            Divider()
         }
     }
 
@@ -65,12 +111,12 @@ struct AssistantPhoneConversationView: View {
                         Spacer(minLength: 8)
                         shareButton
                     }
-                    title
+                    titleAndPlace
                 }
             } else {
                 HStack(spacing: 8) {
                     backButton
-                    title
+                    titleAndPlace
                     Spacer(minLength: 8)
                     shareButton
                 }
@@ -142,6 +188,23 @@ struct AssistantPhoneConversationView: View {
     /// where S008's collapse lives. The name is a label, not a sentence;
     /// VoiceOver still reads the whole of it, and the untruncated name is on
     /// the row in the list one tap behind.
+    /// Android's header column: the chat's name, and under it the chip that
+    /// says which place the chat is in (`ChatHeader`, `ChatHome.kt:721-724` —
+    /// a `Column(Modifier.weight(1f))` holding the title and `PlaceChip`).
+    ///
+    /// The chip is nothing at all on a phone with one place
+    /// (``AssistantConversationPlaceChip``), which is every iPhone without the
+    /// system model: this screen does not exist there, so in practice it is
+    /// always drawn here — but the branch is what keeps the **house's**
+    /// conversation, which uses the same chip, honest on a one-place phone.
+    private var titleAndPlace: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            title
+            AssistantConversationPlaceChip(place: place)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     private var title: some View {
         Text(phone.conversation?.title ?? ChatStrings.newChat)
             .font(.headline)
@@ -180,17 +243,24 @@ struct AssistantPhoneConversationView: View {
     /// (IOS-ONLY-STRINGS.md §1): there is no mic to tap in this milestone.
     private var emptyChat: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 8) {
-                Text(AssistantStrings.askAnything)
-                    .font(.headline)
-                    .fixedSize(horizontal: false, vertical: true)
-                Text(AssistantStrings.emptyChatHint)
-                    .font(.footnote)
-                    .foregroundStyle(Color.fgMuted)
-                    .fixedSize(horizontal: false, vertical: true)
+            VStack(spacing: 0) {
+                // ``chromeScrolls``: at an accessibility size the header is
+                // the first row of the scrolling half, here as in
+                // ``transcript``, so a new chat's own hint is not squeezed by
+                // a row that is three lines of `.headline` tall.
+                if chromeScrolls { chrome }
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(AssistantStrings.askAnything)
+                        .font(.headline)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(AssistantStrings.emptyChatHint)
+                        .font(.footnote)
+                        .foregroundStyle(Color.fgMuted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(16)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(16)
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -212,43 +282,60 @@ struct AssistantPhoneConversationView: View {
                 // has the same shape, the same follow and the same crossing
                 // from under-filled to over-filled, and round 2 already gave
                 // the two of them the same scroll target for that reason.
-                VStack(alignment: .leading, spacing: 10) {
-                    let messages = phone.transcript
-                    // Identity is the **position**, not
-                    // ``AssistantMessage/id``: that id is a fresh `UUID` made
-                    // at decode time and the live reply is built anew on every
-                    // read of ``AssistantPhoneModel/transcript``, so keying on
-                    // it would hand `scrollTo` an id that is not in the list
-                    // being drawn — a follow that silently never moves. The
-                    // transcript only appends (and "try again" drops its last),
-                    // which is what makes the position stable enough to key on;
-                    // ``ChatConversationView`` uses `ordinal` for the same
-                    // reason.
-                    ForEach(Array(messages.enumerated()), id: \.offset) { index, message in
-                        // The divider at ``AssistantPhoneModel/windowDividerIndex``
-                        // and **nowhere else**: nil where nothing fell out of
-                        // the model's view, and never at zero — a line above
-                        // the first message would say the whole chat is beyond
-                        // what Domovoi can keep in mind.
-                        if index == phone.windowDividerIndex {
-                            windowDivider
+                VStack(spacing: 0) {
+                    // ``chromeScrolls``: at an accessibility size the header row
+                    // is the first thing in the scrolling half rather than a band
+                    // above it, which is what gives the transcript the height
+                    // train R001 found it had none of.
+                    if chromeScrolls { chrome }
+                    VStack(alignment: .leading, spacing: 10) {
+                        let messages = phone.transcript
+                        // **The cap** (D64): only the window's messages are built.
+                        // ``AssistantPhoneModel/earlierCount`` is the number
+                        // hidden above it and is zero for every conversation
+                        // shorter than ``ChatTranscriptWindow/page``, so nothing
+                        // on this screen changes until a chat is fifty messages
+                        // long.
+                        let hidden = phone.earlierCount
+                        if hidden > 0 { showEarlier(hidden: hidden, pinning: scroller) }
+                        // Identity is the **position**, not
+                        // ``AssistantMessage/id``: that id is a fresh `UUID` made
+                        // at decode time and the live reply is built anew on every
+                        // read of ``AssistantPhoneModel/transcript``, so keying on
+                        // it would hand `scrollTo` an id that is not in the list
+                        // being drawn — a follow that silently never moves. The
+                        // transcript only appends (and "try again" drops its last),
+                        // which is what makes the position stable enough to key on;
+                        // ``ChatConversationView`` uses `ordinal` for the same
+                        // reason.
+                        ForEach(
+                            Array(messages.enumerated()).dropFirst(hidden), id: \.offset
+                        ) { index, message in
+                            // The divider at ``AssistantPhoneModel/windowDividerIndex``
+                            // and **nowhere else**: nil where nothing fell out of
+                            // the model's view, and never at zero — a line above
+                            // the first message would say the whole chat is beyond
+                            // what Domovoi can keep in mind.
+                            if index == phone.windowDividerIndex {
+                                windowDivider
+                            }
+                            AssistantPhoneBubbleView(
+                                // ``AssistantPhoneModel/sendingHere``, not
+                                // `sending`: `sending` is true while a reply is
+                                // written in **any** of this place's chats, so in
+                                // another chat opened mid-reply it drew a spinner
+                                // on that chat's last message — and said "Domovoi,
+                                // writing" of a reply that had failed hours ago.
+                                message: message,
+                                writing: phone.sendingHere && index == messages.count - 1
+                            )
+                            .id(index)
                         }
-                        AssistantPhoneBubbleView(
-                            // ``AssistantPhoneModel/sendingHere``, not
-                            // `sending`: `sending` is true while a reply is
-                            // written in **any** of this place's chats, so in
-                            // another chat opened mid-reply it drew a spinner
-                            // on that chat's last message — and said "Domovoi,
-                            // writing" of a reply that had failed hours ago.
-                            message: message,
-                            writing: phone.sendingHere && index == messages.count - 1
-                        )
-                        .id(index)
+                        tryAgain
                     }
-                    tryAgain
+                    .padding(16)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .padding(16)
-                .frame(maxWidth: .infinity, alignment: .leading)
             }
             // Follow the reply down the screen while it is written. Keyed on
             // ``tail``, which moves on a new message **and** on a chunk, so
@@ -284,6 +371,39 @@ struct AssistantPhoneConversationView: View {
 
     /// The transcript's accessibility identifier — see ``transcript``.
     static let transcriptId = "assistant-transcript"
+
+    /// "show earlier" — one page more of a conversation longer than the
+    /// window (D64, Kamron's answer 64).
+    ///
+    /// **Pinned, not followed.** Growing the window puts a page of messages
+    /// *above* what is on screen, and a scroll view whose content grows at the
+    /// top keeps its offset — so without this the message somebody had just
+    /// read would jump down the screen by the height of fifty bubbles. The
+    /// row that was at the top before the growth is scrolled back to the top
+    /// after it, which is the same message in the same place and a page of
+    /// older ones now above it.
+    ///
+    /// An anchor **is** right here, where ``transcript``'s long note says it
+    /// was wrong for the follow: the follow re-applied a request every 0.12
+    /// seconds over content crossing from shorter than the viewport to
+    /// longer, and this is one request, once, on a tap, over content that is
+    /// certainly longer (there are more than fifty messages, or this control
+    /// is not drawn).
+    @ViewBuilder
+    private func showEarlier(hidden: Int, pinning scroller: ScrollViewProxy) -> some View {
+        HomeLink(ChatStrings.showEarlier) {
+            // The id of the row at the top of the window, read **before** it
+            // grows. The identity here is the message's position
+            // (``transcript`` says why it is not its `id`), and the first
+            // drawn position is the number hidden above it.
+            let top = hidden
+            phone.showEarlier()
+            scroller.scrollTo(top, anchor: .top)
+        }
+        .accessibilityLabel(ChatStrings.showEarlierNote(hidden: hidden))
+        .frame(maxWidth: .infinity, alignment: .center)
+        .padding(.bottom, 10)
+    }
 
     private var tail: String {
         let messages = phone.transcript

@@ -37,6 +37,10 @@ struct ChatConversationView: View {
     /// accessibility size (``title``).
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
+    /// The place this conversation is in, for its header row to say (D63).
+    /// Nil on a phone with one place — ``AssistantConversationPlaceKey``.
+    @Environment(\.assistantConversationPlace) private var place
+
     /// The header's title, bounded at an accessibility size and **untouched**
     /// below one.
     ///
@@ -67,15 +71,7 @@ struct ChatConversationView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            titleRow
-            // The per-thread internet switch (``ChatMoreInternetChipView``).
-            // Honest now: the chip turns a chat's lookups on, and the card a
-            // lookup then stops at is one this app can answer.
-            if let more, chat.openThread != nil {
-                ChatMoreInternetChipView(more: more)
-                    .padding(.horizontal, 12)
-            }
-            Divider()
+            if !chromeScrolls { chrome }
             if let note = chat.aiOffNote {
                 // **In place of the whole conversation**, which is what
                 // ``ChatModel/aiOffNote`` is for: the household's AI switch
@@ -253,6 +249,41 @@ struct ChatConversationView: View {
 
     // MARK: - the title row
 
+    /// Whether this conversation's own chrome — the title row with the place
+    /// chip in it, the per-thread internet switch and the rule under them — is
+    /// drawn **inside** the transcript rather than pinned above it.
+    ///
+    /// ``AssistantPhoneConversationView/chromeScrolls`` carries the argument
+    /// and the measurement at length: the place band above Chat is gone (D63)
+    /// and the chip is in this row instead, which at AX5 is a straight swap of
+    /// 80 points for 80 — so what actually hands the transcript its height
+    /// back is the chrome going with the scroll, which is Kamron's answer 29
+    /// applied to the chrome this screen owns. Below an accessibility size
+    /// nothing moves.
+    ///
+    /// **Never over the AI-off note**, which replaces the transcript
+    /// altogether: there is no scrolling half to put the row in, and the note
+    /// is two short sentences that squeeze nothing.
+    private var chromeScrolls: Bool {
+        dynamicTypeSize.isAccessibilitySize && chat.aiOffNote == nil
+    }
+
+    /// The title row with the place, the per-thread internet switch, and the
+    /// rule under them.
+    @ViewBuilder private var chrome: some View {
+        VStack(spacing: 0) {
+            titleRow
+            // The per-thread internet switch (``ChatMoreInternetChipView``).
+            // Honest now: the chip turns a chat's lookups on, and the card a
+            // lookup then stops at is one this app can answer.
+            if let more, chat.openThread != nil {
+                ChatMoreInternetChipView(more: more)
+                    .padding(.horizontal, 12)
+            }
+            Divider()
+        }
+    }
+
     private var titleRow: some View {
         HStack(spacing: 8) {
             // ``ChatStrings/backToChats`` serves both ways out of this screen
@@ -313,7 +344,20 @@ struct ChatConversationView: View {
             // at the sizes Apple's audit runs at the title now carries
             // neither — exactly MS003's shape — and both modifiers apply
             // only where the bound is wanted.
-            title
+            //
+            // **And under it, the place** (D63): Android's header is a
+            // `Column(Modifier.weight(1f))` holding the title and the place
+            // chip (`ChatHeader`, `ChatHome.kt:721-724`), and that is where
+            // the chip the place band used to draw above this screen now
+            // lives. ``AssistantConversationPlaceChip`` is nothing at all on
+            // a phone with one place, which is every iPhone without the
+            // system model and the whole of iOS 18-25 — so the house's
+            // conversation looks exactly as it shipped there.
+            VStack(alignment: .leading, spacing: 2) {
+                title
+                AssistantConversationPlaceChip(place: place)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             Spacer(minLength: 8)
 
@@ -367,6 +411,12 @@ struct ChatConversationView: View {
                 // `ScrollView` takes ONE view, and two statements in its
                 // builder are a `TupleView` with no layout of its own.
                 VStack(spacing: 0) {
+                    // ``chromeScrolls``: at an accessibility size the title
+                    // row, the place chip and the internet switch are the
+                    // first thing in the transcript rather than a band above
+                    // it, which is what hands the transcript back the height
+                    // train R001 found it had none of.
+                    if chromeScrolls { chrome }
                     // **A `VStack`, and it was a `LazyVStack` until train
                     // R002 measured what the laziness costs here.**
                     //
@@ -416,7 +466,30 @@ struct ChatConversationView: View {
                     // true answer is the one to ask.
                     VStack(alignment: .leading, spacing: 10) {
                         let messages = chat.transcript.messages
-                        ForEach(Array(messages.enumerated()), id: \.element.ordinal) { index, message in
+                        // **The cap** (D64, Kamron's answer 64): the
+                        // container stays eager — the note above is the
+                        // measurement that bought it — and what shrinks is
+                        // how many messages it is handed.
+                        // ``ChatTranscript/earlierCount`` is the number
+                        // hidden above the window, and it is zero for every
+                        // thread shorter than ``ChatTranscriptWindow/page``:
+                        // the stub house's longest is eight, so nothing on
+                        // this screen changes until a thread is fifty
+                        // messages long.
+                        //
+                        // `dropFirst(hidden)` and not a re-numbered list: the
+                        // offsets stay the **transcript's** own, which is
+                        // what ``ChatTranscript/windowDividerIndex`` and the
+                        // last-row rule below are compared against. A window
+                        // that renumbered its messages would draw Android's
+                        // window divider in the wrong place and offer a
+                        // heads-up card on the wrong row.
+                        let hidden = chat.transcript.earlierCount
+                        if hidden > 0 { showEarlier(hidden: hidden, pinning: scroller) }
+                        ForEach(
+                            Array(messages.enumerated()).dropFirst(hidden),
+                            id: \.element.ordinal
+                        ) { index, message in
                             // `WindowDivider` (`ChatHome.kt:655`) at
                             // ``ChatTranscript/windowDividerIndex`` and **nowhere
                             // else** — the index is the model's answer, nil when
@@ -576,6 +649,37 @@ struct ChatConversationView: View {
     /// The transcript's accessibility identifier — see ``transcript``.
     static let transcriptID = "chat-transcript"
 
+    /// "show earlier" — one page more of a thread longer than the window
+    /// (D64, Kamron's answer 64).
+    ///
+    /// **Pinned, not followed.** Growing the window puts a page of messages
+    /// *above* what is on screen, and a scroll view whose content grows at
+    /// the top keeps its offset — so without this the message somebody had
+    /// just read would jump down the screen by the height of fifty bubbles.
+    /// The bubble that was at the top before the growth is scrolled back to
+    /// the top after it: the same message in the same place, with a page of
+    /// older ones now above it.
+    ///
+    /// An anchor **is** right here, where ``transcript``'s long note says it
+    /// was wrong for the follow. That note is about a request re-applied
+    /// every 0.12 seconds over content crossing from shorter than the
+    /// viewport to longer; this is one request, once, on a tap, over content
+    /// that is certainly longer — there are more than fifty messages, or this
+    /// control is not drawn.
+    @ViewBuilder
+    private func showEarlier(hidden: Int, pinning scroller: ScrollViewProxy) -> some View {
+        HomeLink(ChatStrings.showEarlier) {
+            // The ordinal of the bubble at the top of the window, read
+            // **before** it grows: the rows are keyed on
+            // ``ChatLiveMessage/ordinal``, so that is the id `scrollTo` wants.
+            let top = chat.transcript.drawn.first?.ordinal
+            chat.showEarlier()
+            if let top { scroller.scrollTo(top, anchor: .top) }
+        }
+        .accessibilityLabel(ChatStrings.showEarlierNote(hidden: hidden))
+        .frame(maxWidth: .infinity, alignment: .center)
+    }
+
     /// The id of the zero-height view at the very end of the transcript.
     ///
     /// A `String` and not a row's ordinal, so it can never collide with one.
@@ -704,16 +808,51 @@ struct ChatConversationView: View {
                     .foregroundStyle(Color.brandInk)
                     .accessibilityLabel(ChatMoreStrings.talk)
                     .disabled(!chat.canSend)
-                } else {
-                    Button(ChatStrings.send) { send() }
-                        .buttonStyle(.borderedProminent)
-                        .frame(minHeight: 44)
-                        // ``ChatModel/canSend``: not while a reply is being
-                        // written, and not while the house's AI is off. The
-                        // field itself stays live so a message can be typed
-                        // while the last reply finishes.
-                        .disabled(!chat.canSend)
+                } else if !ChatMoreVoiceRules.micOffered(typed: typed) {
+                    // **Something is typed**, which is the same rule read the
+                    // other way round rather than a second spelling of it: the
+                    // mic is offered with a blank box and send with a full one,
+                    // and the gate is one function (`ChatScreen.kt:1157`,
+                    // `:1165`).
+                    //
+                    // **The label's colour is named, not inherited** (D8,
+                    // Kamron's answer 8: "same send-key fix on the house
+                    // chat's composer"). `.borderedProminent` draws a WHITE
+                    // label on the accent, and white on ``Color/brand`` is
+                    // **2.05:1** — the arithmetic is in the token's own doc
+                    // comment, which says to use ``Color/brandFg`` for text
+                    // drawn on the amber. Measured 8.49:1 light, 9.87:1 dark.
+                    // ``AssistantPhoneConversationView/composer`` is where
+                    // this was fixed first and is the model it is copied from.
+                    Button {
+                        send()
+                    } label: {
+                        Text(ChatStrings.send).foregroundStyle(Color.brandFg)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(Color.brand)
+                    .frame(minHeight: 44)
+                    // ``ChatModel/canSend``: not while a reply is being
+                    // written, and not while the house's AI is off. The
+                    // field itself stays live so a message can be typed
+                    // while the last reply finishes. Dimmed and not absent
+                    // here, which is the one case where it is honest: the
+                    // words are typed and the send WILL go out, as soon as
+                    // the reply before it lands.
+                    .disabled(!chat.canSend)
                 }
+                // **Nothing at all with a blank box and no mic to put there**
+                // (D8). That is the brand-new chat: Android's spot holds the
+                // mic whenever the draft is blank (`AssistantChat.kt:379-390`,
+                // `ChatScreen.kt:1157`) and never a greyed send, and here the
+                // mic needs a thread (`POST /threads/{id}/voice` wants an id),
+                // so with neither there is nothing this spot can honestly
+                // offer. A send that sends nothing — ``ChatModel/send(_:)``
+                // refuses a blank message — is the control
+                // [[no-misleading-controls]] is about, and the dimmed
+                // `.borderedProminent` that stood here is also what Apple's
+                // audit failed on contrast in train S005: grey glyphs on a
+                // grey fill.
             }
             .padding(12)
         }
