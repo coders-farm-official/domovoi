@@ -289,23 +289,14 @@ final class PhoneUploadModelTests: XCTestCase {
         )
     }
 
-    /// The ring carries a number now (D43).
-    ///
-    /// ``transferPercent(sent:of:)`` is what turns the transport's two counts
-    /// into the one the button draws, and all three of its edges are decided
-    /// here rather than left to a UI case: an honest fraction, a total the
-    /// server never declared, and a total that is a lie.
-    func testThePercentOfATransferIsClampedAndOptional() {
-        XCTAssertEqual(transferPercent(sent: 512, of: 1024), 50)
-        XCTAssertEqual(transferPercent(sent: 0, of: 1024), 0)
-        XCTAssertNil(transferPercent(sent: 512, of: -1), "an undeclared total is not a percent")
-        XCTAssertNil(transferPercent(sent: 512, of: 0))
-        XCTAssertEqual(transferPercent(sent: 2048, of: 1024), 100, "a lying total cannot draw 200%")
-        XCTAssertEqual(
-            transferPercent(sent: 1023, of: 1024), 99,
-            "rounded DOWN: a bar that says 100% while bytes are still going is the one number that must not appear"
-        )
-    }
+    // `transferPercent(sent:of:)` -- the arithmetic the ring draws -- is
+    // measured in `TransferUploadTests.testThePercentIsOptionalClampedAndRoundedDown`
+    // and not here. A case in this file would have asserted the same three
+    // edges against the same free function one suite over, and two cases for
+    // one function is one of them going stale unnoticed. What belongs here is
+    // whether the number REACHES the button, which
+    // `testASecondTapDoesNotStartASecondUpload` below reads off
+    // `state(for:)`.
 
     // MARK: - two taps
 
