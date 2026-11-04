@@ -119,9 +119,17 @@ public final class AudiobooksModel {
     ///     than an absent one. DECISIONS §3.
     ///   - places: where the phone's places rest. The app's is a file in
     ///     Application Support; a test passes ``BookPositionMemory``.
+    ///   - listener: who the server's rows belong to — D11, and
+    ///     ``ShellModel/listeners``. A closure, not a value, because Android
+    ///     reads `prefs.listenerPersonId.value` at **each** request
+    ///     (`ApiPositionRemote.kt:27`): a person picked in Settings has to
+    ///     take effect on the next save, not on the next launch. Left out,
+    ///     every row is the unidentified listener's, which is what this screen
+    ///     did before the picker existed.
     public convenience init(
         in container: AppContainer,
         deviceID: String?,
+        listener: @Sendable @escaping () -> String? = { nil },
         places: (any SavedState)? = nil,
         covers: AudiobookCoverStore? = nil,
         clock: @Sendable @escaping () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1000) },
@@ -141,13 +149,17 @@ public final class AudiobooksModel {
             in: container,
             serverKey: key,
             remote: {
-                ApiBookPositionRemote(client: client, deviceID: deviceID, server: key())
+                ApiBookPositionRemote(
+                    client: client, deviceID: deviceID, server: key(), listener: listener
+                )
             },
             knowsThisPhone: !ServerCredentials.isBlank(deviceID ?? ""),
             positions: BookPositionSync(
                 store: BookPositionStore(place: kept),
                 remote: {
-                    ApiBookPositionRemote(client: client, deviceID: deviceID, server: key())
+                    ApiBookPositionRemote(
+                        client: client, deviceID: deviceID, server: key(), listener: listener
+                    )
                 },
                 clock: clock
             ),

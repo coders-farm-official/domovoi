@@ -359,3 +359,90 @@ public func selectedListener(_ options: [ListenerOption], personID: String?) -> 
     guard let personID, !personID.isEmpty else { return options.first }
     return options.first { $0.personID == personID } ?? options.first
 }
+
+/// The household, for the "listening as" picker and the two hint chips.
+///
+/// `rememberApi("people-hint") { it.api.get("/api/people").decode<List<PersonRow>>() }`
+/// (`AudiobooksScreen.kt:339`, `PodcastsScreen.kt:308`, and the panel's own at
+/// `ConnectionPanel.kt:103`). One read of `/api/people`, keyed to the server
+/// like every other read in this app, so a house move re-asks and a name from
+/// the old house cannot be shown under the new one's listener id.
+///
+/// It is a model rather than a `@State` in each of the three views for the
+/// standing reason: a view that holds a `Task` is a view whose request dies
+/// when a lazy row recycles, and the name under a chip is read on every
+/// redraw.
+@MainActor
+@Observable
+public final class PlayerListenerModel {
+
+    public let people: ApiRead<[Person]>
+
+    private let listeners: PlayerListenerStore
+
+    public init(in container: AppContainer, listeners: PlayerListenerStore) {
+        self.listeners = listeners
+        let client = container.client
+        self.people = ApiRead(in: container) {
+            try await client.get(PeoplePath.roster, as: [Person].self)
+        }
+    }
+
+    /// The screen appeared.
+    ///
+    /// Re-read only when there is nothing yet, or when the house has moved
+    /// (``ApiRead/serverChanged()``, which re-reads only if the address is
+    /// actually different). Three views share this model's shape and one of
+    /// them is a chip under a lazy list's header: a bare `refresh()` here
+    /// would ask `/api/people` again on every appearance of every one of them.
+    public func start() {
+        if people.data == nil, people.error == nil {
+            people.refresh()
+        } else {
+            people.serverChanged()
+        }
+    }
+
+    public func stop() { people.stop() }
+
+    /// Who this phone saves under, or nil for "me (this device)".
+    public var personID: String? { listeners.personID }
+
+    /// The dropdown's rows.
+    public var options: [ListenerOption] { listenerOptions(people: people.data ?? []) }
+
+    /// Which row is selected, which is the nil row for a person who has since
+    /// left the household.
+    public var selected: ListenerOption? { selectedListener(options, personID: personID) }
+
+    /// Whether a chip should be drawn at all.
+    ///
+    /// `val id = listenerId ?: return` (`AudiobooksScreen.kt:337`) — a phone
+    /// that has never picked anybody shows **nothing**, rather than a chip
+    /// saying "listening as this device", because that is the state every
+    /// phone starts in and a chip for it would be on every screen for ever.
+    public var showsChip: Bool { personID != nil }
+
+    /// The chip's words, with an ellipsis until the name lands.
+    public var chip: String {
+        PlayerStrings.listeningAsChip(options.first { $0.personID == personID }?.name)
+    }
+
+    /// The toast after a pick (`ConnectionPanel.kt:369-372`).
+    public func toast(for option: ListenerOption) -> String {
+        option.personID == nil
+            ? ShellStrings.listeningAsThisDevice
+            : ShellStrings.listeningAs(option.name)
+    }
+
+    /// The card's failure sentence, or nil while there is nothing to say.
+    ///
+    /// Only when the read has **no data at all**: `peopleState.error != null
+    /// && peopleState.data == null` (`ConnectionPanel.kt:357`). A list that is
+    /// a few seconds old with a failed refresh behind it is still a list worth
+    /// picking from, which is the whole reason ``ApiRead`` keeps both.
+    public var trouble: String? {
+        guard people.data == nil, let why = people.error else { return nil }
+        return PlayerStrings.couldNotLoadPeople(why)
+    }
+}

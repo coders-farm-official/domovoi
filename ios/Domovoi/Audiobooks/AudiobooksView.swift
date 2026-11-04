@@ -134,27 +134,40 @@ struct AudiobooksView: View {
             // model needs the container and a `@State` initialiser runs
             // before the view has one.
             if books == nil {
+                let listeners = model.listeners
                 books = AudiobooksModel(
                     in: model.container,
                     deviceID: model.deviceID,
+                    // D11: whose rows the server's slot is. A closure, so a
+                    // person picked in Settings takes effect on the next save
+                    // rather than on the next launch — Android reads
+                    // `prefs.listenerPersonId.value` at each request
+                    // (`ApiPositionRemote.kt:27`).
+                    listener: { listeners.personID },
                     places: Self.keptPlaces()
                 )
             }
             if let books {
-                // **The Player merge.** Nil until this line, and nil draws no
-                // `play` anywhere on the screen; the bridge is nil in turn
-                // when this phone has no device id, because the player cannot
-                // own a server slot without one. ``AudiobooksPhonePlayer``
-                // has the whole reason it is a process-wide object.
+                // **The Player merge.** Nil draws no `play` anywhere on the
+                // screen, and nil is what ``ShellModel/player`` answers for a
+                // phone with no device id — the player cannot own a server
+                // slot without one.
+                //
+                // **Reading `model.player` is what builds it**, which is why
+                // this is here and not in a `body`: the app's one player is
+                // built on first use and never at launch, because a
+                // `.playback` session activated at launch stops whatever the
+                // person was already listening to.
                 //
                 // Asked for on **every** appearance and not only when the
-                // model is built: `shared(...)` reads the household at the
-                // moment it is called, so this is what re-keys the player
-                // after a move made while this screen was away — the
-                // `onChange` below only runs while it is on screen.
-                books.player = AudiobooksPhonePlayer.shared(
+                // model is built: ``AudiobooksPhonePlayer/over(_:in:places:)``
+                // re-points the place store at the household it is called in,
+                // so this is what re-keys it after a move made while this
+                // screen was away — the `onChange` below only runs while it is
+                // on screen.
+                books.player = AudiobooksPhonePlayer.over(
+                    model.player,
                     in: model.container,
-                    deviceID: model.deviceID,
                     places: books.positions
                 )
                 books.start()
@@ -182,21 +195,22 @@ struct AudiobooksView: View {
             openBook = nil
             page = nil
             books?.serverChanged()
-            // **The player is re-asked for, not kept.**
-            // ``AudiobooksPhonePlayer`` reads the household only when
-            // `shared(...)` is called, and the one built in `.task` above was
-            // keyed to whatever house was connected then. Kept across a move
-            // it would go on stamping every item's `origin` with the old
-            // house, so ``AudiobookPlaces`` would record places under the old
-            // key while ``AudiobookDetailModel`` reads the new one — a book
-            // page showing no place however long you listen — and
-            // ``BookPositionSync/push(bookID:server:)`` would match no remote
-            // and send nothing up for ever. `shared(...)` stops and re-keys
-            // the old one, so this is also what ends the old house's book.
+            // **The adapter is re-asked for, not kept.** The player itself
+            // is the app's one player and survives the move —
+            // ``ShellModel/refresh()`` has already told it, which is what
+            // drops the old house's book out of its queue. What must be
+            // re-keyed is the **place store**: the adapter built in `.task`
+            // above carried the household that was connected then, and kept
+            // across a move it would go on stamping every item's `origin`
+            // with the old house, so ``AudiobookPlaces`` would record places
+            // under the old key while ``AudiobookDetailModel`` reads the new
+            // one — a book page showing no place however long you listen —
+            // and ``BookPositionSync/push(bookID:server:)`` would match no
+            // remote and send nothing up for ever.
             if let books {
-                books.player = AudiobooksPhonePlayer.shared(
+                books.player = AudiobooksPhonePlayer.over(
+                    model.player,
                     in: model.container,
-                    deviceID: model.deviceID,
                     places: books.positions
                 )
             }
