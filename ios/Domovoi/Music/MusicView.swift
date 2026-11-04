@@ -25,15 +25,6 @@ import SwiftUI
 ///
 /// ### What is not, and why there is no control for it
 ///
-/// **This phone's own player**, which is Android's `player` tab: queueing to
-/// the handset, playing through its speaker, the seek bar, the sleep timer,
-/// the playback speed, chapters, and casting a local queue to a room. The
-/// screen for it is built (``MusicPlayerTabView``) and so is everything
-/// behind it, but **nothing conforms to ``MusicMorePlayerEngine`` yet** —
-/// the audio engine is its own item. So ``MusicTab/shown(hasPlayer:)``
-/// leaves `player` out of the tab bar entirely rather than offering a
-/// transport row with nothing behind it.
-///
 /// **Uploading** a file from the phone and **saving** a track to the phone.
 /// Each is a different batch's, and neither has a control here.
 ///
@@ -102,12 +93,17 @@ struct MusicView: View {
 
     /// This phone's own queue, over whatever engine is registered.
     ///
-    /// **Nothing registers one**, so ``MusicLocalQueueModel/hasEngine`` is
-    /// false, the `player` tab is not in the bar, and
-    /// ``MusicPlayerTabView`` is never on screen. The model is built anyway
-    /// — rather than the tab being commented out — so that the engine's item
-    /// lands as one `use(_:)` call and nothing here is written from scratch
-    /// against a thing that by then exists.
+    /// **The engine is registered since the 2026-11-03 batch** (D46/D49):
+    /// ``PlayerModelMusicEngine`` over ``ShellModel/player``, the app's one
+    /// player. This note said the engine's item would land "as one `use(_:)`
+    /// call and nothing here is written from scratch", and that is the shape
+    /// of it — see the `.task` below.
+    ///
+    /// ``MusicLocalQueueModel/hasEngine`` is still false, and the `player` tab
+    /// still absent from the bar, on a phone with **no device id**:
+    /// ``ShellModel/player`` is nil for one, because the player writes a
+    /// listening position per device. Not greyed, not empty — absent, which
+    /// is what ``MusicTab/shown(hasPlayer:)`` was built to do.
     @State private var player: MusicLocalQueueModel?
 
     /// One room-lyrics model per room card, kept across redraws so that the
@@ -198,13 +194,12 @@ struct MusicView: View {
                     case .stats:
                         MusicStatsView(music: music)
                     case .player:
-                        // Not reachable today: ``MusicTab/shown(hasPlayer:)``
-                        // leaves this tab out of the bar while nothing
-                        // conforms to ``MusicMorePlayerEngine``, and `tab`
-                        // can only hold what the bar offered. Wired anyway,
-                        // so that the engine's item is one conformance and
-                        // not a screen written later against a seam nobody
-                        // kept honest.
+                        // Reachable since D46: the `.task` below registers
+                        // ``PlayerModelMusicEngine`` over the app's one
+                        // player, so ``MusicTab/shown(hasPlayer:)`` offers
+                        // this tab. It stays out of the bar on a phone with
+                        // no device id, and `tab` can only hold what the bar
+                        // offered.
                         if let player {
                             MusicPlayerTabView(
                                 player: player,
@@ -235,6 +230,23 @@ struct MusicView: View {
             if nudges == nil { nudges = MusicLyricsNudgeStore() }
             if player == nil, let deviceID = model.deviceID {
                 player = MusicLocalQueueModel(deviceID: deviceID)
+            }
+            // **The engine, asked for on every appearance** (D46/D49).
+            //
+            // `model.player` is the app's one player and **reading it is what
+            // builds it** — which is why this is in a `.task` and never in a
+            // `body`: the player is built on first use and never at launch,
+            // because a `.playback` session activated at launch stops
+            // whatever the person was already listening to. Nil (a phone with
+            // no device id) leaves ``MusicLocalQueueModel/hasEngine`` false
+            // and the `player` tab out of the bar.
+            //
+            // Re-asked rather than built once, for the case a phone that had
+            // no device id when this screen first appeared has introduced
+            // itself since; `use(_:)` replaces the engine, and the queue it
+            // reads lives on the player, so nothing is lost by re-adapting.
+            if let made = model.player {
+                player?.use(PlayerModelMusicEngine(made))
             }
             music?.start()
             playlists?.start()
@@ -352,7 +364,10 @@ struct MusicView: View {
                     MusicPlaylistSheet(
                         detail: detail,
                         covers: covers,
-                        rooms: music.castRooms
+                        rooms: music.castRooms,
+                        // D46: the sheet's `play on this phone` section, which
+                        // is absent when this is nil.
+                        player: player
                     )
                 }
             case .addTo(_, let add):

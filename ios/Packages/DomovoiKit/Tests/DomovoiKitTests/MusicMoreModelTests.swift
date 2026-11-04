@@ -1181,12 +1181,20 @@ final class MusicMoreModelTests: XCTestCase {
 
     // MARK: - the player tab's seam
 
-    /// Nothing conforms to ``MusicMorePlayerEngine`` on this branch, so the
-    /// tab is reachable from nowhere — and **nothing claims playback**. This
-    /// is the assertion that goes away with the Player item's engine.
+    /// With no engine the tab is reachable from nowhere, and **nothing claims
+    /// playback**.
+    ///
+    /// This case used to end "the assertion that goes away with the Player
+    /// item's engine". It does not go away: ``PlayerModelMusicEngine`` conforms
+    /// now, but it is built over ``ShellModel/player``, which is **nil on a
+    /// phone with no device id** — the player writes a listening position per
+    /// device and is keyed to one. So this is no longer a statement about an
+    /// unbuilt engine; it is the live description of that phone, and
+    /// `mayPlayHere` is the one line added to it.
     func testWithNoEngineNothingIsOfferedAndNothingCanBeCast() {
         let model = MusicLocalQueueModel(deviceID: phone)
         XCTAssertFalse(model.hasEngine)
+        XCTAssertFalse(model.mayPlayHere, "no engine, so no `play on this device` either")
         XCTAssertTrue(model.isEmpty)
         XCTAssertTrue(model.queue.isEmpty)
         XCTAssertFalse(model.mayCast)
@@ -1196,6 +1204,11 @@ final class MusicMoreModelTests: XCTestCase {
         XCTAssertEqual(MusicCastPlan.nothing, model.castPlan())
         XCTAssertFalse(model.cast(to: "office"))
         XCTAssertFalse(model.tapped(0))
+        XCTAssertFalse(
+            model.playHere([LibraryTrack(id: 4, title: "transmission")]),
+            "a play with no engine hands nothing over and says so"
+        )
+        XCTAssertNil(model.takeToast(), "and it does not claim to have started anything")
     }
 
     /// The body a cast would send, stated here because the engine itself is a

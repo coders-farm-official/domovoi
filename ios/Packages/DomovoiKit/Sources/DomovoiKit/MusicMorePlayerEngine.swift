@@ -156,23 +156,24 @@ public struct MusicRemoteNowPlaying: Equatable, Sendable {
     public var isPlaying: Bool { state == "play" }
 }
 
-/// The audio engine this phone's player tab sits on, as a protocol — **and
-/// nothing on this branch conforms to it.**
+/// The audio engine this phone's player tab sits on, as a protocol — and
+/// ``PlayerModelMusicEngine`` is what conforms to it.
 ///
-/// `PlayerTab.kt` is bound to `PlayerController`'s state flows. The engine
-/// itself is a different overnight item ("player"), its branch is not merged
-/// here, and its notes folder was empty when this was written because it was
-/// running in parallel. So the shape here is: the fourteen members
-/// `PlayerTab.kt`'s own table needs, everything *pure* behind it ported and
-/// package-tested (``MusicCastPlanner``, ``MusicPlayerMath``,
-/// ``MusicLocalQueueModel``), and **the tab drawn only when an engine is
-/// registered** — with none, `player` is not in the tab bar at all: not
-/// greyed, not empty.
+/// `PlayerTab.kt` is bound to `PlayerController`'s state flows. This protocol
+/// was written while the engine was a different item running in parallel, so
+/// the shape is: the fourteen members `PlayerTab.kt`'s own table needs,
+/// everything *pure* behind it ported and package-tested
+/// (``MusicCastPlanner``, ``MusicPlayerMath``, ``MusicLocalQueueModel``), and
+/// **the tab drawn only when an engine is registered** — with none, `player`
+/// is not in the tab bar at all: not greyed, not empty. That is still live,
+/// and it is still what a phone with no device id gets, because
+/// ``ShellModel/player`` is nil for one.
 ///
 /// A transport row over no engine is the control
 /// [[no-misleading-controls]] forbids, and that is the whole reason this is a
-/// protocol rather than a half-built player. When the Player item's engine
-/// lands it is one conformance and nothing else moves.
+/// protocol rather than a half-built player. Its own note said "when the
+/// Player item's engine lands it is one conformance and nothing else moves",
+/// and that is what happened: the conformance is at the foot of this file.
 ///
 /// Members this deliberately does not have: anything about on-device music
 /// (``MusicPlayKind/device``), and anything about saving a track to the phone
@@ -200,6 +201,24 @@ public protocol MusicMorePlayerEngine: AnyObject {
     var sleepRemainingSec: Int? { get }
 
     // ---- what a control does ---------------------------------------------
+
+    /// Queue these library tracks on this phone and start at `startAt`.
+    ///
+    /// **Added with the conformance (D46).** `PlayerTab.kt` only ever *reads*
+    /// a queue — on Android the queueing is done from the library screen
+    /// through `app.player` directly (`MusicScreen.kt:166-176`), because the
+    /// player is on its container and every screen can reach it. Here the
+    /// player reaches a screen only through a seam, so the one thing MusicMore
+    /// can put into a queue has to come through this protocol.
+    ///
+    /// `[LibraryTrack]` and not `[MusicPlayerItem]`, which would have been the
+    /// tab's own vocabulary: an item is what comes **out** of the engine, and
+    /// mapping one back in would be a lossy reverse of
+    /// ``PlayerModelMusicEngine/entry(_:)`` — `parts`, `savedKey` and
+    /// `origin` are dropped on the way out, so a folder audiobook that went
+    /// back in would have lost its other files. A library track has nothing to
+    /// lose, and a library track is all a playlist holds.
+    func playTracks(_ tracks: [LibraryTrack], startAt: Int)
 
     func toggle()
     func previous()
@@ -273,5 +292,248 @@ public enum MusicPlayerMath {
     /// (`PlayerTab.kt:479`'s `abs(speed - v) < 0.01f`).
     public static func isSpeedSelected(_ chip: Double, speed: Double) -> Bool {
         abs(speed - chip) < 0.01
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The conformance (D46/D49, 2026-11-03)
+// ---------------------------------------------------------------------------
+
+/// The app's one player, as the player tab's engine.
+///
+/// ``ShellModel/player`` is the owner (D49) and this is the adapter, which is
+/// the whole of what the protocol's note said the merge would be. It is a
+/// **translation and nothing else**: every member forwards, and the only code
+/// here is the three type maps — queue entry, target and cast outcome — that
+/// exist because the player tab was ported against its own vocabulary before
+/// the player existed.
+///
+/// ### Why two vocabularies at all
+///
+/// ``MusicPlayerItem`` is `PlayItem.kt` narrowed to what the tab reads;
+/// ``PlayerItem`` is `PlayItem.kt` whole, with `parts`, `savedKey` and
+/// `origin` on it for a folder audiobook saved on the phone. Collapsing them
+/// would mean either giving the tab fields it must not read or taking fields
+/// off the player that the audiobook path needs, so they stay two types and
+/// this is the seam. The map is lossy **downward only**: nothing the tab draws
+/// is dropped.
+///
+/// ### Not `@Observable`
+///
+/// Every property reads straight through to ``PlayerModel``, which **is**
+/// `@Observable`, so a view that touches `engine.positionSec` is registered
+/// against the player's own storage and ticks with it. An `@Observable`
+/// wrapper here would add a second layer of tracking over the same values and
+/// a second chance for one of them to go stale.
+@MainActor
+public final class PlayerModelMusicEngine: MusicMorePlayerEngine {
+
+    /// The app's one player. Held strongly: the shell owns it and outlives
+    /// this adapter, which is rebuilt whenever the Music screen is.
+    public let player: PlayerModel
+
+    public init(_ player: PlayerModel) {
+        self.player = player
+    }
+
+    // MARK: - what is queued
+
+    public var queue: [MusicPlayerItem] { player.queue.map(Self.entry) }
+
+    public var index: Int { player.index }
+
+    public var target: MusicPlayTarget {
+        switch player.target {
+        case .thisPhone: return .local
+        case .room(let id): return .room(id)
+        }
+    }
+
+    public var remote: MusicRemoteNowPlaying? {
+        guard let reading = player.roomReading else { return nil }
+        return MusicRemoteNowPlaying(
+            roomID: reading.roomID,
+            state: reading.state,
+            title: reading.title,
+            artist: reading.artist,
+            elapsedSec: reading.elapsedSec,
+            durationSec: reading.durationSec,
+            trackID: reading.trackID,
+            // **This phone's clock, carried through unchanged.** Both types
+            // document it as the monotonic reading taken when the answer came
+            // in, because the server's clock cannot be subtracted from this
+            // phone's `now` — re-stamping it here would make every room
+            // position a little wrong and in a way nothing could see.
+            readAtMs: reading.readAtMs
+        )
+    }
+
+    // MARK: - where it is
+
+    public var positionSec: Double { player.positionSec }
+
+    public var isPlaying: Bool { player.isPlaying }
+
+    /// `Double`, from the player's `Float`.
+    ///
+    /// The tab's vocabulary is `Double` and the player's is `Float` because
+    /// `AVPlayer`'s `rate` is a `Float`. The widening is exact, and the one
+    /// direction that is not — ``setSpeed(_:)`` — is where that is said.
+    public var speed: Double { Double(player.speed) }
+
+    public var sleepRemainingSec: Int? { player.sleepRemainingSec }
+
+    // MARK: - what a control does
+
+    /// `PlayItem.fromTrack` per row (`PlayItem.kt:45`), then the player's own
+    /// ``PlayerModel/play(_:startAt:resumeSec:speed:)`` — which cuts the list
+    /// to a window around `startAt` (``PlayerQueueWindow``), leaves the room
+    /// this phone was casting to, and activates the audio session for the
+    /// first time if this is the first play since launch.
+    ///
+    /// An empty list is the player's own early return: nothing plays and the
+    /// queue is left alone, rather than being replaced by nothing.
+    public func playTracks(_ tracks: [LibraryTrack], startAt: Int) {
+        player.play(
+            tracks.map {
+                PlayerItem.fromTrack(
+                    id: $0.id,
+                    title: $0.displayTitle,
+                    artist: $0.artist,
+                    album: $0.album,
+                    durationSec: $0.durationSec
+                )
+            },
+            startAt: startAt
+        )
+    }
+
+    public func toggle() { player.toggle() }
+
+    public func previous() { player.previous() }
+
+    public func next() { player.next() }
+
+    public func stop() { player.stop() }
+
+    public func seek(toSec seconds: Double) { player.seek(to: seconds) }
+
+    public func jump(to index: Int) { player.jump(to: index) }
+
+    public func move(from index: Int, to destination: Int) {
+        player.move(from: index, to: destination)
+    }
+
+    public func remove(at index: Int) { player.remove(at: index) }
+
+    /// `clearQueue` here, `clear` there — the same call.
+    public func clearQueue() { player.clear() }
+
+    /// The one narrowing conversion in the file.
+    ///
+    /// A `Double` speed the tab offers is one of a short list of quarter and
+    /// half steps (``MusicLocalQueueModel`` and ``PlayerModel/speedOptions``
+    /// agree on them), every one of which is exact in binary and so exact as a
+    /// `Float`. The player clamps whatever arrives anyway.
+    public func setSpeed(_ speed: Double) { player.setSpeed(Float(speed)) }
+
+    public func setSleep(minutes: Int) { player.sleep(afterMinutes: minutes) }
+
+    public func setSleepEndOfTrack() { player.sleepAtEndOfTrack() }
+
+    public func cancelSleep() { player.cancelSleep() }
+
+    public func cast(to room: String) async -> MusicCastOutcome {
+        Self.outcome(await player.cast(to: room))
+    }
+
+    public func castFrom(_ index: Int) async -> MusicCastOutcome {
+        Self.outcome(await player.cast(fromQueueRow: index))
+    }
+
+    /// **`cast(to: nil)`** is the player's "come back here".
+    ///
+    /// One method with an optional room rather than two, because the two share
+    /// the whole of the hand-over: pause the room that had it, work out what
+    /// this end should be doing, and report both halves in one sentence.
+    public func playHere() async -> MusicCastOutcome {
+        Self.outcome(await player.cast(to: nil))
+    }
+
+    // MARK: - the three maps
+
+    /// One queue entry, in the tab's vocabulary.
+    ///
+    /// `parts`, `savedKey` and `origin` are left behind on purpose: they are
+    /// how the audiobook path finds the next file of a folder book and which
+    /// house a saved book's place belongs to, and the tab neither draws nor
+    /// decides either. Dropping them here cannot lose anything, because the
+    /// **player** still holds the item they came from — this is a view of the
+    /// queue, not the queue.
+    static func entry(_ item: PlayerItem) -> MusicPlayerItem {
+        MusicPlayerItem(
+            uid: item.uid,
+            kind: kind(item.kind),
+            trackID: item.itemID,
+            title: item.title,
+            artist: item.artist,
+            album: item.album,
+            src: item.src,
+            durationSec: item.durationSec,
+            seekable: item.seekable,
+            chapters: item.chapters.map { MusicChapter(title: $0.title, startSec: $0.startSec) }
+        )
+    }
+
+    /// The two kind enums are the same five cases of `PlayKind`
+    /// (`PlayItem.kt:5`), spelt out rather than bridged by `rawValue`: a
+    /// `rawValue` round trip has a failure branch, and the only honest thing
+    /// to put in it would be a kind the planner would then mis-count.
+    static func kind(_ kind: PlayerKind) -> MusicPlayKind {
+        switch kind {
+        case .library: return .library
+        case .radio: return .radio
+        case .podcast: return .podcast
+        case .audiobook: return .audiobook
+        case .device: return .device
+        }
+    }
+
+    /// A cast plan, which is the same five numbers under both names.
+    static func plan(_ plan: PlayerCastPlan) -> MusicCastPlan {
+        MusicCastPlan(
+            trackIDs: plan.trackIDs,
+            startIndex: plan.startIndex,
+            startSec: plan.startSec,
+            phoneOnly: plan.phoneOnly,
+            notInLibrary: plan.notInLibrary
+        )
+    }
+
+    /// How a cast went, in the tab's vocabulary.
+    ///
+    /// Branch for branch, including ``MusicCastOutcome/refused(note:)`` — the
+    /// case this unit added to that enum, because the alternative was
+    /// reporting a POST that failed as "on this device". Every label is passed
+    /// explicitly: Swift allows defaults in a `PlayerCastOutcome` case payload
+    /// and forbids them in `MusicCastOutcome`'s, which is the difference
+    /// between the two declarations and not a difference in meaning.
+    static func outcome(_ outcome: PlayerCastOutcome) -> MusicCastOutcome {
+        switch outcome {
+        case .toRoom(let made, let room, let left, let leftPaused, let paused):
+            return .toRoom(
+                plan: plan(made), room: room,
+                left: left, leftPaused: leftPaused, paused: paused
+            )
+        case .superseded(let room, let sent, let undone):
+            return .superseded(room: room, sent: sent, undone: undone)
+        case .here(let left, let playing, let leftPaused, let leftWasPlaying, let queued):
+            return .here(
+                left: left, playing: playing,
+                leftPaused: leftPaused, leftWasPlaying: leftWasPlaying, queued: queued
+            )
+        case .refused(let note):
+            return .refused(note: note)
+        }
     }
 }

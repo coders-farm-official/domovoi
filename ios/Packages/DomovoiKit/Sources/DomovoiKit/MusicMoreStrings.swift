@@ -94,6 +94,26 @@ public enum MusicMoreStrings {
         "\(isVirtual ? "virtual" : "playlist") · #\(id)"
     }
 
+    /// `play on this device` (D46).
+    ///
+    /// The whole phrase, not `play`, because this sits beside the room chips
+    /// and `play` there means "play in the room you picked". Android's
+    /// equivalent says the same words in its toast
+    /// (`MusicScreen.kt:583`: *playing "X" on this device*) and has no button
+    /// of its own, because its playlist drawer plays to rooms only.
+    public static let playHere = "play on this device"
+
+    /// `shuffle on this device` — the phone twin of ``shuffleAll``.
+    public static let shuffleHere = "shuffle on this device"
+
+    /// The section label over the two phone buttons.
+    public static let playHereLabel = "play on this phone"
+
+    /// What a start on this phone says (`MusicScreen.kt:583`).
+    public static func playingHere(_ title: String) -> String {
+        "playing \"\(title)\" on this device"
+    }
+
     public static let playInRoomLabel = "play in room"
     /// `PlaylistDrawer.kt:222` — the section label says the room list is
     /// empty rather than offering a picker with nothing in it.

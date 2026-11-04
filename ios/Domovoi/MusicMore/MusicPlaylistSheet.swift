@@ -30,6 +30,17 @@ import SwiftUI
 ///   sends a whole order from; a `.onMove` would need the rows in a `List`,
 ///   and this sheet's rows carry three controls each inside a `ScrollView`
 ///   the rest of Music already uses.
+///
+/// ### Playing it on the phone arrived in the 2026-11-03 batch
+///
+/// Android's playlist drawer plays to **rooms only** (`PlaylistDrawer.kt:222`)
+/// — its phone playback is reached from the library row's sheet instead. This
+/// sheet gets both, which is the one place this port is deliberately wider
+/// than Android: D46 says the play buttons land in this work, and a playlist
+/// is the only thing in MusicMore that is a list of library tracks ready to
+/// hand over. The section is absent on a phone with no player, and `shuffle on
+/// this device` shuffles **here** rather than asking the server, because the
+/// phone's queue is the phone's.
 struct MusicPlaylistSheet: View {
 
     let detail: MusicPlaylistDetailModel
@@ -38,7 +49,19 @@ struct MusicPlaylistSheet: View {
     /// The rooms the **server** reported.
     let rooms: [String]
 
+    /// This phone's own queue, or nil on a build with no player.
+    ///
+    /// Nil leaves out the `play on this phone` section entirely — not
+    /// greyed, absent — which is what a phone with no device id gets
+    /// (``MusicLocalQueueModel/mayPlayHere``).
+    var player: MusicLocalQueueModel?
+
     @Environment(\.dismiss) private var dismiss
+
+    /// What the last play on this phone said, drawn in the sheet beside the
+    /// model's own outcomes rather than in the shell's toast: the person is
+    /// looking at this sheet and the sentence is about what they just pressed.
+    @State private var said: String?
 
     /// The edit form's fields while it is open. Seeded from the playlist on
     /// each open rather than bound to it, so `cancel` really cancels.
@@ -55,7 +78,19 @@ struct MusicPlaylistSheet: View {
                     // (``MusicMoreSheetStatus``). `deleted "…"` is the one
                     // exception and stays the shell's, because the delete
                     // dismisses this first.
-                    MusicMoreSheetStatus(said: detail.toast, failed: detail.toastFailed)
+                    // **One status line, not two.**
+                    // ``MusicMoreSheetStatus/identifier`` is a single
+                    // identifier shared by both of Music's sheets on purpose,
+                    // so a second instance here would put two elements with
+                    // one identifier on one screen — the ambiguity that has
+                    // already cost this track two audits. A play on this phone
+                    // takes precedence while it is the newest thing said, and
+                    // is never a failure: ``MusicLocalQueueModel/playHere(_:startAt:)``
+                    // either starts or is not offered.
+                    MusicMoreSheetStatus(
+                        said: said ?? detail.toast,
+                        failed: said == nil && detail.toastFailed
+                    )
                     Divider()
                     play
                     if detail.mayEdit {
@@ -90,6 +125,9 @@ struct MusicPlaylistSheet: View {
         .onChange(of: detail.deleted) { _, gone in
             if gone { dismiss() }
         }
+        // The model has something newer to say — a reorder, a removal, a
+        // cast — so the phone's sentence stops masking it.
+        .onChange(of: detail.toast) { _, _ in said = nil }
         .alert(MusicMoreStrings.deletePlaylist, isPresented: deleteConfirmation) {
             Button(MusicMoreStrings.delete, role: .destructive) { detail.delete() }
             Button(MusicMoreStrings.cancel, role: .cancel) {}
@@ -144,6 +182,7 @@ struct MusicPlaylistSheet: View {
                 .font(.caption)
                 .foregroundStyle(Color.fgMuted)
                 .fixedSize(horizontal: false, vertical: true)
+            playHereButtons
             if !rooms.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 6) {
@@ -168,6 +207,44 @@ struct MusicPlaylistSheet: View {
     private var playButtons: some View {
         HomeLink(MusicMoreStrings.play) { detail.play(shuffle: false, rooms: rooms) }
         HomeLink(MusicMoreStrings.shuffleAll) { detail.play(shuffle: true, rooms: rooms) }
+    }
+
+    /// `play on this device` and `shuffle on this device`.
+    ///
+    /// Above the room chips, because this is the cheaper and commoner thing
+    /// and the room section already carries its own `no rooms online` state.
+    /// Absent when there is no player at all, and absent for an **empty**
+    /// playlist: ``MusicLocalQueueModel/playHere(_:startAt:)`` would refuse
+    /// one, and a button that refuses is a button that should not be there.
+    ///
+    /// The shuffle is done **here**, over the tracks this sheet already has,
+    /// rather than through ``MusicPlaylistDetailModel/play(shuffle:rooms:)``
+    /// — that one asks the server to shuffle a room's queue, which has
+    /// nothing to do with what this phone plays.
+    @ViewBuilder
+    private var playHereButtons: some View {
+        if let player, player.mayPlayHere, !detail.tracks.isEmpty {
+            Text(MusicMoreStrings.playHereLabel)
+                .font(.caption)
+                .foregroundStyle(Color.fgMuted)
+                .fixedSize(horizontal: false, vertical: true)
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 12) { phoneButtons(player) }
+                VStack(alignment: .leading, spacing: 4) { phoneButtons(player) }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func phoneButtons(_ player: MusicLocalQueueModel) -> some View {
+        HomeLink(MusicMoreStrings.playHere) {
+            player.playHere(detail.tracks)
+            said = player.takeToast()
+        }
+        HomeLink(MusicMoreStrings.shuffleHere) {
+            player.playHere(detail.tracks.shuffled())
+            said = player.takeToast()
+        }
     }
 
     /// One room chip. The picked one is **told**, not only drawn darker:

@@ -248,9 +248,11 @@ final class MusicStatsAndSheetTests: XCTestCase {
     // MARK: - the tabs
 
     /// The bar is built from ``MusicTab/shown(hasPlayer:)``, never from
-    /// `allCases` — the MusicMore batch added `playlists` (which ships) and
-    /// `player` (which does not, because nothing conforms to
-    /// ``MusicMorePlayerEngine`` yet).
+    /// `allCases` — the MusicMore batch added `playlists` and `player`, and
+    /// since the 2026-11-03 batch both ship: ``PlayerModelMusicEngine``
+    /// conforms to ``MusicMorePlayerEngine``, so `hasPlayer` is true wherever
+    /// ``ShellModel/player`` is. It stays **false on a phone with no device
+    /// id**, which is what the first assertion is now about.
     func testTheTabsAreTheOnesThatHaveSomethingBehindThem() {
         XCTAssertEqual([.library, .queue, .playlists, .stats], MusicTab.shown(hasPlayer: false))
         XCTAssertEqual(

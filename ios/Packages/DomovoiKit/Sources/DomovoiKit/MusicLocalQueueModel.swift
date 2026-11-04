@@ -170,6 +170,39 @@ public final class MusicLocalQueueModel {
         )
     }
 
+    /// Whether anything on this phone can be played at all.
+    ///
+    /// An engine, and nothing else: a library track needs no room, no cast
+    /// plan and no position slot of its own. False is a phone with no device
+    /// id, where ``ShellModel/player`` is nil — and a `play on this device`
+    /// button with nothing behind it is the control
+    /// [[no-misleading-controls]] forbids, so every caller draws nothing
+    /// rather than a disabled button.
+    public var mayPlayHere: Bool { hasEngine }
+
+    /// Play these library tracks on this phone, starting at `startAt`.
+    ///
+    /// `playHereAndSay` (`MusicScreen.kt:575-588`) is Android's shape, minus
+    /// the "paused office" half: this takes the whole queue rather than one
+    /// track, and ``MusicMorePlayerEngine/playTracks(_:startAt:)`` leaves the
+    /// room it was casting to on the way — which is the player's own
+    /// `leaveRoom`, so the room is paused and this phone starts, never both.
+    ///
+    /// Returns whether anything was handed over, so a caller can tell a
+    /// refusal from a start without reading the toast.
+    ///
+    /// An out-of-range `startAt` is clamped rather than refused: a playlist
+    /// can be re-read under the person's thumb between the tap and this call,
+    /// and starting at the top is better than not starting.
+    @discardableResult
+    public func playHere(_ tracks: [LibraryTrack], startAt: Int = 0) -> Bool {
+        guard let engine, !tracks.isEmpty else { return false }
+        let at = min(max(startAt, 0), tracks.count - 1)
+        engine.playTracks(tracks, startAt: at)
+        toast = MusicMoreStrings.playingHere(tracks[at].displayTitle)
+        return true
+    }
+
     /// Whether a cast menu is offered at all: only when a cast would send
     /// something. A menu over a queue nothing in which can go is the control
     /// [[no-misleading-controls]] forbids, and it is the exact one Android
