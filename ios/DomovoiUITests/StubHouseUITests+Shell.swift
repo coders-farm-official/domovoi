@@ -454,10 +454,11 @@ extension StubHouseUITests {
         // stricter than the old sweep, not weaker: a view behind the card that
         // the `behind` filter above does not know about still fails here, and
         // it would have been swallowed by a filter written the other way round.
-        // ``ForgetServerCard``'s own leaves, by the words they carry:
-        // `forget this server?`, the address under it (`the server at …`, the
-        // label Apple's audit asked for), the paragraph's opening, `cancel`
-        // and `forget`. **`the server at ` and not the bare address**: the
+        //
+        // The card's own leaves, by the words they carry: `forget this
+        // server?`, the address under it (`the server at …`, the label Apple's
+        // audit asked for), the paragraph's opening, `cancel` and `forget`.
+        // **`the server at ` and not the bare address**: the
         // pill behind the card says `127.0.0.1:6601` as well, which is why the
         // bare address is in the `behind` list above, and a filter that let
         // either one through would stop telling them apart.
