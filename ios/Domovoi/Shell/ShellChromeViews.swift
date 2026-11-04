@@ -466,7 +466,7 @@ struct ShellScrollAwayChrome: ViewModifier {
         )
     }
 
-    /// ### Both branches say something to the navigation bar
+    /// ### The bar is always told, and `content` never changes branches
     ///
     /// **A modifier that goes away does not undo itself.** `.navigationTitle`
     /// and `.navigationBarTitleDisplayMode` are SwiftUI *preferences*: while a
@@ -496,45 +496,84 @@ struct ShellScrollAwayChrome: ViewModifier {
     ///    on about twenty screens, until the app is relaunched.
     ///
     /// Nothing about that is the audit's: a person who changes the text size
-    /// in Settings and comes back drives the same trait change. So the `else`
-    /// branch **writes the opposite** — an empty title and `.inline` — which
-    /// is the one thing that puts `navigationItem` back. An empty title at
-    /// `.inline` reserves nothing (the 44-point bar below the accessibility
-    /// sizes is the bar that was already there); an empty title at `.large`
-    /// would reserve the row on every screen, and that is the alternative N3
-    /// rejected — it is the display mode, not the empty string, that was the
-    /// problem with it.
-    @ViewBuilder
+    /// in Settings and comes back drives the same trait change. So with no
+    /// title this **writes the opposite** — an empty title and `.inline` —
+    /// which is the one thing that puts `navigationItem` back. An empty title
+    /// at `.inline` reserves nothing (the 44-point bar below the
+    /// accessibility sizes is the bar that was already there); an empty title
+    /// at `.large` would reserve the row on every screen, and that is the
+    /// alternative N3 rejected — it is the display mode, not the empty
+    /// string, that was the problem with it.
+    ///
+    /// ### Why the values flip and the view does not
+    ///
+    /// Saying both of those things used to mean two branches —
+    /// `if let title { content.navigationTitle(title)… } else { content }` —
+    /// and that shape cost far more than the stale bar it fixed. The two arms
+    /// of a `ViewBuilder` `if` are a `_ConditionalContent`, so `content` had a
+    /// different **structural identity** in each: flipping the branch does not
+    /// re-apply a modifier, it discards the subtree and builds a new one.
+    /// Every `@State` under the `NavigationStack` goes with it, and every
+    /// presented sheet and full-screen cover is dismissed.
+    ///
+    /// `performAccessibilityAudit` overrides the content-size trait on every
+    /// call, so it crossed that boundary twice per audit and tore down the
+    /// screen it was measuring. Train I003 paid for it in four areas at once:
+    /// `testAssistant_Audit` lost the open conversation (and, through the
+    /// re-run wipe seam, the whole phone chat store), `testChatMore_Audits`
+    /// popped back to the conversation list mid-audit and sampled four
+    /// phantom `Contrast failed` findings off the arriving list,
+    /// `testCalendar_*` reverted to agenda with its editor sheet gone, and
+    /// rooms' kitchen card and the manual's map pill "did not open" because
+    /// what opened them was rebuilt underneath. Audits are only where it was
+    /// *caught*: a person who changes their text size loses their typed
+    /// search and their open conversation the same way.
+    ///
+    /// So the modifiers are applied **unconditionally** and their arguments
+    /// carry the fold's answer instead. `content` appears once, there is no
+    /// `_ConditionalContent` around it, and the only `if` left is inside the
+    /// `ToolbarItem`, around the pill alone.
+    ///
+    /// The same shape is still live one level out, in
+    /// ``LocalShellView/tab(_:)``, which wraps its screen in a
+    /// `NavigationStack` only at the accessibility sizes — so that screen's
+    /// state does not survive the boundary either. It is left alone here
+    /// deliberately: removing that branch means a `NavigationStack`, and so a
+    /// navigation bar, on every tab of the unpaired shell at every size, which
+    /// `ShellFoldViewBodyTests.testTheLocalShellWrapsATabOnlyWhenTheHeaderGoesInside`
+    /// pins on purpose. It is recorded in this batch's integration notes
+    /// rather than fixed in the same change.
     func body(content: Content) -> some View {
-        // **One question, asked once.** A non-nil title *is* the fold putting
-        // the header inside the stack, so the pill's only remaining gate is
-        // whether there is a pill. There used to be a second
-        // `fold.drawsTheToolbarPill` here, inside this branch — where it was
-        // always true, so it decided nothing and read as a guard that did
-        // (review 3, N2). The property is gone with it; the invariant it was
-        // there to state (the bar's pill or the toolbar's, never both) is
-        // asserted in `ShellFoldTests` over the two properties the views
-        // actually read.
-        if let title = fold.navigationTitle(crumb: crumb) {
-            content
-                .navigationTitle(title)
-                .navigationBarTitleDisplayMode(.large)
-                .toolbar {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        if let pill {
-                            ShellPillToolbarButton(pill: pill, onTap: onPill)
-                        }
+        // **One question, asked once** — and `content` appears once, in one
+        // chain, on purpose. See the note above: the two values below flip
+        // with the fold, but the view they are applied to never changes
+        // branches, so nothing under it is rebuilt when they do.
+        let title = fold.navigationTitle(crumb: crumb)
+        // `Text(verbatim:)` and not a `String`: the `LocalizedStringKey`
+        // overload would send the crumb — and, with no title, an empty key —
+        // through the string table on every screen in the app, and a
+        // breadcrumb is a word the app already composed, not one to look up.
+        return content
+            .navigationTitle(Text(verbatim: title ?? ""))
+            .navigationBarTitleDisplayMode(title == nil ? .inline : .large)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    // **`title != nil` is load-bearing here, and was not
+                    // before.** While this body branched, the pill sat inside
+                    // the title branch and its only remaining question was
+                    // whether there was a pill; a second clause there was
+                    // dead and read as a guard that did something (review 3,
+                    // N2). With the branch gone the clause is the only thing
+                    // left saying "the fold put the header in the bar", and
+                    // without it this draws a pill beside `ShellTopBar`'s own
+                    // on every screen at every size. `ShellFoldViewBodyTests`
+                    // was widened to require it rather than ban it, and says
+                    // so where it reads this gate.
+                    if title != nil, let pill {
+                        ShellPillToolbarButton(pill: pill, onTap: onPill)
                     }
                 }
-        } else {
-            // `Text(verbatim:)` and not `""`: the `LocalizedStringKey`
-            // overload would send an empty key through the string table on
-            // every screen in the app, and this is a layout instruction, not
-            // a word anybody reads.
-            content
-                .navigationTitle(Text(verbatim: ""))
-                .navigationBarTitleDisplayMode(.inline)
-        }
+            }
     }
 }
 

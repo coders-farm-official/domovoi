@@ -221,27 +221,70 @@ final class ShellFoldViewBodyTests: XCTestCase {
         )
         // The applied modifier is the rule's answer and not a string the body
         // picked: `.navigationTitle(` is applied once, to the bound `title`.
+        //
+        // **Why this is `Text(verbatim: title` and no longer
+        // `.navigationTitle(title)`.** The body used to brace the title in a
+        // `ViewBuilder` `if` and hand `content` to both arms, which gave it a
+        // new structural identity on every flip and tore down every `@State`
+        // and every presented sheet under the `NavigationStack` — including
+        // under Apple's own audit, which crosses the accessibility-size
+        // boundary on each call (train I003: chat, calendar, rooms and
+        // documents all lost the screen they were measuring). The modifiers
+        // are applied unconditionally now and the fold's answer rides in the
+        // *argument*, so there is an empty-title case to spell and the
+        // `Text(verbatim:)` overload spells it without sending an empty key
+        // through the string table.
+        //
+        // What this still catches is what it always caught: the applied value
+        // has to be the bound `title`. A crumb the body trimmed itself would
+        // drop `ShellHeaderFold`'s trimming, which is part of the rule.
         XCTAssertTrue(
-            Self.chrome.contains(".navigationTitle(title)"),
+            Self.chrome.contains("navigationTitle(Text(verbatim: title"),
             "ShellChromeViews.swift applies `.navigationTitle` to something other "
                 + "than the `title` the fold answered with — a crumb the body "
                 + "trimmed itself would drop `ShellHeaderFold`'s trimming, which "
                 + "is part of the rule (a screen reader reads a title, not a "
                 + "layout)"
         )
+        // And it is applied to `content` **once**, not once per branch: two
+        // occurrences means the `if` came back and with it the teardown above.
+        XCTAssertEqual(
+            Self.count(of: "navigationTitle(", in: Self.chrome),
+            2,
+            "`navigationTitle(` appears "
+                + "\(Self.count(of: "navigationTitle(", in: Self.chrome)) times in "
+                + "ShellChromeViews.swift, not twice — `fold.navigationTitle(crumb:)` "
+                + "asking the rule, and the one `.navigationTitle(Text(verbatim:))` "
+                + "applying it. A third is `content` back in two arms of a "
+                + "`_ConditionalContent`, which rebuilds every screen in the app "
+                + "when the text size crosses the accessibility boundary"
+        )
     }
 
-    /// The toolbar pill hangs **inside** the title branch, behind nothing but
-    /// whether there is a pill.
+    /// The toolbar pill hangs behind **both** whether there is a pill and
+    /// whether the fold gave a title.
     ///
     /// Two `switch server` controls on one screen is `ShellTopBar` still being
     /// drawn with the toolbar item under it, which
     /// `testShell_TheHeaderScrollsAwayOnTheLocalShell` counts on the screen;
-    /// here the shape is asserted instead — `.toolbar` applied only where the
-    /// fold answered with a title. The gate used to read
-    /// `if let pill, fold.drawsTheToolbarPill`, which inside this branch was
-    /// always true (review 3, N2), so the second clause is banned rather than
-    /// required: a gate that decides nothing reads as one that does.
+    /// here the shape is asserted instead.
+    ///
+    /// ### This reading was inverted on purpose, and why
+    ///
+    /// It used to require the gate to be `if let pill` **and nothing else**.
+    /// That was right while `body(content:)` branched on the title: the pill
+    /// sat inside the title arm, so a title clause there was already decided
+    /// and a second condition was dead — `if let pill, fold.drawsTheToolbarPill`
+    /// is review 3's N2, a gate that decides nothing reading as one that does.
+    ///
+    /// `body(content:)` does not branch any more (its note says what the
+    /// `_ConditionalContent` cost: every `@State` under the stack, on every
+    /// crossing of the accessibility-size boundary, including Apple's audit's
+    /// own). With the arm gone, nothing upstream of this `if` knows whether
+    /// the header is in the bar, so the title clause is the **only** thing
+    /// standing between a nil fold and a pill drawn beside `ShellTopBar`'s own
+    /// on every screen at every size. It is required here now rather than
+    /// banned, and `.toolbar` is still applied exactly once.
     func testTheToolbarPillHangsOnlyWhereTheFoldGaveATitle() {
         guard let gate = Self.innermostGate(
             before: "ShellPillToolbarButton(",
@@ -254,14 +297,24 @@ final class ShellFoldViewBodyTests: XCTestCase {
                     + "`connect` should be"
             )
         }
-        XCTAssertEqual(
-            gate,
-            "if let pill",
-            "the gate above `ShellPillToolbarButton(` is `\(gate)`. It is `if let "
-                + "pill` and nothing else: the branch it sits in is already the "
-                + "fold's answer, so a second condition here either repeats that "
-                + "answer (dead, review 3's N2) or contradicts it (a title with no "
-                + "pill under it, and no way back to the connection sheet)"
+        XCTAssertTrue(
+            gate.contains("let pill"),
+            "the gate above `ShellPillToolbarButton(` is `\(gate)`, which does not "
+                + "bind `pill`. Without it the toolbar item is built for a nil "
+                + "pill, which on the local shell with no server saved is an empty "
+                + "capsule where `connect` should be"
+        )
+        XCTAssertTrue(
+            gate.contains("title != nil"),
+            "the gate above `ShellPillToolbarButton(` is `\(gate)`, which does not "
+                + "read `title != nil`. `body(content:)` no longer branches on the "
+                + "title — it applies `.navigationTitle` and `.toolbar` "
+                + "unconditionally so that `content` keeps one identity across the "
+                + "accessibility-size boundary — so this clause is the only thing "
+                + "left that knows whether the fold put the header in the bar. "
+                + "Drop it and every screen draws a pill here beside "
+                + "`ShellTopBar`'s own, at every size. (It was banned here while "
+                + "the body did branch, where it was dead: review 3's N2.)"
         )
         XCTAssertEqual(
             Self.count(of: ".toolbar {", in: Self.chrome),

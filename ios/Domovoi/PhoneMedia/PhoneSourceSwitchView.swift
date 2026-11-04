@@ -38,14 +38,34 @@ import SwiftUI
 ///
 /// **The switch does not step aside for the keyboard.** Android's does
 /// (`YourDevice.kt:198`) because its pinned header sits in a window the
-/// keyboard is drawn *over*. This pill is pinned too — it is in the `VStack`
-/// above the two sides, and each side scrolls under it — so the earlier
-/// reason given here ("it scrolls with the page it heads") was simply wrong
-/// about this file's own layout. The real reason the omission is safe is the
-/// platform's: on iOS the keyboard shrinks the safe area rather than
-/// overlaying the window, so everything above the scrolling content is still
-/// on screen. Nothing to step aside from, for a different reason than the one
-/// that was written here.
+/// keyboard is drawn *over*. This pill is pinned too — it is a
+/// `.safeAreaInset(edge: .top)` over the two sides, and each side scrolls
+/// under it — so the earlier reason given here ("it scrolls with the page it
+/// heads") was simply wrong about this file's own layout. The real reason the
+/// omission is safe is the platform's: on iOS the keyboard shrinks the safe
+/// area rather than overlaying the window, so everything above the scrolling
+/// content is still on screen. Nothing to step aside from, for a different
+/// reason than the one that was written here.
+///
+/// ### Why an inset and not the top row of a `VStack` — answer 29
+///
+/// The pill was the first child of a `VStack` whose second child held the two
+/// sides, and that is a different thing from being pinned: it put the pill
+/// **between** the navigation bar and the page's own `ScrollView`. UIKit
+/// collapses a large title against a scroll view that is flush with the bar,
+/// so on the three routes this view wraps — music, videos and files
+/// (`RouteScreen.swift:74`, `:84`, `:95`) — there was nothing for the title to
+/// collapse against, and answer 29 bought those screens only the 300 points
+/// ``ShellTopBar`` had been taking. Train I003 measured it: the page stayed at
+/// 117 points through a swipe that did scroll it, with the switch at y=178.7
+/// and the scroll view starting at 245.3.
+///
+/// As a `.safeAreaInset(edge: .top)` the scroll view is flush with the bar
+/// again and the inset is what the page scrolls beneath, so the title folds
+/// away on these three screens as it does everywhere else — while the pill
+/// stays exactly as fixed on screen as the `VStack` row was.
+/// ``StubHouseUITests/testShell_TheSourceSwitchScreensStillGetTheirWindow``
+/// is the reading that measures it.
 ///
 /// **It does not step aside for a type size either, and that is the one
 /// Android's rule nearly covers.** `keyboardCrowdsTheWindow()`
@@ -87,23 +107,37 @@ struct PhoneSourceSwitchView<Server: View, Device: View>: View {
     @State private var kept: Set<PhoneContentSource> = []
 
     var body: some View {
-        VStack(spacing: 0) {
+        ZStack {
+            // A side that has been shown keeps the SAME modifier chain
+            // afterwards — see ``side(_:visible:)``. Only a side nobody
+            // has opened yet is absent.
+            if kept.contains(.server) {
+                side(server, visible: shown == .server)
+            }
+            if kept.contains(.device) {
+                side(device, visible: shown == .device)
+            }
+        }
+        // **A safe-area inset and not the first row of a `VStack`.** See this
+        // type's note on answer 29: in a `VStack` the pill came between the
+        // navigation bar and the page's own `ScrollView`, so no scroll view
+        // was flush with the bar and UIKit had nothing to collapse the large
+        // title against. As an inset the scroll view is flush again and the
+        // page scrolls *under* a pill that stays exactly as pinned as it was.
+        .safeAreaInset(edge: .top, spacing: 0) {
             PhoneSourceSwitchPill(
                 serverTitle: serverTitle,
                 source: shown,
                 onPick: { choices.choose(page, $0) }
             )
-            ZStack {
-                // A side that has been shown keeps the SAME modifier chain
-                // afterwards — see ``side(_:visible:)``. Only a side nobody
-                // has opened yet is absent.
-                if kept.contains(.server) {
-                    side(server, visible: shown == .server)
-                }
-                if kept.contains(.device) {
-                    side(device, visible: shown == .device)
-                }
-            }
+            // Opaque, and the one thing the `VStack` gave for free: inset
+            // content has the page sliding beneath it, so without a
+            // background the tracks would read through the switch. An opaque
+            // `systemBackground` rather than `.bar`, because the segments'
+            // `brandInk` on `brand.opacity(0.12)` is contrast this app
+            // measures, and measuring it through a translucent material
+            // changes the number (NIGHT-RULES §3).
+            .background(Color(.systemBackground))
         }
         // `.onAppear` as well as `.onChange`: the first side is shown without
         // anything changing.

@@ -53,15 +53,30 @@ extension StubHouseUITests {
 
     /// Open Music and wait for it to have drawn.
     ///
-    /// The crumb is the shell's; the tab bar is the screen's, and the second
+    /// The header is the shell's; the tab bar is the screen's, and the second
     /// is what says the reads have answered rather than that the route was
     /// pushed.
+    ///
+    /// **The header is asked for in whichever place this size draws it.**
+    /// Answer 29 moves it out of ``ShellTopBar`` and into the stack's large
+    /// title above the accessibility sizes, and since train I003 the title is
+    /// the route's word rather than the breadcrumb — so at an accessibility
+    /// size nothing anywhere draws `domovoi / music`, this gate waited the
+    /// full 40 seconds and returned `landed: false`, and the two cases that
+    /// ask for a big size went red on a screen that had drawn perfectly:
+    /// `testMusicMore_ThePlaylistEmojiIsDecorative` (AccessibilityXXXL) and
+    /// `testMusicMore_PlaylistsSurviveAnAccessibilityTextSize` (AX5). This is
+    /// the shape `openMusic` uses (`StubHouseUITests+Shell.swift`), kept the
+    /// same on purpose.
     @MainActor
     func openMusicMore(_ mode: String = StubHouseUITests.ordinaryTypeSize)
         -> (app: XCUIApplication, landed: Bool) {
         let app = launch(mode: mode, push: "Music", pushDelay: Self.pushDelay)
         let crumb = app.staticTexts[ShellStringsUnderTest.musicCrumb]
-        guard crumb.waitForExistence(timeout: 40) else { return (app, false) }
+        if !crumb.waitForExistence(timeout: 40) {
+            let title = app.navigationBars.staticTexts[ShellStringsUnderTest.musicTitleAtAX5]
+            guard title.waitForExistence(timeout: 20) else { return (app, false) }
+        }
         let tab = startingWith(app, MusicMoreUnderTest.tabPlaylists)
         guard !tab.waitForExistence(timeout: 30) else { return (app, true) }
         // **The strip is below the room cards, and at an accessibility size

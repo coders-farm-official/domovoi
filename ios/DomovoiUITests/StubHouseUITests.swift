@@ -2507,7 +2507,15 @@ final class StubHouseUITests: XCTestCase {
                 let leaf = app.staticTexts[crumb]
                 if leaf.exists { out["crumb(bar)"] = leaf.frame.height }
             } else {
-                let title = app.navigationBars.staticTexts[crumb]
+                // **The title is the route's word, not the breadcrumb.**
+                // Reading 3's comment below used to call this the open
+                // question — whether to keep `domovoi / music` as the large
+                // title or drop to `music` — and train I003's pictures
+                // answered it: a one-line large title truncated the
+                // breadcrumb at AX5, so the route's word alone is what the
+                // bar draws there now. The bar above the stack still draws
+                // the whole crumb, which is why only this arm changed.
+                let title = app.navigationBars.staticTexts[ShellStringsUnderTest.musicTitleAtAX5]
                 if title.exists { out["crumb(title)"] = title.frame.height }
             }
             for tab in ["Home", "Music", "Videos", "Chat"] {
@@ -2631,23 +2639,34 @@ final class StubHouseUITests: XCTestCase {
                 + "real defect rather than a floor"
         )
 
-        // ### Reading 3 — the crumb at AX5 is Apple's title, and it is there
+        // ### Reading 3 — the header at AX5 is Apple's title, and it is there
         //
-        // Asserted to **exist** and not to have grown. At AX5 the breadcrumb
-        // is a `UINavigationBar` large title, and DECISIONS §8 records that
-        // UIKit shrinks a long one toward the inline size rather than
-        // wrapping it: a title that did not grow is Apple's mechanism
-        // answering Apple's audit, and the open question there is whether to
-        // keep the breadcrumb or drop to the route's word. What this case
-        // must not allow is the leaf quietly ceasing to be addressable,
-        // because then it would report five leaves and measure four.
+        // Asserted to **exist** and not to have grown. At AX5 the header is a
+        // `UINavigationBar` large title, and DECISIONS §8 records that UIKit
+        // shrinks a long one toward the inline size rather than wrapping it:
+        // a title that did not grow is Apple's mechanism answering Apple's
+        // audit.
+        //
+        // **That open question is closed.** This comment used to end by
+        // asking whether to keep the breadcrumb as the title or drop to the
+        // route's word; train I003's pictures answered it, and the title is
+        // the route's word (``ShellStringsUnderTest/musicTitleAtAX5`` carries
+        // the measurement). `heights(_:barDrawn:)` addresses that word in its
+        // `barDrawn == false` arm, which is the only arm that changed — the
+        // bar above the stack still draws the whole crumb.
+        //
+        // What this case must not allow is the leaf quietly ceasing to be
+        // addressable, because then it would report five leaves and measure
+        // four.
         let titleAtAX5 = ax5["crumb(title)"]
         XCTAssertNotNil(
             titleAtAX5,
-            "no `\(ShellStringsUnderTest.musicCrumb)` in a navigation bar at AX5 "
-                + "— answer 29 makes the breadcrumb the stack's large title "
-                + "there, so either the title is not drawn or its label is not "
-                + "the crumb, and the chrome at AX5 is then unmeasured"
+            "no `\(ShellStringsUnderTest.musicTitleAtAX5)` in a navigation bar at "
+                + "AX5 — answer 29 makes the header the stack's large title "
+                + "there, and since train I003 that title is the route's word "
+                + "rather than `\(ShellStringsUnderTest.musicCrumb)`. So either "
+                + "the title is not drawn or its label is neither of those two, "
+                + "and the chrome at AX5 is then unmeasured"
         )
         print(
             "SCALE [crumb] bar at large=\(small["crumb(bar)"].map(\.description) ?? "-") "
@@ -5330,6 +5349,24 @@ enum ShellStringsUnderTest {
 
     /// ``ShellTopBar``'s leading text once the Music route is pushed.
     static let musicCrumb = "domovoi / music"
+
+    /// What the **navigation bar's large title** says on the pushed Music
+    /// route at an accessibility size: the route's word alone, not
+    /// ``musicCrumb``.
+    ///
+    /// Answer 29 moves the header into the stack's title above the
+    /// accessibility sizes, and the two halves say different things on
+    /// purpose. The bar above the stack has the room to draw the whole
+    /// breadcrumb; a `UINavigationBar` large title is one line, and train
+    /// I003 photographed UIKit truncating `domovoi / music` at AX5 with
+    /// Apple's own audit calling it clipped. So the title dropped to the
+    /// route's word — the same information one word shorter — and three
+    /// landing checks read it: `openMusic`, `openMusicMore` and
+    /// `testTheBarsTextGrowsOnAPushedScreen`'s `heights(_:barDrawn:)`.
+    ///
+    /// Lower case, because this is the title's own text and not
+    /// ``Route/label``'s capitalised `Music` (see ``musicTab``).
+    static let musicTitleAtAX5 = "music"
 
     /// An everything-grid tile, which is how the no-phone-bar variant leaves
     /// Home. ``Route/label`` again, so capitalised.

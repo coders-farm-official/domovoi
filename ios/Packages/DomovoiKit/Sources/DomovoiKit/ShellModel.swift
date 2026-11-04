@@ -518,6 +518,17 @@ public final class ShellModel {
     }
 
     public func navigate(_ route: Route) {
+        // **A fresh visit to Settings starts at its index**, which is
+        // Android's (`SettingsScreen.kt:233-236`) and used to be free:
+        // ``settingsPlace`` lived as a `@State` on the view, so a new push
+        // built a new view with a new `.index`. Holding it here to survive a
+        // scene-phase bounce (see that property) means the reset has to be
+        // said out loud, and this is where a fresh visit happens.
+        //
+        // Not in `openSettingsTab(_:)`, which is the other way in: that one
+        // asks for a section by name, and `SettingsPlaceholder` sets the
+        // place from the request it takes.
+        if route == .settings { settingsPlace = .index }
         navigation.navigate(route)
     }
 
@@ -537,6 +548,29 @@ public final class ShellModel {
     public func takeSettingsTab() -> String? {
         navigation.takeSettingsTab()
     }
+
+    /// **Which panel Settings has open** — its index, a group, or a section
+    /// inside one.
+    ///
+    /// Held here, beside ``takeSettingsTab()``, and not as a `@State` on
+    /// `SettingsPlaceholder`, because a `@State` there did not survive a
+    /// scene-phase bounce. The house's own alert banner takes the scene
+    /// `.active` → `.inactive` → `.active`, ``scenePhaseChanged(to:
+    /// sendRegister:)`` runs ``refresh()`` on the way back in, the
+    /// destination is rebuilt and every `@State` under it goes — so somebody
+    /// reading Settings ▸ Rooms & devices ▸ Phones & browsers was thrown back
+    /// to the Settings index **with no action of their own**.
+    ///
+    /// Train I003 measured it in `testPlayer_TheListeningAsCardAudits`: the
+    /// card was reached at t=7.3s, the banner ran t=8.39s to t=15.19s, and
+    /// the tree and screenshot at t=15.2s are the index. The navigation
+    /// `path` is untouched throughout — it is only the section selection that
+    /// is lost, which is why the path was not where the fix went.
+    ///
+    /// The one thing the `@State` gave for free was Android's "a later visit
+    /// starts at the index" (`SettingsScreen.kt:233-236`): a new push built a
+    /// new view. That is said out loud now, in ``navigate(_:)``.
+    public var settingsPlace: SettingsPlace = .index
 
     /// The person tapped "not now" on the pairing screen. The one way out of
     /// it other than pasting a token, on both platforms.

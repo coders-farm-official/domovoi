@@ -269,7 +269,21 @@ struct ScreenPlaceholder: View {
 struct SettingsPlaceholder: View {
 
     let model: ShellModel
-    @State private var place: SettingsPlace = .index
+
+    /// **``ShellModel/settingsPlace``, not a `@State` here.** It was a
+    /// `@State`, and a scene-phase bounce — the house's own alert banner is
+    /// one — rebuilt this destination and threw the reader back to the
+    /// Settings index with no action of their own. That property's note has
+    /// the I003 measurement and why Android's "a later visit starts at the
+    /// index" still holds.
+    ///
+    /// Computed rather than a `@Bindable`, so that every `place = …` below
+    /// reads exactly as it did; `nonmutating` because what it writes to is a
+    /// reference this view only holds.
+    private var place: SettingsPlace {
+        get { model.settingsPlace }
+        nonmutating set { model.settingsPlace = newValue }
+    }
 
     /// **The panel's, held here.** The dialog is drawn at this level, so the
     /// state that opens it is too — a binding rather than a second copy,
@@ -330,9 +344,18 @@ struct SettingsPlaceholder: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
-            // The request is TAKEN, so a later visit starts at the index
-            // (`SettingsScreen.kt:233-236`). An unknown key lands on the
-            // index rather than nowhere.
+            // The request is TAKEN, so a deep link's section is honoured once
+            // and not on every later arrival here. An unknown key lands on
+            // the index rather than nowhere.
+            //
+            // **What makes a later visit start at the index is no longer this
+            // line.** It used to be a side effect of `place` being a `@State`
+            // that a new push rebuilt; now that the place is held on
+            // ``ShellModel`` so it survives a scene bounce,
+            // ``ShellModel/navigate(_:)`` resets it on a fresh visit
+            // (`SettingsScreen.kt:233-236`). This `.onAppear` also runs after
+            // such a bounce, which is exactly why it must not reset anything
+            // itself — it would undo the fix.
             if let asked = model.takeSettingsTab() {
                 place = settingsPlace(of: asked)
             }

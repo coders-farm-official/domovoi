@@ -159,17 +159,22 @@ extension StubHouseUITests {
     /// the navigation bar; a scroll view with a static row above it never
     /// moves the bar.
     ///
-    /// That is three screens' shape and `PhoneSourceSwitchView` is not this
-    /// unit's file, so the limitation is written up for its owner
+    /// That was three screens' shape, and `PhoneSourceSwitchView` was not
+    /// this unit's file, so the limitation was written up for its owner
     /// (`fx-shell/REPORT.md`, "for others") and this case moved to a pushed
     /// screen whose page **is** the stack's content: Settings, whose own
     /// tree puts its `ScrollView` at y=93.3, the navigation bar's own top.
     ///
+    /// The integration pass then fixed it — the switch is a
+    /// `.safeAreaInset(edge: .top)` now, so those three pages reach the bar
+    /// too — but this case stays on Settings. It is the reading that answers
+    /// "does a pushed screen's header fold at all", and a page with no
+    /// chrome of its own is the cleanest place to ask it.
+    ///
     /// The Videos reading is **not** dropped by that move:
-    /// ``testShell_TheSourceSwitchScreensStillGetTheirWindow()`` still
-    /// asserts the collapse on Videos, under an `XCTExpectFailure` naming
-    /// the owner — so the defect keeps a case, and that case reds the day it
-    /// is fixed.
+    /// ``testShell_TheSourceSwitchScreensStillGetTheirWindow()`` asserts the
+    /// collapse on Videos outright, with the `XCTExpectFailure` that named
+    /// the owner deleted now that the pin is gone.
     @MainActor
     func testShell_TheHeaderScrollsAwayOnAPushedScreen() throws {
         let app = launch(mode: StubShell.ax5, push: "Settings", pushDelay: Self.pushDelay)
@@ -208,26 +213,27 @@ extension StubHouseUITests {
         )
     }
 
-    /// **What answer 29 buys on a source-switch screen, and what it does
-    /// not** — the reading train I003 found on Videos, kept rather than
-    /// dropped.
+    /// **What answer 29 buys on a source-switch screen** — the reading train
+    /// I003 found on Videos, kept rather than dropped, and now asserting the
+    /// whole of it.
     ///
     /// `RouteScreen` wraps music, videos and files in
-    /// `PhoneSourceSwitchView`, which pins its row above the page's own
-    /// `ScrollView`. So on those three screens the large title has no scroll
-    /// view touching the bar and **does not collapse**: I003 measured 117 →
-    /// 117 points across a swipe that did scroll the page.
+    /// `PhoneSourceSwitchView`. In I003 that view pinned its row as the first
+    /// child of a `VStack` above the page's own `ScrollView`, so on those
+    /// three screens the large title had no scroll view touching the bar and
+    /// **did not collapse**: 117 → 117 points across a swipe that did scroll
+    /// the page.
     ///
-    /// What answer 29 still buys there is the 300 points ``ShellTopBar`` was
-    /// taking, and that is what this asserts outright: the bar is gone, the
-    /// title and the pill are in the navigation bar, and the page clears the
-    /// same 45% floor the other three screens do.
-    ///
-    /// The collapse is asserted too, under `XCTExpectFailure`. The fix is in
-    /// a file this unit does not own, and a bare assertion would fail this
-    /// unit for another's work (review 1's N4) — but a `print` would leave
-    /// the defect with no case at all, which is worse. An expected failure is
-    /// both: green while it is broken, red the day it is fixed.
+    /// Two things are asserted here, and only one of them has changed.
+    /// Unchanged: what answer 29 buys regardless, the 300 points
+    /// ``ShellTopBar`` was taking — the bar is gone, the title and the pill
+    /// are in the navigation bar, and the page clears the same 45% floor the
+    /// other three screens do. Changed: the collapse itself. The integration
+    /// pass made the switch a `.safeAreaInset(edge: .top)` over the two sides
+    /// instead of a row above them, which puts the page's `ScrollView` flush
+    /// with the bar, so the fold is asserted here directly and the
+    /// `XCTExpectFailure` that held this reading while the file belonged to
+    /// another unit is deleted.
     @MainActor
     func testShell_TheSourceSwitchScreensStillGetTheirWindow() throws {
         let (app, landed) = openVideos(StubShell.ax5)
@@ -269,37 +275,33 @@ extension StubHouseUITests {
                 + "this screen — and it was 102 of 852 before the fold."
         )
 
-        // **The collapse is asserted, not printed.** A `print` never reds, so
-        // a defect that only gets printed is a defect nobody is holding — the
-        // reading train I003 took on Videos would have been lost the moment
-        // this case stopped being about Videos. `XCTExpectFailure` is
-        // XCTest's way of saying "known broken, and not by this unit": while
-        // `PhoneSourceSwitchView` pins its row above the page's own
-        // `ScrollView` the assertion below fails, the failure is expected and
-        // this case passes. The day its owner un-pins it, no failure is
-        // recorded, the expectation goes unmet and **this case goes red** —
-        // which is the reminder to delete the wrapper and keep the
-        // assertion. Either way the defect has a case attached to it.
+        // **The collapse is asserted outright now, and the wrapper is gone.**
+        // This assertion spent train I003 inside an `XCTExpectFailure` naming
+        // the owner of `PhoneSourceSwitchView`: green while the pin was
+        // there, red the day it was un-pinned, which is what a defect in
+        // another unit's file gets instead of either a bare failure (review
+        // 1's N4) or a `print` nobody reds on.
         //
-        // Owner: the file that draws the source switch (music, videos and
-        // files all go through it). `fx-shell/REPORT.md`, "for others".
-        XCTExpectFailure(
-            "the pinned source switch stops the large title collapsing on "
-                + "music, videos and files — when this expectation is NOT met, "
-                + "the pin is gone: delete this `XCTExpectFailure` and leave the "
-                + "assertion"
-        ) {
-            XCTAssertLessThan(
-                barAfter,
-                barBefore,
-                "the large title did not collapse on a pushed Videos: "
-                    + "\(Int(barBefore)) → \(Int(barAfter)) points across a swipe "
-                    + "that did scroll the page. `PhoneSourceSwitchView` is pinned "
-                    + "above this page's `ScrollView` (I003's tree: the switch at "
-                    + "y=178.7, the scroll view at 245.3), and UIKit only collapses "
-                    + "a large title for a scroll view that reaches the bar."
-            )
-        }
+        // The integration pass un-pinned it — the switch is a
+        // `.safeAreaInset(edge: .top)` over the sides rather than the first
+        // row of a `VStack` above them, so the page's `ScrollView` reaches
+        // the navigation bar again. So the expectation would now go unmet,
+        // which is itself a failure, and the wrapper comes off exactly as its
+        // own note said it should.
+        XCTAssertLessThan(
+            barAfter,
+            barBefore,
+            "the large title did not collapse on a pushed Videos: "
+                + "\(Int(barBefore)) → \(Int(barAfter)) points across a swipe "
+                + "that did scroll the page. I003 measured 117 → 117 here with "
+                + "`PhoneSourceSwitchView` pinning its row above this page's "
+                + "`ScrollView` (the switch at y=178.7, the scroll view at "
+                + "245.3); that row is a top safe-area inset now, so the scroll "
+                + "view reaches the bar and UIKit should fold the title. If this "
+                + "is still 117 → 117, the inset did not put the scroll view "
+                + "flush with the bar and the three source-switch screens still "
+                + "get only the 300 points `ShellTopBar` was taking."
+        )
     }
 
     /// **The folded title comes back off.** The one audit finding that failed
