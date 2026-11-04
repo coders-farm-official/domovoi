@@ -308,11 +308,13 @@ public enum DocumentsWebEditorRules {
     /// ### `.unproven` and a wait are deliberately not among them
     ///
     /// `ShellInputs.notOurs` is `.mismatch` **or** `.unproven`
-    /// (`AppContainer.swift:1109-1118`) and an earlier version ended the
-    /// session on it. `.unproven` is a probe that has not answered yet — a
-    /// phone that has just changed network, a house that is slow — so that
-    /// version blanked the page, threw away whatever was unsaved in it, and
-    /// said "This phone isn't paired", which is not what had happened.
+    /// (`AppContainer.swift:1098`, against `identityChanged` at `:1102`; the
+    /// rule that fills both is ``AppContainer/readings(of:)``), and an
+    /// earlier version ended the session on it. `.unproven` is a probe that
+    /// has not answered yet — a phone that has just changed network, a house
+    /// that is slow — so that version blanked the page, threw away whatever
+    /// was unsaved in it, and said "This phone isn't paired", which is not
+    /// what had happened.
     /// ``TokenTrouble/waiting(waitMs:)`` is the same shape: the server has
     /// asked this phone to stop offering tokens for a few minutes, and it
     /// ends by itself. Android refuses **one request** in either state and

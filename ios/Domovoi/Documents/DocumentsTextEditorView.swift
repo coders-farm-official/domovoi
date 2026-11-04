@@ -383,10 +383,17 @@ struct DocumentsTextBody: UIViewRepresentable {
     }
 
     /// **Deliberately not annotated with an actor.** `UITextViewDelegate` is
-    /// isolated to the main actor in the iOS 18 SDK, so these witnesses are
-    /// inferred onto it; writing `@MainActor` here as well would be a second
-    /// claim about an SDK this machine cannot compile against
-    /// (NIGHT-RULES §5), and inference is right either way.
+    /// isolated to the main actor in the SDK, so these witnesses are inferred
+    /// onto it, and the class needs no `@MainActor` of its own.
+    ///
+    /// That holds **because neither method below takes a closure**.
+    /// ``DocumentsWebEditorCoordinator``'s note says what inference does not
+    /// cover: a parameter type is the signature, not something inferred, and a
+    /// completion handler missing the SDK's own `@MainActor @Sendable` makes
+    /// the method a non-witness that `respondsToSelector:` then answers NO
+    /// for — a delegate method that silently never runs. `textViewDidChange`
+    /// and `textViewDidChangeSelection` take a `UITextView` and nothing else,
+    /// so there is no annotation here to get wrong.
     final class Coordinator: NSObject, UITextViewDelegate {
 
         var text: Binding<String>

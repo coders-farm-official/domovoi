@@ -112,18 +112,6 @@ public enum DocumentsSheetLimits: Sendable {
 ///   Chat is another unit's screen and takes no file on this app yet.
 public enum DocumentsSheetParser {
 
-    /// The grid for a sheet file the phone holds the bytes of.
-    ///
-    /// `name` decides the format, by extension, exactly as
-    /// ``DocumentsKinds/category(of:)`` does — not by sniffing the bytes: a
-    /// `.csv` whose first two bytes happen to be `PK` is still a `.csv` to
-    /// the server, and the two must agree about which file is which.
-    ///
-    /// The returned grid carries the server's window rather than whatever the
-    /// file holds, because that is the window a save would be held to, and
-    /// ``DocumentsSheetGrid/hadRows`` is true: a file that really has no rows
-    /// (a `+ New` spreadsheet) is an empty grid to type into, which is a
-    /// different thing from a body that never carried the key.
     /// The refusal for a file this big **before a byte of it is asked for**,
     /// and `nil` when there is nothing to refuse.
     ///
@@ -148,6 +136,18 @@ public enum DocumentsSheetParser {
         )
     }
 
+    /// The grid for a sheet file the phone holds the bytes of.
+    ///
+    /// `name` decides the format, by extension, exactly as
+    /// ``DocumentsKinds/category(of:)`` does — not by sniffing the bytes: a
+    /// `.csv` whose first two bytes happen to be `PK` is still a `.csv` to
+    /// the server, and the two must agree about which file is which.
+    ///
+    /// The returned grid carries the server's window rather than whatever the
+    /// file holds, because that is the window a save would be held to, and
+    /// ``DocumentsSheetGrid/hadRows`` is true: a file that really has no rows
+    /// (a `+ New` spreadsheet) is an empty grid to type into, which is a
+    /// different thing from a body that never carried the key.
     public static func grid(of bytes: Data, named name: String) throws -> DocumentsSheetGrid {
         guard bytes.count <= DocumentsSheetLimits.maxFileBytes else {
             throw DocumentsSheetTrouble.tooLarge(

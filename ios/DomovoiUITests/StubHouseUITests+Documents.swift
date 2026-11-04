@@ -618,6 +618,18 @@ extension StubHouseUITests {
     ///   says so. A port that left `decidePolicyFor` out would leave the
     ///   house entirely, and the toast is the only part of that a case can
     ///   see.
+    ///
+    /// **That third one is the only automated proof that WebKit calls the
+    /// policy method at all**, and it is why this case matters more than it
+    /// looks. The rule is ``DocumentsWebEditorRules/navigation(to:base:mainFrame:)``
+    /// in DomovoiKit and 16 package cases hold it, but a package case cannot
+    /// see whether anything *asks* it: `decidePolicyFor` is an **optional**
+    /// requirement of an `@objc` protocol, so a signature that differs from
+    /// the SDK's by one annotation is not a witness, is not implicitly
+    /// `@objc`, and `respondsToSelector:` answers NO — the method never runs
+    /// and every navigation is allowed. The fix pass shipped exactly that
+    /// (`decisionHandler` without the SDK's `@MainActor @Sendable`), with all
+    /// 16 package cases green, and this tap is what would have gone red.
     @MainActor
     func testDocuments_AFormattedDocumentOpensInTheEditor() throws {
         guard let app = documentsOpen() else { return }

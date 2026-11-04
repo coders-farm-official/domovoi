@@ -100,24 +100,27 @@ import WebKit
 /// Safe Browsing to turn off — so none of the addresses this opens is sent
 /// to Google, which is what that line was about.
 ///
+/// ### The picture button is not an omission
+///
+/// Said before the list of omissions below, because it used to be the first
+/// entry in it and is the opposite of one. This paragraph claimed "no photo
+/// picker", because Android's `onShowFileChooser` (`:230-245`) hands its
+/// WebView the phone's gallery and nothing here ports it, and because the
+/// usage string was said to be missing from `project.yml`. Round 2's review
+/// (S1) found **both halves wrong**: `WKWebView` needs no delegate at all
+/// for an `<input type="file">` — it presents the system picker itself,
+/// which is exactly why there is no `onShowFileChooser` to port — and
+/// `NSPhotoLibraryUsageDescription` (`project.yml:173`),
+/// `NSCameraUsageDescription` (`:169`) and
+/// `NSPhotoLibraryAddUsageDescription` (`:178`) have all been in the plist
+/// since before this batch. So the page's picture button works on the phone,
+/// this port drops no Android capability, and the shared change this unit
+/// asked Kamron for was a change already made. **It has no automated case**:
+/// a UI case cannot drive the system photo picker, and the first proof will
+/// be Kamron's own.
+///
 /// ### What is not, and why there is no control for it
 ///
-/// * **Nothing, in fact — and the picture button is the correction.** This
-///   paragraph used to say "no photo picker", because Android's
-///   `onShowFileChooser` (`:230-245`) hands its WebView the phone's gallery
-///   and nothing here ports it, and because the usage string was said to be
-///   missing from `project.yml`. Round 2's review (S1) found **both halves
-///   wrong**: `WKWebView` needs no delegate at all for an
-///   `<input type="file">` — it presents the system picker itself, which is
-///   exactly why there is no `onShowFileChooser` to port — and
-///   `NSPhotoLibraryUsageDescription` (`project.yml:172`),
-///   `NSCameraUsageDescription` (`:168`) and
-///   `NSPhotoLibraryAddUsageDescription` (`:178`) have all been in the plist
-///   since before this batch. So the page's picture button works on the
-///   phone, this port drops no Android capability, and the shared change this
-///   unit asked Kamron for was a change already made. **It has no automated
-///   case**: a UI case cannot drive the system photo picker, and the first
-///   proof will be Kamron's own.
 /// * **No Save and no dirty mark in this host's own chrome.** The page owns
 ///   the document's state and its autosave and draws both itself; a second
 ///   Save up here would be a button whose state this host cannot know.
@@ -545,9 +548,15 @@ final class DocumentsWebEditorModel {
     /// a literal `""`, so the rule the package test holds is the rule this
     /// line obeys.
     func tokenWasHandedOver() {
+        // **Before the guard.** The page has read the token by the time this
+        // message arrives, whatever state this model is in: a `tokenTaken`
+        // that lands after the weak `webView` has gone — the cover dismissed
+        // on the same turn the page read it — must still leave the one-shot
+        // taken, or the next ``makeUIView`` injects the live token a second
+        // time. Recording it costs nothing when there is no view to rewrite.
+        oneShot.wasTaken()
         guard case .ready(let handoff) = state,
               let controller = webView?.configuration.userContentController else { return }
-        oneShot.wasTaken()
         controller.removeAllUserScripts()
         controller.addUserScript(WKUserScript(
             source: Self.bridgeScript(
@@ -848,12 +857,43 @@ struct DocumentsWebEditorHost: UIViewRepresentable {
 /// `EditorWebClient` (`WebEditorHost.kt:281-303`) and `EditorBridge.close`
 /// (`:331`).
 ///
-/// **Deliberately not annotated with an actor**, exactly as
-/// ``DocumentsTextBody/Coordinator`` is not (`:384-389`): `WKNavigationDelegate`
-/// and `WKScriptMessageHandler` are isolated to the main actor in the iOS 18
-/// SDK, so these witnesses are inferred onto it, and writing `@MainActor` here
-/// as well would be a second claim about an SDK this machine cannot compile
-/// against (NIGHT-RULES §5).
+/// **Not annotated with an actor, but the closure parameter below is** — and
+/// the difference between those two sentences is the whole of this file's
+/// worst bug.
+///
+/// The class needs no `@MainActor`: `WKNavigationDelegate` and
+/// `WKScriptMessageHandler` are isolated to the main actor in the SDK, so a
+/// method that **is** a witness is inferred onto it, exactly as
+/// ``DocumentsTextBody/Coordinator`` is (`DocumentsTextEditorView.swift:385-390`).
+/// A *parameter type* is not inference, though: it is the signature, and a
+/// signature that differs from the requirement's by one annotation is not a
+/// witness at all. These are **optional** protocol requirements on an
+/// `@objc` protocol, so a non-witness is not implicitly `@objc` either, and
+/// `respondsToSelector:` — which is the only thing WebKit asks before it
+/// calls — answers NO. The method then simply never runs, with no error and
+/// no warning beyond a `nearly matches` the train buries.
+///
+/// That is what happened here: `decisionHandler` was declared
+/// `@escaping (WKNavigationActionPolicy) -> Void` where the SDK declares
+/// `@escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void`, so
+/// the origin lock below was dead from the day it was written — every
+/// navigation allowed, ``DocumentsStrings/editorStayedHere`` unreachable, and
+/// the bridge injected into whatever main-frame document arrived. The package
+/// cases that guard ``DocumentsWebEditorRules/navigation(to:base:mainFrame:)``
+/// all passed, because a rule can be right while nothing asks it
+/// ([[reasoning-that-hides-a-bug]]) — and the comment that used to stand here,
+/// arguing that writing the annotation would be "a second claim about an SDK
+/// this machine cannot compile against", is what kept anyone from looking.
+///
+/// NIGHT-RULES §5 says do not guess at an SDK this machine cannot compile
+/// against; it does not say leave the signature wrong. The annotations below
+/// were **measured**, not guessed: three candidate signatures compiled for
+/// `arm64-apple-ios18.0-simulator` at Swift 6 with complete concurrency, and
+/// the same three run on the Mac asking
+/// `responds(to: Selector("webView:decidePolicyForNavigationAction:decisionHandler:"))`
+/// — `@MainActor @Sendable` true, `@MainActor` alone true, the old bare
+/// closure **false**, and the bare one the only one the compiler calls
+/// `nearly matches`. The SDK's own spelling is the one written below.
 final class DocumentsWebEditorCoordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
 
     private let host: DocumentsWebEditorModel
@@ -887,7 +927,7 @@ final class DocumentsWebEditorCoordinator: NSObject, WKNavigationDelegate, WKScr
     func webView(
         _ webView: WKWebView,
         decidePolicyFor navigationAction: WKNavigationAction,
-        decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
+        decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void
     ) {
         switch DocumentsWebEditorRules.navigation(
             to: navigationAction.request.url,

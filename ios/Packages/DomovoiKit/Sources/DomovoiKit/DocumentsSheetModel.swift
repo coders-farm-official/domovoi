@@ -439,6 +439,16 @@ public final class DocumentsSheetModel {
         // would have been a megabyte later, through the same ``ServerMiss``
         // rule — a captive portal's "200 OK" still gets `that isn't Domovoi`
         // rather than a sentence about a file it has said nothing about.
+        //
+        // Which means an over-the-cap sheet behind a captive portal is
+        // **neither fetched nor told it is too big**: ``readersRefusal``
+        // answers only for `.theCallFailed`, so `.thatIsNotDomovoi` draws
+        // "Couldn't load: that isn't Domovoi" and the size is never
+        // mentioned. That is round 2's finding 5 working as settled — the
+        // thing on screen names the failure that is actually in the way, and
+        // the portal is in the way of everything — and it is written down
+        // here because it is a consequence of moving the check earlier and
+        // reads like an omission otherwise.
         if let early = DocumentsSheetParser.refusalBeforeFetching(size: entry.size) {
             load = .failed(miss.readersRefusal(early) ?? DocumentsStrings.couldNotLoad(said))
             return
