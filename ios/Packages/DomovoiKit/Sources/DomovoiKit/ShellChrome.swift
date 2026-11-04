@@ -53,7 +53,11 @@ public struct ShellPill: Equatable, Sendable {
     /// composition of existing strings — no new words — and it is in
     /// `design-notes/ios/batch-2026-11-03/shell/DECISIONS.md`.
     public var toolbarAccessibilityLabel: String {
-        var said = [accessibilityLabel, label]
+        var said = [accessibilityLabel]
+        // With no server saved both are ``ShellStrings/connectPill``, and
+        // "connect, connect" is the kind of thing a composed label says if
+        // nobody checks.
+        if label != accessibilityLabel { said.append(label) }
         if unverified { said.append(ShellStrings.unverified) }
         if let status {
             said.append(status.trimmingCharacters(in: .whitespaces))
