@@ -453,9 +453,9 @@ struct ShellScrollAwayChrome: ViewModifier {
     /// here and in ``WorkspaceView/stack``: review 2's sabotage took the
     /// branch off this body and the size gate off that `if` together, and no
     /// check that runs on Windows read either. Both bodies are read as source
-    /// now, by `ShellFoldViewBodyTests` — a nil title here is "apply no title
-    /// at all", and an empty one would still reserve the large bar's height on
-    /// every screen in the app, which is the alternative N3 rejected.
+    /// now, by `ShellFoldViewBodyTests` — a nil title here is "the header is
+    /// not in the bar", which this body has to say to the bar **out loud**
+    /// rather than by falling silent (see ``body(content:)``).
     ///
     /// The rule, asked once per body. A computed property rather than a `let`
     /// inside the `ViewBuilder`, to match the rest of this file.
@@ -466,6 +466,44 @@ struct ShellScrollAwayChrome: ViewModifier {
         )
     }
 
+    /// ### Both branches say something to the navigation bar
+    ///
+    /// **A modifier that goes away does not undo itself.** `.navigationTitle`
+    /// and `.navigationBarTitleDisplayMode` are SwiftUI *preferences*: while a
+    /// branch applies them, SwiftUI writes `navigationItem.title` and
+    /// `largeTitleDisplayMode` into the UIKit bar underneath. Stop applying
+    /// them and SwiftUI stops writing — it does not write the default back.
+    /// UIKit keeps the last pair it was given.
+    ///
+    /// Train I003 photographed what that costs. `performAccessibilityAudit`
+    /// overrides the content-size trait while it looks for clipping, so
+    /// `typeSize.isAccessibilitySize` turns true inside the audit, this body
+    /// takes its title branch, and the bar becomes a 96-point large-title bar.
+    /// The audit ends, the trait reverts, the branch goes — and the bar stays
+    /// 96 points with a title label squeezed to 7.33 x 40.67 at y=141, drawing
+    /// nothing:
+    ///
+    ///  * `att/testRooms_Audit/` and `att/testAiSettings_TheChatSectionAudits/`
+    ///    attached their trees **before** the audit: `NavigationBar … {393.0,
+    ///    44.0}`, no such element.
+    ///  * `att/testCalendar_AuditHasNothingNew/calendar-17-audit-agenda-tree…`
+    ///    and `att/testPodcasts_…/podcasts-80-grid-audited-tree…` attached
+    ///    theirs **after**: `NavigationBar … {393.0, 96.0}` with
+    ///    `StaticText … {{16.0, 141.0}, {7.3, 40.7}}` inside it, and the page
+    ///    pushed from 137.3 down to 189.3.
+    ///  * `calendar-17-audit-agenda….png` is the picture of it: `Back`, then
+    ///    an empty 52-point band, then the page. A blank row no one can use,
+    ///    on about twenty screens, until the app is relaunched.
+    ///
+    /// Nothing about that is the audit's: a person who changes the text size
+    /// in Settings and comes back drives the same trait change. So the `else`
+    /// branch **writes the opposite** — an empty title and `.inline` — which
+    /// is the one thing that puts `navigationItem` back. An empty title at
+    /// `.inline` reserves nothing (the 44-point bar below the accessibility
+    /// sizes is the bar that was already there); an empty title at `.large`
+    /// would reserve the row on every screen, and that is the alternative N3
+    /// rejected — it is the display mode, not the empty string, that was the
+    /// problem with it.
     @ViewBuilder
     func body(content: Content) -> some View {
         // **One question, asked once.** A non-nil title *is* the fold putting
@@ -489,7 +527,13 @@ struct ShellScrollAwayChrome: ViewModifier {
                     }
                 }
         } else {
+            // `Text(verbatim:)` and not `""`: the `LocalizedStringKey`
+            // overload would send an empty key through the string table on
+            // every screen in the app, and this is a layout instruction, not
+            // a word anybody reads.
             content
+                .navigationTitle(Text(verbatim: ""))
+                .navigationBarTitleDisplayMode(.inline)
         }
     }
 }

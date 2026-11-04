@@ -164,8 +164,12 @@ extension StubHouseUITests {
     /// (`fx-shell/REPORT.md`, "for others") and this case moved to a pushed
     /// screen whose page **is** the stack's content: Settings, whose own
     /// tree puts its `ScrollView` at y=93.3, the navigation bar's own top.
-    /// ``testShell_TheSourceSwitchScreensStillGetTheirWindow()`` keeps the
-    /// Videos reading, as what answer 29 does and does not buy there.
+    ///
+    /// The Videos reading is **not** dropped by that move:
+    /// ``testShell_TheSourceSwitchScreensStillGetTheirWindow()`` still
+    /// asserts the collapse on Videos, under an `XCTExpectFailure` naming
+    /// the owner — so the defect keeps a case, and that case reds the day it
+    /// is fixed.
     @MainActor
     func testShell_TheHeaderScrollsAwayOnAPushedScreen() throws {
         let app = launch(mode: StubShell.ax5, push: "Settings", pushDelay: Self.pushDelay)
@@ -215,12 +219,15 @@ extension StubHouseUITests {
     /// 117 points across a swipe that did scroll the page.
     ///
     /// What answer 29 still buys there is the 300 points ``ShellTopBar`` was
-    /// taking, and that is what this asserts: the bar is gone, the title and
-    /// the pill are in the navigation bar, and the page clears the same 45%
-    /// floor the other three screens do. The collapse is **printed, not
-    /// asserted**, because the fix is in a file this unit does not own — a
-    /// case that red-flagged it would fail this unit for another's work, the
-    /// mistake review 1's N4 found in the dialog case.
+    /// taking, and that is what this asserts outright: the bar is gone, the
+    /// title and the pill are in the navigation bar, and the page clears the
+    /// same 45% floor the other three screens do.
+    ///
+    /// The collapse is asserted too, under `XCTExpectFailure`. The fix is in
+    /// a file this unit does not own, and a bare assertion would fail this
+    /// unit for another's work (review 1's N4) — but a `print` would leave
+    /// the defect with no case at all, which is worse. An expected failure is
+    /// both: green while it is broken, red the day it is fixed.
     @MainActor
     func testShell_TheSourceSwitchScreensStillGetTheirWindow() throws {
         let (app, landed) = openVideos(StubShell.ax5)
@@ -260,6 +267,118 @@ extension StubHouseUITests {
                 + "floor. The large title does not collapse here (the pinned "
                 + "source switch), so this is the whole of what answer 29 buys on "
                 + "this screen — and it was 102 of 852 before the fold."
+        )
+
+        // **The collapse is asserted, not printed.** A `print` never reds, so
+        // a defect that only gets printed is a defect nobody is holding — the
+        // reading train I003 took on Videos would have been lost the moment
+        // this case stopped being about Videos. `XCTExpectFailure` is
+        // XCTest's way of saying "known broken, and not by this unit": while
+        // `PhoneSourceSwitchView` pins its row above the page's own
+        // `ScrollView` the assertion below fails, the failure is expected and
+        // this case passes. The day its owner un-pins it, no failure is
+        // recorded, the expectation goes unmet and **this case goes red** —
+        // which is the reminder to delete the wrapper and keep the
+        // assertion. Either way the defect has a case attached to it.
+        //
+        // Owner: the file that draws the source switch (music, videos and
+        // files all go through it). `fx-shell/REPORT.md`, "for others".
+        XCTExpectFailure(
+            "the pinned source switch stops the large title collapsing on "
+                + "music, videos and files — when this expectation is NOT met, "
+                + "the pin is gone: delete this `XCTExpectFailure` and leave the "
+                + "assertion"
+        ) {
+            XCTAssertLessThan(
+                barAfter,
+                barBefore,
+                "the large title did not collapse on a pushed Videos: "
+                    + "\(Int(barBefore)) → \(Int(barAfter)) points across a swipe "
+                    + "that did scroll the page. `PhoneSourceSwitchView` is pinned "
+                    + "above this page's `ScrollView` (I003's tree: the switch at "
+                    + "y=178.7, the scroll view at 245.3), and UIKit only collapses "
+                    + "a large title for a scroll view that reaches the bar."
+            )
+        }
+    }
+
+    /// **The folded title comes back off.** The one audit finding that failed
+    /// about twenty cases across the app in train I003, as a case of its own.
+    ///
+    /// ### What it is
+    ///
+    /// `performAccessibilityAudit` overrides the content-size trait while it
+    /// looks for clipping. ``ShellScrollAwayChrome`` reads that trait, so the
+    /// shell folds its header into the navigation bar **inside the audit** —
+    /// correct, and not the bug. The bug is the other end: the audit finishes,
+    /// the trait reverts, the title branch goes away, and the bar stays
+    /// folded, because `.navigationTitle` and `.navigationBarTitleDisplayMode`
+    /// are preferences that UIKit keeps when SwiftUI stops writing them.
+    ///
+    /// I003 left a 96-point navigation bar with a `7.33 x 40.67` title in it
+    /// at y=141, every page 52 points down, and an empty band on the screen
+    /// between `Back` and the page
+    /// (`att/testCalendar_AuditHasNothingNew/calendar-17-audit-agenda….png`;
+    /// the trees taken *before* an audit, `testRooms_Audit` and
+    /// `testAiSettings_TheChatSectionAudits`, have the bar at 44 and no such
+    /// element). Apple's audit called it `Text clipped`, which is the audit
+    /// being right.
+    ///
+    /// ### Why it is worth a case and not just a fix
+    ///
+    /// It arrives at every other owner's door as "my frames are 52 points out
+    /// and there is a finding I did not cause", which is how it cost a whole
+    /// train. And it is not only the audit's: a person who changes the text
+    /// size in Settings and comes back drives the same trait change.
+    ///
+    /// Videos rather than Settings because `openVideos` has a landing check
+    /// that cannot pass early (``Pager/countText(shown:total:noun:)``); the
+    /// pinned source switch below the bar makes no difference to the bar.
+    @MainActor
+    func testShell_TheFoldedTitleComesBackOffAfterAnAudit() throws {
+        let (app, landed) = openVideos()
+        XCTAssertTrue(landed, "the videos list never answered — no count line drew")
+        let bar = app.navigationBars.firstMatch
+        XCTAssertTrue(
+            bar.waitForExistence(timeout: 20),
+            "no navigation bar on a pushed Videos — there is no bar to fold"
+        )
+        let before = bar.frame.height
+        evidence(app, "shell-bar-before-audit")
+        guard #available(iOS 17.0, *) else {
+            throw XCTSkip("performAccessibilityAudit needs iOS 17")
+        }
+        _ = try auditIssues(app, "shell-bar-after-audit")
+        let after = app.navigationBars.firstMatch.frame.height
+        evidence(app, "shell-bar-after-audit")
+        print(
+            "SHELL [shell-bar-after-audit] navigation bar \(Int(before)) → "
+                + "\(Int(after)) points across Apple's audit"
+        )
+        XCTAssertEqual(
+            after,
+            before,
+            accuracy: 1,
+            "the navigation bar is \(Int(after)) points after Apple's audit and "
+                + "was \(Int(before)) before it. The audit's type-size override "
+                + "folded the shell's header into the bar and the fold did not "
+                + "come back off, so every screen audited in this run is left "
+                + "with a blank large-title row and its page ~52 points down "
+                + "(train I003, about twenty cases)."
+        )
+        // The other half of the same defect, and the half Apple reported: the
+        // stale title is still an element, with the crumb as its label and a
+        // width no glyph fits in.
+        let squeezed = app.navigationBars.staticTexts.allElementsBoundByIndex
+            .filter { $0.exists && !$0.label.isEmpty && $0.frame.width < 16 }
+            .map { "`\($0.label)` \($0.frame)" }
+        XCTAssertTrue(
+            squeezed.isEmpty,
+            "a navigation-bar title is still in the tree with no width after "
+                + "the audit: \(squeezed.joined(separator: ", ")). That is the "
+                + "`Text clipped` finding about twenty audit cases reported in "
+                + "I003 — the title SwiftUI stopped drawing, in a bar UIKit was "
+                + "never told to put back."
         )
     }
 

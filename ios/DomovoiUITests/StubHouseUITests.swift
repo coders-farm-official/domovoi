@@ -255,92 +255,6 @@ final class StubHouseUITests: XCTestCase {
         "Dynamic Type font sizes are unsupported",
     ]
 
-    /// How wide a text element has to be before this file will believe it is
-    /// on the screen: **16 points**, which is narrower than one glyph of the
-    /// smallest text style the app draws.
-    ///
-    /// See ``isAFoldedTitleArtefact(_:)``. The number is a floor and not the
-    /// measured 7.33, so a Simulator with a different scale cannot slip past
-    /// it; it is far enough under the narrowest real title this file has seen
-    /// (301.3 points) that no laid-out title can reach it.
-    static let unlaidOutTextWidth: CGFloat = 16
-
-    /// **A "Text clipped" finding against a text element squeezed to nothing**
-    /// — the half-built navigation title Apple's own Dynamic Type audit
-    /// raises inside the shell, and the one thing in this file that is
-    /// classified by its *geometry*.
-    ///
-    /// ### What it is
-    ///
-    /// Train I003 failed nineteen audit cases across ten different screens on
-    /// one finding, byte for byte the same on every one of them:
-    ///
-    /// ```
-    /// Text clipped: Text of this element may be clipped at larger Dynamic Type sizes.
-    ///   | element: type=48 label='domovoi / settings'
-    ///     frame=(16.0, 141.0, 7.333333333333332, 40.66666666666666)
-    /// ```
-    ///
-    /// Nineteen screens, one frame: 7.33 points wide and 40.67 tall, at
-    /// y=141 — which on every one of those screens is exactly where a large
-    /// navigation title would sit, 3.7 points under a navigation bar whose
-    /// own frame the trees put at 93.3 + 44.
-    ///
-    /// ### Why it is Apple measuring and not this app drawing
-    ///
-    /// Three readings, none of them an argument:
-    ///
-    ///  1. **It is in no tree.** Every one of those cases attached the
-    ///     accessibility tree it took a moment later, and not one of them
-    ///     holds an element at that frame. On
-    ///     `testAiSettings_TheChatSectionAudits` the only `domovoi / settings`
-    ///     in the tree is ``ShellTopBar``'s, at `(16.0, 68.3, 111.3, 15.7)`.
-    ///  2. **It is in no picture.** The screenshots of those same screens show
-    ///     a navigation bar with a back button and no title at all
-    ///     (`overnight-trains/I003/ALL/att/testAiSettings_TheChatSectionAudits/`
-    ///     `aisettings-audit…png`).
-    ///  3. **The audit moved the page while it measured.** On the pairing
-    ///     screen the same audit reports the Settings index's subtitle at
-    ///     y=241.67; the tree of that very screen puts it at y=189.7. A
-    ///     52-point shift down is a large-title row having been inserted
-    ///     above it — which is what `ShellScrollAwayChrome` does when
-    ///     `dynamicTypeSize.isAccessibilitySize` turns true, and
-    ///     `performAccessibilityAudit` turns it true by overriding the trait
-    ///     while it looks for clipping.
-    ///
-    /// So the shell restructures itself *inside* Apple's own Dynamic Type
-    /// sweep, and the audit reports the title it raised before the navigation
-    /// bar has laid it out. Nobody using this app can see it: a type-size
-    /// change a person makes comes with a full layout.
-    ///
-    /// ### Why the geometry and not the words
-    ///
-    /// Pinning the label would pin a breadcrumb that
-    /// `WorkspaceView.screenTitle(for:)` has just stopped drawing, and pinning
-    /// the exact frame would pin one Simulator. The width is the thing that
-    /// cannot be anything else: **7.33 points cannot hold a character**, and
-    /// the two real clipped titles this train found are 301.3 and 346.7 points
-    /// wide — both still fail, which is why they were fixed rather than
-    /// pinned. A real "Text clipped" against a laid-out element is untouched
-    /// by this.
-    ///
-    /// ### The deeper fix, which is not this unit's to make
-    ///
-    /// Deciding the fold on the **application's** content size category
-    /// (`UIApplication.shared.preferredContentSizeCategory`) rather than on
-    /// the view trait would stop the shell restructuring inside the audit at
-    /// all. It cannot be done here: `ShellFoldViewBodyTests` requires every
-    /// `ShellHeaderFold.forHeader(` call to read
-    /// `isAccessibilitySize: typeSize.isAccessibilitySize` literally, and that
-    /// file belongs to nobody in this batch. It is written up in
-    /// `design-notes/ios/batch-2026-11-03/fx-shell/REPORT.md` under "for
-    /// others".
-    static func isAFoldedTitleArtefact(_ line: String) -> Bool {
-        guard line.hasPrefix("Text clipped") else { return false }
-        guard let frame = Self.elementFrame(in: line) else { return false }
-        return frame.width < Self.unlaidOutTextWidth
-    }
-
     /// The `frame=(x, y, width, height)` out of a finding, or nil when the
     /// line carries no frame (`element: nil`) or does not parse.
     ///
@@ -399,6 +313,23 @@ final class StubHouseUITests: XCTestCase {
     /// the forget card draws `127.0.0.1:6601` and so does the pill behind it,
     /// 70 points higher. A finding with no frame (`element: nil`) counts as
     /// held — this function has nothing to say about it.
+    ///
+    /// ### What it loses, in general and not only in those two shapes
+    ///
+    /// `performAccessibilityAudit` walks **built views**; this walks the
+    /// **accessibility tree**. Anything built but off the page — a row above
+    /// the scroll position, a section the page has laid out below the fold —
+    /// is in the audit and not in the tree, and this function will put it in
+    /// `elsewhere`. That is not "not a finding": it is a finding this
+    /// function cannot place, and three of them went to `elsewhere` on the
+    /// pairing screen in train I003 (`Contrast failed` on `Voice` and
+    /// `System`, which the Settings index really does fail — the same two
+    /// leaves are flagged by `testPlayer_TheListeningAsCardAudits` and
+    /// `testWhetherTheEightAreSizesRatherThanElements`).
+    ///
+    /// So a caller owes `elsewhere` two things, not one: print it, **and**
+    /// route anything in it that names a view some other screen owns. A line
+    /// that is only printed is a defect nobody is holding.
     @MainActor
     static func findingsTheTreeHolds(
         _ app: XCUIApplication,
@@ -434,22 +365,32 @@ final class StubHouseUITests: XCTestCase {
     /// explanation having run into it with no blank line between them. It is
     /// where it belongs now.)
     ///
-    /// ### The third bucket, which is neither
+    /// ### There is no third bucket, and there was one for half a day
     ///
-    /// ``isAFoldedTitleArtefact(_:)`` — a "Text clipped" against an element
-    /// under ``unlaidOutTextWidth`` points wide — is in **neither** return
-    /// value. It is not a finding, because the element it names is in no
-    /// tree and no screenshot, and it is not the floor, because the floor is
-    /// a count this file asserts exactly. ``auditIssues(_:_:)`` prints every
-    /// one of them with the reason, so a run always says how many it dropped
-    /// and against what; the measurement is on ``isAFoldedTitleArtefact(_:)``.
+    /// A `Text clipped` against `label='domovoi / <page>'` at
+    /// `frame=(16.0, 141.0, 7.33, 40.67)` failed about twenty audit cases in
+    /// train I003, and this function briefly dropped it as "an element in no
+    /// tree and no picture". **It is in both.** The tree attached after the
+    /// audit holds it —
+    /// `att/testCalendar_AuditHasNothingNew/calendar-17-audit-agenda-tree…:19`
+    /// has `StaticText … {{16.0, 141.0}, {7.3, 40.7}}` inside a 96-point
+    /// `NavigationBar` — and `calendar-17-audit-agenda….png` shows the empty
+    /// band it leaves between `Back` and the page. The two trees that did not
+    /// hold it (`testRooms_Audit`, `testAiSettings_TheChatSectionAudits`) were
+    /// captured **before** their audit ran, with the bar still 44 points.
+    ///
+    /// It is one app defect — a navigation title the shell applies inside the
+    /// audit's type-size override and never takes back off
+    /// (`ShellScrollAwayChrome.body` says what it is and fixes it) — and a
+    /// width-based classifier here would have hidden it on every screen in the
+    /// app. Nothing is classified by geometry in this file. If a finding is
+    /// attributed to an element, it is in `rest` and it fails its caller.
     static func floorAndRest(_ found: [String]) -> (floor: Int, rest: [String]) {
         func isFloor(_ line: String) -> Bool {
             guard line.hasSuffix("| element: nil") else { return false }
             return Self.knownAnonymousHeadlines.contains { line.hasPrefix($0) }
         }
-        let real = found.filter { !Self.isAFoldedTitleArtefact($0) }
-        return (real.filter(isFloor).count, real.filter { !isFloor($0) })
+        return (found.filter(isFloor).count, found.filter { !isFloor($0) })
     }
 
     /// An `XCUIApplication.State` in words. A raw value in a log is a number
@@ -726,17 +667,23 @@ final class StubHouseUITests: XCTestCase {
         for attempt in 1...3 {
             let waitedOut = waitForNoNotificationBanner("\(name)/attempt-\(attempt)")
             found = try runOneAudit(app, name)
-            // **Said out loud, every time.** ``floorAndRest(_:)`` drops these
-            // from both of its buckets, and a classifier that drops something
-            // silently is how a real finding disappears. One line per
-            // dropped finding, with the reason, so `cases.json` carries it
-            // even for a case that goes green.
-            for line in found where Self.isAFoldedTitleArtefact(line) {
+            // **The bar the audit leaves behind, named where it is read.**
+            // `performAccessibilityAudit` overrides the content-size trait,
+            // the shell folds its header into the navigation bar, and in
+            // train I003 the bar stayed folded afterwards on about twenty
+            // screens — a 96-point bar with a 7.33-point title in it and the
+            // page 52 points down. ``ShellScrollAwayChrome`` fixes it; this
+            // line is here so that a case which fails on a frame 52 points
+            // from where its author put it is told why in its own log,
+            // instead of each owner re-deriving it from a tree.
+            if app.navigationBars.firstMatch.exists,
+               app.navigationBars.firstMatch.frame.height > 60 {
                 print(
-                    "AUDIT [\(name)] NOT A FINDING — the audit's own Dynamic Type "
-                        + "sweep raised the shell's large title and measured it "
-                        + "before the bar laid it out; the element is in no tree "
-                        + "and no screenshot (see `isAFoldedTitleArtefact`): \(line)"
+                    "AUDIT [\(name)] the navigation bar is "
+                        + "\(Int(app.navigationBars.firstMatch.frame.height)) points "
+                        + "after this audit. If it was 44 before, the shell's large "
+                        + "title did not come back off (train I003) and every frame "
+                        + "below it is ~52 points down."
                 )
             }
             // **Was the app still in front when the audit finished?**
@@ -1228,18 +1175,27 @@ final class StubHouseUITests: XCTestCase {
             let found = try auditIssues(app, "pairing")
             let split = Self.floorAndRest(found)
             // **Three of train I003's four findings here were never on this
-            // screen**, and the fourth — the half-built navigation title —
-            // ``floorAndRest(_:)`` has already taken out.
+            // screen.** The fourth was the shell's folded navigation title,
+            // which is a real app defect and is fixed in
+            // `ShellScrollAwayChrome` — not classified away here.
             //
             //  * `Voice` and `System` are the Settings **index**'s group
             //    buttons: this screen is pushed over that index and the tree
-            //    attached by this very case holds neither of them.
+            //    attached by this very case holds neither of them. They are
+            //    real findings **on the index**, where
+            //    `testPlayer_TheListeningAsCardAudits` and
+            //    `testWhetherTheEightAreSizesRatherThanElements` also flag
+            //    them; `fx-shell/REPORT.md` routes them to that screen's
+            //    owner. This case is not the place they get fixed, and it is
+            //    not the place they get hidden either — the `elsewhere` lines
+            //    below are printed every run.
             //  * The index's subtitle was reported at y=241.67 where that
-            //    same tree has it at **189.7** — 52 points down, the height
-            //    of the large-title row the audit's own type-size sweep
-            //    raises in the shell. `testPodcasts_…` failed the same train
-            //    on the same 52 points, `(16.0, 544.0, …)` against
-            //    `(16.0, 596.0, …)`.
+            //    same tree has it at **189.7**: the audit measured it 52
+            //    points *below* where the tree has it, because the audit was
+            //    still inside its own type-size override when it read that
+            //    frame and the tree was taken after. (On Podcasts the same
+            //    52 points appear the other way round — the page had moved
+            //    down and stayed down, which is the defect above.)
             //
             // So the split is by where the tree has them, printed either
             // way: ``findingsTheTreeHolds(_:_:)`` says why that is a

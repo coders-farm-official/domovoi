@@ -93,6 +93,12 @@ struct LocalShellView: View {
     /// the shell's header can be that stack's large title and scroll away with
     /// the screen (this type's note says why the stack is per tab). Below them
     /// the tab is exactly what it was — no stack, no navigation bar, no title.
+    ///
+    /// **This shell cannot keep a stale bar**, which the workspace's can: here
+    /// the whole `NavigationStack` goes when the fold turns off, taking its
+    /// navigation item with it, so there is nothing left to hold the last
+    /// title UIKit was given. ``ShellScrollAwayChrome/body(content:)`` says
+    /// what that costs on the other side and how it is undone there.
     @ViewBuilder private func tab(_ route: Route) -> some View {
         let screen = LocalPhoneScreen(model: model, route: route)
         if headerFold.putsTheHeaderInsideTheStack {
