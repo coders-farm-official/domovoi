@@ -1,5 +1,6 @@
 import DomovoiKit
 import SwiftUI
+import UIKit
 
 /// The app: one container, one shell model, one scene.
 ///
@@ -120,7 +121,48 @@ struct DomovoiApp: App {
         return SavedShellStore(vault: vault)
     }
 
+    /// Apple's placeholder grey, overridden for every `TextField` in the app
+    /// (owner answer 65).
+    ///
+    /// ``HintInk`` carries the colour and the four measured ratios. The short
+    /// of it: SwiftUI draws a field's hint in `UIColor.placeholderText`, which
+    /// train S004's screenshot measures at **1.72:1** on the field's interior,
+    /// and `--fg-muted` is 7.44:1 on white — the ink every other muted line in
+    /// the app already uses, and the one Android's `OutlinedTextField` hints
+    /// are drawn in.
+    ///
+    /// ### Why an appearance proxy, of all things
+    ///
+    /// There is no SwiftUI API for a placeholder's colour, and there are **39
+    /// files** with a `TextField` in them. One proxy here reaches all of them,
+    /// including the ones no batch has written yet, and it leaves the hint as
+    /// the field's own `prompt`: `XCUIElement.placeholderValue` keeps working
+    /// for the cases that read it, and VoiceOver keeps one element where an
+    /// overlay would give it two with the same words.
+    ///
+    /// Both classes, because SwiftUI uses both: a plain `TextField` is backed
+    /// by `UITextField`, and `TextField(…, axis: .vertical)` — the multi-line
+    /// shape this app uses wherever the audit failed a single line — by
+    /// `UITextView`.
+    ///
+    /// **It recolours labels inside a field, not the field's own text.** A
+    /// SwiftUI field's typed text is not a `UILabel`, so the only `UILabel` in
+    /// there is the placeholder. If a future SwiftUI draws something else as a
+    /// contained label, it gets the muted ink too — which is the ink the rest
+    /// of the app's secondary text is in, so the failure mode is "correct but
+    /// unasked for" rather than "unreadable".
+    private static func drawHintsInTheMutedInk() {
+        UILabel.appearance(whenContainedInInstancesOf: [UITextField.self])
+            .textColor = HintInk.ink
+        UILabel.appearance(whenContainedInInstancesOf: [UITextView.self])
+            .textColor = HintInk.ink
+    }
+
     init() {
+        // Before anything is built, let alone drawn: an appearance proxy is
+        // read when a view is created, so a window already on screen would
+        // keep the grey.
+        Self.drawHintsInTheMutedInk()
         // **One vault, handed to both.** Two `TokenVault()`s would reach the
         // same Keychain items — same service, same accounts — so this is not
         // a correctness fix; it is so that "where do the tokens live" has one

@@ -16,6 +16,12 @@ struct WorkspaceView: View {
     @Bindable var model: ShellModel
     @Environment(\.horizontalSizeClass) private var width
 
+    /// Read here and not only inside ``ShellScrollAwayChrome`` because this
+    /// view decides whether ``ShellTopBar`` is drawn at all: at the
+    /// accessibility sizes the header is the navigation bar's large title and
+    /// a band above the stack as well would be the header twice.
+    @Environment(\.dynamicTypeSize) private var typeSize
+
     /// Seeded once and only once: a `NavigationStack` whose path is refilled
     /// behind the person's back cannot be navigated out of.
     @State private var seededPush = false
@@ -103,11 +109,21 @@ struct WorkspaceView: View {
     /// The navigation bar keeps its back button, below our bar rather than
     /// inside it. On the root there is no title and no toolbar, so it
     /// collapses to nothing and Home looks as it did.
+    ///
+    /// ### At the accessibility sizes there is no bar here at all
+    ///
+    /// Owner answer 29. The band measured 300 of 852 points at AX5 and it
+    /// cannot scroll away from up here — it is above the `NavigationStack`,
+    /// not inside any page's scroll view. So at those sizes it is not drawn,
+    /// and ``ShellScrollAwayChrome`` puts the same two things inside the stack
+    /// where UIKit scrolls them away for us: the breadcrumb as a large
+    /// navigation title, the pill as a toolbar item. Below them nothing
+    /// changes.
     private var stack: some View {
         VStack(spacing: 0) {
-            if AuditStrip.active != .topBar {
+            if AuditStrip.active != .topBar && !typeSize.isAccessibilitySize {
                 ShellTopBar(
-                    leading: "\(ShellStrings.homeCrumb) / \(model.navigation.route.label.lowercased())",
+                    leading: crumb,
                     pill: model.chrome.pill,
                     onPill: { model.openConnection() }
                 ) {
@@ -116,11 +132,31 @@ struct WorkspaceView: View {
             }
             NavigationStack(path: $model.path) {
                 stackRoot
+                    // Applied to the stack's root here rather than inside
+                    // ``stackRoot``'s `switch`, so that every ``AuditStrip``
+                    // variant gets the same chrome as the shell it is a
+                    // variant of.
+                    .shellScrollAwayChrome(
+                        crumb: crumb,
+                        pill: model.chrome.pill,
+                        onPill: { model.openConnection() }
+                    )
                     .navigationDestination(for: Route.self) { route in
                         destination(route)
                     }
             }
         }
+    }
+
+    /// The breadcrumb, written once: ``ShellTopBar``'s leading string below
+    /// the accessibility sizes and the navigation title above them, so the two
+    /// chromes cannot drift into saying different things about where a person
+    /// is.
+    ///
+    /// ``ShellModel/navigation``'s route and not the destination's argument:
+    /// it is the open route either way, and the stack's root needs it too.
+    private var crumb: String {
+        "\(ShellStrings.homeCrumb) / \(model.navigation.route.label.lowercased())"
     }
 
     /// The stack's root. ``AuditStrip/root`` is the only way to audit a pushed
@@ -159,6 +195,18 @@ struct WorkspaceView: View {
                 RouteScreen(model: model, route: route)
             }
         }
+        // The pushed screen's own chrome: at the accessibility sizes this is
+        // where the breadcrumb and the pill are, because up above the stack
+        // they cannot scroll away. **No per-screen file changes** — every
+        // pushed screen in the app arrives through this one function.
+        .shellScrollAwayChrome(
+            crumb: crumb,
+            pill: model.chrome.pill,
+            onPill: { model.openConnection() }
+        )
+        // The `navBar` variant hides the bar the chrome above now lives in,
+        // which is what that variant is for: it takes one piece of the shell
+        // away, and at the accessibility sizes the bar *is* the header.
         if AuditStrip.active == .navBar {
             screen.toolbar(.hidden, for: .navigationBar)
         } else {

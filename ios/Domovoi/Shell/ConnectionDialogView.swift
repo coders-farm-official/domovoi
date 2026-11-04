@@ -379,30 +379,86 @@ private struct ServerRow: View {
 /// dialog open heard "forget", and then "forget", and one of the two deletes
 /// a server's token and identity without asking again.
 ///
-/// `.isModal` is the whole fix: VoiceOver ignores everything outside the
-/// element that carries it, so the two findings and the duplicate control go
-/// together. The dim is decorative and says so.
+/// `.isModal` was the first answer: VoiceOver ignores everything outside the
+/// element that carries it, so the duplicate control went away with it.
+///
+/// ### `.isModal` was not enough, and the measurement says so
+///
+/// It stops VoiceOver **navigating** out of the card. It leaves everything
+/// behind the card in the accessibility tree and rendered under the scrim,
+/// which is what Apple's audit reports. With the Alerts explain card up over
+/// Home — the same `ZStack`, with `.isModal` and with
+/// `screen.accessibilityHidden(…)` beside it — the audit still named
+/// `domovoi / home`, `127.0.0.1:6601`, `unverified`, `Kitchen` and the four
+/// phone-bar labels, `Contrast failed` and `Contrast nearly passed`, every one
+/// a view behind the 35% scrim; and the tree attachment listed the whole of
+/// Home as the card's siblings
+/// (train S009, `overnight-trains/S009/Alerts/att/testAlerts_TurningOnAlertsExplainsItselfFirst/`).
+///
+/// That item fixed its own card by making it a `fullScreenCover`
+/// (`AlertsHintRowView.swift:254-273`), which worked: `fullScreenCover` is
+/// `UIModalPresentationStyle.fullScreen`, and UIKit takes the presenting
+/// controller's views **out of the window** once the transition ends. There is
+/// then nothing behind the card to audit, to read at 35%, or to reach with
+/// VoiceOver. `.accessibilityHidden` could not do that from inside a
+/// `NavigationStack` destination, because it is a SwiftUI attribute and does
+/// not cross into the UIKit controller hosting the stack's content.
+///
+/// So the shape moves here, where all four dialogs share it (owner answer 6:
+/// "`DialogCard` becomes a presentation, shared fix for all four dialogs").
+/// **The call-site API is unchanged** — `DialogCard { … }` still — because its
+/// seven uses are in six files this unit does not own.
+///
+/// Three things are deliberate:
+///
+///  * **`Color.clear` is the whole body outside the cover.** The host has to
+///    stay in the hierarchy for the presentation to live, and it must draw and
+///    measure nothing: a call site puts this in a `ZStack` beside the screen,
+///    not in place of it.
+///  * **No `.presentationBackground(.clear)`.** A transparent full-screen
+///    cover is the one case UIKit does *not* take the presenter's views out of
+///    the window for, so it would hand back the hole this change closes, and
+///    show black rather than the screen if it did not. The 35% dim stays
+///    inside the cover instead — it is what the Alerts card already ships and
+///    what the S009 train measured clean.
+///  * **The card is still a `ScrollView`, and still `.isModal`.** The scroll
+///    view is why the card is reachable at AX5 (`RouteScreen.swift:247-249`),
+///    and the trait is belt and braces for a future SwiftUI that presents over
+///    the window rather than in place of it.
+///
+/// `.constant(true)`: the host exists only while its call site's `if` holds, so
+/// the call site's own condition is the binding, and nothing inside the cover
+/// can dismiss it behind the call site's back — a swipe cannot dismiss a
+/// `fullScreenCover` either.
 struct DialogCard<Content: View>: View {
 
     @ViewBuilder let content: Content
 
     var body: some View {
-        ZStack {
-            Color.black.opacity(0.35)
-                .ignoresSafeArea()
-                .accessibilityHidden(true)
-            ScrollView {
-                content
-                    .padding(20)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(.background, in: RoundedRectangle(cornerRadius: 14))
-                    .padding(20)
+        Color.clear
+            // A host, not a view: it takes no hits and says nothing, so the
+            // `ZStack` it sits in is the screen plus a presentation.
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+            .fullScreenCover(isPresented: .constant(true)) {
+                ZStack {
+                    Color.black.opacity(0.35)
+                        .ignoresSafeArea()
+                        .accessibilityHidden(true)
+                    ScrollView {
+                        content
+                            .padding(20)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(.background, in: RoundedRectangle(cornerRadius: 14))
+                            .padding(20)
+                    }
+                    // **The reason this type exists rather than a `ZStack` at
+                    // each call site.** Every dialog in the app gets the trait
+                    // — and now the presentation — from here, so a new one
+                    // cannot be added without them.
+                    .accessibilityAddTraits(.isModal)
+                }
             }
-            // **The reason this type exists rather than a `ZStack` at each
-            // call site.** Every dialog in the app gets the trait from here,
-            // so a new one cannot be added without it.
-            .accessibilityAddTraits(.isModal)
-        }
     }
 }
 

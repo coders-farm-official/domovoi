@@ -36,7 +36,47 @@ public struct ShellPill: Equatable, Sendable {
     /// local shell's pill has no room for it and Android does not draw it
     /// there either.
     public let unverified: Bool
+
+    /// Everything the pill says, in one sentence, for the **one** control that
+    /// has to say it without room to draw it: the navigation toolbar's pill at
+    /// the accessibility type sizes (owner answer 29 — the shell's header
+    /// scrolls away there, and `ShellTopBar` is not drawn at all).
+    ///
+    /// The bar draws four separate leaves — the pill's address, `unverified`,
+    /// the status word, and the pill's own ``accessibilityLabel`` — and a
+    /// toolbar item has room for a glyph. So the glyph carries all four to
+    /// VoiceOver rather than three of them being lost with the bar.
+    ///
+    /// Commas, not the chrome's spacing: the status words carry two leading
+    /// spaces for a bar that puts them beside a dot (``ShellStrings``), and a
+    /// screen reader reads a sentence, not a layout. This is an iOS-only
+    /// composition of existing strings — no new words — and it is in
+    /// `design-notes/ios/batch-2026-11-03/shell/DECISIONS.md`.
+    public var toolbarAccessibilityLabel: String {
+        var said = [accessibilityLabel, label]
+        if unverified { said.append(ShellStrings.unverified) }
+        if let status {
+            said.append(status.trimmingCharacters(in: .whitespaces))
+        }
+        return said.joined(separator: ", ")
+    }
 }
+
+/// The plugin a screen belongs to, as the band above it draws it: the name
+/// (falling back to the slug), `by <publisher>` or nothing, and where `manage`
+/// goes.
+///
+/// **A name for a type that is already capability-agnostic.** It is
+/// ``ImagesBand``, written by the Images item the night two items each wrote a
+/// band, and nothing in it is about Images: ``ImagesBand/of(_:)`` takes any
+/// ``CapabilityPlugin`` and `PluginFrame.kt:124`/`:144`/`:170` are the three
+/// rules it ports. One view draws both bands now (owner answer 58,
+/// `ios/Domovoi/Shell/PluginBandView.swift`), so this is the name that view
+/// reads it by. Renaming the declaration means editing `ImagesModels.swift`
+/// and the tests that name it, neither of which this unit owns —
+/// `design-notes/ios/batch-2026-11-03/shell/DECISIONS.md` says so under
+/// "Needs a shared change".
+public typealias PluginBand = ImagesBand
 
 /// What is drawn, for one state of the shell: §2.11's table as a value.
 ///

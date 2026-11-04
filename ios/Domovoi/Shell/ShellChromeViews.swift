@@ -324,3 +324,134 @@ struct PhoneBarView: View {
         }
     }
 }
+
+/// The server pill where there is room for a glyph and not for an address:
+/// the navigation toolbar, at the accessibility type sizes, where
+/// ``ShellScrollAwayChrome`` has taken ``ShellTopBar`` off the screen.
+///
+/// It does the one thing the bar's pill does — open the connection sheet —
+/// and it says everything the bar said: the address, `unverified` and the
+/// status word all reach VoiceOver through
+/// ``ShellPill/toolbarAccessibilityLabel``, because a toolbar item that drew
+/// them would be back to wrapping an address a character at a line, which is
+/// the measurement the bar's own reflow exists for.
+///
+/// **The warning is drawn, not only spoken.** `unverified` is the one of the
+/// three that is a warning rather than a status, so it keeps a glyph.
+/// ``Color/warnInk`` is 5.73:1 on white, and the large-title navigation bar's
+/// background is the system background — the surface that ink was measured
+/// against, unlike the `.quaternary` capsule the word had to be moved off of.
+struct ShellPillToolbarButton: View {
+
+    let pill: ShellPill
+    let onTap: () -> Void
+
+    var body: some View {
+        Button(action: onTap) {
+            HStack(spacing: 4) {
+                Image(systemName: "server.rack")
+                if pill.unverified {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(Color.warnInk)
+                }
+            }
+            .font(.footnote)
+            // The frame is the space and `contentShape` is the target: the
+            // same pair the phone bar's tabs and the header's live dot both
+            // needed after Apple's audit measured them under 44 points.
+            .frame(minWidth: 44, minHeight: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(Color.brandInk)
+        .accessibilityLabel(pill.toolbarAccessibilityLabel)
+    }
+}
+
+/// At the accessibility type sizes, the shell's header is the navigation
+/// bar's own **large title** rather than a band above the stack — so it
+/// scrolls away with the page (owner answer 29: "shell chrome (header and
+/// plugin band) scrolls away at accessibility sizes, app-wide").
+///
+/// ### The measurement
+///
+/// On a 393 x 852 phone at AX5, train S001 (`testImages_AtTheLargestTypeSize`)
+/// measured the shell taking 300 points for ``ShellTopBar``, 44 for the
+/// navigation bar, 256 for the plugin band and 146 for the phone bar — a
+/// **102-point** window over 1,626 points of content. It is usable, and it is
+/// a straw to read a page through.
+///
+/// ### Why Apple's mechanism and not ours
+///
+/// A large navigation title is already the thing that scrolls away: UIKit
+/// collapses it into the inline bar as the page's own scroll view moves, at no
+/// cost to any screen's code. The alternative — inserting the header into each
+/// page's scroll view — is 30-odd files, and the one modifier that looked like
+/// a shortcut, `safeAreaInset`, has produced two occlusion bugs in
+/// ``WorkspaceView`` already (both written up at `WorkspaceView.swift:52-105`:
+/// a bar drawn over the navigation bar's back button, and a `back to …` button
+/// drawn under the phone bar).
+///
+/// ### What changes, and what does not
+///
+/// Below the accessibility sizes this modifier does **nothing**: there is no
+/// title, no toolbar item, the navigation bar collapses to nothing as it
+/// always did, and ``ShellTopBar``'s existing reflow is untouched
+/// (`ShellChromeViews.swift:12-26`). At AX5 the shell draws no `ShellTopBar`
+/// at all, and this carries both halves of it — the breadcrumb as the title,
+/// the pill as a toolbar item.
+///
+/// ### The one thing to measure next
+///
+/// A `UINavigationBar` large title is a single line, and a long breadcrumb at
+/// AX5 does not fit one: UIKit shrinks it toward the inline size rather than
+/// wrapping. That is Apple's own behaviour for Apple's own chrome, and it is
+/// the reason the breadcrumb is handed in whole rather than being padded out —
+/// but the house rule against shrinking text means it is worth a reading
+/// rather than an assumption, so `testShell_*` measures the title's height at
+/// AX5 and the report says what it found. If it reads as shrunk, the answer is
+/// the route's label alone ("music") in place of the breadcrumb
+/// ("domovoi / music"), which is the same information one word shorter.
+struct ShellScrollAwayChrome: ViewModifier {
+
+    /// The breadcrumb ``ShellTopBar`` would have drawn, as handed to that bar:
+    /// the chrome's leading spaces are trimmed here, because a screen reader
+    /// reads a title and not a layout.
+    let crumb: String
+
+    let pill: ShellPill?
+    let onPill: () -> Void
+
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if typeSize.isAccessibilitySize {
+            content
+                .navigationTitle(crumb.trimmingCharacters(in: .whitespaces))
+                .navigationBarTitleDisplayMode(.large)
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        if let pill {
+                            ShellPillToolbarButton(pill: pill, onTap: onPill)
+                        }
+                    }
+                }
+        } else {
+            content
+        }
+    }
+}
+
+extension View {
+
+    /// ``ShellScrollAwayChrome``, applied where a page is the content of a
+    /// `NavigationStack`: both shells' roots and the workspace's destinations.
+    func shellScrollAwayChrome(
+        crumb: String,
+        pill: ShellPill?,
+        onPill: @escaping () -> Void
+    ) -> some View {
+        modifier(ShellScrollAwayChrome(crumb: crumb, pill: pill, onPill: onPill))
+    }
+}
