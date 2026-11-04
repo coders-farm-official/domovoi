@@ -102,6 +102,44 @@ extension StubHouseUITests {
         return "\(first.month) \(first.day) – \(last.month) \(last.day), \(last.year)"
     }
 
+    /// Tap one of the view toggle's four words, scrolling the toggle
+    /// **sideways** first when that word is not on screen.
+    ///
+    /// The toggle is a horizontal `ScrollView` (``CalendarScreenView``'s
+    /// `CalendarRangeBarView`), and at
+    /// `UICTContentSizeCategoryAccessibilityXXXL` four scaling words do not
+    /// fit a 390pt phone. `week` is the third of them, nothing in this suite
+    /// had tapped past the second at that size, and a tap on an element that
+    /// is off screen **fails rather than scrolling to it** (REVIEW-1, note 8).
+    ///
+    /// The swipe is dispatched on a toggle word that *is* hittable, so the
+    /// gesture lands inside the toggle's own scroll view: swiping the
+    /// application would scroll the agenda underneath instead. The second
+    /// half of the flicks go the other way, in case the first swipe carried
+    /// the wanted word off the left-hand end.
+    @MainActor
+    func calTapViewWord(_ app: XCUIApplication, _ word: String, flicks: Int = 4) -> Bool {
+        let wanted = app.buttons[word]
+        for flick in 0..<flicks {
+            if wanted.exists, wanted.isHittable {
+                wanted.tap()
+                return true
+            }
+            guard let onScreen = CalWords.viewWords
+                .map({ app.buttons[$0] })
+                .first(where: { $0.exists && $0.isHittable })
+            else { break }
+            if flick < flicks / 2 {
+                onScreen.swipeLeft()
+            } else {
+                onScreen.swipeRight()
+            }
+        }
+        print("=== THE TOGGLE'S `\(word)` NEVER BECAME HITTABLE — tree follows ===")
+        print(app.debugDescription)
+        return false
+    }
+
     /// Set the fixture's crowd of past events, or clear it.
     @MainActor
     func setCalCrowd(_ count: Int, port: Int = 6601) {
@@ -143,7 +181,7 @@ extension StubHouseUITests {
     func testCal_TheWeekShowsSevenDayHeadersWithTheAgendasRowsUnderThem() throws {
         let (app, landed) = openCalendar()
         XCTAssertTrue(landed, "the agenda never drew a row")
-        app.buttons[CalWords.week].tap()
+        XCTAssertTrue(calTapViewWord(app, CalWords.week), "the toggle has no reachable `week`")
 
         let label = calWeekRangeLabel()
         XCTAssertTrue(
@@ -211,7 +249,7 @@ extension StubHouseUITests {
     func testCal_TheWeeksChevronStepsSevenDaysAndTodayComesBack() throws {
         let (app, landed) = openCalendar()
         XCTAssertTrue(landed, "the agenda never drew a row")
-        app.buttons[CalWords.week].tap()
+        XCTAssertTrue(calTapViewWord(app, CalWords.week), "the toggle has no reachable `week`")
 
         let thisWeek = calWeekRangeLabel(0)
         let nextWeek = calWeekRangeLabel(1)
@@ -261,7 +299,9 @@ extension StubHouseUITests {
     @MainActor
     func testCal_TheWeeksEmptyDayLineGrowsAtAccessibilitySize() throws {
         func lineHeight(_ app: XCUIApplication) -> CGFloat? {
-            app.buttons[CalWords.week].tap()
+            // The toggle is nudged sideways first at AX5, where `week` is the
+            // third of four scaling words (``calTapViewWord(_:_:flicks:)``).
+            guard calTapViewWord(app, CalWords.week) else { return nil }
             let line = app.staticTexts[CalWords.nothingOn]
             guard calendarScroll(app, to: line, flicks: 20) else { return nil }
             return line.frame.height
@@ -310,7 +350,7 @@ extension StubHouseUITests {
         let edges = calendarEdges(app)
         XCTAssertFalse(edges.isEmpty, "there is no measured edge to classify a finding against")
 
-        app.buttons[CalWords.week].tap()
+        XCTAssertTrue(calTapViewWord(app, CalWords.week), "the toggle has no reachable `week`")
         XCTAssertTrue(
             app.staticTexts[CalWords.nothingOn].waitForExistence(timeout: 20),
             "the week did not draw"
@@ -394,8 +434,10 @@ extension StubHouseUITests {
 
         // The read's marker is **today's group header**, not a row: `porch
         // light` is the row under test, so waiting for it would turn "the
-        // feature is broken" into "the read never landed". Today's header is
-        // third in the list whatever happens, so it is always built.
+        // feature is broken" into "the read never landed". Today's group is
+        // at the top of the list — second, under yesterday's, while the
+        // open-ended row that answer 17 keeps is on screen — so it is always
+        // in the agenda's first build, whichever way the feature behaves.
         let todayHeader = app.descendants(matching: .any)
             .matching(NSPredicate(format: "label == %@", "today \(calendarISODay(0))"))
             .firstMatch
@@ -446,6 +488,14 @@ extension StubHouseUITests {
 enum CalWords {
     /// The toggle's fourth word, added by answer 14.
     static let week = "week"
+
+    /// The toggle's first word, which is where a sideways nudge starts
+    /// (``calTapViewWord(_:_:flicks:)``).
+    static let agenda = "agenda"
+
+    /// All four, in the toggle's own order — `CalendarViewMode.allCases`,
+    /// spelt out for this file's reason.
+    static let viewWords = [agenda, CalendarWords.day, week, CalendarWords.month]
 
     /// What a day of the week with nothing on it says
     /// (``CalendarStrings/nothingOnThisDay``) — iOS-only, and drawn by no

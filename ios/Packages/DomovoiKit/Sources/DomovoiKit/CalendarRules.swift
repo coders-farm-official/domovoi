@@ -265,24 +265,79 @@ public struct CalendarWindow: Equatable, Sendable {
         startMs <= other.startMs && other.endMs <= endMs
     }
 
-    /// The two overlap, or one begins exactly where the other ends.
+    /// The two overlap, or one begins exactly where the other ends — plain
+    /// geometry, and **nothing more**.
     ///
-    /// This is what decides whether a range change **widens** the read or
-    /// replaces it. Stepping a chevron always touches — the ranges are
-    /// adjacent or overlapping by construction — and `today` from six months
-    /// out does not, which is the difference between "read a little more" and
-    /// "read half a year nobody asked for".
+    /// Two **open-ended** windows always touch: both run to the same ∞, so
+    /// `[nov 3, ∞)` and `[may 5, ∞)` share every instant after november. That
+    /// is true, and it is useless as a decision — which is why
+    /// ``widens(to:)``, and not this, is what the model asks before it unions
+    /// two ranges.
     ///
-    /// **An open-ended window never touches a bounded one**, which is not a
-    /// detail. The union of `[nov 3, ∞)` and `[oct 25, dec 6)` is
-    /// `[oct 25, ∞)` — an open-ended read starting two months back, whose
-    /// `limit` is then spent on october before it reaches today. One switch
-    /// from the agenda to month would have turned every later range into
-    /// "already covered" and undone answer 16 in a single tap. A mixed pair
-    /// replaces instead: the new range is read on its own.
+    /// It used to be asked directly, with the mixed-pair rule bolted on here,
+    /// and a review measured what that cost (REVIEW-1, must 1): every agenda
+    /// range "touched" every other, however far apart, so the asked floor
+    /// only ever sank and `today` from six months out could not bring it
+    /// home. The rule belongs where the three cases can be seen together.
     public func touches(_ other: CalendarWindow) -> Bool {
-        guard isOpenEnded == other.isOpenEnded else { return false }
-        return startMs <= other.endMs && other.startMs <= endMs
+        startMs <= other.endMs && other.startMs <= endMs
+    }
+
+    /// Whether a move to `other` should **widen** this window — their union
+    /// is read — or **replace** it, so `other` alone is read.
+    ///
+    /// Three rules, each paid for by a defect:
+    ///
+    /// * **A mixed pair replaces.** The union of `[nov 3, ∞)` and
+    ///   `[oct 25, dec 6)` is `[oct 25, ∞)` — an open-ended read starting two
+    ///   months back, whose `limit` is spent on october before it reaches
+    ///   today. One switch from the agenda to month would have turned every
+    ///   later range into "already covered" and undone answer 16 in a single
+    ///   tap.
+    /// * **A pair that does not meet replaces.** `today` from six months out
+    ///   reads its own range, not half a year of everything in between.
+    /// * **A widening is bounded**, by ``excessDays(over:)`` against
+    ///   ``calendarWidenLimitDays``. Two open-ended windows meet however far
+    ///   apart they are, and a bounded one grows a day with every forward
+    ///   chevron: without a bound the asked window only ever got wider, and
+    ///   every step re-read all of it (REVIEW-1, must 1 and should 5).
+    ///
+    /// What is **not** here is the fourth rule, because it is not a property
+    /// of two windows: a page that came back cut by `LIMIT` must not be
+    /// widened below at all (``CalendarModel``'s `rangeMoved`).
+    public func widens(to other: CalendarWindow) -> Bool {
+        guard isOpenEnded == other.isOpenEnded, touches(other) else { return false }
+        return excessDays(over: other) <= calendarWidenLimitDays
+    }
+
+    /// How many days of instants this window asks for **below** `other`'s
+    /// floor.
+    ///
+    /// The one direction that can *starve* a view. The route is
+    /// `ORDER BY starts_at ASC LIMIT :limit` (`calendar.py:65-67`), so a read
+    /// whose floor is six months under the range on screen spends its limit
+    /// on the summer and comes back carrying nothing the view can draw — the
+    /// empty agenda answer 16 was asked for. An excess *ceiling* costs bytes
+    /// and starves nothing, because the rows the view needs are the first
+    /// ones that ordering reaches.
+    public func daysBelow(_ other: CalendarWindow) -> Int {
+        Int(max(0, other.startMs - startMs) / calendarNominalDayMs)
+    }
+
+    /// How many days of instants a union with `other` would ask for that
+    /// `other` itself does not need — below its floor, and above its ceiling.
+    ///
+    /// A shared open ceiling counts for nothing: what bounds an open-ended
+    /// read is `limit` and not a date, and an agenda stepped a week back asks
+    /// for exactly the range it wants, since its new floor *is* the union's.
+    /// So the measure is the waste, and for an open-ended pair the waste is
+    /// all floor.
+    ///
+    /// Meaningful for a pair of the same open-endedness, which is what
+    /// ``widens(to:)`` checks first; `Int64.max - Int64.max` is the only
+    /// arithmetic an open-ended pair reaches here.
+    public func excessDays(over other: CalendarWindow) -> Int {
+        daysBelow(other) + Int(max(0, endMs - other.endMs) / calendarNominalDayMs)
     }
 
     /// The smallest window holding both — the span, not the set, so a gap
@@ -294,6 +349,29 @@ public struct CalendarWindow: Equatable, Sendable {
         )
     }
 }
+
+/// A nominal day in milliseconds — the unit the widening budget is measured
+/// in, and the one place in this file that pretends a day is a fixed length.
+///
+/// It is a **budget**, not a date: an hour either way across a daylight-saving
+/// change moves no decision here, where civil arithmetic (``CalendarDay``,
+/// which every real bound is cut with) would make "is this read worth
+/// widening" depend on the time of year.
+let calendarNominalDayMs: Int64 = 86_400_000
+
+/// How far past the range on screen a read may be widened before it is
+/// re-pointed instead — ``CalendarWindow/widens(to:)``.
+///
+/// Sixty-two days, which is two months of stepping: a month grid's own 42
+/// cells plus a step still widens, and a jump of a season does not. The
+/// number is a budget and not a boundary — what it has to do is exist. The
+/// branch it closes had none, so the asked window grew for the life of the
+/// model: thirty forward day-chevrons asked for a thirty-day window and
+/// re-read all of it on every tap, and in the agenda — where two open-ended
+/// windows meet however far apart they are — the floor sank with every step
+/// back and `today` could never bring it home (REVIEW-1, must 1, measured
+/// with 26 chevrons and a probe).
+public let calendarWidenLimitDays = 62
 
 /// How many rows one windowed read asks for — the route's own default
 /// (`calendar.py:41`, `ge=1, le=2000`).

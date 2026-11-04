@@ -46,10 +46,10 @@ import Synchronization
 /// * Stepping stays responsive because a page is **reused**, and widened
 ///   rather than replaced: a range already inside the page costs nothing
 ///   (``CalendarPage/serves(_:)``), and a range next to it is read as the
-///   union of the two (``CalendarWindow/touches(_:)``), so flicking back and
+///   union of the two (``CalendarWindow/widens(to:)``), so flicking back and
 ///   forth over a fortnight settles into one window instead of a request a
-///   tap. A jump that touches nothing read is a fresh read of just that
-///   range.
+///   tap. A jump that meets nothing read — and any step at all once a page
+///   has come back cut by `LIMIT` — is a fresh read of just that range.
 ///
 /// The cost that remains is named at ``calendarWindow(mode:anchor:in:)``: the
 /// route filters on `starts_at`, so an event longer than a day that began
@@ -405,11 +405,23 @@ public final class CalendarModel {
     /// * the page already **serves** the new range — nothing is asked, and
     ///   ``ApiRead/fetches`` does not move. Agenda → day on the anchor is
     ///   this: the day is inside the agenda's own open-ended window.
-    /// * the asked window **touches** the new range — their union is read, so
-    ///   a fortnight of stepping back and forth settles into one window
-    ///   rather than costing a request a tap.
-    /// * it touches nothing — the new range alone is read. `today` from six
-    ///   months out must not read half a year to get home.
+    /// * the asked window **widens** to the new range
+    ///   (``CalendarWindow/widens(to:)``) — their union is read, so a
+    ///   fortnight of stepping back and forth settles into one window rather
+    ///   than costing a request a tap.
+    /// * it does not — the new range alone is read. `today` from six months
+    ///   out must not read half a year to get home, and a review measured
+    ///   that it did: two open-ended windows meet however far apart they are,
+    ///   so in the agenda — the view this screen opens on — the floor sank
+    ///   with every step back and nothing ever brought it home (REVIEW-1,
+    ///   must 1).
+    ///
+    /// **A cut page bars a widening outright.** `truncated` is proof that
+    /// `limit` and not the window is what bounds this house's read, and the
+    /// route is `ORDER BY starts_at ASC`: asking from a floor below the range
+    /// on screen then spends those 500 rows on instants nobody is looking at
+    /// and comes back with nothing to draw. That is the empty agenda answer
+    /// 16 was asked for, one range-change later.
     ///
     /// The union is taken against ``window`` (what was **asked**) and not
     /// against the page's own window, because a read may still be in flight:
@@ -420,6 +432,11 @@ public final class CalendarModel {
     /// drops a reply for the range the person has just left.
     private func rangeMoved() {
         let wanted = wantedWindow
+        let asked = window.current
+        // A page cut by `LIMIT` is not evidence about any range but its own,
+        // and it is evidence about the house: widening is off while it is
+        // what is in hand.
+        let widen = events.data?.truncated != true && asked.widens(to: wanted)
         // Served **and** safe to leave alone. The second half is not
         // belt-and-braces: ``window`` is what any read still in flight is
         // for, and ``ApiRead`` has one slot for its value, so a reply for a
@@ -430,9 +447,19 @@ public final class CalendarModel {
         // never stops. When the in-flight window does not cover the new
         // range, the read is re-pointed, and ``ApiRead/refresh()``'s cancel
         // is what drops the reply that is on its way.
-        if events.data?.serves(wanted) == true, window.current.contains(wanted) { return }
-        let asked = window.current
-        window.set(asked.touches(wanted) ? asked.union(wanted) : wanted)
+        if events.data?.serves(wanted) == true, asked.contains(wanted) {
+            // Nothing to ask for — the rows are already here. But the box
+            // must not be left holding a floor nobody is looking at: `today`
+            // after a walk into the past lands exactly here, and a box still
+            // pointed at may means the **next** read — a push, a write, the
+            // screen coming back — spends its limit on the summer. Narrowing
+            // costs no request, and misfiles nothing: a page carries the
+            // window it asked for (``CalendarPage``), so anything in flight
+            // still lands under its own range.
+            if asked.daysBelow(wanted) > calendarWidenLimitDays { window.set(wanted) }
+            return
+        }
+        window.set(widen ? asked.union(wanted) : wanted)
         events.refresh()
     }
 

@@ -301,8 +301,10 @@ final class CalendarModelTests: XCTestCase {
             "the week uses the range wording and its own word (answer 14)"
         )
 
-        // No `onRange`: the 4th is inside the month grid just read, so
-        // ``CalendarPage/serves(_:)`` answers it with no request at all.
+        // No `onRange`: the page in hand is still the **month grid's** — the
+        // week asked for nothing either, being inside it — and the 4th is
+        // inside that grid too, so ``CalendarPage/serves(_:)`` answers both
+        // with no request at all.
         model.show(.day)
         XCTAssertEqual(
             "tap new event to add one for wed, nov 4",

@@ -257,8 +257,12 @@ final class CalendarWindowTests: XCTestCase {
         )
     }
 
-    /// `contains`, `touches` and `union` — and the pair that must **not**
-    /// touch.
+    /// `contains`, `touches`, `union` — and the three pairs that must **not**
+    /// widen.
+    ///
+    /// ``CalendarWindow/touches(_:)`` is geometry and nothing else since
+    /// REVIEW-1: it is asserted here as geometry, and every decision is
+    /// asserted through ``CalendarWindow/widens(to:)``.
     func testAnOpenEndedWindowNeverWidensABoundedOne() {
         let agenda = CalendarWindow(startMs: 300, endMs: CalendarWindow.noCeiling)
         let grid = CalendarWindow(startMs: 100, endMs: 900)
@@ -266,19 +270,119 @@ final class CalendarWindowTests: XCTestCase {
         XCTAssertTrue(agenda.contains(CalendarWindow(startMs: 400, endMs: 500)))
         XCTAssertFalse(agenda.contains(grid), "the grid begins before the agenda's floor")
 
-        XCTAssertFalse(
+        XCTAssertTrue(
             agenda.touches(grid),
+            "geometrically they do overlap — 300 to 900 is in both, and a "
+                + "predicate that denied it would be lying about the shapes"
+        )
+        XCTAssertFalse(
+            agenda.widens(to: grid),
             "their union would be an open-ended read from 100, whose limit is "
                 + "spent before it reaches 300 — answer 16 undone in one tap"
         )
-        XCTAssertFalse(grid.touches(agenda))
+        XCTAssertFalse(grid.widens(to: agenda))
 
         let next = CalendarWindow(startMs: 800, endMs: 1_600)
         XCTAssertTrue(grid.touches(next))
+        XCTAssertTrue(grid.widens(to: next))
         XCTAssertEqual(CalendarWindow(startMs: 100, endMs: 1_600), grid.union(next))
 
         let far = CalendarWindow(startMs: 5_000, endMs: 6_000)
-        XCTAssertFalse(grid.touches(far), "`today` from six months out reads its own range")
+        XCTAssertFalse(grid.touches(far))
+        XCTAssertFalse(grid.widens(to: far), "`today` from six months out reads its own range")
+    }
+
+    /// **The agenda's floor comes home when `today` does.**
+    ///
+    /// Twenty-six chevrons back — the agenda steps seven days
+    /// (`CalendarModels.kt:62`) — and then `today`, as arithmetic over the
+    /// windows alone. This is REVIEW-1's must 1 at the size of one predicate:
+    /// both windows are open-ended, so they share the same ∞ and *touch*
+    /// however far apart they are. While `touches` was what decided a
+    /// widening, every step unioned, `union` takes the lower floor, and the
+    /// asked floor was therefore monotonically non-increasing for the life of
+    /// the model: six months out, `today` could not bring it back, and the
+    /// next read asked `start=may&limit=500` for a screen showing november.
+    func testAnAgendaWalkedIntoThePastComesHomeWhenTodayDoes() {
+        let today = day(2026, 11, 4)
+        let home = calendarWindow(mode: .agenda, anchor: today, in: chicago)
+        var asked = home
+
+        for step in 1...26 {
+            let wanted = calendarWindow(
+                mode: .agenda, anchor: today.adding(days: -7 * step), in: chicago
+            )
+            XCTAssertTrue(
+                asked.widens(to: wanted),
+                "a chevron's own step must widen: it asks for exactly the range "
+                    + "it wants, since the new floor is the union's"
+            )
+            asked = asked.union(wanted)
+            XCTAssertEqual(
+                wanted.startMs, asked.startMs,
+                "stepping back must not leave the floor above the range in view"
+            )
+        }
+        // 26 × 7 = 182 days, plus the agenda's day of lead-in: 5 may 2026,
+        // which is what the probe measured on this branch (REVIEW-1, must 1).
+        XCTAssertEqual(today.adding(days: -183).startMs(in: chicago), asked.startMs)
+        XCTAssertEqual(
+            182, asked.daysBelow(home),
+            "the walk back is half a year below today's own floor"
+        )
+        XCTAssertFalse(
+            asked.widens(to: home),
+            "`today` from six months out widened the window instead of replacing "
+                + "it, so the floor can never come home (REVIEW-1, must 1)"
+        )
+        let oneStepBack = calendarWindow(
+            mode: .agenda, anchor: today.adding(days: -7), in: chicago
+        )
+        XCTAssertTrue(
+            home.widens(to: oneStepBack),
+            "one step back is still a widening — the bound must not cost the "
+                + "thing it bounds"
+        )
+    }
+
+    /// **A widening is bounded in either direction**, so the asked window
+    /// cannot grow for the life of the model (REVIEW-1, should 5).
+    ///
+    /// Thirty forward day-chevrons used to ask for a thirty-day window and
+    /// re-read all of it on every tap; past ``calendarWindowLimit`` the page
+    /// is cut, ``CalendarPage/serves(_:)`` goes false for every sub-range,
+    /// and each further step became a full re-read of an ever-larger range.
+    /// Both directions are asserted because the measure has a floor term and
+    /// a ceiling term, and only the floor one can starve a view.
+    func testAWideningIsBoundedInEitherDirection() {
+        let start = day(2026, 11, 4)
+
+        func walk(_ direction: Int) -> CalendarWindow {
+            var asked = calendarWindow(mode: .day, anchor: start, in: chicago)
+            for step in 1...200 {
+                let wanted = calendarWindow(
+                    mode: .day, anchor: start.adding(days: direction * step), in: chicago
+                )
+                asked = asked.widens(to: wanted) ? asked.union(wanted) : wanted
+            }
+            return asked
+        }
+
+        let forwards = walk(1)
+        let lastDay = calendarWindow(mode: .day, anchor: start.adding(days: 200), in: chicago)
+        XCTAssertLessThanOrEqual(
+            forwards.daysBelow(lastDay),
+            calendarWidenLimitDays,
+            "two hundred forward chevrons left the floor further behind the day "
+                + "on screen than the budget allows"
+        )
+        let backwards = walk(-1)
+        XCTAssertLessThanOrEqual(
+            (backwards.endMs - backwards.startMs) / calendarNominalDayMs,
+            Int64(calendarWidenLimitDays) + 2,
+            "two hundred chevrons back asked for a window of "
+                + "\((backwards.endMs - backwards.startMs) / calendarNominalDayMs) days"
+        )
     }
 
     /// A page cut short by `LIMIT` is this range's answer and **nobody
@@ -372,6 +476,16 @@ final class CalendarWindowTests: XCTestCase {
                 // where the window's bounds are written in `Z`.
                 let from = bound("start")
                 let until = bound("end")
+                // **`ORDER BY starts_at ASC LIMIT :limit`** (`calendar.py:65-67`),
+                // and not only the two bounds. Honoured since REVIEW-1: the
+                // defect answer 16 was asked for is a *cut* read — the oldest
+                // 500 from a floor below the range on screen — and a house
+                // that answered with everything could not reproduce it at
+                // all. Every case here but
+                // `testTodayComesHomeInAHouseWith...` has a handful of rows,
+                // for which this is the order they were written in anyway.
+                let limit = (items.first { $0.name == "limit" }?.value).flatMap { Int($0) }
+                    ?? calendarWindowLimit
                 let body = self.rows
                     .filter { row in
                         guard let at = isoMs(row.startsAt) else { return false }
@@ -379,6 +493,8 @@ final class CalendarWindowTests: XCTestCase {
                         if let until, at >= until { return false }
                         return true
                     }
+                    .sorted { (isoMs($0.startsAt) ?? 0) < (isoMs($1.startsAt) ?? 0) }
+                    .prefix(limit)
                     .map {
                         """
                         {"id":\($0.id),"title":"\($0.title)","starts_at":"\($0.startsAt)",\
@@ -402,6 +518,31 @@ final class CalendarWindowTests: XCTestCase {
             (3, "choir practice", "2026-11-20T19:00:00-06:00"),
             (4, "flu jab", "2025-10-01T10:00:00-05:00"),
         ])
+    }
+
+    /// A house with more history than one read can carry: 600 events in the
+    /// 182 days behind the clock, plus `pottery class` today.
+    ///
+    /// The crowd is dense on purpose — about three and a third a day — so
+    /// that a read whose floor is six months back is **cut** before it
+    /// reaches today. That is the whole defect answer 16 was asked for, and
+    /// the UI case `testCal_ABoundedReadFindsTodayInAHouseWithYearsBehindIt`
+    /// seeds the same shape in the stub house.
+    private func crowdedHouse() -> WindowHouse {
+        let floor = midnight(2026, 5, 5)
+        let ceiling = midnight(2026, 11, 3)
+        let gap = (ceiling - floor) / 600
+        var rows: [(id: Int64, title: String, startsAt: String)] = (0..<600).map { index in
+            (
+                id: Int64(1_000 + index),
+                title: "backfill \(index)",
+                startsAt: calendarInstant(
+                    Date(timeIntervalSince1970: Double(floor + gap * Int64(index)) / 1000)
+                )
+            )
+        }
+        rows.append((1, "pottery class", "2026-11-04T11:00:00-06:00"))
+        return WindowHouse(rows: rows)
     }
 
     private func rig(_ house: WindowHouse) -> (CalendarModel, InMemoryShellStore) {
@@ -536,6 +677,177 @@ final class CalendarWindowTests: XCTestCase {
             model.askedWindow,
             "a jump read everything in between"
         )
+    }
+
+    /// **`today` comes home in a house with more history than one read can
+    /// carry** — REVIEW-1's must 1, at the size of the model.
+    ///
+    /// Twenty-six agenda chevrons back (seven days a step) and then `today`,
+    /// against 600 events in the six months behind us. The walk back is
+    /// legitimate and every step of it asks for what it wants; what must not
+    /// happen is that the asked **floor** stays in may when the screen comes
+    /// home to november. The route is `ORDER BY starts_at ASC LIMIT 500`, so
+    /// `start=may&limit=500` in this house is 500 rows of summer and today is
+    /// not among them: the agenda drew `nothing on the calendar` in a house
+    /// with a full calendar, which is the exact defect answer 16 was asked
+    /// for, one `today` later.
+    ///
+    /// `pottery class` is what discriminates: a read that came home has it,
+    /// and a read still pointed at may cannot — the cut took the oldest 500
+    /// and today is the newest row in the house.
+    func testTodayComesHomeInAHouseWithMoreHistoryThanOneReadCanCarry() async {
+        let house = crowdedHouse()
+        let (model, _) = rig(house)
+        model.start()
+        await settleUntil({ model.events.answered }, "the opening read")
+        XCTAssertTrue(
+            model.visible.contains { $0.title == "pottery class" },
+            "the opening read cannot see today"
+        )
+
+        for step in 1...26 {
+            model.step(-1)
+            await settleUntil({ !model.rangePending }, "the read for chevron \(step)")
+        }
+        XCTAssertEqual(
+            day(2026, 11, 4).adding(days: -183).startMs(in: chicago),
+            model.askedWindow.startMs,
+            "the walk back asked for something other than the range it walked to"
+        )
+        XCTAssertTrue(
+            model.events.data?.truncated == true,
+            "the read from may is not cut, so this case cannot see the starving: "
+                + "the crowd is too thin or the house stopped honouring `limit`"
+        )
+
+        model.goToToday()
+        await settleUntil({ !model.rangePending }, "the read home")
+
+        XCTAssertEqual(
+            calendarWindow(mode: .agenda, anchor: day(2026, 11, 4), in: chicago),
+            model.askedWindow,
+            "the asked floor is still six months back: the window only ever "
+                + "widened and `today` could not bring it home (REVIEW-1, must 1)"
+        )
+        XCTAssertEqual(
+            "start=2026-11-03T06%3A00%3A00Z&limit=500",
+            house.asked.current.last,
+            "the read home asked for the oldest 500 from the walk's own floor"
+        )
+        XCTAssertTrue(
+            model.visible.contains { $0.title == "pottery class" },
+            "`nothing on the calendar` in a house with a full calendar — the "
+                + "read home spent its limit on the summer"
+        )
+        XCTAssertNil(model.emptyText)
+    }
+
+    /// **A reply is filed under the range its own request asked for, and not
+    /// under whatever the box holds when it lands** — the range key is
+    /// captured *before* the `await` (REVIEW-1, must 2).
+    ///
+    /// The one live path where the box moves and the read in flight is **not**
+    /// cancelled: ``CalendarModel/serverChanged()`` sets the window and then
+    /// calls ``ApiRead/serverChanged()``, whose `guard lastBase != base()`
+    /// returns without cancelling anything when the address has not actually
+    /// changed — which is the case `ApiRead` documents, a caller that "shouts
+    /// the server changed on every redraw". So: december's union is held open
+    /// at the server, the box is narrowed back to december's own grid inside
+    /// that round trip, and only then is the reply let go.
+    ///
+    /// ``CalendarWindowTests/testAHeldReplyForTheRangeJustLeftIsDropped()``
+    /// looks like this case and is not: there the move *cancels*, so
+    /// ``ApiRead``'s own `guard !Task.isCancelled` drops the reply and the
+    /// fetch closure's capture is never exercised. A review moved
+    /// `let asked = window.current` below the `await` and the whole suite
+    /// stayed green. This is the case that fails.
+    func testAReplyIsFiledUnderTheRangeItAskedForAndNotTheBoxsNow() async {
+        let house = spreadOut()
+        let (model, _) = rig(house)
+        model.start()
+        await settleUntil({ model.events.answered }, "the opening read")
+        model.show(.month)
+        await settleUntil({ !model.rangePending }, "november's grid")
+
+        // December's grid overlaps november's, so the step widens: the union
+        // `[nov 1, jan 10)` is what goes out, and the `end` is what tells it
+        // from november's own read.
+        house.hold.set("end=\(calendarInstantEncoded(ms: midnight(2027, 1, 10)))")
+        let fetchesBefore = model.events.fetches
+        model.step(1)
+        await settle(for: house.arrived, what: "the union's read")
+        XCTAssertEqual(
+            window((2026, 11, 1), (2027, 1, 10)), model.askedWindow,
+            "the held request is not the union, so the move below asserts nothing"
+        )
+
+        // **Inside the round trip.** Nothing here cancels: the address has
+        // not changed, so `ApiRead.serverChanged()` returns at its guard and
+        // the held request is still the live one.
+        model.serverChanged()
+        XCTAssertEqual(
+            window((2026, 11, 29), (2027, 1, 10)), model.askedWindow,
+            "the box did not move, so there is nothing for the reply to be "
+                + "misfiled under"
+        )
+        XCTAssertEqual(
+            fetchesBefore + 1, model.events.fetches,
+            "something re-read: the reply this case is about was cancelled"
+        )
+
+        house.release.set(true)
+        await settleUntil({ !model.rangePending }, "the held reply")
+        XCTAssertFalse(house.ranOut.current, "the park timed out, so this asserts nothing")
+        XCTAssertEqual(
+            fetchesBefore + 1, model.events.fetches,
+            "the reply in hand is not the held one"
+        )
+        XCTAssertEqual(
+            window((2026, 11, 1), (2027, 1, 10)),
+            model.events.data?.window,
+            "the page is filed under the range the box holds now, not the one "
+                + "its own request asked for — the window was read after the "
+                + "`await` (REVIEW-1, must 2)"
+        )
+    }
+
+    /// A week with nothing on it says `nothing in this range` — it does
+    /// **not** draw seven empty day headers.
+    ///
+    /// Android's own shape: `if (visible.isEmpty())` wraps the whole view
+    /// switch, so the week's grid is not drawn at all for an empty week
+    /// (`CalendarScreen.kt:170-200`). ``CalendarScreenView`` tests
+    /// ``CalendarModel/emptyText`` before its own switch for the same reason,
+    /// and REVIEW-1's should 6 is right that nothing covered it: answer 14's
+    /// "seven, always" is a property of
+    /// ``calendarWeekSections(_:anchor:todayMs:in:)``, and this is where the
+    /// screen's own answer is pinned instead of left to be rediscovered.
+    func testAnEmptyWeekSaysSoRatherThanDrawingSevenEmptyHeaders() async {
+        let house = spreadOut()
+        let (model, _) = rig(house)
+        model.start()
+        await settleUntil({ model.events.answered }, "the opening read")
+        model.show(.week)
+        await settleUntil({ !model.rangePending }, "this week's read")
+        XCTAssertNil(model.emptyText, "this week has two of these events")
+
+        // The week before: `autumn fete` is 29 september, so nothing is in it.
+        model.step(-1)
+        await settleUntil({ !model.rangePending }, "last week's read")
+
+        XCTAssertTrue(model.visible.isEmpty)
+        XCTAssertEqual(CalendarStrings.emptyRangeTitle, model.emptyText?.title)
+        XCTAssertEqual(
+            CalendarStrings.emptyRangeBody(CalendarViewMode.week.label),
+            model.emptyText?.body,
+            "an empty week must use the range wording and its own word"
+        )
+        XCTAssertEqual(
+            7, model.weekSections.count,
+            "the seven groups are still what the week is made of — what the "
+                + "screen does with an empty one is the decision, not the shape"
+        )
+        XCTAssertTrue(model.weekSections.allSatisfy { $0.rows.isEmpty })
     }
 
     /// **The range key is captured before the `await`, so a reply that lands

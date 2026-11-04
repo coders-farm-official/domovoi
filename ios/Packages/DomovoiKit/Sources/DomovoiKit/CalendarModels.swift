@@ -329,7 +329,8 @@ public struct CalendarDay: Hashable, Comparable, Sendable {
 ///
 /// **Kamron's answer 14 (2026-11-03): "build the week view (agenda rows under
 /// seven day headers)."** So the week is a week-bounded list — the agenda's own
-/// rows, under all seven day headers, from ``calendarWeekSections(_:todayMs:in:)``
+/// rows, under all seven day headers, from
+/// ``calendarWeekSections(_:anchor:todayMs:in:)``
 /// — and the arithmetic it steps on is the one that was already ported and
 /// tested (``calendarWeekStart(_:)``, ``calendarWeekRangeLabel(_:)``).
 ///
