@@ -127,6 +127,35 @@ extension StubHouseUITests {
             .firstMatch
     }
 
+    /// The size of the attribution leaf under a reply — the model's name —
+    /// or nil where the transcript never drew it.
+    ///
+    /// Scrolled for, because a leaf below the fold is **unbuilt** and not
+    /// merely out of sight: at AX5 one bubble fills the transcript, so the
+    /// line under it needs the foot. The transcript opens *at* its foot and
+    /// the attribution is the last thing in it, so every flick is downwards
+    /// (`swipeUp` moves the content up), and it is dragged by its
+    /// **identifier** rather than `scrollViews.firstMatch` (train R002).
+    ///
+    /// A zero-height match is a view that is not laid out, which is not a
+    /// size; it is skipped the same way ``chatTopmostFrame(_:_:)`` skips it.
+    @MainActor
+    func chatAttributionSize(
+        _ app: XCUIApplication, _ words: String, flicks: Int = 6
+    ) -> CGSize? {
+        let leaf = app.staticTexts.matching(NSPredicate(format: "label == %@", words)).firstMatch
+        let transcript = app.scrollViews[ChatStringsUnderTest.transcriptID].firstMatch
+        for _ in 0...flicks {
+            if leaf.exists, leaf.frame.height > 0 { return leaf.frame.size }
+            guard transcript.exists else { break }
+            transcript.swipeUp(velocity: .slow)
+        }
+        if leaf.exists, leaf.frame.height > 0 { return leaf.frame.size }
+        print("=== NO ATTRIBUTION LEAF '\(words)' — tree follows ===")
+        print(app.debugDescription)
+        return nil
+    }
+
     // MARK: - D8: the house composer's send
 
     /// **Nothing at all in the send's place with a blank box and no thread.**
@@ -325,6 +354,45 @@ extension StubHouseUITests {
     ///
     /// Classified by ``StubHouseUITests/floorAndRest(_:)`` like every audit in
     /// this file, never a pinned total.
+    ///
+    /// ### The two things on this screen that are not this screen's
+    ///
+    /// Train I004 failed this case with four findings, and **neither pair is
+    /// a defect of the composer**. Both are classified here, by a
+    /// measurement taken in this case rather than by a wider allowance.
+    ///
+    ///  1. **Three anonymous `Element has no description`** at
+    ///     `(0, 516, 131, 45)`, `(131, …)` and `(262, …)` — the three cells
+    ///     of **iOS's own QuickType bar**. The same train's trees name them:
+    ///     `I004/ALL/testAssistant_ComposerHasNoLyingSendKey.log:158-169` has
+    ///     `Other … identifier: 'SystemInputAssistantView'` →
+    ///     `'CenterPageView'` → `label: 'Typing Predictions'` with exactly
+    ///     those three frames, carrying the candidates `'“M”'`, `'My'`,
+    ///     `'Me'`, and `Keyboard` itself begins below them at y=561. Here
+    ///     "is the side gate shut" offered iOS no candidates, so the three
+    ///     cells drew **empty** and Apple's audit asked them for a
+    ///     description. The classification below is anchored three ways: the
+    ///     region is read live off Apple's own identifier (no region, no
+    ///     exclusion), only an empty-labelled finding inside it is excluded,
+    ///     and the case **measures** that the composer's own field and send
+    ///     are above that region — so nothing of this screen can be in it.
+    ///  2. **`Dynamic Type font sizes are partially unsupported` naming
+    ///     `label='qwen3:8b'`** — the attribution under the assistant's
+    ///     reply (`ChatConversationView.attribution`, `.font(.caption2)`).
+    ///     It scales: the same train measured that leaf
+    ///     `52.33 x 13.33` at `large` and `173.67 x 48.0` at AX5, a 3.6x
+    ///     growth (`I004/ALL/`
+    ///     `testChatMore_TheConversationsTextGrowsWithTheTypeSize.log:373`
+    ///     and `:1127`). ``testChat_TheModelNameUnderAReplyGrowsWithTheTypeSize()``
+    ///     takes that measurement **in this file**, on this screen, so the
+    ///     classification here is held by a case of its own rather than by
+    ///     another unit's: if the attribution ever stops scaling, that case
+    ///     says so and this one keeps classifying. It is the same
+    ///     false-positive class as the audit's anonymous Dynamic Type
+    ///     findings (``StubHouseUITests/knownAnonymousHeadlines``) — the
+    ///     difference is only that Apple attributed this one — so it is
+    ///     admitted for **that one leaf** and nothing else: a Dynamic Type
+    ///     finding naming any other element still fails.
     @MainActor
     @available(iOS 17.0, *)
     func testChat_TheComposerAuditsWithItsSendDrawn() throws {
@@ -343,7 +411,127 @@ extension StubHouseUITests {
         let found = try auditIssues(app, "chat-composer")
         let (floor, rest) = Self.floorAndRest(found)
         print("CHAT composer audit floor=\(floor) rest=\(rest)")
-        XCTAssertTrue(rest.isEmpty, "Apple's audit over the composer: \(rest)")
+
+        // **iOS's half of the screen, read off the live hierarchy** by Apple's
+        // own identifier for it rather than by a rectangle written down here.
+        let assistant = app.otherElements[StubChatComposer.systemInputAssistant].firstMatch
+        XCTAssertTrue(
+            assistant.exists,
+            "iOS's input-assistant view is not on screen, so this audit was not taken with the "
+                + "keyboard up — which is the state the send is drawn in"
+        )
+        let keyboard = app.keyboards.firstMatch
+        // Optional on purpose: no assistant view, no region, and
+        // ``StubHouseUITests/isInside(_:_:)`` then excludes nothing at all —
+        // which is the direction an unmeasured classifier must fail in.
+        let region: CGRect? = assistant.exists
+            ? (keyboard.exists ? assistant.frame.union(keyboard.frame) : assistant.frame)
+            : nil
+        print("CHAT composer audit iOS's own region \(region.map { "\($0)" } ?? "none")")
+
+        // The measurement that makes the exclusion safe: this screen's own
+        // composer is **above** that region, so a finding inside it cannot be
+        // the composer's. Read here and not assumed, because the only reason
+        // the exclusion is sound is that it is true.
+        if let region {
+            XCTAssertLessThanOrEqual(
+                field.frame.maxY, region.minY,
+                "the composer's field at \(field.frame) reaches into iOS's own region at "
+                    + "\(region): the exclusion below would swallow findings about this screen"
+            )
+            if let send = composerSend(app), send.exists {
+                XCTAssertLessThanOrEqual(
+                    send.frame.maxY, region.minY,
+                    "the composer's send at \(send.frame) reaches into iOS's own region at "
+                        + "\(region): the exclusion below would swallow findings about this "
+                        + "screen"
+                )
+            }
+        }
+
+        let keyboardsOwn = rest.filter { $0.contains("label=''") && Self.isInside(region, $0) }
+        for line in keyboardsOwn { print("CHAT composer audit iOS's own cell :: \(line)") }
+
+        // The one leaf a Dynamic Type finding may name here, held by
+        // ``testChat_TheModelNameUnderAReplyGrowsWithTheTypeSize()``.
+        XCTAssertTrue(
+            app.staticTexts[StubChatComposer.model].firstMatch.exists,
+            "the model's name is not under the reply, so a finding naming it would be about a "
+                + "leaf this screen is not drawing"
+        )
+        let scaled = rest.filter {
+            $0.hasPrefix("Dynamic Type font sizes are")
+                && $0.contains("label='\(StubChatComposer.model)'")
+        }
+        for line in scaled { print("CHAT composer audit a leaf measured growing :: \(line)") }
+
+        let mine = rest.filter { !keyboardsOwn.contains($0) && !scaled.contains($0) }
+        XCTAssertEqual([], mine, "Apple's audit over the composer: \(mine)")
+    }
+
+    /// The model's name under a reply **grows with the type size**, which is
+    /// what lets ``testChat_TheComposerAuditsWithItsSendDrawn()`` classify the
+    /// one Dynamic Type finding Apple attributes to it.
+    ///
+    /// `ChatConversationView.attribution` draws it `.font(.caption2)`, a text
+    /// style, so it should scale — and Apple's audit says it is "partially
+    /// unsupported" anyway, on this screen in I004 and on the ChatMore
+    /// threads in I001, I002 and I004. The audit is the headline; this is the
+    /// measurement, and the measurement is what a classification may rest on.
+    ///
+    /// Two launches, because the type size is a launch argument
+    /// (`launch(mode:)`). The garage thread is the subject: two messages, the
+    /// assistant's carrying `model="qwen3:8b"` and no device
+    /// (`stubhouse.py`'s `CHAT_MESSAGES[12]`), so the attribution is the
+    /// model's name alone and the leaf's label is exactly that word.
+    ///
+    /// The floor is a growth factor and not a pinned size: I004 measured
+    /// 13.33 → 48.0 points (3.6x) and a Simulator's rounding is in the third
+    /// decimal, but 1.5x is far below anything "it scales" could mean and far
+    /// above anything a stuck font could reach.
+    @MainActor
+    func testChat_TheModelNameUnderAReplyGrowsWithTheTypeSize() throws {
+        var measured: [String: CGSize] = [:]
+        for (label, mode) in [
+            ("large", StubHouseUITests.ordinaryTypeSize),
+            ("AX5", "UICTContentSizeCategoryAccessibilityXXXL"),
+        ] {
+            let (app, landed) = openChat(mode)
+            XCTAssertTrue(landed, "the thread list never answered at \(label)")
+            // At AX5 a row is **unbuilt** rather than off screen, which is why
+            // this is not `openThread` — the same shape as
+            // ``testChat_TheWayOutOfAConversationIsPinnedAtTheLargestTypeSize()``.
+            let row = app.buttons[StubChat.garage].firstMatch
+            XCTAssertTrue(
+                scrollUntilBuilt(app, row), "the garage row was never built at \(label)"
+            )
+            row.tap()
+            XCTAssertTrue(
+                startingWith(app, StubChat.garageSnippet).waitForExistence(timeout: 30),
+                "the garage thread drew no transcript at \(label)"
+            )
+            let size = chatAttributionSize(app, StubChatComposer.model)
+            print("CHAT attribution [\(label)] \(StubChatComposer.model) size=\(size ?? .zero)")
+            evidence(app, "chat-attribution-\(label)")
+            XCTAssertNotNil(
+                size,
+                "the model's name is not drawn under the reply at \(label), so there is nothing "
+                    + "to measure"
+            )
+            if let size { measured[label] = size }
+            app.terminate()
+        }
+
+        guard let small = measured["large"], let big = measured["AX5"] else {
+            return XCTFail("one of the two type sizes gave no measurement: \(measured)")
+        }
+        XCTAssertGreaterThan(
+            big.height, small.height * 1.5,
+            "the model's name under a reply is \(small.height) points at large and "
+                + "\(big.height) at AX5, so it does not scale — which makes Apple's Dynamic "
+                + "Type finding on it a real defect, and "
+                + "testChat_TheComposerAuditsWithItsSendDrawn must stop classifying it"
+        )
     }
 
     // MARK: - D64: the cap, and what it costs to open a long thread
@@ -848,6 +1036,36 @@ enum StubChatLong {
 
     /// What a case asks the long thread, which no seeded message contains.
     static let asked = "Vermilion, and how does this one end"
+}
+
+/// What the composer's audit case has to name that is not a string of this
+/// app's.
+///
+/// Both of these are read rather than asserted-about, and both earn their
+/// place by being spelt out where the case that uses them is: a classification
+/// keyed on a constant somebody else can rename is a classification that
+/// stops meaning what it says.
+enum StubChatComposer {
+
+    /// The model every seeded reply carries (`stubhouse.py`'s `_msg`), drawn
+    /// under the words by `ChatConversationView.attribution`.
+    ///
+    /// The same word as `StubChatMore.model`, deliberately not shared with
+    /// it: that enum belongs to another unit's file, and this file's two
+    /// readers of it (the composer audit's classification and
+    /// ``StubHouseUITests/testChat_TheModelNameUnderAReplyGrowsWithTheTypeSize()``'s
+    /// measurement) must move together or not at all.
+    static let model = "qwen3:8b"
+
+    /// iOS's own accessory bar above the keyboard, by **Apple's** identifier
+    /// for it.
+    ///
+    /// Its three cells are the QuickType candidates. With no candidates to
+    /// show they draw empty, and Apple's audit then asks each of them for a
+    /// description — three findings on a view no part of this app owns
+    /// (train I004; the trees that name it are cited in
+    /// ``StubHouseUITests/testChat_TheComposerAuditsWithItsSendDrawn()``).
+    static let systemInputAssistant = "SystemInputAssistantView"
 }
 
 // `ChatBatchUnderTest` stood here. It held `showEarlier` and `talk` because
