@@ -245,6 +245,18 @@ extension StubHouseUITests {
                 print(app.debugDescription)
                 return false
             }
+            // **Which view is being creeped, in the log, before it is.**
+            //
+            // Train R003 ran this file at round 2 (the UI test bundle the
+            // train built was one commit behind the app it drove: the log's
+            // `ScrollView (First Match)` and its own `:1216` are round 2's
+            // unnamed query and round 2's line numbers, while the app's tree
+            // in the same run carries round 3's `chat-transcript`). Round 3's
+            // fix was therefore never exercised, and nothing in the failure
+            // said so — "the phone's place never drew at ax5" reads the same
+            // whichever view the eight creeps went to. One line of frame is
+            // what tells the two apart at a glance next time.
+            print("ASSISTANT place band \(picker.frame) chip \(chip.frame)")
             for _ in 0..<8 {
                 if chip.isHittable { break }
                 if !assistantCreep(picker, towards: .foot) { break }
@@ -252,6 +264,7 @@ extension StubHouseUITests {
         }
         guard chip.isHittable else {
             print("=== THE PHONE CHIP CANNOT BE REACHED — tree follows ===")
+            print("the chip is at \(chip.frame), exists=\(chip.exists)")
             print(app.debugDescription)
             return false
         }

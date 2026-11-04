@@ -1408,4 +1408,125 @@ final class ChatModelTests: XCTestCase {
             "the name the server refused stayed in the header"
         )
     }
+
+    // MARK: - the end of a stream, which train R002 put under suspicion
+
+    /// A stream that stops without a `done` or an `error` still settles the
+    /// screen: the spinner stops, the words stay, and both lists are re-read.
+    ///
+    /// ### Why this case exists
+    ///
+    /// Train R002 left `testANewChatIsNamedByItsFirstMessageAndCanBeRenamed`
+    /// wedged for 110 seconds with the reply finished and on screen, and the
+    /// one reading that said anything about *why* was that the per-thread
+    /// internet chip never appeared — a chip that needs
+    /// ``ChatModel/endStream()`` to have run. So round 4 was asked whether
+    /// there is a path where a stream's end is never delivered or never
+    /// handled.
+    ///
+    /// Reading says there is not, and this is the reading made executable.
+    /// The hard case is the one no other case covers: the server closing the
+    /// socket after some deltas and before its `done` — a generator ending
+    /// early, a worker restart, a proxy giving up — which is the only way the
+    /// stream can end with the live reply still pending. The end of the body
+    /// is the end of the stream (`DomovoiClient.events` finishes its
+    /// continuation when `AsyncBytes` runs out), `run(path:body:verb:on:)`
+    /// falls out of its `for try await` and reaches `endStream()`, and
+    /// ``ChatTranscript/finishStream(atISO:)`` takes `.unfinished`: the reply
+    /// keeps what arrived, as Android does (`ChatScreen.kt:779`).
+    ///
+    /// The assertion that matters most is the last one. `sending` going back
+    /// to false is the composer; `refreshLists()` is what the chip the trains
+    /// read is drawn from, so it is the one that says the end was *handled*
+    /// and not merely survived.
+    func testAStreamThatEndsWithoutItsDoneStillSettlesTheScreen() async {
+        let (model, house, _) = rig()
+        // No `done` and no `error`: two deltas and then the body ends.
+        house.stream.set("""
+        event: delta
+        data: {"text":"about "}
+
+        event: delta
+        data: {"text":"twenty minutes"}
+
+        """)
+        model.start()
+        await settleUntil({ model.threads.data != nil })
+        // Both of `start()`'s reads have to have landed before `seen` is
+        // cleared, or one of them turns up again afterwards and the
+        // assertions below would pass on it rather than on the stream's own
+        // refresh.
+        await everythingLands()
+        model.startNewChat()
+        house.seen.set([])
+        XCTAssertTrue(model.send("how long do lentils take?"))
+        XCTAssertTrue(model.sending)
+        await settleUntil({ !model.sending }, "the stream that never said done")
+
+        XCTAssertEqual(
+            ["how long do lentils take?", "about twenty minutes"],
+            model.transcript.messages.map(\.content),
+            "an unfinished reply keeps the words that arrived"
+        )
+        XCTAssertFalse(model.transcript.streaming, "the reply is still pending")
+        XCTAssertFalse(
+            model.transcript.messages.last?.pending ?? true,
+            "a spinner that never stops is the one outcome a person cannot act on"
+        )
+        XCTAssertNil(
+            model.transcript.messages.last?.id,
+            "and it has no server row, so there is nothing to retry or share"
+        )
+        XCTAssertFalse(model.transcript.canRetry)
+        // **Both, in one wait**, for the reason
+        // ``testArchivingSaysSoAndReadsBothListsAgain`` has written out:
+        // `refreshLists()` starts a `Task` per list, so the two requests
+        // reach the stub in whichever order the scheduler runs them — and
+        // both are started *after* `sending` goes back to false.
+        await settleUntil(
+            {
+                house.seen.current.contains("GET /api/chat/threads")
+                    && house.seen.current.contains("GET /api/chat/threads?archived=true")
+            },
+            "the stream's end reaching endStream(): neither list was re-read"
+        )
+    }
+
+    /// A `done` that arrives with **no blank line after it** still lands.
+    ///
+    /// The other half of the same question, and the one that is a real risk
+    /// rather than a careful reading: in SSE a blank line is what ends an
+    /// event, so a server that closes the socket straight after
+    /// `data: {...}` has sent a `done` nothing has delivered yet.
+    /// `DomovoiClient.events` takes the unterminated line and then ends the
+    /// event itself, in that order, for exactly this; without those two lines
+    /// the reply would keep its streamed guess, have no id, and offer neither
+    /// "try again" nor sharing, while looking finished.
+    func testADoneWithNoBlankLineAfterItStillLands() async {
+        let (model, house, _) = rig()
+        // The literal ends immediately after the `data:` line — a multi-line
+        // string with no trailing blank line has no trailing newline either,
+        // which is the shape under test.
+        house.stream.set("""
+        event: delta
+        data: {"text":"about twenty minutes"}
+
+        event: done
+        data: {"id":11,"role":"assistant","content":"about twenty minutes","model":"llama3.2:latest","retryable":true}
+        """)
+        model.start()
+        await settleUntil({ model.threads.data != nil })
+        model.startNewChat()
+        XCTAssertTrue(model.send("how long do lentils take?"))
+        await settleUntil({ !model.sending }, "the stream with no trailing newline")
+
+        XCTAssertEqual(
+            11,
+            model.transcript.messages.last?.id,
+            "the done row was lost with the newline that never came"
+        )
+        XCTAssertEqual("llama3.2:latest", model.transcript.messages.last?.model)
+        XCTAssertFalse(model.transcript.streaming)
+        XCTAssertTrue(model.transcript.canRetry, "and the reply the server kept can be retried")
+    }
 }
