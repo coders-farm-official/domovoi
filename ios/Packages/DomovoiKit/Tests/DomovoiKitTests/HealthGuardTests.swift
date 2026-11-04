@@ -74,16 +74,17 @@ final class HealthGuardTests: XCTestCase {
     /// Both routes 404: a server older than the container guard. `loaded`,
     /// tier none.
     ///
-    /// **The two expectations below are the only lines in this file the
-    /// `screens` unit changed** (2026-11-03), and it is not its file to edit
-    /// (BATCH-RULES §1): Kamron's answers 7 and 24 are `not checked yet` for
-    /// a house with no container guard, which is the collapse this case used
-    /// to record as green. The engine's own branch is untouched and still
-    /// Android's (`loaded`, tier `.none`) — what changed is
-    /// ``ContainerGuardState/checkedSomething``. Reverting the two values
-    /// hands the train a failing case, so it is left here for the
-    /// orchestrator and the fix itself is pinned next door in
-    /// `ScreensHealthGuardTests`, which that unit owns.
+    /// **The two expectations below were changed by the `screens` unit** in
+    /// the 2026-11-03 batch, in a file no unit's `owns` list named, and the
+    /// integration **blessed the edit** rather than revert it or retire the
+    /// case (`INTEGRATION.md`). Kamron's answers 7 and 24 are `not checked
+    /// yet` for a house with no container guard, which is the collapse this
+    /// case used to record as green: a byte-clean revert hands the train a
+    /// red case, and deleting the case loses the pin. The engine's own branch
+    /// is untouched and still Android's (`loaded`, tier `.none`) — what
+    /// changed is ``ContainerGuardState/checkedSomething``. The fix itself is
+    /// pinned next door in `ScreensHealthGuardTests`, which that unit owns;
+    /// this case is the one that would have caught the collapse coming back.
     func testAServerWithNoGuardIsLoadedAndEmpty() async {
         let result = await outcome(
             household: .answered(status: 404), summary: .answered(status: 404)
