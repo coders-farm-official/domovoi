@@ -27,10 +27,19 @@ import java.io.File
  * each of these five lines being quietly undone, and it fails loudly rather
  * than vacuously when it cannot find a source to read.
  *
- * What it deliberately does not do is restate a whole line of code as a
- * string to diff. Each case asserts the PROPERTY the answer asked for (a
- * guard exists; a count goes through the plural helper; a label carries its
- * kind), so ordinary editing of the surrounding code does not trip it.
+ * Two of the cases DO restate a line as a string to diff, and say so here
+ * rather than claiming otherwise: the add button's whole guard
+ * (`if (r.can_add && r.url != null)`) and the manual's `CHECKLIST_UNKNOWN`
+ * constant are each a single expression whose shape IS the property, with
+ * nothing else to read it off. They are brittle in the safe direction —
+ * rewording a correct guard fails them — and that was measured: a guard
+ * rewritten as `can_add && url != null || title != null`, which Kotlin's
+ * precedence turns back into the bug, was caught by the trailing paren of
+ * the pinned literal. The other cases assert the property rather than the
+ * line (a count goes through the plural helper; a label carries its kind),
+ * and the two that can be are also scanned MODULE-WIDE — which is what
+ * catches a second control planted beside an intact literal, and the next
+ * file to repeat the mistake.
  */
 class OneLineAnswerSourcesTest {
 
@@ -115,6 +124,23 @@ class OneLineAnswerSourcesTest {
         }
     }
 
+    /**
+     * The hand-pluralised counts that SHIP today, named line by line so a
+     * NEW one cannot hide behind them.
+     *
+     * One entry: `OpenSourceLicences.summary` reads "1 libraries" for a
+     * build with a single Maven library. Harmless (that build will not
+     * happen) and in a file this unit does not own, so it is carried here
+     * instead of fixed — REPORT.md, "needs a shared change". Each entry is
+     * asserted to still match, so fixing the line fails this case until
+     * the entry goes: the list shrinks, like `test_route_auth_matrix`'s
+     * open-route allowlist, and can never go stale into a blanket
+     * exemption.
+     */
+    private val knownHandPluralised = listOf(
+        "OpenSourceLicences.kt" to "\${libs.size} libraries",
+    )
+
     @Test fun noCountIsPluralisedByHandAnywhereInTheModule() {
         // The defect CLASS, not just the four sites answer 48 named: an
         // interpolated count followed by a hard-coded plural noun, which
@@ -125,8 +151,15 @@ class OneLineAnswerSourcesTest {
         // wording at all: a log line, an exception or a `toString`, which
         // nobody reads as a sentence, and byte/ms counts that are never one.
         val countThenPlural = Regex("\\$\\{[^}]*\\.(size|count)\\b[^}]*\\}\\s+[a-z]+s\\b")
-        val guard = Regex("==\\s*1\\b|>\\s*1\\b|<\\s*2\\b|>\\s*5\\b|isEmpty\\(\\)|^\\s*1\\s*->")
+        // A singular branch, and nothing else. `isEmpty()` used to be in
+        // here and is the one shape that must NOT be: emptiness rules out
+        // ZERO and says nothing about ONE, the only number a hand-written
+        // plural gets wrong, so an `if (xs.isEmpty()) return` early exit
+        // above a `${xs.size} things` forgave exactly the defect (review
+        // fix-1, S-3). `> 5` was unrelated to singularity too.
+        val guard = Regex("==\\s*1\\b|>\\s*1\\b|<\\s*2\\b|^\\s*1\\s*->")
         val diagnostic = Regex("\\bLog\\.|Exception\\(|fun toString\\(")
+        val carried = mutableSetOf<Pair<String, String>>()
         val offenders = kotlinSources.flatMap { (f, s) ->
             val all = s.lines()
             all.withIndex()
@@ -142,6 +175,14 @@ class OneLineAnswerSourcesTest {
                 .filterNot { (i, _) ->
                     all.subList(maxOf(0, i - 6), i + 1).any { guard.containsMatchIn(it) }
                 }
+                // The named, already-known lines — not a shape exemption.
+                .filterNot { (_, l) ->
+                    val hit = knownHandPluralised.firstOrNull { (file, fragment) ->
+                        f.name == file && l.contains(fragment)
+                    }
+                    if (hit != null) carried += hit
+                    hit != null
+                }
                 .map { (i, l) -> "${f.name}:${i + 1} ${l.trim()}" }
         }
         assertEquals(
@@ -149,11 +190,19 @@ class OneLineAnswerSourcesTest {
                 "\"1 things\" (D48, owner 2026-11-03) — use plural() or add the branch",
             emptyList<String>(), offenders,
         )
+        assertEquals(
+            "a line in knownHandPluralised no longer reads that way — if it is " +
+                "fixed, drop the entry so the list keeps shrinking",
+            knownHandPluralised.toSet(), carried,
+        )
         // The scan must be able to fire, or this case guards nothing: the
         // shape it looks for, and the shape it forgives.
         assertTrue(kotlinSources.sumOf { (_, s) -> s.lines().size } > 500)
         assertTrue(countThenPlural.containsMatchIn("\"\${book.chapters.size} chapters\""))
         assertTrue(guard.containsMatchIn("if (books.size == 1) one else"))
+        // And the shape it must NOT forgive, or the scan is back to pinning
+        // the shape instead of the defect.
+        assertTrue(!guard.containsMatchIn("if (libs.isEmpty()) return \"none\""))
     }
 
     // ---- D33: the unticked circle says something on an old document ------
