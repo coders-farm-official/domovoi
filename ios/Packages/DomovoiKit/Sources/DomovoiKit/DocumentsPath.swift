@@ -263,6 +263,14 @@ public enum DocumentsWebEditorRules {
     /// (round 2's review, note 6): the bridge is re-injected into whatever
     /// main-frame document loads, and `about:srcdoc` is a document whose
     /// content is the page's own text.
+    ///
+    /// If `WebKit` ever gave that blanking navigation some other address, the
+    /// cost is bounded and is **not** a page left typeable: `recheck(_:)`
+    /// sets `state = .refused` in the same turn, which removes the host and
+    /// runs `dismantleUIView`'s `stopLoading()`. What would show is one
+    /// spurious *"that link isn't on your home server"* over the refusal
+    /// sentence. It is listed in the unit's REPORT as a behaviour reasoned
+    /// about and not observed.
     public static func navigation(
         to url: URL?, base: ServerURL, mainFrame: Bool
     ) -> DocumentsWebEditorNavigation {
