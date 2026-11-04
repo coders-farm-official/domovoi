@@ -121,6 +121,15 @@ struct RoomsView: View {
     /// ``HomeView``'s guard, for its reason: this is inside the workspace's
     /// `NavigationStack`, so a pushed destination fires `onDisappear` while
     /// the view stays in the hierarchy with its `onChange` live.
+    ///
+    /// **"Live" means it fires, not that it fires promptly**, and the two
+    /// halves of that are both paid for. It fires: that is why the one-sided
+    /// version of this guard cost ``HomeView`` its socket for whole sessions.
+    /// It fires *late*: a covered view's body is not re-evaluated while it is
+    /// covered, so the closure runs at the pop — with `visible` still false,
+    /// because body evaluation precedes `onAppear` — which is why the toast
+    /// hand-off below could not stay this view's alone once D56 made a room a
+    /// push (train I004's six reds; see ``RoomsRoomScreen``).
     @State private var visible = false
 
     /// Whether this view is one of ``RoomsModel``'s holders. See the
@@ -175,6 +184,9 @@ struct RoomsView: View {
             // covered, so a toast raised from an opened room reached the
             // shell only after the pop — train I004's six "said nothing"
             // reds, measured against I002 where the room was not a push.
+            // (That is the late half of "the `onChange` stays live" on
+            // ``visible`` above, not a contradiction of it: the closure does
+            // fire, which is what that guard is for; it fires at the pop.)
             // ``RoomsModel/takeToast()`` clears as it reads, so the two
             // hand-offs cannot both raise the same sentence. What is left
             // here is the broadcast card's, which is raised with no room

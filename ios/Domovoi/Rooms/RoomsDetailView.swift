@@ -281,6 +281,18 @@ struct RoomsRoomScreen: View {
         // nothing anyone had seen. From the outside that is a write that
         // says nothing.
         //
+        // **This is the same fact as "the `onChange` stays live", not the
+        // opposite of it** — ``RoomsView``'s ``RoomsView/visible`` carries
+        // the other end of it and review round 1 read the two as
+        // contradicting. A push does not end the covered view's identity:
+        // its modifiers stay attached and the closure does fire, which is
+        // exactly why ``HomeView``'s one-sided guard was a bug. What a push
+        // defers is *when*: the delivery waits for the next body evaluation,
+        // and for a covered destination that is the pop. So the closure runs
+        // late, with `visible` still false (body evaluation precedes
+        // `onAppear`) — the guard is necessary, and a sentence meant for the
+        // pill arrived after the screen that said it was gone.
+        //
         // Measured, rather than argued from SwiftUI's rules:
         //
         //  * I002 (the room swapped in place, ``RoomsView`` on screen) —

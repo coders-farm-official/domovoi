@@ -1338,15 +1338,63 @@ extension StubHouseUITests {
         // off the screenshot and looks for an accessibility element covering
         // them; under a presentation the two come apart, because the covered
         // page stays in the tree at the frames it had before the sheet went
-        // up — `I004/ALL/att/…/rooms-27-dropin-live-tree…` has
-        // `announce to kitchen` at y=399.7 and the switch at y=507.7, both
-        // underneath a sheet that starts at y=398.7 and draws `live · 0:00`
-        // and `mute` over them. That is the same class
-        // `testAudiobooks_ABookPagePassesApplesAudit` measured behind its
-        // question (`StubHouseUITests+Audiobooks.swift:1209-1233`), and it is
-        // classified here the same way: by wording **and** `element: nil`, so
-        // a finding Apple can attribute to a view of the sheet's still lands
-        // in `rest` and fails this case from the first run.
+        // up and the backdrop the system draws over it is what hit-testing
+        // now finds there — `I004/ALL/att/…/rooms-27-dropin-live-tree…` has
+        // `announce to kitchen` at y=399.7 and the switch at y=507.7
+        // underneath a sheet that starts at y=398.7, and the page's own
+        // words above that line (`version`, `mpd ports`, `stream`,
+        // `volume`/`unknown`, and the 33.7-point `master output …` caption
+        // at y=350) are on screen through the backdrop. That is the same
+        // class `testAudiobooks_ABookPagePassesApplesAudit` measured behind
+        // its question (`StubHouseUITests+Audiobooks.swift:1209-1233`), and
+        // it is classified here the same way: by wording **and**
+        // `element: nil`, so a finding Apple can attribute to a view of the
+        // sheet's still lands in `rest` and fails this case from the first
+        // run.
+        //
+        // **The banner is not it**, which the picture in `att/` invites a
+        // reader to think: `rooms-27-dropin-live_…png` was taken at t=10.98s
+        // with a `Signs of tampering` banner over the app, and a banner is
+        // the known producer of exactly this headline
+        // (``waitForNoNotificationBanner(_:appearIn:clearIn:)``). The audit
+        // was not taken through it —
+        // `testRooms_DropInFromThisPhoneIsHeardAndHungUp.log:339`,
+        // "clean on attempt 1 after waiting out a banner at
+        // (8.0, 56.0, 377.0, 78.67) — 5 finding(s)" — and
+        // ``auditIssues(_:_:)`` only prints that line when the banner is gone
+        // at both ends of the audit.
+        //
+        // **`Contrast nearly passed` is excused with the other four, and
+        // that needs its own elimination**, because the discriminator below
+        // runs with the sheet DOWN and so can never see a finding against
+        // text only the sheet draws. The named suspect is this unit's own:
+        // `DropInCallSheet.swift:59-60` draws the two-way-audio line
+        // `.font(.caption)` + `Color.fgMuted`, which is small grey text and
+        // exactly what "contrast is not high enough … unless font size is
+        // larger" names. Four measurements, three of them from this same
+        // train, say it is not:
+        //
+        //  * **Apple names what it can resolve.** The sheet's caption is an
+        //    element in the tree with its own label and frame
+        //    (`{{28.5, 567.0}, {336.0, 14.3}}`), and it is asserted as one
+        //    below. The other `Contrast nearly passed` in all 432 cases of
+        //    I004 — `testShell_ADialogLeavesNothingBehindIt.log:123-133` —
+        //    **names** `cancel`, and `testCalendar_AuditHasNothingNew`'s
+        //    `Contrast failed` names `swim lesson`. An anonymous one is not
+        //    an element the audit had.
+        //  * **The pairing is ambient and never flagged.**
+        //    `.font(.caption)` + `Color.fgMuted` is drawn on dozens of this
+        //    app's screens (Files, Chat, Calendar, Audiobooks, Assistant …)
+        //    and `Contrast nearly passed` occurs **once** in 432 cases.
+        //  * **Apple measured that exact pairing in this train and said
+        //    nothing about its contrast.** `4.0 MB · 4h ago`
+        //    (`FileRowView.swift:122-123`, `.caption` + `fgMuted`) is named
+        //    by a *Dynamic Type* finding in `testTheFilesListAudits.log`, so
+        //    the audit had the element and measured it.
+        //  * **The canvas is the difference.** The sheet is the white
+        //    `systemBackground` the ink tokens were measured against; the
+        //    covered page under a presentation is that canvas dimmed, which
+        //    is the condition NIGHT-RULES §3 records `fgMuted` failing on.
         //
         // The discriminator is below, after `hang up`: the same audit with
         // nothing over the room must report none of them. One that survives
@@ -1357,10 +1405,13 @@ extension StubHouseUITests {
             let sheet = try auditIssues(app, "rooms-dropin-sheet")
             let split = Self.floorAndRest(sheet)
             underTheSheet = split.rest.filter(Self.roomsAnonymousUnderAPresentation)
-            let ours = split.rest.filter { !underTheSheet.contains($0) }
+            let ours = split.rest.filter { !Self.roomsAnonymousUnderAPresentation($0) }
+            let unexposed = underTheSheet.filter { $0.hasPrefix(Self.roomsUnexposedText) }
+            let nearlyPassed = underTheSheet.filter { $0.hasPrefix(Self.roomsNearlyPassed) }
             print(
                 "ROOMS AUDIT dropin-sheet floor=\(split.floor) rest=\(split.rest.count) "
-                    + "covered=\(underTheSheet.count) ours=\(ours.count)"
+                    + "covered=\(underTheSheet.count) (unexposed=\(unexposed.count) "
+                    + "nearly-passed=\(nearlyPassed.count)) ours=\(ours.count)"
             )
             for line in underTheSheet { print("ROOMS AUDIT dropin-sheet covered :: \(line)") }
             XCTAssertTrue(
@@ -1369,29 +1420,55 @@ extension StubHouseUITests {
                     + "beyond the measured floor and the covered page: "
                     + ours.joined(separator: " / ")
             )
+            // **The excused set is an equality, not an open filter.** Review
+            // round 1 of this fix caught the filter as written: unbounded,
+            // where I004 measured exactly four and one — so a sixth and a
+            // seventh would have been waved through unseen, and a real
+            // low-contrast line added to this sheet tomorrow would be
+            // excused for good. Pinned the way ``testRooms_Audit`` pins its
+            // two floors, for the same reason: a number that moves is the
+            // thing worth seeing. If it moves, re-measure from
+            // `att/…/rooms-27-dropin-live-tree…` and the log's `covered ::`
+            // lines and re-pin here — never widen it.
+            XCTAssertEqual(
+                [unexposed.count, nearlyPassed.count], [4, 1],
+                "the backdrop's anonymous findings are no longer the four "
+                    + "`\(Self.roomsUnexposedText)` and the one "
+                    + "`\(Self.roomsNearlyPassed)` train I004 measured. The "
+                    + "page behind this sheet is the opened kitchen room; "
+                    + "re-measure before re-pinning:\n"
+                    + underTheSheet.joined(separator: "\n")
+            )
         }
-        // **The sheet exposes every word it draws.** The other half of the
-        // classification above: if those four anonymous findings really were
-        // the sheet's, one of these four lines would be a picture with no
-        // element behind it. Each is read as an element, by its own label.
-        // (The sheet's title is not asserted here — `kitchen` is drawn by the
+        // **The sheet's own words resolve to elements Apple could have
+        // named** — which is what makes an *anonymous* finding above not the
+        // sheet's. Worth being exact about what each line is worth: `mute`
+        // is the one word of the sheet this case did not already assert, and
+        // the caption is the suspect the elimination above turns on, so it is
+        // re-read here *after* the audit and its frame is asserted too — an
+        // element Apple can both name and place. `live · …` was waited for at
+        // the top of this case and `hang up` is asserted below, so repeating
+        // them here would have been three restatements dressed as four
+        // measurements, which is how review round 1 read them.
+        //
+        // (The sheet's title is not asserted — `kitchen` is drawn by the
         // navigation bar and by the room's header as well, so an element with
         // that label says nothing about which view produced it.)
-        XCTAssertTrue(
-            startingWith(app, RoomsStringsUnderTest.livePrefix).exists,
-            "the call sheet's live line is drawn without an accessibility element"
-        )
         XCTAssertTrue(
             app.buttons[RoomsStringsUnderTest.mute].firstMatch.exists,
             "`mute` is drawn without an accessibility element"
         )
+        let sheetCaption = containing(app, RoomsStringsUnderTest.twoWayAudioKitchen)
         XCTAssertTrue(
-            app.buttons[RoomsStringsUnderTest.hangUp].firstMatch.exists,
-            "`hang up` is drawn without an accessibility element"
-        )
-        XCTAssertTrue(
-            containing(app, RoomsStringsUnderTest.twoWayAudioKitchen).exists,
+            sheetCaption.exists,
             "the call sheet's explanation is drawn without an accessibility element"
+        )
+        XCTAssertFalse(
+            sheetCaption.frame.isEmpty,
+            "the call sheet's explanation has an element with no frame, so an "
+                + "audit finding against it could not have named it — which is "
+                + "the step the `Contrast nearly passed` elimination above rests "
+                + "on: \(sheetCaption.frame)"
         )
 
         // The house's own record: the room it was asked for, this phone's id
@@ -1438,15 +1515,21 @@ extension StubHouseUITests {
             roomsWaitGone(app, RoomsStringsUnderTest.twoWayAudioKitchen),
             "`hang up` left the call sheet on screen"
         )
-        // **The discriminator for the five findings above.** The room screen
-        // is uncovered now and in the tree whole, so Apple's element
-        // detection has an element for every word it can read. An anonymous
-        // `Potentially inaccessible text` or `Contrast nearly passed` that
-        // survives the sheet coming down was never the presentation's: it is
-        // this screen drawing something it does not expose, and it fails
-        // here. (If `underTheSheet` is empty the claim is vacuous and this
-        // asserts nothing new — which is the honest reading of a train that
-        // saw none.)
+        // **The discriminator for the five findings above, and what it does
+        // NOT cover.** The room screen is uncovered now and in the tree
+        // whole, so Apple's element detection has an element for every word
+        // it can read. An anonymous finding of either headline that survives
+        // the sheet coming down was never the presentation's: it is this
+        // screen drawing something it does not expose, and it fails here.
+        //
+        // Its reach is the **covered page**, which is where the backdrop
+        // theory puts all five. It says nothing about text only the sheet
+        // draws, because the sheet is gone — so the sheet's own `.caption`
+        // line is eliminated by the four measurements written at the audit
+        // above and by the equality pinned there, not by this. (And if
+        // `underTheSheet` is empty the claim is vacuous and this asserts
+        // nothing new — which is the honest reading of a train that saw
+        // none.)
         if #available(iOS 17.0, *) {
             let bare = try auditIssues(app, "rooms-dropin-after")
             let bareSplit = Self.floorAndRest(bare)
@@ -2055,43 +2138,58 @@ extension StubHouseUITests {
         // **The one finding I004 returned here, and whose it is.** The audit
         // came back with `Hit area is too small … | element: nil` — one
         // finding, no element. It is `back to Rooms & devices`, the foot of
-        // every Settings section (`RouteScreen.swift:410`), and it is a
+        // every Settings section (`RouteScreen.swift:413`), and it is a
         // 192.3 x 20.3 `Button` with no `frame(minHeight: 44)` on it.
         //
-        // Apple named nothing, so the attribution is two eliminations and a
-        // swap, all inside the trains:
+        // Apple named nothing, so the attribution is a swap and two
+        // eliminations, every number of them out of the two trains' own
+        // roster trees (`att/testRooms_Audit/rooms-31-audit-roster-tree…`):
         //
-        //  * **The swap.** `diff` of the I002 and I004 roster trees
-        //    (`att/testRooms_Audit/rooms-31-audit-roster-tree…`) is the same
-        //    element set at the same sizes, 26.6 points of scroll apart. The
-        //    only element whose relation to the **window** changed is this
-        //    button: I002 drew it at y=760.3 with the phone bar at y=774, so
-        //    its last 6.6 points were occluded and the audit reported
-        //    `Contrast failed` against it (D57's finding); I004's scroll puts
-        //    it at y=733.7, wholly on the window, and the contrast finding is
-        //    gone and this one is in its place. One finding, traded for one
-        //    finding, on the one element that moved.
-        //  * **The chrome is eliminated.** `switch server` is 121 x 22.3 and
-        //    is on the opened room's screen too, where this case's second
-        //    audit reports `rest=0`.
-        //  * **Text fields are eliminated.** The broadcast field's element is
-        //    212 x 20.0, and the announce field on the opened room is
-        //    279.3 x 20.0 — the same shape, on the screen that reports none.
+        //  * **The swap.** `diff` of the I002 and I004 roster trees is the
+        //    same element set at the same sizes, 26.6 points of scroll apart.
+        //    The only element whose relation to the **window** changed is
+        //    this button: I002 drew it at y=760.3 with the scroll view's foot
+        //    at 770 and the phone bar at 774, so its last 10 points were
+        //    occluded and the audit reported `Contrast failed` against it
+        //    (D57's finding); I004's scroll puts it at y=733.7, wholly on the
+        //    window, and the contrast finding is gone and this one is in its
+        //    place. One finding, traded for one finding, on the one element
+        //    that moved.
+        //  * **The chrome is eliminated by the same swap.** `switch server`
+        //    is 121 x 22.3 at `{{172.0, 65.0}}` in **both** trees — it did
+        //    not move at all — and only I004 reports a hit area.
+        //  * **The text fields are eliminated by the same swap.** The
+        //    broadcast field is a 212 x 20.0 `TextField` wholly inside the
+        //    scroll view in both trains — y=702.3 in I002, y=675.7 in I004,
+        //    the foot at 770 in both — so it was fully on the window in the
+        //    run that reported no hit area.
+        //    (Review round 1 corrected this one: the elimination used to
+        //    cite the **announce** field on the opened room, 279.3 x 20.0,
+        //    "on the screen that reports none". That screen's `rest=0` says
+        //    nothing about it — I004's detail tree has it at y=830.3, sixty
+        //    points below that scroll view's foot at 770, so it was not on
+        //    the audited area at all.)
         //
         // So it is real, it is a control, and it is not this item's file.
         // Kamron's answer 57 is "fix it once in the shell", and the shell is
         // where it has to be fixed: `roomsOursOnly(_:)` excuses nothing, for
         // the reason written on it. Handed to the shell item in
         // `batch-2026-11-03/gx-rooms/REPORT.md`; this case stays red until
-        // those three Settings buttons get a 44-point hit area.
+        // the Settings index/group/section buttons get a 44-point hit area —
+        // `Button(group.label)` (`RouteScreen.swift:387`),
+        // `Button(section.label)` (`:395`),
+        // `Button(ShellStrings.allSettings)` (`:398`) and
+        // `Button(ShellStrings.backTo(…))` (`:413`). All four are the same
+        // plain 20.3-point `Button`; the foot one is this finding.
         XCTAssertTrue(
             rosterRest.isEmpty,
             "Apple's audit has findings against the Rooms roster beyond the "
                 + "measured floor: " + rosterRest.joined(separator: " / ")
                 + " — an unattributed `Hit area is too small` here is "
-                + "`back to Rooms & devices` (RouteScreen.swift:410, "
-                + "192.3 x 20.3), the shell's section foot; see this case's "
-                + "comment for the elimination"
+                + "`back to Rooms & devices` (RouteScreen.swift:413, "
+                + "192.3 x 20.3), the shell's section foot, and its three "
+                + "siblings at :387, :395 and :398 are the same shape; see "
+                + "this case's comment for the elimination"
         )
         XCTAssertTrue(
             detailRest.isEmpty,
@@ -2190,11 +2288,35 @@ extension StubHouseUITests {
     /// Written out here rather than calling the Audiobooks predicate: that
     /// one is another item's, it covers one of the two headlines, and a
     /// cross-file borrow is a rename away from silently matching nothing.
+    ///
+    /// ### The second headline is excused on its own evidence
+    ///
+    /// ``audiobooksAnonymousInaccessibleText(_:)`` covers
+    /// ``roomsUnexposedText`` only. ``roomsNearlyPassed`` is this file's
+    /// addition, and it is not carried by that precedent: the sheet's own
+    /// `.caption` + `Color.fgMuted` line (`DropInCallSheet.swift:59-60`) is
+    /// a live suspect for it, and the discriminator in
+    /// ``testRooms_DropInFromThisPhoneIsHeardAndHungUp()`` runs with the
+    /// sheet down and so cannot see a finding against text only the sheet
+    /// draws. The four measurements that eliminate the caption are written
+    /// out at that audit, and the excused set is pinned there as an
+    /// **equality** (4 + 1, train I004) rather than left as an open filter —
+    /// so this predicate decides which findings are *candidates*, and the
+    /// case decides how many there may be.
     static func roomsAnonymousUnderAPresentation(_ line: String) -> Bool {
         guard line.hasSuffix("| element: nil") else { return false }
-        return line.hasPrefix("Potentially inaccessible text")
-            || line.hasPrefix("Contrast nearly passed")
+        return line.hasPrefix(Self.roomsUnexposedText)
+            || line.hasPrefix(Self.roomsNearlyPassed)
     }
+
+    /// Apple's wording for "there is text here belonging to no element".
+    /// Spelled once, so the predicate, the counts and the failure message
+    /// cannot drift apart.
+    static let roomsUnexposedText = "Potentially inaccessible text"
+
+    /// Apple's wording for "contrast is not high enough … unless font size is
+    /// larger" — small text, which is why a `.caption` needed eliminating.
+    static let roomsNearlyPassed = "Contrast nearly passed"
 }
 
 /// The words these cases match on, spelled out rather than imported.
