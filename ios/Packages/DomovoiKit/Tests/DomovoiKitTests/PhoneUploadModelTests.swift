@@ -87,9 +87,27 @@ final class PhoneUploadModelTests: XCTestCase {
             kind: kind,
             status: status(said),
             deviceID: deviceID,
-            read: bytes,
-            send: { path, body, _ in
-                posts.record(path, body)
+            // The model takes a **file** since D43, so the bytes a case hands
+            // over are spooled to one here, and `Posts` reads that file back.
+            // The cases below therefore still assert on the body that was
+            // sent -- which for the Files door is now the file itself, and for
+            // the Music door is the multipart envelope around it.
+            file: { item in
+                let data = try await bytes(item)
+                let url = PhoneUploadSpool.fileURL(
+                    in: try PhoneUploadSpool.directory(),
+                    for: item.name
+                )
+                try data.write(to: url, options: .atomic)
+                return .spooled(url)
+            },
+            send: { path, body, _, onProgress in
+                let data = (try? Data(contentsOf: body)) ?? Data()
+                // One tick, at the end: enough to prove a percent reaches the
+                // button. The arithmetic itself is measured against
+                // `transferPercent` rather than through this seam.
+                onProgress(Int64(data.count), Int64(data.count))
+                posts.record(path, data)
                 return answered
             },
             boundary: { "BOUND" }
@@ -179,13 +197,20 @@ final class PhoneUploadModelTests: XCTestCase {
 
         model.upload(item("clip.mov", kind: .video))
         await settle({ model.toast?.hasPrefix("uploaded") == true }, "the done toast")
-        XCTAssertEqual(posts.lastPath, "/api/files/upload")
+        // **The streamed door, and everything in the query** (D43). This used
+        // to be `/api/files/upload` with a multipart body whose parts carried
+        // the library, the path and the device; the body IS the file now
+        // (`files.py:1189`), so what used to be asserted about the parts is
+        // asserted about the URL -- and the body is the bytes, with no
+        // envelope anywhere in it.
+        XCTAssertEqual(
+            posts.lastPath,
+            "/api/files/upload-stream?library_id=core%3Adocuments&rel_path=clip.mov"
+                + "&path=&device_id=this-phone"
+        )
         XCTAssertEqual(model.toast, "uploaded \"clip.mov\" to Documents")
-        let body = posts.lastBody
-        XCTAssertTrue(body.contains("name=\"library_id\"\r\n\r\ncore:documents"))
-        XCTAssertTrue(body.contains("name=\"path\"\r\n\r\n\r\n"), "the library's root is an empty path, still sent")
-        XCTAssertTrue(body.contains("name=\"device_id\"\r\n\r\nthis-phone"))
-        XCTAssertTrue(body.contains("filename=\"clip.mov\""))
+        XCTAssertEqual(posts.lastBody, "x", "the body is the file, not a multipart envelope")
+        XCTAssertFalse(posts.lastBody.contains("Content-Disposition"))
     }
 
     /// `/api/files/upload`'s `device_id` is required and typed 3–64
@@ -218,41 +243,68 @@ final class PhoneUploadModelTests: XCTestCase {
         XCTAssertFalse(posts.lastBody.contains("device_id"))
     }
 
-    // MARK: - the ceiling
+    // MARK: - the ceiling that is gone (D43)
 
-    func testARowOverTheCeilingGetsNoControlAtAllAndSaysHowBigItIs() async {
+    /// **Every file gets a control, whatever its size.**
+    ///
+    /// Two cases used to live here, and both asserted the opposite:
+    /// `testARowOverTheCeilingGetsNoControlAtAllAndSaysHowBigItIs` (no
+    /// control for a row over 64 MiB, a toast if something asked anyway) and
+    /// `testAFileThatTurnsOutBiggerThanItsRowSaidIsStillRefused` (the bytes
+    /// re-measured after the read, in case a stale listing undersold them).
+    /// The body is streamed off disk now, so neither the row's stated size nor
+    /// the file's real size is consulted anywhere in this model, and there is
+    /// no number left for either case to be about. A folder is the one row
+    /// with no control, because the streamed door takes one file per request
+    /// (`files.py:1189`).
+    func testARowOfAnySizeGetsAnUploadControlAndIsPosted() async {
         let said = Shared<PhoneServerWriteStatus?>(PhoneServerWriteStatus(libraries: [library("core:music", "Music")]))
         let posts = Posts()
         let model = model(said: said, posts: posts)
         model.start()
         await settle({ model.target != nil }, "the write status")
 
-        let huge = item("film.mov", kind: .video, size: PhoneUploadModel.cap + 1)
-        XCTAssertFalse(model.offersUpload(huge), "no control is drawn for a file this app cannot post")
-        XCTAssertTrue(model.isTooBig(huge))
+        // Four gigabytes: over the old cap by a factor of sixty-four, and over
+        // what a `Data` on a phone can hold at all, which is the point.
+        let huge = item("film.mov", kind: .video, size: 4 * 1024 * 1024 * 1024)
+        XCTAssertTrue(model.offersUpload(huge), "a four-gigabyte row must still offer an upload")
         XCTAssertTrue(model.offersUpload(item()))
-        // Nothing should be able to ask; if something does, it is refused.
+        XCTAssertFalse(
+            model.offersUpload(PhoneMediaItem(
+                id: "Trips",
+                libraryID: "phone:folder:/a",
+                name: "Trips",
+                kind: .folder,
+                isDir: true,
+                origin: .file(URL(fileURLWithPath: "/a/Trips"))
+            )),
+            "a folder is the one row with nothing to send"
+        )
+
         model.upload(huge)
-        XCTAssertEqual(model.toast, PhoneMediaStrings.tooBigToUpload(PhoneUploadModel.cap + 1))
-        XCTAssertEqual(posts.count, 0)
+        await settle({ posts.count == 1 }, "the post")
+        XCTAssertEqual(
+            model.toast?.hasPrefix("too big"), false,
+            "nothing refuses a file for its size any more: \(model.toast ?? "nil")"
+        )
     }
 
-    func testAFileThatTurnsOutBiggerThanItsRowSaidIsStillRefused() async {
-        // A folder's listing can be stale, and a photo asset has no size at
-        // all until its bytes are in hand — so the cap is checked again on
-        // what actually arrived.
-        let said = Shared<PhoneServerWriteStatus?>(PhoneServerWriteStatus(libraries: [library("core:music", "Music")]))
-        let posts = Posts()
-        let model = model(
-            said: said,
-            posts: posts,
-            bytes: { _ in Data(count: Int(PhoneUploadModel.cap) + 1) }
+    /// The ring carries a number now (D43).
+    ///
+    /// ``transferPercent(sent:of:)`` is what turns the transport's two counts
+    /// into the one the button draws, and all three of its edges are decided
+    /// here rather than left to a UI case: an honest fraction, a total the
+    /// server never declared, and a total that is a lie.
+    func testThePercentOfATransferIsClampedAndOptional() {
+        XCTAssertEqual(transferPercent(sent: 512, of: 1024), 50)
+        XCTAssertEqual(transferPercent(sent: 0, of: 1024), 0)
+        XCTAssertNil(transferPercent(sent: 512, of: -1), "an undeclared total is not a percent")
+        XCTAssertNil(transferPercent(sent: 512, of: 0))
+        XCTAssertEqual(transferPercent(sent: 2048, of: 1024), 100, "a lying total cannot draw 200%")
+        XCTAssertEqual(
+            transferPercent(sent: 1023, of: 1024), 99,
+            "rounded DOWN: a bar that says 100% while bytes are still going is the one number that must not appear"
         )
-        model.start()
-        await settle({ model.target != nil }, "the write status")
-        model.upload(item("big.mp3", size: nil))
-        await settle({ model.toast?.hasPrefix("too big") == true }, "the refusal")
-        XCTAssertEqual(posts.count, 0, "nothing is posted once the bytes turn out to be over the cap")
     }
 
     // MARK: - two taps
@@ -274,9 +326,12 @@ final class PhoneUploadModelTests: XCTestCase {
 
         model.upload(item())
         let key = PhoneUploadKey.of(item(), .music)
+        // Nil **at this moment**, not for ever (D43 gave the upload a real
+        // percent): this upload is still inside the file read -- the `release`
+        // box below has not been set -- so nothing has been sent and there is
+        // no fraction to report. A ring pinned at 0 would read as a stall,
+        // which is why nil stays the indeterminate case.
         XCTAssertEqual(model.state(for: key), .busy(percent: nil))
-        // There is no byte-level progress to report through `raw`, so the ring
-        // is indeterminate rather than a guessed percent.
         XCTAssertEqual(PhoneMediaStrings.uploadingLabel(nil), "uploading")
 
         model.upload(item())
@@ -297,8 +352,15 @@ final class PhoneUploadModelTests: XCTestCase {
             kind: .music,
             status: status(said),
             deviceID: "this-phone",
-            read: { _ in Data("x".utf8) },
-            send: { _, _, _ in
+            file: { _ in
+                let url = PhoneUploadSpool.fileURL(
+                    in: try PhoneUploadSpool.directory(),
+                    for: "a.mp3"
+                )
+                try Data("x".utf8).write(to: url, options: .atomic)
+                return .spooled(url)
+            },
+            send: { _, _, _, _ in
                 throw DomovoiError.refused(ApiFailure(status: 403, message: "403: \(body)", body: body))
             },
             boundary: { "BOUND" }
@@ -381,7 +443,10 @@ final class PhoneUploadModelTests: XCTestCase {
         model.upload(item("notes.txt", kind: .docText))
         await settle({ model.toast?.hasPrefix("uploaded") == true }, "the done toast")
         XCTAssertEqual(model.toast, "uploaded \"notes.txt\" to Documents")
-        XCTAssertTrue(posts.lastBody.contains("name=\"library_id\"\r\n\r\ncore:documents"))
+        XCTAssertTrue(
+            posts.lastPath?.contains("library_id=core%3Adocuments") == true,
+            "the streamed door carries the library in the query: \(posts.lastPath ?? "nil")"
+        )
     }
 
     // MARK: - the status read itself
@@ -549,19 +614,28 @@ final class PhoneUploadModelTests: XCTestCase {
         )
     }
 
-    /// A picked file over the ceiling: the refusal is a **toast**, because
-    /// there is no row whose control could have been left out, and nothing is
-    /// posted.
-    func testAPickedFileOverTheCapIsRefusedWithoutPosting() async {
+    /// A picked file well over the old ceiling **is posted** (D43).
+    ///
+    /// This was `testAPickedFileOverTheCapIsRefusedWithoutPosting` and
+    /// asserted a toast and `posts.count == 0`. Eighty mebibytes here rather
+    /// than the four gigabytes the row case uses, because a pick really does
+    /// arrive as `Data` -- that is what the picker hands over -- and this case
+    /// is about what the model then does with it: spool it to a file and
+    /// stream that file, instead of measuring it and refusing.
+    func testAPickedFileOverTheOldCapIsSpooledAndPosted() async {
         let said = Shared<PhoneServerWriteStatus?>(PhoneServerWriteStatus(libraries: [library("core:music", "Music")]))
         let posts = Posts()
         let model = model(said: said, posts: posts)
         model.start()
         await settle({ model.target != nil }, "the write status")
 
-        let huge = Data(count: Int(PhoneUploadModel.cap) + 1)
-        model.uploadPicked(name: "grendalf huge raw.wav", bytes: huge, kind: .audio)
-        XCTAssertEqual(posts.count, 0)
-        XCTAssertEqual(model.toast, PhoneMediaStrings.tooBigToUpload(Int64(huge.count)))
+        let big = Data(count: 80 * 1024 * 1024)
+        model.uploadPicked(name: "grendalf huge raw.wav", bytes: big, kind: .audio)
+        await settle({ posts.count == 1 }, "the picked upload")
+        XCTAssertEqual(posts.lastPath, PhoneUploadPath.music)
+        await settle(
+            { model.toast == "uploaded \"grendalf huge raw.wav\" to Music" },
+            "the finished toast (last seen: \(model.toast ?? "nil"))"
+        )
     }
 }

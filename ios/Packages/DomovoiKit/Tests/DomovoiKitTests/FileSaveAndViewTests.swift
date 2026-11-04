@@ -58,7 +58,7 @@ final class FileSaveAndViewTests: XCTestCase {
         })
 
         model.save(entry("notes.md", rel: "Projects/notes.md"), from: "core:documents")
-        XCTAssertEqual(.fetching("notes.md"), model.state)
+        XCTAssertEqual(.fetching("notes.md", nil), model.state)
         await settleUntil({
             if case .ready = model.state { return true }
             return false
@@ -94,23 +94,36 @@ final class FileSaveAndViewTests: XCTestCase {
         model.taken()
     }
 
-    /// Nothing should be able to ask for a file over the cap — no control is
-    /// drawn for one — so it is a refusal rather than a fetch.
-    func testAFileOverTheCapIsRefusedWithoutAskingForIt() async throws {
-        let asked = Shared<Int>(0)
-        let model = FileSaveModel(fetch: { _ in
-            asked.mutate { $0 += 1 }
-            return Data()
+    /// **A four-gigabyte file is fetched like any other** (D47).
+    ///
+    /// This case used to be `testAFileOverTheCapIsRefusedWithoutAskingForIt`
+    /// and asserted that nothing was asked for and the state went to
+    /// `.failed` with the "too big to save from a phone" sentence. There is
+    /// no ceiling now — ``SaveToDeviceModel`` writes the bytes to disk as
+    /// they arrive — so the size is not consulted at all, which is what this
+    /// asserts: the request IS made, for the right path, for a row whose
+    /// stated size is sixty-four times what this app once refused.
+    func testAFileFarOverTheOldCapIsStillFetched() async throws {
+        let asked = Shared<[String]>([])
+        let model = FileSaveModel(fetch: { path in
+            asked.mutate { $0.append(path) }
+            return Data("a film, abridged".utf8)
         })
 
-        model.save(entry("film.mkv", size: FileSaveModel.cap + 1), from: "core:music")
-        await nothingHappens()
+        model.save(entry("film.mkv", size: 4 * 1024 * 1024 * 1024), from: "core:music")
+        await settleUntil({
+            if case .ready = model.state { return true }
+            return false
+        }, "the film")
 
-        XCTAssertEqual(0, asked.current)
         XCTAssertEqual(
-            .failed("too big to save from a phone (64.0 MB) — on the dashboard"),
-            model.state
+            ["/api/files/download?library_id=core%3Amusic&path=film.mkv"],
+            asked.current,
+            "a big file must be asked for, not refused on its stated size"
         )
+        guard case .ready(_, let name) = model.state else { return XCTFail("no file") }
+        XCTAssertEqual("film.mkv", name)
+        model.taken()
     }
 
     func testAFailedFetchSaysWhatWentWrong() async throws {

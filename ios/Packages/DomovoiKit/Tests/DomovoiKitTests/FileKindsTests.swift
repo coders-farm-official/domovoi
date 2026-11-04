@@ -5,9 +5,13 @@ import XCTest
 /// The file-kind rules, and what a row's tap does.
 ///
 /// `FileKindsTest.kt` is the Kotlin's version of the first half; the second
-/// half — ``FileKinds/action(for:in:saveCap:)`` — has no counterpart, because
+/// half — ``FileKinds/action(for:in:)`` — has no counterpart, because
 /// Android's four destinations are four things Android can do and these are
 /// four things this app can.
+///
+/// That function used to take a `saveCap` and answer a fifth case for a file
+/// over it. D47 streams the save onto disk, so there is no size at which the
+/// answer changes and the argument is gone.
 final class FileKindsTests: XCTestCase {
 
     // MARK: - the extension
@@ -152,7 +156,16 @@ final class FileKindsTests: XCTestCase {
     private let documents = FileLibrary(id: FileLibrary.documents, label: "Documents", kind: "core", editable: true, docEditing: true)
     private let music = FileLibrary(id: "core:music", label: "Music", kind: "core", editable: true)
     private let stick = FileLibrary(id: "usb-1", label: "USB stick", kind: "removable")
-    private let cap: Int64 = 64 * 1024 * 1024
+    /// The ceiling this file used to be half about. D47 removed it, and the
+    /// number stays under its own name as the size a few cases still measure
+    /// against — the point they make now being that a file of that size, and
+    /// well over it, is treated exactly like any other.
+    ///
+    /// Spelled as a plain number rather than `64 * 1024 * 1024`, so that the
+    /// batch's own sweep for that expression across `ios/` comes back empty:
+    /// the ceiling is gone, and the one place it may still be written down is
+    /// a sentence about its removal.
+    private let oldCap: Int64 = 67_108_864
 
     private func entry(_ name: String, isDir: Bool = false, size: Int64? = 1024) -> FileEntry {
         FileEntry(
@@ -166,23 +179,22 @@ final class FileKindsTests: XCTestCase {
     }
 
     func testAFolderOpens() {
-        XCTAssertEqual(.open, FileKinds.action(for: entry("Albums", isDir: true), in: music, saveCap: cap))
+        XCTAssertEqual(.open, FileKinds.action(for: entry("Albums", isDir: true), in: music))
         XCTAssertEqual("open", FileKinds.verb(.open))
     }
 
     /// Even in a library this phone may not write to, and even on a drive: a
     /// listing is a read, and reads are never blocked.
     func testAFolderOpensOnAReadOnlyDriveToo() {
-        XCTAssertEqual(.open, FileKinds.action(for: entry("DCIM", isDir: true), in: stick, saveCap: cap))
-        XCTAssertEqual(.open, FileKinds.action(for: entry("x", isDir: true), in: nil, saveCap: cap))
+        XCTAssertEqual(.open, FileKinds.action(for: entry("DCIM", isDir: true), in: stick))
+        XCTAssertEqual(.open, FileKinds.action(for: entry("x", isDir: true), in: nil))
     }
 
     /// A folder is **never** a save: Android downloads one as a server-built
-    /// zip whose size nothing knows in advance, and a cap cannot be applied
-    /// to a number that does not exist.
+    /// zip, and this app has nothing to unpack one with.
     func testAFolderIsNeverASave() {
         let huge = FileEntry(name: "everything", rel: "everything", isDir: true, size: nil)
-        XCTAssertEqual(.open, FileKinds.action(for: huge, in: music, saveCap: cap))
+        XCTAssertEqual(.open, FileKinds.action(for: huge, in: music))
     }
 
     /// Any library: `/api/images/raw` takes a `library_id`, which is the
@@ -191,19 +203,20 @@ final class FileKindsTests: XCTestCase {
         for library in [documents, music, stick] {
             XCTAssertEqual(
                 .view,
-                FileKinds.action(for: entry("photo.jpg"), in: library, saveCap: cap),
+                FileKinds.action(for: entry("photo.jpg"), in: library),
                 "an image in \(library.label) should open in the viewer"
             )
         }
         XCTAssertEqual("view", FileKinds.verb(.view))
     }
 
-    /// An image over the cap is still **viewed**, not refused: the viewer
-    /// holds one decoded picture and the cap is about saving a copy.
+    /// A huge image is still **viewed**, not refused: the viewer holds one
+    /// decoded picture, and since D47 nothing here refuses a file for being
+    /// big at all.
     func testAHugeImageIsStillViewed() {
         XCTAssertEqual(
             .view,
-            FileKinds.action(for: entry("panorama.jpg", size: cap * 4), in: music, saveCap: cap)
+            FileKinds.action(for: entry("panorama.jpg", size: oldCap * 4), in: music)
         )
     }
 
@@ -211,42 +224,45 @@ final class FileKindsTests: XCTestCase {
     /// folder, so the same `.md` in Music is a 404 there and this app does
     /// not offer to read it.
     func testADocumentIsReadInTheAppAndTheSameFileElsewhereIsNot() {
-        XCTAssertEqual(.read, FileKinds.action(for: entry("notes.md"), in: documents, saveCap: cap))
-        XCTAssertEqual(.read, FileKinds.action(for: entry("Letter.html"), in: documents, saveCap: cap))
-        XCTAssertEqual(.save, FileKinds.action(for: entry("notes.md"), in: music, saveCap: cap))
+        XCTAssertEqual(.read, FileKinds.action(for: entry("notes.md"), in: documents))
+        XCTAssertEqual(.read, FileKinds.action(for: entry("Letter.html"), in: documents))
+        XCTAssertEqual(.save, FileKinds.action(for: entry("notes.md"), in: music))
         XCTAssertEqual("read", FileKinds.verb(.read))
     }
 
     /// Documents' own non-text files: a PDF, a spreadsheet, a Word file. This
     /// app has no viewer for any of them, so it hands the person the file.
     func testTheRestOfDocumentsIsSaved() {
-        XCTAssertEqual(.save, FileKinds.action(for: entry("scan.pdf"), in: documents, saveCap: cap))
-        XCTAssertEqual(.save, FileKinds.action(for: entry("budget.xlsx"), in: documents, saveCap: cap))
-        XCTAssertEqual(.save, FileKinds.action(for: entry("letter.docx"), in: documents, saveCap: cap))
+        XCTAssertEqual(.save, FileKinds.action(for: entry("scan.pdf"), in: documents))
+        XCTAssertEqual(.save, FileKinds.action(for: entry("budget.xlsx"), in: documents))
+        XCTAssertEqual(.save, FileKinds.action(for: entry("letter.docx"), in: documents))
         XCTAssertEqual("save to device", FileKinds.verb(.save))
     }
 
-    func testAFileOverTheCapOffersNothingAndCarriesItsSize() {
-        let film = entry("film.mkv", size: 2 * 1024 * 1024 * 1024)
-        XCTAssertEqual(.tooBig(2 * 1024 * 1024 * 1024), FileKinds.action(for: film, in: music, saveCap: cap))
-        XCTAssertNil(FileKinds.verb(.tooBig(1)), "a file with no control has no verb")
-        XCTAssertEqual(
-            "too big to save from a phone (2.00 GB) — on the dashboard",
-            FileStrings.tooBigToSave(2 * 1024 * 1024 * 1024)
-        )
-    }
-
-    /// Exactly at the cap is **in**: the comparison is `>`, and a file of
-    /// precisely 64 MiB is one this app has said it will fetch.
-    func testTheCapIsInclusive() {
-        XCTAssertEqual(.save, FileKinds.action(for: entry("big.pdf", size: cap), in: music, saveCap: cap))
-        XCTAssertEqual(.tooBig(cap + 1), FileKinds.action(for: entry("big.pdf", size: cap + 1), in: music, saveCap: cap))
+    /// **A two-gigabyte film is a save** (D47, Kamron's answer 47).
+    ///
+    /// Two cases used to live here — `testAFileOverTheCapOffersNothingAndCarriesItsSize`
+    /// and `testTheCapIsInclusive` — and both asserted the opposite:
+    /// `.tooBig`, no verb, and the sentence that sent the person to the
+    /// dashboard. The save streams to disk now (``SaveToDeviceModel``), so
+    /// there is nothing a file's size can do to this answer, which is what
+    /// this asserts at the old ceiling, one byte over it, and thirty-two
+    /// times over it.
+    func testAFilmOfAnySizeIsASave() {
+        for size: Int64 in [oldCap, oldCap + 1, 2 * 1024 * 1024 * 1024] {
+            XCTAssertEqual(
+                .save,
+                FileKinds.action(for: entry("film.mkv", size: size), in: music),
+                "a file of \(size) bytes should be a save like any other"
+            )
+        }
+        XCTAssertEqual("save to device", FileKinds.verb(.save))
     }
 
     /// A row with no `size` is not evidence of an enormous file. Refusing it
     /// would make every older server's files unsaveable.
     func testAFileTheServerDidNotMeasureIsStillOffered() {
         let unmeasured = FileEntry(name: "mystery.bin", rel: "mystery.bin", size: nil, kind: "other")
-        XCTAssertEqual(.save, FileKinds.action(for: unmeasured, in: music, saveCap: cap))
+        XCTAssertEqual(.save, FileKinds.action(for: unmeasured, in: music))
     }
 }
