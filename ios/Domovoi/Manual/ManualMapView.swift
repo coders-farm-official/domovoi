@@ -821,7 +821,12 @@ struct ManualScrambleName: View {
     /// behaviour. `try?` and a cancellation check, not `do`/`catch`: a
     /// cancelled sleep must leave the loop, and the real name comes back on
     /// screen whichever way it left.
-    private func scramble() async {
+    ///
+    /// `@MainActor` and not nonisolated: it writes `@State` and a `@Binding`,
+    /// and a nonisolated `async` method of a view that does that is the one
+    /// shape Swift 6's isolation checking has an opinion about. `.task`
+    /// inherits the actor context, so this is called without a hop.
+    @MainActor private func scramble() async {
         guard !reduceMotion else { return }
         let letters = Array(text)
         guard !letters.isEmpty else { return }

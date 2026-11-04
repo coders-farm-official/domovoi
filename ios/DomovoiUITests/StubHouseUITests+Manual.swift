@@ -21,6 +21,14 @@ import XCTest
 // needs two wake words, a plugin row or a track count asks for it first and
 // `reset-fixtures` takes it away again.
 //
+// **The cards do not float while these cases run.** Answer 31 gives every
+// map node a `repeatForever` animation and XCUITest waits for the app to go
+// idle before every query, so `manualLaunch(…)` — which every case here
+// launches through — passes `-domovoi-manual-float-off`. One case,
+// `testManual_TheMapWorksWhileItsNodesFloat`, turns it on and drives the map
+// with the cards moving, so a quiescence problem costs that case and not the
+// screen.
+//
 // **A level is a screen on a stack of the manual's own** (answer 32), below
 // the accessibility sizes. So the level *underneath* the one on screen is
 // still in the tree, unhittable: `the map's nodes exist` is not the same
@@ -49,7 +57,7 @@ extension StubHouseUITests {
     @MainActor
     func testManual_StartHereDrawsTheServersDocument() throws {
         control("reset-fixtures", "{}", port: 6601, what: "the manual fixture's seed")
-        let app = launch(push: "Manual", pushDelay: Self.pushDelay)
+        let app = manualLaunch()
         XCTAssertTrue(manualStart(app), "the manual never drew Start here")
         evidence(app, "manual-start-here")
 
@@ -99,7 +107,7 @@ extension StubHouseUITests {
             "manual-tracks", "{\"unreadable\": true}",
             port: 6601, what: "a library whose stats cannot be read"
         )
-        var app = launch(push: "Manual", pushDelay: Self.pushDelay)
+        var app = manualLaunch()
         XCTAssertTrue(manualStart(app), "the manual never drew Start here")
         XCTAssertTrue(
             containing(app, StubManual.musicLine).waitForExistence(timeout: 10),
@@ -137,7 +145,7 @@ extension StubHouseUITests {
             "manual-tracks", "{\"total_tracks\": 412}",
             port: 6601, what: "the library's track count"
         )
-        app = launch(push: "Manual", pushDelay: Self.pushDelay)
+        app = manualLaunch()
         XCTAssertTrue(manualStart(app), "the manual never drew Start here again")
         XCTAssertTrue(
             containing(app, StubManual.musicLine).waitForExistence(timeout: 10),
@@ -165,7 +173,7 @@ extension StubHouseUITests {
     @MainActor
     func testManual_MapOpensATopicThenAPiece() throws {
         control("reset-fixtures", "{}", port: 6601, what: "the manual fixture's seed")
-        let app = launch(push: "Manual", pushDelay: Self.pushDelay)
+        let app = manualLaunch()
         XCTAssertTrue(manualMap(app), "the map pill did not open the map")
         evidence(app, "manual-map-level-one")
 
@@ -215,26 +223,43 @@ extension StubHouseUITests {
     /// `"<title>: <subtitle>"` — within a second of its level opening, while
     /// the glyphs are still landing, and again once they have. The effect is
     /// 216 ms in a shipping build, which no case could be inside, so this one
-    /// asks for 300 ms a frame (`-domovoi-manual-scramble`, DEBUG-only) and
-    /// has 2.7 seconds of scramble to query during.
+    /// asks for 600 ms a frame (`-domovoi-manual-scramble`, DEBUG-only) and
+    /// has 5.4 seconds of scramble to query during.
     ///
     /// It fails against the obvious wrong implementation: a scramble that is
     /// the node's own text with no label over it makes the button's merged
     /// label the glyph run, and `label == "Domovoi: your home"` then matches
     /// nothing for as long as the effect runs.
     ///
-    /// **What it cannot do is prove the glyphs are drawn at all**, and that is
-    /// by design rather than an oversight: the drawn run is nobody's label and
-    /// nobody's value — that is the whole point of the effect being
-    /// `redacted`-style — so nothing in the accessibility tree carries it. The
-    /// two screenshots are the evidence a person reads:
-    /// `manual-scramble-running` has the glyphs in it and
-    /// `manual-scramble-settled` has the names. This case is the **guard** on
-    /// the half that can break silently.
+    /// ### And it fails if the scramble is deleted
+    ///
+    /// Which it did not, before the review: the label this case reaches a node
+    /// by predates the effect, so the whole of `ManualScrambleName` could be
+    /// removed and this passed. The drawn glyphs are nobody's label and
+    /// nobody's value — that is the point of the effect — so nothing in the
+    /// accessibility tree can carry *what* was drawn.
+    ///
+    /// What it can carry is **whether** a scramble is in flight, and that is
+    /// now published as the node's accessibility value
+    /// (``ManualMapNode/scrambleState``) for as long as a case has asked for
+    /// a slow scramble, and only then: `"scrambling"`, then `"settled"`. A
+    /// node drawn straight is `"settled"` from the first frame and the wait
+    /// below times out. The two screenshots stay, because they are what says
+    /// the glyphs *look* right: `manual-scramble-running` has them in it and
+    /// `manual-scramble-settled` has the names.
+    ///
+    /// The settle arithmetic itself — which characters are glyphs at which
+    /// frame — is `ManualAnswersTests.testAScramblingNameSettlesFromTheLeftAndKeepsItsShape`
+    /// in the package suite, where a deterministic glyph picker can be handed
+    /// in. A UI case cannot assert on `Random`.
     @MainActor
     func testManual_ANodeIsNamedWhileItsNameScrambles() throws {
         control("reset-fixtures", "{}", port: 6601, what: "the manual fixture's seed")
-        let app = manualLaunch(scrambleMS: 300)
+        // 600 ms a frame: nine frames is 5.4 s, which is the slack this case
+        // needs. The assertions below are taken after a tap, an element wait
+        // and (for the second pair) a screenshot, and at the shipping 24 ms
+        // the effect would be over before the first of them.
+        let app = manualLaunch(scrambleMS: 600)
 
         // **Start here first, and it is not tidiness.** `@SceneStorage` keeps
         // the level across a launch, so a run that came in already on the map
@@ -261,13 +286,32 @@ extension StubHouseUITests {
                 + "its name was scrambling — the drawn glyphs have become "
                 + "somebody's accessibility label"
         )
+
+        // **The effect is running.** The only thing about it the tree can
+        // carry, and the assertion a deleted scramble fails: nine 600 ms
+        // frames is 5.4 s of `"scrambling"`, and a name drawn straight is
+        // `"settled"` from the first frame. Asserted before the screenshot,
+        // which costs the better part of a second.
+        //
+        // The value is read off the **button** and not off `centre`, which is
+        // an `.any` match: a value belongs to the control, and `.any` can
+        // land on a container that merged the same label.
+        let card = app.buttons[StubManual.centreNodeLabel].firstMatch
+        XCTAssertTrue(card.waitForExistence(timeout: 5), "the centre node is not a control")
+        XCTAssertTrue(
+            manualValue(card, is: "scrambling"),
+            "the centre node's name never scrambled: its value went straight "
+                + "to \"\(card.value as? String ?? "")\" — the effect is not "
+                + "running at all"
+        )
         evidence(app, "manual-scramble-running")
 
-        // Long enough for nine 300 ms frames to finish. ``XCTWaiter`` with an
-        // expectation nothing fulfils is this rig's wait: `wait(for:timeout:)`
-        // records a failure of its own, and `setUp` sets
-        // `continueAfterFailure = false`.
-        _ = XCTWaiter().wait(for: [XCTestExpectation(description: "the glyphs land")], timeout: 5)
+        // Then it finishes, which is the other half: an effect that never
+        // settles leaves a node showing glyphs for good.
+        XCTAssertTrue(
+            manualValue(card, is: "settled", timeout: 15),
+            "the centre node's name never finished scrambling"
+        )
         XCTAssertTrue(
             centre.exists,
             "the centre node lost its name once the scramble had finished"
@@ -277,6 +321,51 @@ extension StubHouseUITests {
             "a ring topic lost its name: \(StubManual.roomsTopicLabel)"
         )
         evidence(app, "manual-scramble-settled")
+    }
+
+    /// **Answer 31**: the map still works while its cards are bobbing.
+    ///
+    /// The one case in this file that launches with the float **on** (see
+    /// `manualLaunch(mode:scrambleMS:float:)`). Ten `repeatForever`
+    /// animations are ten animations that never finish, and every XCUITest
+    /// query waits for the app to go idle first; the rest of the suite turns
+    /// the float off so that a quiescence problem cannot cost every manual
+    /// case, and this is the case that would pay for it instead.
+    ///
+    /// So what it asserts is deliberately ordinary — the map draws, a topic
+    /// opens, `zoom out` comes back — because the claim is not about the
+    /// animation's looks. It is "the screen is still driveable with it on".
+    /// If this case idle-times out and the rest pass, the float's
+    /// `repeatForever` is the suspect and
+    /// `-domovoi-manual-float-off` is already the answer.
+    @MainActor
+    func testManual_TheMapWorksWhileItsNodesFloat() throws {
+        control("reset-fixtures", "{}", port: 6601, what: "the manual fixture's seed")
+        let app = manualLaunch(float: true)
+
+        XCTAssertTrue(manualMap(app), "the map did not open with the cards floating")
+        evidence(app, "manual-float-on")
+        let topic = manualNode(app, StubManual.roomsTopic)
+        XCTAssertTrue(topic.waitForExistence(timeout: 15), "a floating ring topic was not drawn")
+        // A moving target is still a target: `.offset` moves the hit area
+        // with the card, so a tap lands.
+        topic.tap()
+        XCTAssertTrue(
+            manualNode(app, StubManual.plugins).waitForExistence(timeout: 15),
+            "tapping a floating node did not open its cluster — the hit area "
+                + "does not move with the card"
+        )
+        let out = app.buttons[StubManual.zoomOut].firstMatch
+        XCTAssertTrue(
+            out.waitForExistence(timeout: 15),
+            "`zoom out` was not reachable with the cards floating"
+        )
+        out.tap()
+        XCTAssertTrue(
+            manualNode(app, StubManual.centreNode).waitForExistence(timeout: 15),
+            "`zoom out` did not come back to the centre"
+        )
+        evidence(app, "manual-float-still-driveable")
     }
 
     /// **Answer 32**: a swipe back from a piece goes up to its topic, and
@@ -294,7 +383,7 @@ extension StubHouseUITests {
     @MainActor
     func testManual_ASwipeFromAPieceGoesUpToItsTopic() throws {
         control("reset-fixtures", "{}", port: 6601, what: "the manual fixture's seed")
-        let app = launch(push: "Manual", pushDelay: Self.pushDelay)
+        let app = manualLaunch()
 
         XCTAssertTrue(
             manualOpenTopic(app, topic: StubManual.roomsTopic),
@@ -362,7 +451,7 @@ extension StubHouseUITests {
             "manual-tracks", "{\"unreadable\": true}",
             port: 6601, what: "a library whose stats cannot be read"
         )
-        let app = launch(push: "Manual", pushDelay: Self.pushDelay)
+        let app = manualLaunch()
         XCTAssertTrue(manualStart(app), "the manual never drew Start here")
         XCTAssertTrue(
             containing(app, StubManual.musicLine).waitForExistence(timeout: 10),
@@ -397,10 +486,30 @@ extension StubHouseUITests {
     /// audit covers every ink-on-wash pairing at once — including `admin`,
     /// the weakest at 5.17:1. A translucent wash would make those numbers
     /// untrue and this is where it would show.
+    ///
+    /// ### What this case does **not** guard, said plainly
+    ///
+    /// It passes with `run.backgroundColor` removed from both arms, and the
+    /// review was right to say so. A wash is three pixel values inside a
+    /// `Text`'s attributed string: it is not an element, it has no label and
+    /// no value, and the accessibility tree a UI case queries cannot see it.
+    /// Pixel-sampling a screenshot was considered and rejected — the washed
+    /// run is a substring of a paragraph, so there is no frame to sample it
+    /// in, and a case that sampled the paragraph's frame would be reading
+    /// mostly page background either way.
+    ///
+    /// So answer 34 is guarded in two places and neither is this one:
+    /// `ManualAnswersTests.testEveryRatioTheWashCommentsState` holds the
+    /// numbers, the two washes and the measurement that says why there are
+    /// two of them; and the evidence screenshot is what says the wash is on
+    /// the run at all. **One assignment per run kind is guarded by review
+    /// only.** What this case is for is the other half: that the page a
+    /// reviewer looked at still passes Apple's audit, at the ordinary type
+    /// size, with the keyboard down.
     @MainActor
     func testManual_ACodeSpanIsWashedAndStillAudits() throws {
         control("reset-fixtures", "{}", port: 6601, what: "the manual fixture's seed")
-        let app = launch(push: "Manual", pushDelay: Self.pushDelay)
+        let app = manualLaunch()
         XCTAssertTrue(
             manualOpen(app, search: StubManual.keywordYourMusic, piece: StubManual.yourMusic),
             "the manual never opened the piece with the code span in it"
@@ -430,7 +539,7 @@ extension StubHouseUITests {
     @MainActor
     func testManual_SearchOpensThePieceItNames() throws {
         control("reset-fixtures", "{}", port: 6601, what: "the manual fixture's seed")
-        let app = launch(push: "Manual", pushDelay: Self.pushDelay)
+        let app = manualLaunch()
         XCTAssertTrue(manualStart(app), "the manual never drew Start here")
         XCTAssertTrue(manualType(app, StubManual.keywordPiRoom), "the search field never drew")
         evidence(app, "manual-search-keyword")
@@ -462,7 +571,7 @@ extension StubHouseUITests {
     @MainActor
     func testManual_APluginsPieceIsHiddenWhileThePluginIsNot() throws {
         control("reset-fixtures", "{}", port: 6601, what: "the manual fixture's seed")
-        var app = launch(push: "Manual", pushDelay: Self.pushDelay)
+        var app = manualLaunch()
         XCTAssertTrue(manualStart(app), "the manual never drew Start here")
         XCTAssertTrue(manualType(app, StubManual.keywordRadio), "the search field never drew")
         XCTAssertTrue(
@@ -481,7 +590,7 @@ extension StubHouseUITests {
                 + " \"version\": \"0.4.1\", \"enabled\": true, \"status\": \"ok\"}]}",
             port: 6601, what: "a radio plugin that is installed and healthy"
         )
-        app = launch(push: "Manual", pushDelay: Self.pushDelay)
+        app = manualLaunch()
         XCTAssertTrue(manualStart(app), "the manual never drew Start here again")
         XCTAssertTrue(manualType(app, StubManual.keywordRadio), "the search field never drew")
         XCTAssertTrue(
@@ -506,7 +615,7 @@ extension StubHouseUITests {
     func testManual_APhraseTheServerCannotAnswerIsNotShown() throws {
         control("reset-fixtures", "{}", port: 6601, what: "the manual fixture's seed")
         control("chat-ai", "{\"on\": false}", port: 6601, what: "the server's AI features off")
-        let app = launch(push: "Manual", pushDelay: Self.pushDelay)
+        let app = manualLaunch()
         let reached = manualOpen(app, search: StubManual.keywordTalking, piece: StubManual.talking)
         let sibling = containing(app, StubManual.timePhrase).waitForExistence(timeout: 10)
         let asked = containing(app, StubManual.aiPhrase).exists
@@ -555,7 +664,7 @@ extension StubHouseUITests {
     func testManual_AnUnopenableRouteLinkIsNotALink() throws {
         control("reset-fixtures", "{}", port: 6601, what: "the manual fixture's seed")
         control("chat-ai", "{\"on\": false}", port: 6601, what: "the server's AI features off")
-        let app = launch(push: "Manual", pushDelay: Self.pushDelay)
+        let app = manualLaunch()
         let reached = manualOpen(app, search: StubManual.keywordWhatItIs, piece: StubManual.whatItIs)
         // A control of **either** kind. `Text`'s link runs and a `Button` are
         // both controls — a query for one alone would call a port that drew
@@ -630,7 +739,7 @@ extension StubHouseUITests {
     func testManual_TheRoomsSlotNamesTheRoomAndWhatItPlays() throws {
         control("reset-fixtures", "{}", port: 6601, what: "the manual fixture's seed")
         control("manual-rooms", StubManual.oneRoomPlaying, port: 6601, what: "a room with a song")
-        let app = launch(push: "Manual", pushDelay: Self.pushDelay)
+        let app = manualLaunch()
         XCTAssertTrue(
             manualOpen(app, search: StubManual.keywordPiRoom, piece: StubManual.piRoom),
             "the manual never opened the piece with the rooms slot"
@@ -676,7 +785,7 @@ extension StubHouseUITests {
     @MainActor
     func testManual_ThingsToSayListsTheServersPhrasesAndFallsBack() throws {
         control("reset-fixtures", "{}", port: 6601, what: "the manual fixture's seed")
-        let app = launch(push: "Manual", pushDelay: Self.pushDelay)
+        let app = manualLaunch()
         XCTAssertTrue(
             manualOpen(app, search: StubManual.keywordPlugins, piece: StubManual.plugins),
             "the manual never opened the piece with the live slots"
@@ -726,7 +835,7 @@ extension StubHouseUITests {
     func testManual_TheWakeWordNoteNamesOnlyTheOtherWords() throws {
         control("reset-fixtures", "{}", port: 6601, what: "the manual fixture's seed")
         control("manual-rooms", StubManual.twoRoomsOneWord, port: 6601, what: "one wake word")
-        var app = launch(push: "Manual", pushDelay: Self.pushDelay)
+        var app = manualLaunch()
         XCTAssertTrue(manualStart(app), "the manual never drew Start here")
         XCTAssertTrue(
             containing(app, StubManual.fencepost).waitForExistence(timeout: 15),
@@ -740,7 +849,7 @@ extension StubHouseUITests {
         )
 
         control("manual-rooms", StubManual.twoWords, port: 6601, what: "two wake words")
-        app = launch(push: "Manual", pushDelay: Self.pushDelay)
+        app = manualLaunch()
         XCTAssertTrue(manualStart(app), "the manual never drew Start here again")
         let note = startingWith(app, StubManual.wakeNoteOpening)
         XCTAssertTrue(
@@ -775,7 +884,7 @@ extension StubHouseUITests {
     func testManual_AServerWithNoManualOffersTheDashboard() throws {
         control("reset-fixtures", "{}", port: 6601, what: "the manual fixture's seed")
         control("manual-doc", "{\"how\": \"missing\"}", port: 6601, what: "no manual file")
-        var app = launch(push: "Manual", pushDelay: Self.pushDelay)
+        var app = manualLaunch()
         XCTAssertTrue(
             app.staticTexts[StubManual.noManualTitle].firstMatch.waitForExistence(timeout: 20),
             "a server that answers 404 for the manual did not say so"
@@ -787,7 +896,7 @@ extension StubHouseUITests {
         )
 
         control("manual-doc", "{\"how\": \"html\"}", port: 6601, what: "the SPA's index instead")
-        app = launch(push: "Manual", pushDelay: Self.pushDelay)
+        app = manualLaunch()
         XCTAssertTrue(
             app.staticTexts[StubManual.noManualTitle].firstMatch.waitForExistence(timeout: 20),
             "a 200 that is the dashboard's `index.html` was accepted as a manual"
@@ -808,7 +917,7 @@ extension StubHouseUITests {
     @MainActor
     func testManual_AnUnreachableServerShowsTheCopyFromLastTime() throws {
         control("reset-fixtures", "{}", port: 6601, what: "the manual fixture's seed")
-        var app = launch(push: "Manual", pushDelay: Self.pushDelay)
+        var app = manualLaunch()
         XCTAssertTrue(manualStart(app), "the manual never drew Start here")
         XCTAssertTrue(
             containing(app, StubManual.fencepost).waitForExistence(timeout: 15),
@@ -819,7 +928,7 @@ extension StubHouseUITests {
             "manual-fail", "{\"how\": \"unreachable\"}",
             port: 6601, what: "a manual read that fails without a 404"
         )
-        app = launch(push: "Manual", pushDelay: Self.pushDelay)
+        app = manualLaunch()
         let drawn = containing(app, StubManual.fencepost).waitForExistence(timeout: 20)
         let marked = app.staticTexts[StubManual.cachedLine].firstMatch.exists
         evidence(app, "manual-copy-from-last-time")
@@ -933,7 +1042,7 @@ extension StubHouseUITests {
                 + " \"version\": \"0.4.1\", \"enabled\": true, \"status\": \"ok\"}]}",
             port: 6601, what: "a plugin row to audit"
         )
-        let app = launch(push: "Manual", pushDelay: Self.pushDelay)
+        let app = manualLaunch()
 
         XCTAssertTrue(manualStart(app), "the manual never drew Start here")
         XCTAssertTrue(
@@ -1114,7 +1223,7 @@ extension StubHouseUITests {
         _ name: String
     ) throws -> (node: CGFloat, heading: CGFloat, bullet: CGFloat, item: CGFloat) {
         control("reset-fixtures", "{}", port: 6601, what: "the manual fixture's seed")
-        let app = launch(mode: mode, push: "Manual", pushDelay: Self.pushDelay)
+        let app = manualLaunch(mode: mode)
 
         // ---- the two leaves Apple's audit names on Start here, measured
         // before anything else so that ``manualAudit(_:_:)``'s classification
@@ -1337,27 +1446,47 @@ extension StubHouseUITests {
             .firstMatch
     }
 
-    /// The app, launched with the scramble slowed down.
+    /// **Every case in this file launches through here**, and the reason is
+    /// the float.
+    ///
+    /// Answer 31 gives each map card a `repeatForever` animation, and
+    /// XCUITest waits for the app under test to go idle before every query.
+    /// Ten animations that never finish are a quiescence risk for the whole
+    /// screen — not a hypothetical one: the cost of being wrong is every
+    /// `testManual_*` case idle-timing-out on a shared train, which is a
+    /// worse outcome than not exercising an ornament. So this passes
+    /// `-domovoi-manual-float-off` (``ManualFloatClock``, DEBUG-only and read
+    /// once at launch) and one case of its own,
+    /// ``testManual_TheMapWorksWhileItsNodesFloat()``, passes `-on` and drives
+    /// the map with the cards moving. If forever-animating nodes do hang
+    /// XCUITest, that is the one case that hangs.
     ///
     /// ``StubHouseUITests/launch(mode:paired:server:port:strip:push:pushDelay:)``
     /// takes no extra launch arguments and lives in a shared file this item
-    /// may not edit, so this is that launch with one more argument on it —
-    /// written out rather than wrapped, because `launchArguments` has to be
+    /// may not edit, so this is that launch with the manual's own knobs on it
+    /// — written out rather than wrapped, because `launchArguments` has to be
     /// set before `launch()`. An `args:` parameter on the shared helper would
     /// replace this; it is in DECISIONS under "Needs a shared change".
     @MainActor
-    private func manualLaunch(scrambleMS: Int) -> XCUIApplication {
+    private func manualLaunch(
+        mode: String = StubHouseUITests.ordinaryTypeSize,
+        scrambleMS: Int? = nil,
+        float: Bool = false
+    ) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = [
             "-domovoi-server", "127.0.0.1:6601",
             "-domovoi-token", Self.token,
             "-domovoi-audit-push", "Manual",
             "-domovoi-audit-push-delay", "\(Self.pushDelay)",
-            "-UIPreferredContentSizeCategoryName", Self.ordinaryTypeSize,
-            // DEBUG-only on the app's side (``ManualScrambleClock``), read
-            // once at launch, so it cannot leak into the next case.
-            "-domovoi-manual-scramble", "\(scrambleMS)",
+            "-UIPreferredContentSizeCategoryName", mode,
+            // DEBUG-only on the app's side, read once at launch, so neither
+            // can leak into the next case.
+            float ? "-domovoi-manual-float-on" : "-domovoi-manual-float-off",
         ]
+        if let scrambleMS {
+            app.launchArguments += ["-domovoi-manual-scramble", "\(scrambleMS)"]
+        }
         app.launch()
         XCTAssertTrue(app.wait(for: .runningForeground, timeout: 30))
         return app
@@ -1375,6 +1504,31 @@ extension StubHouseUITests {
         app.descendants(matching: .any)
             .matching(NSPredicate(format: "label == %@", label))
             .firstMatch
+    }
+
+    /// Wait for an element's accessibility **value** to become this string.
+    ///
+    /// Only one thing in this item publishes a value and only while a case
+    /// has asked for a slow scramble: ``ManualMapNode/scrambleState``, which
+    /// is `"scrambling"` then `"settled"`. It is a value and not a label
+    /// because the label is the node's real name, and that claim is the other
+    /// half of the same case.
+    ///
+    /// ``XCTWaiter`` and not `wait(for:timeout:)`, for this file's standing
+    /// reason: `setUp` sets `continueAfterFailure = false` and the built-in
+    /// wait records a failure of its own, which would end the case before the
+    /// line that says what went wrong.
+    @MainActor
+    private func manualValue(
+        _ element: XCUIElement,
+        is value: String,
+        timeout: TimeInterval = 10
+    ) -> Bool {
+        let became = expectation(
+            for: NSPredicate(format: "value == %@", value),
+            evaluatedWith: element
+        )
+        return XCTWaiter().wait(for: [became], timeout: timeout) == .completed
     }
 
     /// Wait for an element to stop existing.
