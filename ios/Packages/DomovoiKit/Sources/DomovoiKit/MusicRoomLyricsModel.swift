@@ -68,7 +68,12 @@ public final class MusicRoomLyricsModel {
 
     /// How long after a drag ends before following comes back —
     /// `FOLLOW_PAUSE_MS` (`LyricsPanel.kt:118`), to the millisecond.
-    public static let followResumeMs: Int64 = 4_000
+    ///
+    /// `nonisolated` because the thing that waits it is the injected sleeper,
+    /// which runs off the main actor: an immutable `Int64` on a `@MainActor`
+    /// class is main-actor-isolated like everything else here, and reading it
+    /// from inside the sleeper is the one place that matters.
+    public nonisolated static let followResumeMs: Int64 = 4_000
 
     /// The pushes a lyrics surface listens for (`LyricsPanel.kt:121`, `:223`).
     public static let events: Set<String> = ["lyrics.changed", "music.now_playing.changed"]
