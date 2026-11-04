@@ -497,6 +497,74 @@ extension StubHouseUITests {
         back.terminate()
     }
 
+    // MARK: - 5. the card is measured, not just drawn (review 1, N4)
+
+    /// Apple's audit over **Settings → Phones & browsers**, with the
+    /// "Listening as" card on it.
+    ///
+    /// Review 1's N4: the card shipped unmeasured. Settings' own audit cases
+    /// live in a file this unit does not own, and the card is the one new
+    /// element on that panel — so the measurement belongs here, where the
+    /// panel is already reached (``reachPhonesAndBrowsersFromSettings(_:)``)
+    /// for the picker case above.
+    ///
+    /// **A floor by signature, never by total.** The panel is not this unit's
+    /// and `StubHouseUITests.swift:55-72` records what it already had: three
+    /// `Text clipped`, five `Contrast failed` and a hit-area finding, all
+    /// since fixed, plus the eight nil-element Dynamic Type findings of
+    /// ``knownPushedBarFloor`` that are an artefact of a pushed bar and not a
+    /// defect. Asserting a count here would make every unrelated Settings
+    /// change this unit's failure. So this asserts the two things that are
+    /// about the card: that no finding names it, and that the anonymous floor
+    /// has not grown.
+    ///
+    /// The card is a `Menu` whose label carries ``ShellStrings/listeningAs(_:)``
+    /// as its `accessibilityValue` — a tick on the chosen row rather than a
+    /// highlight, because a menu row's selected state is not read out. The
+    /// audit is taken with the dropdown **shut**: the open menu is
+    /// SpringBoard's own presentation and a finding on it would not be this
+    /// app's to fix.
+    @MainActor
+    @available(iOS 17.0, *)
+    func testPlayer_TheListeningAsCardAudits() throws {
+        let app = launch(push: "Settings")
+        XCTAssertTrue(
+            reachPhonesAndBrowsersFromSettings(app),
+            "never reached Settings → Phones & browsers, so the card could not "
+                + "be measured"
+        )
+        let picker = app.buttons[PlayerListenerUnderTest.card]
+        XCTAssertTrue(
+            picker.waitForExistence(timeout: 20),
+            "the panel draws no `\(PlayerListenerUnderTest.card)` card to audit "
+                + "— tree follows\n" + app.debugDescription
+        )
+
+        let found = try auditIssues(app, "player-listening-as")
+        evidence(app, "player-70-listening-as-audit")
+        let split = Self.floorAndRest(found)
+        for line in split.rest { print("LISTENING AS AUDIT REST :: \(line)") }
+
+        // Named findings about the card itself. `label=` carries the card's
+        // name and `value=` the sentence under it, so either naming it is
+        // this unit's.
+        let mine = split.rest.filter {
+            $0.contains(PlayerListenerUnderTest.card)
+                || $0.contains(PlayerListenerUnderTest.thisDevice)
+                || $0.contains(PlayerListenerUnderTest.chevy)
+        }
+        XCTAssertEqual(
+            [], mine,
+            "the `\(PlayerListenerUnderTest.card)` card has an audit finding of "
+                + "its own"
+        )
+        XCTAssertLessThanOrEqual(
+            split.floor, Self.knownPushedBarFloor,
+            "the anonymous Dynamic Type floor grew on a panel this unit added a "
+                + "card to"
+        )
+    }
+
     /// Every position ask the stub house has been sent this run, in order.
     ///
     /// `GET /api/_test/audiobooks-position-asks` — the probe

@@ -24,7 +24,10 @@ import XCTest
 /// case was written as an absence and is inverted rather than deleted. What a
 /// Simulator still cannot add is whether `AVPlayer` reached `.readyToPlay`:
 /// `testPlayer_TheStubHousePlaysTheFixturesAudio` owns the bytes and
-/// `PodcastsModelTests` owns the resume arithmetic.
+/// `PodcastPlayTests` owns the resume arithmetic — eleven cases over a real
+/// ``PlayerModel``, added in review 1 of this batch. This sentence named
+/// `PodcastsModelTests` while that file had no case naming play or resume,
+/// which is the kind of pointer that stops the next reader looking (M2).
 ///
 /// **A `podcasts.changed` push reloading the grid.** The stub house can push
 /// one hard-coded frame type and a fixture module cannot push its own
