@@ -2193,13 +2193,17 @@ final class StubHouseUITests: XCTestCase {
 
     /// Apple's audit over the grid.
     ///
-    /// Three kinds of finding are classified rather than failed, and each one
-    /// is explained where it is tested below: a Dynamic Type headline a
-    /// measurement contradicts, a contrast finding the scroll view's own
-    /// bottom edge cuts in half, and — since train R004 — a `Text clipped`
-    /// prediction against a poster tile's caption, which truncates by design
-    /// and more generously than Android's (`VideosScreen.kt:293`). Everything
-    /// else is a defect to fix.
+    /// **Two** kinds of finding are classified rather than failed, and each
+    /// one is explained where it is tested below: a Dynamic Type headline a
+    /// measurement contradicts, and a contrast finding the scroll view's own
+    /// bottom edge cuts in half. Everything else is a defect to fix.
+    ///
+    /// It was three until D66. The third classified a `Text clipped`
+    /// prediction against a poster tile's caption as the design, on the
+    /// grounds that two lines was the limit at every type size; the caption
+    /// wraps at accessibility sizes now, so that argument no longer holds and
+    /// the branch is gone. The reasoning, and what its removal costs, are at
+    /// the place it stood.
     @MainActor
     @available(iOS 17.0, *)
     func testTheVideosGridAudits() throws {
@@ -2248,43 +2252,41 @@ final class StubHouseUITests: XCTestCase {
                box.minY < bottom, box.maxY > bottom {
                 return false
             }
-            // **`Text clipped` against a grid tile's caption**, which is the
-            // one truncation on this screen that is the design and not a
-            // defect. Train R004 raised it against `01 she said "no".mp4` at
-            // `{{202.5, 511.5}, {120.3, 14.3}}` inside a 174.7-point tile —
-            // one line, nothing truncated at `large` — and train I001 did
-            // **not** raise it against the same leaf at the same width one
-            // strip lower, so the headline is not even a stable function of
-            // the element's geometry. Three things settle it, and the third
-            // is asserted rather than argued:
+            // **There is no `Text clipped` branch here any more** (D66).
             //
-            // 1. **The font scales.** `testTheVideosGridTextGrowsAtAX5`
-            //    measures this code site at 14.33 -> 102.33 points, 7.1x.
-            //    Nothing here is stuck at a size.
-            // 2. **Two lines IS the design, and Android gives one.** The
-            //    caption is `.font(.caption).lineLimit(2).fixedSize(...)`
-            //    (`VideosView.swift:250-254`) against `maxLines = 1, overflow
-            //    = Ellipsis` on the same tile at `VideosScreen.kt:293`. 102.33
-            //    at AX5 is both lines full, so a title half again as long does
-            //    lose its tail — to an ellipsis, on a poster tile, exactly as
-            //    Android loses it at **every** type size. A port that
-            //    truncates less than the specification does is not the defect
-            //    the headline is reporting.
-            // 3. **Nothing is lost to a reader who cannot see the tile**,
-            //    which is the only thing an ellipsis could have cost. The
-            //    tile is a `Button` whose own accessibility label is the whole
-            //    title, and **that is the condition below**, not a remark:
-            //    a flagged caption no tile names is not classified here and
-            //    fails the case.
+            // One used to sit at this exact spot, classifying a `Text
+            // clipped` prediction against a poster tile's caption as the
+            // design: the caption was `.lineLimit(2)` at every type size, two
+            // lines was more generous than Android's one
+            // (`VideosScreen.kt:293`), and the tile's own accessibility label
+            // carried the whole title, so nothing was lost to a reader who
+            // could not see it. The branch's own comment admitted the
+            // headline was "not even a stable function of the element's
+            // geometry" — train R004 raised it against `01 she said
+            // "no".mp4` and train I001 did not raise it against the same leaf
+            // at the same width one strip lower.
             //
-            // Scoped that way on purpose: a `Text clipped` against anything
-            // else on this screen — a heading, the count line, a resume
-            // line, a caption whose tile does not name it — still fails.
-            if line.hasPrefix("Text clipped"), let flagged = label(in: line),
-               app.buttons[flagged].exists {
-                print("VIDEOS GRID :: clipped caption whose tile names it in full :: \(flagged)")
-                return false
-            }
+            // Kamron asked for the tile's name to **wrap** at accessibility
+            // sizes, and `VideosView` now reads
+            // `.lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 2)`. A
+            // caption that runs to as many lines as it needs where the text
+            // is large is a different claim from "two lines is the design at
+            // every size", and the old branch argued the second one. It is
+            // gone rather than reworded, because a classification resting on
+            // an unstable headline and a superseded argument is the kind of
+            // comment this project treats as a review target rather than as
+            // evidence ([[reasoning-that-hides-a-bug]]).
+            //
+            // **What this costs, written down rather than discovered.** This
+            // case runs at `large`, where the limit is still two lines, so
+            // the audit may raise that prediction again — and the case will
+            // then fail instead of explaining it. That is the intended
+            // trade: the next run looks at the finding against a design that
+            // wraps where it matters, rather than at an argument from before
+            // it did. The branch's text is kept verbatim in
+            // `design-notes/ios/batch-2026-11-03/transfers/DECISIONS.md`, so
+            // putting it back is one paste if the finding returns and is
+            // still the design.
             return true
         }
         XCTAssertEqual(
@@ -2327,17 +2329,25 @@ final class StubHouseUITests: XCTestCase {
     /// skipped rather than failed.
     @MainActor
     func testTheVideosGridTextGrowsAtAX5() throws {
-        // **`caption-long` is here because of train R004's audit finding.**
+        // **`caption-long` is here because of train R004's audit finding,
+        // and it is what D66 answered.**
+        //
         // `Text clipped` was raised against this exact caption and nothing
-        // else on the screen, and ``testTheVideosGridAudits`` classifies it
-        // as the tile's design rather than a defect. What makes that a
-        // measurement instead of an argument is this row: at `large` it is
-        // 1.37x wider than `caption` (120.33 against 88.0 points) inside the
-        // same 174.7-point tile, so if `caption` already fills both of
-        // `lineLimit(2)`'s lines at AX5 then this one's tail is genuinely
-        // lost there — to an ellipsis, as `VideosScreen.kt:293` loses it at
-        // every size. The two heights printed side by side are what say so,
-        // and they say it in the log of every run rather than in a note.
+        // else on the screen. ``testTheVideosGridAudits`` used to classify it
+        // as the tile's design, on the grounds that `.lineLimit(2)` was the
+        // limit at every size and Android gives one line
+        // (`VideosScreen.kt:293`); that argument rested on this row, which at
+        // `large` is 1.37x wider than `caption` (120.33 against 88.0 points)
+        // inside the same 174.7-point tile — so if `caption` already filled
+        // both lines at AX5, this one's tail really was lost there.
+        //
+        // It is not lost any more. The caption reads
+        // `.lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 2)`, so at
+        // AX5 it runs to as many lines as the title needs and this row's
+        // height is expected to grow **more** than `caption`'s, not the same.
+        // The two heights printed side by side are still the instrument, and
+        // they are now also the check on that: the floor below is 2x and this
+        // row clears it by much more.
         let leaves = [
             ("count", "showing 50 of 60 videos"),
             ("heading", "Movies · 54"),
@@ -2888,19 +2898,46 @@ final class StubHouseUITests: XCTestCase {
         XCTAssertTrue(app.buttons["save to device"].exists, "no save offered for a file that cannot be shown")
     }
 
-    /// A file over the save cap gets a line saying how big it is and where to
-    /// get it — and no control that would refuse.
+    /// A four-gigabyte row is a **row like any other**: a tap, no refusal,
+    /// and nothing saying how big it is.
+    ///
+    /// This was `testAFileTooBigToSaveSaysSoRatherThanOfferingOne`, and it
+    /// asserted the opposite about the same row — the line `too big to save
+    /// from a phone (4.00 GB) — on the dashboard`, and no control. D47 made
+    /// the save a `URLSessionDownloadTask` writing to disk, so there is no
+    /// size at which the app refuses and no sentence left to draw. The row is
+    /// the same `film.mkv` on purpose: a reader comparing the two cases is
+    /// comparing behaviour, not fixtures.
+    ///
+    /// The transfer itself is not here. It needs a paced stub and a share
+    /// sheet, which is
+    /// `testTransfers_AFilmFarOverTheOldCapIsSavedAndHandedToTheShareSheet`
+    /// in `StubHouseUITests+Transfers.swift`; this case is the **shape of the
+    /// row**, which is what the old one was about and costs no socket.
     @MainActor
-    func testAFileTooBigToSaveSaysSoRatherThanOfferingOne() throws {
+    func testAFileFarOverTheOldCapIsAnOrdinaryRow() throws {
         let (app, landed) = openFiles()
         XCTAssertTrue(landed, "the folder never answered")
         XCTAssertTrue(pickLibrary(app, "Documents"), "the library picker never opened")
         XCTAssertTrue(app.buttons["notes.md"].waitForExistence(timeout: 20), "Documents never listed")
-        evidence(app, "56-files-too-big")
+        evidence(app, "56-files-four-gigabytes")
 
-        XCTAssertTrue(
+        XCTAssertFalse(
             app.staticTexts["too big to save from a phone (4.00 GB) — on the dashboard"].exists,
-            "the four-gigabyte row does not say why it cannot be saved here"
+            "the row still carries the refusal the save cap used to draw"
+        )
+        XCTAssertTrue(
+            app.buttons["film.mkv"].exists,
+            "a four-gigabyte row is not a button, so its tap does nothing — the control the "
+                + "cap used to remove"
+        )
+        // And its tap is the **save**, which is why its menu offers no
+        // second one — the same claim `testWhatEachLibraryOffersOnARow`
+        // makes about `track 00.mp3`, now true of this row too.
+        XCTAssertTrue(openRowMenu(app, "film.mkv"), "the four-gigabyte row has no menu")
+        XCTAssertFalse(
+            app.buttons["save to device"].exists,
+            "a row whose tap is already a save offered a second one"
         )
     }
 
@@ -2937,10 +2974,17 @@ final class StubHouseUITests: XCTestCase {
             "a read-only library's row drew a menu with nothing in it"
         )
 
-        // The drive, on the one row that cannot be tapped: `holiday.mp4` is
-        // 300 MB, over the save cap, so there is no save to offer — and an
-        // import is still offered, because the copy happens on the server
-        // where there is no cap. A row with no tap and a menu all the same.
+        // The drive, on a row whose menu offers an import and no save.
+        //
+        // **The reason inverted under this assertion** (D47), which is worth
+        // the four lines. `holiday.mp4` is 300 MB; it used to be over the
+        // save cap, so its tap did nothing at all and the menu had no save to
+        // offer either — "a row with no tap and a menu all the same" was the
+        // point of picking it. There is no cap now: its tap **is** the save,
+        // and a row whose tap is already a save does not offer a second one
+        // in its menu, exactly as `track 00.mp3` does not above. Same
+        // assertion, same row, opposite cause — the kind this project writes
+        // down rather than leaves to be re-derived.
         XCTAssertTrue(pickLibrary(app, "USB stick"), "the picker never opened for the drive")
         XCTAssertTrue(app.buttons["clip.mp4"].waitForExistence(timeout: 20), "the drive never listed")
         XCTAssertTrue(openRowMenu(app, "holiday.mp4"), "the drive's row has no menu")

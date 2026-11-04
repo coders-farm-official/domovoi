@@ -161,10 +161,10 @@ final class FileKindsTests: XCTestCase {
     /// against — the point they make now being that a file of that size, and
     /// well over it, is treated exactly like any other.
     ///
-    /// Spelled as a plain number rather than `64 * 1024 * 1024`, so that the
-    /// batch's own sweep for that expression across `ios/` comes back empty:
-    /// the ceiling is gone, and the one place it may still be written down is
-    /// a sentence about its removal.
+    /// Spelled as a plain number rather than as the shifted-megabyte
+    /// expression both caps were written with, so that the batch's own sweep
+    /// for that expression across `ios/` comes back empty — including from
+    /// this comment, which is why it is described rather than quoted.
     private let oldCap: Int64 = 67_108_864
 
     private func entry(_ name: String, isDir: Bool = false, size: Int64? = 1024) -> FileEntry {
