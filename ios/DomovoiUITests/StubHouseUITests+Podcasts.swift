@@ -997,6 +997,13 @@ extension StubHouseUITests {
                 + "was mid-flight"
         )
 
+        // The shell's navigation bar, before. It folds its large title away
+        // on a scroll and the audit scrolls, so the whole page rides up with
+        // it — see the assertion below. The **frame**, because what is
+        // compared afterwards is the gap between the bar's bottom edge and
+        // the foot card, not two heights read at two different moments.
+        let barBefore = app.navigationBars.firstMatch.frame
+
         let found = try auditIssues(app, "podcasts-grid")
         evidence(app, "podcasts-80-grid-audited")
         let (floor, rest) = Self.floorAndRest(found)
@@ -1010,10 +1017,55 @@ extension StubHouseUITests {
         // carry unnecessary, which is why that exemption is gone rather than
         // kept as a safety net. An exemption with no case under it is a hole
         // for the next real finding to fall through.
+        //
+        // ### What moves it that is not a scroll (train I003)
+        //
+        // The foot came back 52 points higher and the grid had not moved a
+        // row. The shell grew a large navigation title in the 2026-11-03
+        // batch, Apple's audit scrolls, and the title folds away when
+        // anything does — 96 points of bar to 44, with everything under it
+        // rising by exactly the difference. That is the shell's own
+        // behaviour and its own case
+        // (`testShell_TheHeaderScrollsAwayOnAPushedScreen` asserts it), not
+        // a list mid-flight, and a case that cannot tell the two apart is
+        // one that fails for somebody else's feature.
+        //
+        // **The fold lands late, which is why this waits for it.** The I003
+        // tree captured 30 ms before the foot was read still had the bar at
+        // 96 and the card at 596; the read that failed the case got 544. Two
+        // heights taken at two moments therefore cannot be subtracted from
+        // one another — half the time one is from before the animation and
+        // the other from after, and the case would be red under a message
+        // that misdescribes it. What holds still through the fold is the
+        // **gap between the bar's bottom edge and the foot**: the fold moves
+        // both by the same 52 and the gap does not change, while a scroll
+        // moves the card and not the bar. Both are read after the bar has
+        // stopped moving (``podcastsSettledNavigationBar(_:)``).
+        //
+        // So the claim is made exactly rather than loosened: the foot may
+        // ride up with the bar, and may not move relative to it by so much
+        // as a point. S007's run moved the content offset 463 points under
+        // the audit, which fails this.
+        let barAfter = Self.podcastsSettledNavigationBar(app)
+        let after = foot.frame
+        let gapBefore = before.minY - barBefore.maxY
+        let gapAfter = after.minY - barAfter.maxY
+        print(
+            "PODCASTS AUDIT bar \(barBefore.height)->\(barAfter.height)"
+                + " foot \(before.minY)->\(after.minY) gap \(gapBefore)->\(gapAfter)"
+        )
         XCTAssertEqual(
-            before, foot.frame,
-            "the page moved while Apple's audit ran, so its contrast "
-                + "readings are of a list mid-flight (train S007)"
+            gapBefore, gapAfter, accuracy: 1,
+            "the foot card sat \(gapBefore) points under the navigation bar before "
+                + "Apple's audit and \(gapAfter) after it, so the grid scrolled while "
+                + "the audit read its colours and they are a list mid-flight (train "
+                + "S007). The bar itself went \(barBefore.height) to \(barAfter.height), "
+                + "which moves the card and not this number."
+        )
+        XCTAssertEqual(
+            before.size, after.size,
+            "the foot card changed size during the audit, so the page was still "
+                + "laying out when its colours were read"
         )
 
         let unexplained = rest.filter { line in
@@ -1036,6 +1088,33 @@ extension StubHouseUITests {
             "the audit found something the Dynamic Type measurement above "
                 + "does not explain:\n" + unexplained.joined(separator: "\n")
         )
+    }
+
+    /// The navigation bar's frame once it has stopped changing.
+    ///
+    /// The shell's large title folds away under a scroll, and the fold is
+    /// **animated**: train I003's audit returned at t=22.08s, the tree taken
+    /// at t=22.63s still had the bar at 96 points and the grid's foot at 596,
+    /// and the next read — 30 ms later — had the foot at 544. Anything that
+    /// compares a before and an after across that window is reading one side
+    /// of an animation, which is how a case about scrolling came to be red
+    /// about a fold.
+    ///
+    /// So: poll until two reads agree, up to three seconds, and return the
+    /// last. Named for this unit rather than added to the shared file, which
+    /// this unit does not own.
+    @MainActor
+    static func podcastsSettledNavigationBar(_ app: XCUIApplication) -> CGRect {
+        var last = app.navigationBars.firstMatch.frame
+        let settleBy = Date().addingTimeInterval(3)
+        while Date() < settleBy {
+            usleep(250_000)
+            let now = app.navigationBars.firstMatch.frame
+            if now == last { return now }
+            last = now
+        }
+        print("PODCASTS AUDIT the navigation bar never settled; last read \(last)")
+        return last
     }
 }
 

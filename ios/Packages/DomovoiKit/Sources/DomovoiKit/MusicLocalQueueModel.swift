@@ -43,7 +43,21 @@ import Observation
 public final class MusicLocalQueueModel {
 
     /// The engine, or nil — in which case nothing here is drawn.
-    public private(set) weak var engine: (any MusicMorePlayerEngine)?
+    ///
+    /// **Held strongly since train I003.** It was `weak`, written when
+    /// nothing conformed to ``MusicMorePlayerEngine`` and the only imaginable
+    /// writer was a long-lived object elsewhere. D46's writer is not one:
+    /// `MusicView`'s `.task` calls `use(PlayerModelMusicEngine(made))` with an
+    /// adapter made on that line and held nowhere, so it was released at once
+    /// and ``hasEngine`` stayed false. The player tab was never offered and
+    /// no `play on this device` was drawn — `testMusicMore_ThePlayerTabIsOfferedNowTheEngineIsRegistered`,
+    /// `…APlaylistPlaysOnThisPhoneAndReachesThePlayerTab`, `…NoRoomsNoPlayButton`
+    /// and `…TheTabStripTextGrowsAtAX5`, all four of this unit's MusicMore reds.
+    ///
+    /// No cycle: ``PlayerModelMusicEngine`` holds ``PlayerModel``, which the
+    /// shell owns, and neither holds this model. ``use(_:)`` replaces the
+    /// adapter, so re-registering on every appearance costs one object.
+    public private(set) var engine: (any MusicMorePlayerEngine)?
 
     /// Where the person has dragged the seek bar to, while they are dragging
     /// it. The engine's own position is ignored until they let go: a seek bar

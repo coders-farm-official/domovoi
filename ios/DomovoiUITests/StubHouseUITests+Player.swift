@@ -422,6 +422,26 @@ extension StubHouseUITests {
         //     launches.
         let (books, booksLanded) = openAudiobooks(reset: false)
         let bookDrew = booksLanded && openBook(books, StubAudiobooks.dune)
+        // **Opening the page is not what asks the house.** Train I003 failed
+        // here with "the book's page read no position at all", and the page
+        // was right: ``AudiobookDetailModel/refreshPlace()`` reads the
+        // **phone's** place and nothing else, exactly as Android's
+        // `produceState` does (`BookPage.kt:96-98`). The compare with the
+        // server's slot is ``BookPositionSync/open(bookID:server:)``, which
+        // runs when a book **starts** — so this case has to start one, and
+        // `not now` answers the question that raises without playing
+        // anything. `testAudiobooks_ABookPageShowsItsChaptersAndPlace` drives
+        // the same two taps for the same reason.
+        //
+        // Nothing here asserts: step 3 has to put the install's listener
+        // back first. A tap that found nothing leaves `reads` empty and the
+        // verdict below says so.
+        let start = audiobooksStart(books)
+        if bookDrew, start.waitForExistence(timeout: 25) {
+            start.tap()
+            let notNow = books.buttons[StubAudiobooks.notNow].firstMatch
+            if notNow.waitForExistence(timeout: 25) { notNow.tap() }
+        }
         let reads = positionAsks()
             .filter { $0["method"] == "GET" && $0["book"] == StubAudiobooks.duneID }
         evidence(books, "player-32-person-id-on-the-wire")
@@ -443,8 +463,10 @@ extension StubHouseUITests {
         XCTAssertTrue(bookDrew, "Dune's page never drew, so no position was read")
         XCTAssertFalse(
             reads.isEmpty,
-            "the book's page read no position at all, so this case says nothing "
-                + "about the listener on the wire"
+            "starting Dune read no position from the house at all, so this case "
+                + "says nothing about the listener on the wire — either the page "
+                + "drew no `play`/`resume` to tap (``AudiobooksModel/canPlay(_:)``) "
+                + "or `BookPositionSync.open` never went up"
         )
         XCTAssertEqual(
             PlayerListenerUnderTest.chevyID, reads.last?["person_id"],
@@ -532,21 +554,75 @@ extension StubHouseUITests {
     @available(iOS 17.0, *)
     func testPlayer_TheListeningAsCardAudits() throws {
         let app = launch(push: "Settings")
-        XCTAssertTrue(
-            reachPhonesAndBrowsersFromSettings(app),
-            "never reached Settings → Phones & browsers, so the card could not "
-                + "be measured"
-        )
+        // **Reach the panel, let the house's banner come and go, and go back
+        // in if it took the panel with it.**
+        //
+        // Train I003 audited the Settings *index*: the panel was reached at
+        // t=7.3s, the card was found at t=8.35s, and the house's own alert
+        // banner arrived at t=8.39s. `auditIssues` waited it out — correctly
+        // — and audited at t=15.2s, by which time the panel had gone. A
+        // banner takes the scene to `.inactive` and back,
+        // `ShellModel.scenePhaseChanged` runs `refresh()` on the way back in,
+        // and `SettingsScreen`'s `place` is a `@State` that was at `.index`
+        // again. The audit then reported the index's eighteen anonymous
+        // Dynamic Type findings — and three `Contrast failed` naming `Voice`
+        // and `System` — as this card's.
+        //
+        // Waiting for the banner *before* navigating does not help: it is
+        // posted about eight seconds into the launch, which is while the two
+        // taps below are being made, and `waitForNoNotificationBanner`'s
+        // `appearIn` would have to cover the whole of that. So the wait is
+        // here instead, with the panel already drawn — the one place the
+        // bounce can be seen — and the panel is re-entered when it has gone.
+        // Two attempts, because the banner is posted once per launch at
+        // `start()`: a second one means something else is going on and the
+        // case should say so rather than loop.
+        //
+        // (The reset itself is Settings', not this unit's — it is written up
+        // under "Needs a shared change" in DECISIONS.md. This is a case
+        // working around another unit's defect, not a fix for it.)
         let picker = app.buttons[PlayerListenerUnderTest.card]
-        XCTAssertTrue(
-            picker.waitForExistence(timeout: 20),
-            "the panel draws no `\(PlayerListenerUnderTest.card)` card to audit "
-                + "— tree follows\n" + app.debugDescription
-        )
+        for attempt in 1...2 {
+            XCTAssertTrue(
+                reachPhonesAndBrowsersFromSettings(app),
+                "never reached Settings → Phones & browsers on attempt \(attempt), so "
+                    + "the card could not be measured"
+            )
+            XCTAssertTrue(
+                picker.waitForExistence(timeout: 20),
+                "the panel draws no `\(PlayerListenerUnderTest.card)` card to audit "
+                    + "— tree follows\n" + app.debugDescription
+            )
+            let banner = waitForNoNotificationBanner(
+                "player-listening-as/attempt-\(attempt)",
+                appearIn: 6
+            )
+            if picker.exists { break }
+            XCTAssertNotNil(
+                banner,
+                "the `\(PlayerListenerUnderTest.card)` card went away on its own and no "
+                    + "banner explains it — tree follows\n" + app.debugDescription
+            )
+            print(
+                "LISTENING AS the banner at \(banner.map { "\($0)" } ?? "?") took Settings "
+                    + "back to its index — going in again"
+            )
+        }
 
         let found = try auditIssues(app, "player-listening-as")
         evidence(app, "player-70-listening-as-audit")
+        // **An audit only covers the state you launch.** The card has to
+        // still be there when the audit finishes, or every finding below is
+        // about whatever took its place — tree printed, because a failure
+        // here is about where the app went.
+        XCTAssertTrue(
+            picker.exists,
+            "the `\(PlayerListenerUnderTest.card)` card was gone by the time Apple's "
+                + "audit finished, so these findings are another screen's — tree "
+                + "follows\n" + app.debugDescription
+        )
         let split = Self.floorAndRest(found)
+        print("LISTENING AS AUDIT floor=\(split.floor) rest=\(split.rest.count)")
         for line in split.rest { print("LISTENING AS AUDIT REST :: \(line)") }
 
         // Named findings about the card itself. `label=` carries the card's
@@ -562,10 +638,36 @@ extension StubHouseUITests {
             "the `\(PlayerListenerUnderTest.card)` card has an audit finding of "
                 + "its own"
         )
-        XCTAssertLessThanOrEqual(
+        // **The anonymous floor, as an equality — and nobody has measured
+        // this panel's yet.**
+        //
+        // This line was `split.floor <= knownPushedBarFloor` and train I003
+        // failed it with 18 against 8. Neither number was a reading of
+        // Phones & browsers: the 18 came off the Settings index (see the
+        // bounce above) and the 8 is ``knownPushedBarFloor``, a figure
+        // measured on other pushed screens. A `<=` is the wrong shape as
+        // well, for the reason the shared helper gives: a floor that *grew*
+        // is the thing worth seeing, and a bound hides exactly the direction
+        // this unit's card can move it in.
+        //
+        // So it is an equality against the pushed-bar figure, and **the
+        // first train to run this case with the panel actually on screen is
+        // the measurement**. The `print` above is where to read it: if the
+        // number it reports is all `element: nil` Dynamic Type lines, that is
+        // the number to pin here. This is Rooms' arrangement for its detail
+        // panel (`StubHouseUITests+Rooms.swift`), and it is a guard rather
+        // than the nothing the fix for I003 first left behind — the project
+        // rule asks for a floor by signature, not for no floor, and
+        // `floorAndRest` is what makes this one by signature: only the two
+        // anonymous Dynamic Type headlines are counted here and everything
+        // Apple could attribute is asserted above.
+        XCTAssertEqual(
             split.floor, Self.knownPushedBarFloor,
-            "the anonymous Dynamic Type floor grew on a panel this unit added a "
-                + "card to"
+            "Phones & browsers reports \(split.floor) anonymous Dynamic Type findings "
+                + "and the pushed-bar figure is \(Self.knownPushedBarFloor). This panel's "
+                + "own floor has never been measured — train I003 graded the Settings "
+                + "index instead — so if the \(split.floor) are all `element: nil` bar "
+                + "findings, that is the number to pin here"
         )
     }
 

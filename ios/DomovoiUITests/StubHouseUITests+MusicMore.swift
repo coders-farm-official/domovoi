@@ -1707,6 +1707,19 @@ extension StubHouseUITests {
     /// icon-only control with no `accessibilityLabel`, or a sheet that is not
     /// modal (which the audit reports as a finding naming an element
     /// *behind* the sheet).
+    ///
+    /// ### Train I003's two, which are the shell's
+    ///
+    /// The floor came back at its usual 28 anonymous Dynamic Type findings
+    /// and `rest` held exactly two: `Text clipped` naming `domovoi / music`
+    /// at **7.3 x 40.7 points** — the shell's new large navigation title,
+    /// squeezed to seven points of width — and one anonymous
+    /// `Contrast failed`, a finding Apple attached no element to because it
+    /// had no measurement. The pair appeared together on the audiobooks
+    /// library too, and the anonymous contrast alone on
+    /// `testSystemSettings_AppLayoutPassesApplesAccessibilityAudit`, a panel
+    /// no unit of this batch touched. Nothing is excused here for them: they
+    /// go with the title's fix, and either one surviving it is new.
     @MainActor
     func testMusicMore_AuditThePlaylistsTab() throws {
         guard #available(iOS 17.0, *) else {

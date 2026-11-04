@@ -60,6 +60,15 @@ extension StubHouseUITests {
         /// `favorited DESC, name ASC` sorts last — so it exists only once the
         /// **second** page has been asked for.
         static let firstFavourite = "Favourite Kestrel 01"
+        /// `firstFavourite`'s row id in the fixture (`stations.py:124-128`,
+        /// `100 + number`). **`POST /play` carries the id and not the name**
+        /// for a station the house already holds — `RadioPlayRequest.station_id`
+        /// (`plugins/radio/.../web.py:142-146`), and a name is only sent for a
+        /// catalogue hit the house has never seen. Train I003 failed
+        /// `testStations_TappingAStationPlaysItOnThisPhone` asserting the name
+        /// appeared in the body; the house had been told `{"station_id": 101}`,
+        /// which is this row and no other.
+        static let firstFavouriteID = "101"
         static let secondPageRow = "Favourite Kestrel 22"
 
         /// The three now-playing branches, one row each.
@@ -115,7 +124,15 @@ extension StubHouseUITests {
         static let subtitle = "23 favorited · 3 recent · tap a station to play it"
         static let subtitleAfterAStar = "24 favorited · 3 recent · tap a station to play it"
         static let subtitleAfterTwoStars = "25 favorited · 3 recent · tap a station to play it"
-        static let subtitleAfterAForget = "22 favorited · 3 recent"
+        /// **The playing tail belongs here too.** Train I003 failed
+        /// `testStations_ForgettingAsksFirst` on "the count did not drop":
+        /// the three sentences above gained `· tap a station to play it` with
+        /// D46 and this one did not, so the exact-match lookup could never
+        /// find a subtitle the screen draws. It is the same
+        /// ``StationsStrings/subtitle(favorites:recent:)`` as the others with
+        /// one favourite gone — a forget does not change the engine, and the
+        /// short form is a build with no audio engine (see `subtitle`).
+        static let subtitleAfterAForget = "22 favorited · 3 recent · tap a station to play it"
         static let playingTail = "tap a station to play it"
         /// `StationsStrings.playingNeedsAHouse`, **which no build contains
         /// any more**: review 2 of the 2026-11-03 batch deleted it, because
@@ -523,8 +540,25 @@ extension StubHouseUITests {
             1, (sent["play"] ?? []).count,
             "one tap on a playable row must be exactly one POST /play: \(sent)"
         )
-        XCTAssertTrue(
-            "\(sent["play"] ?? [])".contains(StubStations.firstFavourite),
+        // **By id, because that is what the route takes.** `POST /play` for a
+        // station the house already holds carries `station_id` and nothing
+        // else (`web.py:142-146`), so the name never appears in the body —
+        // which is how this assertion read until train I003, where it failed
+        // over `{"station_id": 101}`, the right row. The id discriminates as
+        // well as the name did: 101 is `Favourite Kestrel 01` and no other
+        // row in the seed has it.
+        // Flattened to strings rather than decoded, so that an id the app
+        // sent as a **number** and one it sent as a string read the same
+        // here: the route types it `int | None` and either is a tap on row
+        // 101.
+        let played = (sent["play"] ?? [])
+            .compactMap { $0 as? [String: Any] }
+            .compactMap { body -> String? in
+                if let number = body["station_id"] as? Int { return "\(number)" }
+                return body["station_id"] as? String
+            }
+        XCTAssertEqual(
+            [StubStations.firstFavouriteID], played,
             "the house was told to play something other than the row that was tapped: \(sent)"
         )
         XCTAssertEqual(
