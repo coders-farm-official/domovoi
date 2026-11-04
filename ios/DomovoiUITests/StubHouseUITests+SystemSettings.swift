@@ -733,11 +733,29 @@ extension StubHouseUITests {
     ///
     /// **The allowance is measured, not assumed.** Named findings are
     /// classified by their own frames; anonymous ones are allowed only up to
-    /// the number of leaves this screen can actually show the audit in halves,
-    /// counted here from the tree. A fourth anonymous `Contrast failed` with
-    /// only three cut leaves still fails, and so does any contrast finding
-    /// naming an element the edge does not cross. A panel with no cut leaf
-    /// worth allowing for passes `false` and is allowed nothing.
+    /// the number of **text leaves** this screen can actually show the audit
+    /// in halves, counted here from the tree. A fourth anonymous
+    /// `Contrast failed` with only three cut text leaves still fails, and so
+    /// does any contrast finding naming an element the edge does not cross. A
+    /// panel with no cut leaf worth allowing for passes `false` and is allowed
+    /// nothing.
+    ///
+    /// **Text leaves, not their buttons** — and that is the difference
+    /// between a green run and a measured one. `Podcasts` and `Audiobooks` are
+    /// each a `staticText` inside a `button`, and both straddle the edge, so
+    /// counting both kinds doubled every allowance: App layout's composed run
+    /// was allowed 4 for 2 cut leaves and its bare run 2 for none. That slack
+    /// is what swallowed I002's `4` — Apple named the ordinal with a frame,
+    /// but it had come back twice before as `element: nil`, and an anonymous
+    /// finding had room to sit in. A contrast finding is reported against the
+    /// element whose **pixels** were sampled, which is the text; the button is
+    /// its container. Buttons are still printed as `CUT`, because a case that
+    /// goes red here next train needs the whole picture of what the edge was
+    /// cutting.
+    ///
+    /// With text leaves only, App layout's bare allowance is 0 and its
+    /// composed one is 2 (`Podcasts`, `Audiobooks`), which still covers that
+    /// run's 2 anonymous findings. About passes `false` and is unaffected.
     @MainActor
     @available(iOS 17.0, *)
     func systemSettingsAudit(
@@ -765,13 +783,15 @@ extension StubHouseUITests {
         let bottom = page?.frame.maxY ?? 0
         XCTAssertGreaterThan(bottom, 0, "no scroll view to take a bottom edge from")
         func straddles(_ box: CGRect) -> Bool { box.minY < bottom && box.maxY > bottom }
-        let cut = (app.staticTexts.allElementsBoundByIndex + app.buttons.allElementsBoundByIndex)
-            .filter { straddles($0.frame) }
+        let cutTexts = app.staticTexts.allElementsBoundByIndex.filter { straddles($0.frame) }
+        let cutButtons = app.buttons.allElementsBoundByIndex.filter { straddles($0.frame) }
         // Printed whether or not they are allowed for: a case that goes red
-        // here next train needs to know what the edge was cutting.
-        for leaf in cut { print("AUDIT \(name) CUT :: \(Self.oneLine(leaf))") }
+        // here next train needs to know what the edge was cutting. The
+        // buttons are printed and NOT counted — see the note above.
+        for leaf in cutTexts { print("AUDIT \(name) CUT :: \(Self.oneLine(leaf))") }
+        for leaf in cutButtons { print("AUDIT \(name) CUT (button, not counted) :: \(Self.oneLine(leaf))") }
 
-        var anonymousAllowed = cutAllowed ? cut.count : 0
+        var anonymousAllowed = cutAllowed ? cutTexts.count : 0
         let unexplained = rest.filter { line in
             guard cutAllowed, line.hasPrefix("Contrast failed") else { return true }
             if let box = Self.frame(in: line) { return !straddles(box) }

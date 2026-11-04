@@ -401,8 +401,27 @@ private struct SystemSettingsBarRow: View {
             // `.caption` on the same background and the audit passes it.
             // Android's `fgFaint` has no iOS token, and this is the closest
             // one that a person can actually read.
+            //
+            // **The ordinal is semibold, and only the ordinal.** I002 came
+            // back naming one of the four: `4`, `Contrast failed`, frame 30,
+            // 513.5, 7.7x14.3 — while `1`, `2` and `3` passed. All four are
+            // the same token at the same size on the same card, and `4`'s
+            // rendered ink measures the same **6.81:1** as theirs; the crop
+            // is pixel-identical to the green R002/R003, where the same
+            // finding came back as `element: nil`, i.e. the audit saying it
+            // had no measurement rather than naming a view. So this is weight
+            // against an audit that sub-samples a 7.7-point glyph, not a
+            // colour change: a semibold digit gives it more ink to sample in
+            // the same box, and ``indexWidth`` (20, `@ScaledMetric`) is wide
+            // enough for one.
+            //
+            // **``Color/fgMuted`` is not touched**, here or anywhere: it is
+            // measured for this role on this card and nineteen other screens
+            // read it. If a semibold `4` is still flagged, the next step is
+            // `Color.primary` for the ordinal alone — never a change to the
+            // token.
             Text("\(index + 1)")
-                .font(.caption.monospaced())
+                .font(.caption.monospaced().weight(.semibold))
                 .foregroundStyle(Color.fgMuted)
                 .frame(minWidth: indexWidth, alignment: .leading)
             Image(systemName: route.systemImage)

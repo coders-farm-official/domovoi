@@ -38,8 +38,13 @@ import SwiftUI
 /// not about a refusal. Tapping a `.txt`, a `.md`, a `.csv` or an `.xlsx` in
 /// Documents opens an editor (``DocumentsEditorCover``), and the header
 /// offers `+ New` there. What is still **not** built: pictures in a
-/// document, which wants an `NSPhotoLibraryUsageDescription` nothing has
-/// added yet; and the Documents upload, bulk zip and delete.
+/// document, and the Documents upload, bulk zip and delete. (The picture one
+/// used to say it wanted an `NSPhotoLibraryUsageDescription` "nothing has
+/// added yet" — `project.yml:173` has had one, with
+/// `NSPhotoLibraryAddUsageDescription` at `:178`, since before this batch, and
+/// `WKWebView` needs no delegate for a file input either. The documents unit
+/// withdrew its own request for that string on the same reading. What is
+/// missing is the feature, not the permission.)
 ///
 /// **A `.html` or a `.docx` opens an editor now, not the reader.** The lines
 /// above said the opposite and were true when they were written: the
