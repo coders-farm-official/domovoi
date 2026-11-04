@@ -232,7 +232,7 @@ public final class DocumentsSheetModel {
     /// with no caller — the defect class [[reasoning-that-hides-a-bug]]
     /// records, and what this model shipped with. See
     /// `overnight/documents/DECISIONS.md` ("The file epoch is removed from
-    /// both document models"). ``readOnThisPhone(because:)`` is held to the
+    /// both document models"). ``readOnThisPhone(_:)`` is held to the
     /// same rule and says so where it compares.
     private var generation = 0
 
@@ -336,7 +336,7 @@ public final class DocumentsSheetModel {
                       // and the first keystroke saves the blankness back over
                       // it.
                       read.hadRows else {
-                    await self.readOnThisPhone(because: DocumentsEditorModel.notDomovoi)
+                    await self.readOnThisPhone(.thatIsNotDomovoi)
                     return
                 }
                 self.show(read, from: .server)
@@ -351,7 +351,7 @@ public final class DocumentsSheetModel {
                 if (error as? DomovoiError)?.failure?.status == 415 {
                     self.load = .unsupported
                 } else {
-                    await self.readOnThisPhone(because: FilesModel.why(error))
+                    await self.readOnThisPhone(.theCallFailed(FilesModel.why(error)))
                 }
             }
         }
@@ -372,27 +372,35 @@ public final class DocumentsSheetModel {
     /// The server could not give a grid: fetch the file's bytes and read it
     /// here (owner answer 22).
     ///
-    /// ### Which failure is shown, and it is not always the server's
+    /// ### Which failure is shown, and it depends on which one it is
     ///
-    /// `because` is the server's own failure, and it is the right sentence
-    /// while the **fetch** is what went wrong: "the house is unreachable" is
-    /// not improved by "this file is not a spreadsheet".
+    /// An earlier version parsed with `try?` and showed the server's failure
+    /// whatever happened — so a 32 MB workbook, an archive claiming to unpack
+    /// to gigabytes, a cell count past the window and a file that is not a zip
+    /// at all were all reported as the server's 500, and four of
+    /// ``DocumentsSheetTrouble``'s five sentences were written and reachable
+    /// from nothing at all ([[reasoning-that-hides-a-bug]]: the comment
+    /// arguing the omission was safe is the review target, and it was that
+    /// one).
     ///
-    /// Once the bytes are in hand it is the other way round, and an earlier
-    /// version of this method had it wrong in a way worth naming. It parsed
-    /// with `try?` and reported `because` whatever happened — so a 32 MB
-    /// workbook, an archive claiming to unpack to gigabytes, a cell count past
-    /// the window and a file that is not a zip at all were all reported as the
-    /// server's 500, and four of ``DocumentsSheetTrouble``'s five sentences
-    /// were written and reachable from nothing
-    /// ([[reasoning-that-hides-a-bug]]: the comment arguing the omission was
-    /// safe is the review target, and it was this one). The reader's own
-    /// refusal is what a person can act on — open it on the dashboard, fix the
-    /// file — so that is what is drawn.
+    /// It is not simply the other way round either, which is what ``ServerMiss``
+    /// is for:
+    ///
+    /// * the **call failed** (a 500 out of openpyxl, no `/sheet` route, a
+    ///   timeout) and the bytes then would not read — the reader is the one
+    ///   who knows something, and what it knows is actionable: open it on the
+    ///   dashboard, or fix the file;
+    /// * the server answered **200 with something that is not this route's
+    ///   answer** — a captive portal, an older server, a renamed key — and
+    ///   `/raw` was answered by the same thing. The reader refusing a portal's
+    ///   JSON is a symptom; "that isn't Domovoi" is the diagnosis, and saying
+    ///   "this file isn't a spreadsheet" there blames a file that is probably
+    ///   fine.
     ///
     /// The parse runs off the main actor: a full window is sixty thousand
     /// cells of XML scanning, which would hold the editor's first frame.
-    private func readOnThisPhone(because said: String) async {
+    private func readOnThisPhone(_ miss: ServerMiss) async {
+        let said = miss.message
         // Captured BEFORE the await: the file this read is about, so the
         // request asks for one path and not a later one, and the generation it
         // started at, which is what tells a stale answer from a current one
@@ -426,12 +434,39 @@ public final class DocumentsSheetModel {
             }.value
         } catch {
             guard base == generation else { return }
-            load = .failed((error as? DocumentsSheetTrouble)?.message
-                ?? DocumentsStrings.couldNotLoad(said))
+            load = .failed(miss.readersRefusal(error) ?? DocumentsStrings.couldNotLoad(said))
             return
         }
         guard base == generation else { return }
         show(parsed, from: .thisPhone)
+    }
+
+    /// Why `GET /api/documents/sheet` did not give a grid — which decides
+    /// whose refusal the editor draws if the phone cannot read the file
+    /// either. See ``readOnThisPhone(_:)``.
+    private enum ServerMiss {
+        /// The call itself failed. Whatever `/raw` hands over is unrelated to
+        /// it, so a reader that refuses those bytes has found a second,
+        /// separate thing and it is the one worth saying.
+        case theCallFailed(String)
+        /// A 200 that is not this route's answer (``DocumentsSheetGrid/hadRows``
+        /// false, or a body that would not decode). `/raw` is answered by the
+        /// same thing, so the reader's refusal is a symptom of this one.
+        case thatIsNotDomovoi
+
+        var message: String {
+            switch self {
+            case .theCallFailed(let why): return why
+            case .thatIsNotDomovoi: return DocumentsEditorModel.notDomovoi
+            }
+        }
+
+        /// The reader's own sentence, when the reader is the one who knows
+        /// something — and nil when it is not.
+        func readersRefusal(_ error: any Error) -> String? {
+            guard case .theCallFailed = self else { return nil }
+            return (error as? DocumentsSheetTrouble)?.message
+        }
     }
 
     // MARK: - saving

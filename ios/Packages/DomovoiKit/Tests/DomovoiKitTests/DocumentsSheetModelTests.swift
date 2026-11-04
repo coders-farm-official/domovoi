@@ -137,6 +137,14 @@ final class DocumentsSheetModelTests: XCTestCase {
     /// keystroke PUTs eight rows of blanks and the server's diff clears every
     /// cell in the window. So the grid is never offered — the model fails, as
     /// ``DocumentsEditorModel/body(_:for:)`` already did for the text half.
+    ///
+    /// It is also the case that decides **whose** refusal is drawn. The same
+    /// thing answering `/sheet` with `{"status":"ok"}` answers `/raw` with it
+    /// too, so the phone's reader refuses those bytes — "not an xlsx file (not
+    /// a zip)", which blames a file that is probably fine. `notDomovoi` is the
+    /// diagnosis and the reader's refusal is the symptom, which is why
+    /// `ServerMiss` exists rather than a flat "the reader knows best"
+    /// (round 1's review asked for the flat rule; this case is why it is not).
     func testASheetReadThatIsNotThisRoutesAnswerFails() async throws {
         let calls = Calls()
         let model = sheet(calls: calls) { _, _ in Data(#"{"status":"ok"}"#.utf8) }
@@ -145,6 +153,12 @@ final class DocumentsSheetModelTests: XCTestCase {
         XCTAssertEqual(
             DocumentsSheetLoad.failed(DocumentsStrings.couldNotLoad(DocumentsEditorModel.notDomovoi)),
             model.load
+        )
+        // The fallback did run — this is not the 415 short-circuit — and its
+        // reader's refusal was deliberately not the sentence shown.
+        XCTAssertEqual(
+            ["GET /api/documents/sheet/a%20spreadsheet.xlsx", "GET /api/documents/raw/a%20spreadsheet.xlsx"],
+            calls.lines.current
         )
         // Nothing to type into and nothing to save back.
         XCTAssertTrue(model.grid.isEmpty)
