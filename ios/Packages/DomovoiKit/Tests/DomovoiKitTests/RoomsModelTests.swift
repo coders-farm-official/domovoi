@@ -848,8 +848,21 @@ final class RoomsModelTests: XCTestCase {
 
     // MARK: - add to library
 
-    /// `can_add` does not promise the call will be accepted, so a refusal
-    /// shows **the server's own words** and the optimistic mark goes back.
+    /// A library row is never sent, and an add that really fails says so and
+    /// puts the optimistic mark back.
+    ///
+    /// **Corrected for D55 (batch 2026-11-03).** It used to assert that a
+    /// refusal showed the server's own words — `can_add` was computed without
+    /// consulting a fulfiller, so the one refusal worth quoting was "no
+    /// fulfiller plugin is installed". Kamron, answer 55: "no fulfiller means
+    /// no button and no error: the server computes `can_add` against the
+    /// fulfiller allowlist, so both phones draw it honestly." The server does
+    /// that now (`web/backend/api/satellites.py:985-1044`), so that path is
+    /// dead and ``RoomsModel/addToLibrary(_:_:)`` has dropped it rather than
+    /// keeping a sentence nothing can produce. What is left is
+    /// ``roomsFailure(_:_:)``'s ordinary wording, which is what this now
+    /// pins — the case is corrected rather than made to assert less, and the
+    /// row's mark going back is still the half that matters.
     func testARefusedAddSaysWhatTheHouseSaidAndUnmarksTheRow() async {
         let house = House()
         let (model, _, _, _) = rig(house: house)
@@ -869,7 +882,14 @@ final class RoomsModelTests: XCTestCase {
         model.addToLibrary(model.rooms[0], rows[1])
         XCTAssertTrue(model.openReads?.queuedAdds.contains(10) == true, "marked while it is in flight")
         await settleUntil({ model.toast != nil }, "the refused add")
-        XCTAssertEqual("no fulfiller plugin recognises that address", model.takeToast())
+        // The failure's ordinary wording, carrying the status and the body so
+        // that a 403 nobody expected is still legible. Matched on its start,
+        // because the rest is the house's own `{"detail": …}`.
+        let said = model.takeToast() ?? ""
+        XCTAssertTrue(
+            said.hasPrefix("add failed: 403"),
+            "a failed add did not say so in the ordinary wording: \(said)"
+        )
         XCTAssertFalse(
             model.openReads?.queuedAdds.contains(10) == true,
             "nothing was queued, so the mark goes back"
