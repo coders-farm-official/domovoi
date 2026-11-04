@@ -125,8 +125,17 @@ final class PlayerOwnerTests: XCTestCase {
         /// shell is told to re-read it. That order is the real one — the
         /// connection picker writes the store through ``ServerTrustGate`` and
         /// the selection sink calls ``ShellModel/refresh()``.
-        func move(to url: String) {
-            store.trustServer(url, identity: TestIdentity.real.pin)
+        ///
+        /// - Parameter identity: whose key the new address proves. **A
+        ///   different house needs a different one**, and the first version of
+        ///   these cases got that wrong: both addresses were trusted with
+        ///   `TestIdentity.real`, so ``PlayerServerScope/isSameServer(as:)``
+        ///   was right to call them one house — a house keeps its pinned key
+        ///   across a new address — and two cases failed against correct code.
+        ///   `.real` is the default so that a case about *the same house at a
+        ///   new address* reads as the one line it is.
+        func move(to url: String, identity: TestIdentity = .real) {
+            store.trustServer(url, identity: identity.pin)
             _ = store.setServerURL(url)
             model.refresh()
         }
@@ -221,7 +230,7 @@ final class PlayerOwnerTests: XCTestCase {
         player.play([PlayerSeed.episode])
         XCTAssertEqual(1, player.queue.count)
 
-        rig.move(to: houseB)
+        rig.move(to: houseB, identity: .rogue)
         XCTAssertTrue(
             player.queue.isEmpty,
             "house A's episode is still queued on house B — the player was "
@@ -246,7 +255,7 @@ final class PlayerOwnerTests: XCTestCase {
         // House A's track first, so the play head is on the one that goes.
         player.play([PlayerSeed.transmission, phoneSong])
 
-        rig.move(to: houseB)
+        rig.move(to: houseB, identity: .rogue)
 
         XCTAssertEqual(1, rig.built.current, "the move built a second player")
         XCTAssertTrue(player === rig.model.player, "the move replaced the player")
