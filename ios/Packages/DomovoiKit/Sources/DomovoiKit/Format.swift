@@ -75,6 +75,48 @@ public func fmtDur(_ seconds: Double?) -> String {
     return String(format: "%d:%02d", m, s)
 }
 
+/// `2h 14m`, `47m` — a span long enough that seconds are noise.
+/// `fmtBigDur` (`Format.kt:62`), which the stats tiles use for a whole
+/// library's playing time.
+///
+/// **A bare em dash for nil**, as `fmtDur` gives, and the hour is left off
+/// entirely when there is none: `47m`, not `0h 47m`. Anything negative or
+/// non-finite is an em dash too — `fmtBigDur` is handed arithmetic over an
+/// optional from the wire, exactly as `fmtDur` is, and Android's version does
+/// not guard that: `fmtBigDur(Double.NaN)` over there is `"-2147483648h"`,
+/// because `roundToInt()` on a NaN is `Int.MIN_VALUE`.
+public func fmtBigDur(_ seconds: Double?) -> String {
+    guard let seconds, seconds.isFinite, seconds >= 0 else { return "—" }
+    let total = Int(seconds.rounded())
+    let h = total / 3600
+    let m = (total % 3600) / 60
+    return h > 0 ? "\(h)h \(m)m" : "\(m)m"
+}
+
+/// `0 B`, `512 B`, `1 KB`, `12.4 MB`, `1.08 GB` — `fmtBytes`
+/// (`Format.kt:51`), and an em dash for nothing.
+///
+/// Binary units with decimal names, as Android has it: 1 KB is 1024 bytes.
+/// That is what the dashboard shows for the same file, so the two agree, and
+/// changing it here would make the phone disagree with the browser about the
+/// size of one video.
+///
+/// A **negative** size reads as the em dash rather than `-3 B`. Android would
+/// print the negative (its `b < 1024` branch takes any negative straight to
+/// `"$b B"`); a size is a count of bytes, and the server sending one below
+/// zero means it does not know, which is what the dash says. The same
+/// judgement as ``fmtBigDur``'s guard one batch ago, and recorded for the
+/// same reason: it is a deliberate divergence, not an accident.
+public func fmtBytes(_ bytes: Int64?) -> String {
+    guard let bytes, bytes >= 0 else { return "—" }
+    if bytes < 1024 { return "\(bytes) B" }
+    let kb = Double(bytes) / 1024
+    if kb < 1024 { return String(format: "%.0f KB", kb) }
+    let mb = kb / 1024
+    if mb < 1024 { return String(format: "%.1f MB", mb) }
+    return String(format: "%.2f GB", mb / 1024)
+}
+
 /// `just now`, `4m ago`, `2h ago`, `3d ago`, then a date — `relTime`
 /// (`Format.kt:21`).
 ///
@@ -87,7 +129,19 @@ public func fmtDur(_ seconds: Double?) -> String {
 ///   is all about (45 seconds, an hour, a day, thirty days) without waiting
 ///   for it.
 public func relTime(_ iso: String?, nowMs: Int64) -> String {
-    guard let then = isoMs(iso) else { return "—" }
+    relTimeMs(isoMs(iso), nowMs: nowMs)
+}
+
+/// The same wording for a time already in epoch **milliseconds**.
+///
+/// ``relTime(_:nowMs:)`` was the whole function until Files, whose
+/// timestamps are `st_mtime` floats rather than ISO strings
+/// (``FileEntry/mtime``). The split is a rename, not a second
+/// implementation: one wording, one set of boundaries, two ways in — the
+/// alternative being a Files copy that disagreed with Home about what
+/// "3d ago" means.
+public func relTimeMs(_ thenMs: Int64?, nowMs: Int64) -> String {
+    guard let then = thenMs else { return "—" }
     let seconds = (nowMs - then) / 1000
     if seconds < 0 { return relFuture(-seconds) }
     switch seconds {
@@ -121,7 +175,11 @@ private func relFuture(_ seconds: Int64) -> String {
 
 /// Kotlin's `roundToInt()`: half away from zero, which `Foundation.rounded()`
 /// also is by default. Every argument here is non-negative.
-private func rounded(_ value: Double) -> Int {
+///
+/// Internal rather than private since ``LibraryStats/tiles`` needs the same
+/// rounding for its "N minutes" line: two roundings of one number in one
+/// module is how two screens come to disagree about a duration by a minute.
+func rounded(_ value: Double) -> Int {
     Int(value.rounded())
 }
 

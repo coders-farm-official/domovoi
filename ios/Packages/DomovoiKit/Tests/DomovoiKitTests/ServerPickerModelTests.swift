@@ -97,9 +97,15 @@ final class ServerPickerModelTests: XCTestCase {
     /// A sweep that probed 254 addresses and heard nothing says so — and a
     /// sweep that probed **nothing** says one of the other three things.
     /// These are the states a person actually meets.
+    ///
+    /// A fresh ``InMemoryShellStore`` is a **fresh install**, so the empty
+    /// sweep gets the first-install wording; the settled one is the test
+    /// below. That is not a detail of the rig: this loop is exactly what the
+    /// person who has just installed the app sees, and it used to accuse
+    /// their server.
     func testEachOutcomeReachesThePickerAsItsOwnLine() async {
         for (outcome, expected) in [
-            (SweepOutcome.swept(servers: []), ServerPickerNotice.nothingAnswered(port: 6369)),
+            (SweepOutcome.swept(servers: []), ServerPickerNotice.nothingAnsweredYet(port: 6369)),
             (.notOnLan, .notOnWifi),
             (.noLocalNetwork, .noAddressYet),
             (.localNetworkDenied, .localNetworkDenied),
@@ -108,6 +114,56 @@ final class ServerPickerModelTests: XCTestCase {
             await sweepAndSettle(picker)
             XCTAssertEqual(expected, picker.notice, "for \(outcome)")
         }
+    }
+
+    /// A sweep that **found** something settles the permission question for
+    /// this install, and it is settled in the store — so it is still settled
+    /// after the dialog is closed and the next panel is built, which is where
+    /// the picker's own `remember`s go.
+    func testASweepThatFoundSomethingSettlesThePermissionForGood() async {
+        let store = InMemoryShellStore()
+        XCTAssertFalse(store.localNetworkHasAnswered, "a fresh install has heard nothing")
+
+        let hit = FoundDomovoi(url: server, name: nil, identity: nil)
+        await sweepAndSettle(makePicker(store: store, outcome: .swept(servers: [hit])))
+        XCTAssertTrue(store.localNetworkHasAnswered, "a dashboard answered and nothing wrote it down")
+
+        // A second panel, over the same store, finding nothing this time: the
+        // house is the question now, and the backend may be asked about.
+        let later = makePicker(store: store, outcome: .swept(servers: []))
+        await sweepAndSettle(later)
+        XCTAssertEqual(.nothingAnswered(port: 6369), later.notice)
+    }
+
+    /// An empty sweep proves nothing, so it must not settle anything: this is
+    /// the run that happens while Apple's alert is up.
+    func testAnEmptySweepLeavesThePermissionQuestionOpen() async {
+        let store = InMemoryShellStore()
+        await sweepAndSettle(makePicker(store: store, outcome: .swept(servers: [])))
+        XCTAssertFalse(store.localNetworkHasAnswered)
+    }
+
+    /// A typed address that reached a dashboard proves the same thing a sweep
+    /// hit does — and it is the way out for someone whose first sweep found
+    /// nothing, so it is the one that most needs to count.
+    func testATypedAddressThatAnsweredSettlesItToo() async {
+        let store = InMemoryShellStore()
+        let picker = makePicker(
+            store: store,
+            hit: FoundDomovoi(url: server, name: "kitchen-box", identity: nil)
+        )
+        picker.manual = "10.0.0.42:6369"
+        _ = await picker.addManual()
+        XCTAssertTrue(store.localNetworkHasAnswered)
+    }
+
+    /// A typed address that answered nothing proves nothing.
+    func testATypedAddressThatAnsweredNothingSettlesNothing() async {
+        let store = InMemoryShellStore()
+        let picker = makePicker(store: store, hit: nil)
+        picker.manual = "10.0.0.42:6369"
+        _ = await picker.addManual()
+        XCTAssertFalse(store.localNetworkHasAnswered)
     }
 
     /// The auto-scan on open happens once.
