@@ -913,9 +913,7 @@ struct ManualCrumbs: View {
             // of them, which is the no-misleading-controls rule pointed at a
             // sentence rather than at a button.
             .accessibilityHint(
-                typeSize.isAccessibilitySize
-                    ? ManualStrings.swipeLeavesTheManualHint
-                    : ManualStrings.swipeGoesUpHint
+                ManualStrings.swipeHint(isAccessibilitySize: typeSize.isAccessibilitySize)
             )
         }
     }

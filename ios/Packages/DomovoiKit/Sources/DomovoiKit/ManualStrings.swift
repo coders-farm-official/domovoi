@@ -89,6 +89,20 @@ public enum ManualStrings {
     public static let swipeLeavesTheManualHint =
         "at this text size a swipe back leaves the manual; this goes up a level"
 
+    /// Which of the two `zoom out` says, asked **here** and not in a view
+    /// body.
+    ///
+    /// ``ShellHeaderFold``'s reason, which this app has already paid for: a
+    /// review's negative control broke two size gates written as ternaries
+    /// inside view bodies and nothing in the repository noticed, because
+    /// `pkgtest` builds the package and not the views. A sentence that is
+    /// wrong at one text size is the no-misleading-controls rule broken by a
+    /// hint, so the choice is a function with a test on it
+    /// (`ManualAnswersTests`).
+    public static func swipeHint(isAccessibilitySize: Bool) -> String {
+        isAccessibilitySize ? swipeLeavesTheManualHint : swipeGoesUpHint
+    }
+
     /// `"${label("next")}: ${title}"` (`ManualScreen.kt:769`).
     public static func next(_ label: String, piece title: String) -> String {
         "\(label): \(title)"

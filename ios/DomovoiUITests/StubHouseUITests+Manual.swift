@@ -29,18 +29,33 @@ import XCTest
 // with the cards moving, so a quiescence problem costs that case and not the
 // screen.
 //
-// **A level is the screen's own state, swapped under one ``ManualTopBar``.**
-// It was an entry on a `NavigationStack` of the manual's own for one batch —
-// answer 32, "swipe back goes up a level" — and train I003 measured that a
-// second stack inside the shell's pushed route takes the route's screen
-// away: all twenty cases here that reach a loaded document failed, and the
-// one that stops before it passed. The measurement and the shared change
-// that unblocks the answer are in ``ManualView/ready(_:cached:_:)``. For
-// these cases it means: only one level is in the tree at a time, the swipe
-// back leaves the manual from every level, and `zoom out` and the crumbs are
-// the way up. "This page is gone" is still a wait
+// **A level is a pushed screen, on the shell's own `NavigationStack`.**
+// Answer 32 — "swipe back goes up a level" — is built again, and these cases
+// are the only thing that can read it: `pkgtest` builds the package and
+// `appcheck` type-checks, so a gesture against a real navigation stack is a
+// train's to run. What it means here:
+//
+//  * the top bar is drawn by every level, so the pills, the crumbs, the
+//    search field and `zoom out` are reachable at every depth as before;
+//  * one level is on screen at a time, and a covered one is **behind a
+//    pushed screen** rather than unmounted. UIKit hides a covered view
+//    controller from accessibility, so the tree still holds one level — if a
+//    query here ever matches two of the same label, that premise is what
+//    broke, and it is the first thing to check;
+//  * the swipe back goes up one level from the map, a cluster and a piece,
+//    and leaves the manual from Start here (which has nothing pushed);
+//  * at an accessibility text size the levels are swapped in place, because
+//    the bar and the page share one scroll view there, so the swipe leaves
+//    the manual from every level — Kamron's open entry 74, pinned by
+//    ``testManual_ASwipeAtAnAccessibilitySizeLeavesTheManual()``.
+//
+// The first build of answer 32 gave the manual a `NavigationStack` of its
+// own and train I003 measured what that costs: all twenty cases here that
+// reach a loaded document failed, because a nested stack unwound the route's
+// own push (``ManualView/ready(_:cached:_:)`` has the whole measurement).
+// Nothing here is a nested stack now. "This page is gone" is still a wait
 // (``manualGone(_:timeout:)``) rather than a read on the next line, because
-// the swap animates.
+// a push and a pop animate.
 //
 // **`@SceneStorage` outlives a launch.** The screen keeps which level it was
 // on the way Android's `rememberSaveable` does, and on iOS that survives a
@@ -370,36 +385,165 @@ extension StubHouseUITests {
         evidence(app, "manual-float-still-driveable")
     }
 
-    // **`testManual_ASwipeFromAPieceGoesUpToItsTopic` stood here and is
-    // gone**, with the behaviour it guarded.
-    //
-    // It asserted answer 32's first half — a swipe back from a piece lands
-    // on its topic's cluster and does not leave the manual — which was built
-    // by giving the manual a `NavigationStack` of its own. Train I003
-    // measured that that stack takes the whole route's screen away
-    // (``ManualView/ready(_:cached:_:)``), so the stack is gone and the
-    // swipe pops the route again, from every level. The case is deleted
-    // rather than rewritten to assert the pop: a case that pinned the
-    // behaviour the owner asked to change would have to be deleted again the
-    // day the shared change lands, and the way up that does exist —
-    // `zoom out` from a piece to its topic's cluster, with the piece's page
-    // gone afterwards — is already asserted in
-    // ``testManual_MapOpensATopicThenAPiece()``.
-    //
-    // It comes back, unchanged, with the shared change: see this fix's
-    // REPORT under "for others".
+    /// **Answer 32**: a swipe back from a piece goes up to its topic, and
+    /// does not leave the manual.
+    ///
+    /// Three things say it, and they say different halves:
+    ///
+    ///  * the piece's page is **gone** — so the swipe did something;
+    ///  * the `map` pill is **still there** — so what it did was not pop the
+    ///    route. Between `6d071463` and the commit that added this case back,
+    ///    the gesture popped the route like every other screen's and the
+    ///    manual was replaced by Home;
+    ///  * the cluster's own node is there — so the level it landed on is the
+    ///    piece's topic and not, say, Start here. (The topic's nodes alone
+    ///    cannot say it: the cluster is the screen underneath the piece and
+    ///    its nodes exist either way.)
+    ///
+    /// **This case stood here before and was deleted**, with the inner
+    /// `NavigationStack` train I003 measured (twenty reds,
+    /// ``ManualView/ready(_:cached:_:)``). It comes back unchanged from
+    /// `e27b0adf:ios/DomovoiUITests/StubHouseUITests+Manual.swift:384` bar
+    /// its drag, which is now ``manualSwipeBack(_:)``. If it fails again,
+    /// the thing to read is which level the tree holds: a map means the
+    /// pushed chain was short (``ManualLevelHost``'s late fallback drawing
+    /// the deepest level), and Home means the route was popped, which is a
+    /// pushed screen that was never pushed.
+    @MainActor
+    func testManual_ASwipeFromAPieceGoesUpToItsTopic() throws {
+        control("reset-fixtures", "{}", port: 6601, what: "the manual fixture's seed")
+        let app = manualLaunch()
+
+        XCTAssertTrue(
+            manualOpenTopic(app, topic: StubManual.roomsTopic),
+            "the map never opened the topic's cluster"
+        )
+        let piece = manualNode(app, StubManual.piRoom)
+        XCTAssertTrue(piece.waitForExistence(timeout: 15), "the cluster drew no piece node")
+        piece.tap()
+        XCTAssertTrue(
+            app.buttons[StubManual.nextPlugins].firstMatch.waitForExistence(timeout: 15),
+            "the piece's page never opened"
+        )
+        evidence(app, "manual-swipe-on-the-piece")
+
+        manualSwipeBack(app)
+
+        XCTAssertTrue(
+            manualGone(app.buttons[StubManual.nextPlugins].firstMatch),
+            "a swipe back from a piece left its page on screen"
+        )
+        XCTAssertTrue(
+            manualGone(app.staticTexts[StubManual.piRoom].firstMatch),
+            "a swipe back from a piece left the piece's heading and crumb on screen"
+        )
+        evidence(app, "manual-swipe-went-up-a-level")
+        XCTAssertTrue(
+            app.buttons[StubManual.mapPill].firstMatch.exists,
+            "a swipe back from a piece left the manual altogether instead of "
+                + "going up a level — it popped the route, which is what it did "
+                + "before answer 32"
+        )
+        XCTAssertTrue(
+            manualNode(app, StubManual.plugins).exists,
+            "the topic's cluster is not what the swipe landed on"
+        )
+    }
+
+    /// **Answer 32, one level higher**: a swipe back from the map lands on
+    /// Start here, and still does not leave the manual.
+    ///
+    /// Android's `up()` reads `else -> "start"` (`ManualScreen.kt:308`), so
+    /// its back from the map stays on the screen too — the `BackHandler` is
+    /// enabled at every level but Start here (`:315`). This is the level
+    /// where the two outcomes of answer 32 meet, and the only one where
+    /// getting it wrong looks like getting it right: a swipe that popped the
+    /// route would also take the map off screen, so "the map is gone" is not
+    /// the claim. The claim is **what is there instead** — Start here's own
+    /// title, which Home does not draw.
+    @MainActor
+    func testManual_ASwipeFromTheMapGoesBackToStartHere() throws {
+        control("reset-fixtures", "{}", port: 6601, what: "the manual fixture's seed")
+        let app = manualLaunch()
+
+        XCTAssertTrue(manualMap(app), "the map pill did not open the map")
+        let centre = manualNode(app, StubManual.centreNode)
+        XCTAssertTrue(centre.waitForExistence(timeout: 15), "the map drew no centre node")
+        evidence(app, "manual-swipe-on-the-map")
+
+        manualSwipeBack(app)
+
+        XCTAssertTrue(
+            app.staticTexts[StubManual.startTitle].firstMatch.waitForExistence(timeout: 15),
+            "a swipe back from the map did not land on Start here — if the "
+                + "house's name is on screen instead it popped the route and "
+                + "left the manual"
+        )
+        XCTAssertTrue(
+            manualGone(centre),
+            "the map's centre node is still drawn, so the swipe moved nothing"
+        )
+        XCTAssertTrue(
+            app.buttons[StubManual.mapPill].firstMatch.exists,
+            "the manual's top bar is gone, so the swipe left the screen"
+        )
+        evidence(app, "manual-swipe-back-on-start-here")
+    }
+
+    /// **Kamron's entry 74**: at an accessibility text size the swipe back
+    /// leaves the manual from a level too, and that is on purpose.
+    ///
+    /// At those sizes the top bar and the page share **one** scroll view
+    /// (``ManualView/ready(_:cached:_:)``: pinned, the bar alone was 310 of
+    /// this screen's 400 points), and a level cannot be a pushed screen
+    /// inside that — a pushed screen brings a bar of its own that scrolls
+    /// with its own page. So the levels are swapped in place there and the
+    /// route's own pop gesture is the only one on the screen.
+    ///
+    /// It is pinned rather than left to the code, because it is the one place
+    /// this screen means two different things by one gesture: a reader of the
+    /// next train's results should see that this is a case with an
+    /// expectation and not a case that failed to notice. `zoom out`'s
+    /// VoiceOver hint says which it is
+    /// (``ManualStrings/swipeHint(isAccessibilitySize:)``, pinned at the
+    /// package layer — `XCUIElement` cannot read a hint).
+    @MainActor
+    func testManual_ASwipeAtAnAccessibilitySizeLeavesTheManual() throws {
+        control("reset-fixtures", "{}", port: 6601, what: "the manual fixture's seed")
+        let app = manualLaunch(mode: "UICTContentSizeCategoryAccessibilityXXXL")
+
+        XCTAssertTrue(manualMap(app), "the map pill did not open the map at AX5")
+        let pill = app.buttons[StubManual.mapPill].firstMatch
+        XCTAssertTrue(pill.exists, "the manual's top bar is not on screen at AX5")
+        evidence(app, "manual-swipe-ax5-on-the-map")
+
+        manualSwipeBack(app)
+
+        XCTAssertTrue(
+            manualGone(pill, timeout: 15),
+            "at an accessibility size a swipe back from the map was expected "
+                + "to leave the manual (entry 74) and the top bar is still "
+                + "there. If the levels are pushed screens at these sizes now, "
+                + "this case is the thing to rewrite, not the screen"
+        )
+        XCTAssertTrue(
+            houseName(in: app).waitForExistence(timeout: 20),
+            "the swipe left the manual but Home is not what it landed on"
+        )
+        evidence(app, "manual-swipe-ax5-left-the-manual")
+    }
+
 
     /// A swipe back from **Start here** leaves the manual.
     ///
-    /// Written for answer 32's second half — "the system swipe-back pops a
-    /// level and only the top level leaves the manual" — and it is the half
-    /// that survived the answer being rolled back
-    /// (``ManualView/ready(_:cached:_:)``): the route's own
-    /// `interactivePopGestureRecognizer` is the only one on this screen
-    /// again, so this is the claim that it still fires at all. It is worth
-    /// keeping either way. A manual nobody can swipe out of is the
-    /// regression a second recogniser would cause, and this case is what
-    /// would catch it when answer 32 is built again on the shell's own path.
+    /// Answer 32's second half — "the system swipe-back pops a level and only
+    /// the top level leaves the manual". Start here has nothing pushed above
+    /// it (``ManualLevelStack/presentsDeeper(at:in:)`` is false for an empty
+    /// chain, which is Android's `BackHandler(enabled = at != "start")`), so
+    /// the route's own `interactivePopGestureRecognizer` is the only
+    /// recogniser in play and the manual is left. A manual nobody can swipe
+    /// out of is the regression the levels-as-screens shape could cause, and
+    /// this is the case that catches it.
     ///
     /// Two assertions, each a different failure:
     ///
@@ -454,13 +598,7 @@ extension StubHouseUITests {
         XCTAssertTrue(pill.exists, "the manual's top bar is not on screen")
         evidence(app, "manual-swipe-on-start-here")
 
-        // `dx: 0.01` and not 0, so the drag starts inside the app's frame
-        // where the leading-edge recogniser can see it.
-        app.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.5))
-            .press(
-                forDuration: 0.08,
-                thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5))
-            )
+        manualSwipeBack(app)
 
         XCTAssertTrue(
             manualGone(pill),
@@ -1638,6 +1776,31 @@ extension StubHouseUITests {
             pushDelay: Self.pushDelay,
             args: seams
         )
+    }
+
+    /// The system's leading-edge swipe back, driven for real.
+    ///
+    /// One helper and not a drag written out in four cases: it is the gesture
+    /// answer 32 is *about*, and four copies of it would be four chances for
+    /// one of them to stop being a left-edge drag.
+    ///
+    /// `dx: 0.02` and not 0, so the press lands inside the app's frame where
+    /// the leading-edge recogniser can see it, and `0.8` so the drag is long
+    /// enough to be committed rather than cancelled back. The press is held
+    /// for 80 ms first: a drag with no press is a flick, and
+    /// `UIScreenEdgePanGestureRecognizer` wants the touch to settle on the
+    /// edge before it moves.
+    ///
+    /// It returns nothing: what the gesture *did* is the caller's claim, and
+    /// every caller here reads it off the screen rather than off a return
+    /// value.
+    @MainActor
+    private func manualSwipeBack(_ app: XCUIApplication) {
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.5))
+            .press(
+                forDuration: 0.08,
+                thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.5))
+            )
     }
 
     /// An element by its **whole** label, of any kind.

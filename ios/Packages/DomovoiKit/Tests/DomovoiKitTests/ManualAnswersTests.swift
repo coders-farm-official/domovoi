@@ -303,6 +303,47 @@ final class ManualAnswersTests: XCTestCase {
         model.stop()
     }
 
+    /// What `zoom out` says the swipe does, which is not the same sentence at
+    /// every text size.
+    ///
+    /// Answer 32's gesture is built below the accessibility sizes and not at
+    /// them (``ManualView/ready(_:cached:_:)``, Kamron's open entry 74), so a
+    /// hint that said "a swipe does this too" everywhere would be the app
+    /// telling a VoiceOver user something untrue of the screen in front of
+    /// them. The choice lives in ``ManualStrings/swipeHint(isAccessibilitySize:)``
+    /// rather than in the view's body for the reason ``ShellHeaderFold``
+    /// exists: a review's negative control broke two size gates written as
+    /// ternaries inside view bodies and the whole package suite stayed green.
+    ///
+    /// No UI case can read this: `XCUIElement` exposes a label and a value
+    /// and not a hint. This is the only thing that holds the two sentences to
+    /// the two sizes.
+    func testZoomOutSaysWhatTheSwipeDoesAtThisTextSize() {
+        XCTAssertEqual(
+            ManualStrings.swipeGoesUpHint,
+            ManualStrings.swipeHint(isAccessibilitySize: false),
+            "below the accessibility sizes a level is a pushed screen, so the "
+                + "gesture does what `zoom out` does"
+        )
+        XCTAssertEqual(
+            ManualStrings.swipeLeavesTheManualHint,
+            ManualStrings.swipeHint(isAccessibilitySize: true),
+            "at an accessibility size the levels are swapped in place and the "
+                + "swipe pops the route, so the hint must not promise a level"
+        )
+        XCTAssertNotEqual(
+            ManualStrings.swipeGoesUpHint,
+            ManualStrings.swipeLeavesTheManualHint,
+            "the two sizes do different things; one sentence for both would "
+                + "be wrong at one of them"
+        )
+        XCTAssertTrue(
+            ManualStrings.swipeLeavesTheManualHint.contains("leaves the manual"),
+            "the accessibility-size hint has to say where the swipe goes, "
+                + "which is out of the manual"
+        )
+    }
+
     /// **Answer 30 on the way back up**: a level arrived at again is a new
     /// arrival, and that is what makes the names scramble a second time.
     ///
