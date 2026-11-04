@@ -381,11 +381,30 @@ struct SettingsPlaceholder: View {
             // `minimumScaleFactor` is the other answer and is rejected
             // throughout this app: it makes text smaller for the person who
             // asked for bigger.
+            //
+            // **And every one of them is 44 pt tall**, which is Kamron's
+            // answer 57 ("fix it once in the shell") read the way the
+            // measurement left it. A bare `Button("some words")` is drawn
+            // 20.3 pt tall here, and train I004 returned one
+            // `Hit area is too small` finding that Apple could not attribute;
+            // the rooms unit got to this file by elimination (the I002/I004
+            // roster tree diff is the same element set 26.6 pt of scroll
+            // apart, and the foot button is the only element whose
+            // window-occlusion changed between them — it traded I002's
+            // `Contrast failed` for I004's hit-area finding; `switch server`
+            // at 121 x 22.3 and the 20-pt text fields are eliminated because
+            // they are also on the opened room's screen, which audits
+            // `rest = 0`; and it is the only `Hit area is too small` in all
+            // 432 cases). So the defect is the control's *size*, not a colour
+            // and not the case's scroll. `contentShape` is what makes the
+            // grown frame the tap target rather than just the words in it.
             switch place {
             case .index:
                 ForEach(SettingsGroup.allCases, id: \.self) { group in
                     Button(group.label) { place = .group(group) }
                         .fixedSize(horizontal: false, vertical: true)
+                        .frame(minHeight: 44)
+                        .contentShape(.rect)
                 }
             case .group(let group):
                 Text(group.label)
@@ -394,9 +413,13 @@ struct SettingsPlaceholder: View {
                 ForEach(sections(of: group), id: \.key) { section in
                     Button(section.label) { place = .section(section) }
                         .fixedSize(horizontal: false, vertical: true)
+                        .frame(minHeight: 44)
+                        .contentShape(.rect)
                 }
                 Button(ShellStrings.allSettings) { place = place.up ?? .index }
                     .fixedSize(horizontal: false, vertical: true)
+                    .frame(minHeight: 44)
+                    .contentShape(.rect)
             case .section(let section):
                 Text(section.label)
                     .font(.headline)
@@ -412,6 +435,8 @@ struct SettingsPlaceholder: View {
                 )
                 Button(ShellStrings.backTo(section.group.label)) { place = place.up ?? .index }
                     .fixedSize(horizontal: false, vertical: true)
+                    .frame(minHeight: 44)
+                    .contentShape(.rect)
             }
             // **No `Spacer()`.** It was here to push the content up in a
             // `VStack` that filled the screen; inside a `ScrollView` a

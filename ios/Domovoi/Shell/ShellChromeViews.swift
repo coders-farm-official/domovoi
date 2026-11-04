@@ -570,6 +570,17 @@ struct ShellScrollAwayChrome: ViewModifier {
             // still announces as `Back`, stays. Android's top bar is a bare
             // arrow (`AppShell.kt:1021`), so this is also the faithful shape.
             //
+            // **So the back button's name changes with the type size, and a
+            // reader diffing two trees from one train will see it.** In a bare
+            // run it is `Back` (the chevron's own name, no word drawn); in any
+            // run where a case has already called
+            // `performAccessibilityAudit`, the audit leaves
+            // `isAccessibilitySize` true, `isDrawn` answers yes from then on,
+            // and the button is named `home` — the root's `navigationTitle`,
+            // written two lines above. Both are this rule working as built,
+            // not two shells; nobody should have to re-derive that from a
+            // tree diff.
+            //
             // ### How that finding was attributed, since the audit could not
             //
             // `performAccessibilityAudit` returned one `Text clipped` whose

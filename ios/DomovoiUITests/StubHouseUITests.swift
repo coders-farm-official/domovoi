@@ -496,20 +496,49 @@ final class StubHouseUITests: XCTestCase {
     /// would have shown a header reading `domovoi`, and only the tree said
     /// the header had also drawn `offline` and `not live` beside a server
     /// address that was plainly reachable.
+    ///
+    /// ### One walk, and only if the app is still alive
+    ///
+    /// `app.debugDescription` is a whole-tree accessibility fetch, and this
+    /// read it twice — once for the attachment and once for the print — so
+    /// every audit case in this file paid for a second traversal of the same
+    /// tree. The I004 `SIGSEGV` trace puts the signal four milliseconds into
+    /// such a walk, which makes halving them the one reduction in exposure
+    /// this file can make without weakening an assertion.
+    ///
+    /// The `.runningForeground` guard is the other half. When the process has
+    /// already died, `app.screenshot()` throws, and the case then reports a
+    /// screenshot failure for a death that happened seconds earlier —
+    /// `testNews_PassesApplesAccessibilityAudit` in I004 read exactly that
+    /// way. Say the death instead, and let the case's own assertions be what
+    /// fails.
     @MainActor
     func evidence(_ app: XCUIApplication, _ name: String) {
+        guard app.state == .runningForeground else {
+            print("=== NO EVIDENCE: \(name) — the app is \(app.state.rawValue), not running ===")
+            let note = XCTAttachment(
+                string: "\(name): the app was \(app.state.rawValue) when the evidence was asked for, "
+                    + "so there is no screenshot and no tree. The process died before this point."
+            )
+            note.name = "\(name)-the-app-was-gone"
+            note.lifetime = .keepAlways
+            add(note)
+            return
+        }
+
         let shot = XCTAttachment(screenshot: app.screenshot())
         shot.name = name
         shot.lifetime = .keepAlways
         add(shot)
 
-        let tree = XCTAttachment(string: app.debugDescription)
+        let described = app.debugDescription
+        let tree = XCTAttachment(string: described)
         tree.name = "\(name)-tree"
         tree.lifetime = .keepAlways
         add(tree)
 
         print("=== TREE: \(name) ===")
-        print(app.debugDescription)
+        print(described)
     }
 
     /// Home, drawn against a server, at the ordinary type size.
@@ -5024,10 +5053,24 @@ final class StubHouseUITests: XCTestCase {
         let unexplained = rest.filter { !clipped.contains($0) && !archivedEntry.contains($0) }
         XCTAssertEqual([], unexplained, "the Chat list has an audit finding of its own")
         XCTAssertFalse(clipped.isEmpty, "the ten `Text clipped` findings went away — re-read this case")
-        XCTAssertEqual(
-            1,
+        // **Zero or one, not one.** This case's own rule, two paragraphs up,
+        // is that a classified finding is pinned by *what it says* and never
+        // by how many of it there are — and then this assertion required
+        // exactly one of them, which is a total. Train I004 collected it:
+        // `rest` came back as five anonymous `Text clipped` lines and nothing
+        // else (`I004/ALL/testTheChatListAudits.log:55-69`), Apple having
+        // attributed the archived entry's finding to no element at all on
+        // that run, so the case failed on a false positive going away.
+        //
+        // What is still strict is the part that catches a defect: `unexplained`
+        // above is asserted empty, so the finding *moving* to another leaf
+        // fails here as it always did. All this line now says is that it
+        // cannot show up twice, or on a leaf whose label is not the archived
+        // entry's.
+        XCTAssertLessThanOrEqual(
             archivedEntry.count,
-            "the archived entry's Dynamic Type finding is not the one that was measured"
+            1,
+            "the archived entry's Dynamic Type finding is reported more than once"
         )
         // **The floor is not pinned to a number here, and that is deliberate.**
         // The Videos grid and the Files list both assert `0`, and the pairing
