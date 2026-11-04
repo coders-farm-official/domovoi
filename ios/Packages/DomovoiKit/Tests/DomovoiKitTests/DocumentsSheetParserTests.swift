@@ -280,6 +280,36 @@ final class DocumentsSheetParserTests: XCTestCase {
         }
     }
 
+    /// The same cap, asked of the size the **listing** already carries, so
+    /// nothing is fetched at all (round 2's review, S4).
+    ///
+    /// `nil` is an unknown size and not a small one: the read must still be
+    /// tried, which is why ``DocumentsSheetParser/grid(of:named:)``'s own
+    /// check on the bytes stays where it is. The boundary is `>` and not
+    /// `>=`: a file of exactly the cap is one the parser accepts, and the two
+    /// must not disagree about it.
+    func testAFileTheListingSaysIsOverTheCapIsRefusedBeforeItIsFetched() {
+        let cap = Int64(DocumentsSheetLimits.maxFileBytes)
+        XCTAssertNil(DocumentsSheetParser.refusalBeforeFetching(size: nil))
+        XCTAssertNil(DocumentsSheetParser.refusalBeforeFetching(size: 0))
+        XCTAssertNil(DocumentsSheetParser.refusalBeforeFetching(size: cap))
+        guard case .tooLarge(let said) =
+            DocumentsSheetParser.refusalBeforeFetching(size: cap + 1) else {
+            return XCTFail("a file the listing says is over the cap was going to be fetched")
+        }
+        // The very same sentence the parser throws once the bytes are in
+        // hand, with the number in it — a second wording for one limit is a
+        // limit people cannot learn.
+        XCTAssertEqual(
+            DocumentsStrings.sheetTooBig(DocumentsSheetLimits.maxFileBytes / (1024 * 1024)),
+            said
+        )
+        let big = Data(count: DocumentsSheetLimits.maxFileBytes + 1)
+        XCTAssertThrowsError(try DocumentsSheetParser.grid(of: big, named: "huge.csv")) { error in
+            XCTAssertEqual(DocumentsSheetTrouble.tooLarge(said), error as? DocumentsSheetTrouble)
+        }
+    }
+
     /// A small archive that declares a gigantic part is refused from the
     /// **directory**, without inflating any of it.
     func testAnArchiveThatClaimsToUnpackToGigabytesIsRefused() {

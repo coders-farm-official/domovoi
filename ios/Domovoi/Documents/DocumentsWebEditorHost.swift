@@ -79,7 +79,10 @@ import WebKit
 ///    (``DocumentsStrings/editorStayedHere``), where Android's returns true
 ///    and leaves the tap looking broken.
 /// 2. **The session ends** the moment the condition that admitted it stops
-///    holding: the active server changes, or the pinned identity does.
+///    holding: the active server changes, the pinned identity does, or the
+///    server refuses the token this phone holds (an admin blocking this
+///    device while the editor is open is that third one, and round 2's
+///    review found it going unnoticed).
 ///    Android refuses the next request; this refuses every further request at
 ///    once, by taking the page down and saying why
 ///    (``DocumentsWebEditorModel/recheck(_:)``). For the case the intercept
@@ -99,12 +102,22 @@ import WebKit
 ///
 /// ### What is not, and why there is no control for it
 ///
-/// * **No photo picker.** Android's `onShowFileChooser` hands the page the
-///   phone's gallery (`:230-245`) so a picture can be put in a document. That
-///   needs the photo-library permission and the usage string in
-///   `project.yml`, which this unit does not own this batch, and the page's
-///   own picker would otherwise open a file input that does nothing. It is
-///   listed in `batch-2026-11-03/documents/DECISIONS.md` as a shared change.
+/// * **Nothing, in fact — and the picture button is the correction.** This
+///   paragraph used to say "no photo picker", because Android's
+///   `onShowFileChooser` (`:230-245`) hands its WebView the phone's gallery
+///   and nothing here ports it, and because the usage string was said to be
+///   missing from `project.yml`. Round 2's review (S1) found **both halves
+///   wrong**: `WKWebView` needs no delegate at all for an
+///   `<input type="file">` — it presents the system picker itself, which is
+///   exactly why there is no `onShowFileChooser` to port — and
+///   `NSPhotoLibraryUsageDescription` (`project.yml:172`),
+///   `NSCameraUsageDescription` (`:168`) and
+///   `NSPhotoLibraryAddUsageDescription` (`:178`) have all been in the plist
+///   since before this batch. So the page's picture button works on the
+///   phone, this port drops no Android capability, and the shared change this
+///   unit asked Kamron for was a change already made. **It has no automated
+///   case**: a UI case cannot drive the system photo picker, and the first
+///   proof will be Kamron's own.
 /// * **No Save and no dirty mark in this host's own chrome.** The page owns
 ///   the document's state and its autosave and draws both itself; a second
 ///   Save up here would be a button whose state this host cannot know.
@@ -179,9 +192,10 @@ struct DocumentsWebEditorView: View {
         // The second half of the origin rule (see the type's note): the
         // session ends when what admitted it stops being true. `inputs` is
         // `Equatable` and observable, so this fires on a changed server
-        // address and on a changed identity — and on an `.unproven` probe
-        // too, which ``DocumentsWebEditorModel/recheck(_:)`` deliberately
-        // does nothing about.
+        // address, on a changed identity and on a changed `trouble` — and on
+        // an `.unproven` probe too, which
+        // ``DocumentsWebEditorRules/sessionEnd(activeServerURL:pageServerURL:identityChanged:trouble:)``
+        // deliberately does nothing about.
         .onChange(of: model.inputs) { _, now in host?.recheck(now) }
         // And on a network change, because the gate's proof is per network
         // and `inputs` can be identical across one.
@@ -352,6 +366,12 @@ final class DocumentsWebEditorModel {
     /// alive with it.
     weak var webView: WKWebView?
 
+    /// Whether the token has already left the bridge. The rule itself is
+    /// ``DocumentsWebEditorRules/OneShotToken``, in DomovoiKit, so that a
+    /// package test can hold it: everything in this file is compiled by a
+    /// train and by nothing else.
+    private(set) var oneShot = DocumentsWebEditorRules.OneShotToken()
+
     init(
         entry: FileEntry,
         dark: Bool,
@@ -408,8 +428,14 @@ final class DocumentsWebEditorModel {
         do {
             token = try client.tokenForDownload(page)
         } catch {
+            // `FilesModel.why(_:)` says exactly this
+            // (`FilesModel.swift:606`) and is DomovoiKit-internal, so the app
+            // target cannot call it — train C101 failed on that one line. The
+            // whole of its body is the two terms here, and the first was
+            // already asked, so this is the same answer inline rather than a
+            // shared change to `FilesModel.swift`, which this unit does not own.
             state = .refused(DocumentsStrings.editorNotReached((error as? DomovoiError)?.message
-                ?? FilesModel.why(error)))
+                ?? error.localizedDescription))
             return
         }
         guard let token, !token.isEmpty else {
@@ -513,12 +539,22 @@ final class DocumentsWebEditorModel {
     /// **same** `userContentController` object, which is what
     /// ``DocumentsWebEditorHost/dismantleUIView(_:coordinator:)`` already
     /// relies on to break the handler's retain cycle.
+    ///
+    /// What goes into the replacement script is
+    /// ``DocumentsWebEditorRules/OneShotToken/toInject(_:)``'s answer and not
+    /// a literal `""`, so the rule the package test holds is the rule this
+    /// line obeys.
     func tokenWasHandedOver() {
         guard case .ready(let handoff) = state,
               let controller = webView?.configuration.userContentController else { return }
+        oneShot.wasTaken()
         controller.removeAllUserScripts()
         controller.addUserScript(WKUserScript(
-            source: Self.bridgeScript(token: "", deviceID: handoff.deviceID, dark: handoff.dark),
+            source: Self.bridgeScript(
+                token: oneShot.toInject(handoff.token),
+                deviceID: handoff.deviceID,
+                dark: handoff.dark
+            ),
             injectionTime: .atDocumentStart,
             forMainFrameOnly: true
         ))
@@ -677,44 +713,45 @@ final class DocumentsWebEditorModel {
     /// of Android's per-request re-check, which `WKWebView` gives no hook
     /// for. See the view's note.
     ///
-    /// Three conditions, each one a reason `tokenForDownload` would now
-    /// answer differently:
+    /// **Which conditions end it is ``DocumentsWebEditorRules/sessionEnd(activeServerURL:pageServerURL:identityChanged:trouble:)``,
+    /// in DomovoiKit**, with the argument for each of the three it answers
+    /// and for the two it deliberately does not (`.unproven`, and a wait the
+    /// server has asked for). The three it answers: the active server moved,
+    /// the identity changed (`.mismatch`), or the server refused the token
+    /// this phone holds.
     ///
-    /// * the **active server changed** — the page is on an origin that is no
-    ///   longer the house, holding a token the house issued;
-    /// * the **identity changed** (`.mismatch`) — something is answering on
-    ///   that address and it is not the Domovoi this phone pinned.
+    /// Round 2's review (S2) found this guard reading
+    /// `moved || inputs.identityChanged` under a comment claiming that "a
+    /// token the server refuses arrives as a `trouble` inside ``inputs``,
+    /// which this already watches by equality" — the view does watch, and
+    /// `recheck` then dropped the trouble on the floor. An admin blocking
+    /// this device mid-edit left a live editor whose every save came back 401
+    /// as the page's own error instead of the app's refusal.
     ///
-    /// ### `.unproven` is deliberately not one of them
-    ///
-    /// `inputs.notOurs` is **`.mismatch` or `.unproven`** (`AppContainer.swift:1096-1098`),
-    /// and an earlier version of this ended the session on it. `.unproven` is
-    /// a probe that has not answered yet — a phone that has just changed
-    /// network, a house that is slow — so that version blanked the page,
-    /// threw away whatever was unsaved in it, and said "This phone isn't
-    /// paired with the home server", which is not what had happened. Android
-    /// refuses **one request** in that state (`WebEditorHost.kt:297-298`) and
-    /// leaves the page and its text exactly where they are; so does this now.
-    /// `.mismatch` — a different house on the address — still ends it at
-    /// once, which is the case the per-request check was written about.
-    ///
-    /// Room mode and a refused token are not here, and do not need to be:
-    /// both are states `prepare(in:)` asks about through
-    /// `tokenForDownload`, and neither can begin while this cover is up —
-    /// room mode is a different screen, and a token the server refuses
-    /// arrives as a `trouble` inside ``inputs``, which this already watches
-    /// by equality.
+    /// Room mode is still not here and still does not need to be: it is a
+    /// different screen, and it cannot begin while this cover is up.
     func recheck(_ inputs: AppContainer.ShellInputs) {
         guard case .ready(let handoff) = state else { return }
-        let moved = inputs.serverURL != handoff.serverURL
-        guard moved || inputs.identityChanged else { return }
+        guard let ending = DocumentsWebEditorRules.sessionEnd(
+            activeServerURL: inputs.serverURL,
+            pageServerURL: handoff.serverURL,
+            identityChanged: inputs.identityChanged,
+            trouble: inputs.trouble
+        ) else { return }
         webView?.stopLoading()
         // Blank it before the sentence replaces it: a page left rendered for
         // a frame is a page that can still be typed into, and its next save
         // would go to whatever is on that address now.
         webView?.loadHTMLString("", baseURL: nil)
+        // A refused token gets the same sentence as a changed identity: in
+        // both the house will not take what this phone holds, which is what
+        // ``DocumentsStrings/editorNotPaired`` says. It is Android's own
+        // wording for the state (`WebEditorHost.kt:166`), so there is no new
+        // sentence to record.
         state = .refused(
-            moved ? DocumentsStrings.editorNoServer : DocumentsStrings.editorNotPaired
+            ending == .serverMoved
+                ? DocumentsStrings.editorNoServer
+                : DocumentsStrings.editorNotPaired
         )
     }
 }
@@ -747,8 +784,15 @@ struct DocumentsWebEditorHost: UIViewRepresentable {
         // window with no origin rule on it.
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
         configuration.userContentController.addUserScript(WKUserScript(
+            // `oneShot.toInject(_:)` and not `handoff.token`: a cover that is
+            // re-made (a rotation that rebuilds the representable, say) after
+            // the page has already read the token must not mint a second
+            // hand-over. The rule is in DomovoiKit, where a package test can
+            // break it (``DocumentsWebEditorRules/OneShotToken``).
             source: DocumentsWebEditorModel.bridgeScript(
-                token: handoff.token, deviceID: handoff.deviceID, dark: handoff.dark
+                token: host.oneShot.toInject(handoff.token),
+                deviceID: handoff.deviceID,
+                dark: handoff.dark
             ),
             injectionTime: .atDocumentStart,
             // Main frame only, as Android's `addJavascriptInterface` is: an
@@ -826,78 +870,40 @@ final class DocumentsWebEditorCoordinator: NSObject, WKNavigationDelegate, WKScr
     /// server's downloads stay; anything else is refused rather than opened
     /// in here.
     ///
-    /// `TokenScope.sameServer` is the comparison — same scheme, same host,
-    /// same port, with the port already defaulted and both hosts already
-    /// lowercased by ``ServerURL`` — rather than a second `sameOrigin` of my
-    /// own. One origin rule in this app, in one place.
+    /// **The rule itself is ``DocumentsWebEditorRules/navigation(to:base:mainFrame:)``,
+    /// in DomovoiKit.** It was here, in a file `pkgtest.sh` cannot compile, so
+    /// the one thing answer 21 asks for by name — "only to that server's own
+    /// origin" — was guarded by nothing but a train (round 2's review, note 1:
+    /// the origin lock could not even be sabotaged). What stays here is the
+    /// `WebKit` half: pulling the address and the target frame off a
+    /// `WKNavigationAction`, which is not a value DomovoiKit can hold, and
+    /// turning the answer into a `WKNavigationActionPolicy`.
     ///
-    /// The cleartext rule is asked again here and not only in
-    /// ``DocumentsWebEditorModel/prepare(in:)``: a redirect can change the
-    /// scheme, and `https` → `http` on a public address is exactly what the
-    /// policy exists to refuse.
+    /// `targetFrame?.isMainFrame ?? true` — no target frame is a
+    /// `window.open` / `target="_blank"`, which this host draws no view for
+    /// (`setSupportMultipleWindows(false)`, `:268`) and which gets the
+    /// **strict** rule rather than the lenient one. An off-origin one still
+    /// says so, which is what the origin-lock case taps.
     func webView(
         _ webView: WKWebView,
         decidePolicyFor navigationAction: WKNavigationAction,
         decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
     ) {
-        guard let url = navigationAction.request.url else {
-            decisionHandler(.cancel)
-            return
-        }
-        // **Android refuses every non-http(s) NAVIGATION.**
-        // `shouldOverrideUrlLoading` parses with `toHttpUrlOrNull()` and
-        // `?: return true` (`WebEditorHost.kt:284`) — returning true is the
-        // refusal. `data:` and `blob:` are allowed in
-        // `shouldInterceptRequest` (`:293`) and only there, which is the
-        // **subresource** seam: an embedded picture the page fetches, not a
-        // document it navigates to.
-        //
-        // An earlier version of this method read `:293` as covering
-        // navigations as well and allowed `data:`, `blob:` and `about:` in
-        // any frame. That widened the lock rather than porting it: the bridge
-        // is re-injected into whatever main-frame document loads
-        // (`forMainFrameOnly:`, `makeUIView`), so a main-frame navigation to
-        // a `data:` document was an opaque origin being handed a bridge of
-        // its own — and `sanitize.py:179` stripping `data:` hrefs out of
-        // document content was the only thing between that and the household
-        // token leaving the phone.
-        let scheme = url.scheme?.lowercased() ?? ""
-        // `?? true`: no target frame is a `window.open` / `target="_blank"`,
-        // which this host draws no view for (`setSupportMultipleWindows(false)`,
-        // `:268`) and which gets the **strict** rule rather than the lenient
-        // one. An off-origin one still falls to the guard below and still
-        // says so, which is what the origin-lock case taps.
-        let mainFrame = navigationAction.targetFrame?.isMainFrame ?? true
-        if mainFrame {
-            // `about:` in the main frame, and it is this host's own doing:
-            // ``DocumentsWebEditorModel/recheck(_:)`` blanks the view with
-            // `loadHTMLString("", baseURL: nil)`, which arrives here as a
-            // navigation to `about:blank`. Cancelled, the page it is taking
-            // down would stay on screen and stay typeable.
-            if scheme == "about" {
-                decisionHandler(.allow)
-                return
-            }
-        } else if ["data", "blob", "about"].contains(scheme) {
-            // A sub-frame is as close as `decidePolicyFor` comes to Android's
-            // subresource seam, and the editor uses both schemes there: a
-            // `blob:` iframe for its print copy, `data:` for a picture. The
-            // bridge is not injected into a sub-frame and
-            // ``userContentController(_:didReceive:)`` refuses messages from
-            // one, so nothing in here holds the token or can ask for it.
+        switch DocumentsWebEditorRules.navigation(
+            to: navigationAction.request.url,
+            base: base,
+            mainFrame: navigationAction.targetFrame?.isMainFrame ?? true
+        ) {
+        case .allow:
             decisionHandler(.allow)
-            return
-        }
-        guard let parsed = ServerURL.parse(url.absoluteString),
-              TokenScope.sameServer(base, parsed),
-              CleartextPolicy.permits(parsed) else {
+        case .refuseQuietly:
+            decisionHandler(.cancel)
+        case .refuseAndSay:
             decisionHandler(.cancel)
             // Android refuses silently; a tap that does nothing and says
             // nothing reads as a broken app, so this one says it.
             host.onRefusedNavigation()
-            return
         }
-        decisionHandler(.allow)
     }
 
     /// The four things the page asks the app for: `close()` (`:331`),

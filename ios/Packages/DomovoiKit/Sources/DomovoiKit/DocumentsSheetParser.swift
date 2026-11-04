@@ -124,6 +124,30 @@ public enum DocumentsSheetParser {
     /// ``DocumentsSheetGrid/hadRows`` is true: a file that really has no rows
     /// (a `+ New` spreadsheet) is an empty grid to type into, which is a
     /// different thing from a body that never carried the key.
+    /// The refusal for a file this big **before a byte of it is asked for**,
+    /// and `nil` when there is nothing to refuse.
+    ///
+    /// ``grid(of:named:)`` asks the same question of the bytes it is handed,
+    /// which is one request too late: the phone-parsed fallback fetches
+    /// `/api/documents/raw/{rel}` whole and buffers it in a `Data`, so a
+    /// 500 MB workbook — exactly the kind openpyxl falls over on, which is
+    /// what sends the read here — was pulled over the LAN in full and then
+    /// refused (round 2's review, S4). On a phone that is a jetsam kill as
+    /// likely as a sentence, under a bare spinner with nothing to cancel.
+    ///
+    /// ``FileEntry/size`` is already on the entry the model holds when it
+    /// makes the request. `nil` is an unknown size, not a small one: the
+    /// listing is the only thing that carries it, and a read that reached the
+    /// model another way must still be allowed to try. The check on the bytes
+    /// stays where it is for that, and for a server whose listing understates
+    /// a file.
+    public static func refusalBeforeFetching(size: Int64?) -> DocumentsSheetTrouble? {
+        guard let size, size > Int64(DocumentsSheetLimits.maxFileBytes) else { return nil }
+        return .tooLarge(
+            DocumentsStrings.sheetTooBig(DocumentsSheetLimits.maxFileBytes / (1024 * 1024))
+        )
+    }
+
     public static func grid(of bytes: Data, named name: String) throws -> DocumentsSheetGrid {
         guard bytes.count <= DocumentsSheetLimits.maxFileBytes else {
             throw DocumentsSheetTrouble.tooLarge(

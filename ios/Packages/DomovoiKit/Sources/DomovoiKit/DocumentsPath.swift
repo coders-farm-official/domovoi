@@ -187,3 +187,180 @@ public enum DocumentsPath {
         return #","device_id":"# + VideoPath.quoted(deviceID)
     }
 }
+
+// MARK: - the WebView host's three rules, where a test can reach them
+
+/// What ``DocumentsWebEditorHost``'s `WKWebView` may do with one navigation.
+public enum DocumentsWebEditorNavigation: Equatable, Sendable {
+    case allow
+    /// Cancelled, **and the host says so**: Android refuses silently, and a
+    /// tap that does nothing and says nothing reads as a broken app
+    /// (``DocumentsStrings/editorStayedHere``).
+    case refuseAndSay
+    /// Cancelled with nothing said: a navigation with no address at all, so
+    /// there is nothing to tell the person about.
+    case refuseQuietly
+}
+
+/// Why a session that was admitted is ended under the person: the two halves
+/// of Android's per-request re-check that a `WKWebView` gives no hook for.
+public enum DocumentsWebEditorSessionEnd: Equatable, Sendable {
+    /// The active server is no longer the one the page was opened on.
+    case serverMoved
+    /// `.mismatch` — something is answering on that address and it is not the
+    /// Domovoi this phone pinned.
+    case identityChanged
+    /// The server refused the token this phone holds
+    /// (``TokenTrouble/notRecognised(waitMs:)``), which is the state Android's
+    /// `shouldInterceptRequest` 403s the next request in.
+    case tokenRefused
+}
+
+/// The origin lock, the one-shot token and the session-end rule of
+/// ``DocumentsWebEditorHost`` — the decisions, with no `WebKit` in them.
+///
+/// ### Why they are here and not in the view
+///
+/// They were in `ios/Domovoi/Documents/DocumentsWebEditorHost.swift`, where
+/// `pkgtest.sh` cannot see them, so a review that broke the origin lock on
+/// purpose could not be caught by anything but a train (round 2's review,
+/// note 1: *"with M1 in place there is at this moment nothing anywhere that
+/// would catch a regression in either"*). The `WebKit` glue stays in the
+/// view — a `WKNavigationAction` is not a value this package can hold — and
+/// only the question it asks moved here.
+///
+/// It is this file rather than a new one because the unit owns no other
+/// DomovoiKit file where a rule about the editor page's **address** belongs,
+/// and ``DocumentsPath/documentPage(rel:)`` — the one address the lock exists
+/// to keep the page on — is forty lines above.
+public enum DocumentsWebEditorRules {
+
+    /// `EditorWebClient.shouldOverrideUrlLoading` (`WebEditorHost.kt:283-288`)
+    /// plus the subresource half of `shouldInterceptRequest` (`:290-299`), as
+    /// one answer.
+    ///
+    /// * `url` is `navigationAction.request.url`, which is optional in the
+    ///   SDK;
+    /// * `mainFrame` is `navigationAction.targetFrame?.isMainFrame ?? true`
+    ///   — **no target frame is a `window.open` / `target="_blank"`**, which
+    ///   this host draws no view for and which gets the strict rule.
+    ///
+    /// Android refuses every non-http(s) **navigation**: `toHttpUrlOrNull()`
+    /// with `?: return true`, and `true` is the refusal. `data:` and `blob:`
+    /// are allowed in `shouldInterceptRequest` and only there, which is the
+    /// **subresource** seam — an embedded picture the page fetches, not a
+    /// document it navigates to. A sub-frame is as close as
+    /// `decidePolicyFor` comes to that seam, and the editor uses both schemes
+    /// there (a `blob:` iframe for its print copy, `data:` for a picture);
+    /// the bridge is not injected into a sub-frame and the message handler
+    /// refuses a sub-frame, so nothing in one holds the token.
+    ///
+    /// `about:blank` in the main frame is this host's own doing:
+    /// ``DocumentsWebEditorModel``'s `recheck(_:)` blanks the view with
+    /// `loadHTMLString("", baseURL: nil)`, which arrives here as a navigation
+    /// to `about:blank`. Cancelled, the page it is taking down would stay on
+    /// screen and stay typeable. It is `about:blank` and not every `about:`
+    /// (round 2's review, note 6): the bridge is re-injected into whatever
+    /// main-frame document loads, and `about:srcdoc` is a document whose
+    /// content is the page's own text.
+    public static func navigation(
+        to url: URL?, base: ServerURL, mainFrame: Bool
+    ) -> DocumentsWebEditorNavigation {
+        guard let url else { return .refuseQuietly }
+        let scheme = url.scheme?.lowercased() ?? ""
+        if mainFrame {
+            if scheme == "about" {
+                // The whole address, lowercased, not a prefix:
+                // `about:blank#x` and `about:blankish` are not it.
+                return url.absoluteString.lowercased() == "about:blank"
+                    ? .allow : .refuseAndSay
+            }
+        } else if scheme == "data" || scheme == "blob" || scheme == "about" {
+            return .allow
+        }
+        // ``TokenScope/sameServer(_:_:)`` is the comparison rather than a
+        // second `sameOrigin` of this unit's own: one origin rule in this app,
+        // in one place. The cleartext rule is asked again here and not only in
+        // `prepare(in:)` because a redirect can change the scheme, and
+        // `https` → `http` on a public address is what that policy is for.
+        guard let parsed = ServerURL.parse(url.absoluteString),
+              TokenScope.sameServer(base, parsed),
+              CleartextPolicy.permits(parsed)
+        else { return .refuseAndSay }
+        return .allow
+    }
+
+    /// Whether the session the cover is holding still has what admitted it.
+    ///
+    /// `nil` is "carry on". The three that are not nil are each a reason
+    /// ``DomovoiClient/tokenForDownload(_:)`` would now answer differently,
+    /// which is what Android re-asks on every request
+    /// (`WebEditorHost.kt:290-299`).
+    ///
+    /// ### `.unproven` and a wait are deliberately not among them
+    ///
+    /// `ShellInputs.notOurs` is `.mismatch` **or** `.unproven`
+    /// (`AppContainer.swift:1109-1118`) and an earlier version ended the
+    /// session on it. `.unproven` is a probe that has not answered yet — a
+    /// phone that has just changed network, a house that is slow — so that
+    /// version blanked the page, threw away whatever was unsaved in it, and
+    /// said "This phone isn't paired", which is not what had happened.
+    /// ``TokenTrouble/waiting(waitMs:)`` is the same shape: the server has
+    /// asked this phone to stop offering tokens for a few minutes, and it
+    /// ends by itself. Android refuses **one request** in either state and
+    /// leaves the page and its text where they are.
+    ///
+    /// ``TokenTrouble/notRecognised(waitMs:)`` is not that: the server has
+    /// refused the token this phone holds, nothing clears it but pairing
+    /// again, and every `fetch` the page makes from here on comes back 401
+    /// from the house. Round 2's review (S2) found the comment claiming this
+    /// was handled while `identityChanged` — `.mismatch` only — was the whole
+    /// of the guard, so a device blocked by an admin mid-edit kept a live
+    /// editor whose saves all failed as the page's own error.
+    public static func sessionEnd(
+        activeServerURL: String,
+        pageServerURL: String,
+        identityChanged: Bool,
+        trouble: TokenTrouble?
+    ) -> DocumentsWebEditorSessionEnd? {
+        if activeServerURL != pageServerURL { return .serverMoved }
+        if identityChanged { return .identityChanged }
+        if case .notRecognised = trouble { return .tokenRefused }
+        return nil
+    }
+
+    /// The token the bridge may carry into the **next** main-frame document.
+    ///
+    /// Android's `AtomicReference.getAndSet(null)` (`WebEditorHost.kt:323,
+    /// 328`) is one reference living beside the WebView for as long as it
+    /// does, so a token that has been read is gone for every later document.
+    /// The injected script's own `var t = ''` is only half of that: a
+    /// `WKUserScript` re-runs `.atDocumentStart` for every main-frame
+    /// document with a fresh `var t`, so `location.reload()` would be handed
+    /// the token again and would be the whole of the defeat.
+    ///
+    /// So the hand-over is recorded here, on the host's side of the bridge,
+    /// and this value decides what goes into the script each time it is
+    /// injected. A token the page never read is still there for the next
+    /// document, as an un-taken `AtomicReference` is.
+    public struct OneShotToken: Equatable, Sendable {
+
+        private var handedOver = false
+
+        public init() {}
+
+        /// Whether the page has read the token (the bridge posts
+        /// `tokenTaken` the one time its `deviceToken()` answers something).
+        public var hasBeenTaken: Bool { handedOver }
+
+        public mutating func wasTaken() { handedOver = true }
+
+        /// `token` until the page has read it, and the empty string ever
+        /// after. The bridge is still injected and still answers `deviceId()`,
+        /// `darkTheme()`, `close()`, `saveFile` and `print`: a reloaded page
+        /// that lost its Download menu as well would be a second bug, and
+        /// `doc_page.jsx` reads an empty token as "not paired", which is the
+        /// truth.
+        public func toInject(_ token: String) -> String { handedOver ? "" : token }
+    }
+}

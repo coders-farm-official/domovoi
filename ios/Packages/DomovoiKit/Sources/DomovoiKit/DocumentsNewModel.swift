@@ -16,9 +16,37 @@ import Observation
 ///   with it. The order below is Android's menu order
 ///   (`NewDocument.kt:22-34`): Document, Spreadsheet, Text file.
 ///
-/// A person who wants a **markdown** file still types `notes.md` into Text
-/// file, whose name the server takes verbatim (`documents.py:772-785`) — and
-/// not into Document, which would append `.html` to it.
+/// ### What a typed extension does, as the route really has it
+///
+/// `POST /create` appends the kind's default extension **only when the typed
+/// one is not already one of that kind's own** (`documents.py:779`), and the
+/// Document kind's set is the whole Documents catch-all — `.html`, `.htm`,
+/// `.docx`, `.doc`, `.odt`, `.rtf`, `.txt`, `.md` (`_DOC_EXTS`, `:144`). The
+/// route says so itself at `:755-757`: *"A new document is a formatted
+/// document (.html, the live editor's own format); naming it 'x.md' still
+/// makes a markdown one."*
+///
+/// So `notes.md` typed into **Document** makes `notes.md`, not
+/// `notes.md.html`. An earlier version of this paragraph said the opposite,
+/// and round 2's review (S3) found it: the misread hid the case that matters.
+/// **`letter.odt`, `x.rtf` and `memo.doc` typed into Document are accepted by
+/// the server and then open in nothing** — ``DocumentsKinds/category(ofExt:)``
+/// sends all three to `.download` through ``FileKinds/officeWordProcessor``,
+/// and ``DocumentsKinds/editor(for:in:)`` answers nil, so the row is a
+/// reader. That is a `+ New` that made a file with nowhere to edit it, which
+/// is what bringing Document back was supposed to end.
+///
+/// It is left as it is because Android does exactly the same
+/// (`opensInDocEditor`, `WebEditorHost.kt:405-406`) and this batch takes the
+/// Android-faithful choice rather than inventing a client-side name rule the
+/// dashboard does not have. It is written down here as the behaviour it is,
+/// and in the unit's DECISIONS.md under "What `+ New > Document` does with a
+/// typed extension", for Kamron to settle.
+///
+/// A person who wants a **markdown** file can type `notes.md` into either
+/// Text file (whose name the server takes verbatim) or Document; the hint
+/// under Document says `.html` because that is what a name with no extension
+/// gets.
 public enum DocumentsNewKind: String, CaseIterable, Equatable, Sendable, Identifiable {
     case document
     case spreadsheet

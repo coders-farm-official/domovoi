@@ -25,8 +25,11 @@ private let sheetGrid = """
 @MainActor
 final class DocumentsSheetModelTests: XCTestCase {
 
-    private func entry(_ name: String) -> FileEntry {
-        FileEntry(name: name, rel: name, isDir: false, size: 4096, mtime: 1_762_000_000, kind: "doc-office")
+    /// `size` is what the **listing** says, which is what the fallback now
+    /// reads before it fetches anything (round 2's review, S4). `nil` is a
+    /// listing that did not carry one.
+    private func entry(_ name: String, size: Int64? = 4096) -> FileEntry {
+        FileEntry(name: name, rel: name, isDir: false, size: size, mtime: 1_762_000_000, kind: "doc-office")
     }
 
     private func settleUntil(
@@ -187,11 +190,12 @@ final class DocumentsSheetModelTests: XCTestCase {
 
     private func sheet(
         _ name: String = "a spreadsheet.xlsx",
+        size: Int64? = 4096,
         canWrite: Bool = true,
         calls: Calls,
         answer: @Sendable @escaping (String, String) async throws -> Data
     ) -> DocumentsSheetModel {
-        DocumentsSheetModel(entry: entry(name), canWrite: canWrite, deviceID: "phone-1", send: { method, path, body in
+        DocumentsSheetModel(entry: entry(name, size: size), canWrite: canWrite, deviceID: "phone-1", send: { method, path, body in
             calls.lines.mutate { $0.append("\(method) \(path)") }
             if let body { calls.bodies.mutate { $0.append(body) } }
             return try await answer(method, path)
@@ -464,6 +468,63 @@ final class DocumentsSheetModelTests: XCTestCase {
             ),
             model.load
         )
+    }
+
+    /// Round 2's review, S4: the cap is asked of the **listing's** size
+    /// before a byte is fetched.
+    ///
+    /// The case above is the same refusal a megabyte too late: a 500 MB
+    /// workbook — exactly what openpyxl falls over on, which is what sends
+    /// the read here in the first place — was pulled over the LAN in full
+    /// and buffered in a `Data` before the number was looked at. On a phone
+    /// that is a jetsam kill as likely as a sentence, under a bare spinner
+    /// with nothing to cancel.
+    ///
+    /// The assertion that matters is the **call list**: one `GET /sheet` and
+    /// no `GET /raw` at all.
+    func testASheetTheListingSaysIsTooBigIsNeverFetched() async throws {
+        let calls = Calls()
+        let model = sheet(
+            "huge.xlsx",
+            size: Int64(DocumentsSheetLimits.maxFileBytes) + 1,
+            calls: calls
+        ) { _, _ in
+            throw sheetRefusal(500, body: "openpyxl fell over")
+        }
+        model.read()
+        await settleUntil({ model.load != .loading }, "the refusal")
+        XCTAssertEqual(
+            DocumentsSheetLoad.failed(
+                DocumentsStrings.sheetTooBig(DocumentsSheetLimits.maxFileBytes / (1024 * 1024))
+            ),
+            model.load,
+            "the limit is not what the editor says"
+        )
+        XCTAssertEqual(
+            ["GET /api/documents/sheet/huge.xlsx"],
+            calls.lines.current,
+            "the file was fetched although the listing already said how big it is"
+        )
+    }
+
+    /// A listing with **no** size in it is not a small file: the read must
+    /// still be tried, because the size is the listing's and a model reached
+    /// another way has none.
+    func testASheetWithNoSizeInTheListingIsStillRead() async throws {
+        let calls = Calls()
+        let model = sheet("takings.csv", size: nil, calls: calls) { _, path in
+            if path.hasPrefix("/api/documents/sheet/") {
+                throw sheetRefusal(500, body: "openpyxl fell over")
+            }
+            return Data("week,spent\n12,13\n".utf8)
+        }
+        model.read()
+        await settleUntil({ model.load == .ready }, "the phone-parsed grid")
+        XCTAssertEqual(
+            ["GET /api/documents/sheet/takings.csv", "GET /api/documents/raw/takings.csv"],
+            calls.lines.current
+        )
+        XCTAssertEqual("week", model.cell(row: 0, column: 0))
     }
 
     /// And the one case where the **server's** sentence is still the right

@@ -236,6 +236,18 @@ public final class DocumentsSheetModel {
     /// same rule and says so where it compares.
     private var generation = 0
 
+    /// Which run of the phone-parsed fallback is the current one.
+    ///
+    /// ``generation`` moves only in ``show(_:from:)``, so two failed `/sheet`
+    /// reads start two ``readOnThisPhone(_:)``s holding the **same** `base`
+    /// and the earlier one's `/raw` answer can land last and win — which the
+    /// `base == generation` guards read as covering and do not (round 2's
+    /// review, note 4). Harmless while both reads are of the same file, and
+    /// still worth closing: the two can carry different ``ServerMiss``es, so
+    /// the sentence a failure gets could come from the read that is no longer
+    /// the one being waited on.
+    private var fallbackRun = 0
+
     public init(
         entry: FileEntry,
         canWrite: Bool,
@@ -415,7 +427,22 @@ public final class DocumentsSheetModel {
         // the race there is.
         let asked = entry.rel
         let base = generation
+        // And which fallback run this is: see ``fallbackRun``. Captured here,
+        // before the await, like the other two.
+        fallbackRun += 1
+        let run = fallbackRun
         let call = send
+        // Before the request and not after it: the listing already says how
+        // big this file is, and a 500 MB workbook fetched in full into a
+        // `Data` just to be refused is a jetsam kill as likely as a sentence
+        // (round 2's review, S4). The reader's refusal is shown exactly as it
+        // would have been a megabyte later, through the same ``ServerMiss``
+        // rule — a captive portal's "200 OK" still gets `that isn't Domovoi`
+        // rather than a sentence about a file it has said nothing about.
+        if let early = DocumentsSheetParser.refusalBeforeFetching(size: entry.size) {
+            load = .failed(miss.readersRefusal(early) ?? DocumentsStrings.couldNotLoad(said))
+            return
+        }
         let bytes: Data
         do {
             bytes = try await call("GET", DocumentsPath.raw(rel: asked), nil)
@@ -423,7 +450,7 @@ public final class DocumentsSheetModel {
             // The guard the old `asked == entry.rel` was standing in for: a
             // retry that already landed a grid must not be replaced by this
             // one's failure.
-            guard base == generation else { return }
+            guard base == generation, run == fallbackRun else { return }
             load = .failed(DocumentsStrings.couldNotLoad(said))
             return
         }
@@ -433,11 +460,11 @@ public final class DocumentsSheetModel {
                 try DocumentsSheetParser.grid(of: bytes, named: asked)
             }.value
         } catch {
-            guard base == generation else { return }
+            guard base == generation, run == fallbackRun else { return }
             load = .failed(miss.readersRefusal(error) ?? DocumentsStrings.couldNotLoad(said))
             return
         }
-        guard base == generation else { return }
+        guard base == generation, run == fallbackRun else { return }
         show(parsed, from: .thisPhone)
     }
 

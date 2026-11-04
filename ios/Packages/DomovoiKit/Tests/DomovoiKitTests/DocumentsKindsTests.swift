@@ -83,9 +83,19 @@ final class DocumentsKindsTests: XCTestCase {
         XCTAssertNil(DocumentsKinds.editor(for: entry("page.html"), in: "core:music"))
     }
 
+    /// `letter.odt` and `memo.doc` are in this list for a second reason as
+    /// well as the first: `POST /create` accepts either name under the
+    /// **Document** kind, because `.odt` and `.doc` are in its own extension
+    /// set (`documents.py:144`, `:779`), and the file it makes then opens in
+    /// nothing. Round 2's review (S3) found the written rule saying `.html`
+    /// was appended instead; ``DocumentsNewKind`` now says what the route
+    /// really does, and this is where the consequence is pinned.
     func testTheOtherCategoriesOpenNothing() {
         let documents = FileLibrary.documents
-        for name in ["old.xls", "old.ods", "typed.rtf", "scan.pdf", "photo.png", "board.excalidraw"] {
+        for name in [
+            "old.xls", "old.ods", "typed.rtf", "scan.pdf", "photo.png", "board.excalidraw",
+            "letter.odt", "memo.doc",
+        ] {
             XCTAssertNil(DocumentsKinds.editor(for: entry(name), in: documents), name)
         }
     }

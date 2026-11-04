@@ -632,6 +632,16 @@ extension StubHouseUITests {
         XCTAssertTrue(app.staticTexts[DocumentsPillWord.document].exists,
                       "no pill saying which editor this is")
         XCTAssertFalse(app.textFields["A1"].exists, "an .html opened the grid editor")
+        // The replaced case (`testDocuments_AFormattedDocumentStaysReadOnly`)
+        // asserted this and this one had stopped (round 2's review, note 5):
+        // the host deliberately draws **no Save of its own**, because the page
+        // owns the document's dirty state and its autosave, and a Save up here
+        // would be a button whose state the host cannot know
+        // ([[no-misleading-controls]]). `app.buttons["save"]` is the native
+        // editors' own Save, matched exactly, and is not the page's
+        // `Save in page` below.
+        XCTAssertFalse(app.buttons["save"].exists,
+                       "the web editor host drew a Save of its own")
         for marker in Self.docsHandoffMarkers {
             XCTAssertFalse(containing(app, marker).exists,
                            "the page reports \(marker) — the token handoff is wrong")
