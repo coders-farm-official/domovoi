@@ -423,7 +423,7 @@ final class CalendarWindowTests: XCTestCase {
         return (model, store)
     }
 
-    private func settle(_ done: @MainActor () -> Bool, _ what: String) async {
+    private func settleUntil(_ done: @MainActor () -> Bool, _ what: String) async {
         for _ in 0..<settleYieldLimit {
             if done() { return }
             await Task.yield()
@@ -465,7 +465,7 @@ final class CalendarWindowTests: XCTestCase {
         let house = spreadOut()
         let (model, _) = rig(house)
         model.start()
-        await settle({ model.events.answered }, "the opening read")
+        await settleUntil({ model.events.answered }, "the opening read")
 
         XCTAssertEqual(1, house.asked.current.count)
         XCTAssertEqual(
@@ -495,7 +495,7 @@ final class CalendarWindowTests: XCTestCase {
         let house = spreadOut()
         let (model, _) = rig(house)
         model.start()
-        await settle({ model.events.answered }, "the opening read")
+        await settleUntil({ model.events.answered }, "the opening read")
         XCTAssertEqual(1, model.events.fetches)
 
         // 1. **Inside.** The 4th is inside the agenda's open-ended window, so
@@ -510,7 +510,7 @@ final class CalendarWindowTests: XCTestCase {
         // agenda's floor — and an open-ended window never widens a bounded
         // one, so this is a fresh read of the grid alone.
         model.show(.month)
-        await settle({ !model.rangePending }, "the month's read")
+        await settleUntil({ !model.rangePending }, "the month's read")
         XCTAssertEqual(2, model.events.fetches)
         XCTAssertEqual(window((2026, 11, 1), (2026, 12, 13)), model.askedWindow)
 
@@ -518,7 +518,7 @@ final class CalendarWindowTests: XCTestCase {
         //    union is read rather than december alone: a fortnight of
         //    stepping back and forth settles into one window.
         model.step(1)
-        await settle({ !model.rangePending }, "the widened read")
+        await settleUntil({ !model.rangePending }, "the widened read")
         XCTAssertEqual(3, model.events.fetches)
         XCTAssertEqual(
             window((2026, 11, 1), (2027, 1, 10)),
@@ -529,7 +529,7 @@ final class CalendarWindowTests: XCTestCase {
         // 3. **Far.** Six months on touches nothing read, so the window is
         //    the new range alone and not half a year of everything between.
         model.step(6)
-        await settle({ !model.rangePending }, "the fresh read")
+        await settleUntil({ !model.rangePending }, "the fresh read")
         XCTAssertEqual(4, model.events.fetches)
         XCTAssertEqual(
             window((2027, 5, 30), (2027, 7, 11)),
@@ -557,7 +557,7 @@ final class CalendarWindowTests: XCTestCase {
         let house = spreadOut()
         let (model, _) = rig(house)
         model.start()
-        await settle({ model.events.answered }, "the opening read")
+        await settleUntil({ model.events.answered }, "the opening read")
 
         house.hold.set("start=\(calendarInstantEncoded(ms: midnight(2026, 11, 1)))")
         model.show(.month)
@@ -568,7 +568,7 @@ final class CalendarWindowTests: XCTestCase {
         // this widens: the union is read and the held request is cancelled.
         model.step(-1)
         house.release.set(true)
-        await settle({ !model.rangePending }, "october's read")
+        await settleUntil({ !model.rangePending }, "october's read")
 
         XCTAssertFalse(house.ranOut.current, "the park timed out, so this asserts nothing")
         XCTAssertEqual(
@@ -599,9 +599,9 @@ final class CalendarWindowTests: XCTestCase {
         let house = spreadOut()
         let (model, _) = rig(house)
         model.start()
-        await settle({ model.events.answered }, "the opening read")
+        await settleUntil({ model.events.answered }, "the opening read")
         model.show(.month)
-        await settle({ !model.rangePending }, "the month's read")
+        await settleUntil({ !model.rangePending }, "the month's read")
         XCTAssertNil(model.emptyText, "november has three of these events")
 
         model.step(6)
@@ -610,7 +610,7 @@ final class CalendarWindowTests: XCTestCase {
         XCTAssertNil(model.emptyText, "a range nothing was read for is not an empty range")
         XCTAssertNil(model.errorText)
 
-        await settle({ !model.rangePending }, "may 2027's read")
+        await settleUntil({ !model.rangePending }, "may 2027's read")
         XCTAssertEqual("may 2027", model.rangeLabel)
         XCTAssertEqual(CalendarStrings.emptyRangeTitle, model.emptyText?.title)
     }
@@ -627,7 +627,7 @@ final class CalendarWindowTests: XCTestCase {
         let house = spreadOut()
         let (model, _) = rig(house)
         model.start()
-        await settle({ model.events.answered }, "the opening read")
+        await settleUntil({ model.events.answered }, "the opening read")
 
         model.show(.day)
         await everythingLands()
@@ -659,7 +659,7 @@ final class CalendarWindowTests: XCTestCase {
         let house = spreadOut()
         let (model, _) = rig(house)
         model.start()
-        await settle({ model.events.answered }, "the opening read")
+        await settleUntil({ model.events.answered }, "the opening read")
 
         house.hold.set("start=\(calendarInstantEncoded(ms: midnight(2026, 11, 1)))")
         model.show(.month)
@@ -667,7 +667,7 @@ final class CalendarWindowTests: XCTestCase {
 
         model.show(.agenda)
         house.release.set(true)
-        await settle({ !model.rangePending }, "the agenda's second read")
+        await settleUntil({ !model.rangePending }, "the agenda's second read")
 
         XCTAssertFalse(house.ranOut.current, "the park timed out, so this asserts nothing")
         XCTAssertFalse(model.isLoading, "the agenda is still spinning")
