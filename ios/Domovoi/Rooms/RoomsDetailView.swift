@@ -19,9 +19,23 @@ import SwiftUI
 /// the tab strip while the keyboard is up. It is a fix for a measured Android
 /// landscape bug — the announce field and `send` ended up off screen while you
 /// typed — and the iOS field is inside a scroll view that scrolls itself into
-/// view on focus. Porting it would take away the one control that closes the
-/// room, for a bug nobody has seen here. On the Simulator checklist.
+/// view on focus. On the Simulator checklist. (Its first reason was that
+/// porting it would hide the one control that closed the room; that control
+/// is gone with D56 and the navigation bar's back button cannot be hidden by
+/// a keyboard, so what is left is the measured-bug argument alone.)
+///
+/// ### There is no close control (D56)
+///
+/// The header used to end in an `xmark` button labelled `close this room`.
+/// A room is its own pushed screen now (Kamron, answer 56), so the system's
+/// back button and its swipe-back gesture close it; one of ours beside them
+/// would be a second way to do one thing, and a test that tapped `close this
+/// room` would be testing a control no iPhone app draws.
 struct RoomsDetailView: View {
+
+    /// Passed through to the overview's drop-in row, which needs this phone's
+    /// device id and its client to open a call (D54).
+    let shell: ShellModel
 
     let model: RoomsModel
 
@@ -39,8 +53,14 @@ struct RoomsDetailView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// The dot, the room, its status, and the close control (`CardHeader`,
-    /// `SatelliteDetail.kt:129`).
+    /// The dot, the room and its status (`CardHeader`,
+    /// `SatelliteDetail.kt:129`), with no close control — see this type's
+    /// note on D56.
+    ///
+    /// The room's id is kept here although the navigation bar also carries it
+    /// (``RoomsRoomScreen``): the bar's title is a word in the chrome, and
+    /// this line is what the dot and the status pill belong to. Android draws
+    /// the same pair in its header.
     private var header: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             ToneDot(tone: room.online ? .ok : .idle, live: room.online)
@@ -53,20 +73,6 @@ struct RoomsDetailView: View {
                 tone: room.online ? .ok : .idle
             )
             Spacer(minLength: 8)
-            Button {
-                model.close()
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.body)
-                    .frame(minWidth: 44, minHeight: 44)
-                    .contentShape(.rect)
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(Color.brandInk)
-            // Android's close is an icon with no words at all. Every
-            // icon-only control in this app carries a label — this one is
-            // ``RoomsStrings/closeRoom``, which IOS-ONLY-STRINGS records.
-            .accessibilityLabel(RoomsStrings.closeRoom)
         }
     }
 
@@ -75,7 +81,7 @@ struct RoomsDetailView: View {
         if let reads = model.openReads {
             switch model.tab {
             case .overview:
-                RoomsOverviewView(model: model, reads: reads, room: room)
+                RoomsOverviewView(shell: shell, model: model, reads: reads, room: room)
             case .sessions:
                 RoomsSessionsView(model: model, reads: reads)
             case .conversations:
@@ -89,6 +95,79 @@ struct RoomsDetailView: View {
             case .settings:
                 RoomsSettingsTabView(model: model, reads: reads, room: room)
             }
+        }
+    }
+}
+
+/// One room as its own pushed screen (D56).
+///
+/// Kamron, answer 56. What this adds over ``RoomsDetailView`` is the three
+/// things being a screen means: a scroll view of its own (the roster's is
+/// left behind, and in the Settings mounting the section's is too), the
+/// navigation bar's title, and the lifetime — which room is open, and the
+/// hold that keeps ``RoomsModel`` running while this screen is up.
+///
+/// ### Why the hold is here and not only on the roster
+///
+/// A pushed destination fires the covered view's `onDisappear`, so the
+/// roster's own `release()` runs the moment this screen arrives. If nothing
+/// held the model up from here, that would stop the reads this screen draws
+/// from. ``RoomsModel/hold()`` and ``RoomsModel/release()`` are a count for
+/// exactly that, and they say why a count and not a flag.
+///
+/// ### The room the detail is given is the roster's row, read fresh
+///
+/// ``RoomsOpenRoom`` carries the id, and the row is looked up in the roster
+/// on every redraw — never captured when the push was made. A room that goes
+/// offline, starts playing or joins a call while its screen is up has to say
+/// so, which is ``RoomsModel/openRoom``'s whole point. A room that drops off
+/// the roster entirely says that instead of drawing a stale copy.
+struct RoomsRoomScreen: View {
+
+    /// The shell, for the one thing a room screen needs from it: this phone's
+    /// device id, which is a drop-in call's identity in the house's
+    /// `active_dropins` (``dropInSocketURL(house:info:room:phoneID:)``).
+    let shell: ShellModel
+
+    let model: RoomsModel
+    let open: RoomsOpenRoom
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                if let room = model.openRoom, room.roomID == open.roomID {
+                    RoomsDetailView(shell: shell, model: model, room: room)
+                } else if let room = model.rooms.first(where: { $0.roomID == open.roomID }) {
+                    // The model has not been told yet (the `.task` below runs
+                    // after the first frame). Draw the row we have rather
+                    // than a spinner that lasts one frame.
+                    RoomsDetailView(shell: shell, model: model, room: room)
+                } else {
+                    // The room left the roster while this screen was up — a
+                    // rename on the dashboard, or a room that was forgotten.
+                    // Not an error state: the screen says the room is not
+                    // there and the back button is the way out.
+                    Text(RoomsStrings.roomIsGone(open.roomID))
+                        .font(.subheadline)
+                        .foregroundStyle(Color.fgMuted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .navigationTitle(RoomsStrings.roomTitle(open.roomID))
+        .navigationBarTitleDisplayMode(.inline)
+        // `.task` and not `onAppear`: this must run **once per push**, and a
+        // sheet presented over this screen can fire `onAppear` again — which
+        // would reset the tab strip to `overview` under somebody reading the
+        // timers tab.
+        .task { model.open(open.roomID) }
+        .onAppear { model.hold() }
+        .onDisappear {
+            model.release()
+            model.close()
         }
     }
 }

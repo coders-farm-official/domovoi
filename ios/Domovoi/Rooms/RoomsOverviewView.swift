@@ -17,17 +17,27 @@ import SwiftUI
 ///   and ``RoomsStrings/upgradeIsOnTheDashboard`` says where the buttons are.
 ///   Android's confirm dialogs, its press ledger, its six-minute upgrade clock
 ///   and its outcome sentences (`SatUpgrade.kt`) go with them.
-/// * **Starting a drop-in**: the peer picker and `start`
+/// * **Starting a drop-in between two ROOMS**: the peer picker and `start`
 ///   (`SatOverviewTab.kt:467-560`). The core's `/v1/admin/dropin/start` is
 ///   admin *security* (`domovoi/main.py:2649-2658`), so from this phone it
-///   could only fail. **`hang up` is drawn** — `/v1/admin/dropin/end` is
-///   device tier (`main.py:2718-2721`).
-/// * **"Drop in from this phone"** (`PhoneDropinRow`, `PhoneDropinCall.kt:61`):
-///   permitted, deferred, no audio layer in this app at all.
+///   could only fail — and Kamron settled it rather than leaving it to the
+///   tier (answers 5 and 53): "phones never create room-to-room drop-ins",
+///   and Android's button comes out too. **`hang up` is drawn** —
+///   `/v1/admin/dropin/end` is device tier (`main.py:2718-2721`).
+///
+/// **"Drop in from this phone" is drawn** (`PhoneDropinRow`,
+/// `PhoneDropinCall.kt:61`): Kamron, answer 54. ``RoomsDropInRow`` is the
+/// control and the call sheet; it is a device-tier socket of its own
+/// (`main.py:7056`) and the only call it opens is this phone's into this
+/// room.
 ///
 /// Every write is ``RoomsModel``'s, never this view's: a section that holds
 /// the request loses it when the tab changes under it.
 struct RoomsOverviewView: View {
+
+    /// For the drop-in row: this phone's device id and the client it calls
+    /// with (D54).
+    let shell: ShellModel
 
     let model: RoomsModel
     let reads: RoomsRoomModel
@@ -352,8 +362,27 @@ struct RoomsOverviewView: View {
 
     // MARK: - drop in (`DropInSection`, `SatOverviewTab.kt:467`)
 
-    /// The state, `hang up` when there is a call, and one line saying where
-    /// starting one is done.
+    /// The state, `hang up` when there is a call, one line saying where a
+    /// call between two *rooms* is started, and — for a room that can do
+    /// drop-in at all — "drop in from this phone".
+    ///
+    /// ### Why the row is drawn for the `inCall` state too
+    ///
+    /// It is not, and that is the difference from Android, which composes
+    /// `PhoneDropinRow` **unconditionally** and says why in a comment worth
+    /// quoting in full (`SatOverviewTab.kt:559-564`): "Always composed —
+    /// gating on in_call_with would unmount the active call dialog the
+    /// instant the room reports it's in a call (which is this very call), and
+    /// the dialog's onDispose hangs up, killing the call on connect."
+    ///
+    /// That is a real hazard and this screen avoids it a different way: the
+    /// call sheet is presented by ``RoomsDropInRow``, which is drawn in the
+    /// `.inCall` branch as well as the `.idle` one — the branch decides what
+    /// the row's **button** says, not whether the row exists. So the roster
+    /// reporting `in_call_with` a second later changes a label and unmounts
+    /// nothing, and the button is `disabled` while any call is on, which is
+    /// Android's `enabled = s.online && s.full_duplex && s.in_call_with == null`
+    /// (`PhoneDropinCall.kt:81`) by another route.
     @ViewBuilder
     private var dropIn: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -377,9 +406,13 @@ struct RoomsOverviewView: View {
                     .font(.footnote)
                     .foregroundStyle(Color.fgMuted)
                     .fixedSize(horizontal: false, vertical: true)
+                RoomsDropInRow(shell: shell, model: model, room: room)
             case .noAec:
                 // A fact about the hardware, not a refusal of this phone's:
-                // this room cannot do drop-in at all.
+                // this room cannot do drop-in at all, so there is no control
+                // here either. The core would answer `target_no_aec`
+                // (`phone_dropin.py:84-85`), and a button that always got
+                // that is the one the rule forbids.
                 Text(RoomsStrings.noAecMic)
                     .font(.footnote)
                     .foregroundStyle(Color.fgMuted)
@@ -389,6 +422,7 @@ struct RoomsOverviewView: View {
                     .font(.footnote)
                     .foregroundStyle(Color.fgMuted)
                     .fixedSize(horizontal: false, vertical: true)
+                RoomsDropInRow(shell: shell, model: model, room: room)
             }
         }
     }

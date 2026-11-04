@@ -97,9 +97,18 @@ public enum RoomsApi {
     public static func volume(_ id: String) -> String { room(id) + "/volume" }
 
     /// `POST` — no web gate; the core's `/v1/admin/dropin/end` is **device**
-    /// tier (`:1507`; `main.py:2718-2721`). This is the one drop-in control
-    /// the phone draws.
+    /// tier (`:1507`; `main.py:2718-2721`). Ending a call somebody else began
+    /// is the one thing a phone needs from the admin pair.
     public static func dropInEnd(_ id: String) -> String { room(id) + "/dropin/end" }
+
+    /// `GET` — device tier (`:1520-1530`): where the core's drop-in socket
+    /// listens, so this phone can open one itself (D54,
+    /// ``DropInCallModel``). "Requires the household device token …; the
+    /// phone presents the same token again on the WebSocket upgrade"
+    /// (`:1537-1538`).
+    public static func dropInPhoneInfo(_ id: String) -> String {
+        room(id) + "/dropin/phone-info"
+    }
 
     /// A JSON body, built **before** the await so that what is sent cannot
     /// change under the request.
@@ -435,12 +444,23 @@ extension RoomsModel {
     /// `SatHistoryTabs.kt:294`).
     ///
     /// The row is marked queued optimistically and the four outcomes are
-    /// ``roomsAddToast(_:title:)``'s. A **refusal shows the server's own
-    /// words**: `can_add` is computed without consulting a fulfiller
-    /// (`satellites.py:1035-1045`) while the core's gate is a fulfiller's URL
-    /// matcher (`domovoi/main.py:5782-5788`), so the honest thing when it is
-    /// refused is to say what the house said — and the mark is taken back,
-    /// because nothing was queued.
+    /// ``roomsAddToast(_:title:)``'s.
+    ///
+    /// ### There is no missing-fulfiller path here any more (D55)
+    ///
+    /// Kamron, answer 55: "no fulfiller means no button and no error: the
+    /// server computes `can_add` against the fulfiller allowlist, so both
+    /// phones draw it honestly." `can_add` now consults the allowlist
+    /// (`web/backend/api/satellites.py:985-1044`), so a row the server
+    /// offered is a row a fulfiller recognises — and this method used to
+    /// carry the other half of the old arrangement: it surfaced the server's
+    /// own refusal text ("no fulfiller plugin is installed") in place of a
+    /// generic failure, and took the optimistic mark back. **That path is
+    /// dead**, so it is gone rather than kept as a sentence nothing can
+    /// produce. What is left is the honest condition — ``RoomsPlayed/canAdd``
+    /// and nothing else — and ``roomsFailure(_:_:)``'s ordinary wording for
+    /// an add that really did fail (a house that went away mid-request, a
+    /// 500).
     public func addToLibrary(_ room: RoomsSatellite, _ row: RoomsPlayed) {
         guard row.canAdd else { return }
         let reads = reads(for: room.roomID)
@@ -467,14 +487,7 @@ extension RoomsModel {
                 self.reads(for: roomID).played.refresh()
             } catch {
                 guard let self, self.stillHome(epoch) else { return }
-                // The server's own refusal, not "add failed": its sentence
-                // ("no fulfiller plugin is installed") is the only one that
-                // tells a person what to do about it. ``serverDetail(in:)``
-                // is Chat's reader for exactly this — the `{"detail": …}`
-                // FastAPI sends — so there is one way to take a refusal's
-                // words out of a body rather than two.
-                let detail = serverDetail(in: (error as? DomovoiError)?.failure?.body)
-                self.say(detail ?? roomsFailure("add", error))
+                self.say(roomsFailure("add", error))
                 // Nothing was queued, so the optimistic mark goes back.
                 self.reads(for: roomID).queuedAdds.remove(rowID)
             }

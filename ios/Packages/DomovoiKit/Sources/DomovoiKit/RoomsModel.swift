@@ -39,13 +39,15 @@ import Observation
 /// * **Starting a room-to-room drop-in** — the core's
 ///   `/v1/admin/dropin/start` is admin *security* (`domovoi/main.py:2649-2658`)
 ///   and the web hop adds no gate of its own, so the peer picker and `start`
-///   could only ever fail. **`hang up` is kept**: `/v1/admin/dropin/end` is
-///   device tier (`main.py:2718-2721`), and ending a call somebody else
-///   started is the one thing a phone in the house genuinely needs here.
-/// * **"Drop in from this phone"** (`PhoneDropinCall.kt`, `DropinCallClient.kt`)
-///   — permitted but deferred: this app has no audio capture or playback layer
-///   at all, and a button that opens a dialog stuck on "connecting…" is
-///   exactly what the rule forbids. DECISIONS asks whether it is a v1 feature.
+///   could only ever fail. Kamron settled it rather than leaving it to the
+///   tier (answers 5 and 53): "phones never create room-to-room drop-ins; a
+///   phone can only drop into a room", and Android's button comes out too.
+///   **`hang up` is kept**: `/v1/admin/dropin/end` is device tier
+///   (`main.py:2718-2721`), and ending a call somebody else started is the
+///   one thing a phone in the house genuinely needs here.
+///   **"Drop in from this phone" is built** (answer 54, ``DropInCallModel``):
+///   that is a different socket on the device tier, and the only call it
+///   opens is this phone's own into one room.
 /// * **Display controls and logs** — `:1597-1602` and `:1679-1684`, both
 ///   admin; Android's phone screen draws neither either.
 /// * **"Use this device as a room"** (`SatellitesScreen.kt:169`) — the
@@ -310,6 +312,78 @@ public final class RoomsModel {
 
     // MARK: - lifecycle
 
+    /// How many of this screen's views are on screen: the roster, and — once
+    /// a room is **pushed** on top of it (D56) — that room's screen.
+    ///
+    /// ### Why a count and not a flag
+    ///
+    /// A pushed destination fires the covered view's `onDisappear` while that
+    /// view stays in the hierarchy (``RoomsView``'s `visible` records the
+    /// same fact for its own reason), so opening a room calls `onDisappear`
+    /// on the roster and `onAppear` on the room — and **the order of the two
+    /// is not guaranteed**. The screen used to stop the model in that
+    /// `onDisappear`, which was right when the detail replaced the roster in
+    /// place and is wrong now: it would drop `byRoom`, leave the event sink
+    /// and stop the roster read the pushed screen is drawing from.
+    ///
+    /// "Stop unless a room is pushed" cannot be made safe, because either
+    /// order can be the one that runs. A count can: whichever way round the
+    /// two callbacks arrive, the number never passes through zero while
+    /// something is on screen, and it reaches zero exactly when nothing is.
+    /// Leaving Rooms while a room is open fires both, and the model stops.
+    private var holders = 0
+
+    /// A view of this screen appeared. Starts the model the first time.
+    public func hold() {
+        holders += 1
+        pendingStop?.cancel(); pendingStop = nil
+        if !onScreen { start() }
+    }
+
+    /// A view of this screen went away. Stops the model when it was the last.
+    ///
+    /// **The stop waits one turn of the main actor**, and that is not
+    /// belt-and-braces. Popping a room fires the room screen's
+    /// `onDisappear` and the roster's `onAppear`, and in the order where the
+    /// room's goes first the count passes through zero for the length of a
+    /// callback — long enough, without this, to drop every per-room read and
+    /// hang up a live call for an animation. One hop is enough: both
+    /// callbacks are already on the main actor. In the other order the count
+    /// never reaches zero and this costs an empty task.
+    public func release() {
+        holders = max(0, holders - 1)
+        guard holders == 0 else { return }
+        pendingStop?.cancel()
+        pendingStop = Task { @MainActor [weak self] in
+            guard let self, self.holders == 0 else { return }
+            self.stop()
+        }
+    }
+
+    private var pendingStop: Task<Void, Never>?
+
+    /// How many views are holding this model up. Read by the tests.
+    public var holderCount: Int { holders }
+
+    /// The phone's drop-in call, once something has built one (D54).
+    ///
+    /// Held **here** and not in the row or the sheet that starts it, for this
+    /// screen's standing rule — a view that holds the request loses it when
+    /// the view goes away — and because a call has to survive a tab change
+    /// and a scroll. One per screen, not one per room: the core's
+    /// `initiator_busy` is per phone (`phone_dropin.py:88-89`), so a second
+    /// call is a refusal, not a second model.
+    ///
+    /// **The app builds it, this package does not.** ``DropInCallModel``
+    /// needs an `AVAudioEngine`, an `AVAudioSession` and the microphone
+    /// prompt, all three iOS-only and none of them compiled where this
+    /// package's tests run; a factory here would have to be `#if os(iOS)` and
+    /// then the model would be untestable on the Mac. So ``RoomsDropInRow``
+    /// builds it and hands it over, and what lives here is the lifetime.
+    public private(set) var call: DropInCallModel?
+
+    public func adopt(call: DropInCallModel) { self.call = call }
+
     public func start() {
         onScreen = true
         if eventSink == nil {
@@ -323,11 +397,18 @@ public final class RoomsModel {
         restartTickLoop()
     }
 
-    /// The screen is gone: every read stops, the tick stops, and the per-room
-    /// reads are dropped. "A route holds nothing" (`Pagination.swift`), and
-    /// coming back re-reads.
+    /// The screen is gone: every read stops, the tick stops, the per-room
+    /// reads are dropped and **a drop-in call ends**. "A route holds nothing"
+    /// (`Pagination.swift`), and coming back re-reads.
+    ///
+    /// The call ends because Android's does: its dialog hangs up on dispose,
+    /// "Safety net: tear the call down if this UI ever leaves composition"
+    /// (`PhoneDropinCall.kt:124-127`). A room's microphone left open because
+    /// somebody tapped another tab is the one outcome this socket's whole
+    /// tier exists to prevent.
     public func stop() {
         onScreen = false
+        call?.reset()
         tickLoop?.cancel(); tickLoop = nil
         volumeDebounce?.cancel(); volumeDebounce = nil
         if let eventSink {
@@ -363,6 +444,10 @@ public final class RoomsModel {
         // from here on, whatever order its continuation runs in.
         houseEpoch += 1
         volumeDebounce?.cancel(); volumeDebounce = nil
+        // A call to the old house's `kitchen` is a call to a room this phone
+        // is no longer in a position to be in, and both houses can have one.
+        call?.reset()
+        call = nil
         openRoomID = nil
         tab = .overview
         broadcastDraft = ""

@@ -23,6 +23,34 @@ import Foundation
 // one shape and two copies of it would be two things to keep in step.
 // ---------------------------------------------------------------------------
 
+// MARK: - the value a room is pushed with (D56)
+
+/// Which room a pushed room screen is for.
+///
+/// Kamron, answer 56: "take the recommendation: a room opens as its own
+/// pushed screen with swipe back." A `NavigationStack` path is typed, so a
+/// push needs a `Hashable` value — and this is a **wrapper around the room
+/// id** rather than the id itself for one reason: `String` is the obvious
+/// type for some other screen in this app to push one day, and two
+/// `navigationDestination(for: String.self)` declarations in one stack is a
+/// runtime warning and a silent last-one-wins. ``RoomsSatellite`` is not it
+/// either, because the value in a path outlives the roster row it came from
+/// and a room that went offline while its screen was up would then be pushed
+/// under its old state (``RoomsDetailView`` keeps the live row instead).
+///
+/// It is **not** a `Route` case and it adds no second path to the shell:
+/// SwiftUI resolves a `navigationDestination` declared anywhere inside the
+/// stack's content, so ``RoomsView`` declares this one itself and no shared
+/// file changes. ``RoomsView``'s own doc comment has the rest.
+public struct RoomsOpenRoom: Hashable, Sendable, Identifiable, Codable {
+
+    public let roomID: String
+
+    public init(_ roomID: String) { self.roomID = roomID }
+
+    public var id: String { roomID }
+}
+
 // MARK: - the roster: GET /api/satellites
 
 /// One room of `GET /api/satellites` (`Satellite`, `SatModels.kt:117`;

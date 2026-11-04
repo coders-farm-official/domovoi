@@ -39,29 +39,48 @@ import SwiftUI
 ///   `/v1/admin/dropin/end` is device tier (`main.py:2718-2721`), and ending a
 ///   call somebody else started is the one thing a phone in the house
 ///   genuinely needs here.
-/// * **"Drop in from this phone"** (`PhoneDropinCall.kt`, `DropinCallClient.kt`)
-///   — permitted and deferred: the app has no audio capture or playback layer
-///   at all, and a button that opens a dialog stuck on `connecting…` is
-///   exactly what the rule forbids.
 /// * **Display controls and logs** — `:1597-1602` and `:1679-1684`, both
 ///   admin. Android's phone screen draws neither either.
 /// * **"Use this device as a room"** (`SatellitesScreen.kt:169`) — the
 ///   `roommode` item's card. This screen leaves the gap rather than drawing a
 ///   dead one.
 ///
-/// ### The detail replaces the roster in place, and is not pushed
+/// **"Drop in from this phone" IS here now** (`PhoneDropinRow`,
+/// `PhoneDropinCall.kt:61`): Kamron, answer 54. It is a device-tier socket of
+/// its own, ``DropInCallModel`` drives it, and ``RoomsDropInRow`` draws the
+/// control inside the opened room's drop-in section.
 ///
-/// Android's compact layout replaces the grid with the detail and takes the
-/// system back button for it (`SatellitesScreen.kt:119-131`); its wide layout
-/// puts the detail in a 440 dp pane, which this app has nowhere (there is no
-/// wide layout anywhere in it — `MusicRoomCards.swift:13-16`).
+/// ### A room is its own pushed screen (D56)
 ///
-/// A `NavigationLink` would have given the back gesture for free and is not
-/// available: the workspace's stack is `NavigationStack(path:)` over `[Route]`
-/// (`WorkspaceView.swift`), a typed path takes no other value, and the Settings
-/// entry point is inside Settings' own `ScrollView`. So the swap is in place
-/// with an explicit `close this room` control, which is Android's compact
-/// behaviour minus the gesture. Recorded in DECISIONS.
+/// Kamron, answer 56: "take the recommendation: a room opens as its own
+/// pushed screen with swipe back." It used to be a swap in place — the roster
+/// replaced by the detail, with an explicit `close this room` control — which
+/// was Android's compact behaviour (`SatellitesScreen.kt:119-131`) minus the
+/// gesture, because a `NavigationStack(path:)` over `[Route]` takes no other
+/// value and this item could not add one.
+///
+/// It needs no shared change after all. **A `navigationDestination` is
+/// resolved by the nearest enclosing stack wherever inside its content it is
+/// declared**, so this view declares `.navigationDestination(for:
+/// RoomsOpenRoom.self)` itself and the cards are `NavigationLink(value:)`s.
+/// The system's back button and swipe-back pop it; there is no `Route` case,
+/// no second `path` on ``ShellModel``, and ``WorkspaceView`` and
+/// ``RouteScreen`` are untouched. Both mountings are inside the same
+/// `NavigationStack` (`RouteScreen.swift:147-154` and `:390-392`), so both
+/// get the push and neither of those lines changes.
+///
+/// **One declaration, in a view that is mounted once.** Two
+/// `navigationDestination`s for one type in one stack is a runtime warning
+/// and a silent last-one-wins; `navigate(.satellites)` resolves to the
+/// Settings section (`Route.swift:137-139`), so the route slot and the
+/// section are never on screen together and only one of them declares it at a
+/// time. ``RoomsOpenRoom`` is a wrapper for a related reason, which it
+/// states: the id's own type would collide with any other screen that pushed
+/// a `String`.
+///
+/// It is also **not** inside a lazy container, which Apple's documentation
+/// forbids: the roster is a plain `VStack` (see ``panel``) and the Settings
+/// page a plain `ScrollView`, by decisions taken for other reasons.
 struct RoomsView: View {
 
     let model: ShellModel
@@ -82,19 +101,30 @@ struct RoomsView: View {
 
     var body: some View {
         content
-            .task {
-                // Built here and not in `init` for ``HomeView``'s reason: the
-                // model needs the container, and a `@State` initialiser runs
-                // before the view has one it can rely on.
+            // **Both halves in `onAppear`/`onDisappear`, which is a change
+            // D56 forced.** The model used to be built and started in
+            // `.task` and stopped in `onDisappear`, and that pair is not
+            // symmetric: `.task` runs once per view identity and a pushed
+            // room does not end this view's identity, so coming back from a
+            // room would never have restarted a model the push had stopped.
+            // ``RoomsModel/hold()`` and ``RoomsModel/release()`` are a
+            // count, so the two callbacks may arrive in either order — see
+            // ``RoomsModel/holders``.
+            //
+            // Built here and not in `init` for ``HomeView``'s reason: the
+            // model needs the container, and a `@State` initialiser runs
+            // before the view has one it can rely on. `onAppear` runs with
+            // the view fully configured, so `model.container` is there.
+            .onAppear {
+                visible = true
                 if rooms == nil {
                     rooms = RoomsModel(in: model.container)
                 }
-                rooms?.start()
+                rooms?.hold()
             }
-            .onAppear { visible = true }
             .onDisappear {
                 visible = false
-                rooms?.stop()
+                rooms?.release()
             }
             // **The toast is the shell's**, drawn over the whole app
             // (`AppShellView.swift:36`): a toast about an announcement that
@@ -125,6 +155,20 @@ struct RoomsView: View {
 
     @ViewBuilder
     private var content: some View {
+        mounting
+            // **The push, declared here and nowhere else** (D56). On the
+            // destination side the model is told which room is open and the
+            // room screen holds it up for as long as it is on screen; the
+            // pop is the system's.
+            .navigationDestination(for: RoomsOpenRoom.self) { open in
+                if let rooms {
+                    RoomsRoomScreen(shell: model, model: rooms, open: open)
+                }
+            }
+    }
+
+    @ViewBuilder
+    private var mounting: some View {
         if embedded {
             panel
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -158,11 +202,10 @@ struct RoomsView: View {
                     .font(.footnote)
                     .foregroundStyle(Color.fgMuted)
                     .fixedSize(horizontal: false, vertical: true)
-                if let open = rooms.openRoom {
-                    RoomsDetailView(model: rooms, room: open)
-                } else {
-                    roster(rooms)
-                }
+                // The roster, always: a room is pushed on top of this screen
+                // now (D56), so this one stays mounted underneath rather
+                // than being swapped for the detail.
+                roster(rooms)
             }
         }
     }
@@ -197,12 +240,21 @@ struct RoomsView: View {
         case .rooms(let list):
             VStack(alignment: .leading, spacing: 12) {
                 ForEach(list) { room in
-                    RoomsCardView(
-                        room: room,
-                        extraSec: rooms.extraSec,
-                        nowMs: rooms.clockMs,
-                        onOpen: { rooms.open(room.roomID) }
-                    )
+                    // A link and not a `Button`: this is what gives the
+                    // pushed screen the system back button and the
+                    // swipe-back gesture for nothing (D56). The card is
+                    // still the whole target, as Android's is
+                    // (`SatellitesScreen.kt:195`), and a `NavigationLink`
+                    // reports as a button to VoiceOver and to a test's
+                    // `app.buttons` query.
+                    NavigationLink(value: RoomsOpenRoom(room.roomID)) {
+                        RoomsCardView(
+                            room: room,
+                            extraSec: rooms.extraSec,
+                            nowMs: rooms.clockMs
+                        )
+                    }
+                    .buttonStyle(.plain)
                 }
                 RoomsBroadcastCard(model: rooms)
             }
