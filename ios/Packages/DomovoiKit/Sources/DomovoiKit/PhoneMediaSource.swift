@@ -67,9 +67,10 @@ public enum PhoneMediaKind: String, Codable, Equatable, Sendable, CaseIterable {
         self = PhoneMediaKind(rawValue: FileKinds.kind(of: fileName, isDir: isDir)) ?? (isDir ? .folder : .other)
     }
 
-    /// The kinds the device side of Music lists. Audio only — and **no play
-    /// control on any of them**, for the reason
-    /// ``PhoneMediaStrings/noPhonePlayerYet`` gives.
+    /// The kinds the device side of Music lists. Audio only, and each row
+    /// plays on the handset (``PhoneMediaListModel/playQueue(around:)``) —
+    /// except on a phone with no device id, where
+    /// ``PhoneMediaStrings/noPhonePlayerYet`` says why instead.
     public static let audioOnly: Set<PhoneMediaKind> = [.audio]
 
     /// The kinds the device side of Videos lists.

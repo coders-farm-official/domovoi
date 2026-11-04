@@ -82,12 +82,17 @@ public enum PhoneMediaStrings {
     /// `PhoneFiles.kt:196`.
     public static let imageCannotBeShown = "This image can't be shown here."
 
-    /// Why a phone audio row has no play control. **iOS-only** — Android
-    /// plays a window of the phone's tracks on the handset
-    /// (`LocalMediaScreens.kt:159`); this app has no handset audio engine
-    /// yet, so under the owner's no-misleading-controls rule the control is
-    /// left out and this line says so instead.
-    public static let noPhonePlayerYet = "playing a phone track on the phone is its own milestone — this side uploads and browses"
+    /// Why a phone audio row has no play control **on a phone that has not
+    /// introduced itself to a house**.
+    ///
+    /// **iOS-only.** Android's player needs no device identity; this app's one
+    /// player is keyed to one (``ShellModel/player``), because it writes
+    /// listening positions per device. So in the local shell — no server, no
+    /// device id — a track still does not play here, and this says so rather
+    /// than drawing an arrow that does nothing
+    /// ([[no-misleading-controls]]). Every other phone has `play` on the row
+    /// since the 2026-11-03 batch (D46), and this line is not drawn there.
+    public static let noPhonePlayerYet = "a phone track plays here once this phone has joined a domovoi — until then this side browses"
 
     // MARK: - the upload button and its card
 

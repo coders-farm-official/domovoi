@@ -268,6 +268,68 @@ public final class PhoneMediaListModel {
         )
     }
 
+    // MARK: - playing a phone track on the phone (D46)
+
+    /// Whether this row can be played on the handset.
+    ///
+    /// Audio in a **picked folder** only. A photo-library asset has no file
+    /// path this app may hand `AVPlayer` (``PhoneMediaOrigin/asset(_:)`` is a
+    /// `PHAsset.localIdentifier`, opaque to this package) — and there is no
+    /// audio in the photo library anyway, so an asset branch here would be a
+    /// control for a row that cannot exist. A folder is not a track.
+    public func canPlay(_ item: PhoneMediaItem) -> Bool {
+        guard !item.isDir, item.kind == .audio else { return false }
+        if case .file = item.origin { return true }
+        return false
+    }
+
+    /// The playable rows in order, and where the tapped one sits in them.
+    ///
+    /// Android's own comment is why this is a window and not the whole list:
+    /// *"The tapped track plus its neighbours, not every track on the phone: a
+    /// whole-device queue (thousands of songs) stalled playback start"*
+    /// (`LocalMediaScreens.kt:155-157`). The cut itself is
+    /// ``PlayerQueueWindow/around(_:index:)``, which
+    /// ``PlayerModel/play(_:startAt:resumeSec:speed:)`` applies — the same
+    /// arithmetic as Android's `QueueWindow.around` — so this hands over the
+    /// rows and says which one was tapped.
+    ///
+    /// **Only rows that can play are in it.** A folder or a document between
+    /// two tracks would be an entry the engine could not open, and `next`
+    /// would stop on it.
+    public func playQueue(around item: PhoneMediaItem) -> (items: [PlayerItem], index: Int) {
+        let playable = rows.state.items.filter(canPlay)
+        let items = playable.map(Self.queueEntry)
+        let at = playable.firstIndex { $0.id == item.id && $0.libraryID == item.libraryID } ?? 0
+        return (items, max(0, at))
+    }
+
+    /// One phone track as a queue entry.
+    ///
+    /// `PlayItem.fromDeviceAudio` (`PlayItem.kt:79`): the `src` is the file's
+    /// own URL and no server is in it, which is why ``PlayerArtwork`` and the
+    /// engine both test for a leading `/` rather than prefixing blindly —
+    /// prefixing a phone song's art with the server turned it into a dead URL
+    /// on Android (`CoverArt.kt:30`).
+    ///
+    /// **No album art.** Android reads `albumArtUri` from `MediaStore`; a file
+    /// in a picked folder has none this app has parsed, and a cover path
+    /// pointing at nothing is a placeholder either way.
+    ///
+    /// The id is a hash of the row's own id, because `fromDeviceAudio` takes
+    /// an `Int64` and a phone row's id is a relative path. It has only to be
+    /// stable within one queue (``PlayerItem/uid``); the `src` is what plays.
+    private static func queueEntry(_ item: PhoneMediaItem) -> PlayerItem {
+        var url = ""
+        if case .file(let at) = item.origin { url = at.absoluteString }
+        return PlayerItem.fromDeviceAudio(
+            id: Int64(bitPattern: UInt64(abs(item.id.hashValue))),
+            title: item.name,
+            durationSec: item.durationSec,
+            uri: url
+        )
+    }
+
     /// Nothing here, and nothing wrong: the folder answered and it is empty.
     ///
     /// Never while no library is chosen, a read is in flight or one failed —

@@ -241,15 +241,15 @@ struct PhoneVideoTile: View {
                     }
                 }
                 Spacer(minLength: 2)
-                if let uploads, !item.isDir {
-                    if uploads.offersUpload(item) {
-                        PhoneUploadRowButton(
-                            state: uploads.state(for: PhoneUploadKey.of(item, uploads.kind)),
-                            onTap: { uploads.upload(item) }
-                        )
-                    } else {
-                        PhoneUploadTooBigNote(size: item.sizeBytes)
-                    }
+                // One branch, not two: ``PhoneUploadModel/offersUpload(_:)``
+                // is `!item.isDir` since the transfers unit's streaming
+                // upload took the 64 MiB ceiling out, so the `else` that drew
+                // `PhoneUploadTooBigNote` was unreachable.
+                if let uploads, !item.isDir, uploads.offersUpload(item) {
+                    PhoneUploadRowButton(
+                        state: uploads.state(for: PhoneUploadKey.of(item, uploads.kind)),
+                        onTap: { uploads.upload(item) }
+                    )
                 }
             }
         }

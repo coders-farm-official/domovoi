@@ -8,20 +8,23 @@ import SwiftUI
 /// device side of `FilesScreen.kt`'s row, which are the same row with a
 /// different second line.
 ///
+/// ### Playing arrived in the 2026-11-03 batch
+///
+/// An audio row in a picked folder plays on the handset, as Android's does
+/// (`LocalMediaScreens.kt:158-166`): the tap is this row's, the queue is the
+/// neighbouring playable tracks (``PhoneMediaListModel/playQueue(around:)``)
+/// and the player is the app's one (``ShellModel/player``). It is the
+/// **caller** that decides — the device side of Music passes the tap, the
+/// device side of Files does not, which is Android's split too — so this row
+/// has no new control on it, only a new ``hint(_:)`` case. A **video** row was
+/// already tappable, because `AVPlayer` over a local file needs no server and
+/// no token.
+///
 /// ### What is not, and why there is no control for it
 ///
-/// * **No play.** Android plays a window of the phone's neighbouring tracks
-///   on the handset (`LocalMediaScreens.kt:159`). There is no handset audio
-///   engine in this app — ``MusicView``'s own doc calls the player "its own
-///   milestone" — so there is no play arrow here and
-///   ``PhoneMediaStrings/noPhonePlayerYet`` says so once at the foot of the
-///   list. A **video** row is tappable, because `AVPlayer` over a local file
-///   needs no server and no token.
 /// * **No delete, rename or move.** Android gets all three free from its
 ///   `FileSource` interface; this side lists and reads only
 ///   (``PhoneFolderSource``'s own "What is not", and DECISIONS).
-/// * **No upload on a row over the ceiling** — ``PhoneUploadTooBigNote``
-///   instead, with the size in it.
 struct PhoneMediaRowView: View {
 
     let item: PhoneMediaItem
@@ -93,18 +96,23 @@ struct PhoneMediaRowView: View {
         .contentShape(.rect)
     }
 
+    /// The upload button, for any file at all.
+    ///
+    /// **No size branch any more.** ``PhoneUploadModel/offersUpload(_:)`` is
+    /// `!item.isDir` since the transfers unit's streaming upload took the
+    /// 64 MiB ceiling out, so the `else` that drew `PhoneUploadTooBigNote`
+    /// with the size in it was unreachable code describing a rule that no
+    /// longer exists. Kept as an `if` on `offersUpload` rather than inlined,
+    /// because that is still the model's question to answer and a later rule
+    /// would go there.
     @ViewBuilder private var uploadControl: some View {
-        if let uploads, !item.isDir {
-            if uploads.offersUpload(item) {
-                PhoneUploadRowButton(
-                    state: uploads.state(for: PhoneUploadKey.of(item, uploads.kind)),
-                    // The tap calls the **model**, which runs the upload on
-                    // itself. Nothing on this row holds the task.
-                    onTap: { uploads.upload(item) }
-                )
-            } else {
-                PhoneUploadTooBigNote(size: item.sizeBytes)
-            }
+        if let uploads, !item.isDir, uploads.offersUpload(item) {
+            PhoneUploadRowButton(
+                state: uploads.state(for: PhoneUploadKey.of(item, uploads.kind)),
+                // The tap calls the **model**, which runs the upload on
+                // itself. Nothing on this row holds the task.
+                onTap: { uploads.upload(item) }
+            )
         }
     }
 
@@ -119,6 +127,7 @@ struct PhoneMediaRowView: View {
     static func hint(_ item: PhoneMediaItem) -> String {
         switch item.kind {
         case .video: return VideoStrings.play
+        case .audio: return PlayerStrings.play
         case .image: return PhoneMediaStrings.lookAtThePicture
         default: return FileStrings.folder
         }

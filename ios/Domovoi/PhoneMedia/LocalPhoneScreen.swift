@@ -27,13 +27,17 @@ import SwiftUI
 ///
 /// ### What is not, and why there is no control for it
 ///
-/// * **Music does not play here.** The local shell's Music tab lists the
-///   audio in the folders the person added and says
-///   ``PhoneMediaStrings/noPhonePlayerYet``. Android plays it; this app has
-///   no handset audio engine yet (DECISIONS), and the local shell is where
-///   that absence is most visible — a phone with no server and no player has
-///   a list and a `connect` pill, which map §10.1 says is the design rather
-///   than something to paper over with a wizard.
+/// * **Music does not play here**, and this is now the **only** screen in the
+///   app where that is true. D46 put `play` on a phone track's row, but the
+///   app's one player is keyed to a device id (``ShellModel/player``) because
+///   it writes a listening position per device — and the local shell has no
+///   server, so no device id, so no player. The rows get no tap and
+///   ``PhoneMediaStrings/noPhonePlayerYet`` says why. Android plays it,
+///   because its player needs no identity; the gap is written down in
+///   `design-notes/ios/batch-2026-11-03/player/DECISIONS.md`. The local shell
+///   is where the absence is most visible — a phone with no server has a list
+///   and a `connect` pill, which map §10.1 says is the design rather than
+///   something to paper over with a wizard.
 /// * **The local shell's Settings screen** (`LocalSettingsScreen.kt:45`) is
 ///   still a later batch's: ``LocalShellView``'s gear is drawn and this item
 ///   does not change it. Mapped and not built — it is the phone's voice and

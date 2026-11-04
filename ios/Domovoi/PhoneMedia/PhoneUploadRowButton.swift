@@ -206,25 +206,12 @@ struct PhoneUploadRefusedCard: View {
     }
 }
 
-/// What a row too big to upload says instead of having a control.
-///
-/// **Unreachable since D43**, and left defined on purpose. There is no
-/// ceiling in this app any more — ``PhoneUploadModel/offersUpload(_:)`` is
-/// true for every file — so nothing draws this. Its two call sites
-/// (`PhoneMediaRowView.swift:98`, `PhoneDeviceVideosView.swift:245`) belong
-/// to the player unit's files, which this unit may not edit, and a branch
-/// calling a view that no longer exists is a branch that does not compile.
-/// So the view stays until that unit takes the call sites out; it is noted in
-/// `design-notes/ios/batch-2026-11-03/transfers/DECISIONS.md` under "Needs a
-/// shared change".
-struct PhoneUploadTooBigNote: View {
-
-    let size: Int64?
-
-    var body: some View {
-        Text(PhoneMediaStrings.tooBigToUpload(size ?? 0))
-            .font(.caption)
-            .foregroundStyle(Color.fgMuted)
-            .fixedSize(horizontal: false, vertical: true)
-    }
-}
+// `PhoneUploadTooBigNote` was here. The transfers unit left it defined with
+// the instruction that it "stays until that unit takes the call sites out",
+// because a branch calling a view that does not exist is a branch that does
+// not compile. This unit owns both call sites
+// (`PhoneMediaRowView`, `PhoneDeviceVideosView`) and has taken them out, so
+// the view goes with them: there is no ceiling in this app any more and
+// nothing could reach it. ``PhoneMediaStrings/tooBigToUpload(_:)`` stays —
+// ``PhoneUploadRules`` and ``PhoneMediaListModel`` still say it for a file the
+// **server** refuses, which is a different rule and a live one.
