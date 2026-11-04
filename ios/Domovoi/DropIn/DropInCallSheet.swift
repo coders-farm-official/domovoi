@@ -171,22 +171,34 @@ struct DropInCallSheet: View {
                 systemImage: "phone.down"
             )
             .font(.subheadline)
+            // **``Color/dangerFg`` and not `.white`, and on the label and not
+            // on the `Button`.** `--danger-fg` flips with the theme because
+            // white on the dark fill (`#FF5F5B`) is 2.99:1 —
+            // ``DangerInk/whiteOnTheDarkFillRatio``, which is the number the
+            // pair exists to avoid. The pair measures 5.91:1 light and 6.53:1
+            // dark (``DangerInk/lightArithmeticRatio``,
+            // ``DangerInk/darkArithmeticRatio``), recomputed by
+            // `ShellFoldTests`.
+            //
+            // It is on the `Label` because `.borderedProminent` picks its own
+            // label colour out of the style, and a `.foregroundStyle` applied
+            // outside the `Button` is the half of that pair SwiftUI is free to
+            // win. Inside, it is the label's own colour.
+            .foregroundStyle(Color.dangerFg)
             .fixedSize(horizontal: false, vertical: true)
             .frame(minHeight: 44)
             .contentShape(.rect)
         }
-        // **Bordered and not prominent, although Android's is filled.**
-        // Android fills it with `colors.err` and draws white on it
-        // (`PhoneDropinCall.kt:180-183`); this app has no `err` *fill* token,
-        // only the ink one — `DomovoiApp.swift` has `errInk` and nothing to
-        // pair it with, and that file belongs to another unit. A prominent
-        // button tinted with an ink token draws its own label on it at
-        // 3.08:1, which is the measurement ``RoomsBroadcastCard`` records.
-        // So this is the same shape as the `hang up` control two sections up
-        // (``RoomsOverviewView``), which is the other way this app says "this
-        // ends something". Written up in DECISIONS under "Needs a shared
-        // change".
-        .buttonStyle(.bordered)
-        .tint(Color.errInk)
+        // **Filled, as Android's is** (`PhoneDropinCall.kt:180-183`:
+        // `colors.err` with white on it). The shell unit added the fill token
+        // this needed — ``Color/danger`` with ``Color/dangerFg`` for the text
+        // on it, both built from ``DangerInk`` — which is what the rooms
+        // unit asked for under "needs a shared change" and why this button
+        // shipped `.bordered` with `.tint(Color.errInk)` until the
+        // integration. A prominent button tinted with the *ink* token drew
+        // its own label at 3.08:1, the measurement ``RoomsBroadcastCard``
+        // records; the two-token pair is how that is avoided in both themes.
+        .buttonStyle(.borderedProminent)
+        .tint(Color.danger)
     }
 }

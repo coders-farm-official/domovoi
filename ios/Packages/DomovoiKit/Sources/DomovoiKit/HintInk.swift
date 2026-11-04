@@ -157,14 +157,17 @@ public enum HintInk {
 ///
 /// ### Who calls it
 ///
-/// Nobody yet, and that is written down rather than hidden: the one caller is
-/// `ios/Domovoi/Rooms/DropInCallSheet.swift`, which is the rooms unit's file,
-/// and the edit is in
-/// `design-notes/ios/batch-2026-11-03/shell/DECISIONS.md` §3b. **A seam with
-/// no caller is its own defect class on this track** — a seam built, tested
-/// and never read is how `TokenVault` shipped with eleven tests and no call
-/// site — so if rooms declines, this type and the two tokens go rather than
-/// sit here being arithmetic nobody draws.
+/// `ios/Domovoi/DropIn/DropInCallSheet.swift`'s `leave` button, since the
+/// integration of this batch: `.borderedProminent` with `.tint(Color.danger)`
+/// and the label in ``Color/dangerFg``. The two files belonged to two
+/// different units, which is why this shipped with no caller on
+/// `wf/ios-b-shell` and why the call site was typed on `wf/ios-b-all`
+/// (`design-notes/ios/batch-2026-11-03/shell/DECISIONS.md` §3b,
+/// `INTEGRATION.md`). **A seam with no caller is its own defect class on this
+/// track** — a seam built, tested and never read is how `TokenVault` shipped
+/// with eleven tests and no call site — so if the pair ever loses its last
+/// caller, this type and the two tokens go rather than sit here being
+/// arithmetic nobody draws.
 public enum DangerInk {
 
     /// `oklch(0.52 0.19 25)` as sRGB: `--danger`, light. The same colour as

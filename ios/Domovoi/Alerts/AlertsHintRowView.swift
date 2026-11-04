@@ -214,15 +214,6 @@ struct AlertsHintLifecycle: ViewModifier {
 
     @Environment(\.scenePhase) private var phase
 
-    /// `model.explaining` as the presentation's binding. The setter only ever
-    /// closes: a swipe cannot dismiss a `fullScreenCover`, so the one writer
-    /// is the card's own `not now`, and this exists so that a dismissal
-    /// driven by iOS (a scene going away mid-card) cannot leave the model
-    /// claiming a card that is no longer on screen.
-    private var explaining: Binding<Bool> {
-        Binding(get: { model.explaining }, set: { if !$0 { model.closeExplain() } })
-    }
-
     func body(content: Content) -> some View {
         // **A presentation that covers the window, not a sibling in a
         // `ZStack`** — and that is a measurement, not a preference.
@@ -250,18 +241,22 @@ struct AlertsHintLifecycle: ViewModifier {
         // because it was the half this item could change alone; it was the
         // level.
         //
-        // So the card stops being a sibling and becomes a presentation.
-        // `fullScreenCover` is `UIModalPresentationStyle.fullScreen`, and
-        // UIKit takes the presenting controller's views out of the window
-        // once the transition ends — there is then nothing behind the card to
-        // audit, to read at 35%, or to reach with VoiceOver, without any
-        // shared file being touched. The card keeps its own look: the cover's
-        // content is still ``AlertsPermissionCardView``, scrim and all.
+        // So the card stops being a sibling and becomes a presentation —
+        // but **not one this modifier requests**. ``DialogCard`` presents the
+        // `fullScreenCover` itself (answer 6), and
+        // ``AlertsPermissionCardView``'s whole body is a `DialogCard`, so the
+        // cover arrives from inside the card. `fullScreenCover` is
+        // `UIModalPresentationStyle.fullScreen`, and UIKit takes the
+        // presenting controller's views out of the window once the transition
+        // ends — there is then nothing behind the card to audit, to read at
+        // 35%, or to reach with VoiceOver, without any shared file being
+        // touched.
         //
         // `.accessibilityHidden` stays on the content as well. It costs a
-        // boolean, it is what hides the chrome during the transition, and if
-        // a future SwiftUI presents this over the window rather than in place
-        // of it, the chrome is still out of the tree.
+        // boolean, it is what hides the chrome during the transition and
+        // during the deadline ``DialogPresentationGuard`` waits out, and if a
+        // future SwiftUI draws the card in place rather than over the window,
+        // the chrome is still out of the tree.
         content
             .accessibilityHidden(model.explaining)
             // The card is presented from the app's root and not from the row
@@ -270,8 +265,35 @@ struct AlertsHintLifecycle: ViewModifier {
             // scroll can tear down is a dialog that can vanish mid-sentence.
             // This also makes the hook into Home **one** line, which is the
             // other half of why this modifier exists.
-            .fullScreenCover(isPresented: explaining) {
-                AlertsPermissionCardView(model: model)
+            //
+            // **An `.overlay`, not a `fullScreenCover`** — the one line the
+            // shell unit's DECISIONS §1 calls a merge blocker, and the
+            // integration is where it could be typed, because
+            // `AlertsHintRowView.swift` and `ConnectionDialogView.swift`
+            // belonged to two different units.
+            //
+            // ``AlertsPermissionCardView``'s whole body is a ``DialogCard``,
+            // and since answer 6 a `DialogCard` presents its own
+            // `fullScreenCover`. Presenting it *from* a cover made it a cover
+            // inside a cover, and SwiftUI may drop an inner presentation
+            // requested during the outer transition: the outer cover is then
+            // left showing `DialogCard.hostOfNothing`, which is a blank,
+            // undismissable screen. ``DialogPresentationGuard`` catches that
+            // — after 1.5s the card is drawn inline instead — but the inline
+            // shape is the pre-answer-6 one, with the page still behind the
+            // card in the tree and still sampled through the 35% scrim, so
+            // the guard trades a blank screen for an intermittent contrast
+            // regression (`ConnectionDialogView.swift:460-471`).
+            //
+            // With an overlay there is no outer presentation, so there is no
+            // inner one to drop and the guard never fires here. The card is
+            // still a window-covering modal, because the `DialogCard` inside
+            // it still presents one; this modifier is on the app's root, so
+            // the overlay is above the whole workspace either way.
+            .overlay {
+                if model.explaining {
+                    AlertsPermissionCardView(model: model)
+                }
             }
             .task { await model.refresh() }
             .onChange(of: phase) { _, now in
