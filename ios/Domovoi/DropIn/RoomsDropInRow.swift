@@ -94,18 +94,42 @@ struct RoomsDropInRow: View {
         if let existing = model.call {
             call = existing
         } else {
-            call = DropInCallModel(
-                client: shell.container.client,
-                transport: URLSessionDropInTransport(),
-                audio: DropInAudioEngine(),
+            // The three hardware pieces, and the stand-ins a UI case on a
+            // Simulator puts in their place. ``DropInTestSeam`` has the whole
+            // argument for why there is a seam here at all and what keeps it
+            // honest; the short of it is that the microphone prompt is a
+            // system alert, so without this there is no UI coverage of this
+            // feature — and that every decision below the hardware stays the
+            // app's own either way.
+            let audio: any DropInAudio
+            let session: PlayerAudioSessionControl
+            let permission: any DropInMicPermission
+            switch DropInTestSeam.asked(ProcessInfo.processInfo.arguments) {
+            case nil:
+                audio = DropInAudioEngine()
+                permission = AVAudioMicPermission()
                 // **Our own instance of the session control, deliberately.**
                 // `AVAudioSession.sharedInstance()` is process-wide, so the
                 // category this sets has exactly the right effect on the one
                 // real session; only `active` is per-instance, and it answers
                 // "did *this* object activate something", which is what the
                 // release path needs and what a shared object could not say.
-                session: AVAudioSessionControl(),
-                permission: AVAudioMicPermission(),
+                session = AVAudioSessionControl()
+            case .deny:
+                audio = RecordingDropInAudio()
+                permission = FixedMicPermission(false)
+                session = RecordingPlayerAudioSession()
+            case .pump:
+                audio = PumpedDropInAudio()
+                permission = FixedMicPermission(true)
+                session = RecordingPlayerAudioSession()
+            }
+            call = DropInCallModel(
+                client: shell.container.client,
+                transport: URLSessionDropInTransport(),
+                audio: audio,
+                session: session,
+                permission: permission,
                 // This phone's identity in the house's `active_dropins`, which
                 // is what makes `initiator_busy` work: "give it a stable
                 // per-device value" (`domovoi/main.py:7064`). Nil before the

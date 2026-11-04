@@ -747,4 +747,93 @@ final class DropInCallModelTests: XCTestCase {
         )
         XCTAssertNil(model.toast, "something was said about an add that was never made")
     }
+
+    // MARK: - the UI-case seam
+
+    /// The seam is reached only by its own argument, with a value it knows.
+    ///
+    /// The nil cases are the ones that matter: an ordinary launch, and a
+    /// mistyped or truncated argument on a train, must all leave the app its
+    /// real microphone rather than half-replacing it.
+    func testTheDropInSeamIsOnlyReachedByItsOwnArgument() {
+        XCTAssertNil(DropInTestSeam.asked([]), "an empty launch asked for a seam")
+        XCTAssertNil(
+            DropInTestSeam.asked(["-domovoi-server", "127.0.0.1:6601"]),
+            "an ordinary launch asked for a seam"
+        )
+        XCTAssertNil(
+            DropInTestSeam.asked([DropInTestSeam.flag]),
+            "the flag with no value asked for a seam"
+        )
+        XCTAssertNil(
+            DropInTestSeam.asked([DropInTestSeam.flag, "loop"]),
+            "an unknown value asked for a seam instead of being ignored"
+        )
+        XCTAssertEqual(
+            DropInTestSeam.deny,
+            DropInTestSeam.asked(["-domovoi-token", "t", DropInTestSeam.flag, "deny"])
+        )
+        XCTAssertEqual(
+            DropInTestSeam.pump,
+            DropInTestSeam.asked([DropInTestSeam.flag, "pump", "-UIPreferredContentSizeCategoryName", "x"])
+        )
+    }
+
+    /// The pump hands whole frames up, stops while muted, and stops for good.
+    ///
+    /// Timed, because a timer is the whole of what this class is: 30 ms a
+    /// frame, so a tenth of a second is two or three. The assertions are
+    /// "more than none" and "no more after the mute", never a count — a
+    /// Simulator under load delivers a different number every run and a
+    /// pinned one would be a flake waiting for the train.
+    func testThePumpHandsUpWholeFramesUntilItIsMutedAndStopped() async throws {
+        let pump = PumpedDropInAudio()
+        let seen = CapturedFrames()
+        try pump.start { frame in seen.add(frame) }
+        try await Task.sleep(for: .milliseconds(120))
+        let running = seen.take()
+        XCTAssertFalse(running.isEmpty, "the pump handed up no frames at all")
+        XCTAssertTrue(
+            running.allSatisfy { $0.count == DropInAudioFormat.frameBytes },
+            "the pump handed up a part frame: \(running.map(\.count))"
+        )
+
+        pump.setMuted(true)
+        _ = seen.take()
+        try await Task.sleep(for: .milliseconds(120))
+        XCTAssertTrue(
+            seen.take().isEmpty,
+            "the pump kept sending while it was muted — the microphone stays "
+                + "open and the frames stop"
+        )
+
+        pump.setMuted(false)
+        try await Task.sleep(for: .milliseconds(120))
+        XCTAssertFalse(seen.take().isEmpty, "unmuting did not start the frames again")
+
+        pump.stop()
+        _ = seen.take()
+        try await Task.sleep(for: .milliseconds(120))
+        XCTAssertTrue(seen.take().isEmpty, "the pump kept sending after it was stopped")
+    }
+}
+
+/// What a capture callback handed up, readable from the test's own thread.
+///
+/// ``PumpedDropInAudio`` calls its sink on a private queue, so this is the
+/// only part of that case that needs a lock.
+private final class CapturedFrames: @unchecked Sendable {
+    private let lock = NSLock()
+    private var held: [Data] = []
+
+    func add(_ frame: Data) { lock.withLock { held.append(frame) } }
+
+    /// What has arrived since the last call, and empties the record.
+    func take() -> [Data] {
+        lock.withLock { () -> [Data] in
+            let was = held
+            held = []
+            return was
+        }
+    }
 }

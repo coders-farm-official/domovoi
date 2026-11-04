@@ -365,3 +365,137 @@ public final class RecordingDropInAudio: DropInAudio, @unchecked Sendable {
         sink?(frame)
     }
 }
+
+/// A microphone that produces frames nobody spoke into, on a timer.
+///
+/// ### What this is for, and why it is not a test double
+///
+/// ``RecordingDropInAudio`` answers the package's cases, which drive capture
+/// by hand (``RecordingDropInAudio/feed(_:)``). A **UI** case cannot: it has
+/// no reference to anything inside the app, so the only way a drop-in call can
+/// carry audio up to the house on a Simulator is for the capture side to run
+/// by itself. This does that, and nothing else — a frame of digital silence
+/// every 30 ms, the same size and rate ``DropInAudioFormat`` specifies, so the
+/// socket, the frame cutter, the server's reader and the house's readback all
+/// see exactly what a real microphone would put through them.
+///
+/// It is reached **only** through ``DropInTestSeam``, from a launch argument
+/// the app never sets for itself. A person using this app never gets it: there
+/// is no setting, no debug menu and no build flag — the argument has to be on
+/// the process.
+///
+/// Silence rather than a tone on purpose. A tone would be audible on the
+/// Mac's speakers for the length of every UI run, and the thing under test is
+/// that frames *travel*, which silence proves as well as noise does.
+public final class PumpedDropInAudio: DropInAudio, @unchecked Sendable {
+
+    private struct State {
+        var running = false
+        var played: [Data] = []
+        var muted = false
+        var frames = 0
+    }
+
+    private let lock = NSLock()
+    private var state = State()
+    private let queue = DispatchQueue(label: "domovoi.dropin.pump")
+    /// Under ``lock`` like everything else here: ``stop()`` can arrive on a
+    /// different thread from ``start(onFrame:)``, and a timer read while it is
+    /// being assigned is the one race this class could have.
+    private var held: DispatchSourceTimer?
+
+    /// How many frames this has handed up. A UI case cannot read it; it is
+    /// here so a package case can prove the pump runs at all.
+    public var frames: Int { lock.withLock { state.frames } }
+    public var played: [Data] { lock.withLock { state.played } }
+
+    public init() {}
+
+    public func start(onFrame: @escaping @Sendable (Data) -> Void) throws {
+        let already: Bool = lock.withLock { () -> Bool in
+            if state.running { return true }
+            state.running = true
+            return false
+        }
+        guard !already else { return }
+        let silence = Data(count: DropInAudioFormat.frameBytes)
+        let made = DispatchSource.makeTimerSource(queue: queue)
+        made.schedule(deadline: .now() + .milliseconds(30), repeating: .milliseconds(30))
+        made.setEventHandler { [weak self] in
+            guard let self else { return }
+            // Muted is the real engine's behaviour too: the microphone stays
+            // open and the frames stop, so the socket stays up.
+            let send: Bool = self.lock.withLock { () -> Bool in
+                guard self.state.running, !self.state.muted else { return false }
+                self.state.frames += 1
+                return true
+            }
+            if send { onFrame(silence) }
+        }
+        lock.withLock { held = made }
+        made.resume()
+    }
+
+    public func play(_ pcm: Data) { lock.withLock { state.played.append(pcm) } }
+
+    public func setMuted(_ muted: Bool) { lock.withLock { state.muted = muted } }
+
+    public func stop() {
+        let going: DispatchSourceTimer? = lock.withLock { () -> DispatchSourceTimer? in
+            state.running = false
+            let was = held
+            held = nil
+            return was
+        }
+        going?.cancel()
+    }
+}
+
+/// The one launch argument that puts stand-ins in a drop-in call's place, for
+/// a UI case on a Simulator.
+///
+/// ### Why this exists at all
+///
+/// A drop-in call starts by asking for the microphone, and on a Simulator that
+/// is a **system** alert outside the app. A UI case can dismiss one with an
+/// interruption monitor, but it cannot do it reliably, and the frame after it
+/// the call opens a real `AVAudioEngine` against the Mac's input. So without
+/// a seam there is no UI coverage of this feature at all: not the control, not
+/// the refusal sentence, not `hang up`.
+///
+/// ### What keeps it honest
+///
+/// * It is a **launch argument**, like `-domovoi-server` and
+///   `-domovoi-audit-strip` (`DomovoiApp.swift:103-117`) — the app never sets
+///   it, there is no setting and no debug menu, and a person cannot reach it.
+/// * It replaces only the three things that need hardware: the engine, the
+///   audio session and the permission prompt. **Every decision stays the
+///   app's own** — the arbiter, the read, the socket, the token, the
+///   sentences, the lifetime. A case driven through this seam tests the real
+///   model against the real house.
+/// * Neither value makes anything *pass* that would otherwise fail:
+///   ``deny`` refuses the microphone, which is a state a person reaches by
+///   tapping `Don't Allow`, and ``pump`` grants it and then speaks silence.
+public enum DropInTestSeam: String, Sendable {
+
+    /// The microphone is refused, as `Don't Allow` refuses it.
+    case deny
+
+    /// The microphone is granted, and capture is ``PumpedDropInAudio``.
+    case pump
+
+    /// The flag this reads. Spelt out because it belongs to this type and to
+    /// the one view that asks (`RoomsDropInRow.swift`).
+    public static let flag = "-domovoi-dropin-mic"
+
+    /// The seam `arguments` asks for, or nil — which is every ordinary launch.
+    ///
+    /// An unknown value is **nil**, not a trap: a mistyped argument on a train
+    /// must leave the app the app rather than half-replacing its audio.
+    public static func asked(_ arguments: [String]) -> DropInTestSeam? {
+        guard let at = arguments.firstIndex(of: flag), at + 1 < arguments.count else {
+            return nil
+        }
+        return DropInTestSeam(rawValue: arguments[at + 1])
+    }
+}
