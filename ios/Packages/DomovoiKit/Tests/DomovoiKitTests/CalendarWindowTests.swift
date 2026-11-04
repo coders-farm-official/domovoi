@@ -388,24 +388,34 @@ final class CalendarWindowTests: XCTestCase {
     /// A page cut short by `LIMIT` is this range's answer and **nobody
     /// else's**.
     ///
-    /// The distinction the screen depends on: `landed` keeps a truncated page
-    /// from spinning for ever, `serves` keeps it from being believed about a
-    /// smaller range it may not carry every row of.
+    /// The distinction the screen depends on, and the whole of it since
+    /// REVIEW-2's must 1: a cut page is its **own** range's answer — so
+    /// nothing spins waiting for an uncut one — and is no answer at all about
+    /// a range inside it.
+    ///
+    /// There used to be a second, weaker predicate (`landed(for:)`) saying a
+    /// cut page had answered any range its window covered, and
+    /// ``CalendarModel/rangePending`` asked that one. The last two assertions
+    /// here are why it is gone: a screen that believed a cut page about a
+    /// range inside it said `nothing on the calendar` when the read had
+    /// failed, and flashed the same sentence on the way to a successful one.
     func testACutPageAnswersItsOwnRangeAndNoOther() {
         let window = CalendarWindow(startMs: 100, endMs: 900)
         let inside = CalendarWindow(startMs: 200, endMs: 300)
 
         let whole = CalendarPage(window: window, rows: [], truncated: false)
-        XCTAssertTrue(whole.landed(for: inside))
         XCTAssertTrue(whole.serves(inside))
+        XCTAssertTrue(whole.serves(window))
 
         let cut = CalendarPage(window: window, rows: [], truncated: true)
-        XCTAssertTrue(cut.landed(for: window), "a cut page is still its own range's answer")
         XCTAssertTrue(cut.serves(window), "re-reading it would return the same cut")
-        XCTAssertTrue(cut.landed(for: inside))
         XCTAssertFalse(
             cut.serves(inside),
             "the first 500 rows of a window are not every row of a range inside it"
+        )
+        XCTAssertFalse(
+            cut.serves(CalendarWindow(startMs: 50, endMs: 900)),
+            "a page is never an answer about a range it does not even cover"
         )
     }
 
@@ -429,6 +439,12 @@ final class CalendarWindowTests: XCTestCase {
         /// means the case that depended on it asserted nothing.
         let ranOut = Shared<Bool>(false)
 
+        /// While set, every read of the events route answers 503 — a house
+        /// that has gone away with a page already in hand, which is the state
+        /// REVIEW-2's must 1 was measured in. The request is still recorded in
+        /// ``asked``: it was asked.
+        let failing = Shared<Bool>(false)
+
         let rows: [(id: Int64, title: String, startsAt: String)]
 
         init(rows: [(id: Int64, title: String, startsAt: String)]) {
@@ -447,6 +463,9 @@ final class CalendarWindowTests: XCTestCase {
                 }
                 let query = url.query ?? ""
                 self.asked.mutate { $0.append(query) }
+                if self.failing.current {
+                    return .json(#"{"detail":"the calendar is unwell"}"#, status: 503)
+                }
                 if let holding = self.hold.current, query.contains(holding) {
                     self.arrived.set(true)
                     // Bounded at 0.8 s, under the rig's own
@@ -545,7 +564,55 @@ final class CalendarWindowTests: XCTestCase {
         return WindowHouse(rows: rows)
     }
 
+    /// A house with more events in **one day** than one read can carry: 500
+    /// on the 4th, and `swim lesson` alone on the 5th.
+    ///
+    /// The shape the cut-page bar is about (REVIEW-2, must 2). Every window
+    /// that includes the 4th comes back cut, so a read widened from the 4th
+    /// to the 5th spends all 500 of its rows on the 4th — `ORDER BY starts_at
+    /// ASC LIMIT 500` — and the 5th draws nothing. `crowdedHouse` cannot see
+    /// this: there the excess is 182 days, so ``CalendarWindow/widens(to:)``
+    /// says no on its own and the bar never decides.
+    private func busyDay() -> WindowHouse {
+        let floor = midnight(2026, 11, 4)
+        var rows: [(id: Int64, title: String, startsAt: String)] = (0..<500).map { index in
+            (
+                id: Int64(2_000 + index),
+                title: "shift \(index)",
+                startsAt: calendarInstant(
+                    Date(timeIntervalSince1970: Double(floor + Int64(index) * 150_000) / 1000)
+                )
+            )
+        }
+        rows.append((1, "swim lesson", "2026-11-05T07:00:00-06:00"))
+        return WindowHouse(rows: rows)
+    }
+
+    /// One window as the query string the route is asked for.
+    ///
+    /// Composed with the app's own ``calendarInstantEncoded(ms:)`` on
+    /// purpose: what the spelling is, character for character, is
+    /// ``testTheWindowIsSpeltOutAsTheRoutesQueryString()``'s job, and the
+    /// cases below are about *which window* was asked for.
+    private func query(_ window: CalendarWindow) -> String {
+        var text = "start=\(calendarInstantEncoded(ms: window.startMs))"
+        if !window.isOpenEnded {
+            text += "&end=\(calendarInstantEncoded(ms: window.endMs))"
+        }
+        return text + "&limit=\(calendarWindowLimit)"
+    }
+
     private func rig(_ house: WindowHouse) -> (CalendarModel, InMemoryShellStore) {
+        let (model, store, _) = rigged(house)
+        return (model, store)
+    }
+
+    /// ``rig(_:)`` with the container, for the one case that has to fire a
+    /// push — the read a push makes is what says the box is pointed at the
+    /// range on screen.
+    private func rigged(
+        _ house: WindowHouse
+    ) -> (CalendarModel, InMemoryShellStore, AppContainer) {
         house.install()
         let store = InMemoryShellStore(serverURL: server, token: "household-abc")
         store.trustServer(server, identity: TestIdentity.real.pin)
@@ -561,7 +628,7 @@ final class CalendarWindowTests: XCTestCase {
             nowMs: { [nowMs] in nowMs },
             timeZone: { [chicago] in chicago }
         )
-        return (model, store)
+        return (model, store, container)
     }
 
     private func settleUntil(_ done: @MainActor () -> Bool, _ what: String) async {
@@ -722,11 +789,15 @@ final class CalendarWindowTests: XCTestCase {
 
         let fetchesBefore = model.events.fetches
         model.goToToday()
-        // **Not `!rangePending`**, which is already false here and was while
-        // this case was being written: the cut page from may *contains* the
-        // range coming home, so it `landed(for:)` it and a settle on that
-        // predicate returns before the request has even gone out. What is
-        // waited for is the page in hand being the one that was asked for.
+        // **Not `!rangePending`**, even though since REVIEW-2's must 1 that
+        // predicate is true here: what this case is about is the *request*,
+        // and the assertion below has to be made before any settle at all,
+        // because a settle is where the request is allowed to happen. What is
+        // then waited for is the page in hand being the one that was asked
+        // for. (While `rangePending` asked only whether the page's window
+        // covered the range, it was false here — the cut page from may covers
+        // november — and a settle on it returned before the request had even
+        // gone out.)
         XCTAssertEqual(
             fetchesBefore + 1, model.events.fetches,
             "`today` asked for nothing: a cut page from may was taken as the "
@@ -977,10 +1048,18 @@ final class CalendarWindowTests: XCTestCase {
     ///
     /// Agenda → month → straight back to the agenda. The month's reply lands
     /// into ``ApiRead``'s one value slot **after** the person is back on the
-    /// agenda, and the agenda's page is gone with it: without the in-flight
-    /// check in the model's `rangeMoved` nothing was left to replace it, so
-    /// ``CalendarModel/rangePending`` stayed true and the agenda showed a
-    /// spinner that never stopped.
+    /// agenda, and the agenda's page is gone with it: with nothing left to
+    /// replace it, ``CalendarModel/rangePending`` stayed true and the agenda
+    /// showed a spinner that never stopped.
+    ///
+    /// This is ``CalendarModel``'s `pageLanded()`, and it is the case that
+    /// says why that exists. `rangeMoved` used to guess at this instead —
+    /// going back to the agenda re-pointed the read because the window a read
+    /// *might* be in flight for did not cover it — and the guess cost a round
+    /// trip on every backwards chevron that needed none (REVIEW-2, should 5).
+    /// Here the month's reply is not cancelled at all: it lands, it cannot
+    /// draw the agenda, and the agenda's own range is read again because of
+    /// that and not because of a guess.
     func testComingStraightBackFromAViewWhoseReadWasAbandonedStillSettles() async {
         let house = spreadOut()
         let (model, _) = rig(house)
@@ -999,5 +1078,250 @@ final class CalendarWindowTests: XCTestCase {
         XCTAssertFalse(model.isLoading, "the agenda is still spinning")
         XCTAssertEqual([1, 2, 3], model.all.map(\.id))
         XCTAssertEqual(CalendarViewMode.agenda, model.mode)
+        XCTAssertEqual(
+            calendarWindow(mode: .agenda, anchor: day(2026, 11, 4), in: chicago),
+            model.events.data?.window,
+            "the page in hand is still the month grid's: nothing re-read the "
+                + "range on screen after a page landed that could not draw it"
+        )
+    }
+
+    // MARK: - REVIEW-2: what the page in hand is, and is not, evidence of
+
+    /// **A failed read says why, with a cut page in hand.**
+    ///
+    /// REVIEW-2's must 1, measured on the Mac at head 40e56588: twenty-six
+    /// agenda chevrons back into a house with more history than one read can
+    /// carry, the house then unwell, `today` — and the screen said
+    /// `nothing on the calendar`, permanently, with no retry link, because
+    /// the error branch is the only one that has one.
+    ///
+    /// The readings are the whole bug: the page in hand *covers* november
+    /// (its window is open-ended from may) and carries no row of it, because
+    /// `LIMIT` cut it in the summer. A screen that took that for an answer
+    /// had `rangePending == false`, which gates ``CalendarModel/errorText``
+    /// off and ``CalendarModel/emptyText`` on. `visible.isEmpty` is asserted
+    /// first for exactly that reason: it is what makes the empty wording
+    /// reachable, so without it the case could pass for the wrong reason.
+    func testAFailedReadWithACutPageInHandSaysWhyRatherThanLookingEmpty() async {
+        let house = crowdedHouse()
+        let (model, _) = rig(house)
+        model.start()
+        await settleUntil({ model.events.answered }, "the opening read")
+
+        for step in 1...26 {
+            model.step(-1)
+            await settleUntil({ !model.rangePending }, "the read for chevron \(step)")
+        }
+        XCTAssertTrue(
+            model.events.data?.truncated == true,
+            "the read from may is not cut, so this case cannot see the bug"
+        )
+
+        house.failing.set(true)
+        model.goToToday()
+        await settleUntil({ model.events.error != nil }, "the refusal")
+
+        XCTAssertTrue(
+            model.visible.isEmpty,
+            "the cut page from may carries a november row, so the empty "
+                + "wording was never reachable and this case asserts nothing"
+        )
+        XCTAssertNotNil(
+            model.errorText,
+            "the read failed and the screen says nothing about it: a cut page "
+                + "from may was taken as the answer for november (REVIEW-2, must 1)"
+        )
+        XCTAssertNil(
+            model.emptyText,
+            "`nothing on the calendar` in a house with a full calendar, "
+                + "because the read failed — and no retry, which lives in the "
+                + "error branch alone"
+        )
+        XCTAssertFalse(
+            model.isLoading,
+            "a failure must not read as a spinner: the sentence is what the "
+                + "screen has to show"
+        )
+
+        // And the retry link's own action gets there: ``CalendarScreenView``'s
+        // error branch calls `events.refresh()`, and the box is pointed at
+        // november, so one tap is enough.
+        house.failing.set(false)
+        model.events.refresh()
+        await settleUntil({ !model.rangePending }, "the retry")
+        XCTAssertNil(model.errorText)
+        XCTAssertTrue(model.visible.contains { $0.title == "pottery class" })
+    }
+
+    /// **A cut page never widens a read below the range on screen.**
+    ///
+    /// REVIEW-2's must 2: the bar on widening while the page in hand is cut
+    /// had no test at all, and deleting it left the suite green. This is the
+    /// shape it is for — five hundred events on the 4th and `swim lesson`
+    /// alone on the 5th — and `crowdedHouse` cannot stand in for it: there a
+    /// step's excess is 182 days, so ``CalendarWindow/widens(to:)`` says no
+    /// on its own and the bar never decides. Here the excess is **one day**,
+    /// the widening is allowed on the arithmetic, and only the cut bars it.
+    ///
+    /// What the counts are for: without the bar the union `[4, 6)` goes out
+    /// with `limit=500` and `ORDER BY starts_at ASC`, which is five hundred
+    /// rows of the 4th, so the 5th draws nothing — and then
+    /// ``CalendarModel`` `pageLanded()` notices and re-reads the 5th alone.
+    /// The screen recovers; the round trip was still spent, and the window
+    /// asked for was still the union. So this case counts the requests and
+    /// names the union it must not see, rather than only looking at the rows.
+    func testACutPageNeverWidensAReadBelowTheRangeOnScreen() async {
+        let house = busyDay()
+        let (model, _) = rig(house)
+        model.start()
+        await settleUntil({ model.events.answered }, "the opening read")
+        XCTAssertTrue(
+            model.events.data?.truncated == true,
+            "five hundred events on the 4th did not cut the agenda's read"
+        )
+
+        model.show(.day)
+        await settleUntil({ !model.rangePending }, "the 4th's own read")
+        let fourth = window((2026, 11, 4), (2026, 11, 5))
+        XCTAssertEqual(fourth, model.askedWindow)
+        XCTAssertTrue(
+            model.events.data?.truncated == true,
+            "the 4th's own read is not cut either, so there is no cut page in hand"
+        )
+
+        let asksBefore = house.asked.current.count
+        let fifth = window((2026, 11, 5), (2026, 11, 6))
+        model.step(1)
+        await settleUntil({ !model.rangePending }, "the 5th's read")
+
+        XCTAssertEqual(
+            asksBefore + 1,
+            house.asked.current.count,
+            "the step asked twice: the cut page was widened and the union came "
+                + "back with nothing the 5th could draw (REVIEW-2, must 2)"
+        )
+        XCTAssertFalse(
+            house.asked.current.dropFirst(asksBefore)
+                .contains(query(window((2026, 11, 4), (2026, 11, 6)))),
+            "the union of the 4th and the 5th went out with `limit=500`, which "
+                + "in this house is five hundred rows of the 4th"
+        )
+        XCTAssertEqual(fifth, model.askedWindow)
+        XCTAssertEqual(query(fifth), house.asked.current.last)
+        XCTAssertTrue(
+            model.visible.contains { $0.title == "swim lesson" },
+            "the 5th is empty on a day that has one event on it"
+        )
+        XCTAssertNil(model.emptyText)
+    }
+
+    /// Four agenda chevrons back and then `today`, which asks for **nothing**
+    /// — the page in hand is a month wider than the range on screen and
+    /// uncut, so it serves it.
+    ///
+    /// The setup for the two cases below, which are the two halves of that
+    /// branch: where the box is left pointing, and what the next chevron
+    /// costs.
+    private func walkedBackThenHome(
+        _ house: WindowHouse
+    ) async -> (CalendarModel, AppContainer) {
+        let (model, _, container) = rigged(house)
+        model.start()
+        await settleUntil({ model.events.answered }, "the opening read")
+        for step in 1...4 {
+            model.step(-1)
+            await settleUntil({ !model.rangePending }, "the read for chevron \(step)")
+        }
+        XCTAssertEqual(
+            day(2026, 10, 6).startMs(in: chicago),
+            model.askedWindow.startMs,
+            "four chevrons back is four weeks and the agenda's day of lead-in"
+        )
+        XCTAssertFalse(model.events.data?.truncated ?? true, "this house cuts nothing")
+
+        let fetchesBefore = model.events.fetches
+        model.goToToday()
+        await everythingLands()
+        XCTAssertEqual(
+            fetchesBefore,
+            model.events.fetches,
+            "`today` re-read a range whose rows were already in hand"
+        )
+        XCTAssertFalse(model.rangePending)
+        return (model, container)
+    }
+
+    /// **The box is left pointing at the range on screen**, so the next read
+    /// anybody makes is of that range.
+    ///
+    /// REVIEW-2's must 3: the box coming home on the branch that asks for
+    /// nothing had no test, and deleting the line left the suite green. The
+    /// push is what makes it observable — nothing else reads the box without
+    /// first setting it — and a push is the ordinary way this screen re-reads
+    /// (`pg_notify` inside every write's own transaction).
+    ///
+    /// The walk is **four** weeks and not twenty-six on purpose. The line
+    /// used to be `if asked.daysBelow(wanted) > calendarWidenLimitDays`, 62
+    /// days, so a four-week walk left the box a month in the past and
+    /// qualified as "close enough": this case therefore fails both for the
+    /// line being deleted and for that bound coming back.
+    func testTheBoxIsLeftPointingAtTheRangeOnScreenSoTheNextReadIsOfIt() async {
+        let house = spreadOut()
+        let (model, container) = await walkedBackThenHome(house)
+        let home = calendarWindow(mode: .agenda, anchor: day(2026, 11, 4), in: chicago)
+        XCTAssertEqual(
+            home,
+            model.askedWindow,
+            "`today` asked for nothing and left the box pointed a month back"
+        )
+
+        let fetchesBefore = model.events.fetches
+        container.stateEventArrived(StateEvent(type: "calendar.events.changed", frame: "{}"))
+        await settleUntil(
+            { model.events.fetches == fetchesBefore + 1 }, "the push's re-read"
+        )
+        XCTAssertEqual(
+            query(home),
+            house.asked.current.last,
+            "the push's read asked from a floor nobody is looking at: in a "
+                + "house with more rows than `limit` below it, that read comes "
+                + "home with nothing to draw (REVIEW-2, must 3)"
+        )
+    }
+
+    /// **A step back into rows already on screen costs no request.**
+    ///
+    /// REVIEW-2's should 5. The branch that asks for nothing used to need the
+    /// box to cover the new range as well, and the box has just been narrowed
+    /// to the range on screen — so the very next backwards chevron failed
+    /// that test and re-read a fortnight that was already drawn. What decides
+    /// it now is the page (``CalendarPage/serves(_:)``) and nothing else;
+    /// what a read still in flight might land is ``CalendarModel``
+    /// `pageLanded()`'s business, and
+    /// ``testComingStraightBackFromAViewWhoseReadWasAbandonedStillSettles()``
+    /// is the case for that.
+    func testAStepBackIntoThePageInHandCostsNoRequest() async {
+        let house = spreadOut()
+        let (model, _) = await walkedBackThenHome(house)
+
+        let fetchesBefore = model.events.fetches
+        let asksBefore = house.asked.current.count
+        model.step(-1)
+        await everythingLands()
+
+        XCTAssertEqual(
+            fetchesBefore,
+            model.events.fetches,
+            "the step back re-read rows that were already on screen "
+                + "(REVIEW-2, should 5)"
+        )
+        XCTAssertEqual(asksBefore, house.asked.current.count)
+        XCTAssertFalse(model.rangePending, "the rows are here: nothing is pending")
+        XCTAssertEqual(
+            [1, 2, 3],
+            model.visible.map(\.id),
+            "the step back drew something other than the page in hand"
+        )
     }
 }

@@ -117,14 +117,23 @@ extension StubHouseUITests {
     /// application would scroll the agenda underneath instead. The second
     /// half of the flicks go the other way, in case the first swipe carried
     /// the wanted word off the left-hand end.
+    ///
+    /// **Every swipe is followed by a look.** The loop was check-then-swipe,
+    /// so the last flick was dispatched and nothing ever looked at what it
+    /// did — with the default four that left two left flicks and exactly
+    /// **one** usable right-hand flick, which is the case the right-hand
+    /// flicks exist for (REVIEW-2, should 4). A flake here lands in a train
+    /// as a red case and reads as a layout bug.
     @MainActor
     func calTapViewWord(_ app: XCUIApplication, _ word: String, flicks: Int = 4) -> Bool {
         let wanted = app.buttons[word]
+        func tapIfReachable() -> Bool {
+            guard wanted.exists, wanted.isHittable else { return false }
+            wanted.tap()
+            return true
+        }
         for flick in 0..<flicks {
-            if wanted.exists, wanted.isHittable {
-                wanted.tap()
-                return true
-            }
+            if tapIfReachable() { return true }
             guard let onScreen = CalWords.viewWords
                 .map({ app.buttons[$0] })
                 .first(where: { $0.exists && $0.isHittable })
@@ -135,6 +144,8 @@ extension StubHouseUITests {
                 onScreen.swipeRight()
             }
         }
+        // The look the loop used to leave out.
+        if tapIfReachable() { return true }
         print("=== THE TOGGLE'S `\(word)` NEVER BECAME HITTABLE — tree follows ===")
         print(app.debugDescription)
         return false
