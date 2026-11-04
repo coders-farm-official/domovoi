@@ -18,11 +18,13 @@ import SwiftUI
 // up where they happen: the wires do not follow the float
 // (``ManualMapStage/wires(_:size:)``), and there is no 280 ms camera zoom
 // between levels, because a level change is a different arm of
-// ``ManualView``'s `@ViewBuilder` switch — a transition between two stages,
-// not a value change inside one, so there is no camera to move
+// ``ManualLevelView``'s `switch` — a transition between two stages, not a
+// value change inside one, so there is no camera to move
 // (``ManualMapStage/body``, which has the whole reason). That held before
-// answer 32 was attempted and it holds now that the attempt is reverted;
-// the stack never came into it.
+// answer 32, while it was attempted on a stack of the manual's own, and
+// now that a level is a pushed screen (``ManualLevelHost``): how the levels
+// are mounted never came into it, and Kamron's entry 73 is the open
+// question of building the glide for real.
 // ---------------------------------------------------------------------------
 
 /// A world position and the scale the thing at it is drawn at — `Pos`
@@ -227,7 +229,7 @@ struct ManualMapStage: View {
         // **No 280 ms camera animation, because there is no camera move to
         // animate.** Android keeps one `ManualMap` composition and animates
         // `focus` inside it (`MOVE_MS`, `ManualScreen.kt:549`). Here a level
-        // change is a different arm of ``ManualView``'s `@ViewBuilder`
+        // change is a different arm of ``ManualLevelView``'s
         // switch, which SwiftUI gives a different identity, and `focus` is a
         // `let` on a view built per level, so it cannot change within one
         // stage's lifetime. The level change is a *transition* between two
@@ -274,14 +276,16 @@ struct ManualMapStage: View {
     /// two ~104-point cards, so the part of it that would move is the part
     /// covered by the cards.
     ///
-    /// **And that cost is one stage's.** One level is mounted at a time —
-    /// the inner stack that kept covered levels alive is gone
-    /// (``ManualView/ready(_:cached:_:)``) — so there is one
-    /// `GeometryReader` and one set of `repeatForever` offsets, which is
-    /// what this decision was costed against. ``isOnTop`` still gates the
-    /// float and is still worth its line: it is the gate that makes the cost
-    /// one stage's whatever mounts a second one, and it is `true` for the
-    /// level on screen either way. The wires never followed in any case.
+    /// **And that cost is one stage's, which is ``isOnTop``'s whole job.**
+    /// Answer 32 mounts a level as a screen on the shell's stack
+    /// (``ManualLevelHost``), so a map **stays mounted** under the cluster
+    /// pushed over it and two or three stages are alive at once. Only the top
+    /// one floats: `isOnTop` is a comparison against ``ManualModel/place``,
+    /// so the covered stages hold their cards still and there is one set of
+    /// `repeatForever` offsets on screen, which is what this decision was
+    /// costed against. For one commit — `6d071463` to this one — the gate was
+    /// constant `true` because one level was mounted at a time; it is load
+    /// bearing again. The wires never followed in any case.
     ///
     /// Hidden from VoiceOver — it is a drawing of the links the nodes beside
     /// it already are.
@@ -404,7 +408,7 @@ struct ManualMapStage: View {
     /// *up* as much as on the way down.
     ///
     /// SwiftUI does not. Two sibling clusters are the same arm of
-    /// ``ManualView``'s `@ViewBuilder` switch with a different `focus`, so
+    /// ``ManualLevelView``'s switch with a different `focus`, so
     /// the view is reused rather than rebuilt; and while the levels were a
     /// `NavigationStack` of the manual's own the level below the one on
     /// screen stayed mounted, so a pop restarted nothing at all. Either way
@@ -426,7 +430,7 @@ struct ManualMapStage: View {
     ///
     /// Only the top one floats — see ``wires(_:size:)``. It is a comparison
     /// of two `ManualPlace`s and not "is my focus the model's focus", so the
-    /// `.piece` fallback (``ManualView``'s map for a piece the document lost)
+    /// `.piece` fallback (``ManualLevelView``'s map for a piece the document lost)
     /// is on top when it is on top.
     private var isOnTop: Bool { manual.place == place }
 

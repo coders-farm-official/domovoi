@@ -268,7 +268,7 @@ struct ManualMapPage: View {
     /// arrival at this level the scramble should key on, and whether this
     /// page is the one on top of the manual's stack (only the top level's
     /// cards float). Deriving it would get the `.piece` fallback wrong —
-    /// ``ManualView`` draws a map for a piece the document no longer has, and
+    /// ``ManualLevelView`` draws a map for a piece the document no longer has, and
     /// that page's `focus` is `nil` while its place is `.piece(…)`, so a
     /// derived place would call the top level covered and hold its cards
     /// still.

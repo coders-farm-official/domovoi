@@ -17,16 +17,16 @@ import XCTest
 ///  * `ManualStrings.Fallback.checklistUnknown` back to `""` — answer 33 dead,
 ///    the third-state circle unlabelled on an older server;
 ///  * `ManualModel.levels` returning `[]` always — the chain answer 32 needs,
-///    broken. **Read this one carefully**: when the sabotage was written the
-///    chain was the path of a `NavigationStack` of the manual's own, so
-///    breaking it killed the swipe-back. Train I003 then showed that that
-///    stack took the route's screen away in all twenty UI cases, and the fix
-///    (`fx-manual`) removed it. So **a swipe-back leaves the manual either
-///    way now**, this chain has no caller in the app
-///    (`ManualModel.levels`' own doc comment says so), and what this test
-///    still pins is the arithmetic the shared change will bind — not a
-///    behaviour of the shipping screen. Nothing here is evidence that the
-///    gesture goes up a level; it does not;
+///    broken. **Read this one carefully, because what it breaks has changed
+///    twice.** When the sabotage was written the chain was the path of a
+///    `NavigationStack` of the manual's own; train I003 showed that that
+///    stack took the route's screen away in all twenty UI cases and
+///    `fx-manual` (`6d071463`) removed it, which left the chain with no
+///    caller at all. It has one again: `ManualLevelHost` mounts one screen
+///    per entry on the **shell's** stack, so an always-empty chain is a
+///    manual that never leaves Start here. These cases are the arithmetic
+///    under that mounting; the gesture itself can only be driven by a UI
+///    case on a train (`testManual_ASwipeFromAPieceGoesUpToItsTopic`);
 ///  * `manualRelativeLuminance` without its gamma expansion — every contrast
 ///    ratio the wash's doc comment states silently wrong.
 ///
@@ -64,16 +64,17 @@ final class ManualAnswersTests: XCTestCase {
         return ManualModel(in: container, visibility: { seen }, cache: ManualCacheBox())
     }
 
-    /// The chain a `NavigationStack` of the manual's own would be given, and
-    /// what a pop would write back.
+    /// The chain the screen's levels are mounted from, and what a pop writes
+    /// back.
     ///
-    /// **This is the case the sabotage `levels -> []` fails**, and after
-    /// `fx-manual` it is the *only* thing that would fail: no view binds
-    /// `levels` any more, so an always-empty chain is invisible on screen.
-    /// That is the point of keeping the test — the arithmetic is what the
-    /// shared change will bind, and this is all that holds it honest in the
-    /// meantime. It says nothing about the swipe-back, which leaves the
-    /// manual today (``ManualModel/up()``).
+    /// **This is the case the sabotage `levels -> []` fails**, and it is a
+    /// claim about the shipping screen again: ``ManualLevelHost`` reads this
+    /// chain for which level each pushed screen draws and for how many of
+    /// them there are, so an always-empty chain is a manual that cannot
+    /// leave Start here. What it still does not say is that the *gesture*
+    /// works — a `NavigationStack` cannot be driven from a package test, and
+    /// `testManual_ASwipeFromAPieceGoesUpToItsTopic` on the next train is
+    /// what reads that.
     func testTheLevelChainIsWhatTheStackPushesAndPops() {
         let model = rig()
 
@@ -151,6 +152,154 @@ final class ManualAnswersTests: XCTestCase {
         // Bounded: four levels is the whole chain, whatever is asked for.
         model.open(levels: [.piece("pi-room")])
         XCTAssertLessThanOrEqual(model.levels.count, 4, "the walk is capped")
+        model.stop()
+    }
+
+    // MARK: - answer 32, rebuilt: the levels as screens on the shell's stack
+
+    /// Which level the screen at each depth draws, and how many screens there
+    /// are.
+    ///
+    /// ``ManualLevelStack`` is the whole of what `ManualLevelHost` knows: the
+    /// host at depth 0 is the route's own screen (Start here) and presents
+    /// depth 1 while the chain is longer than 0, and so on. A UI case on a
+    /// train is the only thing that can drive the gesture; this is the sum
+    /// underneath it, and the sum is where an off-by-one would live.
+    func testWhichLevelEachPushedScreenDraws() {
+        let cluster: [ManualPlace] = [.map, .topic("rooms-and-devices")]
+
+        XCTAssertEqual(
+            .start, ManualLevelStack.level(at: 0, in: cluster),
+            "depth 0 is the route's own screen, which is always Start here"
+        )
+        XCTAssertEqual(.map, ManualLevelStack.level(at: 1, in: cluster))
+        XCTAssertEqual(.topic("rooms-and-devices"), ManualLevelStack.level(at: 2, in: cluster))
+        XCTAssertNil(
+            ManualLevelStack.level(at: 3, in: cluster),
+            "a depth the chain does not reach is a screen on its way out, and "
+                + "it keeps drawing what it drew — nil is how the host knows "
+                + "to"
+        )
+
+        // Start here: nothing is pushed, so nothing above depth 0 is drawn
+        // and the swipe is the route's own. That is the half of answer 32
+        // Android spells `BackHandler(enabled = at != "start")`.
+        XCTAssertFalse(
+            ManualLevelStack.presentsDeeper(at: 0, in: []),
+            "Start here pushes nothing, so a swipe there leaves the manual"
+        )
+        XCTAssertTrue(ManualLevelStack.presentsDeeper(at: 0, in: cluster))
+        XCTAssertTrue(ManualLevelStack.presentsDeeper(at: 1, in: cluster))
+        XCTAssertFalse(
+            ManualLevelStack.presentsDeeper(at: 2, in: cluster),
+            "the deepest screen of the chain presents nothing"
+        )
+
+        // The cap is the recursion's, and it is the same walk `levels` caps.
+        let tooDeep: [ManualPlace] = [.map, .topic("a"), .piece("b"), .piece("c")]
+        XCTAssertFalse(
+            ManualLevelStack.presentsDeeper(at: ManualLevelStack.maxDepth, in: tooDeep),
+            "nothing is presented past the cap, whatever the chain says"
+        )
+    }
+
+    /// A swipe back goes up **one** level, from every level, and off the top
+    /// of the manual from Start here — Kamron's answer 32, and Android's
+    /// `BackHandler(enabled = at != "start") { up() }` (`ManualScreen.kt:315`).
+    ///
+    /// The dismissal is written as a depth and not as `up()`
+    /// (``ManualModel/pop(to:)``): the gesture pops a screen, and what the
+    /// model is told is which screen is now on top. Taking `up()` from
+    /// `place` instead would be a second source of truth for where the screen
+    /// is, which is the defect this app has paid for twice — and this case is
+    /// what would catch the two drifting apart, because it checks that the
+    /// landing is `parent(of:)` every time.
+    func testASwipeBackGoesUpExactlyOneLevel() async {
+        // A **served** document, because the depth of a piece depends on it:
+        // its parent is its topic's cluster only when the document has that
+        // topic (``ManualModel/parent(of:)``), so a rig with no document
+        // would put a piece two screens deep instead of three and this case
+        // would be testing a shorter stack than the app has.
+        let model = servedRig()
+        model.start()
+        await settle(until: { model.doc != nil })
+
+        model.go("pi-room")
+        XCTAssertEqual(.piece("pi-room"), model.place)
+        XCTAssertEqual(
+            [.map, .topic("rooms-and-devices"), .piece("pi-room")],
+            model.levels,
+            "a piece's page is three screens above the route's own"
+        )
+
+        // The swipe from the piece's page: the screen at depth 3 is
+        // dismissed, so the one at depth 2 is on top.
+        let fromThePiece = model.place
+        model.pop(to: 2)
+        XCTAssertEqual(
+            model.parent(of: fromThePiece), model.place,
+            "a swipe from a piece's page has to land exactly where `zoom out` "
+                + "does, or the gesture and the control are two ways up that "
+                + "disagree"
+        )
+        XCTAssertEqual(.topic("rooms-and-devices"), model.place)
+
+        // And again from the cluster: depth 1, the map.
+        let fromTheCluster = model.place
+        model.pop(to: 1)
+        XCTAssertEqual(.map, model.place)
+        XCTAssertEqual(model.parent(of: fromTheCluster), model.place)
+
+        // And from the map, which is Start here — still inside the manual,
+        // as Android's back from `"map"` is (`up()` reads `else -> "start"`).
+        model.pop(to: 0)
+        XCTAssertEqual(.start, model.place, "a swipe from the map lands on Start here")
+        XCTAssertEqual([ManualPlace](), model.levels)
+
+        // From Start here there is no pushed screen to dismiss, so this is
+        // not the gesture's path at all — the route's own pop is, and the
+        // manual is left. Asked for anyway, because a binding read during a
+        // transition can call it: it must not move anything.
+        model.pop(to: 0)
+        XCTAssertEqual(.start, model.place, "popping at the root moves nothing")
+        model.stop()
+    }
+
+    /// A dismissal that arrives after the chain was cut somewhere else cannot
+    /// lengthen it again.
+    ///
+    /// The real sequence: on a piece's page the `map` pill is tapped, which
+    /// cuts the chain from three to one. SwiftUI then dismisses the two
+    /// screens above, and each dismissal calls the binding of the host below
+    /// it — a host at depth 2 that no longer exists in the chain. Without the
+    /// clamp in ``ManualLevelStack/popped(to:in:)`` the first of those would
+    /// write `[.map, <whatever depth 2 used to be>]` back and put the screen
+    /// in a cluster the person had just left.
+    func testAPopThatArrivesLateCannotPutTheScreenBack() async {
+        let model = servedRig()
+        model.start()
+        await settle(until: { model.doc != nil })
+
+        model.go("pi-room")
+        XCTAssertEqual(3, model.levels.count, "a piece's page is three screens deep")
+
+        // The `map` pill, which cuts the chain from three to one in one go.
+        model.go("map")
+        XCTAssertEqual(.map, model.place)
+        XCTAssertEqual([.map], model.levels)
+
+        // The dismissals the stack then performs, in the order it unwinds
+        // them: the host at depth 2 first, then the one at depth 1. Both are
+        // depths the chain no longer reaches.
+        model.pop(to: 2)
+        XCTAssertEqual(
+            .map, model.place,
+            "a dismissal from a depth the chain no longer has must not push "
+                + "the screen back down into the cluster it just left"
+        )
+        model.pop(to: 1)
+        XCTAssertEqual(.map, model.place, "the chain already ends at the map")
+        XCTAssertEqual([.map], model.levels)
         model.stop()
     }
 

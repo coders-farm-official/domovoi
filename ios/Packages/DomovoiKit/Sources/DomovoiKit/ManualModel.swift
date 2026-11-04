@@ -12,9 +12,9 @@ import Observation
 /// — it survives a process death and dies with the app's removal.
 /// `Hashable` because a level is a **dictionary key**
 /// (``ManualModel/arrivalCounts``), and because the chain in
-/// ``ManualModel/levels`` is written to be a navigation path the day the
-/// shell's own path can carry it — `navigationDestination(for:)` and
-/// `NavigationLink(value:)` both ask for `Hashable`.
+/// ``ManualModel/levels`` is what the screen's levels are mounted from
+/// (``ManualLevelStack``) — a level is compared, keyed and handed to a
+/// presented screen.
 public enum ManualPlace: Equatable, Hashable, Sendable {
     case start
     case map
@@ -54,6 +54,71 @@ public enum ManualPlace: Equatable, Hashable, Sendable {
     public var pieceID: String? {
         if case .piece(let id) = self { return id }
         return nil
+    }
+}
+
+/// How the manual's levels sit on the **shell's** navigation stack: which
+/// level the screen at a given depth draws, when that screen has to present a
+/// deeper one, and what a dismissal writes back.
+///
+/// ### Why this arithmetic is in the package and not in the view
+///
+/// Kamron's answer 32 — "swipe back goes up a level", which is Android's
+/// `BackHandler(enabled = at != "start") { up() }` (`ManualScreen.kt:315`).
+/// The first build of it gave the manual a `NavigationStack` of its own
+/// inside the route's screen and train I003 measured the cost: all twenty UI
+/// cases that reach a loaded document failed, because a nested stack inside a
+/// homogeneous-path stack unwinds the **outer** push and takes the route's
+/// screen away (``ManualView/ready(_:cached:_:)`` has the whole measurement).
+///
+/// The shape that replaces it brings no second stack: one screen per entry of
+/// ``ManualModel/levels``, each presenting the next through
+/// `navigationDestination(isPresented:)` on the stack that is **already**
+/// there, so the system's own swipe-back pops one level. Which screen draws
+/// which level, and where a dismissal lands, is then a small sum — and a sum
+/// a package test can read, where a `NavigationStack` can only be driven by a
+/// UI case on a train.
+///
+/// Depths are counted from the route's screen: `0` is Start here (the screen
+/// the route pushed, which nothing here presents), `1` the map, `2` a
+/// cluster, `3` a piece's page.
+public enum ManualLevelStack {
+
+    /// How deep the manual can go, which is the length of the longest chain
+    /// ``ManualModel/levels`` can return: map, cluster, piece.
+    ///
+    /// It is a cap and not only a description: the mounting recurses, and a
+    /// chain that was somehow longer than this (a document whose piece
+    /// parented itself, which ``ManualModel/parent(of:)`` cannot produce and
+    /// ``ManualModel/levels`` caps anyway) would recurse with it.
+    public static let maxDepth = 3
+
+    /// The level the screen at this depth draws, or nil when the chain is
+    /// shorter than the depth — a screen the chain no longer reaches, which
+    /// is a screen on its way out. It keeps drawing what it drew: the level
+    /// it is being popped *off* is what the pop animation has to show.
+    public static func level(at depth: Int, in chain: [ManualPlace]) -> ManualPlace? {
+        if depth <= 0 { return .start }
+        guard depth <= chain.count else { return nil }
+        return chain[depth - 1]
+    }
+
+    /// Whether the screen at this depth has a deeper one to present.
+    ///
+    /// `chain.count` screens are pushed above the route's own, so depth `d`
+    /// presents depth `d + 1` exactly while the chain is longer than `d`.
+    public static func presentsDeeper(at depth: Int, in chain: [ManualPlace]) -> Bool {
+        depth >= 0 && depth < min(chain.count, maxDepth)
+    }
+
+    /// What the model opens when the screen above `depth` is dismissed: the
+    /// chain cut back to this screen's own level.
+    ///
+    /// Clamped at both ends, because the binding that calls this is read
+    /// during a transition: a dismissal that arrives after the chain has
+    /// already been cut somewhere else must not lengthen it again.
+    public static func popped(to depth: Int, in chain: [ManualPlace]) -> [ManualPlace] {
+        Array(chain.prefix(max(0, min(depth, chain.count))))
     }
 }
 
@@ -428,8 +493,11 @@ public final class ManualModel {
     /// up bumps that level's count, the key changes, and the task restarts
     /// whatever SwiftUI decided about the view's identity. It is the half
     /// that does not depend on how the levels are mounted, which is why it
-    /// stayed when the inner `NavigationStack` went
-    /// (``ManualView/ready(_:cached:_:)``).
+    /// stayed when the inner `NavigationStack` went and why it is still what
+    /// re-scrambles a level now that the levels are pushed screens on the
+    /// shell's stack: a revealed screen was never unmounted, so only the key
+    /// can restart its task (``ManualLevelStack``,
+    /// ``ManualView/ready(_:cached:_:)``).
     ///
     /// Read through ``arrivals(of:)``. It is `0` before the first arrival,
     /// which is the value a freshly mounted page sees — and a fresh page runs
@@ -742,16 +810,17 @@ public final class ManualModel {
 
     /// `up` (`ManualScreen.kt:308`), and the system back on Android.
     ///
-    /// `zoom out` in the crumbs calls this, and so does a tap on a crumb
-    /// above the one we are on. **On iOS those are the only callers.** The
-    /// swipe-back gesture is not a third way up: it pops the route and
-    /// leaves the manual.
+    /// `zoom out` in the crumbs calls this, a tap on a crumb above the one we
+    /// are on calls it, and **the swipe-back gesture is the third caller** —
+    /// through ``pop(to:)``, which is the same walk taken from the depth the
+    /// gesture popped to rather than from `place`. Kamron's answer 32, and
+    /// Android's own `BackHandler(enabled = at != "start") { up() }`
+    /// (`ManualScreen.kt:315`): back from Start here leaves the screen on
+    /// both platforms, back from anywhere else goes up one level.
     ///
-    /// On Android the system back *is* a caller —
-    /// `BackHandler(enabled = at != "start") { up() }`
-    /// (`ManualScreen.kt:315`) — so the two platforms differ here, and the
-    /// difference is answer 32 blocked on a shared change, not a port
-    /// decision. ``levels`` says what that change is.
+    /// ``ManualLevelStack`` is how that gesture reaches here without a
+    /// `NavigationStack` of the manual's own — the shape train I003 measured
+    /// the cost of.
     public func up() {
         land(on: parent(of: place))
     }
@@ -781,31 +850,29 @@ public final class ManualModel {
     /// `[]` on Start here, `[.map]` on the map, `[.map, .topic]` in a
     /// cluster, `[.map, .topic, .piece]` on a piece's page.
     ///
-    /// **Nothing in the app binds this today — this is a tested, public
-    /// seam with no call site**, which is the shape this track has been
-    /// bitten by before (a `TokenVault` nobody read). It is kept knowingly,
-    /// and the package tests around it
-    /// (`ManualAnswersTests`, "answer 32: the chain of levels") must never
-    /// be read as evidence that a swipe-back goes up a level. It does not:
-    /// see ``up()``. That is a measured retreat rather than an oversight.
+    /// **``ManualLevelHost`` binds it**: one screen per entry, mounted on the
+    /// shell's own `NavigationStack` through `navigationDestination(isPresented:)`
+    /// rather than on a stack of the manual's own, which is the shape train
+    /// I003 measured the cost of (twenty UI cases, the route's screen taken
+    /// away; ``ManualView/ready(_:cached:_:)``). A pushed screen is popped by
+    /// the system's swipe-back, and the pop writes the shorter chain back
+    /// through ``pop(to:)`` — Kamron's answer 32, "swipe back goes up a
+    /// level". The arithmetic the mounting reads is ``ManualLevelStack``.
     ///
-    /// It was written to be the path of
-    /// a `NavigationStack` of the manual's own, so that the system's
-    /// swipe-back popped one level — Kamron's answer 32 — and train I003
-    /// showed that a second stack inside the shell's pushed route takes the
-    /// route's screen away (``ManualView/ready(_:cached:_:)`` has the
-    /// measurement). The chain is kept, with the package tests that pin it,
-    /// because the shared change that unblocks answer 32 is to push these
-    /// values onto the shell's own path: this is the array that change
-    /// needs, and `up()` is one step of the same walk.
+    /// At an accessibility size nothing binds it: the bar and the page share
+    /// one scroll view there and a stack of levels cannot be laid out inside
+    /// that, so the level is swapped in place and a swipe leaves the manual.
+    /// `zoom out` and the crumbs still go up a level, and the control says
+    /// so (``ManualStrings/swipeLeavesTheManualHint``). That divergence is
+    /// entry 74 in `DECISIONS-FOR-KAMRON.md`.
     ///
     /// It is *computed* from ``place`` rather than stored beside it: two
     /// sources of truth for where the screen is would be the defect this app
     /// has already paid for twice, and `place` is what the pills, the
     /// crumbs, the search and `@SceneStorage` all read and write. A pop
-    /// writes back through ``open(levels:)``, and the recomputed chain then
-    /// equals what was written, which is the contract a `NavigationStack`
-    /// path binding asks for.
+    /// writes back through ``pop(to:)`` → ``open(levels:)``, and the
+    /// recomputed chain then equals what was written, which is the contract
+    /// the mounting asks for.
     ///
     /// The walk is bounded: the four levels are a chain, ``parent(of:)``
     /// reaches `.start` in at most three steps, and the count is capped so a
@@ -823,11 +890,30 @@ public final class ManualModel {
     /// The screen's stack popped or pushed: the level on top is where we are.
     ///
     /// An empty array is Start here, which is what a pop-to-root gesture
-    /// hands over. The other half of ``levels``, and like it waiting on the
-    /// shared change — see that property for why nothing in the app calls
-    /// this today.
+    /// hands over. The other half of ``levels``.
     public func open(levels: [ManualPlace]) {
         land(on: levels.last ?? .start)
+    }
+
+    /// A pushed level was dismissed: the screen is now the one at `depth`.
+    ///
+    /// `depth` is the depth of the screen the gesture landed **on** —
+    /// `0` for Start here, `1` for the map, `2` for a cluster — so a swipe
+    /// back from a piece's page calls `pop(to: 2)` and lands on its topic's
+    /// cluster. That is one step of ``up()``'s walk whenever the dismissed
+    /// screen was the deepest one, which is the only screen the system's
+    /// gesture can dismiss; it is written as a depth rather than as `up()`
+    /// so that a dismissal can never move the screen somewhere the stack is
+    /// not (the bug class this app has paid for twice: two sources of truth
+    /// for where it is).
+    ///
+    /// Android reaches the same place from its system back
+    /// (`BackHandler(enabled = at != "start") { up() }`,
+    /// `ManualScreen.kt:315`); from Start here it is not enabled there and
+    /// there is no pushed screen here, so the gesture leaves the manual on
+    /// both.
+    public func pop(to depth: Int) {
+        open(levels: ManualLevelStack.popped(to: depth, in: levels))
     }
 
     /// Picking a search result: open it, clear the field (`ManualScreen.kt:387`).
