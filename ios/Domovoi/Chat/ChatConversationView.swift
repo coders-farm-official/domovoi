@@ -297,12 +297,19 @@ struct ChatConversationView: View {
     /// the only way back to the list, so it is the one part of this row that
     /// may never be somewhere a reader has to scroll to find.
     private var exitRow: some View {
-        HStack(spacing: 8) {
-            backButton
-            Spacer(minLength: 8)
-            shareButton
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                backButton
+                Spacer(minLength: 8)
+                shareButton
+            }
+            .padding(.horizontal, 12)
+            // The same rule ``chrome`` draws under itself. Without it the
+            // pinned chevron sat straight against the first bubble, so at an
+            // accessibility size nothing said where the chrome ended and the
+            // conversation began (review round 2, note 8).
+            Divider()
         }
-        .padding(.horizontal, 12)
     }
 
     /// The name, the place and the per-thread internet switch, as the first
@@ -547,9 +554,30 @@ struct ChatConversationView: View {
                         // heads-up card on the wrong row.
                         let hidden = chat.transcript.earlierCount
                         if hidden > 0 { showEarlier(hidden: hidden, pinning: scroller) }
+                        // **The slice's own indices, and fifty pairs rather
+                        // than a thousand.** `drawn` is
+                        // `messages.dropFirst(hidden)` — the same slice
+                        // ``ChatTranscript/drawn`` returns, taken from the
+                        // array already read above rather than by a second
+                        // read of it — and an `ArraySlice` keeps the array's
+                        // indices, so `index` is still the transcript's own
+                        // offset and the divider and last-row rules below are
+                        // unchanged.
+                        //
+                        // `Array(messages.enumerated()).dropFirst(hidden)`
+                        // stood here and was the same list, at the cost of
+                        // building one tuple per message in the WHOLE thread
+                        // and dropping all but the window's: a thousand tuples
+                        // for fifty rows. This body runs on every delta of a
+                        // streaming reply (``tail`` moves about ten times a
+                        // second), which is what made it worth the change.
+                        // ``AssistantPhoneConversationView`` was fixed the
+                        // same way in round 2 and this is the house's half of
+                        // it (review round 2, finding 4).
+                        let drawn = messages.dropFirst(hidden)
                         ForEach(
-                            Array(messages.enumerated()).dropFirst(hidden),
-                            id: \.element.ordinal
+                            Array(zip(drawn.indices, drawn)),
+                            id: \.1.ordinal
                         ) { index, message in
                             // `WindowDivider` (`ChatHome.kt:655`) at
                             // ``ChatTranscript/windowDividerIndex`` and **nowhere
@@ -869,7 +897,7 @@ struct ChatConversationView: View {
                     .foregroundStyle(Color.brandInk)
                     .accessibilityLabel(ChatMoreStrings.talk)
                     .disabled(!chat.canSend)
-                } else if ChatRules.sendOffered(typed: typed) {
+                } else if ChatRules.sendOffered(typed: typed), chat.canSend {
                     // **Something is typed** — ``ChatRules/sendOffered(typed:)``,
                     // which is the send's own question and deliberately not the
                     // mic's read backwards. That rule's doc comment has the
@@ -897,14 +925,6 @@ struct ChatConversationView: View {
                     .buttonStyle(.borderedProminent)
                     .tint(Color.brand)
                     .frame(minHeight: 44)
-                    // ``ChatModel/canSend``: not while a reply is being
-                    // written, and not while the house's AI is off. The
-                    // field itself stays live so a message can be typed
-                    // while the last reply finishes. Dimmed and not absent
-                    // here, which is the one case where it is honest: the
-                    // words are typed and the send WILL go out, as soon as
-                    // the reply before it lands.
-                    .disabled(!chat.canSend)
                 }
                 // **Nothing at all with a blank box and no mic to put there**
                 // (D8). That is the brand-new chat: Android's spot holds the
@@ -918,6 +938,39 @@ struct ChatConversationView: View {
                 // `.borderedProminent` that stood here is also what Apple's
                 // audit failed on contrast in train S005: grey glyphs on a
                 // grey fill.
+                //
+                // **And nothing at all while a reply is being written**, which
+                // is the second half of the same rule and what review round 2
+                // found still drawn here. `chat.canSend` is in the branch's
+                // own condition rather than a `.disabled(!chat.canSend)` under
+                // it, for two reasons:
+                //
+                //  * ``ChatModel/send(_:)`` does not queue anything. Its guard
+                //    is `!content.isEmpty, canSend, conversationOpen`
+                //    (`ChatModel.swift:590`), so a message typed while a reply
+                //    streams is refused outright and the person has to tap
+                //    again when the reply lands. The comment that used to sit
+                //    here said the send "WILL go out, as soon as the reply
+                //    before it lands", and that was simply not true of this
+                //    model — the kind of argument-in-a-comment this track has
+                //    been bitten by before.
+                //  * the shape it drew instead was the dimmed
+                //    `.borderedProminent` — the one Apple's audit failed on
+                //    contrast in train S005 — and no case ever visited it,
+                //    because the composer's audit types and measures while the
+                //    thread is idle.
+                //
+                // **This is a departure from Android**, which draws the send
+                // faint-and-disabled while `sending`
+                // (`ChatScreen.kt:1166-1171`: `enabled = canSend`, `tint = if
+                // (canSend) brand else fgFaint`). It is logged in this batch's
+                // DECISIONS.md for Kamron, and it is the same trade the blank
+                // box above already makes: a control that cannot do what it
+                // says is not drawn. The field itself stays live, so the
+                // message can still be typed while the last reply finishes —
+                // what is withheld is only the button that would refuse it.
+                // ``StubHouseUITests/testChat_NoSendIsDrawnWhileAReplyIsBeingWritten()``
+                // is the case, and it asserts the send comes back.
             }
             .padding(12)
         }

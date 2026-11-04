@@ -205,6 +205,78 @@ final class ChatTranscriptWindowTests: XCTestCase {
         transcript.clear()
         XCTAssertNil(transcript.window.pinned)
     }
+
+    // MARK: - the window divider against the window
+
+    /// A thread whose last reply says the model's view began `fromId`.
+    private func threadWithWindow(_ count: Int, fromId: Int64) -> [ChatMessage] {
+        thread(count).map { message in
+            guard message.id == Int64(count) else { return message }
+            return ChatMessage(
+                id: message.id,
+                role: "assistant",
+                content: message.content,
+                stats: ChatStats(windowFromId: fromId)
+            )
+        }
+    }
+
+    /// **Where Android's window divider goes when it falls above the cap**, the
+    /// one state round 1 of this branch left with no case at all.
+    ///
+    /// ``ChatTranscript/windowDividerIndex`` is an index into the WHOLE thread
+    /// and the views compare it against the index of each row they draw, so a
+    /// divider whose place is above the window is simply not drawn — and that
+    /// is the right answer rather than a gap: the divider says "the model was
+    /// only given the messages below this line", and when the line is above
+    /// everything on screen, every message on screen is inside the model's
+    /// view and there is nothing to warn about. It comes into the transcript
+    /// the moment "show earlier" brings its row in, which is what the second
+    /// half asserts.
+    ///
+    /// Why it is worth pinning: the obvious "fix" for the missing line is to
+    /// clamp the index into the window, which would draw Android's line at the
+    /// top of the newest page and say the model had forgotten a conversation
+    /// it holds whole.
+    func testAWindowDividerAboveTheCapIsNotDrawnUntilItsRowIsBroughtIn() {
+        var transcript = ChatTranscript()
+        // `window_from_id` sixty messages back, so the divider's row is ten
+        // above the newest page of fifty.
+        XCTAssertTrue(transcript.load(threadWithWindow(1000, fromId: 940), thisDeviceID: "ios-1"))
+        XCTAssertEqual(
+            939, transcript.windowDividerIndex,
+            "the divider is not at message 940's own row, so this case is measuring the wrong thing"
+        )
+        XCTAssertEqual(950, transcript.drawn.startIndex)
+        XCTAssertFalse(
+            transcript.drawn.indices.contains(939),
+            "the divider's row is inside the newest page, so nothing here is about the cap"
+        )
+        transcript.showEarlier()
+        XCTAssertEqual(900, transcript.drawn.startIndex)
+        XCTAssertTrue(
+            transcript.drawn.indices.contains(939),
+            "one page of show earlier did not bring the divider's row in, so the line can never "
+                + "be reached on a thread this long"
+        )
+        XCTAssertEqual(
+            939, transcript.windowDividerIndex,
+            "growing the window moved the divider: the index is the thread's, not the window's"
+        )
+    }
+
+    /// And the control: a `window_from_id` inside the newest page is drawn
+    /// where it belongs, so the case above is about the cap and not about a
+    /// divider that never appears.
+    func testAWindowDividerInsideTheNewestPageIsDrawn() {
+        var transcript = ChatTranscript()
+        XCTAssertTrue(transcript.load(threadWithWindow(1000, fromId: 980), thisDeviceID: "ios-1"))
+        XCTAssertEqual(979, transcript.windowDividerIndex)
+        XCTAssertTrue(
+            transcript.drawn.indices.contains(979),
+            "a divider thirty messages from the foot is outside a fifty-message window"
+        )
+    }
 }
 
 // MARK: - the phone's conversation

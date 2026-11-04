@@ -513,12 +513,13 @@ struct AssistantPhoneConversationView: View {
                     Button(AssistantStrings.stop) { phone.stop() }
                         .buttonStyle(.bordered)
                         .frame(minHeight: 44)
-                } else if !typed.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    // Disabled, not absent and not lying, while a reply is
-                    // being written in **another** of this place's chats: the
-                    // model allows one reply at a time (``send`` guards on
-                    // `sending`), so a `send` that looked live here would do
-                    // nothing when tapped.
+                } else if ChatRules.sendOffered(typed: typed), !phone.sending {
+                    // **Something is typed** — ``ChatRules/sendOffered(typed:)``
+                    // and not this screen's own copy of the trim. The rule is
+                    // the send's one question for both composers (its doc
+                    // comment carries the argument), and while this file kept
+                    // the literal a change to the rule applied to the house's
+                    // composer only (review round 2, finding 3).
                     //
                     // The label's colour is named rather than inherited.
                     // `.borderedProminent` draws a WHITE label on the accent,
@@ -533,7 +534,6 @@ struct AssistantPhoneConversationView: View {
                     .buttonStyle(.borderedProminent)
                     .tint(Color.brand)
                     .frame(minHeight: 44)
-                    .disabled(phone.sending)
                 }
                 // **Nothing at all with a blank composer.** Android does not
                 // draw a greyed send there either — with a blank draft the
@@ -544,6 +544,19 @@ struct AssistantPhoneConversationView: View {
                 // audit failed on contrast in train S005: grey glyphs on a
                 // grey fill, the one finding that run attributed to a control
                 // of this screen.
+                //
+                // **And nothing at all while a reply is being written in
+                // another of this place's chats.** That was the last reachable
+                // dimmed `.borderedProminent` on this screen: `sendingHere`
+                // takes the branch above and draws `stop`, so the only state
+                // left for a `.disabled(phone.sending)` was a reply running in
+                // a different chat — where a greyed send is the same control
+                // that cannot do what it says, in the same shape S005 failed.
+                // ``send()`` refuses it anyway (`!phone.sending`), and it does
+                // not queue it. The house's composer is the wider exposure of
+                // the same thing and took the same treatment; this batch's
+                // DECISIONS.md logs the departure from Android, which draws
+                // the send faint-and-disabled (`ChatScreen.kt:1166-1171`).
             }
             .padding(12)
         }

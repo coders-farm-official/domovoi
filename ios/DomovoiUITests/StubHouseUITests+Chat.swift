@@ -81,15 +81,6 @@ extension StubHouseUITests {
         return false
     }
 
-    /// The transcript's "show earlier" control.
-    ///
-    /// **By prefix, because its accessibility label is not its words.** The
-    /// control draws ``ChatStrings/showEarlier`` and is *read out* as
-    /// ``ChatStrings/showEarlierNote(hidden:)`` — "show earlier, 950 more
-    /// above" — because "show earlier" on its own does not say whether it is
-    /// one message above or nine hundred. `app.buttons["show earlier"]`
-    /// therefore matches nothing at all, which is a case that would pass
-    /// against an app that had lost the control.
     /// The frame of the **highest** element on screen whose label is exactly
     /// `words`, or nil where there is none.
     ///
@@ -117,6 +108,18 @@ extension StubHouseUITests {
         return best
     }
 
+    /// The transcript's "show earlier" control.
+    ///
+    /// **By prefix, because its accessibility label is not its words.** The
+    /// control draws ``ChatStrings/showEarlier`` and is *read out* as
+    /// ``ChatStrings/showEarlierNote(hidden:)`` — "show earlier, 950 more
+    /// above" — because "show earlier" on its own does not say whether it is
+    /// one message above or nine hundred. `app.buttons["show earlier"]`
+    /// therefore matches nothing at all, which is a case that would pass
+    /// against an app that had lost the control.
+    ///
+    /// (This block documented ``chatTopmostFrame(_:_:)`` after round 2's edit
+    /// moved that function in above it — review round 2, note 7.)
     @MainActor
     func chatShowEarlier(_ app: XCUIApplication) -> XCUIElement {
         app.buttons
@@ -214,6 +217,99 @@ extension StubHouseUITests {
         XCTAssertFalse(
             app.buttons[ChatBatchUnderTest.talk].exists,
             "the mic stayed beside the send on a box with words in it"
+        )
+    }
+
+    /// **No send while a reply is being written** — the other half of D8's
+    /// rule, and the state review round 2 found still drawing the dimmed
+    /// `.borderedProminent` that Apple's audit failed in train S005.
+    ///
+    /// The field stays live while a reply streams, so a follow-up can be
+    /// typed; what is withheld is the button. ``ChatModel/send(_:)`` guards on
+    /// `canSend` and **queues nothing**, so a send drawn in this state is a
+    /// control that cannot do what it says — and the shape it drew was the
+    /// grey-glyphs-on-a-grey-fill one. Android draws it faint-and-disabled
+    /// (`ChatScreen.kt:1166-1171`); this is the departure, and the batch's
+    /// DECISIONS.md carries it for Kamron.
+    ///
+    /// ### Why the window is real, and how this case says so if it is not
+    ///
+    /// `fail: "slow"` makes the stub's five-piece reply take 1.5s a piece
+    /// (`stubhouse.py`, `chat_send`), so there are some seven seconds in which
+    /// a reply is being written. ``StubChat/replyEnding`` is the reply's last
+    /// words, so its absence is the proof that the stream was still open when
+    /// the assertion was read — asserted on **both** sides of the read, rather
+    /// than trusting the clock. A window that closed early fails this case
+    /// with its own message instead of passing it for the wrong reason.
+    ///
+    /// And the send **comes back**: it can only be drawn by
+    /// ``ChatRules/sendOffered(typed:)``, which asks whether there is anything
+    /// in the box, so a send on screen afterwards is also the proof that the
+    /// typed words survived the stream.
+    @MainActor
+    func testChat_NoSendIsDrawnWhileAReplyIsBeingWritten() throws {
+        let (app, landed) = openChat(fail: "slow")
+        XCTAssertTrue(landed, "the thread list never answered")
+        XCTAssertTrue(
+            // `secondMessage` and not the list's snippet: `openThread` waits
+            // for a label that STARTS WITH these words, and the snippet starts
+            // with an ellipsis no message in the transcript does.
+            openThread(app, StubChat.fridge, waitingFor: StubChat.secondMessage),
+            "the fridge thread drew no transcript"
+        )
+        XCTAssertTrue(say(app, "slowly now"), "the composer would not send")
+        let live = startingWith(app, StubChat.replyOpening)
+        XCTAssertTrue(
+            live.waitForExistence(timeout: 25),
+            "the first words of the reply never arrived, so no reply was being written"
+        )
+
+        // Short on purpose: every keystroke is spent out of the stream's own
+        // seven seconds.
+        let field = composerField(app)
+        field.tap()
+        app.typeText("and one more")
+        let finished = containing(app, StubChat.replyEnding)
+        XCTAssertFalse(
+            finished.exists,
+            "the reply had already finished before the follow-up was typed: this case needs a "
+                + "reply still being written, so give the stub a longer one"
+        )
+        evidence(app, "chat-send-withheld-mid-reply")
+
+        XCTAssertFalse(
+            chatComposerSends(app),
+            "a send is drawn while a reply is being written — ChatModel.send refuses it and "
+                + "queues nothing, and the dimmed .borderedProminent is what Apple's audit "
+                + "failed in train S005"
+        )
+        XCTAssertFalse(
+            app.buttons[ChatBatchUnderTest.talk].exists,
+            "the mic took the spot while there were words in the box: the mic-or-send rule is "
+                + "about an EMPTY box (ChatScreen.kt:1157)"
+        )
+        XCTAssertFalse(
+            finished.exists,
+            "the reply finished while the composer was being read, so the two assertions above "
+                + "were not read against a streaming reply"
+        )
+
+        // And when the reply lands, the send is back — with the words still
+        // there, which is what being drawn at all says.
+        XCTAssertTrue(
+            finished.waitForExistence(timeout: 40),
+            "the reply never finished, so nothing was waiting for the send to come back"
+        )
+        var back = false
+        for _ in 0..<40 {
+            if chatComposerSends(app) { back = true; break }
+            usleep(250_000)
+        }
+        evidence(app, "chat-send-back-after-reply")
+        XCTAssertTrue(
+            back,
+            "the send never came back after the reply landed: a typed message with nothing on "
+                + "screen that can send it"
         )
     }
 
