@@ -71,8 +71,11 @@ public enum ManualStrings {
     /// while iOS's leading-edge swipe is announced by nobody. Kamron's answer
     /// 32 put the gesture on this screen; a gesture a VoiceOver user cannot
     /// discover is a control that may as well not exist, so the control that
-    /// does the same job says so. Recorded with the other iOS-only sentences
-    /// in this item's notes.
+    /// does the same job says so. Recorded, with
+    /// ``swipeLeavesTheManualHint``, in
+    /// `design-notes/ios/batch-2026-11-03/gx-manual/IOS-ONLY-STRINGS.md` —
+    /// this item's batch notes, not the overnight ones, because the overnight
+    /// file belongs to an item nobody in this batch owns.
     public static let swipeGoesUpHint = "a swipe back from the left edge does this too"
 
     /// The same hint at an accessibility text size, where the swipe does

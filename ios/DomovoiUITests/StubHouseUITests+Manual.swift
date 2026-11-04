@@ -329,25 +329,41 @@ extension StubHouseUITests {
         // accessibility label alone") and the half that shipped broken.
         // Train I004's `manual-audit-map` tree had two static texts per node
         // in one frame — `'Rooms & devices'` and `'Rooms & deX76H0'` — so the
-        // drawn glyphs *were* an element's label, and that is also the one
-        // thing that changed about a screen whose identical audit came back
-        // clean in I002. ``ManualScrambleName`` is now hidden from
-        // accessibility entire, so the card contributes its second line and
-        // nothing else; the name is read off the card's own label, which the
-        // wait above already proved.
+        // drawn glyphs *were* an element's label. (It is *not* what made that
+        // train's audit red: the glyphs measure the same 18.82:1 as the name
+        // they replace. ``testManual_AuditsClean``'s note has the pixels and
+        // what did.) ``ManualScrambleName`` is now hidden from accessibility
+        // entire, and so is the second line — its `AttributedString` frame
+        // claimed the whole card — so a node's card contributes **nothing** to
+        // the tree and is read by its own label, which the wait above already
+        // proved.
         //
-        // Three labels here means the hide came off. **Zero** means
-        // something else: SwiftUI no longer exposing a merged button's
-        // children at all, in which case this is the line to change and not
-        // the screen.
+        // A label here is a hide that came off, and which one says which:
+        // the glyph run or the real name is ``ManualScrambleName``'s, the
+        // subtitle is the second line's. Zero is also what SwiftUI would
+        // report if it stopped exposing a merged button's children at all, so
+        // that reading gets a control of its own below rather than a comment
+        // saying it is unlikely.
         let inside = card.staticTexts.allElementsBoundByIndex.map(\.label)
         XCTAssertEqual(
-            inside, [StubManual.centreSubtitle],
+            inside, [],
             "the centre node's card contributes \(inside) to the tree while "
-                + "its name is scrambling, and it should contribute only its "
-                + "second line — a label that is neither the subtitle nor "
-                + "absent is the drawn glyphs, which answer 30 says nobody "
-                + "reads"
+                + "its name is scrambling, and it should contribute nothing — "
+                + "the glyph run or the name is `ManualScrambleName`'s hide "
+                + "coming off, and \"\(StubManual.centreSubtitle)\" is the "
+                + "second line's"
+        )
+        // The control for the zero: a button whose children are still in the
+        // tree, on the same screen, in the same run. The phone bar's tabs are
+        // an `Image` and a `Text` under one label, so if SwiftUI had stopped
+        // exposing a button's children the count above would be zero for a
+        // reason that is not this screen's and this line says so first.
+        XCTAssertGreaterThan(
+            app.buttons[StubManual.homeTabControl].firstMatch.staticTexts.count, 0,
+            "no button on this screen exposes a static text of its own, so "
+                + "the empty node card above says nothing about either hide — "
+                + "SwiftUI has changed what a merged button contributes and "
+                + "this file's counting assertions are what to rewrite"
         )
         evidence(app, "manual-scramble-running")
 
@@ -366,6 +382,76 @@ extension StubHouseUITests {
             "a ring topic lost its name: \(StubManual.roomsTopicLabel)"
         )
         evidence(app, "manual-scramble-settled")
+    }
+
+    /// A map card is **one** accessibility element, and it is the element
+    /// Apple's audit measures.
+    ///
+    /// This is the case train I004's two unattributable `Contrast failed`
+    /// findings should have had and did not. The audit on that screen reports
+    /// `element: nil`, so a red there says "something on the map", and the
+    /// thing that was wrong was a rectangle: the node's second line claimed
+    /// the whole `{177.7 × 104}` card instead of its own `{85.3 × 14.3}`
+    /// from the batch answer 34 made it an `AttributedString` in, and a
+    /// card-sized rectangle contains the card's own border — 1.35:1, 2.46:1 on the hub —
+    /// where a tight one contains only `fgMuted` on the card at 6.66:1.
+    /// ``testManual_AuditsClean`` has the sampling and the counts.
+    ///
+    /// So this counts what the audit cannot name. Every card on the map
+    /// contributes **no** static text of its own and is read by its label
+    /// (``manualNodeReading(title:subtitle:)``, which the package suite holds
+    /// word for word). Either hide coming off puts a label back here, and the
+    /// failure prints which: a title or a glyph run is
+    /// ``ManualScrambleName``'s, a second line is ``ManualMapNode``'s.
+    ///
+    /// At rest, and `testManual_ANodeIsNamedWhileItsNameScrambles` does the
+    /// same count mid-scramble: the audit runs in that state, and this one is
+    /// the state a reader sees for the rest of the screen's life.
+    ///
+    /// The float is off (`manualLaunch`'s default) so that `frame` is read off
+    /// a card that is holding position — a bobbing card's frame is a point in
+    /// an animation, which is the one thing a geometry assertion in this file
+    /// must not be.
+    @MainActor
+    func testManual_ANodeCardIsOneElementAndNotFour() throws {
+        control("reset-fixtures", "{}", port: 6601, what: "the manual fixture's seed")
+        let app = manualLaunch()
+
+        XCTAssertTrue(manualMap(app), "the map pill did not open the map")
+        let centre = app.buttons[StubManual.centreNodeLabel].firstMatch
+        XCTAssertTrue(centre.waitForExistence(timeout: 20), "the map drew no centre node")
+        // The scramble is over by now at the shipping 24 ms — the pill tap,
+        // the wait and the queries above cost more than its 350 ms lead-in
+        // and eight frames — and this case does not depend on that either
+        // way: both of a card's texts are hidden in both states.
+        for label in [StubManual.centreNodeLabel, StubManual.roomsTopicLabel] {
+            let cards = app.buttons.matching(NSPredicate(format: "label == %@", label))
+            XCTAssertEqual(
+                cards.count, 1,
+                "\(label) is \(cards.count) controls on the map, not one — a "
+                    + "card drawn twice is a level below this one still in the "
+                    + "tree (`testManual_ASwipeFromAPieceGoesUpToItsTopic` has "
+                    + "the premise)"
+            )
+            let card = cards.firstMatch
+            let inside = card.staticTexts.allElementsBoundByIndex.map(\.label)
+            XCTAssertEqual(
+                inside, [],
+                "the card \"\(label)\" contributes \(inside) to the tree and "
+                    + "should contribute nothing: a title or a run of glyphs "
+                    + "is `ManualScrambleName`'s `.accessibilityHidden` coming "
+                    + "off, a second line is `ManualMapNode`'s — and that one "
+                    + "is the frame Apple's audit measured 1.35:1 inside"
+            )
+        }
+        // The control for those zeroes, so an empty card cannot be SwiftUI
+        // having stopped exposing a merged button's children at all.
+        XCTAssertGreaterThan(
+            app.buttons[StubManual.homeTabControl].firstMatch.staticTexts.count, 0,
+            "no button on this screen exposes a static text of its own, so the "
+                + "empty cards above say nothing about either hide"
+        )
+        evidence(app, "manual-node-card-is-one-element")
     }
 
     /// **Answer 31**: the map still works while its cards are bobbing.
@@ -733,6 +819,34 @@ extension StubHouseUITests {
     /// the whole claim: if this case fails again, it is a second finding and
     /// the thing to look at is what is holding the app un-idle, not a popped
     /// route.
+    ///
+    /// ### And it did fail again, in I004, with a third symptom
+    ///
+    /// It failed on its own assertion rather than on a hang: the pill's
+    /// `exists == 0` was polled once a second from `t = 18.5s` to
+    /// `t = 28.5s`, 11 times, and the pill was there every time
+    /// (`testManual_ASwipeFromStartHereLeavesTheManual.log:168-186`). No
+    /// 106-second query, no un-idle app, and the recording's last frame is
+    /// the manual drawn exactly as the frame before the touch — the gesture
+    /// did nothing.
+    /// ``manualSwipeBack(_:)`` carries that diagnosis and the eliminations,
+    /// including the one difference that is not about coordinates: this is the
+    /// only swipe in the suite that has to pop a `Route` off
+    /// ``ShellModel/path``.
+    ///
+    /// **Answer 32 did not change this case's claim**, which is worth saying
+    /// because answer 32 landed after I004 ran: Start here is depth 0, no
+    /// ``ManualLevelHost`` is presented over it
+    /// (`ManualLevelStack.presentsDeeper(at:in:)` is false on an empty
+    /// chain), so the leading-edge gesture has nothing of the manual's to
+    /// unwind and the route's own pop is still the only thing it can do. The
+    /// two cases above it — from the map and from a piece — are where answer
+    /// 32 changed the outcome.
+    ///
+    /// `manual-swipe-on-start-here` is taken **before** the drag, as the
+    /// state the gesture was aimed at. The state after it is in
+    /// `manual-swipe-left-the-manual`, and in a failing run in neither: both
+    /// assertions below come first.
     @MainActor
     func testManual_ASwipeFromStartHereLeavesTheManual() throws {
         control("reset-fixtures", "{}", port: 6601, what: "the manual fixture's seed")
@@ -1447,6 +1561,51 @@ extension StubHouseUITests {
     /// is repainted, and a `Contrast failed` naming this element again fails
     /// this case exactly as it did.
     ///
+    /// ### `manual-audit-map`'s two findings, and why no wait went in front
+    /// of them
+    ///
+    /// Train **I004** returned two `Contrast failed … element: nil` on the map
+    /// (`testManual_AuditsClean.log:257-261`) where **I002**, auditing the
+    /// same screen, returned none. The first reading of that was the
+    /// scramble, and the first fix put a 1.5 s wait here. The pixels say
+    /// otherwise, and they are what settled it.
+    ///
+    /// Both trains' screenshots were sampled in the same rectangles, at
+    /// 1178 × 2556 for a 393 × 852 window
+    /// (`I004/ALL/att/testManual_AuditsClean/manual-audit-map_0_115C….png`
+    /// against `I002/…/manual-audit-map_0_0B78….png`):
+    ///
+    ///  - **Each node's card rectangle is the same picture in both.**
+    ///    `(242,242,247)` over 92.0% of it, the `.quaternary` border
+    ///    `(210,210,215)` over 2.7%, `fgMuted` `(88,85,79)` over 0.6%. The
+    ///    hub's border is `(187,150,99)` — `brandInk` at 60% — over 2.6%.
+    ///    Nothing was repainted between the two trains.
+    ///  - **The glyphs are the same ink as the name.** In the name's own
+    ///    frame, I004's gibberish measures `(0,0,0)` on the card at
+    ///    **18.82:1** and I002's real name measures 18.82:1, the same to the
+    ///    second decimal; the black pixel counts differ by 8% (2305 against
+    ///    2130), which is the gibberish being a little wider. A re-lettering
+    ///    has no contrast finding in it.
+    ///  - **One rectangle changed hands.** The node's second line is an
+    ///    element whose frame went from `{85.3 × 14.3}` to the whole
+    ///    `{177.7 × 104}` card between the two trains; answer 34 making it
+    ///    an `AttributedString` is the only edit it took in between, and
+    ///    ``ManualMapNode``'s second line says why that is a correlation and
+    ///    not a proven mechanism. The tight frame's only pair was `fgMuted` on the card,
+    ///    6.66:1. The card-sized one contains the card's own border:
+    ///    **1.35:1**, and 2.46:1 on the hub. Those three frames hold the only
+    ///    sub-4.5 pairs in the audited picture, and there are two findings.
+    ///
+    /// So the fix is the second line leaving the tree, not a wait, and the
+    /// audit runs on the state the findings came back in. A wait would have
+    /// made this case blind to the one thing it has ever caught here, with
+    /// nothing gained: the scrambling and settled trees are identical in
+    /// accessibility terms now that both of a card's texts are hidden, so the
+    /// earlier state is the same audit plus the guarantee that the hide holds
+    /// while glyphs are on screen. That the hide holds at all is counted, not
+    /// inferred, in ``testManual_ANodeCardIsOneElementAndNotFour()`` and
+    /// ``testManual_ANodeIsNamedWhileItsNameScrambles()``.
+    ///
     /// ### The two states that bisect it, which are kept
     ///
     /// R001 ran the three-state version of this case — S012's commit, not the
@@ -1493,7 +1652,15 @@ extension StubHouseUITests {
             manualNode(app, StubManual.roomsTopic).waitForExistence(timeout: 10),
             "the map drew no nodes, so there was nothing to audit"
         )
-        manualLetTheScrambleFinish()
+        // **Audited the moment the nodes exist, which is mid-scramble, which
+        // is the state the two findings came back on.** There was a 1.5 s
+        // wait here for one commit, and it was wrong: it removed the only
+        // state this screen has ever returned a finding in, so the audit
+        // could not tell the fix from its absence. The audit's note has the
+        // measurement that makes the wait unnecessary — the card rectangles
+        // are identical to the pixel between the scrambling frame and the
+        // settled one — and the state with the extra elements in it is the
+        // stricter of the two.
         try manualAudit(app, "manual-audit-map")
 
         // ---- the topic, which is the piece page's chrome without its page.
@@ -1510,7 +1677,9 @@ extension StubHouseUITests {
             roomPiece.waitForExistence(timeout: 15),
             "the topic's cluster drew no nodes, so there was nothing to audit"
         )
-        manualLetTheScrambleFinish()
+        // Mid-scramble here too, and for the same reason: the cluster's cards
+        // are the same ``ManualMapNode``, so auditing it settled would audit
+        // one fewer state of the same view.
         try manualAudit(app, "manual-audit-topic")
 
         // ---- a second page of the same shape, with other content in it.
@@ -1813,38 +1982,6 @@ extension StubHouseUITests {
         )
     }
 
-    /// Wait out answer 30's scramble before auditing a level that has nodes
-    /// on it.
-    ///
-    /// **Why an audit waits here and nowhere else in this file.** Train I002
-    /// audited the map before the scramble existed and reported nothing;
-    /// train I004 audited it 0.1 s after the nodes drew — the tree it
-    /// attached has every node mid-retype — and Apple returned two
-    /// `Contrast failed` findings it could not attribute to any element. An
-    /// audit taken inside a 542 ms animation is a race, and a race is how a
-    /// finding comes back unattributed and un-reproducible.
-    ///
-    /// **Nothing is audited less.** The scrambled frame and the settled frame
-    /// are the same `Text`, the same font and the same box —
-    /// ``ManualScrambleName``'s `name(_:)` exists so that the laid-out copy
-    /// and the glyph copy cannot be given different ones — and the overlay is
-    /// clipped to the real name's frame. Only *which characters* differ. So a
-    /// contrast defect in the scrambled frame would be a contrast defect in
-    /// the settled one, and this audit still sees it. The transient itself
-    /// has its own case,
-    /// ``testManual_ANodeIsNamedWhileItsNameScrambles()``, which drives a
-    /// 600 ms frame on purpose and now also counts the node's children.
-    ///
-    /// 1.5 s against `ManualScrambleClock`'s shipping 350 ms lead-in plus
-    /// eight 24 ms frames: two and a half times the effect, and the knob
-    /// cannot slow it here because no case that audits asks for a slow one.
-    /// Crude, and said out loud rather than hidden in a constant — the shape
-    /// `StubHouseUITests`' strip settle already uses.
-    @MainActor
-    private func manualLetTheScrambleFinish() {
-        usleep(1_500_000)
-    }
-
     /// `Contrast failed` against one named static text, and nothing else —
     /// the signature ``manualAudit(_:_:washedParagraph:)`` explains.
     ///
@@ -2051,9 +2188,13 @@ extension StubHouseUITests {
     /// ### The numbers are copied from the one drag in this suite that is
     /// measured to pop a screen
     ///
-    /// They were this item's own (`app.coordinate`, `dx: 0.02`, out to `0.8`)
-    /// and train **I004** is why they are not any more. Two edge drags ran in
-    /// that train and only one worked:
+    /// What **ran** in train I004 was this item's own drag at
+    /// `app.coordinate`, `dx: 0.01` out to `0.9` (`3f6ca5f7:459,462`), and
+    /// that train is why the numbers are not this item's any more. (An
+    /// intermediate `0.02`/`0.8` sat here between `84f60193` and this commit
+    /// and has never run anywhere — an earlier version of this comment
+    /// credited I004 with it.) Two edge drags ran in that train and only one
+    /// worked:
     ///
     ///  * ``StubHouseUITests/roomsLeaveRoom(_:_:swipe:)`` —
     ///    `app.windows.firstMatch.coordinate`, `dx: 0.004`, out to `0.95`,
@@ -2069,24 +2210,47 @@ extension StubHouseUITests {
     ///    transition started; nothing slid.
     ///
     /// The point itself was delivered where this file asked for it — the
-    /// synthesised event in the same folder carries `coordinate.x 3.93`,
-    /// `coordinate.y 426.0`, `destination.x 353.7` — so the numbers are not
-    /// *known* to be the cause. They are the only difference between the two
-    /// drags that this file owns, and copying the working one costs nothing.
-    /// What is left over is in `gx-manual/REPORT.md` under "Needs a shared
-    /// change": no case in this suite has ever popped a route off
-    /// ``ShellModel/path`` by any means, and that is the shell's seam, not
-    /// this item's.
+    /// synthesised event in the same folder carries `coordinate.x 3.93`
+    /// (`0.01 × 393`, exactly), `coordinate.y 426.0` (`0.5 × 852`, exactly)
+    /// and `destination.x 353.7` (`0.9 × 393`) — so the numbers are **not**
+    /// known to be the cause, and two things that sound like reasons are not
+    /// reasons either:
+    ///
+    ///  * **`app` versus the window was not it in that run.** `y = 426.0` is
+    ///    half of the 852-point window to the decimal and `x` is `0.01 × 393`
+    ///    to the decimal, so the application element's frame and the window's
+    ///    were the same rectangle. Taking the window is still right — the
+    ///    application's frame is the union of its windows, and the audit
+    ///    cases' trees do carry a second one — but it is insurance, not a
+    ///    diagnosis. What is left between the two drags is `x 3.93 → 1.57`
+    ///    and `353.7 → 373.35`.
+    ///  * **Nothing in the app competes for the gesture.** There is no
+    ///    `DragGesture`, `simultaneousGesture`, `highPriorityGesture`,
+    ///    `interactiveDismissDisabled` or `navigationBarBackButtonHidden`
+    ///    anywhere under `ios/Domovoi/Manual/` or `ios/Domovoi/Shell/`;
+    ///    `ShellModel.path`'s setter is a plain assignment
+    ///    (`ShellNavigation.swift:72-74`), so a pop is not written back over;
+    ///    and the harness's seeded push is behind a `seededPush` guard
+    ///    (`WorkspaceView.swift:48-56`), so it cannot re-push what a pop took
+    ///    off. I004's own tree has a standard `Back` button in the stack's bar
+    ///    (`manual-swipe-on-start-here-tree…txt:17-18`).
+    ///
+    /// What is **not** the same about the two drags is what they have to pop,
+    /// and that is the difference worth reading first if this fails again:
+    /// rooms' working drag pops a destination-based `NavigationLink`
+    /// (`RoomsView.swift:62`, `:299`), while a swipe from Start here has to
+    /// pop a `Route` element off ``ShellModel/path``
+    /// (`WorkspaceView.swift:161`) — which no case in this suite has ever
+    /// done, by a gesture or by anything else. That is the shell's seam, not
+    /// this item's, and it is in `gx-manual/REPORT.md` under "Needs a shared
+    /// change".
     ///
     /// `dx: 0.004` and not 0, so the press lands inside the window's frame
     /// where the leading-edge recogniser can see it, and `0.95` so the drag
     /// is long enough to be committed rather than cancelled back. The press
     /// is held for 80 ms first: a drag with no press is a flick, and
     /// `UIScreenEdgePanGestureRecognizer` wants the touch to settle on the
-    /// edge before it moves. **The window and not the application**: the
-    /// application element's frame is the union of its windows, so a run with
-    /// a second window up — which the audit cases' trees have — puts
-    /// `dy: 0.5` somewhere other than the middle of the screen.
+    /// edge before it moves.
     ///
     /// It returns nothing: what the gesture *did* is the caller's claim, and
     /// every caller here reads it off the screen rather than off a return
@@ -2321,12 +2485,23 @@ enum StubManual {
     /// A node's **whole** label: the Kotlin's `"<title>: <subtitle>"`
     /// (`ManualScreen.kt:655`), which is what the scramble must not change.
     static let centreNodeLabel = "Domovoi: your home"
-    /// The centre node's second line, which is the **only** static text its
-    /// card should contribute to the tree: its name is drawn by a view that
-    /// is hidden from accessibility outright (``ManualScrambleName``) and the
-    /// card's own label is ``centreNodeLabel``.
+    /// The centre node's second line, which its card contributes to the tree
+    /// **nowhere**: the name is drawn by a view hidden from accessibility
+    /// outright (``ManualScrambleName``) and the second line is hidden too,
+    /// because the frame it claimed was the whole card. The card's own
+    /// label is ``centreNodeLabel`` and carries both words. Kept as a
+    /// constant because it is what a failure prints to say which of the two
+    /// hides came off.
     static let centreSubtitle = "your home"
     static let roomsTopicLabel = "Rooms & devices: where it listens"
+
+    /// The phone bar's Home tab, by its accessibility label.
+    ///
+    /// The bare word, as `StubHouseUITests.swift:2521` reaches the same four
+    /// tabs — they are the suite's one control that is a button with a static
+    /// text of its own on every screen, which is what makes it the positive
+    /// control for a node card contributing nothing.
+    static let homeTabControl = "Home"
     /// `ManualStrings.next("next", piece: "What plugins add")` — the footer
     /// that exists on a piece's page and on no other level.
     static let nextPlugins = "next: What plugins add"

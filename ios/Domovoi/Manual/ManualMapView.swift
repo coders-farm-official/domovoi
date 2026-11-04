@@ -589,6 +589,60 @@ struct ManualMapNode: View {
                         .foregroundStyle(Color.fgMuted)
                         .multilineTextAlignment(.leading)
                         .fixedSize(horizontal: false, vertical: true)
+                        // **Out of the accessibility tree, because the frame
+                        // it claims is not its own.** The words are not lost:
+                        // the card's own label below is `"<title>: <subtitle>"`
+                        // (``manualNodeReading(title:subtitle:)``), which is
+                        // Android's `contentDescription` and the only reading
+                        // VoiceOver ever gets of a node.
+                        //
+                        // Measured, in train I004's own screenshots:
+                        //
+                        //  - I002, when this was a `String`:
+                        //    `label: 'where it listens'` at
+                        //    `{{25.1, 435.0}, {85.3, 14.3}}` — its own glyphs,
+                        //    and the only pair inside it is `fgMuted` on the
+                        //    card, 6.66:1.
+                        //  - I004, as an `AttributedString`:
+                        //    the same label at `{{14.0, 407.3}, {177.7, 104.0}}`
+                        //    — the **whole card**, twelve times the area, in
+                        //    the scrambling tree and in the settled one alike.
+                        //    That rectangle holds the card's own 1-point
+                        //    border, so the strongest failing pair in it is
+                        //    `(242,242,247)` against `(210,210,215)` —
+                        //    **1.35:1** — and on the hub, whose border is
+                        //    `brandInk` at 60%, `(187,150,99)` — 2.46:1.
+                        //
+                        // Those are the only sub-4.5 pairs anywhere in the
+                        // picture Apple returned two unattributable
+                        // `Contrast failed` findings on: the card rectangles
+                        // of I002's clean audit and I004's dirty one are
+                        // identical to the pixel, inks and all
+                        // (``testManual_AuditsClean``'s note has the method
+                        // and the counts). A tight frame cannot contain that
+                        // pair; this one does, and nothing repainted.
+                        //
+                        // **What is not established is the mechanism.** The
+                        // `AttributedString` is the only edit this line took
+                        // in the batch the frame changed in, and that is a
+                        // correlation, not a cause: ``ManualPiecePage``'s
+                        // washed paragraph is an `AttributedString` too and
+                        // its frame is its own four lines
+                        // (`361 × 64.3`), as is Start here's unwashed one.
+                        // Nothing here rests on knowing which: the element
+                        // leaves the tree either way, and the words it carries
+                        // are in the card's label regardless. The cost is
+                        // stated and it is small — a future SwiftUI that gave
+                        // this line an honest frame again would not be
+                        // noticed, because a hidden element is not measured by
+                        // anything.
+                        //
+                        // `.accessibilityHidden` and not `.hidden()`: the line
+                        // is still drawn, still measured and still washes its
+                        // `preview`/`plugin` runs. Android does not announce
+                        // those pills either (`ManualScreen.kt:655` joins the
+                        // title and the subtitle and stops).
+                        .accessibilityHidden(true)
                 }
             }
             .padding(.horizontal, 11)
@@ -627,9 +681,13 @@ struct ManualMapNode: View {
         // name reaches it mid-scramble exactly as it does at rest
         // (``testManual_ANodeIsNamedWhileItsNameScrambles``, which now counts
         // the node's children for that reason).
-        .accessibilityLabel(
-            node.subtitle.isEmpty ? node.title : "\(node.title): \(node.subtitle)"
-        )
+        //
+        // It is now the only reading of the second line too (above), so the
+        // join is a rule with a test of its own rather than a ternary in a
+        // view body: ``manualNodeReading(title:subtitle:)``. Both texts under
+        // this control are hidden, and a label that lost half of itself would
+        // leave a node announced by its title alone with nothing objecting.
+        .accessibilityLabel(manualNodeReading(title: node.title, subtitle: node.subtitle))
         // The one thing a UI case can read about the scramble — see
         // ``scrambleState``. The **empty** string in every build that could
         // ship, and in a DEBUG build nobody passed the argument to, which is
@@ -902,10 +960,22 @@ enum ManualFloatClock {
 /// drawn glyphs *were* an element's label, which is the half of answer 30
 /// Kamron named out loud ("leaving the accessibility label alone"). The same
 /// audit returned two `Contrast failed` findings it could not attribute to any
-/// element, on a screen whose every ink is unchanged from the settled frame
-/// the identical audit passed clean in I002 — a transparent text and a second
-/// text in its exact frame are the only two things that changed about that
-/// tree, and both go away here.
+/// element.
+///
+/// **Those findings are not this view's, and the first account of them said
+/// they were.** It claimed a transparent text and a second text in its frame
+/// were "the only two things that changed about that tree". A third thing
+/// changed, and it is where the arithmetic lands: the node's **second line**
+/// went from a `String` to an `AttributedString` with answer 34, and its
+/// accessibility frame went from `{85.3 × 14.3}` to the whole `{177.7 × 104}`
+/// card with it — in the scrambling tree and the settled one alike
+/// (``ManualMapNode``'s second line has the measurement and the ratios).
+/// Sampled off I004's own screenshot, the glyph frames measure
+/// `(0,0,0)` on `(242,242,247)`, **18.82:1**, pixel-for-pixel what I002's
+/// clean audit measured in the same rectangles — the gibberish is the same
+/// black as the name. A re-lettering cannot fail a contrast check, so the
+/// hide below is answer 30's half and **not** the audit's fix; the second
+/// line's is.
 ///
 /// The fix is one modifier and not a redraw: the **whole** name — the
 /// laid-out copy, the overlay and the box they share — leaves the
@@ -913,6 +983,13 @@ enum ManualFloatClock {
 /// name. It is the belt without the braces, deliberately: three sayings of
 /// one thing were what hid this, since two of them were inside a subtree
 /// nothing was checking.
+///
+/// What holds it is ``testManual_ANodeIsNamedWhileItsNameScrambles``, which
+/// counts this control's children while the glyphs are on screen, and
+/// ``testManual_ANodeCardIsOneElementAndNotFour``, which counts them at rest
+/// with a positive control that SwiftUI still exposes a button's children at
+/// all. The audit does not hold it and was never able to: with the glyphs
+/// measuring 18.82:1 there is nothing in them for a contrast check to find.
 ///
 /// It stays in the **layout** and in the picture: `.accessibilityHidden` is
 /// not `.hidden()`, so the card is still measured by the real name and the

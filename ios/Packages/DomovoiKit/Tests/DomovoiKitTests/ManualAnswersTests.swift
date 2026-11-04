@@ -1077,6 +1077,44 @@ final class ManualAnswersTests: XCTestCase {
             )
         }
     }
+
+    /// Both of a map card's lines are in the one thing VoiceOver reads.
+    ///
+    /// Since the second line left the accessibility tree — its
+    /// frame was the whole card, which is the rectangle Apple's audit
+    /// measured 1.35:1 inside (``ManualMapNode``) — a node's
+    /// label is the *only* reading of it. This is the case that would fail if
+    /// that label were trimmed back to the title while the lines under it
+    /// stayed hidden, which is a card announced as half of itself and nothing
+    /// in the UI suite looking at it.
+    func testANodeIsAnnouncedWithBothOfItsLines() {
+        XCTAssertEqual(
+            "Rooms & devices: where it listens",
+            manualNodeReading(title: "Rooms & devices", subtitle: "where it listens"),
+            "`StubManual.roomsTopicLabel` is this string, and so is Android's "
+                + "`listOfNotNull(title, sub).joinToString(\": \")`"
+        )
+        XCTAssertEqual(
+            "Domovoi: your home",
+            manualNodeReading(title: "Domovoi", subtitle: "your home")
+        )
+        // `listOfNotNull` drops the null rather than joining onto it, so a
+        // level whose document gives no second line is announced by its name
+        // and not by `"Domovoi: "`.
+        XCTAssertEqual("Domovoi", manualNodeReading(title: "Domovoi", subtitle: ""))
+        for (title, subtitle) in [("Music & media", "what it plays"), ("Domovoi", "")] {
+            let reading = manualNodeReading(title: title, subtitle: subtitle)
+            XCTAssertTrue(
+                reading.contains(title),
+                "a node's reading has lost its title"
+            )
+            XCTAssertTrue(
+                subtitle.isEmpty || reading.contains(subtitle),
+                "a node's reading has lost its second line, which is now the "
+                    + "only place that line is read at all"
+            )
+        }
+    }
 }
 
 /// A document with the three kinds of id ``ManualModel/go(_:)`` resolves - a
