@@ -322,17 +322,38 @@ struct ManualView: View {
         case "node":
             manual.go(link.target)
         case "doc":
-            act(manual.openDoc(link.target))
+            act(manual.openDoc(link.target), in: manual)
         default:
-            act(manual.openRoute(link.target))
+            act(manual.openRoute(link.target), in: manual)
         }
     }
 
-    private func act(_ open: ManualOpen) {
+    private func act(_ open: ManualOpen, in manual: ManualModel) {
         switch open {
         case .screen(let route):
+            // **The manual's levels come off the stack first, in the same
+            // update.** A level is a pushed screen now
+            // (``ManualLevelHost``), and this appends a `Route` to the
+            // *same* `NavigationStack` those screens are presented on
+            // (``ShellModel/navigate(_:)`` → `path.append`). Leaving them
+            // there would ask SwiftUI to hold a route pushed underneath
+            // presentations that hang off the screen below it — a shape
+            // nobody here has measured, whose worst case is a link that
+            // visibly does nothing, which is the one thing Kamron's
+            // no-misleading-controls rule will not have.
+            //
+            // Both writes are in one event, so SwiftUI resolves one new
+            // stack (`[.manual, <route>]`, no presentations) rather than a
+            // pop followed by a push.
+            //
+            // The cost is that coming back lands on Start here where
+            // Android comes back to the piece: `@SceneStorage` mirrors
+            // ``ManualModel/place``, and this moves it. It is in this
+            // item's DECISIONS as Kamron's call.
+            zoomOutOfTheManual(manual)
             model.navigate(route)
         case .settingsTab(let tab):
+            zoomOutOfTheManual(manual)
             model.openSettingsTab(tab)
         case .web(let url):
             guard let target = URL(string: url) else { return }
@@ -342,6 +363,16 @@ struct ManualView: View {
             // names and does not define goes nowhere, on both platforms.
             break
         }
+    }
+
+    /// Put the manual back on Start here, so that nothing of it is left
+    /// pushed on the shell's stack when another route goes on top.
+    ///
+    /// Only for the two links that push a route. `.web(…)` opens Safari and
+    /// `.nothing` does nothing, and neither touches the stack.
+    private func zoomOutOfTheManual(_ manual: ManualModel) {
+        guard !manual.levels.isEmpty else { return }
+        manual.go("start")
     }
 
 }
