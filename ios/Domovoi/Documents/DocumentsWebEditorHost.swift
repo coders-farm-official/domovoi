@@ -516,7 +516,7 @@ final class DocumentsWebEditorModel {
     /// extension — so a name without one gets the one the page asked for.
     static func shareName(_ name: String, mime: String) -> String {
         let refused: Set<Character> = ["\\", "/", ":", "*", "?", "\"", "<", ">", "|"]
-        var cleaned = String(name.map { character in
+        var cleaned = String(name.map { (character: Character) -> Character in
             let control = (character.unicodeScalars.first?.value ?? 32) <= 0x1f
             return control || refused.contains(character) ? "_" : character
         })
