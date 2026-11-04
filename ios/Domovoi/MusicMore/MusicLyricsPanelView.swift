@@ -201,9 +201,10 @@ struct MusicLyricsPanelView: View {
             // the drag ends, or at once from the chip (answer 35).
             //
             // **The view reports the phase and owns nothing.** The timer is
-            // ``MusicRoomLyricsModel/handReleased()``'s, in a model that
-            // outlives this `ScrollView`, because a `Task` started here dies
-            // with the panel and a lazy row never holds one (NIGHT-RULES §3).
+            // ``MusicRoomLyricsModel/handReleased()``'s, reached through
+            // ``MusicRoomLyricsModel/hand(_:)``, in a model that outlives
+            // this `ScrollView`, because a `Task` started here dies with the
+            // panel and a lazy row never holds one (NIGHT-RULES §3).
             //
             // **Three phases, not two.** `.interacting` is a finger moving
             // the list (Android's `DragInteraction.Start`,

@@ -487,13 +487,20 @@ extension StubHouseUITests {
         //    identifiers `newsChipRowIsOneElement` just proved exist, so a
         //    missing chip cannot make this half vacuous.
         //
-        //    `allElementsBoundByIndex` once, not a query per chip: one
-        //    snapshot of the tree, and `exists` on each because an element
-        //    resolved from a stale snapshot answers a zero frame.
+        //    `allElementsBoundByIndex` once over the text leaves, not a query
+        //    per chip: one snapshot of the tree, with `exists` asked of each
+        //    element because one resolved from a stale snapshot answers a
+        //    zero frame.
+        //
+        //    An explicit result type and explicit labels on the tuple: a
+        //    multi-statement closure whose branches are a tuple and `nil` is
+        //    one Swift will not always infer, and an unlabelled tuple is not
+        //    always convertible to a labelled one in a return position.
         let chips: [(name: String, box: CGRect)] = ScreensWords.newsChipPeople
-            .compactMap { name in
+            .compactMap { (name: String) -> (name: String, box: CGRect)? in
                 let chip = app.buttons["news-chip-\(name)"]
-                return chip.exists ? (name, chip.frame) : nil
+                guard chip.exists else { return nil }
+                return (name: name, box: chip.frame)
             }
         XCTAssertEqual(
             ScreensWords.newsChipPeople.count, chips.count,
