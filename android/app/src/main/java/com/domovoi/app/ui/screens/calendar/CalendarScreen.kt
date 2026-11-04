@@ -83,7 +83,10 @@ fun CalendarScreen() {
     val state = rememberApi(eventTypes = setOf("calendar.events.changed")) { a ->
         a.api.get("/api/calendar/events").decode<List<CalendarEvent>>()
     }
-    val events = state.data ?: emptyList()
+    // A row whose `starts_at` we cannot read is dropped here, before
+    // anything counts or draws it (D18) — it used to be drawn as if it
+    // were happening now.
+    val events = (state.data ?: emptyList()).withReadableStart()
 
     var view by remember(compact) {
         mutableStateOf(if (compact) CalView.Agenda else CalView.Month)
@@ -101,8 +104,11 @@ fun CalendarScreen() {
                 val desc: String? = d.description.ifBlank { null }
                 val body = buildJsonObject {
                     put("title", d.title)
-                    put("starts_at", d.start.format(IsoLocalFmt))
-                    put("ends_at", d.end.format(IsoLocalFmt))
+                    // An absolute instant, not the wall clock (D13): a naive
+                    // local time is read in the SERVER's zone, which is hours
+                    // out whenever this phone's zone is not the house's.
+                    put("starts_at", calendarInstant(d.start))
+                    put("ends_at", calendarInstant(d.end))
                     put("location", loc)
                     put("description", desc)
                 }
@@ -214,7 +220,7 @@ fun CalendarScreen() {
                             EventDetailContent(
                                 event = selected,
                                 onClose = { selectedId = null },
-                                onEdit = { editorDraft = draftOf(selected) },
+                                onEdit = { editorDraft = editDraftOf(selected) },
                                 onDelete = { deleteTarget = selected },
                             )
                         }
@@ -233,7 +239,7 @@ fun CalendarScreen() {
                 EventDetailContent(
                     event = selected,
                     onClose = { selectedId = null },
-                    onEdit = { editorDraft = draftOf(selected) },
+                    onEdit = { editorDraft = editDraftOf(selected) },
                     onDelete = { deleteTarget = selected },
                 )
             }

@@ -163,7 +163,13 @@ internal fun EventDetailContent(
 
         HorizontalDivider(color = Domovoi.colors.borderSoft)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = onEdit) { Text("edit", color = Domovoi.colors.fg) }
+            // No `edit` for a row whose `starts_at` we cannot read (D18):
+            // the editor has no honest time to put in its start field, so
+            // the control is left out rather than quietly doing nothing
+            // (`editDraftOf` is null for it). Delete still works.
+            if (editDraftOf(event) != null) {
+                OutlinedButton(onClick = onEdit) { Text("edit", color = Domovoi.colors.fg) }
+            }
             TextButton(onClick = onDelete) { Text("delete", color = Domovoi.colors.err) }
         }
     }

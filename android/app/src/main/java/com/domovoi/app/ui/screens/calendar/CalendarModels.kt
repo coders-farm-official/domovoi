@@ -5,6 +5,7 @@ import kotlinx.serialization.Serializable
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.ZoneId
+import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
@@ -30,11 +31,29 @@ internal fun CalendarEvent.isGoogle(): Boolean = source == "google"
 internal fun parseLocal(iso: String?): LocalDateTime? =
     parseInstant(iso)?.atZone(ZoneId.systemDefault())?.toLocalDateTime()
 
+/**
+ * The event's start in this phone's zone. A `starts_at` we cannot read is
+ * the far future, not "now": such a row used to be DRAWN as if it were
+ * happening at this moment (D18 / iOS entry 18 — `calendarStartMs(_:)`
+ * returns `Int64.max` there for the same reason). It falls outside every
+ * view window, and [withReadableStart] drops it before anything is drawn,
+ * so this value is never put on screen.
+ */
 internal fun CalendarEvent.startLocal(): LocalDateTime =
-    parseLocal(starts_at) ?: LocalDateTime.now()
+    parseLocal(starts_at) ?: LocalDateTime.MAX
 
 internal fun CalendarEvent.endLocal(): LocalDateTime =
     parseLocal(ends_at) ?: startLocal()
+
+/**
+ * The rows with a readable `starts_at` — the only ones the calendar draws
+ * (D18). A row whose timestamp we cannot parse has no place on any day, so
+ * the honest thing is to leave it out rather than invent one; the agenda in
+ * particular would otherwise keep it forever, since its `endLocal()` is in
+ * the far future too.
+ */
+internal fun List<CalendarEvent>.withReadableStart(): List<CalendarEvent> =
+    filter { parseLocal(it.starts_at) != null }
 
 // ---------------------------------------------------------------------------
 // Views + date math (week starts Sunday, like the web page).
@@ -109,9 +128,24 @@ private val monDayFmt = DateTimeFormatter.ofPattern("MMM d", Locale.US)
 private val monDayYrFmt = DateTimeFormatter.ofPattern("MMM d, yyyy", Locale.US)
 private val dayFullFmt = DateTimeFormatter.ofPattern("EEEE, MMMM d", Locale.US)
 
-/** ISO local datetime, the datetime-local analog: "2026-07-10T14:30:00". */
-internal val IsoLocalFmt: DateTimeFormatter =
-    DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss")
+/**
+ * The instant a wall-clock time names, in UTC: "2026-07-10T19:30:00Z" for
+ * 2:30pm on a phone set to New York.
+ *
+ * What the house is told when an event is saved (D13 / ledger #27). The
+ * dashboard posts `new Date(...).toISOString()` (web/static/calendar.jsx:36)
+ * and the iPhone's `calendarInstant(_:)` writes this same shape, and the
+ * route takes a `datetime` either way (web/backend/api/calendar.py:37-72,
+ * schemas.py:838-841). A naive local time went before, which the server
+ * read in ITS zone — the same reading on a house whose zone is the
+ * household's, and hours off whenever the phone's zone differs from the
+ * server's (travelling, or a server never given a zone).
+ */
+internal fun calendarInstant(t: LocalDateTime, zone: ZoneId = ZoneId.systemDefault()): String =
+    IsoUtcFmt.format(t.atZone(zone).toInstant())
+
+private val IsoUtcFmt: DateTimeFormatter =
+    DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss'Z'").withZone(ZoneOffset.UTC)
 
 internal fun fmtClock(t: LocalDateTime): String =
     t.format(clockFmt).lowercase(Locale.US).replace(" ", "")
@@ -163,6 +197,16 @@ internal fun blankDraft(anchor: LocalDate): EventDraft {
     val start = anchor.atTime(minOf(hour, 23), 0)
     return EventDraft(start = start, end = start.plusHours(1))
 }
+
+/**
+ * The draft the detail sheet's `edit` opens — null for a row whose
+ * `starts_at` we cannot read, so the editor opens nothing rather than a
+ * lie about when the event is (D18; iOS's `CalendarDraft(_ entry:)`
+ * returns nil for the same row). Such a row is never drawn in the first
+ * place ([withReadableStart]); this is the second lock on the same door.
+ */
+internal fun editDraftOf(e: CalendarEvent): EventDraft? =
+    if (parseLocal(e.starts_at) == null) null else draftOf(e)
 
 internal fun draftOf(e: CalendarEvent): EventDraft {
     val s = e.startLocal()
