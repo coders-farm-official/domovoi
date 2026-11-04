@@ -43,11 +43,28 @@ final class PodcastPlayTests: XCTestCase {
     override func setUp() {
         super.setUp()
         StubURLProtocol.reset()
+        PlayerMicArbiter.shared.reset()
     }
 
-    override func tearDown() {
+    /// **Leave nothing running.** Every case here builds a ``PlayerModel``,
+    /// which registers with ``PlayerMicArbiter`` and the notification centre,
+    /// and most leave a position read or a resume Task in the air. XCTest runs
+    /// classes in one process, one after another, so work this file leaves
+    /// behind runs *during somebody else's cases* — on the same main actor,
+    /// against the dispatcher they installed, and into the
+    /// `StubURLProtocol.recorded` they assert on.
+    ///
+    /// Measured, not supposed: before this tearDown, eight runs of the package
+    /// suite at the pre-review commit were clean and one run in six of the
+    /// fixed branch failed in `AudiobooksModelTests` and `RoomsModelTests` —
+    /// two classes with nothing to do with the player, both failing on waits
+    /// that are counted in yields. The yields below are what the leftovers get
+    /// instead of theirs.
+    override func tearDown() async throws {
+        for _ in 0..<settleYieldLimit { await Task.yield() }
         StubURLProtocol.reset()
-        super.tearDown()
+        PlayerMicArbiter.shared.reset()
+        try await super.tearDown()
     }
 
     // MARK: - the rig

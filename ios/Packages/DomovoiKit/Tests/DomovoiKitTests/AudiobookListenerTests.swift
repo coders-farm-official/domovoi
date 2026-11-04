@@ -34,9 +34,15 @@ final class AudiobookListenerTests: XCTestCase {
         StubURLProtocol.reset()
     }
 
-    override func tearDown() {
+    /// Review 1's S1 cases call ``PlayerListenerModel/start()``, which asks
+    /// `/api/people` — so this class now leaves a read in the air where it
+    /// used to leave nothing. `AudiobookSaveTests` runs next alphabetically
+    /// and `AudiobooksModelTests` right after it, and both judge what
+    /// ``StubURLProtocol`` was asked for. The yields are the leftovers' turn.
+    override func tearDown() async throws {
+        for _ in 0..<settleYieldLimit { await Task.yield() }
         StubURLProtocol.reset()
-        super.tearDown()
+        try await super.tearDown()
     }
 
     // MARK: - the paths and the body
@@ -429,8 +435,11 @@ final class AudiobookListenerTests: XCTestCase {
         XCTAssertEqual("2", settings.personID)
         XCTAssertNil(chip.personID, "another screen's model moved without appearing")
 
-        // Now it appears.
+        // Now it appears. `start()` also asks `/api/people`, so the screen
+        // going away again is part of the case: a read left in the air here
+        // runs during another class's.
         chip.start()
+        defer { chip.stop() }
         XCTAssertEqual("2", chip.personID)
         XCTAssertTrue(chip.showsChip)
     }

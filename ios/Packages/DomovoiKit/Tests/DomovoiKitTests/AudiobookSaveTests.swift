@@ -10,6 +10,23 @@ import XCTest
 @MainActor
 final class AudiobookSaveTests: XCTestCase {
 
+    /// There was no `setUp`/`tearDown` here while this file was pure
+    /// arithmetic. Review 1 added four cases that drive a real
+    /// ``AudiobookDetailModel`` over ``StubURLProtocol``, so the dispatcher
+    /// and whatever those reads leave in the air are this file's to clean up:
+    /// `AudiobooksModelTests` runs next alphabetically and asserts on the
+    /// requests it sees.
+    override func setUp() {
+        super.setUp()
+        StubURLProtocol.reset()
+    }
+
+    override func tearDown() async throws {
+        for _ in 0..<settleYieldLimit { await Task.yield() }
+        StubURLProtocol.reset()
+        try await super.tearDown()
+    }
+
     /// The **book** route, not the audio route with `download=1`.
     ///
     /// They are different things and the wrong one is quiet about it: the
