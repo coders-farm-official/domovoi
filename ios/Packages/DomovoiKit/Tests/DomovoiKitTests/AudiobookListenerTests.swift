@@ -36,9 +36,10 @@ final class AudiobookListenerTests: XCTestCase {
 
     /// Review 1's S1 cases call ``PlayerListenerModel/start()``, which asks
     /// `/api/people` — so this class now leaves a read in the air where it
-    /// used to leave nothing. `AudiobookSaveTests` runs next alphabetically
-    /// and `AudiobooksModelTests` right after it, and both judge what
-    /// ``StubURLProtocol`` was asked for. The yields are the leftovers' turn.
+    /// used to leave nothing, and the classes after it judge what
+    /// ``StubURLProtocol`` was asked for. Hygiene; the suite's intermittent
+    /// `AudiobooksModelTests` failure is a race in that case's own rig, not
+    /// this (see `PodcastPlayTests.tearDown()`).
     override func tearDown() async throws {
         for _ in 0..<settleYieldLimit { await Task.yield() }
         StubURLProtocol.reset()

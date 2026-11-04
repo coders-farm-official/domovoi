@@ -13,9 +13,12 @@ final class AudiobookSaveTests: XCTestCase {
     /// There was no `setUp`/`tearDown` here while this file was pure
     /// arithmetic. Review 1 added four cases that drive a real
     /// ``AudiobookDetailModel`` over ``StubURLProtocol``, so the dispatcher
-    /// and whatever those reads leave in the air are this file's to clean up:
-    /// `AudiobooksModelTests` runs next alphabetically and asserts on the
-    /// requests it sees.
+    /// and whatever those reads leave in the air are this file's to clean up.
+    ///
+    /// Hygiene, not a fix: the suite's intermittent failure in
+    /// `AudiobooksModelTests` — which runs next alphabetically — was measured
+    /// to be a race inside that case's **own** rig, failing 4 of 8 runs with
+    /// nothing else in the process. See `PodcastPlayTests.tearDown()`.
     override func setUp() {
         super.setUp()
         StubURLProtocol.reset()

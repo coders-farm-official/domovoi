@@ -42,16 +42,24 @@ final class PlayerOwnerTests: XCTestCase {
     /// which registers with ``PlayerMicArbiter`` and the notification centre,
     /// and most leave a position read or a resume Task in the air. XCTest runs
     /// classes in one process, one after another, so work this file leaves
-    /// behind runs *during somebody else's cases* — on the same main actor,
-    /// against the dispatcher they installed, and into the
-    /// `StubURLProtocol.recorded` they assert on.
+    /// behind would otherwise run *during somebody else's cases* — on the same
+    /// main actor, against the dispatcher they installed, and into the
+    /// `StubURLProtocol.recorded` they assert on. This is hygiene, the same
+    /// `setUp`/`tearDown` pair `PlayerModelCastTests` has had all along.
     ///
-    /// Measured, not supposed: before this tearDown, eight runs of the package
-    /// suite at the pre-review commit were clean and one run in six of the
-    /// fixed branch failed in `AudiobooksModelTests` and `RoomsModelTests` —
-    /// two classes with nothing to do with the player, both failing on waits
-    /// that are counted in yields. The yields below are what the leftovers get
-    /// instead of theirs.
+    /// **It is not the fix for the flake that prompted it, and this comment
+    /// said it was.** The suite fails intermittently in
+    /// `AudiobooksModelTests.testOpeningABookTakesTheServersPlaceWhenOnlyItHasOne`,
+    /// and the obvious story — work leaked from the player's new classes into
+    /// the ones that run next alphabetically — was wrong. Measured 2026-11-04
+    /// on the Mac, under the slot: that case run **alone**, `--filter
+    /// AudiobooksModelTests` with nothing else in the process, failed 4 of 8
+    /// runs. Twelve whole-suite runs alternating between this branch and the
+    /// pre-review commit failed 2 of 6 on each. The cause is in its own rig —
+    /// `sleep: { _ in }` into ``BookTimeout/bounded(ms:sleep:)``, which races
+    /// `work()` against an *instant* timeout in a task group, so the loser is
+    /// whichever child the scheduler happens to run second. It is logged for
+    /// the unit that owns that file (`DECISIONS.md` §7.6).
     override func tearDown() async throws {
         for _ in 0..<settleYieldLimit { await Task.yield() }
         StubURLProtocol.reset()
