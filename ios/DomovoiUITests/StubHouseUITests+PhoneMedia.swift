@@ -371,6 +371,44 @@ extension StubHouseUITests {
     /// asked for, because a press-and-drag that begins on a row is a gesture
     /// the row may take. One copy of how a page under the switch is scrolled,
     /// as the comment above this one says.
+    /// Where every built `staticText` is, by label — one snapshot of the
+    /// tree, for a case that wants to know whether a flick **moved** the page.
+    ///
+    /// Beside ``phoneSourceFlick(_:_:)`` because that is what it is for: two
+    /// rounds of the AX5 growth case swiped into a wall and reported a layout
+    /// finding, because nothing measured the travel. A case that reads this
+    /// before and after each flick prints a number the next round can argue
+    /// from, and can stop when the page stops moving.
+    @MainActor
+    func phoneTextPlaces(_ app: XCUIApplication) -> [String: CGFloat] {
+        var out: [String: CGFloat] = [:]
+        for text in app.staticTexts.allElementsBoundByIndex {
+            let name = text.label
+            guard !name.isEmpty, out[name] == nil else { continue }
+            out[name] = text.frame.minY
+        }
+        return out
+    }
+
+    /// How far the page moved between two readings: the biggest shift of
+    /// anything in both.
+    ///
+    /// Nil when they share nothing, which means the viewport turned over
+    /// completely — movement by any reading. Zero means nothing moved at all,
+    /// and twice over means the page will not move again: the foot of the
+    /// list, or a gesture that never reached it.
+    @MainActor
+    func phoneMovement(_ before: [String: CGFloat], _ after: [String: CGFloat]) -> CGFloat? {
+        var shift: CGFloat = 0
+        var common = 0
+        for (name, was) in before {
+            guard let now = after[name] else { continue }
+            common += 1
+            shift = max(shift, abs(was - now))
+        }
+        return common == 0 ? nil : shift
+    }
+
     @MainActor
     func phoneSourceFlick(_ app: XCUIApplication, _ identifier: String? = nil) {
         guard let identifier else {
@@ -1248,32 +1286,6 @@ extension StubHouseUITests {
         /// instead of swiping forty times into a wall and then blaming the
         /// app's layout for a leaf that was never built.
         func leafFrames(_ app: XCUIApplication, _ label: String) -> [String: CGRect] {
-            /// Where every built `staticText` is, by label. One snapshot of
-            /// the tree per call: at AX5 there are a handful of them.
-            func places() -> [String: CGFloat] {
-                var out: [String: CGFloat] = [:]
-                for text in app.staticTexts.allElementsBoundByIndex {
-                    let name = text.label
-                    guard !name.isEmpty, out[name] == nil else { continue }
-                    out[name] = text.frame.minY
-                }
-                return out
-            }
-            /// How far the list moved between two readings: the biggest shift
-            /// of anything that is in both. Nil when they share nothing,
-            /// which means the viewport turned over completely and is
-            /// movement by any reading.
-            func moved(_ before: [String: CGFloat], _ after: [String: CGFloat]) -> CGFloat? {
-                var shift: CGFloat = 0
-                var common = 0
-                for (name, was) in before {
-                    guard let now = after[name] else { continue }
-                    common += 1
-                    shift = max(shift, abs(was - now))
-                }
-                return common == 0 ? nil : shift
-            }
-
             var out: [String: CGRect] = [:]
             var travel: [Int] = []
             var still = 0
@@ -1293,7 +1305,7 @@ extension StubHouseUITests {
                     print("=== PHONEMEDIA SCALE [\(label)] THE LIST IS GONE at swipe \(swipe) ===")
                     break
                 }
-                let before = places()
+                let before = phoneTextPlaces(app)
                 // This file's one copy of how a page under the switch is
                 // scrolled, now that it can be told which page:
                 // `.swipeUp(velocity: .slow)` on the list, re-resolved every
@@ -1301,8 +1313,8 @@ extension StubHouseUITests {
                 // page over rows, and at AX5 a row stepped over is a leaf
                 // that was never built and so never measured.
                 phoneSourceFlick(app, StubPhoneMedia.deviceFilesList)
-                let after = places()
-                let step = moved(before, after)
+                let after = phoneTextPlaces(app)
+                let step = phoneMovement(before, after)
                 travel.append(Int(step ?? -1))
                 // `nil` is a viewport with nothing in common, which is
                 // movement; 0 twice over is a list that will not move again.
@@ -1429,9 +1441,10 @@ extension StubHouseUITests {
     /// Short by design next to its sibling: there is one tile and it is the
     /// first thing under the top matter, so reaching it is a swipe or two
     /// rather than the length of a list. It borrows that case's measured
-    /// swipe — `swipeUp()` on the list, found by identifier — and its own
-    /// `1.8` factor, which is what `testTheFilesListTextGrowsAtAX5` settled
-    /// on over the same two text styles.
+    /// flick — ``phoneSourceFlick(_:_:)`` on the Videos list by identifier,
+    /// with ``phoneTextPlaces(_:)`` either side of it — and its own `1.8`
+    /// factor, which is what `testTheFilesListTextGrowsAtAX5` settled on over
+    /// the same two text styles.
     @MainActor
     func testPhoneMedia_TheDeviceVideoTileGrowsAtAX5() throws {
         let leaves = [
@@ -1473,11 +1486,15 @@ extension StubHouseUITests {
                 }
                 if here["tile-title"] != nil { break }
                 if swipe == 12 { break }
-                let before = app.staticTexts.allElementsBoundByIndex.map { $0.frame.minY }
+                let before = phoneTextPlaces(app)
                 phoneSourceFlick(app, StubPhoneMedia.deviceVideosList)
-                let after = app.staticTexts.allElementsBoundByIndex.map { $0.frame.minY }
-                travel.append(Int(abs((after.min() ?? 0) - (before.min() ?? 0))))
-                still = before == after ? still + 1 : 0
+                let after = phoneTextPlaces(app)
+                let step = phoneMovement(before, after)
+                travel.append(Int(step ?? -1))
+                // Two flicks that move nothing is the foot of the grid, or a
+                // gesture that never reached it — either way, stop and let
+                // the assertion below print the tree.
+                if step == 0 { still += 1 } else { still = 0 }
                 if still == 2 { break }
             }
             print("PHONEMEDIA TILE [\(label)] travel=\(travel) built=\(here.keys.sorted())")
