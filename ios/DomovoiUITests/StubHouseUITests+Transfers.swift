@@ -680,6 +680,35 @@ extension StubHouseUITests {
         // After the reset, which puts the fixture back to answering at once.
         uploadHold(6000)
         let app = phoneLaunch(push: "Files")
+        // **Sleep through the seeded push instead of polling through it.**
+        //
+        // ``phoneLaunch(push:media:mode:server:port:)`` holds the push for
+        // ``StubHouseUITests/pushDelay`` — twelve seconds — and the source
+        // switch this case needs is on the screen that push opens, so
+        // ``phoneSourcePickSide(_:_:)``'s `waitForExistence(timeout: 40)`
+        // spends that whole hold failing a one-second predicate. Every
+        // failed poll makes XCTest capture an element debug description
+        // **and** a whole accessibility-hierarchy snapshot of the app, so
+        // this case was walking the entire tree twelve times before the
+        // screen it is about had been drawn once.
+        //
+        // In train I004 the twelfth of those walks is where the app went:
+        // `StubHouseUITests+PhoneMedia.swift:155` reported `Lost connection
+        // to the application (pid 93158)` at t = 15.45 s after eleven
+        // `Capturing element debug description` lines at one-second spacing
+        // (`I004/ALL/testTransfers_ABigPhoneFileGoesThroughTheStreamedDoor.log`),
+        // and the Simulator log has the process taking SIGSEGV on the main
+        // thread five elements into an XCTest AX query. No app frame is
+        // named and the cause is not attributed — `testNews_PassesApples\
+        // AccessibilityAudit` died the same way in the same train — so this
+        // is not a claim to have fixed it. It is the one thing this case can
+        // do about it: a sleep asks the app for nothing, so the twelve walks
+        // become one and the window this case holds open shrinks with them.
+        //
+        // The wait below is unchanged and still forty seconds, so a push
+        // that lands late is still waited for in the ordinary way. The sleep
+        // costs nothing: the case already spent these seconds, polling.
+        usleep(useconds_t(Self.pushDelay * 1_000_000))
         XCTAssertTrue(
             phoneSwitchToDevice(app, waitingFor: StubPhoneMedia.phoneBigFileWord),
             "the device side of Files never listed the phone's own folder"
