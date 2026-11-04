@@ -3835,6 +3835,51 @@ final class StubHouseUITests: XCTestCase {
         // `testTheFilesListTextGrowsAtAX5` measures those very leaves. The
         // measurement is the test; this is the classification that makes room
         // for it.
+        //
+        // ### The folder filter's `Text clipped` is not classified here. It
+        // ### was fixed in the app.
+        //
+        // Train I004 added a sixth finding to this screen —
+        // `Text clipped … | type=49 label='filter this folder…'
+        // frame=(16.0, 401.3, 361.0, 34.0)` — and the first pass over it
+        // excluded it from `unexplained` on the strength of the field's
+        // *height* growing 34.0 → 73.0 at AX5. That was the wrong property:
+        // the headline is about text that does not fit **across** the field,
+        // and a field that grows taller can still cut its hint off at the
+        // right edge. The exclusion is gone and nothing replaces it.
+        //
+        // The finding is true, measured off the two trees of that same train
+        // and nothing else: the `.footnote` leaf below this field,
+        // `showing 50 of 56 items`, is **142.0** points wide for 22 glyphs on
+        // one line (`67-files-scale-large-tree:43`), which calibrates a
+        // glyph-advance model to +6.4 %; the `.body` `Music` leaf above it
+        // measures the type scale at **3.118×** (20.3 → 63.3 points high
+        // across the two trees). Android's nineteen-glyph sentence then wants
+        // **436** points at AX5 where a 361-point `.roundedBorder` field
+        // offers **345**, short by about four glyphs. The same model returns
+        // 315.8 against 313 for News's 39-glyph hint, which train S005
+        // photographed clipped mid-`Formula 1`, and clears the 31-glyph hint
+        // that replaced it — so it predicts the one finding of this kind that
+        // has a picture behind it, and the fix that answered it.
+        //
+        // So `FilesView.filterField` now draws
+        // ``FileStrings/filterPlaceholderShort`` (`filter…`, 172 points at
+        // AX5) and keeps Android's whole sentence as the field's
+        // accessibility label — which is why the element's `label=` in this
+        // screen's tree is unchanged and `testTheFilesListTextGrowsAtAX5`
+        // still finds it by that label. **If `Text clipped` names this field
+        // again, this case reds**, and that is the right outcome: it would
+        // mean Apple is reading the label and not the drawn hint, and the
+        // next fix is a shorter label or a wrapping one.
+        //
+        // What the first pass got right and is kept: the audit's output on
+        // this screen is not stable (10, 8, 1 and 5 findings over four trains
+        // for one unchanged list, I004's five being four of I002's eight plus
+        // this one). That is a reason to classify the *Dynamic Type* set by
+        // signature rather than pin a total. It is not a reason to disbelieve
+        // a named finding — a pass that is otherwise reporting less and still
+        // reports something new is reporting something more notable, not
+        // less.
         let unexplained = rest.filter { !$0.hasPrefix("Dynamic Type font sizes") }
         XCTAssertEqual([], unexplained, "the Files list has an audit finding of its own")
         XCTAssertEqual(0, floor, "an anonymous finding appeared on the Files list")
@@ -3867,14 +3912,33 @@ final class StubHouseUITests: XCTestCase {
     /// one scroll position holds all four.
     @MainActor
     func testTheFilesListTextGrowsAtAX5() throws {
+        // **`filter` is the leaf train I004 added**, and it is a `TextField`
+        // rather than a text leaf: `FilesView.filterField`. I004's audit
+        // named it `Text clipped — may be clipped at larger Dynamic Type
+        // sizes`, the finding was true, and the field was shortened in the
+        // app (``FileStrings/filterPlaceholderShort``).
+        //
+        // This leaf does **not** hold that finding — height is not the
+        // property the headline is about, and the first pass over I004
+        // mistook one for the other. What it holds is the other half: the
+        // field must still grow with the type size, so a fix that had
+        // font-locked the field to make the hint fit would fail here. The
+        // hint itself is asserted below, by name, on what the field draws
+        // and on what it says to a reader.
+        //
+        // The label the leaf matches is Android's whole sentence, which is
+        // the field's **accessibility label** and did not change with the
+        // drawn hint — that is why this predicate is the same one I004 ran.
+        let leaves: [(String, String)] = [
+            ("subtitle", "label BEGINSWITH 'browse every library'"),
+            ("count", "label BEGINSWITH 'showing 50 of 56'"),
+            ("filter", "label == 'filter this folder…'"),
+            ("row-meta", "label BEGINSWITH 'folder · '"),
+            ("row-title", "label == 'Albums'"),
+        ]
         func heights(_ app: XCUIApplication) -> [String: CGFloat] {
             var out: [String: CGFloat] = [:]
-            for (leaf, predicate) in [
-                ("subtitle", "label BEGINSWITH 'browse every library'"),
-                ("count", "label BEGINSWITH 'showing 50 of 56'"),
-                ("row-meta", "label BEGINSWITH 'folder · '"),
-                ("row-title", "label == 'Albums'"),
-            ] {
+            for (leaf, predicate) in leaves {
                 let found = app.descendants(matching: .any)
                     .matching(NSPredicate(format: predicate))
                     .firstMatch
@@ -3915,19 +3979,65 @@ final class StubHouseUITests: XCTestCase {
             // which is what this case always spent and what always reached
             // `Albums` there.
             var seen: [String: CGFloat] = [:]
+            // The hint, taken the first time the field is built, at both
+            // sizes: `placeholderValue` is what the field **draws** and
+            // `label` is what it **says**, and the fix for I004's
+            // `Text clipped` is exactly that those two stopped being the same
+            // string. Read here rather than in a case of its own because
+            // this is the one case that already opens Files at AX5, and the
+            // size it matters at is AX5.
+            var drawn: [String: String] = [:]
             let flicks = mode == Self.ordinaryTypeSize ? 6 : 40
             for flick in 0...flicks {
                 for (leaf, height) in heights(app) where seen[leaf] == nil {
                     seen[leaf] = height
                 }
+                if drawn["drawn"] == nil {
+                    let field = app.descendants(matching: .any)
+                        .matching(NSPredicate(format: "label == 'filter this folder…'"))
+                        .firstMatch
+                    if field.exists {
+                        drawn["drawn"] = field.placeholderValue ?? "<no placeholderValue>"
+                        drawn["read"] = field.label
+                    }
+                }
                 if flick == 0 { evidence(app, "67-files-scale-\(label)") }
-                if seen.count == 4 || flick == flicks { break }
+                if seen.count == leaves.count || flick == flicks { break }
                 phoneSourceFlick(app)
             }
             measured[label] = seen
             for (leaf, height) in seen.sorted(by: { $0.key < $1.key }) {
                 print("FILES SCALE [\(label)] \(leaf) height=\(height)")
             }
+            print(
+                "FILES SCALE [\(label)] hint drawn=\(drawn["drawn"] ?? "<field not built>") "
+                    + "read=\(drawn["read"] ?? "<field not built>")"
+            )
+            // **Short on screen, whole to a reader** — the shape
+            // `NewsTopicsView.freeform` already took for the same finding.
+            // Measured off I004's own two trees: Android's nineteen glyphs
+            // want 436 points at AX5 in the 345 a 361-point
+            // `.roundedBorder` field offers, and `filter…` wants 172
+            // (``FileStrings/filterPlaceholderShort`` carries the
+            // calibration and the leaves it rests on). If someone restores
+            // the long hint to the field, this fails and `Text clipped`
+            // comes back with it; if someone takes the whole sentence off
+            // the label as well, the second assertion fails and VoiceOver
+            // would have stopped saying which folder is filtered.
+            XCTAssertEqual(
+                FilesStringsUnderTest.filterHintDrawn,
+                drawn["drawn"],
+                "the folder filter draws \(drawn["drawn"] ?? "nothing") at \(label), not "
+                    + "`\(FilesStringsUnderTest.filterHintDrawn)` — a hint that does not "
+                    + "fit the field at an accessibility size is what I004's "
+                    + "`Text clipped` was"
+            )
+            XCTAssertEqual(
+                FilesStringsUnderTest.filterHintRead,
+                drawn["read"],
+                "the folder filter says \(drawn["read"] ?? "nothing") to a reader at "
+                    + "\(label), not Android's whole sentence"
+            )
             app.terminate()
         }
 
@@ -5052,21 +5162,45 @@ final class StubHouseUITests: XCTestCase {
         }
         let unexplained = rest.filter { !clipped.contains($0) && !archivedEntry.contains($0) }
         XCTAssertEqual([], unexplained, "the Chat list has an audit finding of its own")
-        XCTAssertFalse(clipped.isEmpty, "the ten `Text clipped` findings went away — re-read this case")
-        // **Zero or one, not one.** This case's own rule, two paragraphs up,
-        // is that a classified finding is pinned by *what it says* and never
-        // by how many of it there are — and then this assertion required
-        // exactly one of them, which is a total. Train I004 collected it:
-        // `rest` came back as five anonymous `Text clipped` lines and nothing
-        // else (`I004/ALL/testTheChatListAudits.log:55-69`), Apple having
-        // attributed the archived entry's finding to no element at all on
-        // that run, so the case failed on a false positive going away.
+
+        // **Neither explanation is asserted to still be in use**, and that is
+        // what train I004 corrected here.
         //
-        // What is still strict is the part that catches a defect: `unexplained`
-        // above is asserted empty, so the finding *moving* to another leaf
-        // fails here as it always did. All this line now says is that it
-        // cannot show up twice, or on a leaf whose label is not the archived
-        // entry's.
+        // This case used to assert `archivedEntry.count == 1` and
+        // `!clipped.isEmpty` — that Apple's audit *still emits* the two
+        // findings whose explanations are written above. Both of those are
+        // assertions about XCTest's output, not about this app, and the
+        // first of them flipped:
+        //
+        //     train   floor   rest   `archived · ` named   anonymous `Text clipped`
+        //     I001        5      6                     1                        5
+        //     I002        5      6                     1                        5
+        //     I003        0      6                     0                        5
+        //     I004        0      5                     0                        5
+        //
+        // (I003's sixth was the folded navigation title, named and real; it
+        // is the defect `ShellChromeViews` fixed, and it is gone in I004.)
+        //
+        // Nothing in the Chat list changed under that. The whole
+        // `Dynamic Type font sizes` set simply stopped being reported on this
+        // screen after I002, on the same screen with the same rows, and I004
+        // failed here with `("1") is not equal to ("0")` — a red for the
+        // audit saying *less*, which is the one direction that can never be a
+        // defect in this app.
+        //
+        // What holds the app side is `testTheChatListTextGrowsAtAX5`, which
+        // passed in all four trains and measures the very leaves these two
+        // headlines named: `archived · 2` 18.0 → 116.7, the row title
+        // 18.0 → 406.7, its snippet 30.3 → 102.3, the subtitle 15.7 → 208.7,
+        // the new-chat row 20.3 → 63.3. If one of those is ever pinned, that
+        // case reds. The hard assertion that remains here is the only one
+        // that is about this screen: a finding of any **other** kind, or one
+        // of these two *with* an element the measurement does not name, is in
+        // `unexplained` above and fails.
+        print("CHAT AUDIT clipped=\(clipped.count) archivedEntry=\(archivedEntry.count)")
+        // The one count still held is "not twice": a duplicate, or the
+        // finding moving to a second leaf, is a defect in the app;
+        // the finding going away is not.
         XCTAssertLessThanOrEqual(
             archivedEntry.count,
             1,
@@ -5298,6 +5432,22 @@ enum StubChat {
 
     static let archiveMeAsked = "Archive this one for the test, please"
     static let archiveMe = "Archive this one for the"
+}
+
+/// The Files screen's own words, from ``FileStrings``.
+///
+/// Two of them, and only because the pair is the point: after train I004's
+/// `Text clipped` the folder filter draws one string and says another, which
+/// is `NewsTopicsView.freeform`'s shape and is a thing a case can get wrong
+/// in two directions. A UI test cannot import the app target, so they are
+/// written out.
+enum FilesStringsUnderTest {
+    /// ``FileStrings/filterPlaceholderShort`` — what the field draws. The
+    /// ellipsis is U+2026, as Android's is.
+    static let filterHintDrawn = "filter…"
+    /// ``FileStrings/filterPlaceholder`` — Android's whole sentence
+    /// (`FilesScreen.kt:696`), still the field's accessibility label.
+    static let filterHintRead = "filter this folder…"
 }
 
 /// The Chat screen's own words, from ``ChatStrings`` and ``ShellStrings``.

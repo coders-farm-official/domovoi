@@ -4,11 +4,14 @@ import Foundation
 ///
 /// Where a sentence had to change because this app does something different
 /// from Android's, it is marked **iOS-only** and recorded in
-/// `design-notes/ios/IOS-ONLY-STRINGS.md`. There are five of those, and each
-/// one is a sentence Android has no need of: the three refusals this app
-/// gives (no admin for a delete, a file too big to pull into memory, no
-/// device id to write with), the read-only note on the text viewer, and the
-/// image viewer's answer to bytes it cannot decode.
+/// `design-notes/ios/IOS-ONLY-STRINGS.md`. There are six of those. Five are
+/// sentences Android has no need of: the three refusals this app gives (no
+/// admin for a delete, a file too big to pull into memory, no device id to
+/// write with), the read-only note on the text viewer, and the image
+/// viewer's answer to bytes it cannot decode. The sixth is a sentence
+/// Android has and this app cannot draw — ``filterPlaceholderShort``, the
+/// folder filter's hint, which does not fit an iPhone's field at an
+/// accessibility type size.
 public enum FileStrings {
 
     // MARK: - the page
@@ -21,7 +24,48 @@ public enum FileStrings {
 
     /// `FilesScreen.kt:536`.
     public static let rescan = "rescan this library"
+
+    /// `FilesScreen.kt:696`. The ellipsis is U+2026.
+    ///
+    /// Kept as the field's **accessibility label**, so a reader still hears
+    /// Android's whole sentence, and shortened on screen — see
+    /// ``filterPlaceholderShort``.
     public static let filterPlaceholder = "filter this folder…"
+
+    /// iOS-only: the same hint, short enough to be *read* in the field.
+    ///
+    /// Apple's audit named this field `Text clipped` on train I004
+    /// (`FILES AUDIT REST :: … type=49 label='filter this folder…'
+    /// frame=(16.0, 401.3, 361.0, 34.0)`), and the words do not fit the
+    /// field at an accessibility type size. Measured, from two trees of that
+    /// one train rather than from font tables: the `showing 50 of 56 items`
+    /// leaf beside it is one `.footnote` line **142.0 points** wide for 22
+    /// glyphs, which calibrates a glyph-advance model to +6.4 %; the `.body`
+    /// `Music` leaf above it measures the type scale at **3.118×**
+    /// (20.3 → 63.3 points high, `large` → AX5). Nineteen glyphs of
+    /// `filter this folder…` then want **436 points** inside a
+    /// `.roundedBorder` field that offers 361 − 16 = **345** — short by 91,
+    /// about four glyphs. `filter…` wants **172**, half the room there is.
+    ///
+    /// The model is not a guess: on the one finding of this kind with a
+    /// photograph behind it, News's 39-glyph hint in a 329-point field, it
+    /// returns 315.8 against 313 available — clipped, which is what train
+    /// S005's screenshot shows (cut mid-`Formula 1`) — and clears the
+    /// 31-glyph hint that replaced it at 242.4, which no audit has named
+    /// since. ``NewsStrings/freeformPlaceholderShort`` is that precedent,
+    /// and this is its shape: short on screen, whole to a reader.
+    ///
+    /// Which words go: `this folder`, because the breadcrumb row directly
+    /// above the field is the folder — `library root / Music / Albums` — so
+    /// the scope is already on screen, the way News's `add topic` button
+    /// already said its verb. `filter…` is also what Android's own hint is
+    /// on the two screens that have a shorter folder to name
+    /// (``VideoStrings/filterPlaceholder``,
+    /// ``PhoneMediaStrings/filterPlaceholder``), so this app says one word
+    /// for one control. `filter folder…` was measured too and rejected: 331
+    /// against 345 is 4 % of margin, inside the model's own error.
+    /// `IOS-ONLY-STRINGS.md`, and `gx-transfers/DECISIONS.md` for the call.
+    public static let filterPlaceholderShort = "filter…"
 
     /// The picker's label when no library is chosen yet (`FilesScreen.kt:983`).
     public static let selectLibrary = "select a library"
