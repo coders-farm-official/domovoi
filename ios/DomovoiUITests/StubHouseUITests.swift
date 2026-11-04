@@ -199,7 +199,8 @@ final class StubHouseUITests: XCTestCase {
         port: Int = 6601,
         strip: String? = nil,
         push: String? = nil,
-        pushDelay: Double? = nil
+        pushDelay: Double? = nil,
+        args: [String] = []
     ) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = server ? ["-domovoi-server", "127.0.0.1:\(port)"] : []
@@ -213,6 +214,18 @@ final class StubHouseUITests: XCTestCase {
         if let pushDelay {
             app.launchArguments += ["-domovoi-audit-push-delay", "\(pushDelay)"]
         }
+        // **An item's own launch arguments, so nobody has to copy this body.**
+        //
+        // `launchArguments` must be set before `launch()`, so an item with one
+        // argument of its own had no way in and three units wrote the whole
+        // launcher out again: `roomsLaunch(mode:pushDelay:micSeam:)` for
+        // `-domovoi-dropin-mic` (batch REPORT, "A micSeam parameter on
+        // launch"), and `manualLaunch(mode:scrambleMS:float:)` for two of its
+        // own — a duplicate every case in that file now goes through, so it is
+        // load-bearing and silently drifts from this one. Appended last and
+        // untouched: the seams are the app's own DEBUG-only arguments and this
+        // function has no business knowing which.
+        app.launchArguments += args
         // The type size, set the way the Simulator's own setting would.
         app.launchArguments += ["-UIPreferredContentSizeCategoryName", mode]
         app.launch()
@@ -250,9 +263,23 @@ final class StubHouseUITests: XCTestCase {
     /// element is a defect to fix — that is how the modal bug was found, by
     /// two `Contrast failed` that named the views behind a dialog — and an
     /// anonymous finding of an unrecognised kind is an unknown, not a floor.
+    ///
+    /// (The doc comment above belonged to this function and was attached to
+    /// ``stateName(_:)``, three lines of ``floorAndRest(_:)``'s own
+    /// explanation having run into it with no blank line between them. It is
+    /// where it belongs now.)
+    static func floorAndRest(_ found: [String]) -> (floor: Int, rest: [String]) {
+        func isFloor(_ line: String) -> Bool {
+            guard line.hasSuffix("| element: nil") else { return false }
+            return Self.knownAnonymousHeadlines.contains { line.hasPrefix($0) }
+        }
+        return (found.filter(isFloor).count, found.filter { !isFloor($0) })
+    }
+
     /// An `XCUIApplication.State` in words. A raw value in a log is a number
     /// somebody has to look up, and the one question being asked of it here is
-    /// whether the app is still there.
+    /// whether the app is still there — which is what ``auditIssues(_:_:)``
+    /// asks before it believes a finding.
     static func stateName(_ state: XCUIApplication.State) -> String {
         switch state {
         case .unknown: return "unknown"
@@ -262,14 +289,6 @@ final class StubHouseUITests: XCTestCase {
         case .runningForeground: return "runningForeground"
         @unknown default: return "state \(state.rawValue)"
         }
-    }
-
-    static func floorAndRest(_ found: [String]) -> (floor: Int, rest: [String]) {
-        func isFloor(_ line: String) -> Bool {
-            guard line.hasSuffix("| element: nil") else { return false }
-            return Self.knownAnonymousHeadlines.contains { line.hasPrefix($0) }
-        }
-        return (found.filter(isFloor).count, found.filter { !isFloor($0) })
     }
 
     /// The house's name in the header, which is the one thing on this screen
@@ -496,6 +515,31 @@ final class StubHouseUITests: XCTestCase {
         for attempt in 1...3 {
             let waitedOut = waitForNoNotificationBanner("\(name)/attempt-\(attempt)")
             found = try runOneAudit(app, name)
+            // **Was the app still in front when the audit finished?**
+            //
+            // Train I002 failed `testVoiceSettings_Audit` with a rest of
+            // anonymous `Potentially inaccessible text` findings, and the
+            // diagnosis (`I002-DIAGNOSIS.json`, entry 4) placed them: the
+            // app's process was gone and Apple's audit had sampled
+            // **SpringBoard's** text. The case then reported them as Voices
+            // findings, which is a phantom accessibility defect — the worst
+            // kind of result, because somebody goes looking for it in a view
+            // that is fine.
+            //
+            // `app.state` takes no snapshot and is safe after the process has
+            // died, so this is one read and no retry: a relaunch would have to
+            // repeat the caller's whole navigation, and a helper that cannot do
+            // that honestly should fail honestly instead. ``appGoneAudit`` is
+            // deliberately **not** in ``knownAnonymousHeadlines``, so
+            // ``floorAndRest(_:)`` cannot swallow it.
+            if app.state != .runningForeground {
+                print(
+                    "AUDIT [\(name)] the app was \(Self.stateName(app.state)) when attempt "
+                        + "\(attempt) finished — the findings beside this line are not this "
+                        + "app's"
+                )
+                return [Self.appGoneAudit] + found
+            }
             guard let over = notificationBanner()?.frame else {
                 // **Say what the retake was worth.** A clean audit taken after
                 // a banner was waited out is the measurement that attributes
@@ -559,6 +603,17 @@ final class StubHouseUITests: XCTestCase {
         "UNMEASURED: a notification banner covered the app for all three audit "
             + "attempts, so the findings beside this line are SpringBoard's, not "
             + "this screen's | element: nil"
+
+    /// What ``auditIssues(_:_:)`` returns when the app was not in front.
+    ///
+    /// The sibling of ``bannerPollutedAudit`` and the same claim: the screen
+    /// Apple measured was not this app's. There it was covered; here the
+    /// process had gone (train I002's `testVoiceSettings_Audit`, whose whole
+    /// `rest` was SpringBoard's text reported as Voices findings).
+    static let appGoneAudit =
+        "UNMEASURED: the app was not in the foreground when the audit finished "
+            + "(process lost), so the findings beside this line are not this "
+            + "screen's | element: nil"
 
     /// One pass of Apple's audit, with every issue it has — not the first.
     @MainActor
@@ -1632,6 +1687,17 @@ final class StubHouseUITests: XCTestCase {
         var unreached: [String] = []
         var findings: [String: [String]] = [:]
         var floors: [String: Int] = [:]
+        /// The visible band of each state's page, and how many of its text
+        /// leaves an edge of that band cuts in half. See the classification at
+        /// the foot of this case.
+        var bands: [String: (top: CGFloat, bottom: CGFloat)] = [:]
+        var straddlers: [String: Int] = [:]
+
+        /// Does `edge` run through `box`? Half a point of slack each way, so a
+        /// leaf that merely *touches* an edge is not a straddler.
+        func crosses(_ edge: CGFloat, _ box: CGRect) -> Bool {
+            box.minY < edge - 0.5 && box.maxY > edge + 0.5
+        }
 
         /// Audit whatever is on screen, under a name, having first waited for
         /// the one element that says this state is really the one on screen.
@@ -1649,6 +1715,43 @@ final class StubHouseUITests: XCTestCase {
                 print("SWEEP [\(name)] NEVER ARRIVED — audited anyway, tree above")
             }
             guard #available(iOS 17.0, *) else { return }
+            // **Measured before the audit, not after.** The band and the
+            // straddler count are what the classification at the foot of this
+            // case rests on, and a tree read taken afterwards would be a read
+            // of wherever `performAccessibilityAudit` left the page.
+            let views = app.scrollViews.allElementsBoundByIndex.map(\.frame)
+                .filter { $0.height > 0 }
+            if let page = views.max(by: { $0.height < $1.height }) {
+                // The **page's** scroll view is the tallest one on screen: the
+                // phone bar's lies on its side underneath it and a strip
+                // inside a page is shorter still. `bottom` is then the page's
+                // own foot or the top of whatever scroll view sits below it,
+                // whichever is higher — in the I002 trees the phone bar begins
+                // at 706 where the page ends at 702, and a row in that
+                // four-point gap is drawn by neither.
+                let below = views.filter { $0.minY >= page.maxY - 1 }.map(\.minY).min()
+                var top = page.minY
+                // And the navigation bar's foot where there is one, because
+                // `wf/ios-b-shell` replaces ``ShellTopBar`` with a large
+                // navigation title at accessibility sizes (answer 29): once
+                // that merges, the edge a row straddles at the top of a page
+                // can be the bar's bottom rather than the scroll view's minY.
+                let bar = app.navigationBars.firstMatch
+                if bar.exists, bar.frame.maxY > top { top = bar.frame.maxY }
+                let bottom = min(page.maxY, below ?? page.maxY)
+                bands[name] = (top: top, bottom: bottom)
+                let texts = app.descendants(matching: .staticText)
+                    .allElementsBoundByIndex.map(\.frame)
+                straddlers[name] = texts.filter {
+                    crosses(top, $0) || crosses(bottom, $0)
+                }.count
+                print(
+                    "SWEEP [\(name)] band top=\(top) bottom=\(bottom) "
+                        + "straddling text leaves=\(straddlers[name] ?? 0)"
+                )
+            } else {
+                print("SWEEP [\(name)] no scroll view — no viewport band to measure")
+            }
             let split = Self.floorAndRest(try auditIssues(app, name))
             floors[name] = split.floor
             findings[name] = split.rest
@@ -1716,10 +1819,10 @@ final class StubHouseUITests: XCTestCase {
         )
         waiting.terminate()
 
-        // ### Twice, and the second pass is an experiment
+        // ### Twice, and the second pass was an experiment that has answered
         //
-        // This state is the only one of seven to report a `Contrast failed`,
-        // on every pass, and two explanations have already died:
+        // This state was the only one of seven to report a `Contrast failed`,
+        // and two explanations died before the right one:
         //
         //  1. *the timers' room chip, dimmed because the rooms read failed* —
         //     `home-ax5` draws a genuinely offline room's chip dimmed and
@@ -1728,22 +1831,30 @@ final class StubHouseUITests: XCTestCase {
         //     nothing in it the clean states do not also draw.
         //
         // What killed both was looking at the picture. The element the audit
-        // finally named is `pasta`, a timer's **title** — no dim, no colour of
+        // first named is `pasta`, a timer's **title** — no dim, no colour of
         // its own — and in the screenshot it is **straddling the bottom edge
         // of the scroll viewport**, half of it under the phone bar. It is
         // flagged here and not on `home-ax5` because there the rooms list sits
         // above the timers and pushes that row right off the screen instead of
         // half on it.
         //
-        // So the hypothesis is now about the **edge**, not the element: a text
-        // that is partly rendered gets a contrast reading of a partly rendered
-        // thing. The second pass swipes the card fully into view before
-        // auditing. If the finding disappears, or lands on whatever text is at
-        // the edge *then*, it belongs to the viewport and not to this app.
+        // **Train I002 settled it, and at both edges.** The unscrolled pass is
+        // clean (0+0 in R004, R005 and I002 alike): the swipe-up is what makes
+        // the straddlers, which is the experiment's own control. The scrolled
+        // pass reports exactly two, and they are the only two text leaves in
+        // the tree that cross an edge — `5 min timer` at 676.0-734.7 against
+        // a page ending at 702.0, and the media-request row at 53.0-343.7
+        // against a page beginning at 300.3. The leaves wholly inside the
+        // band, `pasta` (467-526) and `timers` (391.7-455), are not flagged.
+        // R004 and R005 have the same geometry and the same two findings with
+        // no element attached; I002 is simply the first run in which Apple
+        // attributed them.
         //
-        // That one of the two passes named `pasta` and the other named nothing
-        // at all, in the same run, is the same instability pointing the same
-        // way.
+        // So it does belong to the viewport and not to this app, and the
+        // allowance at the foot of this case is geometric rather than a count.
+        // The pass stays: it is the only state in this file that renders a
+        // half-clipped row on purpose, and it is therefore the only place that
+        // rule is exercised at all.
         for pass in ["rooms-down", "rooms-down-scrolled"] {
             let roomsDown = launch(mode: ax5, port: Self.roomsDownPort)
             if pass.hasSuffix("scrolled") {
@@ -1796,27 +1907,84 @@ final class StubHouseUITests: XCTestCase {
                 + unreached.joined(separator: ", ")
         )
         // Everything Apple could attribute, and every anonymous finding of a
-        // kind this file has not measured. Empty is the claim everywhere but
-        // the two `rooms-down` passes, where **one** `Contrast failed` is
-        // allowed while the viewport-edge question above is open.
+        // kind this file has not measured.
         //
-        // Allowed by **state and by kind and by count**, not by a total: a
-        // second finding there, a finding of any other kind there, or one of
-        // these anywhere else all fail. Pinning the total is what let a real
-        // finding hide behind `knownPairingIssues` for three sessions.
+        // ### The rule is geometric now, and it used to be a count
+        //
+        // It allowed **one** `Contrast failed` per `rooms-down` pass, counted,
+        // while the viewport-edge question in the comment above was open.
+        // Train I002 answered that question and failed this case for it: with
+        // the swipe-up, `rooms-down-scrolled` has a row straddling *each* edge
+        // — `5 min timer` at 676.0-734.7 against a page ending at 702.0, and
+        // the media-request row at 53.0-343.7 against a page beginning at
+        // 300.3, 247 of its 290.7 points clipped away under ``ShellTopBar``.
+        // Two straddlers, two findings, and the second one became "(a second
+        // one)" and a red (`I002-DIAGNOSIS.json`, entry 1).
+        //
+        // Neither is a colour defect. The media-request sentence is the
+        // primary label colour on ``HomeCard``'s light grey fill, about 18:1
+        // (`HomeAttentionView.swift:183`, `HomeCardView.swift:75`); what the
+        // audit read in its frame was mostly the top bar's ink and canvas,
+        // because that is where the clipped 247 points of it are. The
+        // screenshot `40-rooms-down-scrolled` shows only "can fill it".
+        //
+        // So the allowance is by **geometry and by kind**, for every state and
+        // not just this one:
+        //
+        //  * an attributed `Contrast failed` whose element the band's top or
+        //    bottom edge cuts in half is dropped, and logged with its numbers;
+        //  * an attributed `Contrast failed` on a **wholly visible** element
+        //    still fails, anywhere, which is the thing this rule must not
+        //    stop catching;
+        //  * an anonymous one (`element: nil`, no frame to read) is allowed up
+        //    to the state's straddler count less the attributed ones already
+        //    dropped — which is the R004/R005 shape, where the same two rows
+        //    straddled the same two edges and the audit named neither;
+        //  * a finding of any other kind outside the measured floor fails, as
+        //    before.
+        //
+        // Pinning a total is what let a real finding hide behind
+        // `knownPairingIssues` for three sessions, and a count per state was
+        // the same mistake one size smaller.
         var rest: [String] = []
         for name in order {
             let found = findings[name] ?? []
-            guard name.hasPrefix("rooms-down") else {
-                rest += found.map { "\(name): \($0)" }
-                continue
-            }
+            let band = bands[name]
             let contrast = found.filter { $0.hasPrefix("Contrast failed") }
             rest += found.filter { !$0.hasPrefix("Contrast failed") }.map { "\(name): \($0)" }
-            if contrast.count > 1 {
-                rest += contrast.dropFirst().map { "\(name) (a second one): \($0)" }
+            // Attributed first, so the anonymous allowance below is computed
+            // against a settled number of drops rather than against whatever
+            // order Apple happened to report the findings in.
+            var attributed: [String] = []
+            var anonymous: [String] = []
+            for line in contrast {
+                if Self.frame(in: line) == nil { anonymous.append(line) } else { attributed.append(line) }
             }
-            print("SWEEP [\(name)] contrast findings: \(contrast.count)")
+            var dropped = 0
+            for line in attributed {
+                guard let box = Self.frame(in: line), let band,
+                      crosses(band.top, box) || crosses(band.bottom, box) else {
+                    rest.append("\(name): \(line)")
+                    continue
+                }
+                dropped += 1
+                print("SWEEP [\(name)] viewport-edge contrast :: \(line)")
+            }
+            var allowance = max(0, (straddlers[name] ?? 0) - dropped)
+            for line in anonymous {
+                if allowance > 0 {
+                    allowance -= 1
+                    print("SWEEP [\(name)] unattributed contrast, one of \(straddlers[name] ?? 0) "
+                        + "straddling leaves :: \(line)")
+                    continue
+                }
+                rest.append("\(name) (more unattributed contrast than straddling leaves): \(line)")
+            }
+            print(
+                "SWEEP [\(name)] contrast findings: \(contrast.count) "
+                    + "(\(dropped) at an edge, \(anonymous.count) unattributed, "
+                    + "straddling leaves \(straddlers[name] ?? 0))"
+            )
         }
         XCTAssertTrue(
             rest.isEmpty,
@@ -3435,6 +3603,28 @@ final class StubHouseUITests: XCTestCase {
             .firstMatch
     }
 
+    /// Anything on screen whose label **is** `text`, of any element type.
+    ///
+    /// The exact-match sibling of ``containing(_:_:)``, and it exists because
+    /// `CONTAINS` cannot assert an absence: a marker that is a substring of
+    /// another marker is unassertable, so a case written to catch a bug passes
+    /// against the bug. The Documents item met this and worked around it by
+    /// renaming its pair of markers (`TOKEN-AFTER-RELOAD` /
+    /// `TOKEN-WITHHELD-ON-RELOAD` rather than one with a `NO-` prefix) —
+    /// which is a fixture bent round a helper, and the helper was the thing
+    /// missing (batch REPORT, documents' "Needs a shared change").
+    ///
+    /// ``anything(_:labelled:)`` is the same predicate for the base cases;
+    /// this one takes the Chat-shaped `(app, text)` argument order that every
+    /// `+<Tag>` file already calls `startingWith` and `containing` with, so a
+    /// case switching from a substring match to an exact one moves one word.
+    @MainActor
+    func labelled(_ app: XCUIApplication, _ text: String) -> XCUIElement {
+        app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label == %@", text))
+            .firstMatch
+    }
+
     /// The composer's field.
     ///
     /// Matched by label across every element type on purpose: it is a
@@ -4617,6 +4807,22 @@ enum ChatStringsUnderTest {
     static let serverDeleteNote = "Deletes it for everyone in the house."
     static let windowNote = "earlier messages are beyond what Domovoi can keep in mind"
     static let thisPhone = "this phone"
+
+    /// ``ChatStrings/showEarlier`` — the transcript's cap (D64).
+    ///
+    /// The Chat item could not add it here (this file is another unit's this
+    /// batch) and declared `ChatBatchUnderTest.showEarlier` in its own file
+    /// instead, asking for it to be folded in by whoever owned this one next
+    /// (batch REPORT, chat's "Needs a shared change"). So: here it is, and
+    /// `StubHouseUITests+Chat.swift`'s own copy and the
+    /// `ChatBatchUnderTest` enum around it can go with it the day the two
+    /// branches are in one tree — **not before**, since nothing on this
+    /// branch defines that enum and nothing on that one defines this.
+    ///
+    /// Its sibling `ChatBatchUnderTest.talk` has no home here: it is
+    /// ``ChatMoreStrings/talk``, and `ChatMoreStringsUnderTest` is in the
+    /// ChatMore item's file, which is not this unit's either.
+    static let showEarlier = "show earlier"
 
     /// ``ShellStrings/unavailableNote(label:isChat:aiEnabled:)`` for a house
     /// whose AI features are off, which is what the **route** answers with
