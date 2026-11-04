@@ -842,3 +842,41 @@ struct ManualScrambleName: View {
         scrambling = false
     }
 }
+
+
+/// A piece's `preview` and `plugin` words, in the document's own wording
+/// (`MapNode`'s folded pills, `ManualScreen.kt:660`, and `PiecePage`'s,
+/// `:755`).
+func manualPieceTags(_ piece: ManualPiece, _ doc: ManualDoc) -> [String] {
+    var tags: [String] = []
+    if piece.preview {
+        tags.append(doc.label("preview", "text", fallback: ManualStrings.Fallback.preview))
+    }
+    if piece.plugin != nil {
+        tags.append(doc.label("plugin", "text", fallback: ManualStrings.Fallback.plugin))
+    }
+    return tags
+}
+
+/// A topic's glyph (`TOPIC_ICONS`, `ManualScreen.kt:171`).
+///
+/// **A choice, not a transcription**, for ``Route/systemImage``'s reason:
+/// there is no mapping from Material's names to SF Symbols, so each one is
+/// the nearest symbol Apple ships, picked against the Material glyph. A topic
+/// the document adds later falls to the same `HelpOutline` the Kotlin falls
+/// to.
+func manualTopicIcon(_ topic: String) -> String {
+    switch topic {
+    case "how-it-works": return "cpu"
+    case "things-to-say": return "bubble.left"
+    case "rooms-and-devices": return "dot.radiowaves.left.and.right"
+    case "your-phone": return "iphone"
+    case "music-and-media": return "music.note"
+    case "chat-files-calendar": return "folder"
+    case "chat-and-help": return "bubble.left.and.bubble.right"
+    case "documents-and-letters": return "doc.text"
+    case "people-and-privacy": return "person.2"
+    case "keeping-it-running": return "wrench.and.screwdriver"
+    default: return "questionmark.circle"
+    }
+}
