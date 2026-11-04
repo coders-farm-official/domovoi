@@ -208,9 +208,11 @@ final class TransferReceiveDelegate: NSObject, URLSessionDownloadDelegate, @unch
     /// Delete whatever was moved into place. Called on every failure path, so
     /// a refusal's body and a half-cancelled save are never left behind.
     func discard() {
-        let file: URL? = state.withLock {
-            defer { $0.landed = nil }
-            if case .success(let url) = $0.landed { return url }
+        // The parameter is named rather than `$0`, because the `defer` body is
+        // not itself a closure and `$0` is not in scope inside one.
+        let file: URL? = state.withLock { held -> URL? in
+            defer { held.landed = nil }
+            if case .success(let url) = held.landed { return url }
             return nil
         }
         if let file { try? FileManager.default.removeItem(at: file) }

@@ -128,24 +128,31 @@ public final class SaveToDeviceModel {
         // note is about.
         let name = named
         let where_ = path
+        let box = TransferProgressBox()
+        // The progress closure runs on a `URLSession` thread, so it puts the
+        // numbers in a lock and hops to the main actor to draw them. It reads
+        // `mine`, never the model's `epoch`: a tick that lands after a server
+        // switch must not move the new house's bar.
+        //
+        // It is built **here**, in the method body, and not inside the task
+        // below. Its `[weak self]` is then the real `self`; a `[weak self]`
+        // written inside the task's own body would be re-capturing that task's
+        // weak optional, which is a mutable capture and a concurrency error
+        // (`reference to captured var 'self'`) — the compiler is right, since
+        // that reference can go nil between the two closures reading it.
+        let onProgress: @Sendable (Int64, Int64) -> Void = { [weak self] sent, total in
+            box.note(sent: sent, of: total)
+            Task { @MainActor in
+                guard let self, mine == self.epoch else { return }
+                guard case .fetching = self.state else { return }
+                self.state = .fetching(name, box.share)
+            }
+        }
         running = Task { @MainActor [weak self] in
-            let box = TransferProgressBox()
             do {
                 let spool = try FileSaveModel.emptySpool()
                 let into = spool.appendingPathComponent(name, isDirectory: false)
-                // The progress closure runs on a `URLSession` thread, so it
-                // puts the numbers in a lock and hops to the main actor to
-                // draw them. It reads `mine`, never the model's `epoch`: a
-                // tick that lands after a server switch must not move the
-                // new house's bar.
-                let url = try await read(where_, into) { sent, total in
-                    box.note(sent: sent, of: total)
-                    Task { @MainActor [weak self] in
-                        guard let self, mine == self.epoch else { return }
-                        guard case .fetching = self.state else { return }
-                        self.state = .fetching(name, box.share)
-                    }
-                }
+                let url = try await read(where_, into, onProgress)
                 guard let self, mine == self.epoch else { return }
                 self.state = .ready(url, name)
             } catch is CancellationError {
