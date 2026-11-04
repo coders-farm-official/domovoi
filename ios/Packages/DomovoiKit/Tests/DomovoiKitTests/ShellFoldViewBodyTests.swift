@@ -19,15 +19,24 @@ import XCTest
 /// and two call sites with none is not answer 29 having a reading.
 ///
 /// What is available on this machine: `pkgtest.sh` builds the package and runs
-/// `swift test`; `appcheck.sh`, the app-target type-checker, fails at its
-/// first step on this branch **and on the base branch** (`HintInk.swift:4:
-/// cannot load underlying module for 'UIKit'`), so it is a harness defect and
-/// not something this branch can repair; and the four `testShell_*` cases that
-/// read the real screens need a train and a Simulator. So this file reads the
-/// source. `AlertsStringsTests` and `ShellStringsTests` already read Kotlin
-/// out of the repository through `#filePath` for the same reason — a reading a
-/// Windows agent can get a verdict on (NIGHT-RULES §5) beats an argument in a
-/// doc comment.
+/// `swift test`; `appcheck.sh` type-checks the app target; and the four
+/// `testShell_*` cases that read the real screens need a train and a
+/// Simulator.
+///
+/// **A correction, from the integration of 2026-11-03.** This paragraph used
+/// to say `appcheck.sh` "fails at its first step on this branch and on the
+/// base branch (`HintInk.swift:4: cannot load underlying module for 'UIKit'`),
+/// so it is a harness defect". That is not true of the merged branch:
+/// `appcheck.sh` exits 0 on `wf/ios-b-all`, so the app target does have a
+/// type-checked verdict and whatever produced that error was not a standing
+/// harness defect. The reason this file reads source is the one below, which
+/// a type-checker could never give: both recorded sabotages compiled
+/// perfectly.
+///
+/// `AlertsStringsTests` and `ShellStringsTests` already read Kotlin out of the
+/// repository through `#filePath` for the same reason — a reading a Windows
+/// agent can get a verdict on (NIGHT-RULES §5) beats an argument in a doc
+/// comment.
 ///
 /// ### What this can and cannot catch
 ///
