@@ -330,8 +330,16 @@ fun SatRecentlyPlayedTab(room: String) {
 
     // Generic acquisition enqueue (design §4.8): the exact stored URL goes
     // to the media-acquisition queue; whichever fulfiller plugin is
-    // installed claims it. The server's `can_add` flag on each row already
-    // reflects fulfiller availability.
+    // installed claims it.
+    //
+    // The button is drawn on the row's `can_add` alone, and the server now
+    // computes that against the fulfiller allowlist it also answers
+    // add-by-url with (D55, owner 2026-11-03: "no fulfiller means no
+    // button and no error") — so with nothing installed to act on the
+    // queue there is no button here, and the queue's graceful-absence
+    // sentence is a reply this screen can no longer provoke. The toast of
+    // `res.message` stays for the replies it CAN provoke (already in the
+    // library, already queued), which still reach the person (answer 44).
     fun add(r: SatPlayed) {
         scope.launch {
             runCatching {

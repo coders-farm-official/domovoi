@@ -59,6 +59,7 @@ from satellite import provisioning_protocol as proto
 
 from web.backend import satellite_adoption, timer_fires
 from web.backend.api import captures as captures_api
+from web.backend.api.acquisitions import _availability as _acquisition_availability
 from web.backend.api.music import _now_playing_for
 from web.backend.db import session_scope
 from web.backend.domovoi_client import (
@@ -1057,9 +1058,22 @@ async def list_recently_played(
     provider-plugin picks (``source`` is an open enum) — newest first.
     An external play that isn't yet in the library carries
     ``can_add=True`` so the drawer can offer "+ add to library", which
-    enqueues a generic media acquisition (design §4.8/§10.1); the
-    frontend shows the button only while a fulfiller capability is
-    registered."""
+    enqueues a generic media acquisition (design §4.8/§10.1).
+
+    ``can_add`` asks the fulfiller allowlist too (D55, owner decision
+    2026-11-03: "no fulfiller means no button and no error"). It used to
+    be a property of the ROW alone, so with nothing installed to act on
+    the queue every phone drew a button whose only outcome was the
+    queue's graceful-absence sentence — a control that cannot do what it
+    says. The answer comes from the same place add-by-query and
+    add-by-url get theirs (``_availability``, which reads the core's
+    ``GET /v1/acquisitions`` → ``ACQUISITIONS.availability()``,
+    domovoi/main.py:5874), so one answer cannot disagree with another.
+    The button posts the stored URL to add-by-url, so it is
+    ``can_fulfill_url`` that decides. A core that does not answer leaves
+    availability ``None`` — not a positive answer, so no button, and no
+    error for anyone to read either.
+    """
     _LOCAL_SOURCES = ("library", "playlist", "spoken_audio")
     async with session_scope() as s:
         rows = await s.execute(
@@ -1081,30 +1095,41 @@ async def list_recently_played(
             ),
             {"room_id": room_id, "limit": limit},
         )
-        out: list[RecentlyPlayed] = []
-        for r in rows.all():
-            in_library = bool(r.in_library)
-            external = r.source not in _LOCAL_SOURCES
-            out.append(
-                RecentlyPlayed(
-                    id=int(r.id),
-                    room_id=r.room_id,
-                    source=r.source,
-                    title=r.title,
-                    artist=r.artist,
-                    channel=r.channel,
-                    external_id=r.video_id,
-                    url=r.url,
-                    started_at=r.started_at,
-                    in_library=in_library,
-                    can_add=(
-                        external
-                        and not in_library
-                        and bool(r.title or r.url)
-                    ),
-                )
-            )
-        return out
+        raw = rows.all()
+
+    def _reacquirable(r: Any) -> bool:
+        """A row "+ add to library" could act on at all: an external play,
+        not already in the library, with something to fetch it by."""
+        return (
+            r.source not in _LOCAL_SOURCES
+            and not bool(r.in_library)
+            and bool(r.title or r.url)
+        )
+
+    # Only ask the core when some row could carry the button, so a history
+    # of nothing but library plays costs no round trip. Outside the session
+    # block: this is a 2-second HTTP read, not something to hold a
+    # database connection open for.
+    can_fulfill = False
+    if any(_reacquirable(r) for r in raw):
+        can_fulfill = (await _acquisition_availability()).get("can_fulfill_url") is True
+
+    return [
+        RecentlyPlayed(
+            id=int(r.id),
+            room_id=r.room_id,
+            source=r.source,
+            title=r.title,
+            artist=r.artist,
+            channel=r.channel,
+            external_id=r.video_id,
+            url=r.url,
+            started_at=r.started_at,
+            in_library=bool(r.in_library),
+            can_add=can_fulfill and _reacquirable(r),
+        )
+        for r in raw
+    ]
 
 
 _TIMER_COLUMNS = "id, expires_at, label, message, room_id, created_at"
