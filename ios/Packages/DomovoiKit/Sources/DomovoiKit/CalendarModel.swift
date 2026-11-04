@@ -42,7 +42,10 @@ import Synchronization
 ///   there is no moment at which rows for one range can be filed under
 ///   another. A reply that lands after the range moved is dropped by
 ///   ``ApiRead``'s own cancel-on-refresh, which is what moving the range
-///   calls.
+///   calls when it asks for anything — and a page that lands when it did
+///   not, or that came back cut, is answered by ``pageLanded()``: a page
+///   that cannot draw the range on screen is re-pointed at that range and
+///   read again, once.
 /// * Stepping stays responsive because a page is **reused**, and widened
 ///   rather than replaced: a range already inside the page costs nothing
 ///   (``CalendarPage/serves(_:)``), and a range next to it is read as the
@@ -183,6 +186,11 @@ public final class CalendarModel {
                 truncated: rows.count >= calendarWindowLimit
             )
         }
+        // Last, because it captures `self` — ``FilesModel``'s own
+        // `libraries.onValue` line, for the same reason it exists there: the
+        // read's success path is the one place that knows a page has landed,
+        // and a failure must not be mistaken for one.
+        self.events.onValue = { [weak self] in self?.pageLanded() }
     }
 
     // MARK: - lifecycle
@@ -216,6 +224,34 @@ public final class CalendarModel {
 
     public func received(_ event: StateEvent) {
         events.received(event)
+    }
+
+    /// A page landed. If it cannot answer the range on screen, ask for that
+    /// range and nothing else — **once**.
+    ///
+    /// Two pages arrive that cannot, and both used to end in a screen that
+    /// said the wrong thing for ever:
+    ///
+    /// * **a page for a range the person has left.** Nothing cancels a read
+    ///   whose range was abandoned while the page in hand still served the
+    ///   new one (`rangeMoved`'s first branch), so the abandoned reply lands
+    ///   into ``ApiRead``'s one value slot and takes the drawn page with it.
+    /// * **a page cut by `LIMIT`.** It is the oldest `limit` rows of its own
+    ///   window and no answer about any range inside it
+    ///   (``CalendarPage/serves(_:)``), so a widened read that came back cut
+    ///   leaves the view it was widened for unanswerable.
+    ///
+    /// It terminates, which is what makes it safe to run off a landing: the
+    /// re-read is pointed at ``wantedWindow`` exactly, and a page whose
+    /// window **is** the range serves it whether or not `limit` cut it — so
+    /// the second landing settles, cut or not. ``ApiRead/refresh()`` is called
+    /// from inside the read's own success path on purpose: it cancels the
+    /// task that is running, which has published its value and is returning.
+    private func pageLanded() {
+        let wanted = wantedWindow
+        guard events.data?.serves(wanted) != true else { return }
+        window.set(wanted)
+        events.refresh()
     }
 
     /// The saved server changed under us. Everything the person had chosen in
@@ -325,12 +361,27 @@ public final class CalendarModel {
     /// **of another range**, and a screen that treated it as an answer would
     /// flash `nothing in this range` on every chevron into unread territory.
     ///
-    /// ``CalendarPage/landed(for:)`` and not ``CalendarPage/serves(_:)``: a
-    /// page cut short by `LIMIT` is still this range's answer and must not
-    /// spin for ever, even though it is not evidence about a neighbouring
-    /// range.
+    /// ``CalendarPage/serves(_:)`` and **not** a bare "the page's window
+    /// covers this range".
+    ///
+    /// It was the second of those until REVIEW-2's must 1, and the difference
+    /// is a page cut short by `LIMIT`: it covers its own window and carries
+    /// only the oldest `limit` rows of it, so for a range *inside* that
+    /// window it is no answer at all. Taking it for one cost both wordings at
+    /// once — a failed read said `nothing on the calendar` instead of saying
+    /// why (``errorText`` is gated on this being true, ``emptyText`` on its
+    /// being false, and the retry link lives in the error branch), and the
+    /// successful path flashed the same sentence for one round trip. Measured
+    /// on the Mac: 26 agenda chevrons back into a crowded house, the read
+    /// made to fail, `today` — `errorText` nil with `events.error` set, and
+    /// `nothing on the calendar` permanently, with no way to retry.
+    ///
+    /// The spinner that `serves(_:)` could leave is closed where it arises
+    /// rather than here: ``pageLanded()`` re-points the read at the range on
+    /// screen when a page lands that cannot answer it, so this is pending
+    /// only while something is on its way.
     public var rangePending: Bool {
-        !(events.data?.landed(for: wantedWindow) ?? false)
+        !(events.data?.serves(wantedWindow) ?? false)
     }
 
     /// The loading state's own condition — `loading && data == null` (`:161`),
@@ -437,26 +488,30 @@ public final class CalendarModel {
         // and it is evidence about the house: widening is off while it is
         // what is in hand.
         let widen = events.data?.truncated != true && asked.widens(to: wanted)
-        // Served **and** safe to leave alone. The second half is not
-        // belt-and-braces: ``window`` is what any read still in flight is
-        // for, and ``ApiRead`` has one slot for its value, so a reply for a
-        // range the person has left replaces the page they are looking at.
-        // Without this test, agenda → month → straight back to the agenda
-        // left the month's page in the slot with nothing in flight to replace
-        // it: the agenda was `rangePending` for ever, which is a spinner that
-        // never stops. When the in-flight window does not cover the new
-        // range, the read is re-pointed, and ``ApiRead/refresh()``'s cancel
-        // is what drops the reply that is on its way.
-        if events.data?.serves(wanted) == true, asked.contains(wanted) {
-            // Nothing to ask for — the rows are already here. But the box
-            // must not be left holding a floor nobody is looking at: `today`
-            // after a walk into the past lands exactly here, and a box still
-            // pointed at may means the **next** read — a push, a write, the
-            // screen coming back — spends its limit on the summer. Narrowing
-            // costs no request, and misfiles nothing: a page carries the
-            // window it asked for (``CalendarPage``), so anything in flight
-            // still lands under its own range.
-            if asked.daysBelow(wanted) > calendarWidenLimitDays { window.set(wanted) }
+        // Served, so there is nothing to ask for: the rows are already here.
+        //
+        // It used to take a second condition — that the window a read may
+        // still be in flight for covered the new range — because a reply for
+        // a range the person has left replaces the page they are looking at,
+        // and agenda → month → straight back to the agenda then left the
+        // month's page in ``ApiRead``'s one slot with nothing on its way to
+        // replace it: `rangePending` for ever, a spinner that never stops.
+        // That guess about what might land is now ``pageLanded()``, which
+        // acts on what actually did, and the guess cost a round trip it did
+        // not have to: the box is narrowed to the range on screen below, so
+        // the very next backwards chevron failed it and re-read rows that
+        // were already drawn (REVIEW-2, should 5).
+        if events.data?.serves(wanted) == true {
+            // The box is pointed at the range on screen, always. It must not
+            // be left holding a floor nobody is looking at: `today` after a
+            // walk into the past lands exactly here, and a box still pointed
+            // at may means the **next** read — a push, a write, the screen
+            // coming back — spends its limit on the summer and comes home
+            // with nothing to draw (REVIEW-2, must 3; REVIEW-1, must 1).
+            // Pointing it costs no request, and misfiles nothing: a page
+            // carries the window it asked for (``CalendarPage``), so anything
+            // in flight still lands under its own range.
+            window.set(wanted)
             return
         }
         window.set(widen ? asked.union(wanted) : wanted)
@@ -614,17 +669,15 @@ public struct CalendarPage: Equatable, Sendable {
         self.truncated = truncated
     }
 
-    /// This page is `wanted`'s own answer: the read for that range has come
-    /// back, whether or not it was cut.
-    ///
-    /// What ``CalendarModel/rangePending`` asks, and the reason it is not
-    /// ``serves(_:)``: a cut page is still an answer, and a screen that spun
-    /// until it got an uncut one would spin for ever in a busy house.
-    public func landed(for wanted: CalendarWindow) -> Bool {
-        window.contains(wanted)
-    }
-
     /// `wanted` can be drawn from these rows with no further request.
+    ///
+    /// Both of the two questions a screen has about a page — "is this the
+    /// answer for the range on screen?" (``CalendarModel/rangePending``) and
+    /// "do I need to ask?" (``CalendarModel`` `rangeMoved`) — are this one.
+    /// There used to be a second, weaker predicate (`landed(for:)`, the bare
+    /// `window.contains(wanted)`) for the first of them, and a cut page
+    /// passing it is what made a failed read say the calendar was empty
+    /// (REVIEW-2, must 1). It is gone rather than left with no caller.
     ///
     /// A **cut** page serves only itself: it is the first `limit` rows of its
     /// window, so for any smaller range inside it there may be rows it never
