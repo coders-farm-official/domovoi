@@ -222,6 +222,92 @@ extension StubHouseUITests {
         }
     }
 
+    /// **The local shell's header is the stack's title on every tab**, which
+    /// is the reading review 2's uncaught sabotage left open.
+    ///
+    /// That sabotage was one argument — `drawn: false` on
+    /// ``LocalShellView``'s `.shellScrollAwayChrome` — with the rule, both
+    /// gates and all three of `WorkspaceView`'s `forHeader` calls untouched.
+    /// It makes ``ShellScrollAwayChrome``'s fold answer `noHeaderAtAll`, so
+    /// `navigationTitle(crumb:)` returns nil and the body takes `else {
+    /// content }`: at AX5 the shell a fresh install lands on has no large
+    /// title and no toolbar pill, and `drawsBarAboveTheStack` is false there
+    /// too, so there is no `ShellTopBar` either. **ShellFold ran 29 of 29
+    /// green against it.** `ShellFoldViewBodyTests`' one reading of this file
+    /// (`localShell.contains("drawn: true")`) is satisfied by the
+    /// `forHeader(drawn: true, …)` call that computes the gate, not by the
+    /// modifier, so the package half cannot close it.
+    ///
+    /// What this adds over
+    /// ``testShell_TheHeaderScrollsAwayOnTheLocalShell()``, which would also
+    /// go red under it: that case reads the tab the shell opens on. The
+    /// modifier is applied **per tab** (``LocalShellView``'s `tab(_:)` —
+    /// there is no one stack in a `TabView`), so a header that is only wired
+    /// on the first tab is a shape neither case saw. This walks the tabs and
+    /// asserts the title and the pill on each, which is also the cheapest
+    /// place to catch a later unit wrapping one tab's screen in a stack of
+    /// its own.
+    ///
+    /// **It never opens the connection sheet** (NIGHT-RULES §1: that starts a
+    /// LAN sweep of Kamron's real network). The pill is asserted to exist and
+    /// is not tapped.
+    @MainActor
+    func testShell_TheLocalShellsHeaderIsOnEveryTab() throws {
+        let app = launch(mode: StubShell.ax5, server: false)
+        let crumb = "domovoi / local media"
+        XCTAssertTrue(
+            app.navigationBars.staticTexts[crumb].waitForExistence(timeout: 30),
+            "no `\(crumb)` in a navigation bar on the local shell's first tab at "
+                + "AX5 — `ShellScrollAwayChrome` drew no large title, which is "
+                + "what `drawn: false` on `LocalShellView`'s "
+                + "`.shellScrollAwayChrome` does. Tree attached."
+        )
+        evidence(app, "shell-local-ax5-tabs")
+
+        // `music`, `videos`, `files`: ``localTabs(phoneCanChat:sharedScreen:savedBooks:)``
+        // always offers these three, and with no server there is no chat and
+        // no saved book to add a fourth.
+        let connect = NSPredicate(format: "label == %@", "connect")
+        var read = 0
+        for name in ["music", "videos", "files"] {
+            let item = app.tabBars.buttons[name].exists
+                ? app.tabBars.buttons[name]
+                : app.buttons[name]
+            guard item.waitForExistence(timeout: 10) else {
+                print("SHELL [local-tabs] no `\(name)` tab item — tree follows")
+                print(app.debugDescription)
+                continue
+            }
+            item.tap()
+            let title = app.navigationBars.staticTexts[crumb]
+            XCTAssertTrue(
+                title.waitForExistence(timeout: 15),
+                "the `\(name)` tab of the local shell at AX5 has no `\(crumb)` in "
+                    + "a navigation bar. The chrome is applied per tab, so a tab "
+                    + "whose `.shellScrollAwayChrome` is not drawn has no header "
+                    + "and no way back to the connection sheet at all"
+            )
+            XCTAssertEqual(
+                app.navigationBars.buttons.matching(connect).count,
+                1,
+                "\(app.navigationBars.buttons.matching(connect).count) `connect` "
+                    + "pills in the navigation bar of the `\(name)` tab at AX5, "
+                    + "not one — the toolbar pill is the only way back to the "
+                    + "connection sheet once the bar above the tabs is gone"
+            )
+            print("SHELL [local-tabs] \(name): title and pill in the navigation bar")
+            read += 1
+        }
+        evidence(app, "shell-local-ax5-tabs-walked")
+        XCTAssertGreaterThanOrEqual(
+            read,
+            2,
+            "only \(read) of the local shell's three tabs could be reached at "
+                + "AX5, so this case measured almost nothing. The trees above "
+                + "say what the tab bar looked like"
+        )
+    }
+
     /// What "the header scrolls away" means, as four readings and no opinions.
     ///
     /// 1. **The band is gone.** No button whose label is exactly

@@ -152,21 +152,20 @@ public enum ImagesStrings {
 
     // MARK: - the plugin band
 
-    // `pluginBadge` ("plugin", `PluginFrame.kt:152`) stood here and is gone:
-    // one view draws both bands since owner answer 58, and its copy of the
-    // word is ``PluginBandStrings/badge``, which `ShellFoldTests` pins.
-    // `by(_:)`, `manage` and `manageLabel(name:)` below are NOT dead —
-    // ``PluginBand/publisherLine`` and ``PluginBand/manageLabel`` read them
-    // (`ImagesModels.swift:605`, `:610`), which `ImagesTests` asserts.
-
-    /// `PluginFrame.kt:144`.
-    public static func by(_ publisher: String) -> String { "by \(publisher)" }
-
-    /// `PluginFrame.kt:178`, the word; and `:181`, its screen-reader label.
-    public static let manage = "manage"
-    public static func manageLabel(name: String) -> String {
-        "manage \(name) on the dashboard's Plugins page"
-    }
+    // **All four of the band's words stood here and all four are gone.**
+    // `pluginBadge` ("plugin", `PluginFrame.kt:152`) went with owner answer
+    // 58 — one view draws both bands now — and `by(_:)`, `manage` and
+    // `manageLabel(name:)` have followed it: ``PluginBandStrings`` is the one
+    // copy, `ShellFoldTests` pins it, and ``PluginBandView`` is what draws
+    // it.
+    //
+    // They were kept once, on the ground that ``PluginBand/publisherLine``
+    // and ``PluginBand/manageLabel`` read them. They did — and nothing read
+    // *those* except `ImagesTests`, so three strings, two computed
+    // properties and three green assertions stood over a sentence the app
+    // drew from somewhere else (review 4 §4.3). Both properties read
+    // ``PluginBandStrings`` now and the view reads the properties, so the
+    // same assertions measure the words the screen actually shows.
 
     // MARK: - the picture sheet
 

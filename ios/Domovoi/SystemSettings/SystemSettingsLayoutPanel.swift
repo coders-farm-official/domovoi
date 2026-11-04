@@ -402,26 +402,37 @@ private struct SystemSettingsBarRow: View {
             // Android's `fgFaint` has no iOS token, and this is the closest
             // one that a person can actually read.
             //
-            // **The ordinal is semibold, and only the ordinal.** I002 came
-            // back naming one of the four: `4`, `Contrast failed`, frame 30,
-            // 513.5, 7.7x14.3 — while `1`, `2` and `3` passed. All four are
-            // the same token at the same size on the same card, and `4`'s
-            // rendered ink measures the same **6.81:1** as theirs; the crop
-            // is pixel-identical to the green R002/R003, where the same
-            // finding came back as `element: nil`, i.e. the audit saying it
-            // had no measurement rather than naming a view. So this is weight
-            // against an audit that sub-samples a 7.7-point glyph, not a
-            // colour change: a semibold digit gives it more ink to sample in
-            // the same box, and ``indexWidth`` (20, `@ScaledMetric`) is wide
-            // enough for one.
+            // **The ordinal's weight is unchanged, and that is the finding.**
+            //
+            // I002 came back naming one of the four: `4`, `Contrast failed`,
+            // frame 30, 513.5, 7.7x14.3 — while `1`, `2` and `3` passed. All
+            // four are the same token at the same size on the same card,
+            // `4`'s rendered ink measures the same **6.81:1** as theirs, and
+            // the crop is pixel-identical to the green R002/R003, where the
+            // same finding came back as `element: nil` — the audit saying it
+            // had no measurement rather than naming a view.
+            //
+            // The integration made this `.weight(.semibold)` on the argument
+            // that a sub-sampled 7.7-point glyph needs more ink to sample.
+            // Review 4 §4.4 turned the evidence round and it is right: if
+            // the pixels were identical across a pass and a fail, the pixels
+            // are not what varied, so changing them cannot be shown to fix
+            // it — and landing a pixel change in the same commit as the
+            // allowance tightening below would have left a green train
+            // unable to say which of the two earned it. It was also a visual
+            // change to every row of a shipped panel, taken on an
+            // unverifiable mechanism, with no owner for this directory this
+            // batch. So it is reverted and the allowance stays: the
+            // allowance asserts more than before on its own, and it is the
+            // measurement.
             //
             // **``Color/fgMuted`` is not touched**, here or anywhere: it is
             // measured for this role on this card and nineteen other screens
-            // read it. If a semibold `4` is still flagged, the next step is
+            // read it. If `4` is flagged again, the next step is
             // `Color.primary` for the ordinal alone — never a change to the
-            // token.
+            // token, and never a weight whose effect cannot be measured.
             Text("\(index + 1)")
-                .font(.caption.monospaced().weight(.semibold))
+                .font(.caption.monospaced())
                 .foregroundStyle(Color.fgMuted)
                 .frame(minWidth: indexWidth, alignment: .leading)
             Image(systemName: route.systemImage)

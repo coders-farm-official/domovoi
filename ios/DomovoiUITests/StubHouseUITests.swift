@@ -438,12 +438,47 @@ final class StubHouseUITests: XCTestCase {
         // word were dividing 361 points between them. Home's content began at
         // **y=444 of 852**: more than half the screen was chrome.
         //
-        // These are the two numbers that say so, and they are deliberately
+        // These are the numbers that say so, and they are deliberately
         // generous. A pill under 160 points is one that still wraps its
         // address over two or three lines at this type size, which is fine; a
         // pill over it is one that has gone back to wrapping per character.
-        let pill = app.buttons[ShellStringsUnderTest.pillLabel]
-        XCTAssertTrue(pill.exists, "no server pill in the bar")
+        //
+        // ### Which pill, after owner answer 29
+        //
+        // At AX5 **there is no bar**, so there is no exactly-labelled
+        // `switch server` either: ``ShellScrollAwayChrome`` puts the
+        // breadcrumb in the navigation bar as its large title and the pill
+        // beside it as ``ShellPillToolbarButton``, whose label is
+        // ``ShellPill/toolbarAccessibilityLabel`` — the composed form that
+        // ``ShellStringsUnderTest/pillToolbarPrefix`` matches by prefix.
+        // Shell DECISIONS §6 named this case and said what it should assert;
+        // this is that, and the exact-match reading is kept as the **negative
+        // control** rather than dropped, because a bar drawn again at AX5 is
+        // the regression answer 29 is about and nothing else here sees it.
+        //
+        // The y=360 reading stands unchanged, and should now pass with room
+        // to spare: the chrome that took 300 of 852 points is the chrome that
+        // went away.
+        let barPill = app.buttons.matching(
+            NSPredicate(format: "label == %@", ShellStringsUnderTest.pillLabel)
+        )
+        let pill = app.buttons.matching(
+            NSPredicate(format: "label BEGINSWITH %@", ShellStringsUnderTest.pillToolbarPrefix)
+        ).firstMatch
+        XCTAssertEqual(
+            barPill.count,
+            0,
+            "`ShellTopBar`'s pill is on Home at AX5 — the band above the stack "
+                + "is drawn again, and from up there it cannot scroll away "
+                + "(300 of 852 points, train S001)"
+        )
+        XCTAssertTrue(
+            pill.waitForExistence(timeout: 10),
+            "no toolbar pill on Home at AX5: the bar is gone and nothing "
+                + "replaced it, so the server's address, `unverified` and the "
+                + "status word are off the screen with no way back to the "
+                + "connection sheet"
+        )
         XCTAssertLessThan(
             pill.frame.height,
             160,
@@ -2019,6 +2054,27 @@ final class StubHouseUITests: XCTestCase {
     /// right to hold both wordings. If it does not, AX5 has findings of its
     /// own somewhere else and the floor is hiding them.
     ///
+    /// ### What the `topBar` variant strips at AX5, after owner answer 29
+    ///
+    /// Shell DECISIONS §6 named this case and asked for a look, which is
+    /// this. ``ShellTopBar`` is **not drawn at AX5 at all** now, so the
+    /// variant does not remove it there: `AuditStrip.active != .topBar` is
+    /// the `drawn:` argument of ``ShellScrollAwayChrome``, so what the
+    /// variant removes at AX5 is the whole header — the `UINavigationBar`
+    /// large title that replaced the bar, and the toolbar pill with it. The
+    /// algebra is unaffected by that, because it is additivity and not an
+    /// identity: `whole` is the header's findings plus the phone bar's,
+    /// whichever two pieces those are.
+    ///
+    /// One assertion is affected and is relaxed with its reason. "Stripping
+    /// the top bar changed nothing" used to mean "this app's bar carries at
+    /// least one finding"; at AX5 the piece being stripped is **Apple's own
+    /// chrome**, and Apple's large title carrying no Dynamic Type finding is
+    /// a plausible, blameless outcome rather than a defect. So that one is a
+    /// `<=` and a printed line, while the phone bar — which is this app's,
+    /// and which the `large` bisect placed four of the eight in — keeps its
+    /// strict reading.
+    ///
     /// Arrival is by **tap**, never by the seeded push: a tap waits for
     /// quiescence, and the seeded push measures 0 on a destination that is
     /// provably on screen for reasons still unexplained (see
@@ -2121,8 +2177,27 @@ final class StubHouseUITests: XCTestCase {
                 + "`knownAnonymousHeadlines` is holding one that belongs somewhere "
                 + "else"
         )
-        XCTAssertLessThan(withoutTop, whole, "stripping the top bar changed nothing")
-        XCTAssertLessThan(withoutPhone, whole, "stripping the phone bar changed nothing")
+        print(
+            "AX5STRIP the header carried \(whole - withoutTop) finding(s) and the "
+                + "phone bar \(whole - withoutPhone)"
+        )
+        XCTAssertLessThanOrEqual(
+            withoutTop,
+            whole,
+            "stripping the header left MORE findings than the whole screen has, "
+                + "which is not an arithmetic the algebra above can be read "
+                + "against. At AX5 the piece this variant removes is Apple's "
+                + "large title and its toolbar pill (answer 29), so zero is a "
+                + "blameless answer and this is the only direction that is not"
+        )
+        XCTAssertLessThan(
+            withoutPhone,
+            whole,
+            "stripping the phone bar changed nothing. `PhoneBarView` is this "
+                + "app's own and the `large` bisect placed four of the eight in "
+                + "it, so a screen that reports the same count without it has "
+                + "its findings somewhere this case is not looking"
+        )
     }
 
     /// **Do the eight flagged leaves actually scale?** The question the audit
@@ -2165,13 +2240,40 @@ final class StubHouseUITests: XCTestCase {
     /// names its element.
     ///
     /// That is not a matter of opinion. The text either gets bigger or it
-    /// does not, and the accessibility tree reports the frames. This launches
-    /// a pushed screen at `large` and again at AX5 and compares the height of
-    /// each flagged leaf it can address by name.
+    /// does not, and the accessibility tree reports the frames.
     ///
     /// **If the heights grow, the eight are a false positive** and the right
     /// answer is a documented floor rather than a fix — and this test, not a
     /// comment, is what keeps that claim honest.
+    ///
+    /// ### Three launches, after owner answer 29, and why
+    ///
+    /// It was two: `large` and AX5, comparing five leaves across them. Answer
+    /// 29 took ``ShellTopBar`` off the screen at the accessibility sizes, so
+    /// four of the eight — the breadcrumb, the address, `unverified` and
+    /// `live` — **do not exist at AX5 to be measured**, and the breadcrumb
+    /// that does appear there is a `UINavigationBar` large title, which is
+    /// Apple's chrome and a different element. Shell DECISIONS §6 named this
+    /// case; comparing the two would have been comparing a `Text` with a
+    /// title, and §8 records that UIKit *shrinks* a long large title toward
+    /// the inline size rather than wrapping it — so the old reading would
+    /// have gone red with the message asserting the opposite of the truth.
+    ///
+    /// So the question is asked at the sizes where each leaf exists:
+    ///
+    ///  * `large` → `XXXL`, the largest size at which the bar is still drawn,
+    ///    answers it for **the bar's own leaf and the four tab captions** —
+    ///    the same five elements, both times, which is the reading the eight
+    ///    are judged by;
+    ///  * `large` → AX5 answers it for the four tab captions, which
+    ///    ``PhoneBarView`` draws at every size and which the bisect placed
+    ///    four of the eight in;
+    ///  * and at AX5 the large title has to **exist and be addressable**,
+    ///    because a crumb leaf that silently stopped matching is how this
+    ///    case would come to measure four leaves while reporting five. Its
+    ///    height is printed beside the bar's, and not asserted on: a title
+    ///    UIKit has shrunk is Apple's mechanism answering Apple's audit, and
+    ///    DECISIONS §8 is where that question is open.
     @MainActor
     func testTheBarsTextGrowsOnAPushedScreen() throws {
         /// The flagged leaves this test can name. Five of the eight: the
@@ -2182,10 +2284,21 @@ final class StubHouseUITests: XCTestCase {
         /// third's label carries leading whitespace, so a query on them is a
         /// query on the fixture rather than on the font. Five leaves settle
         /// the question as well as eight would.
-        func heights(_ app: XCUIApplication) -> [String: CGFloat] {
+        ///
+        /// `barDrawn` decides **where the breadcrumb is addressed**, and the
+        /// two go under different keys so that no comparison can put a
+        /// `ShellTopBar` leaf and a navigation-bar title side by side without
+        /// saying so.
+        func heights(_ app: XCUIApplication, barDrawn: Bool) -> [String: CGFloat] {
             var out: [String: CGFloat] = [:]
-            let crumb = app.staticTexts[ShellStringsUnderTest.musicCrumb]
-            if crumb.exists { out["crumb"] = crumb.frame.height }
+            let crumb = ShellStringsUnderTest.musicCrumb
+            if barDrawn {
+                let leaf = app.staticTexts[crumb]
+                if leaf.exists { out["crumb(bar)"] = leaf.frame.height }
+            } else {
+                let title = app.navigationBars.staticTexts[crumb]
+                if title.exists { out["crumb(title)"] = title.frame.height }
+            }
             for tab in ["Home", "Music", "Videos", "Chat"] {
                 // Scoped **through the tab's button**, because `music` is also
                 // the placeholder's own heading on this very screen and an
@@ -2197,9 +2310,10 @@ final class StubHouseUITests: XCTestCase {
         }
 
         var measured: [String: [String: CGFloat]] = [:]
-        for (label, mode) in [
-            ("large", Self.ordinaryTypeSize),
-            ("AX5", "UICTContentSizeCategoryAccessibilityXXXL"),
+        for (label, mode, barDrawn) in [
+            ("large", Self.ordinaryTypeSize, true),
+            ("XXXL", "UICTContentSizeCategoryXXXL", true),
+            ("AX5", "UICTContentSizeCategoryAccessibilityXXXL", false),
         ] {
             let app = launch(mode: mode)
             XCTAssertTrue(
@@ -2215,39 +2329,119 @@ final class StubHouseUITests: XCTestCase {
             )
             usleep(3_000_000)
             evidence(app, "90-scale-\(label)")
-            measured[label] = heights(app)
-            for (leaf, h) in heights(app).sorted(by: { $0.key < $1.key }) {
+            let read = heights(app, barDrawn: barDrawn)
+            measured[label] = read
+            for (leaf, h) in read.sorted(by: { $0.key < $1.key }) {
                 print("SCALE [\(label)] \(leaf) height=\(h)")
             }
             app.terminate()
         }
 
-        guard let small = measured["large"], let big = measured["AX5"] else {
+        guard let small = measured["large"],
+              let bigger = measured["XXXL"],
+              let ax5 = measured["AX5"]
+        else {
             return XCTFail("a launch did not reach a pushed screen")
         }
-        var grew: [String] = []
-        var stuck: [String] = []
-        for (leaf, h) in small.sorted(by: { $0.key < $1.key }) {
-            guard let tall = big[leaf] else {
-                print("SCALE [compare] \(leaf) MISSING at AX5")
-                continue
+
+        /// Every leaf `small` has that `taller` also has, split by whether it
+        /// grew. A leaf missing from `taller` is printed and **not** silently
+        /// dropped — that is what `missing` is returned for.
+        func compare(
+            _ taller: [String: CGFloat],
+            named size: String
+        ) -> (grew: [String], stuck: [String], missing: [String]) {
+            var grew: [String] = []
+            var stuck: [String] = []
+            var missing: [String] = []
+            for (leaf, h) in small.sorted(by: { $0.key < $1.key }) {
+                guard let tall = taller[leaf] else {
+                    print("SCALE [compare] \(leaf) MISSING at \(size)")
+                    missing.append(leaf)
+                    continue
+                }
+                if tall > h {
+                    grew.append("\(leaf) \(h)→\(tall)")
+                } else {
+                    stuck.append("\(leaf) \(h)→\(tall)")
+                }
             }
-            if tall > h {
-                grew.append("\(leaf) \(h)→\(tall)")
-            } else {
-                stuck.append("\(leaf) \(h)→\(tall)")
-            }
+            print("SCALE [\(size)] GREW " + grew.joined(separator: " | "))
+            print("SCALE [\(size)] STUCK " + stuck.joined(separator: " | "))
+            return (grew, stuck, missing)
         }
-        print("SCALE GREW " + grew.joined(separator: " | "))
-        print("SCALE STUCK " + stuck.joined(separator: " | "))
 
         XCTAssertFalse(small.isEmpty, "no flagged leaf could be addressed at large")
+
+        // ### Reading 1 — the five, at the two sizes where all five exist
+        //
+        // The bar is drawn at `large` and at `XXXL`, so this is the same five
+        // elements both times and it is the reading the eight findings are
+        // judged by.
+        let bar = compare(bigger, named: "XXXL")
+        XCTAssertEqual(
+            bar.missing,
+            [],
+            "these leaves could be addressed at large and not at XXXL: "
+                + "\(bar.missing.joined(separator: ", ")) — the bar is drawn at "
+                + "both sizes, so a leaf that stopped matching is a leaf this "
+                + "case would have gone on reporting without measuring"
+        )
         XCTAssertTrue(
-            stuck.isEmpty,
+            bar.stuck.isEmpty,
             "Apple's audit says these leaves cannot be resized, and these did not grow "
-                + "between large and AX5: \(stuck.joined(separator: ", ")) — which makes the "
+                + "between large and XXXL: \(bar.stuck.joined(separator: ", ")) — which makes the "
                 + "eight a real defect in \(ShellStringsUnderTest.musicCrumb)'s bars rather "
                 + "than a floor, and `knownPushedBarFloor` is hiding it"
+        )
+
+        // ### Reading 2 — the phone bar's four, all the way up to AX5
+        //
+        // `PhoneBarView` is drawn at every size, so the four tab captions —
+        // the half of the eight the bisect placed there — are answerable at
+        // AX5 as well. `crumb(bar)` is expected to be missing: owner answer
+        // 29 took that bar off the screen, and reading 3 is where its
+        // replacement is accounted for.
+        let phone = compare(ax5, named: "AX5")
+        XCTAssertEqual(
+            phone.missing,
+            ["crumb(bar)"],
+            "what could be addressed at large and not at AX5 is "
+                + "\(phone.missing.isEmpty ? "nothing" : phone.missing.joined(separator: ", ")) "
+                + "— and it should be exactly `crumb(bar)`, the one leaf answer "
+                + "29 moves. A tab caption in that list is the phone bar gone "
+                + "from a screen it is drawn on at every size"
+        )
+        XCTAssertTrue(
+            phone.stuck.isEmpty,
+            "the phone bar's own leaves did not grow between large and AX5: "
+                + "\(phone.stuck.joined(separator: ", ")) — `PhoneBarView` is "
+                + "drawn at every size, so this is four of the eight being a "
+                + "real defect rather than a floor"
+        )
+
+        // ### Reading 3 — the crumb at AX5 is Apple's title, and it is there
+        //
+        // Asserted to **exist** and not to have grown. At AX5 the breadcrumb
+        // is a `UINavigationBar` large title, and DECISIONS §8 records that
+        // UIKit shrinks a long one toward the inline size rather than
+        // wrapping it: a title that did not grow is Apple's mechanism
+        // answering Apple's audit, and the open question there is whether to
+        // keep the breadcrumb or drop to the route's word. What this case
+        // must not allow is the leaf quietly ceasing to be addressable,
+        // because then it would report five leaves and measure four.
+        let titleAtAX5 = ax5["crumb(title)"]
+        XCTAssertNotNil(
+            titleAtAX5,
+            "no `\(ShellStringsUnderTest.musicCrumb)` in a navigation bar at AX5 "
+                + "— answer 29 makes the breadcrumb the stack's large title "
+                + "there, so either the title is not drawn or its label is not "
+                + "the crumb, and the chrome at AX5 is then unmeasured"
+        )
+        print(
+            "SCALE [crumb] bar at large=\(small["crumb(bar)"].map(\.description) ?? "-") "
+                + "bar at XXXL=\(bigger["crumb(bar)"].map(\.description) ?? "-") "
+                + "title at AX5=\(titleAtAX5.map(\.description) ?? "-")"
         )
     }
 
@@ -4855,8 +5049,19 @@ enum ShellStringsUnderTest {
     static let householdToken = "Household token"
 
     /// ``ShellPill/accessibilityLabel`` for a saved server, which is what the
-    /// pill button answers to in the tree.
+    /// pill button answers to in the tree — ``ShellTopBar``'s pill, drawn
+    /// below the accessibility sizes only.
     static let pillLabel = "switch server"
+
+    /// ``ShellPill/toolbarAccessibilityLabel``'s prefix, which is what the
+    /// **toolbar's** pill answers to from AX5 up (owner answer 29).
+    ///
+    /// The two pills are told apart by exact match against prefix, and
+    /// nothing else: the composed label goes on to say the address,
+    /// `unverified` and the status word that the bar's three leaves used to
+    /// draw. `StubShell.toolbarPillPrefix` is the same string, spelt out in
+    /// the shell file for the same reason every string in these files is.
+    static let pillToolbarPrefix = "switch server, "
 
     static let allSettings = "all settings"
 

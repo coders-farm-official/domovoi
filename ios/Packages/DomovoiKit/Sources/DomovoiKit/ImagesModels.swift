@@ -601,11 +601,20 @@ public struct PluginBand: Equatable, Sendable {
     }
 
     /// `"by $it"` (`PluginFrame.kt:144`), or nil.
+    ///
+    /// **``PluginBandStrings`` and not ``ImagesStrings``.** Nothing about this
+    /// type is Images' — ``of(_:)`` takes any ``CapabilityPlugin`` — and one
+    /// band draws both screens since owner answer 58, so the band's words
+    /// live in the band's enum. While these two read the Images copies,
+    /// `ImagesStrings.by(_:)` and `.manageLabel(name:)` looked alive to a
+    /// grep and the band was drawing a second copy of the same sentence
+    /// (review 4 §4.3). ``PluginBandView`` reads these properties, so there
+    /// is one copy of each word and one reader of each property.
     public var publisherLine: String? {
-        publisher.map { ImagesStrings.by($0) }
+        publisher.map { PluginBandStrings.by($0) }
     }
 
     /// `"manage $name on the dashboard's Plugins page"` (`:181`) — the
     /// screen-reader label of an icon-and-word control.
-    public var manageLabel: String { ImagesStrings.manageLabel(name: name) }
+    public var manageLabel: String { PluginBandStrings.manageLabel(name: name) }
 }

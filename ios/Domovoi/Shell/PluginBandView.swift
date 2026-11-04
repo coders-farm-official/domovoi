@@ -14,11 +14,14 @@ import SwiftUI
 /// and `StationsPluginBand` were written the same night by two items that
 /// could not see each other's files, and they are two copies of one shape —
 /// differing only in the route's icon, the capability, and whether `manage`
-/// was drawn. Android has one `PluginScreenFrame` for both. So this is it, and
-/// the two old names are kept **in this file** as thin wrappers (below),
-/// because their call sites are in files other units own:
-/// `RouteScreen.swift:125-132` constructs ``ImagesPluginBand`` and
-/// `StationsView.swift:86` constructs ``StationsPluginBand``.
+/// was drawn. Android has one `PluginScreenFrame` for both. So this is it.
+///
+/// **One of the two old names is left**, as a thin wrapper below:
+/// ``StationsPluginBand``, because its call site (`StationsView.swift:86`) is
+/// another unit's file. `ImagesPluginBand` is gone — the integration moved the
+/// Images band inside the page for owner answer 29, which needed
+/// `ImagesView.swift` and `RouteScreen.swift` at once, and the `.images` slot
+/// is `ImagesView(model: model)` now with the band as the page's first row.
 ///
 /// `manage` is drawn for both now (owner answer 28: "leave the `manage`
 /// link"). The Stations copy left it out while its question was open; the
@@ -59,9 +62,16 @@ struct PluginBandView<Content: View>: View {
     /// `PluginScreenFrame(cap, route.icon)` (`ScreenRouter.kt:67`).
     let icon: String
 
-    /// Where the band sits, which is the one thing the two old copies really
-    /// differed about in layout. See ``PluginBandPlace``.
-    let place: PluginBandPlace
+    // `place: PluginBandPlace` stood here. **Both bands are the first row of
+    // their own page now**, so the enum had one reachable case, one
+    // unreachable 16-point arm, and a doc comment describing a shape that
+    // the commit above it had deleted — the seam-with-no-caller class this
+    // integration found a colour token in (`Color.dangerFg`, review 4 §4.1).
+    // The padding it chose was 0 for both places, so the three
+    // `.padding(.horizontal, place.sidePadding)` modifiers are gone with it
+    // and nothing moved: the page's own `.padding(16)` is what insets the
+    // band, on Images (`ImagesView.swift`) as on Stations
+    // (`StationsView.swift:96`).
 
     @ViewBuilder let content: Content
 
@@ -104,7 +114,6 @@ struct PluginBandView<Content: View>: View {
                 badge
                 manage(band)
             }
-            .padding(.horizontal, place.sidePadding)
             .padding(.vertical, 10)
         }
     }
@@ -135,7 +144,6 @@ struct PluginBandView<Content: View>: View {
                         .accessibilityHidden(true)
                         .foregroundStyle(Color.fgMuted)
                 }
-                .padding(.horizontal, place.sidePadding)
                 .padding(.vertical, 10)
                 // 44, the platform minimum. At an accessibility size one line
                 // of `.subheadline` is taller than that by itself, so this
@@ -155,7 +163,6 @@ struct PluginBandView<Content: View>: View {
             .accessibilityHint(PluginBandStrings.manage)
         } else {
             nameRow(band)
-                .padding(.horizontal, place.sidePadding)
                 .padding(.vertical, 10)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 // One element, because it is one fact: this screen is this
@@ -199,8 +206,8 @@ struct PluginBandView<Content: View>: View {
                 Text(band.name)
                     .font(.subheadline.weight(.semibold))
                     .fixedSize(horizontal: false, vertical: true)
-                if let publisher = band.publisher {
-                    Text(PluginBandStrings.by(publisher))
+                if let line = band.publisherLine {
+                    Text(line)
                         .font(.caption)
                         .foregroundStyle(Color.fgMuted)
                         .fixedSize(horizontal: false, vertical: true)
@@ -245,7 +252,13 @@ struct PluginBandView<Content: View>: View {
             // which Apple's audit has caught this app missing on a plain text
             // button (15.7 points measured, twice).
             HomeLink(PluginBandStrings.manage) { openURL(address) }
-                .accessibilityLabel(PluginBandStrings.manageLabel(name: band.name))
+                // ``PluginBand/manageLabel``, not a second call to
+                // ``PluginBandStrings/manageLabel(name:)``: the model is where
+                // the name has already been through `takeIf { isNotBlank() }`,
+                // and reading it here is what makes that property a drawn
+                // thing rather than a seam with three test readers (review 4
+                // §4.3).
+                .accessibilityLabel(band.manageLabel)
         }
     }
 
@@ -256,34 +269,23 @@ struct PluginBandView<Content: View>: View {
     }
 }
 
-/// Where a plugin band sits, which decides whether it pads its own sides.
-///
-/// The two screens mount the band differently and both are right: Images wraps
-/// the whole screen in it, **outside** the page's scroll view, so the band
-/// pads itself; Stations puts it as the first row **inside** its own
-/// `LazyVStack`, which is already padded by 16 (`StationsView.swift:96`), so a
-/// band that padded again would be indented past the page.
-///
-/// It is an enum and not a `CGFloat` because those are the only two places a
-/// band can be, and the second one has a consequence worth a name: a band
-/// inside the page's scroll view already scrolls away with the page, which is
-/// what owner answer 29 asks every screen's chrome to do.
-enum PluginBandPlace {
-
-    /// Outside the page's scroll view, wrapping the screen — Android's
-    /// `PluginScreenFrame { content }` (`ScreenRouter.kt:67`).
-    case aroundTheScreen
-
-    /// The first row of the page's own scroll view, which pads its content.
-    case insideThePage
-
-    var sidePadding: CGFloat {
-        switch self {
-        case .aroundTheScreen: return 16
-        case .insideThePage: return 0
-        }
-    }
-}
+// `PluginBandPlace` stood here, with two cases: `aroundTheScreen` for a band
+// **outside** the page's scroll view, which padded its own sides by 16, and
+// `insideThePage` for a band that is the page's first row and pads by 0.
+//
+// **There is one place left.** Owner answer 29's band half made the Images
+// band a row of `ImagesView`'s own `LazyVStack`, which is where Stations' had
+// always been — so `aroundTheScreen` became an arm nothing could reach, in
+// the same commit that moved the last caller, while this comment went on
+// telling the next reader that Images wrapped the whole screen in it. Review
+// 4 §4.1 named it, and it is the defect class this integration had already
+// found a colour token in two commits earlier: a seam with no caller, and a
+// doc comment arguing the opposite of the code.
+//
+// A band inside the page's scroll view scrolls away with the page, which is
+// what answer 29 asks every screen's chrome to do, and there is no shape
+// left that does not. If a third screen ever wants a band around it, the
+// padding it needs is its own `.padding(16)` and not a case here.
 
 // `ImagesPluginBand` stood here — ``PluginBandView`` for ``capImagegen``,
 // wrapping the whole screen the way `ScreenRouter.kt:67` wraps
@@ -291,7 +293,7 @@ enum PluginBandPlace {
 // site was `RouteScreen.swift`, which the shell unit did not own.
 //
 // It is **gone**, with the wrapping: the band is `ImagesView`'s own first row
-// now (`ImagesView.swift`, `place: .insideThePage`), which is the band half of
+// now (`ImagesView.swift`), which is the band half of
 // owner answer 29 — outside the scroll view it kept 256 of 852 points at AX5
 // and left the page a 102-point window. The move needed `ImagesView.swift` and
 // `RouteScreen.swift` in one change, so it was made on the integration
@@ -310,8 +312,7 @@ struct StationsPluginBand: View {
         PluginBandView(
             model: model,
             capability: capStations,
-            icon: Route.stations.systemImage,
-            place: .insideThePage
+            icon: Route.stations.systemImage
         ) {
             EmptyView()
         }

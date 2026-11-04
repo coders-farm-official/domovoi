@@ -190,7 +190,24 @@ struct DropInCallSheet: View {
             .contentShape(.rect)
         }
         // **Filled, as Android's is** (`PhoneDropinCall.kt:180-183`:
-        // `colors.err` with white on it). The shell unit added the fill token
+        // `colors.err` with white on it).
+        //
+        // ### And deliberately NOT the same shape as `hang up` two sections up
+        //
+        // The comment this replaced justified `.bordered` as parity with
+        // ``RoomsOverviewView``'s `hang up`, "the other way this app says
+        // 'this ends something'". Android does not say it the same way twice,
+        // and that is the answer rather than a divergence: the dialog's end
+        // button is a filled `Button` with the error container
+        // (`PhoneDropinCall.kt:180-183`) and the room overview's is an
+        // `OutlinedButton` (`SatOverviewTab.kt:520-524`). One is the end of
+        // *this phone's* call, on the sheet that is the call; the other ends
+        // a call between two rooms that somebody else started, in a row of a
+        // list. So the pair here matches the pair there, and review 4 §4.2's
+        // finding was that the parity argument had been deleted rather than
+        // answered. It is answered here and in ``RoomsOverviewView``.
+        //
+        // The shell unit added the fill token
         // this needed — ``Color/danger`` with ``Color/dangerFg`` for the text
         // on it, both built from ``DangerInk`` — which is what the rooms
         // unit asked for under "needs a shared change" and why this button

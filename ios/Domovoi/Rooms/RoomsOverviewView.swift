@@ -419,6 +419,22 @@ struct RoomsOverviewView: View {
                     .font(.subheadline)
                     .foregroundStyle(Color.warnInk)
                     .fixedSize(horizontal: false, vertical: true)
+                // **Bordered, as Android's is** — an `OutlinedButton`
+                // (`SatOverviewTab.kt:520-524`), where the drop-in *dialog*'s
+                // end button is filled (`PhoneDropinCall.kt:180-183`) and so
+                // is ``DropInCallSheet``'s. The two are not a mismatch and
+                // not an oversight: this one ends a call between two rooms
+                // that somebody else started, in a row of a list, and that
+                // one ends this phone's own call on the sheet that *is* the
+                // call. Review 4 §4.2 asked for the pair to agree with
+                // Android, and it does — each side, separately.
+                //
+                // The tint is the **ink** token and not ``Color/danger``:
+                // this draws its own label, so the colour has to be one that
+                // is readable as text on the card (rule §3), where a
+                // prominent button needs the fill/`dangerFg` pair the sheet
+                // uses. ``RoomsBroadcastCard`` records the 3.08:1 a
+                // prominent button tinted with the ink measured.
                 Button(RoomsStrings.hangUp) {
                     model.hangUp(room)
                 }

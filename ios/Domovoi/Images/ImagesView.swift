@@ -133,9 +133,9 @@ struct ImagesView: View {
                 // `testImages_AtTheLargestTypeSize`): with the header's 300,
                 // the navigation bar's 44 and the phone bar's 146 the page
                 // was left a 102-point window. Inside the scroll view it
-                // scrolls off like any other row. ``PluginBandPlace`` has the
-                // padding argument — `.insideThePage` pads by 0 because the
-                // `.padding(16)` below is the page's.
+                // scrolls off like any other row, and it pads nothing of its
+                // own: the `.padding(16)` below is the page's, and it is the
+                // band's too.
                 //
                 // The move needed `ImagesView.swift` and
                 // `RouteScreen.swift` at once, which is why neither the shell
@@ -143,8 +143,7 @@ struct ImagesView: View {
                 PluginBandView(
                     model: model,
                     capability: capImagegen,
-                    icon: Route.images.systemImage,
-                    place: .insideThePage
+                    icon: Route.images.systemImage
                 ) {
                     EmptyView()
                 }

@@ -131,8 +131,8 @@ struct RouteScreen: View {
             // of 852 points at AX5 and left the page a 102-point window
             // (train S001). Owner answer 29 asks a screen's chrome to scroll
             // away at those sizes, so the band is ``ImagesView``'s own first
-            // row now, as Stations' already was — `PluginBandView` with
-            // `place: .insideThePage`. A house whose manifest has no imagegen
+            // row now, as Stations' already was — a plain `PluginBandView`,
+            // which pads no sides of its own. A house whose manifest has no imagegen
             // plugin still draws the content bare (`PluginFrame.kt:98-101`):
             // that is a nil ``PluginBand`` inside the same view.
             // ``ImagesView`` says what is left out and why there is no

@@ -10,8 +10,8 @@
 // (`android/.../ui/components/PluginFrame.kt:92`).
 //
 // Answer 29 then took the band off the screen's frame: it is the first row of
-// `ImagesView`'s own `ScrollView` now (`PluginBandView` with
-// `place: .insideThePage`), so it scrolls away with the page at accessibility
+// `ImagesView`'s own `ScrollView` now (a plain `PluginBandView`, padded by the
+// page rather than by itself), so it scrolls away with the page at accessibility
 // text sizes instead of keeping 256 of 852 points on a 393-point phone. The
 // `ImagesPluginBand` wrapper that `RouteScreen.swift` used to construct went
 // with that change, which needed `ImagesView.swift` and `RouteScreen.swift` in
