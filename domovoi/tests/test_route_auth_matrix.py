@@ -113,6 +113,14 @@ ALLOWLIST: dict[tuple[str, str, str], str] = {
         "outbound-fetch tier — check_outbound_fetch inside the handler (admin "
         "OR provider allowlist + per-source rate limit)"
     ),
+    ("core", "POST", "/v1/acquisitions/url-allowed"): (
+        "a POST only because it is batched: no side effects at all — it runs "
+        "the registered fulfillers' url_matcher predicates and answers "
+        "{url: bool}, spends none of add-by-url's rate limit, and tells a "
+        "caller what pressing its button would have told it. Open like its "
+        "sibling GET /v1/acquisitions, which already names the fulfillers "
+        "(added for D55 so can_add is honest — test_recently_played_can_add.py)"
+    ),
     # ── web: the auth surface itself ──────────────────────────────────
     ("web", "POST", "/api/auth/setup"): "IS the auth surface — requires the setup code, backoff-throttled",
     ("web", "POST", "/api/auth/login"): "IS the auth surface — password + backoff",

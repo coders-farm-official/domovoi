@@ -44,6 +44,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import text
 
 from domovoi.admin_auth import (
+    check_admin_request,
     check_device_request,
     require_admin_mutation,
     require_admin_read,
@@ -1044,6 +1045,33 @@ async def list_notes(room_id: str) -> list[VoiceNote]:
         ]
 
 
+async def _urls_allowed_by_fulfillers(urls: list[str]) -> dict[str, bool]:
+    """Which of these URLs an installed fulfiller’s own ``url_matcher``
+    recognizes — the core’s ``POST /v1/acquisitions/url-allowed``
+    (domovoi/main.py, added for D55).
+
+    The matchers are callables in the core process’s capability
+    registry, so this is the only way to ask. Best-effort, like
+    ``_acquisition_availability``: a core that does not answer leaves the
+    dict EMPTY, and an absent url is not a positive answer, so the button
+    is not drawn rather than drawn on a guess.
+    """
+    import httpx
+
+    from web.backend.domovoi_client import domovoi_url
+
+    url = f"{domovoi_url().rstrip('/')}/v1/acquisitions/url-allowed"
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            r = await client.post(url, json={"urls": urls})
+        r.raise_for_status()
+        answer = (r.json() or {}).get("allowed") or {}
+        return {u: v is True for u, v in answer.items()}
+    except Exception as e:  # noqa: BLE001 — best-effort read
+        log.debug("core url allowlist unreachable: %s", e)
+        return {}
+
+
 @router.get(
     "/{room_id}/recently-played", response_model=list[RecentlyPlayed],
     # Device READ tier (2026-10-08, REV-11): a room's play history with
@@ -1052,7 +1080,7 @@ async def list_notes(room_id: str) -> list[VoiceNote]:
     dependencies=READ,
 )
 async def list_recently_played(
-    room_id: str, limit: int = Query(default=100, ge=1, le=500)
+    room_id: str, request: Request, limit: int = Query(default=100, ge=1, le=500)
 ) -> list[RecentlyPlayed]:
     """Everything this room has played — library, playlist, and
     provider-plugin picks (``source`` is an open enum) — newest first.
@@ -1089,19 +1117,28 @@ async def list_recently_played(
     the core does (``web/backend/api/chat.py:1822`` reads it the same
     way).
 
-    **What this cannot ask, and so does not claim.** For a caller that is
-    not an admin session the core's gate is narrower still: the URL must
-    match a registered fulfiller's ``url_matcher`` allowlist
+    **The answer is per CALLER as well as per row.** For a caller that is
+    not an admin session the core's gate is narrower: the URL must match a
+    registered fulfiller's ``url_matcher`` allowlist
     (``ACQUISITIONS.url_allowed_by_fulfillers``, domovoi/main.py:5785-5789,
     and a fulfiller registered without a matcher never allowlists). That
-    is live core-process registry state with no route that answers it, so
-    the web process cannot ask per URL, and a button can still be drawn
-    for a URL the installed provider does not recognise — the press then
-    returns the core's own 403 verbatim ("adding by URL requires an admin
-    session, or a URL matching an installed media provider"). Closing
-    that needs a core route; see
-    design-notes/ios/batch-2026-11-03/android/DECISIONS.md, "Needs a
-    shared change".
+    is live core-registry state, so this route asks the core for it —
+    ``POST /v1/acquisitions/url-allowed``, batched over the page's URLs,
+    added for this decision — and a URL the installed provider does not
+    recognise gets no button rather than a button whose press returns the
+    core's 403 ("adding by URL requires an admin session, or a URL
+    matching an installed media provider"). An admin session skips that
+    question, because its add passes whatever the matchers say: gating it
+    on the allowlist would have withdrawn the dashboard's add on a house
+    whose fulfiller registered no matcher at all.
+
+    Two things it still does not promise, both of them about the moment
+    of the press rather than the state of the house: a non-admin caller
+    also meets a per-source rate limit (429 after
+    ``URL_FETCH_MAX_PER_WINDOW`` in the window), and the URL must still
+    pass ``net_safety.check_outbound_url`` — a loopback or private-address
+    host is a 400. Neither can be answered honestly for a row the person
+    has not pressed yet.
     """
     _LOCAL_SOURCES = ("library", "playlist", "spoken_audio")
     async with session_scope() as s:
@@ -1141,6 +1178,8 @@ async def list_recently_played(
     # database connection open for.
     by_url = False
     by_query = False
+    allowed: dict[str, bool] = {}
+    caller_is_admin = False
     if any(_reacquirable(r) for r in raw):
         availability = await _acquisition_availability()
         # `is True`: `None` means the core did not answer, which is not a
@@ -1150,14 +1189,29 @@ async def list_recently_played(
             and not egress.internet_turned_off()
         )
         by_query = availability.get("can_fulfill_query") is True
+        if by_url:
+            # An admin session passes add-by-url outright; every other
+            # caller — a phone holding a device token, the dashboard on a
+            # cookie alone — needs THIS url to match an installed
+            # fulfiller's own matcher, so ask per url. `== "ok"` is the
+            # same line check_outbound_fetch draws (admin_auth.py:1976):
+            # `cookie-only` and `pre-setup` do not pass it.
+            caller_is_admin = await check_admin_request(request) == "ok"
+            if not caller_is_admin:
+                urls = sorted({r.url for r in raw if r.url and _reacquirable(r)})
+                if urls:
+                    allowed = await _urls_allowed_by_fulfillers(urls)
 
     def _can_add(r: Any) -> bool:
-        """Whether a client has a working add for THIS row (see the
+        """Whether THIS caller has a working add for THIS row (see the
         docstring): the stored URL goes to add-by-url, a title-only row to
-        add-by-query, and the two can be fulfilled by different plugins."""
+        add-by-query, the two can be fulfilled by different plugins, and
+        a non-admin caller's add-by-url also needs the url allowlisted."""
         if not _reacquirable(r):
             return False
-        return by_url if r.url else by_query
+        if not r.url:
+            return by_query
+        return by_url and (caller_is_admin or allowed.get(r.url) is True)
 
     return [
         RecentlyPlayed(

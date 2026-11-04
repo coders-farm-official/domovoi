@@ -340,14 +340,16 @@ fun SatRecentlyPlayedTab(room: String) {
     // and the queue's graceful-absence sentence is a reply this screen can
     // no longer provoke.
     //
-    // What `can_add` still cannot ask is whether the installed provider's
-    // own `url_matcher` recognises THIS url — that is core-process state
-    // with no route to read it (web/backend/api/satellites.py's docstring),
-    // so a non-admin phone can still meet the core's 403 here. The toast
-    // of `res.message`, and of the failure, is what reaches the person
-    // then, which is also what answer 44 asks for: the replies this screen
-    // CAN provoke (already in the library, already queued) are not
-    // stripped.
+    // `can_add` now asks the allowlist itself as well: whether a
+    // registered fulfiller's own `url_matcher` recognises THIS url, which
+    // is the gate a phone holding a device token actually meets
+    // (POST /v1/acquisitions/url-allowed, added for D55 — the core's 403
+    // was the reply this button used to earn). What no server can promise
+    // before the press is the moment itself: the per-source rate limit
+    // (429) and the outbound-URL check (400). So the toast of
+    // `res.message`, and of the failure, still reaches the person, which
+    // is also what answer 44 asks for: the replies this screen CAN
+    // provoke (already in the library, already queued) are not stripped.
     fun add(r: SatPlayed) {
         scope.launch {
             runCatching {

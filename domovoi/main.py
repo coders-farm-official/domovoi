@@ -5948,6 +5948,50 @@ async def list_acquisitions(
     }
 
 
+class _UrlAllowedBody(BaseModel):
+    # 500 is the recently-played page's own cap (that route's `limit` is
+    # `le=500`), so the one caller never has to ask twice.
+    urls: list[str] = Field(default_factory=list, max_length=500)
+
+
+@app.post("/v1/acquisitions/url-allowed")
+async def acquisitions_url_allowed(body: _UrlAllowedBody) -> dict[str, Any]:
+    """Which of these URLs a registered fulfiller's ``url_matcher``
+    allowlist recognizes — the question add-by-url's §7.3 outbound-fetch
+    gate asks of a caller that is NOT an admin session
+    (``check_outbound_fetch``, admin_auth.py:1963-1995).
+
+    This exists so a client can draw an honest "+ add to library" (D55,
+    owner decision 2026-11-03: "no fulfiller means no button and no
+    error"). ``can_fulfill_url`` from ``GET /v1/acquisitions`` is the
+    registry-wide answer — something url-kind is installed — and that is
+    too weak for a phone holding only a device token: that caller also
+    needs THIS url to match, or its press returns a 403 it can do nothing
+    about. The allowlist is each fulfiller's own callable, live registry
+    state, so no other process can compute it; the web hop asks here and
+    gates ``can_add`` on the answer (``web/backend/api/satellites.py``'s
+    recently-played route).
+
+    Batched: the caller has a page of rows, and one request per row would
+    be a round trip each. Repeats collapse — the answer is keyed by url.
+
+    SECURITY. A read with no side effects: it calls the registered
+    matchers (pure predicates over a string) and nothing else — no
+    outbound fetch, no queue row, and it does NOT spend add-by-url's
+    per-source rate limit, so asking cannot use up a caller's budget.
+    Open to the LAN like its sibling ``GET /v1/acquisitions``, which
+    already names the installed ``fulfillers``, and the answer is what
+    pressing the button would have told the caller anyway. A url nothing
+    recognizes is simply ``false``; a matcher that raises is ``false``
+    too (``ACQUISITIONS.url_allowed_by_fulfillers`` logs it).
+    """
+    return {
+        "allowed": {
+            u: ACQUISITIONS.url_allowed_by_fulfillers(u) for u in body.urls
+        }
+    }
+
+
 # ─── Plugin runtime introspection (design §4.14, §12) ─────────────────────
 
 
