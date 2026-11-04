@@ -34,10 +34,16 @@ struct AssistantPhoneConversationView: View {
 
     @Environment(\.dynamicTypeSize) private var typeSize
 
+    /// The place this conversation is in, for its header row to say (D63).
+    /// Nil on a phone with one place — ``AssistantConversationPlaceKey``.
+    @Environment(\.assistantConversationPlace) private var place
+
     var body: some View {
         VStack(spacing: 0) {
-            titleRow
-            Divider()
+            // **The way out is always pinned.** At an accessibility size the
+            // name, the place and the rule go with the scroll (``chromeScrolls``)
+            // and the chevron does not: see ``exitRow``.
+            if chromeScrolls { exitRow } else { chrome }
             if phone.isEmptyConversation {
                 emptyChat
             } else {
@@ -47,34 +53,109 @@ struct AssistantPhoneConversationView: View {
         }
     }
 
+    /// Whether this conversation's own chrome — the title row, the place chip
+    /// and the rule under them — is drawn **inside** the scrolling half
+    /// rather than pinned above it.
+    ///
+    /// ### At an accessibility size it has to be, and D63 is why
+    ///
+    /// The band above this screen is gone (``AssistantPlaceSwitch``, D63) and
+    /// the chip is in the header row instead, which is Android's shape. On a
+    /// 393-point screen at AX5 that is a straight swap of 80 points of band
+    /// for about the same again inside the row — the chip's `.caption` is 44
+    /// points a line there and "on home server · shared with the household"
+    /// is three of them — so moving it alone would have handed the transcript
+    /// back nothing, and train R001 measured what "nothing" is on this
+    /// screen: a `ScrollView` **6.7 points tall** holding 860 points of
+    /// content, a chat with no room to show one line of itself.
+    ///
+    /// What actually makes room is this: at an accessibility size the chrome
+    /// becomes the first rows of the scrolling half and goes with it, so that
+    /// half is given the whole of what is left over the composer. It is
+    /// Kamron's answer 29 — "yes: shell chrome (header and plugin band)
+    /// scrolls away at accessibility sizes, app-wide" — applied to the chrome
+    /// this screen owns rather than the shell's, and it is the same trade
+    /// Android makes in the same place by a blunter rule: `ChatHeader`
+    /// returns **nothing at all** when the keyboard has left the window short
+    /// (`ChatHome.kt:710`, and `ThreadTitleRow`'s own note at
+    /// `ChatScreen.kt:1235-1253` has the measurement that bought it). Android
+    /// can drop the row outright because system back still leaves the chat;
+    /// on this app the chevron is the only way out of a conversation, so the
+    /// row is kept and moved rather than dropped.
+    ///
+    /// **Below an accessibility size nothing changes.** The row is pinned,
+    /// where every train has run with it, and the chip costs it the 44 points
+    /// the band used to cost the screen one row up.
+    ///
+    /// **And what scrolls is never the way out.** Round 1 of this branch put
+    /// the whole row inside the transcript, which at an accessibility size put
+    /// the only exit from a conversation behind a scroll that opens at its
+    /// foot — there is no system back on this app and no swipe-back until
+    /// answer 32 lands, so a reader who had scrolled to the newest message had
+    /// nothing on screen that left the chat. ``exitRow`` is pinned at every
+    /// size for that reason; only the name, the place and the rule go with the
+    /// scroll (``scrollingChrome``).
+    private var chromeScrolls: Bool { typeSize.isAccessibilitySize }
+
+    /// The title row, the place, and the rule under them — the pinned band at
+    /// the ordinary sizes.
+    @ViewBuilder private var chrome: some View {
+        VStack(spacing: 0) {
+            titleRow
+            Divider()
+        }
+    }
+
+    /// The way out, pinned at every size.
+    ///
+    /// 44 points of chevron (and share, where there is anything to share),
+    /// which is what the conversation keeps when the rest of its chrome goes
+    /// with the scroll. ``chromeScrolls`` carries the argument: the chevron is
+    /// the only way back to the list, so it is the one part of this row that
+    /// may never be somewhere a reader has to scroll to find.
+    private var exitRow: some View {
+        HStack(spacing: 8) {
+            backButton
+            Spacer(minLength: 8)
+            shareButton
+        }
+        .padding(.horizontal, 12)
+    }
+
+    /// The name and the place, as the first rows of the scrolling half at an
+    /// accessibility size.
+    ///
+    /// This is what the row gives up to hand the transcript its height back —
+    /// about 107 points of the 401.7 Chat is given at AX5, on top of the 80 of
+    /// band D63 removed. Nothing here is a control except the chip, which is a
+    /// chip and not a button (``AssistantPlacePickerView``'s one-choice
+    /// branch), so nothing in it can be stranded by a scroll.
+    private var scrollingChrome: some View {
+        VStack(spacing: 0) {
+            titleAndPlace
+                .padding(.horizontal, 12)
+            Divider()
+        }
+    }
+
     // MARK: - the title row
 
-    /// The way back, the chat's name, and share.
+    /// The way back, the chat's name, and share — one row, at the ordinary
+    /// sizes.
     ///
-    /// **A row of three at the ordinary sizes, a column at an accessibility
-    /// size** (NIGHT-RULES §3): at AX5 a `.headline` is 53 points and the two
-    /// glyphs either side of it are 44 points wide each, which leaves the name
-    /// about four characters of a 393-point screen. On its own line it has the
-    /// width of the screen.
+    /// There is no column form of it any more: at an accessibility size the
+    /// row is split instead (``exitRow`` pinned, ``scrollingChrome`` scrolling),
+    /// which is what the three-way split replaced it with. At AX5 a `.headline`
+    /// is 53 points and the two glyphs either side of it are 44 points wide
+    /// each, which left the name about four characters of a 393-point screen —
+    /// the reason it was ever a column (NIGHT-RULES §3), and the reason the
+    /// name is on its own line in ``scrollingChrome`` now.
     private var titleRow: some View {
-        Group {
-            if typeSize.isAccessibilitySize {
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 8) {
-                        backButton
-                        Spacer(minLength: 8)
-                        shareButton
-                    }
-                    title
-                }
-            } else {
-                HStack(spacing: 8) {
-                    backButton
-                    title
-                    Spacer(minLength: 8)
-                    shareButton
-                }
-            }
+        HStack(spacing: 8) {
+            backButton
+            titleAndPlace
+            Spacer(minLength: 8)
+            shareButton
         }
         .padding(.horizontal, 12)
     }
@@ -142,6 +223,23 @@ struct AssistantPhoneConversationView: View {
     /// where S008's collapse lives. The name is a label, not a sentence;
     /// VoiceOver still reads the whole of it, and the untruncated name is on
     /// the row in the list one tap behind.
+    /// Android's header column: the chat's name, and under it the chip that
+    /// says which place the chat is in (`ChatHeader`, `ChatHome.kt:721-724` —
+    /// a `Column(Modifier.weight(1f))` holding the title and `PlaceChip`).
+    ///
+    /// The chip is nothing at all on a phone with one place
+    /// (``AssistantConversationPlaceChip``), which is every iPhone without the
+    /// system model: this screen does not exist there, so in practice it is
+    /// always drawn here — but the branch is what keeps the **house's**
+    /// conversation, which uses the same chip, honest on a one-place phone.
+    private var titleAndPlace: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            title
+            AssistantConversationPlaceChip(place: place)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     private var title: some View {
         Text(phone.conversation?.title ?? ChatStrings.newChat)
             .font(.headline)
@@ -180,17 +278,25 @@ struct AssistantPhoneConversationView: View {
     /// (IOS-ONLY-STRINGS.md §1): there is no mic to tap in this milestone.
     private var emptyChat: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 8) {
-                Text(AssistantStrings.askAnything)
-                    .font(.headline)
-                    .fixedSize(horizontal: false, vertical: true)
-                Text(AssistantStrings.emptyChatHint)
-                    .font(.footnote)
-                    .foregroundStyle(Color.fgMuted)
-                    .fixedSize(horizontal: false, vertical: true)
+            VStack(spacing: 0) {
+                // ``chromeScrolls``: at an accessibility size the name and the
+                // place are the first rows of the scrolling half, here as in
+                // ``transcript``, so a new chat's own hint is not squeezed by
+                // a row that is three lines of `.headline` tall. The chevron
+                // stays pinned above this (``exitRow``).
+                if chromeScrolls { scrollingChrome }
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(AssistantStrings.askAnything)
+                        .font(.headline)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(AssistantStrings.emptyChatHint)
+                        .font(.footnote)
+                        .foregroundStyle(Color.fgMuted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(16)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(16)
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -212,43 +318,72 @@ struct AssistantPhoneConversationView: View {
                 // has the same shape, the same follow and the same crossing
                 // from under-filled to over-filled, and round 2 already gave
                 // the two of them the same scroll target for that reason.
-                VStack(alignment: .leading, spacing: 10) {
-                    let messages = phone.transcript
-                    // Identity is the **position**, not
-                    // ``AssistantMessage/id``: that id is a fresh `UUID` made
-                    // at decode time and the live reply is built anew on every
-                    // read of ``AssistantPhoneModel/transcript``, so keying on
-                    // it would hand `scrollTo` an id that is not in the list
-                    // being drawn — a follow that silently never moves. The
-                    // transcript only appends (and "try again" drops its last),
-                    // which is what makes the position stable enough to key on;
-                    // ``ChatConversationView`` uses `ordinal` for the same
-                    // reason.
-                    ForEach(Array(messages.enumerated()), id: \.offset) { index, message in
-                        // The divider at ``AssistantPhoneModel/windowDividerIndex``
-                        // and **nowhere else**: nil where nothing fell out of
-                        // the model's view, and never at zero — a line above
-                        // the first message would say the whole chat is beyond
-                        // what Domovoi can keep in mind.
-                        if index == phone.windowDividerIndex {
-                            windowDivider
+                VStack(spacing: 0) {
+                    // ``chromeScrolls``: at an accessibility size the name and
+                    // the place are the first thing in the scrolling half
+                    // rather than a band above it, which is what gives the
+                    // transcript the height train R001 found it had none of.
+                    // The chevron is **not** in here — see ``exitRow``.
+                    if chromeScrolls { scrollingChrome }
+                    VStack(alignment: .leading, spacing: 10) {
+                        // **The cap** (D64): only the window's messages are
+                        // built. One read of
+                        // ``AssistantPhoneModel/transcriptPage`` and not three
+                        // of ``AssistantPhoneModel/transcript``, which is that
+                        // type's own note: the transcript is a computed array
+                        // and this body wants three facts about the same one.
+                        // `hidden` is zero for every conversation shorter than
+                        // ``ChatTranscriptWindow/page``, so nothing on this
+                        // screen changes until a chat is fifty messages long.
+                        let page = phone.transcriptPage
+                        let hidden = page.hidden
+                        if hidden > 0 { showEarlier(hidden: hidden, pinning: scroller) }
+                        // Identity is the **position**, not
+                        // ``AssistantMessage/id``: that id is a fresh `UUID` made
+                        // at decode time and the live reply is built anew on every
+                        // read of ``AssistantPhoneModel/transcript``, so keying on
+                        // it would hand `scrollTo` an id that is not in the list
+                        // being drawn — a follow that silently never moves. The
+                        // transcript only appends (and "try again" drops its last),
+                        // which is what makes the position stable enough to key on;
+                        // ``ChatConversationView`` uses `ordinal` for the same
+                        // reason.
+                        //
+                        // `zip(page.drawn.indices, page.drawn)` and not
+                        // `Array(page.all.enumerated()).dropFirst(hidden)`: the
+                        // slice carries the array's own indices (see
+                        // ``AssistantPhoneModel/AssistantPhoneTranscriptPage/drawn``),
+                        // so this allocates fifty pairs rather than a thousand
+                        // and still keeps the absolute index the divider and
+                        // the spinner are keyed on.
+                        ForEach(
+                            Array(zip(page.drawn.indices, page.drawn)), id: \.0
+                        ) { index, message in
+                            // The divider at ``AssistantPhoneModel/windowDividerIndex``
+                            // and **nowhere else**: nil where nothing fell out of
+                            // the model's view, and never at zero — a line above
+                            // the first message would say the whole chat is beyond
+                            // what Domovoi can keep in mind.
+                            if index == phone.windowDividerIndex {
+                                windowDivider
+                            }
+                            AssistantPhoneBubbleView(
+                                // ``AssistantPhoneModel/sendingHere``, not
+                                // `sending`: `sending` is true while a reply is
+                                // written in **any** of this place's chats, so in
+                                // another chat opened mid-reply it drew a spinner
+                                // on that chat's last message — and said "Domovoi,
+                                // writing" of a reply that had failed hours ago.
+                                message: message,
+                                writing: phone.sendingHere && index == page.lastIndex
+                            )
+                            .id(index)
                         }
-                        AssistantPhoneBubbleView(
-                            // ``AssistantPhoneModel/sendingHere``, not
-                            // `sending`: `sending` is true while a reply is
-                            // written in **any** of this place's chats, so in
-                            // another chat opened mid-reply it drew a spinner
-                            // on that chat's last message — and said "Domovoi,
-                            // writing" of a reply that had failed hours ago.
-                            message: message,
-                            writing: phone.sendingHere && index == messages.count - 1
-                        )
-                        .id(index)
+                        tryAgain
                     }
-                    tryAgain
+                    .padding(16)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .padding(16)
-                .frame(maxWidth: .infinity, alignment: .leading)
             }
             // Follow the reply down the screen while it is written. Keyed on
             // ``tail``, which moves on a new message **and** on a chunk, so
@@ -284,6 +419,39 @@ struct AssistantPhoneConversationView: View {
 
     /// The transcript's accessibility identifier — see ``transcript``.
     static let transcriptId = "assistant-transcript"
+
+    /// "show earlier" — one page more of a conversation longer than the
+    /// window (D64, Kamron's answer 64).
+    ///
+    /// **Pinned, not followed.** Growing the window puts a page of messages
+    /// *above* what is on screen, and a scroll view whose content grows at the
+    /// top keeps its offset — so without this the message somebody had just
+    /// read would jump down the screen by the height of fifty bubbles. The
+    /// row that was at the top before the growth is scrolled back to the top
+    /// after it, which is the same message in the same place and a page of
+    /// older ones now above it.
+    ///
+    /// An anchor **is** right here, where ``transcript``'s long note says it
+    /// was wrong for the follow: the follow re-applied a request every 0.12
+    /// seconds over content crossing from shorter than the viewport to
+    /// longer, and this is one request, once, on a tap, over content that is
+    /// certainly longer (there are more than fifty messages, or this control
+    /// is not drawn).
+    @ViewBuilder
+    private func showEarlier(hidden: Int, pinning scroller: ScrollViewProxy) -> some View {
+        HomeLink(ChatStrings.showEarlier) {
+            // The id of the row at the top of the window, read **before** it
+            // grows. The identity here is the message's position
+            // (``transcript`` says why it is not its `id`), and the first
+            // drawn position is the number hidden above it.
+            let top = hidden
+            phone.showEarlier()
+            scroller.scrollTo(top, anchor: .top)
+        }
+        .accessibilityLabel(ChatStrings.showEarlierNote(hidden: hidden))
+        .frame(maxWidth: .infinity, alignment: .center)
+        .padding(.bottom, 10)
+    }
 
     private var tail: String {
         let messages = phone.transcript
@@ -345,12 +513,13 @@ struct AssistantPhoneConversationView: View {
                     Button(AssistantStrings.stop) { phone.stop() }
                         .buttonStyle(.bordered)
                         .frame(minHeight: 44)
-                } else if !typed.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    // Disabled, not absent and not lying, while a reply is
-                    // being written in **another** of this place's chats: the
-                    // model allows one reply at a time (``send`` guards on
-                    // `sending`), so a `send` that looked live here would do
-                    // nothing when tapped.
+                } else if ChatRules.sendOffered(typed: typed), !phone.sending {
+                    // **Something is typed** — ``ChatRules/sendOffered(typed:)``
+                    // and not this screen's own copy of the trim. The rule is
+                    // the send's one question for both composers (its doc
+                    // comment carries the argument), and while this file kept
+                    // the literal a change to the rule applied to the house's
+                    // composer only (review round 2, finding 3).
                     //
                     // The label's colour is named rather than inherited.
                     // `.borderedProminent` draws a WHITE label on the accent,
@@ -365,7 +534,6 @@ struct AssistantPhoneConversationView: View {
                     .buttonStyle(.borderedProminent)
                     .tint(Color.brand)
                     .frame(minHeight: 44)
-                    .disabled(phone.sending)
                 }
                 // **Nothing at all with a blank composer.** Android does not
                 // draw a greyed send there either — with a blank draft the
@@ -376,6 +544,19 @@ struct AssistantPhoneConversationView: View {
                 // audit failed on contrast in train S005: grey glyphs on a
                 // grey fill, the one finding that run attributed to a control
                 // of this screen.
+                //
+                // **And nothing at all while a reply is being written in
+                // another of this place's chats.** That was the last reachable
+                // dimmed `.borderedProminent` on this screen: `sendingHere`
+                // takes the branch above and draws `stop`, so the only state
+                // left for a `.disabled(phone.sending)` was a reply running in
+                // a different chat — where a greyed send is the same control
+                // that cannot do what it says, in the same shape S005 failed.
+                // ``send()`` refuses it anyway (`!phone.sending`), and it does
+                // not queue it. The house's composer is the wider exposure of
+                // the same thing and took the same treatment; this batch's
+                // DECISIONS.md logs the departure from Android, which draws
+                // the send faint-and-disabled (`ChatScreen.kt:1166-1171`).
             }
             .padding(12)
         }

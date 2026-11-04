@@ -43,15 +43,33 @@ struct AssistantPlacePickerView: View {
     let selected: ChatPlace
     let onPick: (ChatPlace) -> Void
 
+    /// Drawn **inside a conversation's header row** rather than as the band
+    /// above a list (D63, ``AssistantConversationPlaceChip``).
+    ///
+    /// The chip is the same chip, with the same fill and the same measured
+    /// ratio; what goes is the band's own padding and its greed for the
+    /// width, because a header row already has both. It is only ever true of
+    /// the one-choice branch: a conversation is already in a place, so a
+    /// picker there would offer to move a chat that cannot be moved.
+    ///
+    /// Last, and defaulted, so the three call sites that draw the band pass
+    /// what they always passed.
+    var inHeader = false
+
     var body: some View {
         if choices.count <= 1 {
             // The place, said once. A chip and not a button, so VoiceOver does
             // not offer an action that does nothing.
-            chip(selected, picked: true)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .accessibilityElement(children: .combine)
+            if inHeader {
+                chip(selected, picked: true)
+                    .accessibilityElement(children: .combine)
+            } else {
+                chip(selected, picked: true)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityElement(children: .combine)
+            }
         } else {
             layout {
                 Text(AssistantStrings.runsLabel)

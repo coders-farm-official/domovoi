@@ -188,53 +188,36 @@ struct AssistantPlaceSwitch<House: View>: View {
         pickerCap: CGFloat?
     ) -> some View {
         VStack(spacing: 0) {
-            // Over a conversation the picker would offer to change the place
-            // of a chat that is already in one, so the chip alone is drawn —
-            // which is also what `PlacePicker` itself does with one choice
-            // (`ChatHome.kt:741`).
+            // **The band is not drawn over a conversation at all** (D63,
+            // Kamron's answer 63: "Android's way: the place goes inside each
+            // conversation's header row"). It used to be dropped at an
+            // accessibility size only, which train R001 measured the need
+            // for and entry 63 then named as the hole to close: the chip is
+            // one word in a band 80 points tall at AX5, on top of a header
+            // row that is already 107, of the 401.7 the shell leaves Chat —
+            // and what was left for the transcript was a `ScrollView` **6.7
+            // points tall** holding 860 points of content.
+            //
+            // Android never had the band: `ChatHeader` (`ChatHome.kt:700`)
+            // puts the place chip inside the header row's own title column,
+            // in every place, at every size. So the band goes and the chip
+            // moves down to each conversation's header
+            // (``AssistantConversationPlaceChip``), handed there by
+            // ``EnvironmentValues/assistantConversationPlace`` — which is the
+            // one line below. Nothing is lost at the ordinary sizes either:
+            // the chip is the same chip, with the same words and the same
+            // measured fill, one row up.
+            //
+            // **THE LIST KEEPS ITS PICKER EXACTLY AS IT WAS** (answer 10:
+            // "keep it as now: the picker stays put, the list scrolls under
+            // it") — the cap, the `ScrollView`, its identifier and the
+            // `.layoutPriority(1)` below are untouched, and every number in
+            // their notes still describes them.
             let conversation = inConversation(phone, place)
-            let choices = conversation ? [place] : startable
-            let chips = AssistantPlacePickerView(
-                choices: choices,
-                selected: place,
-                onPick: { picked = $0 }
-            )
-            // **And nothing at all over a conversation at an accessibility
-            // size**, which train R001 measured the price of. The
-            // conversation's chip is one word in a band 80 points tall at
-            // AX5, and it sits on top of a header row that is already 107 —
-            // of the 401.7 the shell leaves Chat at that size. What was left
-            // for the phone conversation's transcript was a `ScrollView`
-            // **6.7 points tall** holding 860 points of content: a chat with
-            // no room to show one message of itself.
-            //
-            // It is a label and not a control here (one choice:
-            // ``AssistantPlacePickerView`` draws a chip rather than a button,
-            // so VoiceOver is offered no action), and the thing it says —
-            // which place this conversation is in — is said by the
-            // conversation. Android puts it inside the header row rather than
-            // above it (`ChatHeader`, `ChatHome.kt:700`), so the band is this
-            // app's shape and not Android's; dropping the band where the band
-            // is what costs the screen is the faithful half of that. Below an
-            // accessibility size nothing changes: the chip is 44 points
-            // there, every train has run with it, and it is how a person on
-            // two places tells them apart at a glance. DECISIONS.md.
-            //
-            // **A conversation, not "one choice"**: a list with a single
-            // startable place keeps its chip at every size, because there the
-            // band is the only thing that says where the chats below it live
-            // — and it is what ``reachPhonePlace`` taps.
-            let bandDrawn = !(conversation && dynamicTypeSize.isAccessibilitySize)
-            // **The cap is for the picker that has chips to fit**, which is
-            // the one that was measured. A `ScrollView` is greedy — it takes
-            // the height it is allowed whether or not its content needs it —
-            // so putting the conversation's single chip in one would hand the
-            // transcript empty space, which is the MS003 mistake from the
-            // other end. One chip is short; it keeps the layout every train
-            // before this has run.
+            let bandDrawn = !conversation
             if !bandDrawn {
                 EmptyView()
-            } else if let pickerCap, choices.count > 1 {
+            } else if let pickerCap, startable.count > 1 {
                 // **Capped, and scrolling past the cap.** The two things the
                 // picker must never do are squeeze a chip and swallow the
                 // list, and the two trains before this one each caught one of
@@ -271,33 +254,50 @@ struct AssistantPlaceSwitch<House: View>: View {
                 // ``AssistantPhoneConversationView/transcriptId`` was added
                 // for the same reason after train S008; this is the other
                 // scrolling view this item owns.
-                ScrollView(.vertical) { chips }
-                    .frame(maxHeight: pickerCap)
-                    .scrollBounceBehavior(.basedOnSize)
-                    .accessibilityIdentifier(AssistantPlaceSwitchIDs.picker)
+                ScrollView(.vertical) {
+                    AssistantPlacePickerView(
+                        choices: startable, selected: place, onPick: { picked = $0 }
+                    )
+                }
+                .frame(maxHeight: pickerCap)
+                .scrollBounceBehavior(.basedOnSize)
+                .accessibilityIdentifier(AssistantPlaceSwitchIDs.picker)
             } else {
-                chips.layoutPriority(1)
+                // **A list with one startable place keeps its chip**, because
+                // there the band is the only thing that says where the chats
+                // below it live — and it is what `reachPhonePlace` taps.
+                AssistantPlacePickerView(
+                    choices: startable, selected: place, onPick: { picked = $0 }
+                )
+                .layoutPriority(1)
             }
             // The rule above it, with the band it belongs to: a divider over
             // nothing is a line across the top of a conversation.
             if bandDrawn { Divider() }
-            switch place {
-            case .server:
-                house
-            case .phone:
-                // The subtitle depends on **both** places
-                // (`chatSubtitle`, `ChatHome.kt:170`), so it is computed here
-                // — the one view that knows them both — and handed down. The
-                // house's own header keeps ``ChatStrings/subtitle``, which is
-                // the sentence it has said since Chat shipped: ``ChatView`` is
-                // shared and this milestone's edit to it is the switch alone
-                // (DECISIONS.md).
-                AssistantPhoneChatView(
-                    phone: phone,
-                    model: model,
-                    subtitle: assistantChatSubtitle(startable: startable)
-                )
+            // **The place, handed to the conversation's own header row**
+            // (D63). Applied to both branches at once rather than to each:
+            // the value is read only by the two conversation views, and
+            // setting it once is what makes "the place is said in exactly one
+            // place per screen" checkable by reading this file.
+            Group {
+                switch place {
+                case .server:
+                    house
+                case .phone:
+                    // The subtitle depends on **both** places
+                    // (`chatSubtitle`, `ChatHome.kt:170`), so it is computed
+                    // here — the one view that knows them both — and handed
+                    // down. The house's own header keeps
+                    // ``ChatStrings/subtitle``, which is the sentence it has
+                    // said since Chat shipped.
+                    AssistantPhoneChatView(
+                        phone: phone,
+                        model: model,
+                        subtitle: assistantChatSubtitle(startable: startable)
+                    )
+                }
             }
+            .environment(\.assistantConversationPlace, place)
         }
     }
 

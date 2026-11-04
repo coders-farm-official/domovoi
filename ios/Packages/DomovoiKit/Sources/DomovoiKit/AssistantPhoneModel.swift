@@ -242,6 +242,9 @@ public final class AssistantPhoneModel {
         visits += 1
         stopped = false
         live = nil
+        // A different conversation opens at its newest page: the window is a
+        // reading position in the one that was open.
+        transcriptWindow.reset()
         guard let found = store.load(id) else {
             toast = AssistantStrings.writeFailed(ChatStrings.verbOpenChat)
             load()
@@ -258,6 +261,7 @@ public final class AssistantPhoneModel {
         visits += 1
         stopped = false
         live = nil
+        transcriptWindow.reset()
         conversation = store.create(now: nowMs())
     }
 
@@ -266,6 +270,7 @@ public final class AssistantPhoneModel {
         visits += 1
         conversation = nil
         live = nil
+        transcriptWindow.reset()
         load()
     }
 
@@ -276,6 +281,63 @@ public final class AssistantPhoneModel {
             out.append(AssistantMessage(from: .domovoi, text: live, at: nowMs()))
         }
         return out
+    }
+
+    /// How much of ``transcript`` is drawn (``ChatTranscriptWindow``, D64).
+    ///
+    /// The same cap as the house's conversation, for the same reason and with
+    /// the same page: this transcript is eager too (``transcript`` is read
+    /// whole on every redraw and the view builds a bubble for each message),
+    /// and a conversation kept on this phone grows for as long as the person
+    /// keeps using it — there is no server trimming it.
+    public private(set) var transcriptWindow = ChatTranscriptWindow()
+
+    /// The window onto ``transcript`` as the view needs it: the messages, how
+    /// many are hidden above them, and the index of the last one.
+    ///
+    /// **One read per redraw, and that is the point of the type.** ``transcript``
+    /// is a computed array — it copies what is saved and appends the reply
+    /// being written — and the view needs three facts about the same array
+    /// (which rows to build, whether "show earlier" is drawn, and which row
+    /// the spinner goes on). Three properties meant three rebuilds of a
+    /// thousand-element array on every chunk of a streaming reply, which is
+    /// the cost D64 is about, measured on the wrong axis. Round 1 of this
+    /// branch also left a `drawnTranscript` nobody called while the view
+    /// windowed the array inline; there is one seam now, and the view is its
+    /// only reader.
+    public struct AssistantPhoneTranscriptPage: Sendable {
+
+        /// Every message of the conversation, newest last — what the window
+        /// is a window onto.
+        public let all: [AssistantMessage]
+
+        /// How many messages are hidden above the window; zero for a
+        /// conversation drawn whole. The "show earlier" control's own gate.
+        public let hidden: Int
+
+        /// The messages the view builds, **carrying ``all``'s own indices** —
+        /// which is what the window divider's index and the "which row is the
+        /// last one" rule are compared against. A window that renumbered its
+        /// messages would draw the divider in the wrong place and put the
+        /// "writing" spinner on the wrong bubble.
+        public var drawn: ArraySlice<AssistantMessage> { all.dropFirst(hidden) }
+
+        /// The index of the newest message, `-1` for an empty conversation.
+        public var lastIndex: Int { all.count - 1 }
+    }
+
+    /// The window onto this conversation — see ``AssistantPhoneTranscriptPage``.
+    public var transcriptPage: AssistantPhoneTranscriptPage {
+        let all = transcript
+        return AssistantPhoneTranscriptPage(
+            all: all,
+            hidden: transcriptWindow.firstDrawn(of: all.count)
+        )
+    }
+
+    /// Show one page more of this conversation.
+    public func showEarlier() {
+        transcriptWindow.showEarlier(of: transcript.count)
     }
 
     /// Where the window divider goes, as an index into ``transcript``; nil for

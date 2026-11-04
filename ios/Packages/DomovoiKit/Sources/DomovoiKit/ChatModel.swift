@@ -511,11 +511,31 @@ public final class ChatModel {
     ///
     /// **Not while the house's AI is off**: the screen says so and offers no
     /// composer, because a message box that cannot send is the thing
-    /// [[no-misleading-controls]] is about. Not while a reply is being written
-    /// either (`ChatScreen.kt:736`'s `sending` guard).
+    /// [[no-misleading-controls]] is about.
+    ///
+    /// A reply being written does **not** take the composer away — the box
+    /// stays live so the next message can be typed while the last one
+    /// finishes. That is ``canSend``'s question, not this one, and the two
+    /// were conflated here: this comment used to claim the `sending` guard
+    /// (`ChatScreen.kt:736`) as well, which the expression has never carried.
     public var composerOffered: Bool { aiEnabled && conversationOpen }
 
+    /// Whether a send would be taken **now**.
+    ///
+    /// The one gate ``send(_:)`` and both composers ask. Nothing is queued: a
+    /// send refused because a reply is being written is simply refused, which
+    /// is why neither composer draws a send in that state (the views carry the
+    /// reasoning, and this batch's DECISIONS.md the departure from Android).
     public var canSend: Bool { composerOffered && !sending }
+
+    /// Show one page more of the open thread (``ChatTranscriptWindow``, D64).
+    ///
+    /// On the model and not on the view's own copy of the transcript, because
+    /// ``transcript`` is `private(set)`: the window is the model's state, and
+    /// it has to survive a redraw.
+    public func showEarlier() {
+        transcript.showEarlier()
+    }
 
     /// What the screen says in place of the whole conversation when the house's
     /// AI features are off (`RouteNotes.kt:10`, already ported as

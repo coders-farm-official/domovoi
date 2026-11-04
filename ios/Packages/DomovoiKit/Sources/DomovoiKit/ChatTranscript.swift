@@ -238,6 +238,13 @@ public struct ChatTranscript: Equatable, Sendable {
 
     public private(set) var messages: [ChatLiveMessage] = []
 
+    /// How much of ``messages`` is drawn (``ChatTranscriptWindow``, D64).
+    ///
+    /// The transcript keeps all of the thread — share, "try again" and the
+    /// window divider are all computed over the whole of it — and this is
+    /// only how much of it the view builds.
+    public private(set) var window = ChatTranscriptWindow()
+
     /// Where the reply being written is, if there is one.
     public private(set) var liveIndex: Int?
 
@@ -277,6 +284,27 @@ public struct ChatTranscript: Equatable, Sendable {
     /// Whether "try again" is offered now (``ChatRules/canRetry(_:)``).
     public var canRetry: Bool { liveIndex == nil && ChatRules.canRetry(messages) }
 
+    // MARK: - how much of it is drawn (D64)
+
+    /// How many messages are hidden above the window, zero for a conversation
+    /// that is drawn whole. The "show earlier" control's own gate.
+    public var earlierCount: Int { window.earlierCount(of: messages.count) }
+
+    /// The messages the view builds: the window's, newest last.
+    ///
+    /// `drawn` and not a narrower `messages`: every other reader of this type
+    /// wants the whole thread — the share text, "try again" and the window
+    /// divider all compute over all of it — and a property that quietly
+    /// returned a slice would make the cap their problem too.
+    public var drawn: ArraySlice<ChatLiveMessage> {
+        messages.dropFirst(window.firstDrawn(of: messages.count))
+    }
+
+    /// Show one page more of the earlier messages.
+    public mutating func showEarlier() {
+        window.showEarlier(of: messages.count)
+    }
+
     // MARK: - loading a thread
 
     /// Replace everything with the thread the server has (`loadMessages`,
@@ -290,6 +318,10 @@ public struct ChatTranscript: Equatable, Sendable {
         guard liveIndex == nil else { return false }
         stashed = nil
         replaced = false
+        // A different thread starts at its newest page: the window is a
+        // reading position in the thread that was open, and carrying it into
+        // the next one would open a short chat scrolled to nowhere.
+        window.reset()
         messages = rows.map { row in
             let message = row.live(ordinal: nextOrdinal, thisDeviceID: thisDeviceID)
             nextOrdinal += 1
@@ -304,6 +336,7 @@ public struct ChatTranscript: Equatable, Sendable {
         liveIndex = nil
         stashed = nil
         replaced = false
+        window.reset()
     }
 
     // MARK: - sending
@@ -514,4 +547,96 @@ struct ChatStreamError: Decodable {
     }
 
     enum CodingKeys: String, CodingKey { case detail, code, model }
+}
+
+/// How much of a conversation is drawn: the newest page of messages, with
+/// everything above them behind one "show earlier".
+///
+/// ### Why the DATA is windowed and not the container
+///
+/// Both chat transcripts build every bubble eagerly, and that is not an
+/// oversight: `ChatConversationView.transcript` carries the measurement at
+/// length, and the short of it is that a lazy container costs a recycled row
+/// the height of the rows that are *left* — so over a transcript whose rows
+/// differ by two orders of magnitude the content box lied by 611 points, the
+/// follow-scroll put the foot 167 points below the fold, and the person's own
+/// question was not in the hierarchy at all (train R002). The eager container
+/// is what bought the truthful box, and it stays.
+///
+/// The cost of that container is the one entry 64 names: the server sends a
+/// whole thread with no limit (`chat.py`'s messages route takes no `limit`),
+/// so a thousand-message thread built a thousand bubbles the moment it opened
+/// and nothing had ever timed it. **Kamron's answer is to cap the transcript**
+/// — "yes: cap the transcript (last N plus 'show earlier')" (answer 64) — so
+/// the container stays eager and what shrinks is how many messages it is
+/// handed.
+///
+/// ### The page is 50
+///
+/// Fifty is more than any thread this app has ever drawn — the stub house's
+/// longest is eight, Android's own window note is about a *model* given fewer
+/// than that — so no case and no conversation of an ordinary size is windowed
+/// at all, and the control appears only where there is genuinely something
+/// above it. One page is also what each "show earlier" adds, which is the
+/// step a person reading backwards through a long chat takes.
+///
+/// ### Untouched it follows the end; grown it is an absolute pin
+///
+/// With ``pinned`` nil the window is the newest page, so the newest message
+/// is always drawn — the one invariant a chat cannot break, because a reply
+/// arriving where it cannot be seen is the whole screen failing.
+///
+/// "Show earlier" pins the oldest drawn message by its **index from the
+/// start**, which is what makes this type need no hook in `append`, in
+/// `beginSend` or in `beginRetry`: both transcripts only ever append (and a
+/// retry replaces the last message), so an index from the start does not move
+/// when the conversation grows underneath it. A count from the END would
+/// have: every reply would shift the top of what is drawn down by one, and a
+/// person reading back through a thread would watch the line they were on
+/// walk off the top of it.
+public struct ChatTranscriptWindow: Equatable, Sendable {
+
+    /// How many messages the first draw shows, and how many each "show
+    /// earlier" adds.
+    public static let page = 50
+
+    /// The index of the oldest drawn message, once somebody has grown the
+    /// window by hand. Nil is the newest page, which follows the end.
+    public private(set) var pinned: Int?
+
+    public init() {}
+
+    /// The index of the oldest message drawn, of a conversation `count` long —
+    /// which is also **how many are hidden above the window**, because every
+    /// message before it is one of them.
+    ///
+    /// Clamped at both ends: a pin past the end of a conversation that has
+    /// since been reloaded shorter draws its last message rather than
+    /// nothing, and a pin at or below zero is the whole conversation.
+    public func firstDrawn(of count: Int) -> Int {
+        guard count > 0 else { return 0 }
+        guard let pinned else { return Swift.max(0, count - Self.page) }
+        return Swift.min(Swift.max(0, pinned), count - 1)
+    }
+
+    /// How many messages are hidden above the window; zero when the whole
+    /// conversation is drawn.
+    public func earlierCount(of count: Int) -> Int { firstDrawn(of: count) }
+
+    /// Whether anything is hidden above the window — whether "show earlier"
+    /// is drawn at all.
+    public func hasEarlier(of count: Int) -> Bool { firstDrawn(of: count) > 0 }
+
+    /// Show one page more of a conversation `count` long.
+    ///
+    /// It takes the count because the first growth has to know where the
+    /// newest page starts; after that the pin is absolute. Growing past the
+    /// start is harmless and is what the last tap does — the pin clamps at
+    /// zero, which is the whole conversation.
+    public mutating func showEarlier(of count: Int) {
+        pinned = Swift.max(0, firstDrawn(of: count) - Self.page)
+    }
+
+    /// Back to the newest page — a different thread, or a different house.
+    public mutating func reset() { pinned = nil }
 }
