@@ -1181,9 +1181,17 @@ final class MusicMoreModelTests: XCTestCase {
 
     // MARK: - the player tab's seam
 
-    /// Nothing conforms to ``MusicMorePlayerEngine`` on this branch, so the
-    /// tab is reachable from nowhere — and **nothing claims playback**. This
-    /// is the assertion that goes away with the Player item's engine.
+    /// With **no engine registered**, nothing is offered and nothing claims
+    /// playback.
+    ///
+    /// This doc called itself "the assertion that goes away with the Player
+    /// item's engine". It does not go away. ``MusicLocalQueueModel`` is a
+    /// `@State` built in `MusicView`, and the engine is handed in by the same
+    /// appearance's `.task`, so the no-engine arm is the shape every Music
+    /// screen passes through — and it is the whole of a build with no audio
+    /// engine. What *did* move is the opposite arm's coverage:
+    /// `mayPlayHere`/`playHere`/`takeToast` with an engine are
+    /// `MusicEngineAdapterTests`'.
     func testWithNoEngineNothingIsOfferedAndNothingCanBeCast() {
         let model = MusicLocalQueueModel(deviceID: phone)
         XCTAssertFalse(model.hasEngine)

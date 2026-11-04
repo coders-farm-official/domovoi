@@ -12,13 +12,23 @@ import Observation
 /// thousand tracks queued that froze the app for seconds, then ran it out of
 /// memory (the 2026-09-30 freeze and crash)".
 ///
-/// ### Nothing conforms to ``MusicMorePlayerEngine`` on this branch
+/// ### The engine is handed in, and for one turn of the loop there is none
 ///
-/// So ``hasEngine`` is false, ``MusicTab`` does not offer `player`, and this
-/// model is reachable from nowhere. It exists so that the Player item's engine
-/// is **one conformance** and so that every rule in it — which entry the
-/// lyrics follow, which chapter is current, what a cast would send, what a
-/// cast refuses — is specified by a test tonight rather than by a view later.
+/// ``PlayerModelMusicEngine`` conforms to ``MusicMorePlayerEngine`` since D46,
+/// and `MusicView`'s `.task` calls ``use(_:)`` with it — so ``hasEngine`` is
+/// true and ``MusicTab`` offers `player` on any build with an audio engine.
+///
+/// But this model is **built before** that call: it is a `@State` in
+/// `MusicView`, and the `.task` registers the engine on the same appearance.
+/// So the no-engine arm is not a dead branch waiting for a conformance, it is
+/// the shape every Music screen passes through, and it is also the whole of a
+/// build with no audio engine. That is what
+/// `testWithNoEngineNothingIsOfferedAndNothingCanBeCast` pins.
+///
+/// (This paragraph said "nothing conforms to `MusicMorePlayerEngine` on this
+/// branch, so this model is reachable from nowhere". True the night it was
+/// written, false since D46 — and it was the premise under the
+/// `noPhonePlayerYet` sentence M1 deleted.)
 ///
 /// ### What is not, and why there is no control for it
 ///

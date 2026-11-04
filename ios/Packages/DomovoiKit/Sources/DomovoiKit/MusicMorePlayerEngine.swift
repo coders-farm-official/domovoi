@@ -245,55 +245,28 @@ public protocol MusicMorePlayerEngine: AnyObject {
     func cancelSleep()
     /// Hand the queue to a room from ``index`` on. The engine owns the
     /// request, because it is also what moves this phone's own target.
-    func cast(to room: String) async -> MusicMoreCastResult
+    func cast(to room: String) async -> MusicCastOutcome
     /// Start the room this queue is already cast to on `index` instead.
-    func castFrom(_ index: Int) async -> MusicMoreCastResult
+    func castFrom(_ index: Int) async -> MusicCastOutcome
     /// Come back to this phone.
-    func playHere() async -> MusicMoreCastResult
+    func playHere() async -> MusicCastOutcome
 }
 
-/// How a cast went, plus the one answer ``MusicCastOutcome`` has no case for.
-///
-/// **A wrapper, and not a fifth case on ``MusicCastOutcome``**, for a reason
-/// that is only half about taste. `MusicCastOutcome` is `CastOutcome`'s
-/// (`CastPlan.kt:224-253`) branch for branch, and Android has no refusal case
-/// because its `castTo`/`castFrom` *throw*: the cast menu catches and shows
-/// `CastPlanner.refusal(...)`. ``MusicLocalQueueModel`` ports that by checking
-/// `MusicCastPlanner.refusal` **before** it asks the engine, so
-/// the "this queue is all podcasts" answer never needed a case either.
-///
-/// What did need one is the **POST that failed**: the engine behind this
-/// protocol is ``PlayerModel``, whose own ``PlayerCastOutcome`` has
-/// `refused(note:)` for exactly that, and mapping it onto
-/// `MusicCastOutcome.here(left: nil, …)` would report "on this device" for a
-/// cast that did not happen — a sentence true about the audio and a lie about
-/// what the person asked for.
-///
-/// The other half: `MusicCastPlan.swift` is **not this unit's file**
-/// (BATCH-RULES §1), so the case cannot be added there. This type lives
-/// beside the protocol that needs it, costs the only consumer
-/// (``MusicLocalQueueModel``) nothing — it reads ``note`` and nothing else —
-/// and leaves `MusicCastOutcome` exactly as its owner wrote it. The case
-/// belongs there in the end; it is in this unit's DECISIONS under "Needs a
-/// shared change".
-public enum MusicMoreCastResult: Equatable, Sendable {
-
-    /// The cast was made, or handed back, or superseded: one of
-    /// ``MusicCastOutcome``'s own four answers.
-    case went(MusicCastOutcome)
-
-    /// Nothing happened, and this is why — the sentence goes straight into
-    /// the toast, as it arrives on Android.
-    case refused(note: String)
-
-    /// What the person reads, from either half.
-    public var note: String {
-        switch self {
-        case .went(let outcome): return outcome.note
-        case .refused(let note): return note
-        }
-    }
-}
+// `MusicMoreCastResult` stood here, a two-case wrapper — `went(MusicCastOutcome)`
+// and `refused(note:)` — with a `note` that read through to either half. It
+// existed because `MusicCastOutcome` had no case for a **POST that failed**
+// and `MusicCastPlan.swift` was not the player unit's file in the 2026-11-03
+// batch, so the case could not be added where it belonged (BATCH-RULES §1).
+//
+// ``MusicCastOutcome/refused(note:)`` is that case, added on the integration,
+// and the wrapper is gone with it: `cast(to:)`, `castFrom(_:)` and
+// `playHere()` return one type again and `outcome(_:)` stops wrapping four of
+// its five branches. The reasoning the wrapper's doc carried lives on that
+// case: not every refusal reaches an outcome, because
+// `MusicCastPlanner.refusal` answers the decided ones (no rooms, a queue of
+// podcasts) before the engine is asked — which is how
+// ``MusicLocalQueueModel`` ports Android's throwing `castTo`/`castFrom`
+// (`CastPlan.kt:224-253`).
 
 /// The pure arithmetic the player tab needs, with no engine in sight.
 ///
@@ -499,11 +472,11 @@ public final class PlayerModelMusicEngine: MusicMorePlayerEngine {
 
     public func cancelSleep() { player.cancelSleep() }
 
-    public func cast(to room: String) async -> MusicMoreCastResult {
+    public func cast(to room: String) async -> MusicCastOutcome {
         Self.outcome(await player.cast(to: room))
     }
 
-    public func castFrom(_ index: Int) async -> MusicMoreCastResult {
+    public func castFrom(_ index: Int) async -> MusicCastOutcome {
         Self.outcome(await player.cast(fromQueueRow: index))
     }
 
@@ -512,7 +485,7 @@ public final class PlayerModelMusicEngine: MusicMorePlayerEngine {
     /// One method with an optional room rather than two, because the two share
     /// the whole of the hand-over: pause the room that had it, work out what
     /// this end should be doing, and report both halves in one sentence.
-    public func playHere() async -> MusicMoreCastResult {
+    public func playHere() async -> MusicCastOutcome {
         Self.outcome(await player.cast(to: nil))
     }
 
@@ -568,27 +541,27 @@ public final class PlayerModelMusicEngine: MusicMorePlayerEngine {
 
     /// How a cast went, in the tab's vocabulary.
     ///
-    /// Branch for branch, with ``PlayerCastOutcome/refused(note:)`` carried by
-    /// ``MusicMoreCastResult/refused(note:)`` rather than squeezed into one of
-    /// `MusicCastOutcome`'s four — the alternative was reporting a POST that
-    /// failed as "on this device". Every label is passed explicitly: Swift
-    /// allows defaults in a `PlayerCastOutcome` case payload and forbids them
-    /// in `MusicCastOutcome`'s, which is the difference between the two
+    /// Branch for branch, including ``PlayerCastOutcome/refused(note:)`` —
+    /// ``MusicCastOutcome/refused(note:)`` now, where this used to hand back a
+    /// `MusicMoreCastResult` wrapper because the case could not be added to
+    /// another unit's file. Every label is passed explicitly: Swift allows
+    /// defaults in a `PlayerCastOutcome` case payload and forbids them in
+    /// `MusicCastOutcome`'s, which is the difference between the two
     /// declarations and not a difference in meaning.
-    static func outcome(_ outcome: PlayerCastOutcome) -> MusicMoreCastResult {
+    static func outcome(_ outcome: PlayerCastOutcome) -> MusicCastOutcome {
         switch outcome {
         case .toRoom(let made, let room, let left, let leftPaused, let paused):
-            return .went(.toRoom(
+            return .toRoom(
                 plan: plan(made), room: room,
                 left: left, leftPaused: leftPaused, paused: paused
-            ))
+            )
         case .superseded(let room, let sent, let undone):
-            return .went(.superseded(room: room, sent: sent, undone: undone))
+            return .superseded(room: room, sent: sent, undone: undone)
         case .here(let left, let playing, let leftPaused, let leftWasPlaying, let queued):
-            return .went(.here(
+            return .here(
                 left: left, playing: playing,
                 leftPaused: leftPaused, leftWasPlaying: leftWasPlaying, queued: queued
-            ))
+            )
         case .refused(let note):
             return .refused(note: note)
         }

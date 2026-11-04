@@ -326,6 +326,43 @@ final class RoomsModelTests: XCTestCase {
         StubURLProtocol.recorded.filter { $0.url?.path == path }
     }
 
+    /// Every request the stub has recorded, one per line, for a count that
+    /// disagreed with this case.
+    ///
+    /// ``StubURLProtocol``'s script is **process-global** and is reset in
+    /// `setUp`/`tearDown`, so a task still in flight when an earlier case
+    /// returned appends to `recorded` after the reset and lands in this
+    /// case's log. That is the mechanism behind
+    /// `testEachTabIsReadWhenItIsShownAndNotBefore`'s flake — 1 red of 2 runs
+    /// at `67ca5e8e`, 2 of 6 across the batch, every failure one of its
+    /// `requests(to:).count` assertions, and no run of this file alone has
+    /// ever reproduced it.
+    ///
+    /// The cure is cancelling the read when its model goes away, which is
+    /// `ApiRead`'s and not this file's. Until then this prints the whole log
+    /// beside the number, so the next red names the request rather than the
+    /// count: a path this case never asks for is a leak from another case, and
+    /// one it does ask for is a real double read.
+    private func printTheWholeLog(_ why: String) {
+        print("ROOMS REQUEST LOG (\(why)) — \(StubURLProtocol.requestCount) in all:")
+        for (index, made) in StubURLProtocol.recorded.enumerated() {
+            print("  [\(index)] \(made.httpMethod ?? "?") \(made.url?.absoluteString ?? "nil")")
+        }
+    }
+
+    /// `requests(to: path).count == want`, and the whole log when it is not.
+    private func assertAsked(
+        _ want: Int,
+        _ path: String,
+        _ message: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let got = requests(to: path).count
+        if got != want { printTheWholeLog("\(path): wanted \(want), got \(got)") }
+        XCTAssertEqual(want, got, message, file: file, line: line)
+    }
+
     private func loaded(_ model: RoomsModel) async {
         model.start()
         await settleUntil({ !model.rooms.isEmpty }, "the roster")
@@ -453,11 +490,11 @@ final class RoomsModelTests: XCTestCase {
 
         model.select(.timers)
         await settleUntil({ model.openReads?.timers.data?.isEmpty == false }, "the timers read")
-        XCTAssertEqual(1, requests(to: "/api/satellites/kitchen/timers").count)
+        assertAsked(1, "/api/satellites/kitchen/timers", "the timers tab was read once when shown")
         model.select(.overview)
         model.select(.timers)
         await nothingHappens()
-        XCTAssertEqual(1, requests(to: "/api/satellites/kitchen/timers").count, "a tab is read once")
+        assertAsked(1, "/api/satellites/kitchen/timers", "a tab is read once")
 
         // The sessions tab needs both reads, because it shows each session's
         // own turns.

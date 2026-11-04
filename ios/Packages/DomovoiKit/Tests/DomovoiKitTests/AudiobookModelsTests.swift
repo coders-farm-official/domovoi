@@ -397,7 +397,13 @@ final class AudiobookModelsTests: XCTestCase {
         XCTAssertEqual("/api/audiobooks?sort=title&q=" + String(repeating: "a", count: 200), path)
     }
 
-    func testThePositionRoutesCarryTheDeviceAndNoPerson() {
+    /// A phone with nobody picked sends **no `person_id` at all** — not an
+    /// empty one, which is a different key to the server.
+    ///
+    /// The last assertion's message used to say "there is no listener person
+    /// on iOS". There is one since D11 (``AudiobookListenerTests``); what this
+    /// pins is the shape of the request when nobody is picked.
+    func testThePositionRoutesCarryTheDeviceAndNoPersonWhenNobodyIsPicked() {
         XCTAssertEqual(
             "/api/audiobooks/7/position?device_id=ios-1",
             AudiobookPath.position(7, deviceID: "ios-1")
@@ -408,7 +414,7 @@ final class AudiobookModelsTests: XCTestCase {
         )
         XCTAssertFalse(
             AudiobookPath.position(7, deviceID: "ios-1").contains("person_id"),
-            "there is no listener person on iOS, and person_id= empty is a different key"
+            "a phone with nobody picked sends no person_id; person_id= empty is a different key"
         )
     }
 

@@ -150,7 +150,23 @@ public enum FileStrings {
     /// this. Here the id comes from the device registration, which a phone
     /// that has never reached its house has not done — and the server types
     /// the field `min_length=3`, so sending nothing would be a 422 rather
-    /// than a refusal anybody could act on.
+    /// than a refusal anybody could act on.    ///
+    /// **Measured unreachable in this app, and kept.** The app's one
+    /// ``ShellModel`` is built with a `deviceSelf` closure
+    /// (`DomovoiApp.swift:280`) whose id is
+    /// ``DeviceIdentity/stable(in:)`` — which returns a saved well-formed id
+    /// or mints one (`ios-` plus 16 hex, 20 characters) and saves it, so it is
+    /// never nil and never shorter than 3. There is no route in the app that
+    /// reaches this sentence; M1 looked and the integration looked again.
+    ///
+    /// It is **not deleted** because taking a sentence off a screen is an
+    /// owner's call and not a fix pass's, and because the guard it belongs to
+    /// is a floor against a caller handing nothing — the models take the id
+    /// as an optional, and a 422 from `min_length=3` is worse than a
+    /// sentence. The sibling ``AudiobooksStrings/noDeviceID`` is the same
+    /// class and is logged in the player unit's DECISIONS §7.9. Decide them
+    /// together: either both go the way of `playingNeedsAHouse`, or both keep
+    /// this note.
     public static let noDeviceID = "this phone hasn't registered with your house yet"
 
     // MARK: - saving a file to the device

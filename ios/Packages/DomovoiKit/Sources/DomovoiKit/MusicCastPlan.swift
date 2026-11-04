@@ -408,6 +408,25 @@ public enum MusicCastOutcome: Equatable, Sendable {
         queued: Bool
     )
 
+    /// **Nothing happened, and this is why** — the sentence goes straight
+    /// into the toast, as it arrives on Android.
+    ///
+    /// Not every refusal: ``MusicCastPlanner/refusal(…)`` answers the ones
+    /// that are decided before anything is asked (no rooms, a queue of
+    /// podcasts), and those never reach an outcome. This is the **POST that
+    /// failed** — ``PlayerCastOutcome/refused(note:)``, which exists for the
+    /// same reason. Mapping that onto `.here(left: nil, …)` would report
+    /// "on this device" for a cast that did not happen: true about the audio
+    /// and a lie about what the person asked for.
+    ///
+    /// It was `MusicMoreCastResult.refused(note:)`, a wrapper enum beside
+    /// ``MusicMorePlayerEngine`` — because `MusicCastPlan.swift` was not the
+    /// player unit's file in the 2026-11-03 batch and a case cannot be added
+    /// from outside. The wrapper collapsed into this case on the
+    /// integration, which is what simplified `cast(to:)`, `castFrom(_:)` and
+    /// `playHere()` back to one return type.
+    case refused(note: String)
+
     /// A cast that went to `room` from this phone, nothing left behind and
     /// nothing paused: the ordinary case, and the one the defaults in the
     /// Kotlin stood for.
@@ -441,6 +460,12 @@ public enum MusicCastOutcome: Equatable, Sendable {
             if !queued { return "back on this device · nothing queued · paused \(left)" }
             if !leftWasPlaying { return "back on this device, paused · \(left) wasn't playing" }
             return "back on this device, paused · paused \(left)"
+
+        // The server's own words, or the engine's — `CastOutcome` has no
+        // branch to be faithful to here, because on Android a failed POST is
+        // reported by the caller and not by the outcome.
+        case .refused(let note):
+            return note
         }
     }
 }

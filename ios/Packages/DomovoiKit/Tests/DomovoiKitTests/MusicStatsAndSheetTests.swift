@@ -248,9 +248,16 @@ final class MusicStatsAndSheetTests: XCTestCase {
     // MARK: - the tabs
 
     /// The bar is built from ``MusicTab/shown(hasPlayer:)``, never from
-    /// `allCases` — the MusicMore batch added `playlists` (which ships) and
-    /// `player` (which does not, because nothing conforms to
-    /// ``MusicMorePlayerEngine`` yet).
+    /// `allCases` — the MusicMore batch added `playlists` and `player`.
+    ///
+    /// This doc said `player` "does not [ship], because nothing conforms to
+    /// ``MusicMorePlayerEngine`` yet". ``PlayerModelMusicEngine`` conforms
+    /// since D46 and `MusicView`'s `.task` registers it, so `hasPlayer` is
+    /// true wherever ``ShellModel/player`` is. It is false for a build with no
+    /// audio engine — not for a phone that has not joined a house, which is
+    /// the premise M1 found false (the device id is minted locally on first
+    /// launch). Both arms are asserted below, which is why the case reads the
+    /// same either way.
     func testTheTabsAreTheOnesThatHaveSomethingBehindThem() {
         XCTAssertEqual([.library, .queue, .playlists, .stats], MusicTab.shown(hasPlayer: false))
         XCTAssertEqual(

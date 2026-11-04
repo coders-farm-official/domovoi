@@ -26,12 +26,16 @@ import Observation
 /// ``MusicRoomLyricsModel``, cover art is ``MusicCoverStore``, and the cast
 /// planner is ``MusicCastPlanner``.
 ///
-/// **Still not built, and no control claims otherwise**: the player tab —
-/// this phone's own playback — because that is an audio engine and
-/// ``MusicMorePlayerEngine`` has no conformer yet; and uploading a file from
-/// the phone or saving a track to it, which are a different batch's. The rule
-/// they are left out under is Kamron's own: a control that cannot do what it
-/// says is not drawn ([[no-misleading-controls]]).
+/// **Still not built, and no control claims otherwise**: uploading a file from
+/// the phone, and saving a track to it. The rule they are left out under is
+/// Kamron's own: a control that cannot do what it says is not drawn
+/// ([[no-misleading-controls]]).
+///
+/// The player tab — this phone's own playback — **is** built: it needed an
+/// audio engine and ``PlayerModelMusicEngine`` conforms to
+/// ``MusicMorePlayerEngine`` since D46, registered from `MusicView`'s `.task`.
+/// It is still absent from a build with no audio engine, which is what
+/// ``MusicTab/shown(hasPlayer:)`` is for.
 @MainActor
 @Observable
 public final class MusicModel {

@@ -216,14 +216,15 @@ final class MusicEngineAdapterTests: XCTestCase {
 
     /// Branch for branch, including the refusal.
     ///
-    /// The refusal is ``MusicMoreCastResult/refused(note:)`` and the other four
-    /// are ``MusicCastOutcome``'s, wrapped in
-    /// ``MusicMoreCastResult/went(_:)``. It was a fifth case **on**
-    /// `MusicCastOutcome` until review 1 of this batch, which is a file this
-    /// unit does not own (BATCH-RULES §1) — so the refusal moved into a
-    /// wrapper beside the protocol that needs it, and `MusicCastOutcome` is
-    /// back to exactly what its owner wrote. The alternative, in either shape,
-    /// was reporting a POST that failed as "on this device".
+    /// All five are ``MusicCastOutcome``'s, the refusal included. It went
+    /// back and forth: a fifth case on `MusicCastOutcome` until review 1 of
+    /// the 2026-11-03 batch, then a `MusicMoreCastResult` wrapper beside the
+    /// protocol — because `MusicCastPlan.swift` was not the player unit's
+    /// file (BATCH-RULES §1) and a case cannot be added from outside — then
+    /// ``MusicCastOutcome/refused(note:)`` on the integration, where it
+    /// belonged all along. The alternative, in any shape, was reporting a
+    /// POST that failed as "on this device": true about the audio, a lie
+    /// about what was asked.
     func testEveryCastOutcomeHasATwinAndKeepsItsSentence() {
         let plan = PlayerCastPlan(
             trackIDs: [4, 7], startIndex: 0, startSec: 31, phoneOnly: 1, notInLibrary: 2
@@ -231,7 +232,7 @@ final class MusicEngineAdapterTests: XCTestCase {
         let sent = PlayerModelMusicEngine.outcome(
             .toRoom(plan: plan, room: "office", left: "kitchen", leftPaused: true, paused: false)
         )
-        guard case .went(.toRoom(let made, let room, let left, let leftPaused, let paused)) = sent
+        guard case .toRoom(let made, let room, let left, let leftPaused, let paused) = sent
         else {
             return XCTFail("a cast to a room must stay a cast to a room: \(sent)")
         }
@@ -244,7 +245,7 @@ final class MusicEngineAdapterTests: XCTestCase {
         XCTAssertTrue(leftPaused)
         XCTAssertFalse(paused)
 
-        if case .went(.superseded(let room, let was, let undone)) =
+        if case .superseded(let room, let was, let undone) =
             PlayerModelMusicEngine.outcome(.superseded(room: "office", sent: true, undone: false)) {
             XCTAssertEqual(room, "office")
             XCTAssertTrue(was)
@@ -253,7 +254,7 @@ final class MusicEngineAdapterTests: XCTestCase {
             XCTFail("superseded must stay superseded")
         }
 
-        if case .went(.here(let left, let playing, _, _, _)) = PlayerModelMusicEngine.outcome(
+        if case .here(let left, let playing, _, _, _) = PlayerModelMusicEngine.outcome(
             .here(left: "office", playing: true, leftPaused: true, leftWasPlaying: true)
         ) {
             XCTAssertEqual(left, "office")
@@ -262,9 +263,8 @@ final class MusicEngineAdapterTests: XCTestCase {
             XCTFail("coming back here must stay coming back here")
         }
 
-        // The one that had nowhere to go before this unit: the sentence is the
-        // whole point, and `here(left: nil, …)` would have replaced it with
-        // "on this device" — true about the audio, a lie about what was asked.
+        // The sentence is the whole point, and `here(left: nil, …)` would have
+        // replaced it with "on this device".
         let refused = PlayerModelMusicEngine.outcome(.refused(note: "office didn't answer"))
         XCTAssertEqual(refused.note, "office didn't answer")
         if case .refused = refused {} else { XCTFail("a refusal must stay a refusal: \(refused)") }
