@@ -21,6 +21,10 @@ import XCTest
 /// 3. **Told when the house moves.** A player stamped with the last house
 ///    saves the next ten seconds of a book to a server that has never heard of
 ///    it — [[read-after-await-wrong-key]] in its simplest form.
+/// 4. **Handed on without being dropped.** A screen's seam takes an adapter
+///    built on the line of the call and must own it; both seams were `weak`
+///    and ten of train I003's cases are what that looked like from outside
+///    (section 5).
 ///
 /// Every case drives ``ShellModel`` with a **counted builder** rather than the
 /// real ``ShellModel/systemPlayer(_:_:)``, which is nil on the macOS this
@@ -526,6 +530,85 @@ final class PlayerOwnerTests: XCTestCase {
             rig.model.toast,
             "the player spoke over a play here that paused nothing: "
                 + (rig.model.toast?.text ?? "")
+        )
+    }
+
+    // MARK: - 5. the seams that hand the player to a screen own what they take
+
+    /// Whatever plays a book, as a recorder — one method, and the one thing
+    /// a case here needs is for it to be an object somebody can drop.
+    ///
+    /// `AudiobooksModelTests` has an `Ears` of its own and this is not it:
+    /// that one is private to its file, and this unit owns this file.
+    @MainActor
+    private final class OwnedEars: AudiobooksPlayer {
+        var played: [AudiobookPlayRequest] = []
+        func play(_ request: AudiobookPlayRequest) { played.append(request) }
+    }
+
+    /// ``AudiobooksModel/player`` **owns** what it is handed.
+    ///
+    /// `AudiobooksView`'s `.task` writes
+    /// `books.player = AudiobooksPhonePlayer.over(model.player, …)` — an
+    /// adapter made on that line, over the player this shell owns, and held
+    /// by nothing else. While the seam was `weak` it was gone before the next
+    /// statement ran, ``AudiobooksModel/canPlay(_:)`` (`player != nil && …`)
+    /// was false on every book, and a book's page drew no `play`, no `resume`
+    /// and every chapter row as plain text. Six of train I003's reds.
+    ///
+    /// The assignment is in a scope of its own with nothing else naming the
+    /// object, which is the shape of the real call site; the pool drain is
+    /// what makes a `weak` seam answer nil here rather than at some later
+    /// point of the runner's choosing.
+    func testTheAudiobooksSeamKeepsAPlayerNothingElseHolds() {
+        let rig = Rig(serverURL: houseA)
+        let books = AudiobooksModel(
+            in: rig.container,
+            deviceID: "phone-1",
+            places: BookPositionMemory(),
+            wait: { _ in }
+        )
+
+        autoreleasepool {
+            books.player = OwnedEars()
+        }
+
+        XCTAssertNotNil(
+            books.player,
+            "the player was let go of the moment it was handed over, so "
+                + "`canPlay` is false on every book and this screen offers nothing "
+                + "to play"
+        )
+    }
+
+    /// ``MusicLocalQueueModel/use(_:)`` **owns** the adapter it is handed.
+    ///
+    /// `MusicView`'s `.task` is `player?.use(PlayerModelMusicEngine(made))` —
+    /// again an adapter built on the line of the call, over the shell's
+    /// player, held by nothing else. While that seam was `weak` the adapter
+    /// was released at once, ``MusicLocalQueueModel/hasEngine`` stayed false,
+    /// and neither the player tab nor either `play on this device` was drawn.
+    /// Four more of I003's reds.
+    ///
+    /// The shell holds the player and nothing holds the adapter, which is
+    /// exactly the call site.
+    func testTheMusicSeamKeepsAnEngineNothingElseHolds() throws {
+        let rig = Rig(serverURL: houseA)
+        let player = try XCTUnwrap(rig.model.player, "this shell built no player")
+        let queue = MusicLocalQueueModel(deviceID: "phone-1")
+
+        autoreleasepool {
+            queue.use(PlayerModelMusicEngine(player))
+        }
+
+        XCTAssertTrue(
+            queue.hasEngine,
+            "the adapter was let go of the moment it was registered, so this "
+                + "phone offers no player tab and no `play on this device`"
+        )
+        XCTAssertTrue(
+            MusicTab.shown(hasPlayer: queue.hasEngine).contains(.player),
+            "the tab strip leaves the player out although an engine is registered"
         )
     }
 

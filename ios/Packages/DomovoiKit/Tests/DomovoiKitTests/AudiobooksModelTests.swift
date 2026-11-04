@@ -1036,34 +1036,6 @@ final class AudiobooksModelTests: XCTestCase {
         XCTAssertTrue(model.canPlay(model.books[0]))
     }
 
-    /// The seam **owns** what it is handed, which is the I003 fix.
-    ///
-    /// `AudiobooksView`'s `.task` writes
-    /// `books.player = AudiobooksPhonePlayer.over(model.player, …)` — an
-    /// adapter made on that line, over a player the shell owns, and held by
-    /// nothing else. While ``AudiobooksModel/player`` was `weak` it was gone
-    /// before the next statement ran, so ``AudiobooksModel/canPlay(_:)`` was
-    /// false on every book: no `play`, no `resume`, and every chapter row
-    /// drawn as plain text (train I003, six cases).
-    ///
-    /// The assignment is in a scope of its own with nothing else naming the
-    /// object, which is the shape of the real call site; the pool drain is
-    /// what makes a `weak` seam answer false here rather than at some later
-    /// point of the test runner's choosing.
-    func testTheSeamKeepsAPlayerNothingElseHolds() async {
-        let (model, _, _, _) = rig()
-        await started(model)
-
-        autoreleasepool {
-            model.player = Ears()
-        }
-        XCTAssertTrue(
-            model.canPlay(model.books[0]),
-            "the player was let go of the moment it was handed over, so no book "
-                + "on this screen can be played"
-        )
-    }
-
     /// `Sabriel`'s shape: a folder book whose files name nothing. Offering a
     /// play would be offering a request the server answers 400.
     func testNoPlayIsOfferedForABookWithNoPlayableFile() async {

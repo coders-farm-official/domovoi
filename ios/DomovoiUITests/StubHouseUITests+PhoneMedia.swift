@@ -271,11 +271,17 @@ extension StubHouseUITests {
     /// The same control while its file is on its way: `uploading` or
     /// `uploading 37%` (``StubPhoneMedia/uploadingPrefix``).
     ///
-    /// A **button**, by prefix. Both halves matter: the percentage is what
-    /// the exact match missed in train I003, and `uploading "…" to Music…` is
-    /// a toast with the same opening that an `.any` query would take instead
-    /// of the row — which would make a case about a ring pass over a row that
-    /// never drew one.
+    /// A **button**, by prefix. The prefix is because
+    /// ``PhoneMediaStrings/uploadingLabel(_:)`` carries a percentage now that
+    /// the transfers unit's streamed door reports one, and an exact match on
+    /// the bare word would miss `uploading 37%`. Buttons only because
+    /// ``PhoneMediaStrings/uploadingTo(_:_:)`` is a `StaticText` toast that
+    /// opens with the same word, and an `.any` query would take the toast and
+    /// pass over a row that never changed.
+    ///
+    /// **Neither of those is why the two callers were red in train I003** —
+    /// see their own notes. The row drew no busy state at all, and this query
+    /// still fails when it does not.
     @MainActor
     func phoneBusyUploadControl(_ app: XCUIApplication) -> XCUIElement {
         app.buttons
@@ -662,6 +668,37 @@ extension StubHouseUITests {
     /// The ring is what catches a `Task` left on a lazy row: a row recycled
     /// while it scrolls cancels one, and the upload would stop mid-file with
     /// nothing said.
+    ///
+    /// ### Red in train I003, and it is not this case that is wrong
+    ///
+    /// The row never drew a busy state at all — not the bare `uploading` this
+    /// case used to match exactly, and not the `uploading NN%` the streamed
+    /// door reports. The evidence is three-sided:
+    ///
+    /// * No busy label appears **anywhere** in that train. A grep for
+    ///   `label: 'uploading…'` over all 431 cases' trees returns nothing, and
+    ///   `PhoneUploadRowButton.percentID` (`transfers-upload-percent`) is in
+    ///   no tree either.
+    /// * The window was not short. The house was told `delay_ms: 6000` before
+    ///   the launch, and `waitForExistence(timeout: 15)` polled about once a
+    ///   second from t=18.4s to t=32.4s — five or more polls inside the busy
+    ///   window, and the picture taken at the end
+    ///   (`att/…AProgressRingShowsWhileAnUploadRuns/phonemedia-upload-ring_*.png`)
+    ///   shows both rows with the plain `arrow.up.circle`.
+    /// * It is not the fixture's six seconds either. The transfers unit's
+    ///   `testTransfers_ABigPhoneFileGoesThroughTheStreamedDoor` sent a real
+    ///   **200 MiB** body through the other door, waited sixty seconds with a
+    ///   query that was already a prefix match, and reported "a 200 MiB upload
+    ///   never reported a percentage" over a tree whose four controls all read
+    ///   plain `upload`. Two different doors, one with no artificial delay at
+    ///   all, same symptom.
+    ///
+    /// So the defect is in the transfers unit's own files — the `.busy` arm of
+    /// `PhoneUploadRowButton` over `PhoneUploadModel.running` — and this case
+    /// stays as it is, asserting the ring. The query was widened to a prefix
+    /// on buttons because the percentage is real and the old exact match would
+    /// have been wrong **too**; that is a correction, not the fix, and this
+    /// case is red until the state renders.
     @MainActor
     func testPhoneMedia_AProgressRingShowsWhileAnUploadRuns() throws {
         phoneReset()
@@ -673,7 +710,13 @@ extension StubHouseUITests {
         let busy = phoneBusyUploadControl(app)
         let ringed = busy.waitForExistence(timeout: 15)
         evidence(app, "phonemedia-upload-ring")
-        XCTAssertTrue(ringed, "no row said it was uploading while a six-second upload ran")
+        XCTAssertTrue(
+            ringed,
+            "no row said it was uploading while a six-second upload ran: the "
+                + "control is still at `\(StubPhoneMedia.upload)`, so "
+                + "`PhoneUploadRowButton`'s `.busy` arm never drew — tree "
+                + "follows\n" + app.debugDescription
+        )
         XCTAssertTrue(
             app.staticTexts[StubPhoneMedia.uploadedTrack].firstMatch.waitForExistence(timeout: 60),
             "the upload started and never finished — the task did not outlive the row"
@@ -682,6 +725,14 @@ extension StubHouseUITests {
 
     /// A second tap does not post the file twice — it says so
     /// (`DeviceUpload.kt:257`).
+    ///
+    /// **Red in train I003 for its sibling's reason**, not its own: this case
+    /// cannot tap a busy control that was never drawn. See
+    /// ``testPhoneMedia_AProgressRingShowsWhileAnUploadRuns`` for the
+    /// evidence and whose defect it is. The refusal this case is named for —
+    /// `PhoneUploadModel.upload(_:)`'s `running.keys.contains(key)` guard and
+    /// ``PhoneMediaStrings/alreadyUploading(_:)`` — was never reached, so
+    /// nothing here says anything about it yet.
     @MainActor
     func testPhoneMedia_ASecondTapDoesNotStartASecondUpload() throws {
         phoneReset()
@@ -694,7 +745,12 @@ extension StubHouseUITests {
         // while it is busy on purpose, because the tap is how the refusal and
         // this message get said at all.
         let busy = phoneBusyUploadControl(app)
-        XCTAssertTrue(busy.waitForExistence(timeout: 15), "the first upload never showed as busy")
+        XCTAssertTrue(
+            busy.waitForExistence(timeout: 15),
+            "the first upload never showed as busy, so there is no busy control to "
+                + "tap twice: `PhoneUploadRowButton`'s `.busy` arm never drew — tree "
+                + "follows\n" + app.debugDescription
+        )
         busy.tap()
 
         let toast = app.staticTexts[StubPhoneMedia.alreadyUploading].firstMatch
@@ -1435,6 +1491,13 @@ extension StubHouseUITests {
         // slack guard against the 79.0-point column: half the row is far
         // above anything the two trailing boxes can leave and far below what
         // a wrapped name delivers.
+        //
+        // **Half is a judgement, not a measurement**, and the only number
+        // under it is the one it must stay above: I002's broken column of
+        // 79.0 points, which is 0.22 of the row. The measurements either side
+        // of it are 236.3 and 221.0 (0.65 and 0.61). It is here so that a
+        // collapse back towards a sliver fails on width as well as on `minX`;
+        // the `minX` bound above is the exact one.
         let inner = rowWidth["AX5"] ?? 0
         let left = rowLeft["AX5"] ?? 0
         XCTAssertGreaterThan(inner, 0, "the AX5 list had no width")
@@ -1585,7 +1648,9 @@ extension StubHouseUITests {
         // train I003 measured this caption at 221.0 in a 361-point tile with
         // the column layout working (`phonemedia-tile-AX5`). Three quarters
         // was a number nobody had measured; half is still far above the
-        // sliver the upload box used to leave beside it.
+        // sliver the upload box used to leave beside it — and half is a
+        // judgement too, sitting between I002's 79.0 (0.22) and I003's 221.0
+        // (0.61). The exact guard is the `minX` one below.
         XCTAssertGreaterThanOrEqual(
             caption.width, inner * 0.5,
             "the tile's name is \(caption.width) wide in a \(inner)-point tile: the upload"
@@ -1690,16 +1755,18 @@ enum StubPhoneMedia {
     /// unit's streaming upload reports one: `PhoneUploadModel.running` is a
     /// map of percentages now and not the set it was ("nothing could report a
     /// percent when the body was built in memory, and now everything can",
-    /// `PhoneUploadModel.swift:136-139`), so the busy button reads
-    /// `uploading 37%` and an exact match on `uploading` found nothing. That
-    /// is train I003's `testPhoneMedia_AProgressRingShowsWhileAnUploadRuns`
-    /// and `…ASecondTapDoesNotStartASecondUpload`, and the percentage is the
-    /// ring those cases are named for.
+    /// `PhoneUploadModel.swift:136-139`), so a busy button on the streamed
+    /// door reads `uploading 37%` and an exact match on the bare word would
+    /// be wrong half the time.
     ///
     /// Matched on **buttons only** by both callers: the toast
     /// ``PhoneMediaStrings/uploadingTo(_:_:)`` opens with the same word and
     /// is a `StaticText`, so an `.any` query would take it and pass over a
     /// row that never changed.
+    ///
+    /// **This is a correction, not train I003's fix.** The two cases that
+    /// read it were red because no busy label of any shape was drawn — see
+    /// ``StubHouseUITests/testPhoneMedia_AProgressRingShowsWhileAnUploadRuns``.
     static let uploadingPrefix = "uploading"
     static let uploadedTrack = "uploaded \"quenlo lullaby.mp3\" to Music · indexing…"
     /// Documents, not Videos: the stub has no `core:videos` **Files**

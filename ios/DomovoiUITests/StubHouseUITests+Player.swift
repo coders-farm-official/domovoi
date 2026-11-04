@@ -554,35 +554,60 @@ extension StubHouseUITests {
     @available(iOS 17.0, *)
     func testPlayer_TheListeningAsCardAudits() throws {
         let app = launch(push: "Settings")
-        // **The banner first, before anything is navigated to.**
+        // **Reach the panel, let the house's banner come and go, and go back
+        // in if it took the panel with it.**
         //
-        // Train I003 audited the Settings *index*: the panel was reached, the
-        // card was found, and then the house's own alert banner arrived while
-        // `auditIssues` was waiting it out. A banner takes the scene to
-        // `.inactive` and back, `ShellModel.scenePhaseChanged` runs
-        // `refresh()` on the way back in, and `SettingsScreen`'s `place` — a
-        // `@State` — was at `.index` again when the audit ran. The audit then
-        // reported the index's eighteen anonymous Dynamic Type findings as
-        // this card's floor, which is a measurement of the wrong screen.
+        // Train I003 audited the Settings *index*: the panel was reached at
+        // t=7.3s, the card was found at t=8.35s, and the house's own alert
+        // banner arrived at t=8.39s. `auditIssues` waited it out — correctly
+        // — and audited at t=15.2s, by which time the panel had gone. A
+        // banner takes the scene to `.inactive` and back,
+        // `ShellModel.scenePhaseChanged` runs `refresh()` on the way back in,
+        // and `SettingsScreen`'s `place` is a `@State` that was at `.index`
+        // again. The audit then reported the index's eighteen anonymous
+        // Dynamic Type findings — and three `Contrast failed` naming `Voice`
+        // and `System` — as this card's.
         //
-        // The banner is posted once per launch, at `start()`, so waiting it
-        // out here spends the bounce on the index where nothing is lost. The
-        // assertion after the audit is the guard: if a future bounce takes
-        // the panel away anyway, the case says so instead of grading another
-        // screen. (The reset itself is Settings', not this unit's — written
-        // up under "Needs a shared change" in DECISIONS.md.)
-        _ = waitForNoNotificationBanner("player-listening-as/before-navigating")
-        XCTAssertTrue(
-            reachPhonesAndBrowsersFromSettings(app),
-            "never reached Settings → Phones & browsers, so the card could not "
-                + "be measured"
-        )
+        // Waiting for the banner *before* navigating does not help: it is
+        // posted about eight seconds into the launch, which is while the two
+        // taps below are being made, and `waitForNoNotificationBanner`'s
+        // `appearIn` would have to cover the whole of that. So the wait is
+        // here instead, with the panel already drawn — the one place the
+        // bounce can be seen — and the panel is re-entered when it has gone.
+        // Two attempts, because the banner is posted once per launch at
+        // `start()`: a second one means something else is going on and the
+        // case should say so rather than loop.
+        //
+        // (The reset itself is Settings', not this unit's — it is written up
+        // under "Needs a shared change" in DECISIONS.md. This is a case
+        // working around another unit's defect, not a fix for it.)
         let picker = app.buttons[PlayerListenerUnderTest.card]
-        XCTAssertTrue(
-            picker.waitForExistence(timeout: 20),
-            "the panel draws no `\(PlayerListenerUnderTest.card)` card to audit "
-                + "— tree follows\n" + app.debugDescription
-        )
+        for attempt in 1...2 {
+            XCTAssertTrue(
+                reachPhonesAndBrowsersFromSettings(app),
+                "never reached Settings → Phones & browsers on attempt \(attempt), so "
+                    + "the card could not be measured"
+            )
+            XCTAssertTrue(
+                picker.waitForExistence(timeout: 20),
+                "the panel draws no `\(PlayerListenerUnderTest.card)` card to audit "
+                    + "— tree follows\n" + app.debugDescription
+            )
+            let banner = waitForNoNotificationBanner(
+                "player-listening-as/attempt-\(attempt)",
+                appearIn: 6
+            )
+            if picker.exists { break }
+            XCTAssertNotNil(
+                banner,
+                "the `\(PlayerListenerUnderTest.card)` card went away on its own and no "
+                    + "banner explains it — tree follows\n" + app.debugDescription
+            )
+            print(
+                "LISTENING AS the banner at \(banner.map { "\($0)" } ?? "?") took Settings "
+                    + "back to its index — going in again"
+            )
+        }
 
         let found = try auditIssues(app, "player-listening-as")
         evidence(app, "player-70-listening-as-audit")
@@ -613,21 +638,37 @@ extension StubHouseUITests {
             "the `\(PlayerListenerUnderTest.card)` card has an audit finding of "
                 + "its own"
         )
-        // **The anonymous floor is printed, not pinned**, which is this
-        // file's own rule two paragraphs up ("a floor by signature, never by
-        // total") and was not what this line did. It asserted
-        // `split.floor <= knownPushedBarFloor`, and that eight is the count
-        // a *pushed bar* produces, measured on screens with almost nothing
-        // on them: the anonymous Dynamic Type findings scale with how many
-        // text leaves are drawn, and Phones & browsers is six cards of them.
-        // Train I003 read 18 — off the Settings index, which has seven — so
-        // the number was never a measurement of this panel at all and could
-        // only ever have failed for somebody else's card.
+        // **The anonymous floor, as an equality — and nobody has measured
+        // this panel's yet.**
         //
-        // What is asserted is what this case is for: nothing Apple can
-        // attribute names the card. A real defect in it — a contrast
-        // failure on the chosen row, a hit area under 44, a label a reader
-        // cannot use — arrives named and fails above.
+        // This line was `split.floor <= knownPushedBarFloor` and train I003
+        // failed it with 18 against 8. Neither number was a reading of
+        // Phones & browsers: the 18 came off the Settings index (see the
+        // bounce above) and the 8 is ``knownPushedBarFloor``, a figure
+        // measured on other pushed screens. A `<=` is the wrong shape as
+        // well, for the reason the shared helper gives: a floor that *grew*
+        // is the thing worth seeing, and a bound hides exactly the direction
+        // this unit's card can move it in.
+        //
+        // So it is an equality against the pushed-bar figure, and **the
+        // first train to run this case with the panel actually on screen is
+        // the measurement**. The `print` above is where to read it: if the
+        // number it reports is all `element: nil` Dynamic Type lines, that is
+        // the number to pin here. This is Rooms' arrangement for its detail
+        // panel (`StubHouseUITests+Rooms.swift`), and it is a guard rather
+        // than the nothing the fix for I003 first left behind — the project
+        // rule asks for a floor by signature, not for no floor, and
+        // `floorAndRest` is what makes this one by signature: only the two
+        // anonymous Dynamic Type headlines are counted here and everything
+        // Apple could attribute is asserted above.
+        XCTAssertEqual(
+            split.floor, Self.knownPushedBarFloor,
+            "Phones & browsers reports \(split.floor) anonymous Dynamic Type findings "
+                + "and the pushed-bar figure is \(Self.knownPushedBarFloor). This panel's "
+                + "own floor has never been measured — train I003 graded the Settings "
+                + "index instead — so if the \(split.floor) are all `element: nil` bar "
+                + "findings, that is the number to pin here"
+        )
     }
 
     /// Every position ask the stub house has been sent this run, in order.
