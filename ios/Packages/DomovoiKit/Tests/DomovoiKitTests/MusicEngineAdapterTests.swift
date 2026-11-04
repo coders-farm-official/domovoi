@@ -214,9 +214,16 @@ final class MusicEngineAdapterTests: XCTestCase {
 
     // MARK: - the outcome map
 
-    /// Branch for branch, including the refusal — the case this unit added to
-    /// ``MusicCastOutcome`` rather than report a POST that failed as "on this
-    /// device".
+    /// Branch for branch, including the refusal.
+    ///
+    /// The refusal is ``MusicMoreCastResult/refused(note:)`` and the other four
+    /// are ``MusicCastOutcome``'s, wrapped in
+    /// ``MusicMoreCastResult/went(_:)``. It was a fifth case **on**
+    /// `MusicCastOutcome` until review 1 of this batch, which is a file this
+    /// unit does not own (BATCH-RULES §1) — so the refusal moved into a
+    /// wrapper beside the protocol that needs it, and `MusicCastOutcome` is
+    /// back to exactly what its owner wrote. The alternative, in either shape,
+    /// was reporting a POST that failed as "on this device".
     func testEveryCastOutcomeHasATwinAndKeepsItsSentence() {
         let plan = PlayerCastPlan(
             trackIDs: [4, 7], startIndex: 0, startSec: 31, phoneOnly: 1, notInLibrary: 2
@@ -224,7 +231,8 @@ final class MusicEngineAdapterTests: XCTestCase {
         let sent = PlayerModelMusicEngine.outcome(
             .toRoom(plan: plan, room: "office", left: "kitchen", leftPaused: true, paused: false)
         )
-        guard case .toRoom(let made, let room, let left, let leftPaused, let paused) = sent else {
+        guard case .went(.toRoom(let made, let room, let left, let leftPaused, let paused)) = sent
+        else {
             return XCTFail("a cast to a room must stay a cast to a room: \(sent)")
         }
         XCTAssertEqual(made.trackIDs, [4, 7])
@@ -236,7 +244,7 @@ final class MusicEngineAdapterTests: XCTestCase {
         XCTAssertTrue(leftPaused)
         XCTAssertFalse(paused)
 
-        if case .superseded(let room, let was, let undone) =
+        if case .went(.superseded(let room, let was, let undone)) =
             PlayerModelMusicEngine.outcome(.superseded(room: "office", sent: true, undone: false)) {
             XCTAssertEqual(room, "office")
             XCTAssertTrue(was)
@@ -245,7 +253,7 @@ final class MusicEngineAdapterTests: XCTestCase {
             XCTFail("superseded must stay superseded")
         }
 
-        if case .here(let left, let playing, _, _, _) = PlayerModelMusicEngine.outcome(
+        if case .went(.here(let left, let playing, _, _, _)) = PlayerModelMusicEngine.outcome(
             .here(left: "office", playing: true, leftPaused: true, leftWasPlaying: true)
         ) {
             XCTAssertEqual(left, "office")

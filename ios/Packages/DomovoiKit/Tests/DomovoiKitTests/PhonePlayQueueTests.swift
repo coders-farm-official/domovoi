@@ -137,10 +137,10 @@ final class PhonePlayQueueTests: XCTestCase {
         await settle()
 
         let queue = list.playQueue(around: onDisk("02 atmosphere.mp3"))
-        XCTAssertEqual(queue.items.map(\.title), [
+        XCTAssertEqual(queue?.items.map(\.title), [
             "01 transmission.mp3", "02 atmosphere.mp3", "03 decades.mp3",
         ])
-        XCTAssertEqual(queue.index, 1)
+        XCTAssertEqual(queue?.index, 1)
     }
 
     /// The reason the queue is filtered and not the whole page: an entry the
