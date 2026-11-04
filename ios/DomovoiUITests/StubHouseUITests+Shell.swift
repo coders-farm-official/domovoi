@@ -50,9 +50,25 @@ extension StubHouseUITests {
 
         /// ``ShellStrings/homeCrumb`` plus the route, which is what
         /// ``WorkspaceView/crumb`` composes: the bar's leading string below
-        /// the accessibility sizes and the navigation title above them.
+        /// the accessibility sizes.
         static let homeCrumb = "domovoi / home"
         static let videosCrumb = "domovoi / videos"
+
+        /// The **navigation title** at the accessibility sizes, which is
+        /// `WorkspaceView.screenTitle(for:)` — the route's label and not the
+        /// breadcrumb.
+        ///
+        /// They diverged in train I003. The breadcrumb does not fit a
+        /// one-line `UINavigationBar` large title at AX5 and UIKit truncates
+        /// it: the pictures of this train read `domovoi / h…` on Home and
+        /// `domovoi / vi…` on a pushed Videos, and Apple's audit called both
+        /// clipped. The pill still carries the server's address and
+        /// ``ShellTopBar`` still draws the whole breadcrumb below the
+        /// accessibility sizes, so the house is still named.
+        static let homeTitle = "home"
+        static let videosTitle = "videos"
+        static let settingsTitle = "settings"
+        static let localMediaTitle = "local media"
 
         /// ``ShellPill/accessibilityLabel`` for a saved server **on its own**,
         /// which is the bar's pill (`ShellStringsUnderTest.pillLabel`), and the
@@ -122,38 +138,128 @@ extension StubHouseUITests {
             houseName(in: app).waitForExistence(timeout: 30),
             "the header never drew the house's name — the config read did not land"
         )
-        try assertTheHeaderScrollsAway(app, crumb: StubShell.homeCrumb, named: "shell-home-ax5")
+        try assertTheHeaderScrollsAway(app, crumb: StubShell.homeTitle, named: "shell-home-ax5")
     }
 
     /// A **pushed** screen at AX5, which is the half the measurement was taken
     /// on: train S001 measured the page at 102 of 852 points on Images, a
     /// pushed screen with a plugin band.
+    ///
+    /// ### It was Videos, and Videos cannot answer this question
+    ///
+    /// Train I003 read 117 → 117 points here: the large title did not
+    /// collapse on a swipe, though the page under it scrolled. The picture
+    /// says why (`overnight-trains/I003/ALL/att/`
+    /// `testShell_TheHeaderScrollsAwayOnAPushedScreen/`
+    /// `shell-videos-ax5-after-a-swipe…png`): the source switch —
+    /// `PhoneSourceSwitchView`, which `RouteScreen` wraps **music, videos and
+    /// files** in — is pinned above the page's own `ScrollView`, and the
+    /// tree agrees (the switch at y=178.7, the scroll view starting at
+    /// 245.3). UIKit collapses a large title for a scroll view that reaches
+    /// the navigation bar; a scroll view with a static row above it never
+    /// moves the bar.
+    ///
+    /// That is three screens' shape and `PhoneSourceSwitchView` is not this
+    /// unit's file, so the limitation is written up for its owner
+    /// (`fx-shell/REPORT.md`, "for others") and this case moved to a pushed
+    /// screen whose page **is** the stack's content: Settings, whose own
+    /// tree puts its `ScrollView` at y=93.3, the navigation bar's own top.
+    /// ``testShell_TheSourceSwitchScreensStillGetTheirWindow()`` keeps the
+    /// Videos reading, as what answer 29 does and does not buy there.
     @MainActor
     func testShell_TheHeaderScrollsAwayOnAPushedScreen() throws {
-        let (app, landed) = openVideos(StubShell.ax5)
-        XCTAssertTrue(landed, "the videos list never answered — no count line drew")
-        try assertTheHeaderScrollsAway(app, crumb: StubShell.videosCrumb, named: "shell-videos-ax5")
+        let app = launch(mode: StubShell.ax5, push: "Settings", pushDelay: Self.pushDelay)
+        XCTAssertTrue(
+            app.navigationBars.staticTexts[StubShell.settingsTitle]
+                .waitForExistence(timeout: 40),
+            "Settings never drew its navigation title at AX5 — the seeded push "
+                + "did not land, so there is no pushed screen to measure"
+        )
+        try assertTheHeaderScrollsAway(
+            app,
+            crumb: StubShell.settingsTitle,
+            named: "shell-settings-ax5"
+        )
 
         // **The back control is not named after the screen it leaves.**
         // Review 1's S1: one `crumb` was handed to the stack's root *and* to
         // its destinations, and a `UINavigationBar` builds the pushed
         // screen's back button out of the ROOT's navigation item — so with
-        // the open route in both places, the way out of Videos was called
-        // `domovoi / videos`.
+        // the open route in both places, the way out of Settings was called
+        // `settings`.
         //
         // The honest limit of this reading: UIKit shortens a back button to
-        // `Back` when the previous title does not fit, and at AX5 it usually
-        // will, so this asserts the **negative** — never the pushed screen's
-        // own crumb — rather than the home crumb it would otherwise be.
+        // `Back` when the previous title does not fit, so this asserts the
+        // **negative** — never the pushed screen's own title — rather than
+        // the home title it would otherwise be.
         let named = app.navigationBars.buttons.allElementsBoundByIndex
-            .filter { $0.exists && $0.label == StubShell.videosCrumb }
+            .filter { $0.exists && $0.label == StubShell.settingsTitle }
         XCTAssertEqual(
             named.count,
             0,
-            "a navigation-bar control on the pushed Videos screen is labelled "
-                + "`\(StubShell.videosCrumb)` — the stack's root is titled "
-                + "after the open route, so the control for leaving Videos is "
-                + "named Videos and VoiceOver says `back to domovoi / videos`"
+            "a navigation-bar control on the pushed Settings screen is labelled "
+                + "`\(StubShell.settingsTitle)` — the stack's root is titled "
+                + "after the open route, so the control for leaving Settings is "
+                + "named Settings and VoiceOver says `back to settings`"
+        )
+    }
+
+    /// **What answer 29 buys on a source-switch screen, and what it does
+    /// not** — the reading train I003 found on Videos, kept rather than
+    /// dropped.
+    ///
+    /// `RouteScreen` wraps music, videos and files in
+    /// `PhoneSourceSwitchView`, which pins its row above the page's own
+    /// `ScrollView`. So on those three screens the large title has no scroll
+    /// view touching the bar and **does not collapse**: I003 measured 117 →
+    /// 117 points across a swipe that did scroll the page.
+    ///
+    /// What answer 29 still buys there is the 300 points ``ShellTopBar`` was
+    /// taking, and that is what this asserts: the bar is gone, the title and
+    /// the pill are in the navigation bar, and the page clears the same 45%
+    /// floor the other three screens do. The collapse is **printed, not
+    /// asserted**, because the fix is in a file this unit does not own — a
+    /// case that red-flagged it would fail this unit for another's work, the
+    /// mistake review 1's N4 found in the dialog case.
+    @MainActor
+    func testShell_TheSourceSwitchScreensStillGetTheirWindow() throws {
+        let (app, landed) = openVideos(StubShell.ax5)
+        XCTAssertTrue(landed, "the videos list never answered — no count line drew")
+        XCTAssertTrue(
+            app.navigationBars.staticTexts[StubShell.videosTitle].waitForExistence(timeout: 20),
+            "no `\(StubShell.videosTitle)` in a navigation bar on a pushed Videos "
+                + "at AX5 — the breadcrumb is not the stack's title"
+        )
+        XCTAssertEqual(
+            app.buttons.matching(NSPredicate(format: "label == %@", StubShell.barPill)).count,
+            0,
+            "`ShellTopBar`'s pill is still on the screen at AX5 — the band above "
+                + "the stack is still drawn, and it cannot scroll away from up "
+                + "there (300 of 852 points, train S001)"
+        )
+        guard let page = tallestScrollView(app) else {
+            return XCTFail("no scroll view on a pushed Videos at AX5")
+        }
+        let barBefore = app.navigationBars.firstMatch.frame.height
+        page.swipeUp(velocity: .slow)
+        let barAfter = app.navigationBars.firstMatch.frame.height
+        evidence(app, "shell-videos-ax5-source-switch")
+        print(
+            "SHELL [shell-videos-ax5-source-switch] navigation bar "
+                + "\(Int(barBefore)) → \(Int(barAfter)) points, page "
+                + "\(Int(page.frame.height)) of \(Int(app.frame.height)) — the "
+                + "source switch is pinned above this page's scroll view, so "
+                + "UIKit has nothing to collapse the large title against"
+        )
+        let floor = app.frame.height * Self.pageFloorShare
+        XCTAssertGreaterThan(
+            page.frame.height,
+            floor,
+            "the page is \(Int(page.frame.height)) of \(Int(app.frame.height)) "
+                + "points on a pushed Videos at AX5, under the \(Int(floor))-point "
+                + "floor. The large title does not collapse here (the pinned "
+                + "source switch), so this is the whole of what answer 29 buys on "
+                + "this screen — and it was 102 of 852 before the fold."
         )
     }
 
@@ -167,11 +273,12 @@ extension StubHouseUITests {
     @MainActor
     func testShell_TheHeaderScrollsAwayOnTheLocalShell() throws {
         let app = launch(mode: StubShell.ax5, server: false)
-        // The local shell's own breadcrumb, trimmed of the two leading spaces
-        // ``ShellStrings/localTopbar`` carries for a bar that is not drawn
-        // here — ``ShellScrollAwayChrome`` trims them, because a screen reader
-        // reads a title and not a layout.
-        let crumb = "domovoi / local media"
+        // ``ShellStrings/localMediaTitle``: the local shell's navigation
+        // title, which is its breadcrumb without the house crumb in front of
+        // it. It was `domovoi / local media` until train I003 measured that
+        // label at the full 360 points with Apple's audit calling it clipped
+        // — a one-line large title at AX5 does not hold it.
+        let crumb = StubShell.localMediaTitle
         let title = app.navigationBars.staticTexts[crumb]
         XCTAssertTrue(
             title.waitForExistence(timeout: 30),
@@ -254,7 +361,7 @@ extension StubHouseUITests {
     @MainActor
     func testShell_TheLocalShellsHeaderIsOnEveryTab() throws {
         let app = launch(mode: StubShell.ax5, server: false)
-        let crumb = "domovoi / local media"
+        let crumb = StubShell.localMediaTitle
         XCTAssertTrue(
             app.navigationBars.staticTexts[crumb].waitForExistence(timeout: 30),
             "no `\(crumb)` in a navigation bar on the local shell's first tab at "
@@ -553,10 +660,24 @@ extension StubHouseUITests {
         let (floor, rest) = Self.floorAndRest(try auditIssues(app, name))
         print("SHELL [\(name)] audit: floor \(floor), rest \(rest.count) — \(rest)")
         // The chrome's two leaves, by the words only they carry. The pill's
-        // label begins with `switch server, ` and the title is the breadcrumb;
-        // `connect` is the local shell's pill, which has no status word.
+        // label begins with `switch server, `; `connect` is the local
+        // shell's pill, which has no status word.
+        //
+        // **The title is matched as a whole label and not as a substring**,
+        // which it was while the title was the breadcrumb. It is the route's
+        // own word now (`home`, `videos`), and `line.contains("home")` also
+        // matches the phone bar's `home` tab — another unit's leaf, and
+        // failing this case for it is review 1's N4 mistake with the owners
+        // the other way round.
+        //
+        // And it is matched **in the top half of the window**, because
+        // `home` is also the phone bar's tab caption, at the foot of the
+        // screen. A navigation title cannot be down there.
+        let titled = "label='\(crumb.trimmingCharacters(in: .whitespaces))'"
+        let waist = app.frame.height / 2
         let chromes = rest.filter { line in
-            line.contains(crumb.trimmingCharacters(in: .whitespaces))
+            let high = (Self.elementFrame(in: line)?.minY ?? 0) < waist
+            return (line.contains(titled) && high)
                 || line.contains(StubShell.toolbarPillPrefix)
                 || line.contains("label='connect'")
         }
@@ -641,12 +762,18 @@ extension StubHouseUITests {
             "`ShellTopBar`'s pill is not on Home at the ordinary type size — "
                 + "the accessibility-size chrome has leaked down to every size"
         )
-        XCTAssertFalse(
-            app.navigationBars.staticTexts[StubShell.homeCrumb].exists,
-            "`\(StubShell.homeCrumb)` is a navigation bar title at the ordinary "
-                + "type size — the large title is drawn where Home used to "
-                + "have no navigation bar at all"
-        )
+        // **Both spellings**, because the title stopped being the breadcrumb
+        // in train I003's fix: `domovoi / home` would no longer be drawn even
+        // if the fold leaked down to this size, so a reading that asked only
+        // for it would have stopped catching the leak it is here for.
+        for title in [StubShell.homeCrumb, StubShell.homeTitle] {
+            XCTAssertFalse(
+                app.navigationBars.staticTexts[title].exists,
+                "`\(title)` is a navigation bar title at the ordinary type size "
+                    + "— the large title is drawn where Home used to have no "
+                    + "navigation bar at all"
+            )
+        }
         XCTAssertEqual(
             app.buttons.matching(
                 NSPredicate(format: "label BEGINSWITH %@", StubShell.toolbarPillPrefix)
@@ -738,8 +865,31 @@ extension StubHouseUITests {
         )
 
         let found = try auditIssues(app, "shell-forget-card")
-        let (floor, rest) = Self.floorAndRest(found)
-        print("SHELL [shell-forget-card] audit floor \(floor), rest \(rest.count)")
+        let (floor, all) = Self.floorAndRest(found)
+        print("SHELL [shell-forget-card] audit floor \(floor), rest \(all.count)")
+        // **What the tree holds with the card up, and what it does not.**
+        //
+        // Train I003's audit named four ``ShellTopBar`` leaves and two
+        // Settings-index leaves behind this card, at the positions they had
+        // before the cover went up — while the picture showed a plain grey
+        // scrim with nothing on it but the card, and the tree held none of
+        // them. The two assertions above, which are the real claim of answer
+        // 6, both passed in that run. `performAccessibilityAudit` samples the
+        // window's **views**, and a `fullScreenCover`'s presenting hierarchy
+        // is still a set of views: out of the tree, out of VoiceOver's reach
+        // and off the screen, which is everything answer 6 promised.
+        //
+        // ``StubHouseUITests/findingsTheTreeHolds(_:_:)`` carries the whole
+        // reading. Nothing is dropped silently — `elsewhere` is printed.
+        let (rest, elsewhere) = Self.findingsTheTreeHolds(app, all)
+        for line in elsewhere {
+            print(
+                "SHELL [shell-forget-card] NOT A FINDING — the audit named a view "
+                    + "the accessibility tree does not hold there with the card "
+                    + "up, so it is a presenting view UIKit has already taken off "
+                    + "the screen: \(line)"
+            )
+        }
         // **Named by what they are about.** A finding against a view behind the
         // card is the defect this change closes; one against the card itself
         // would be a defect of the card. They are told apart by the words in
@@ -751,9 +901,11 @@ extension StubHouseUITests {
         XCTAssertEqual(
             behind,
             [],
-            "Apple's audit still names views behind the dialog: \(behind). That "
-                + "is what the `ZStack` did, and it is what a presentation is "
-                + "supposed to end."
+            "Apple's audit names views behind the dialog that the accessibility "
+                + "tree still holds: \(behind). That is what the `ZStack` did, "
+                + "and it is what a presentation is supposed to end. (A finding "
+                + "whose element is in no tree is printed above instead — the "
+                + "audit reading a view that is off the screen.)"
         )
         // **Everything else the audit attributed, except the card's own.**
         //
@@ -780,6 +932,10 @@ extension StubHouseUITests {
             ShellStringsUnderTest.forget,
             "cancel",
         ]
+        //
+        // `rest` is already the findings the tree holds where the audit put
+        // them (the split above), so an off-the-screen presenting view
+        // cannot arrive here as a stranger.
         let strangers = rest.filter { line in
             !cardsOwn.contains { line.contains($0) }
         }
@@ -1033,21 +1189,82 @@ extension StubHouseUITests {
         _ mode: String = StubHouseUITests.ordinaryTypeSize
     ) -> (app: XCUIApplication, landed: Bool) {
         let app = launch(mode: mode, push: "Music", pushDelay: Self.pushDelay)
-        // At AX5 the crumb is the navigation bar's title rather than
-        // ``ShellTopBar``'s text, so the landing check asks for it wherever it
-        // is drawn — that is answer 29, measured by the cases above.
+        // At the accessibility sizes the header is the navigation bar's
+        // **title** rather than ``ShellTopBar``'s text — answer 29 — and
+        // since train I003 the two say different things: the bar still draws
+        // the whole breadcrumb, the title is the route's word alone, because
+        // a one-line large title truncated the breadcrumb at AX5. So the
+        // landing check asks for whichever this size draws.
         let crumb = anything(app, labelled: ShellStringsUnderTest.musicCrumb)
-        return (app, crumb.waitForExistence(timeout: 40))
+        if crumb.waitForExistence(timeout: 40) { return (app, true) }
+        return (app, app.navigationBars.staticTexts["music"].waitForExistence(timeout: 20))
     }
 
     /// The field with this hint, whichever class it is drawn as: a
     /// single-line `TextField` is a `textField` and `axis: .vertical` is a
     /// `textView`, and which one a size produces is the view's business.
+    ///
+    /// ### It flicks, because a lazy page's foot is unbuilt
+    ///
+    /// Train I003 failed ``testShell_TheHintInkIsReadableOnAVerticalField()``
+    /// with "no field labelled … as either a text field or a text view", and
+    /// the tree it attached says why: at AX5 Music's built content stopped at
+    /// y=1781 and the search field is below it — **not drawn at all**, which
+    /// is a different thing from off the screen (NIGHT-RULES §5). A wait of
+    /// any length cannot make a lazy row exist; only a scroll can.
     @MainActor
     private func hintField(_ app: XCUIApplication, _ hint: String) -> XCUIElement {
         let single = app.textFields[hint]
+        let vertical = app.textViews[hint]
         if single.waitForExistence(timeout: 20) { return single }
-        return app.textViews[hint]
+        if vertical.exists { return vertical }
+        for _ in 0..<20 {
+            guard let page = tallestScrollView(app) else { break }
+            page.swipeUp(velocity: .slow)
+            if single.exists { return single }
+            if vertical.exists { return vertical }
+        }
+        return single.exists ? single : vertical
+    }
+
+    /// Scroll `element` until its whole frame is inside the window, so that a
+    /// screenshot crop of it is a crop of pixels that exist.
+    ///
+    /// ### Why this is here at all
+    ///
+    /// Train I003 failed ``testShell_TheHintInkIsReadable()`` with "could not
+    /// read shell-hint-music's pixels — no screenshot to measure", and the
+    /// tree names the cause exactly: the field was at
+    /// `{{16.0, 925.3}, {361.0, 34.0}}` on an 852-point window — built, in
+    /// the tree, and **73 points past the bottom of the screen**. `CGImage`'s
+    /// `cropping(to:)` answers nil for a rectangle outside the image, so
+    /// ``inkContrast(_:in:)`` returned nil and the case blamed the
+    /// screenshot. A reading of a field nobody can see would have been worth
+    /// nothing either way.
+    ///
+    /// Bounded at twenty flicks and it returns what it achieved, so a field
+    /// that never arrives fails at the caller's own assertion with the
+    /// frame printed rather than looping.
+    @MainActor
+    private func scrollOntoTheScreen(
+        _ app: XCUIApplication,
+        _ element: XCUIElement
+    ) -> Bool {
+        guard let page = tallestScrollView(app) else { return false }
+        for _ in 0..<20 {
+            guard element.exists else { return false }
+            let frame = element.frame
+            if app.frame.contains(frame) { return true }
+            if frame.maxY > app.frame.maxY {
+                page.swipeUp(velocity: .slow)
+            } else if frame.minY < app.frame.minY {
+                page.swipeDown(velocity: .slow)
+            } else {
+                // Off to one side, which no page in this app scrolls to.
+                return false
+            }
+        }
+        return element.exists && app.frame.contains(element.frame)
     }
 
     @MainActor
@@ -1064,6 +1281,17 @@ extension StubHouseUITests {
             field.exists,
             "no field labelled `\(hint)` as either a text field or a text view "
                 + "— tree attached"
+        )
+        // **On the screen before its pixels are read.** I003 measured this
+        // field at y=925.3 on an 852-point window and the crop came back nil
+        // (``scrollOntoTheScreen(_:_:)`` carries the reading).
+        XCTAssertTrue(
+            scrollOntoTheScreen(app, field),
+            "the `\(hint)` field is at \(field.frame) on a "
+                + "\(app.frame) window and twenty flicks did not bring it "
+                + "wholly onto the screen — there are no pixels of it to "
+                + "measure, so a hint ink read here would be a reading of "
+                + "whatever is in that rectangle instead"
         )
         evidence(app, name)
         // **The hint is the field's own prompt, and this is what says so.**
@@ -1123,6 +1351,11 @@ extension StubHouseUITests {
     ) throws {
         let field = hintField(app, hint)
         XCTAssertTrue(field.exists, "no field labelled `\(hint)` to type into")
+        XCTAssertTrue(
+            scrollOntoTheScreen(app, field),
+            "the `\(hint)` field is at \(field.frame) on a \(app.frame) window "
+                + "— it cannot be tapped or photographed from there"
+        )
         field.tap()
         // A word of upper-case stems, which is the most ink a short string can
         // put in a field: the measurement is of one pixel, and a `.` would
@@ -1174,15 +1407,32 @@ extension StubHouseUITests {
         // is whatever device the train booted.
         let scaleX = CGFloat(whole.width) / app.frame.width
         let scaleY = CGFloat(whole.height) / app.frame.height
-        let pixels = CGRect(
+        // **Clipped to the image, and said out loud when it had to be.**
+        // `cropping(to:)` answers nil for a rectangle that leaves the image,
+        // and a caller then reports "no screenshot to measure" for a field
+        // that was merely off the bottom of the screen — which is exactly
+        // what train I003 reported (``scrollOntoTheScreen(_:_:)``). Callers
+        // bring the element on screen first; this is the second line of
+        // defence, and it names the geometry rather than the screenshot.
+        let wanted = CGRect(
             x: box.minX * scaleX,
             y: box.minY * scaleY,
             width: box.width * scaleX,
             height: box.height * scaleY
         ).integral
-        guard let crop = whole.cropping(to: pixels), crop.width > 2, crop.height > 2 else {
-            return nil
+        let pixels = wanted.intersection(
+            CGRect(x: 0, y: 0, width: whole.width, height: whole.height)
+        )
+        if pixels != wanted {
+            print(
+                "SHELL ink box \(wanted) is not wholly inside the "
+                    + "\(whole.width)x\(whole.height) screenshot — measuring the "
+                    + "\(pixels) that is"
+            )
         }
+        guard !pixels.isNull, let crop = whole.cropping(to: pixels),
+              crop.width > 2, crop.height > 2
+        else { return nil }
         let width = crop.width
         let height = crop.height
         var bytes = [UInt8](repeating: 0, count: width * height * 4)

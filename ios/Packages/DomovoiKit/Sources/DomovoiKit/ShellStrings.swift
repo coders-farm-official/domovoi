@@ -33,6 +33,32 @@ public enum ShellStrings {
     /// The local shell's top bar. **Two leading spaces.**
     public static let localTopbar = "  domovoi / local media"
 
+    /// The local shell's **navigation title** at the accessibility sizes —
+    /// the breadcrumb without the house crumb in front of it.
+    ///
+    /// ### Why the title is not the breadcrumb
+    ///
+    /// A `UINavigationBar` large title is one line and UIKit truncates it
+    /// rather than wrapping. Train I003 photographed the result at AX5 on
+    /// three screens: `domovoi / h…` on Home
+    /// (`overnight-trains/I003/ALL/att/testShell_TheHeaderScrollsAwayOnHome/`
+    /// `shell-home-ax5…png`) and `domovoi / vi…` on a pushed Videos
+    /// (`…/testShell_TheHeaderScrollsAwayOnAPushedScreen/`
+    /// `shell-videos-ax5-after-a-swipe…png`) — an ellipsis, in the picture,
+    /// and Apple's audit named each one "Text clipped". The measured widths
+    /// say the same: the label is clamped at the width left beside the
+    /// toolbar pill (301.3 points for `domovoi / music`, 346.7 for
+    /// `domovoi / home`, 360.0 for `domovoi / local media`).
+    ///
+    /// ``ShellScrollAwayChrome``'s own note pre-registered the answer before
+    /// anything had been measured: "the route's label alone (`music`) in
+    /// place of the breadcrumb (`domovoi / music`), which is the same
+    /// information one word shorter". The house is still named — by the
+    /// toolbar pill's address and by ``ShellTopBar`` at every size below the
+    /// accessibility ones. This is the local shell's half of that; the
+    /// workspace's is `WorkspaceView.screenTitle(for:)`.
+    public static let localMediaTitle = "local media"
+
     /// The server pill with no server saved, and its accessibility label.
     public static let connectPill = "connect"
     /// The pill's accessibility label when a server is saved.

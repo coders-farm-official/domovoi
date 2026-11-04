@@ -98,8 +98,14 @@ struct LocalShellView: View {
         if headerFold.putsTheHeaderInsideTheStack {
             NavigationStack {
                 screen
+                    // **The title, not the breadcrumb.** At AX5 a large title
+                    // is one line and UIKit truncates it: train I003's
+                    // picture of this shell reads `domovoi / local media` at
+                    // the full 360 points with Apple's audit calling it
+                    // clipped. ``ShellStrings/localMediaTitle`` carries the
+                    // measurement and the reason.
                     .shellScrollAwayChrome(
-                        crumb: ShellStrings.localTopbar,
+                        crumb: ShellStrings.localMediaTitle,
                         pill: model.chrome.pill,
                         onPill: { model.openConnection() }
                     )

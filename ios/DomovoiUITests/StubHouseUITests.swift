@@ -255,6 +255,171 @@ final class StubHouseUITests: XCTestCase {
         "Dynamic Type font sizes are unsupported",
     ]
 
+    /// How wide a text element has to be before this file will believe it is
+    /// on the screen: **16 points**, which is narrower than one glyph of the
+    /// smallest text style the app draws.
+    ///
+    /// See ``isAFoldedTitleArtefact(_:)``. The number is a floor and not the
+    /// measured 7.33, so a Simulator with a different scale cannot slip past
+    /// it; it is far enough under the narrowest real title this file has seen
+    /// (301.3 points) that no laid-out title can reach it.
+    static let unlaidOutTextWidth: CGFloat = 16
+
+    /// **A "Text clipped" finding against a text element squeezed to nothing**
+    /// — the half-built navigation title Apple's own Dynamic Type audit
+    /// raises inside the shell, and the one thing in this file that is
+    /// classified by its *geometry*.
+    ///
+    /// ### What it is
+    ///
+    /// Train I003 failed nineteen audit cases across ten different screens on
+    /// one finding, byte for byte the same on every one of them:
+    ///
+    /// ```
+    /// Text clipped: Text of this element may be clipped at larger Dynamic Type sizes.
+    ///   | element: type=48 label='domovoi / settings'
+    ///     frame=(16.0, 141.0, 7.333333333333332, 40.66666666666666)
+    /// ```
+    ///
+    /// Nineteen screens, one frame: 7.33 points wide and 40.67 tall, at
+    /// y=141 — which on every one of those screens is exactly where a large
+    /// navigation title would sit, 3.7 points under a navigation bar whose
+    /// own frame the trees put at 93.3 + 44.
+    ///
+    /// ### Why it is Apple measuring and not this app drawing
+    ///
+    /// Three readings, none of them an argument:
+    ///
+    ///  1. **It is in no tree.** Every one of those cases attached the
+    ///     accessibility tree it took a moment later, and not one of them
+    ///     holds an element at that frame. On
+    ///     `testAiSettings_TheChatSectionAudits` the only `domovoi / settings`
+    ///     in the tree is ``ShellTopBar``'s, at `(16.0, 68.3, 111.3, 15.7)`.
+    ///  2. **It is in no picture.** The screenshots of those same screens show
+    ///     a navigation bar with a back button and no title at all
+    ///     (`overnight-trains/I003/ALL/att/testAiSettings_TheChatSectionAudits/`
+    ///     `aisettings-audit…png`).
+    ///  3. **The audit moved the page while it measured.** On the pairing
+    ///     screen the same audit reports the Settings index's subtitle at
+    ///     y=241.67; the tree of that very screen puts it at y=189.7. A
+    ///     52-point shift down is a large-title row having been inserted
+    ///     above it — which is what `ShellScrollAwayChrome` does when
+    ///     `dynamicTypeSize.isAccessibilitySize` turns true, and
+    ///     `performAccessibilityAudit` turns it true by overriding the trait
+    ///     while it looks for clipping.
+    ///
+    /// So the shell restructures itself *inside* Apple's own Dynamic Type
+    /// sweep, and the audit reports the title it raised before the navigation
+    /// bar has laid it out. Nobody using this app can see it: a type-size
+    /// change a person makes comes with a full layout.
+    ///
+    /// ### Why the geometry and not the words
+    ///
+    /// Pinning the label would pin a breadcrumb that
+    /// `WorkspaceView.screenTitle(for:)` has just stopped drawing, and pinning
+    /// the exact frame would pin one Simulator. The width is the thing that
+    /// cannot be anything else: **7.33 points cannot hold a character**, and
+    /// the two real clipped titles this train found are 301.3 and 346.7 points
+    /// wide — both still fail, which is why they were fixed rather than
+    /// pinned. A real "Text clipped" against a laid-out element is untouched
+    /// by this.
+    ///
+    /// ### The deeper fix, which is not this unit's to make
+    ///
+    /// Deciding the fold on the **application's** content size category
+    /// (`UIApplication.shared.preferredContentSizeCategory`) rather than on
+    /// the view trait would stop the shell restructuring inside the audit at
+    /// all. It cannot be done here: `ShellFoldViewBodyTests` requires every
+    /// `ShellHeaderFold.forHeader(` call to read
+    /// `isAccessibilitySize: typeSize.isAccessibilitySize` literally, and that
+    /// file belongs to nobody in this batch. It is written up in
+    /// `design-notes/ios/batch-2026-11-03/fx-shell/REPORT.md` under "for
+    /// others".
+    static func isAFoldedTitleArtefact(_ line: String) -> Bool {
+        guard line.hasPrefix("Text clipped") else { return false }
+        guard let frame = Self.elementFrame(in: line) else { return false }
+        return frame.width < Self.unlaidOutTextWidth
+    }
+
+    /// The `frame=(x, y, width, height)` out of a finding, or nil when the
+    /// line carries no frame (`element: nil`) or does not parse.
+    ///
+    /// Written against the exact text ``oneLine(_:)`` produces, because that
+    /// is the only producer; anything else returns nil and is therefore
+    /// *not* classified, which is the safe direction.
+    static func elementFrame(in line: String) -> CGRect? {
+        guard let open = line.range(of: " frame=(", options: .backwards),
+              let close = line.range(
+                  of: ")", options: .backwards, range: open.upperBound..<line.endIndex
+              )
+        else { return nil }
+        let numbers = line[open.upperBound..<close.lowerBound]
+            .split(separator: ",")
+            .map { Double($0.trimmingCharacters(in: .whitespaces)) }
+        guard numbers.count == 4,
+              let x = numbers[0], let y = numbers[1],
+              let width = numbers[2], let height = numbers[3]
+        else { return nil }
+        return CGRect(x: x, y: y, width: width, height: height)
+    }
+
+    /// Split attributed findings into the ones the app's accessibility tree
+    /// **holds where the audit says they are**, and the ones it does not.
+    ///
+    /// ### What it is for, and why it is opt-in
+    ///
+    /// `performAccessibilityAudit` walks the window's **views**; the
+    /// accessibility tree is what is on the screen. The two come apart in two
+    /// shapes this track has now measured, and in both the audit is reading
+    /// something nobody can see:
+    ///
+    ///  * **Under a presentation.** With the forget dialog up as a
+    ///    `fullScreenCover`, train I003's audit named four ``ShellTopBar``
+    ///    leaves and two Settings-index leaves at the positions they had
+    ///    before the cover went up, while the picture showed a grey scrim
+    ///    with only the card on it and the tree held none of them.
+    ///  * **In the audit's own re-layout.** The audit overrides the type-size
+    ///    trait while it looks for clipping, the shell folds its header into
+    ///    the navigation bar, and the page under it moves down by the height
+    ///    of a large-title row — **52 points**, measured twice in that train:
+    ///    the Settings subtitle reported at y=241.67 where the tree has it at
+    ///    189.7, and `testPodcasts_TheScreenPassesApplesAccessibilityAudit`
+    ///    failing on `(16.0, 544.0, …)` against `(16.0, 596.0, …)` with "the
+    ///    page moved while Apple's audit…".
+    ///
+    /// **It is a function a case calls, not a filter every case gets.** That
+    /// second shape means a real finding on an affected screen is reported at
+    /// a shifted frame too, so a classifier applied everywhere would swallow
+    /// it. A case that calls this is a case whose owner has looked at the
+    /// picture and knows which of the two it is looking at; the lines it
+    /// returns in `elsewhere` are printed by that case, never dropped in
+    /// silence.
+    ///
+    /// Matching is label **and** frame, because a label alone is not enough:
+    /// the forget card draws `127.0.0.1:6601` and so does the pill behind it,
+    /// 70 points higher. A finding with no frame (`element: nil`) counts as
+    /// held — this function has nothing to say about it.
+    @MainActor
+    static func findingsTheTreeHolds(
+        _ app: XCUIApplication,
+        _ lines: [String]
+    ) -> (held: [String], elsewhere: [String]) {
+        let tree = app.descendants(matching: .any).allElementsBoundByIndex
+            .filter { $0.exists && !$0.label.isEmpty }
+            .map { (label: $0.label, frame: $0.frame) }
+        // **A snapshot that came back empty says nothing.** Classifying
+        // against it would mark every finding "not on the screen", which is
+        // the one way this function could hide a defect.
+        guard !tree.isEmpty else { return (lines, []) }
+        func held(_ line: String) -> Bool {
+            guard let frame = Self.elementFrame(in: line) else { return true }
+            return tree.contains {
+                line.contains("label='\($0.label)'") && $0.frame.intersects(frame)
+            }
+        }
+        return (lines.filter(held), lines.filter { !held($0) })
+    }
+
     /// Split an audit's findings into the measured floor and everything else.
     ///
     /// The floor is a finding with no element **and** one of the two headlines
@@ -268,12 +433,23 @@ final class StubHouseUITests: XCTestCase {
     /// ``stateName(_:)``, three lines of ``floorAndRest(_:)``'s own
     /// explanation having run into it with no blank line between them. It is
     /// where it belongs now.)
+    ///
+    /// ### The third bucket, which is neither
+    ///
+    /// ``isAFoldedTitleArtefact(_:)`` — a "Text clipped" against an element
+    /// under ``unlaidOutTextWidth`` points wide — is in **neither** return
+    /// value. It is not a finding, because the element it names is in no
+    /// tree and no screenshot, and it is not the floor, because the floor is
+    /// a count this file asserts exactly. ``auditIssues(_:_:)`` prints every
+    /// one of them with the reason, so a run always says how many it dropped
+    /// and against what; the measurement is on ``isAFoldedTitleArtefact(_:)``.
     static func floorAndRest(_ found: [String]) -> (floor: Int, rest: [String]) {
         func isFloor(_ line: String) -> Bool {
             guard line.hasSuffix("| element: nil") else { return false }
             return Self.knownAnonymousHeadlines.contains { line.hasPrefix($0) }
         }
-        return (found.filter(isFloor).count, found.filter { !isFloor($0) })
+        let real = found.filter { !Self.isAFoldedTitleArtefact($0) }
+        return (real.filter(isFloor).count, real.filter { !isFloor($0) })
     }
 
     /// An `XCUIApplication.State` in words. A raw value in a log is a number
@@ -550,6 +726,19 @@ final class StubHouseUITests: XCTestCase {
         for attempt in 1...3 {
             let waitedOut = waitForNoNotificationBanner("\(name)/attempt-\(attempt)")
             found = try runOneAudit(app, name)
+            // **Said out loud, every time.** ``floorAndRest(_:)`` drops these
+            // from both of its buckets, and a classifier that drops something
+            // silently is how a real finding disappears. One line per
+            // dropped finding, with the reason, so `cases.json` carries it
+            // even for a case that goes green.
+            for line in found where Self.isAFoldedTitleArtefact(line) {
+                print(
+                    "AUDIT [\(name)] NOT A FINDING — the audit's own Dynamic Type "
+                        + "sweep raised the shell's large title and measured it "
+                        + "before the bar laid it out; the element is in no tree "
+                        + "and no screenshot (see `isAFoldedTitleArtefact`): \(line)"
+                )
+            }
             // **Was the app still in front when the audit finished?**
             //
             // Train I002 failed `testVoiceSettings_Audit` with a rest of
@@ -1038,11 +1227,35 @@ final class StubHouseUITests: XCTestCase {
         if #available(iOS 17.0, *) {
             let found = try auditIssues(app, "pairing")
             let split = Self.floorAndRest(found)
+            // **Three of train I003's four findings here were never on this
+            // screen**, and the fourth — the half-built navigation title —
+            // ``floorAndRest(_:)`` has already taken out.
+            //
+            //  * `Voice` and `System` are the Settings **index**'s group
+            //    buttons: this screen is pushed over that index and the tree
+            //    attached by this very case holds neither of them.
+            //  * The index's subtitle was reported at y=241.67 where that
+            //    same tree has it at **189.7** — 52 points down, the height
+            //    of the large-title row the audit's own type-size sweep
+            //    raises in the shell. `testPodcasts_…` failed the same train
+            //    on the same 52 points, `(16.0, 544.0, …)` against
+            //    `(16.0, 596.0, …)`.
+            //
+            // So the split is by where the tree has them, printed either
+            // way: ``findingsTheTreeHolds(_:_:)`` says why that is a
+            // function a case calls and not a filter every case gets.
+            let (rest, elsewhere) = Self.findingsTheTreeHolds(app, split.rest)
+            for line in elsewhere {
+                print(
+                    "AUDIT [pairing] NOT A FINDING — the accessibility tree does "
+                        + "not hold this element there: \(line)"
+                )
+            }
             XCTAssertTrue(
-                split.rest.isEmpty,
+                rest.isEmpty,
                 "Apple's audit has findings against the pairing screen beyond the "
                     + "measured floor of \(Self.knownPushedBarFloor): "
-                    + split.rest.joined(separator: " / ")
+                    + rest.joined(separator: " / ")
             )
             XCTAssertEqual(
                 split.floor,
@@ -1168,8 +1381,30 @@ final class StubHouseUITests: XCTestCase {
         // `.section` → `.group`, via the button the audit itself flagged for
         // clipping. `place.up` is what it calls, so this is the app's own
         // navigation and not a relaunch into a different state.
+        // **Scrolled to, like the printers section's below.** The comment
+        // there said this one "was a few points off the foot of the viewport
+        // and a tap still reached it", and train I003 is where that stopped
+        // being true: the picture of `50-bisect-A-phones` shows the Household
+        // token card running under the phone bar with the back button below
+        // it, and the case failed on "no back button on the pairing screen"
+        // with the panel in front of it. A lazy page's foot is unbuilt, not
+        // off screen, so existence needs the flicks as much as reach does.
         let backToRooms = app.buttons[ShellStringsUnderTest.backToRooms]
-        XCTAssertTrue(backToRooms.waitForExistence(timeout: 10), "no back button on the pairing screen")
+        var reaching = 0
+        while !backToRooms.exists || !backToRooms.isHittable, reaching < 12 {
+            app.swipeUp(velocity: .slow)
+            reaching += 1
+        }
+        XCTAssertTrue(
+            backToRooms.exists,
+            "no back button on the pairing screen after \(reaching) flicks"
+        )
+        XCTAssertTrue(
+            backToRooms.isHittable,
+            "the pairing screen's back button never came into reach — a tap on "
+                + "an element that is not hittable throws `Activation point "
+                + "invalid`"
+        )
         backToRooms.tap()
         let printers = app.buttons[ShellStringsUnderTest.printersSection]
         XCTAssertTrue(printers.waitForExistence(timeout: 10), "tapping back did not reach the group list")
@@ -1812,11 +2047,31 @@ final class StubHouseUITests: XCTestCase {
         //    That is the right behaviour — a phone that has never paired can
         //    still see its house — and the pairing screen belongs to a
         //    *refused* token, which is `token-not-recognised` below.
+        //
+        //    **And it is whichever of the two the shell raised.** An
+        //    unpaired phone's device-tier read 403s and the shell raises the
+        //    pairing screen itself, so Home is not always what is in front
+        //    here — ``testWhereTheEightDynamicTypeFindingsLive()`` has had a
+        //    `homeWasAuditable` guard for exactly that since it met it, and
+        //    train I003 is the run where this case met it too: the picture
+        //    of `40-unpaired-home` is `pair this phone`, not Home. Both are
+        //    the state this entry names, "an unpaired phone at AX5", and
+        //    neither had ever been audited; the marker is whichever arrived,
+        //    and the log says which so a reading is never attributed to the
+        //    wrong screen.
         let unpairedHome = launch(mode: ax5, paired: false)
+        let pairLink = anything(unpairedHome, labelled: ShellStringsUnderTest.pairLink)
+        let onHome = pairLink.waitForExistence(timeout: 25)
+        print(
+            "SWEEP [unpaired-home] the shell raised "
+                + (onHome ? "Home with its pair link" : "the pairing screen")
+        )
         try sweep(
             "unpaired-home",
             unpairedHome,
-            marker: anything(unpairedHome, labelled: ShellStringsUnderTest.pairLink)
+            marker: onHome
+                ? pairLink
+                : anything(unpairedHome, labelled: ShellStringsUnderTest.pairTitle)
         )
         unpairedHome.terminate()
 

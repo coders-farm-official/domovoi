@@ -153,7 +153,7 @@ struct WorkspaceView: View {
                         // the control for leaving Videos was named after
                         // Videos, and the root's own large title was wrong
                         // through every push and pop animation (review 1, S1).
-                        crumb: crumb(for: startRoute),
+                        crumb: screenTitle(for: startRoute),
                         pill: model.chrome.pill,
                         onPill: { model.openConnection() },
                         drawn: AuditStrip.active != .topBar
@@ -192,6 +192,40 @@ struct WorkspaceView: View {
     /// value too few.
     private func crumb(for route: Route) -> String {
         "\(ShellStrings.homeCrumb) / \(route.label.lowercased())"
+    }
+
+    /// One screen's **navigation title** at the accessibility sizes: the
+    /// route's own label, and not ``crumb(for:)``.
+    ///
+    /// ### The breadcrumb did not fit, and the picture says so
+    ///
+    /// A `UINavigationBar` large title is one line, and UIKit truncates what
+    /// does not fit instead of wrapping. Train I003 photographed it at AX5:
+    /// `domovoi / vi…` on a pushed Videos
+    /// (`overnight-trains/I003/ALL/att/`
+    /// `testShell_TheHeaderScrollsAwayOnAPushedScreen/`
+    /// `shell-videos-ax5-after-a-swipe…png`) and `domovoi / h…` on Home — an
+    /// ellipsis drawn on the screen, with Apple's audit reporting "Text
+    /// clipped" against each. The trees agree: the label is clamped to
+    /// whatever is left beside the toolbar pill (301.3 points for
+    /// `domovoi / music` against a 393-point window).
+    ///
+    /// `minimumScaleFactor` is rejected here as everywhere else, and UIKit
+    /// gives no way to wrap a large title. So the title is shortened, which
+    /// is the answer ``ShellScrollAwayChrome``'s own note registered before
+    /// any of this was measured. Every route's label is ten characters or
+    /// fewer (`Route.label`), so each fits that width at AX5 with room.
+    ///
+    /// **Only the title changes.** ``ShellTopBar`` keeps the full breadcrumb
+    /// at every size below the accessibility ones (``crumb``), and the
+    /// toolbar pill still carries the server's address, so nothing that
+    /// named the house has stopped naming it.
+    ///
+    /// It is also what the pushed screen's back button is built from, so
+    /// VoiceOver now says "back to home" where it said "back to domovoi /
+    /// home" — shorter, and the same place.
+    private func screenTitle(for route: Route) -> String {
+        route.label.lowercased()
     }
 
     /// The stack's root. ``AuditStrip/root`` is the only way to audit a pushed
@@ -241,7 +275,7 @@ struct WorkspaceView: View {
         // pushed over it — this title is what that screen's back button will
         // be named after.
         .shellScrollAwayChrome(
-            crumb: crumb(for: route),
+            crumb: screenTitle(for: route),
             pill: model.chrome.pill,
             onPill: { model.openConnection() },
             drawn: AuditStrip.active != .topBar
