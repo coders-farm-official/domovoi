@@ -367,8 +367,8 @@ struct ManualView: View {
     /// `ManualScreen`, its saveable goes with it, and coming back starts again
     /// at `"start"`. Here the manual is covered, not destroyed (``hold``'s
     /// doc), so its model keeps `place` and coming back lands on the piece
-    /// the link was in. Recorded for the Android defects ledger in this
-    /// unit's report (`design-notes/ios/batch-2026-11-05/manual/REPORT.md`, revision 1).
+    /// the link was in. A candidate for the Android defects ledger
+    /// (`design-notes/ios/ANDROID-DEFECTS-FOUND-BY-IOS.md`), not yet entered.
     ///
     /// While a level was a pushed screen this collapsed the manual to Start
     /// here first (DECISIONS D32B), because a route pushed underneath live
