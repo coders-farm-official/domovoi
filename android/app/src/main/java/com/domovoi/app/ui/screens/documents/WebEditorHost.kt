@@ -50,6 +50,7 @@ import com.domovoi.app.AppContainer
 import com.domovoi.app.net.CleartextPolicy
 import com.domovoi.app.ui.components.LoadingState
 import com.domovoi.app.ui.theme.Domovoi
+import kotlin.math.roundToInt
 import kotlinx.coroutines.runBlocking
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
@@ -215,6 +216,14 @@ internal fun WebEditorHost(app: AppContainer, relPath: String, kind: WebEditorKi
                 factory = { ctx ->
                     WebView(ctx).apply {
                         lockDown(settings)
+                        // The document's writing follows the system text-size
+                        // setting (owner answer 72). A WebView's textZoom is
+                        // 100 whatever the system font scale is, so the host
+                        // has to pass it in; the page's own `-apple-system-body`
+                        // rule is Apple-only and is dropped by this engine.
+                        // Only the editor, never the print copy below: a
+                        // printed page is paper and keeps the page's sizes.
+                        settings.textZoom = (100f * ctx.resources.configuration.fontScale).roundToInt()
                         setBackgroundColor(android.graphics.Color.TRANSPARENT)
                         // The page handles every gesture itself (the sheet scrolls
                         // its grid under a dragging finger): no view around it may

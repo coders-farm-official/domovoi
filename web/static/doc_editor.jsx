@@ -456,7 +456,10 @@
 .de-paper p { margin: 0 0 .7em; }
 .de-paper a { color: #1a5fb4; text-decoration: underline; cursor: text; }
 .de-paper blockquote { margin: 1em 0; padding: .2em 0 .2em 1em; border-left: 3px solid #c8c8c8; color: #555; }
-.de-paper pre { background: #f5f5f4; border-radius: 6px; padding: 12px 14px; overflow-x: auto; font: 14px/1.5 ui-monospace, "JetBrains Mono", Consolas, monospace; color: #1d1d1f; }
+/* .875em, not 14px: at the page's own 16px this is the same 14px it always
+   was, and on a phone it follows the writing size with everything else
+   (owner answer 72). Headings, code spans and quotes were already em. */
+.de-paper pre { background: #f5f5f4; border-radius: 6px; padding: 12px 14px; overflow-x: auto; font: .875em/1.5 ui-monospace, "JetBrains Mono", Consolas, monospace; color: #1d1d1f; }
 .de-paper code { font-family: ui-monospace, "JetBrains Mono", Consolas, monospace; font-size: .92em; background: #f1f1ef; border-radius: 4px; padding: .1em .3em; }
 .de-paper pre code { background: none; padding: 0; font-size: inherit; }
 .de-paper hr { border: 0; border-top: 1px solid #d0d0d0; margin: 1.5em 0; }
@@ -521,6 +524,37 @@
   .de-paper { padding: 20px 16px 80px; box-shadow: none; min-height: 100%; max-width: none; flex: 1 0 auto; width: 100%; }
   .de-paper .ProseMirror { min-height: 60vh; }
   .de-fig[data-align="left"], .de-fig[data-align="right"] { float: none; margin: 1em auto; }
+}
+/* The document's writing follows the platform's text-size setting on a phone
+   (owner answer 72, under his rule 2). The phone app shows THIS page in a
+   web view rather than a native editor (answer 21), so the size has to come
+   from here or the two editors drift apart.
+
+   font: -apple-system-body is the mechanism WKWebView honours: it resolves to
+   the current Dynamic Type body size and re-resolves when the setting changes
+   while the editor is open, with no host code and no bridge message. It
+   carries the system family with it, so the family is put straight back to
+   the document's own stack on the next line (a document's text must not
+   change shape with a phone setting) and the line height back to 1.6. On
+   every non-Apple engine -apple-system-body is an invalid value, so the whole
+   shorthand is dropped and the 16px rule above still stands -- which is why
+   Android's half of this is textZoom in the host (WebEditorHost.kt) and not
+   more CSS.
+
+   Gated on pointer: coarse as well as the width, because -apple-system-body
+   on macOS is 13px: a desktop Safari window dragged narrow would otherwise
+   SHRINK the text. Only a touch screen under 700px gets this, so a desktop
+   browser at any size is untouched.
+
+   Only the writing scales. The toolbar, the note strip and the pop-ups keep
+   their fixed sizes (they already set their own px) and the toolbar keeps
+   scrolling sideways, so a bigger document does not cost the controls.
+
+   NOTE: no backticks in here. This whole stylesheet is a JS template
+   literal, and one in a comment ends the string. */
+@media (max-width: 700px) and (pointer: coarse) {
+  .de-paper .ProseMirror { font: -apple-system-body;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; line-height: 1.6; }
 }
 `;
   const injectCss = () => {
