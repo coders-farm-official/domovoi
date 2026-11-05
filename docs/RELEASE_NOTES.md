@@ -20,6 +20,11 @@ is not the admin password, and offers one of your own. The phone app
 shows a "this Domovoi isn't set up yet" screen for an unclaimed server
 instead of a workspace.
 
+A browser that isn't connected to a claimed Domovoi is now greeted once
+with "Welcome! Enter this home's household token to connect this
+browser", with "Where do I find it?" and **Not now**; Home then shows a
+**Connect this browser** button instead of a faint "pair this phone" line.
+
 ## 2026-11-02 — a plugin upgrade may bump its own packages
 
 Upgrading a plugin whose new version pins a newer copy of its own tool
