@@ -337,10 +337,15 @@ struct ManualThingsRow: View {
         // `labels.net.<value>` — a nested label, and **nothing drawn when the
         // document has no word for this value** (`:1000`), which is the
         // Kotlin's `if (words != null)`.
+        //
+        // **Grey, whatever the value** — the Kotlin's bare `Pill(words)`
+        // (`ManualScreen.kt:992`), whose tone defaults to `Tone.Idle`. Amber
+        // is the `admin` word's alone (``ManualTone/warn``); a network badge
+        // drawn on it said "admin" in colour where Android does not.
         if let net = handler.requiresNetwork {
             let words = doc.label("net", net)
             if !words.isEmpty {
-                ManualPill(label: words, tone: net == "yes" ? .warn : .idle)
+                ManualPill(label: words, tone: .idle)
             }
         }
     }

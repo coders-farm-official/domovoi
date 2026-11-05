@@ -16,17 +16,12 @@ import XCTest
 ///
 ///  * `ManualStrings.Fallback.checklistUnknown` back to `""` — answer 33 dead,
 ///    the third-state circle unlabelled on an older server;
-///  * `ManualModel.levels` returning `[]` always — the chain answer 32 needs,
-///    broken. **Read this one carefully, because what it breaks has changed
-///    twice.** When the sabotage was written the chain was the path of a
-///    `NavigationStack` of the manual's own; train I003 showed that that
-///    stack took the route's screen away in all twenty UI cases and
-///    `fx-manual` (`6d071463`) removed it, which left the chain with no
-///    caller at all. It has one again: `ManualLevelHost` mounts one screen
-///    per entry on the **shell's** stack, so an always-empty chain is a
-///    manual that never leaves Start here. These cases are the arithmetic
-///    under that mounting; the gesture itself can only be driven by a UI
-///    case on a train (`testManual_ASwipeFromAPieceGoesUpToItsTopic`);
+///  * `ManualModel.levels` returning `[]` always — the chain answer 32's
+///    pushed levels were mounted from. Answer 73 replaced that stack with one
+///    screen holding every level, so the chain is gone; what a swipe back
+///    does is now ``manualBack(at:manualIsOnTop:)``, pinned by
+///    ``testASwipeBackGoesUpExactlyOneLevel``, and the gesture itself is a
+///    train's (`testManual_ASwipeFromAPieceGoesUpToItsTopic`);
 ///  * `manualRelativeLuminance` without its gamma expansion — every contrast
 ///    ratio the wash's doc comment states silently wrong.
 ///
@@ -39,14 +34,13 @@ import XCTest
 @MainActor
 final class ManualAnswersTests: XCTestCase {
 
-    // MARK: - answer 32: the chain of levels
+    // MARK: - answers 73 and 74: one screen, and the way back up
 
-    /// A model with no document, which is all these need: ``ManualModel/levels``
+    /// A model with no document, which is all these need: ``ManualModel/up()``
     /// and ``ManualModel/parent(of:)`` are a walk over ``ManualPlace`` and the
     /// document is consulted for exactly one thing — whether a piece's topic
     /// is a topic the document has. The branch that says it *is* needs a
-    /// served document and is covered by
-    /// `ManualModelTests.testTheThreeLevelsAndTheWayBackUp`, through `up()`.
+    /// served document and is covered by ``testASwipeBackGoesUpExactlyOneLevel``.
     private func rig() -> ManualModel {
         let store = InMemoryShellStore(serverURL: "https://house.example", token: "household-abc")
         let container = AppContainer(
@@ -64,81 +58,19 @@ final class ManualAnswersTests: XCTestCase {
         return ManualModel(in: container, visibility: { seen }, cache: ManualCacheBox())
     }
 
-    /// The chain the screen's levels are mounted from, and what a pop writes
-    /// back.
-    ///
-    /// **This is the case the sabotage `levels -> []` fails**, and it is a
-    /// claim about the shipping screen again: ``ManualLevelHost`` reads this
-    /// chain for which level each pushed screen draws and for how many of
-    /// them there are, so an always-empty chain is a manual that cannot
-    /// leave Start here. What it still does not say is that the *gesture*
-    /// works — a `NavigationStack` cannot be driven from a package test, and
-    /// `testManual_ASwipeFromAPieceGoesUpToItsTopic` on the next train is
-    /// what reads that.
-    func testTheLevelChainIsWhatTheStackPushesAndPops() {
-        let model = rig()
-
-        XCTAssertEqual(
-            [ManualPlace](), model.levels,
-            "Start here is the stack's root, so its path is empty"
-        )
-
-        // Written as a push, read back as the chain.
-        model.open(levels: [.map])
-        XCTAssertEqual(.map, model.place)
-        XCTAssertEqual([.map], model.levels, "the map is one screen deep")
-
-        model.open(levels: [.map, .topic("rooms-and-devices")])
-        XCTAssertEqual(.topic("rooms-and-devices"), model.place)
-        XCTAssertEqual(
-            [.map, .topic("rooms-and-devices")],
-            model.levels,
-            "a cluster is the map with a topic on top of it"
-        )
-
-        model.open(levels: [.map, .topic("rooms-and-devices"), .piece("pi-room")])
-        XCTAssertEqual(.piece("pi-room"), model.place)
-        XCTAssertEqual(
-            // No document here, so this piece's topic is not a topic the
-            // document has and its parent is the map — the `else` arm of
-            // ``ManualModel/parent(of:)``, which is also what a piece opened
-            // on a server whose document lost its topic gets.
-            [.map, .piece("pi-room")],
-            model.levels,
-            "a piece is a screen on top of whatever its parent is"
-        )
-
-        // A pop: the shorter chain goes back through the binding and the
-        // level on top of it is where the screen now is.
-        model.open(levels: [.map])
-        XCTAssertEqual(.map, model.place, "popping to one level is the map")
-        model.open(levels: [])
-        XCTAssertEqual(.start, model.place, "popping to the root is Start here")
-        XCTAssertEqual([ManualPlace](), model.levels)
-        model.stop()
-    }
-
-    /// Every way up is one step of the same walk.
-    ///
-    /// `zoom out`, a tap on a crumb and — when the shared change lands — a
-    /// pop through ``ManualModel/open(levels:)`` all have to agree; on
-    /// Android the system back is a fourth caller of the same `up()`
-    /// (`ManualScreen.kt:315`), which is the gesture iOS does not have yet.
-    ///
-    /// ``ManualModel/up()`` is one step of the same walk ``ManualModel/levels``
-    /// takes, which is the whole reason `parent(of:)` was factored out of it:
-    /// two sources of truth for "the level above this one" is the defect this
-    /// app has paid for twice.
+    /// Every way up is one step of the same walk: `zoom out`, the swipe and
+    /// VoiceOver's escape all call ``ManualModel/up()``, and it lands on
+    /// ``ManualModel/parent(of:)``.
     func testEveryWayUpIsTheSameWayUp() {
         let model = rig()
         for place in [ManualPlace.piece("pi-room"), .topic("rooms-and-devices"), .map, .start] {
-            model.open(levels: [place])
+            model.restore(saved: place.saved)
             let parent = model.parent(of: place)
             model.up()
             XCTAssertEqual(
                 parent,
                 model.place,
-                "`zoom out` from \(place) did not land where the chain says it should"
+                "`zoom out` from \(place) did not land on the level above it"
             )
         }
 
@@ -148,343 +80,172 @@ final class ManualAnswersTests: XCTestCase {
             .map, model.parent(of: .topic("anything")),
             "a topic always zooms out to the map"
         )
-
-        // Bounded: four levels is the whole chain, whatever is asked for.
-        model.open(levels: [.piece("pi-room")])
-        XCTAssertLessThanOrEqual(model.levels.count, 4, "the walk is capped")
         model.stop()
     }
 
-    // MARK: - answer 32, rebuilt: the levels as screens on the shell's stack
-
-    /// Which level the screen at each depth draws, and how many screens there
-    /// are.
+    /// **Answer 74**: what a swipe back is, at every level — and the same
+    /// answer at every text size, because the decision takes no size at all.
     ///
-    /// ``ManualLevelStack`` is the whole of what `ManualLevelHost` knows: the
-    /// host at depth 0 is the route's own screen (Start here) and presents
-    /// depth 1 while the chain is longer than 0, and so on. A UI case on a
-    /// train is the only thing that can drive the gesture; this is the sum
-    /// underneath it, and the sum is where an off-by-one would live.
-    func testWhichLevelEachPushedScreenDraws() {
-        let cluster: [ManualPlace] = [.map, .topic("rooms-and-devices")]
-
-        XCTAssertEqual(
-            .start, ManualLevelStack.level(at: 0, in: cluster),
-            "depth 0 is the route's own screen, which is always Start here"
-        )
-        XCTAssertEqual(.map, ManualLevelStack.level(at: 1, in: cluster))
-        XCTAssertEqual(.topic("rooms-and-devices"), ManualLevelStack.level(at: 2, in: cluster))
-        XCTAssertNil(
-            ManualLevelStack.level(at: 3, in: cluster),
-            "a depth the chain does not reach is a screen on its way out, and "
-                + "it keeps drawing what it drew — nil is how the host knows "
-                + "to"
-        )
-
-        // Start here: nothing is pushed, so nothing above depth 0 is drawn
-        // and the swipe is the route's own. That is the half of answer 32
-        // Android spells `BackHandler(enabled = at != "start")`.
-        XCTAssertFalse(
-            ManualLevelStack.presentsDeeper(at: 0, in: []),
-            "Start here pushes nothing, so a swipe there leaves the manual"
-        )
-        XCTAssertTrue(ManualLevelStack.presentsDeeper(at: 0, in: cluster))
-        XCTAssertTrue(ManualLevelStack.presentsDeeper(at: 1, in: cluster))
-        XCTAssertFalse(
-            ManualLevelStack.presentsDeeper(at: 2, in: cluster),
-            "the deepest screen of the chain presents nothing"
-        )
-
-        // The cap is the recursion's, and it is the same walk `levels` caps.
-        let tooDeep: [ManualPlace] = [.map, .topic("a"), .piece("b"), .piece("c")]
-        XCTAssertFalse(
-            ManualLevelStack.presentsDeeper(at: ManualLevelStack.maxDepth, in: tooDeep),
-            "nothing is presented past the cap, whatever the chain says"
-        )
-    }
-
-    /// **The two caps agree, and this is what their disagreeing would cost.**
+    /// Android's `BackHandler(enabled = at != "start") { up() }`
+    /// (`ManualScreen.kt:315`): up a level from the map, a cluster and a
+    /// piece, out of the screen from Start here. ``manualBack(at:manualIsOnTop:)``
+    /// is the whole of what `ManualBackSwipe` asks before it begins, and
+    /// VoiceOver's escape asks the same.
     ///
-    /// Review round 1's finding 4. ``ManualModel/levels`` capped its walk at
-    /// four while ``ManualLevelStack/maxDepth`` is three, and the doc comment
-    /// on the cap claimed the two were the same number. It was unreachable —
-    /// ``ManualModel/parent(of:)`` is a three-step walk — and it would have
-    /// failed *silently* in the wrong direction, which is the half worth a
-    /// case: a fourth entry is a level the depth-3 host would **draw**,
-    /// because ``ManualLevelStack/level(at:in:)`` hands it one, and that no
-    /// gesture could reach, because ``ManualLevelStack/presentsDeeper(at:in:)``
-    /// stops at the cap. Nothing would be red; a level would simply never be
-    /// presentable.
-    ///
-    /// The first half is the arithmetic of that gap, written down so it stays
-    /// a known shape. The second is the invariant that now closes it: every
-    /// depth the chain reaches is a depth the mounting presents.
-    func testNoLevelIsDeeperThanTheStackWillPresent() async {
-        let overlong: [ManualPlace] = [.map, .topic("a"), .piece("b"), .piece("c")]
-        XCTAssertNotNil(
-            ManualLevelStack.level(at: ManualLevelStack.maxDepth + 1, in: overlong),
-            "a chain longer than the cap still hands the host past it a level "
-                + "to draw — which is why the chain is capped where the "
-                + "mounting is, and not one deeper"
-        )
-        XCTAssertFalse(
-            ManualLevelStack.presentsDeeper(at: ManualLevelStack.maxDepth, in: overlong),
-            "and nothing would ever present that level"
-        )
-
-        // The deepest place a real document has: a piece inside a topic,
-        // which is why this needs a served rig
-        // (``testASwipeBackGoesUpExactlyOneLevel`` has the reason).
-        let model = servedRig()
-        model.start()
-        await settle(until: { model.doc != nil })
-
-        model.go("pi-room")
-        let chain = model.levels
-        XCTAssertEqual(
-            ManualLevelStack.maxDepth, chain.count,
-            "a piece's page is the deepest the manual goes, and the cap is "
-                + "the length of that chain — if this is short the walk is "
-                + "capped tighter than the document, and a level is gone"
-        )
-        for depth in 0..<chain.count {
-            XCTAssertTrue(
-                ManualLevelStack.presentsDeeper(at: depth, in: chain),
-                "the screen at depth \(depth) does not present the one above "
-                    + "it, so the level at \(depth + 1) is drawn by nothing"
-            )
-        }
-        XCTAssertEqual(
-            model.place, ManualLevelStack.level(at: chain.count, in: chain),
-            "the deepest screen of the chain has to draw where the person is"
-        )
-        model.stop()
-    }
-
-    /// A swipe back goes up **one** level, from every level, and off the top
-    /// of the manual from Start here — Kamron's answer 32, and Android's
-    /// `BackHandler(enabled = at != "start") { up() }` (`ManualScreen.kt:315`).
-    ///
-    /// The dismissal is written as a depth and not as `up()`
-    /// (``ManualModel/pop(to:)``): the gesture pops a screen, and what the
-    /// model is told is which screen is now on top. Taking `up()` from
-    /// `place` instead would be a second source of truth for where the screen
-    /// is, which is the defect this app has paid for twice — and this case is
-    /// what would catch the two drifting apart, because it checks that the
-    /// landing is `parent(of:)` every time.
+    /// The **covered** arm is the one that would be wrong silently: the manual
+    /// stays mounted under a route pushed over it and its recogniser stays on
+    /// the navigation controller's view, so a decision that looked only at
+    /// the level would take a swipe meant for Music and move the manual
+    /// underneath it.
     func testASwipeBackGoesUpExactlyOneLevel() async {
-        // A **served** document, because the depth of a piece depends on it:
-        // its parent is its topic's cluster only when the document has that
-        // topic (``ManualModel/parent(of:)``), so a rig with no document
-        // would put a piece two screens deep instead of three and this case
-        // would be testing a shorter stack than the app has.
+        // A **served** document, because a piece's parent is its topic's
+        // cluster only when the document has that topic.
         let model = servedRig()
         model.start()
         await settle(until: { model.doc != nil })
 
         model.go("pi-room")
         XCTAssertEqual(.piece("pi-room"), model.place)
+
+        for expected in [ManualPlace.topic("rooms-and-devices"), .map, .start] {
+            XCTAssertEqual(
+                .upALevel, manualBack(at: model.place, manualIsOnTop: true),
+                "a swipe back from \(model.place) has to go up a level, as "
+                    + "Android's back does — not leave the manual"
+            )
+            model.up()
+            XCTAssertEqual(expected, model.place, "one swipe is one level")
+        }
+
         XCTAssertEqual(
-            [.map, .topic("rooms-and-devices"), .piece("pi-room")],
-            model.levels,
-            "a piece's page is three screens above the route's own"
+            .leaveTheManual, manualBack(at: .start, manualIsOnTop: true),
+            "from Start here the swipe is the route's own and leaves the manual"
         )
-
-        // The swipe from the piece's page: the screen at depth 3 is
-        // dismissed, so the one at depth 2 is on top.
-        let fromThePiece = model.place
-        model.pop(to: 2)
-        XCTAssertEqual(
-            model.parent(of: fromThePiece), model.place,
-            "a swipe from a piece's page has to land exactly where `zoom out` "
-                + "does, or the gesture and the control are two ways up that "
-                + "disagree"
-        )
-        XCTAssertEqual(.topic("rooms-and-devices"), model.place)
-
-        // And again from the cluster: depth 1, the map.
-        let fromTheCluster = model.place
-        model.pop(to: 1)
-        XCTAssertEqual(.map, model.place)
-        XCTAssertEqual(model.parent(of: fromTheCluster), model.place)
-
-        // And from the map, which is Start here — still inside the manual,
-        // as Android's back from `"map"` is (`up()` reads `else -> "start"`).
-        model.pop(to: 0)
-        XCTAssertEqual(.start, model.place, "a swipe from the map lands on Start here")
-        XCTAssertEqual([ManualPlace](), model.levels)
-
-        // From Start here there is no pushed screen to dismiss, so this is
-        // not the gesture's path at all — the route's own pop is, and the
-        // manual is left. Asked for anyway, because a binding read during a
-        // transition can call it: it must not move anything.
-        model.pop(to: 0)
-        XCTAssertEqual(.start, model.place, "popping at the root moves nothing")
+        for place in [ManualPlace.start, .map, .topic("rooms-and-devices"), .piece("pi-room")] {
+            XCTAssertEqual(
+                .notTheManuals, manualBack(at: place, manualIsOnTop: false),
+                "with another screen pushed over the manual, a swipe at "
+                    + "\(place) belongs to that screen"
+            )
+        }
         model.stop()
     }
 
-    /// A dismissal that arrives after the chain was cut somewhere else cannot
-    /// lengthen it again.
-    ///
-    /// The real sequence: on a piece's page the `map` pill is tapped, which
-    /// cuts the chain from three to one. SwiftUI then dismisses the two
-    /// screens above, and each dismissal calls the binding of the host below
-    /// it — a host at depth 2 that no longer exists in the chain. Without the
-    /// clamp in ``ManualLevelStack/popped(to:in:)`` the first of those would
-    /// write `[.map, <whatever depth 2 used to be>]` back and put the screen
-    /// in a cluster the person had just left.
-    func testAPopThatArrivesLateCannotPutTheScreenBack() async {
-        let model = servedRig()
-        model.start()
-        await settle(until: { model.doc != nil })
-
-        model.go("pi-room")
-        XCTAssertEqual(3, model.levels.count, "a piece's page is three screens deep")
-
-        // The `map` pill, which cuts the chain from three to one in one go.
-        model.go("map")
-        XCTAssertEqual(.map, model.place)
-        XCTAssertEqual([.map], model.levels)
-
-        // The dismissals the stack then performs, in the order it unwinds
-        // them: the host at depth 2 first, then the one at depth 1. Both are
-        // depths the chain no longer reaches.
-        model.pop(to: 2)
-        XCTAssertEqual(
-            .map, model.place,
-            "a dismissal from a depth the chain no longer has must not push "
-                + "the screen back down into the cluster it just left"
-        )
-        model.pop(to: 1)
-        XCTAssertEqual(.map, model.place, "the chain already ends at the map")
-        XCTAssertEqual([.map], model.levels)
-        model.stop()
-    }
-
-    /// What `zoom out` says the swipe does, which is not the same sentence at
-    /// every text size.
-    ///
-    /// Answer 32's gesture is built below the accessibility sizes and not at
-    /// them (``ManualView/ready(_:cached:_:)``, Kamron's open entry 74), so a
-    /// hint that said "a swipe does this too" everywhere would be the app
-    /// telling a VoiceOver user something untrue of the screen in front of
-    /// them. The choice lives in ``ManualStrings/swipeHint(isAccessibilitySize:)``
-    /// rather than in the view's body for the reason ``ShellHeaderFold``
-    /// exists: a review's negative control broke two size gates written as
-    /// ternaries inside view bodies and the whole package suite stayed green.
+    /// What `zoom out` says the swipe does — one sentence, because since
+    /// answer 74 the swipe does the same thing at every text size.
     ///
     /// No UI case can read this: `XCUIElement` exposes a label and a value
-    /// and not a hint. This is the only thing that holds the two sentences to
-    /// the two sizes.
-    func testZoomOutSaysWhatTheSwipeDoesAtThisTextSize() {
+    /// and not a hint.
+    func testZoomOutSaysWhatTheSwipeDoes() {
         XCTAssertEqual(
-            ManualStrings.swipeGoesUpHint,
-            ManualStrings.swipeHint(isAccessibilitySize: false),
-            "below the accessibility sizes a level is a pushed screen, so the "
-                + "gesture does what `zoom out` does"
+            "a swipe back from the left edge does this too",
+            ManualStrings.swipeGoesUpHint
         )
-        XCTAssertEqual(
-            ManualStrings.swipeLeavesTheManualHint,
-            ManualStrings.swipeHint(isAccessibilitySize: true),
-            "at an accessibility size the levels are swapped in place and the "
-                + "swipe pops the route, so the hint must not promise a level"
-        )
-        XCTAssertNotEqual(
-            ManualStrings.swipeGoesUpHint,
-            ManualStrings.swipeLeavesTheManualHint,
-            "the two sizes do different things; one sentence for both would "
-                + "be wrong at one of them"
-        )
-        XCTAssertTrue(
-            ManualStrings.swipeLeavesTheManualHint.contains("leaves the manual"),
-            "the accessibility-size hint has to say where the swipe goes, "
-                + "which is out of the manual"
+        XCTAssertFalse(
+            ManualStrings.swipeGoesUpHint.contains("leaves"),
+            "the hint must not say the swipe leaves the manual: at every size "
+                + "it goes up a level now"
         )
     }
 
-    /// **Answer 30 on the way back up**: a level arrived at again is a new
-    /// arrival, and that is what makes the names scramble a second time.
+    /// **Answer 73's numbers are Android's.** `MOVE_MS = 280`, `FADE_MS = 180`
+    /// and `EASE = CubicBezierEasing(0.2f, 0f, 0f, 1f)` (`ManualScreen.kt:166-168`),
+    /// and the fade's `tween` takes Compose's default `FastOutSlowInEasing`,
+    /// `(0.4, 0, 0.2, 1)`.
     ///
-    /// Android re-scrambles every node on every level change because its
-    /// `levelKey` lives in one composition (`ManualScreen.kt:593`) and
-    /// `focus` changing re-fires every `LaunchedEffect(key, text)` (`:686`)
-    /// — `zoom out` and the system back included. iOS does not get that for
-    /// free: two sibling clusters are the **same** arm of ``ManualView``'s
-    /// `@ViewBuilder` switch with a different `focus`, so SwiftUI reuses the
-    /// stage, and a stage re-shown with its scramble finished long ago
-    /// restarts no task. Each level would scramble exactly once for the life
-    /// of the screen. (Answer 32's `NavigationStack` made it worse again by
-    /// keeping the covered level mounted; that stack is gone — train I003,
-    /// `fx-manual` — and this counter is needed either way.)
+    /// **This pins the numbers only.** That the view builds its two
+    /// `Animation`s from them, puts the glide on the stage keyed on the focus,
+    /// cuts under Reduce Motion and moves the camera as three numbers is
+    /// `ManualMotionSourceTests`' — revision 1's verifier sabotaged all of
+    /// that with this case green.
+    func testTheGlideIsAndroids() {
+        XCTAssertEqual(0.28, ManualGlide.duration, accuracy: 1e-9, "MOVE_MS")
+        XCTAssertEqual(0.18, ManualGlide.fade, accuracy: 1e-9, "FADE_MS")
+        XCTAssertEqual(0.2, ManualGlide.curve.x1, accuracy: 1e-9)
+        XCTAssertEqual(0.0, ManualGlide.curve.y1, accuracy: 1e-9)
+        XCTAssertEqual(0.0, ManualGlide.curve.x2, accuracy: 1e-9)
+        XCTAssertEqual(1.0, ManualGlide.curve.y2, accuracy: 1e-9)
+        XCTAssertEqual(0.4, ManualGlide.fadeCurve.x1, accuracy: 1e-9)
+        XCTAssertEqual(0.0, ManualGlide.fadeCurve.y1, accuracy: 1e-9)
+        XCTAssertEqual(0.2, ManualGlide.fadeCurve.x2, accuracy: 1e-9)
+        XCTAssertEqual(1.0, ManualGlide.fadeCurve.y2, accuracy: 1e-9)
+    }
+
+    /// **The camera glides as three numbers**, which is what lands it on the
+    /// right level.
     ///
-    /// ``ManualMapStage/levelKey`` is `"<level>#<arrival>"`, so this counter
-    /// is the whole mechanism. The two properties it has to have:
+    /// The map's camera is the centre at 1:1; a cluster's is its hub at
+    /// `1 / 0.34` (`ManualScreen.kt:548-550`). At either end the hub of the
+    /// cluster being entered has to be in the **middle of the stage** — that
+    /// is "the glide lands on the right level" as arithmetic — and in between
+    /// the transform is composed from the interpolated `k`, `cx`, `cy`, not
+    /// interpolated itself: the two differ, and the first is Android's.
+    func testTheCameraLandsOnTheClusterItGlidesTo() {
+        let width = 393.0, height = 646.0
+        let hub = (x: -95.0, y: -244.0)
+        let map = ManualCamera.looking(atHubX: nil, y: nil, cluster: 0.34)
+        let cluster = ManualCamera.looking(atHubX: hub.x, y: hub.y, cluster: 0.34)
+        XCTAssertEqual(ManualCamera(k: 1, x: 0, y: 0), map, "the map is the centre at 1:1")
+        XCTAssertEqual(1 / 0.34, cluster.k, accuracy: 1e-9, "a cluster fills the stage the ring did")
+
+        let landed = cluster.onStage(x: hub.x, y: hub.y, width: width, height: height)
+        XCTAssertEqual(width / 2, landed.x, accuracy: 1e-9, "the hub is centred when the glide lands")
+        XCTAssertEqual(height / 2, landed.y, accuracy: 1e-9)
+        let start = map.onStage(x: 0, y: 0, width: width, height: height)
+        XCTAssertEqual(width / 2, start.x, accuracy: 1e-9, "and the centre was, before it began")
+
+        // The layer's transform and the wires' arithmetic are one camera:
+        // a node drawn at a world point lands where its wire ends.
+        let shift = cluster.translation(width: width, height: height)
+        XCTAssertEqual(landed.x, hub.x * cluster.k + shift.x, accuracy: 1e-9)
+        XCTAssertEqual(landed.y, hub.y * cluster.k + shift.y, accuracy: 1e-9)
+
+        // Halfway: each number halfway, and the translation composed from
+        // them — which is not the midpoint of the two translations.
+        let half = map.toward(cluster, progress: 0.5)
+        XCTAssertEqual((1 + 1 / 0.34) / 2, half.k, accuracy: 1e-9)
+        XCTAssertEqual(hub.x / 2, half.x, accuracy: 1e-9)
+        let composed = half.translation(width: width, height: height)
+        let a = map.translation(width: width, height: height)
+        let b = cluster.translation(width: width, height: height)
+        XCTAssertGreaterThan(
+            abs(composed.x - (a.x + b.x) / 2), 1,
+            "the camera's midpoint has to be composed from its three numbers; "
+                + "a translation interpolated on its own takes another path"
+        )
+        XCTAssertEqual(cluster, map.toward(cluster, progress: 1), "the glide ends on the cluster")
+    }
+
+    /// **Answers 30 and 76**: a level arrived at again is a new arrival, down
+    /// and up, and staying put is not one.
     ///
-    ///  * **arriving somewhere new counts**, up as well as down, so the key
-    ///    changes and the task restarts;
-    ///  * **staying where you are does not**, because Android's `levelKey`
-    ///    does not change when you re-tap the level you are on, and a covered
-    ///    stage must not spend its scramble behind the screen above it.
+    /// ``ManualMapStage``'s `levelKey` is `"<level>#<arrival>"`; a move between
+    /// the map and a cluster also draws new cards, so this counter is the
+    /// belt and the fresh cards the braces.
     func testArrivingAtALevelAgainIsANewArrival() {
         let model = rig()
         XCTAssertEqual(0, model.arrivals(of: .map), "nothing has been arrived at yet")
 
-        // Down: the map, then a cluster.
-        model.open(levels: [.map])
+        model.restore(saved: "map")
         XCTAssertEqual(1, model.arrivals(of: .map))
-        model.open(levels: [.map, .topic("rooms-and-devices")])
+        model.restore(saved: "t:rooms-and-devices")
         XCTAssertEqual(1, model.arrivals(of: .topic("rooms-and-devices")))
-        XCTAssertEqual(
-            1, model.arrivals(of: .map),
-            "pushing a cluster must NOT count an arrival at the map underneath "
-                + "it — the covered stage would scramble behind the screen on "
-                + "top of it and be settled again by the time it was seen"
-        )
+        XCTAssertEqual(1, model.arrivals(of: .map), "going down counts nothing at the level left")
 
-        // Back up, which is the half a reused stage eats.
         model.up()
         XCTAssertEqual(.map, model.place)
         XCTAssertEqual(
             2, model.arrivals(of: .map),
             "`zoom out` back to the map is a second arrival at it, which is "
-                + "what re-scrambles its names — without this the ornament runs "
-                + "on the way down only"
+                + "what retypes its names on the way up"
         )
 
-        // And a level opened through the chain — what a stack's binding would
-        // write back on a pop — is the same move.
-        model.open(levels: [.map, .topic("rooms-and-devices")])
-        model.open(levels: [.map])
-        XCTAssertEqual(
-            3, model.arrivals(of: .map),
-            "`open(levels:)` and `up()` land on the same level, and the two "
-                + "ways down to it cannot be allowed to disagree about the "
-                + "arrival"
-        )
+        model.restore(saved: "map")
+        XCTAssertEqual(2, model.arrivals(of: .map), "the level already on screen is no move")
 
-        // Staying put is not an arrival. A `NavigationStack` binding writes
-        // its path back more than once for one gesture, so every write that
-        // lands on the level already on screen must be a no-op — otherwise a
-        // stage re-scrambles for a pop that did not happen. Nothing drives
-        // `open(levels:)` from a binding today; the no-op is a property of
-        // the chain the shared change will bind.
-        model.open(levels: [.map])
-        XCTAssertEqual(
-            3, model.arrivals(of: .map),
-            "opening the level already on screen is no move, as Android's "
-                + "unchanged `levelKey` is no move"
-        )
-
-        // Every way in counts, including the one that skips the levels
-        // between: a search result opens a piece from Start here.
         XCTAssertEqual(0, model.arrivals(of: .piece("pi-room")))
-        model.open(levels: [.map, .piece("pi-room")])
+        model.restore(saved: "p:pi-room")
         XCTAssertEqual(1, model.arrivals(of: .piece("pi-room")))
-        model.restore(saved: ManualPlace.topic("music-and-media").saved)
-        XCTAssertEqual(
-            1, model.arrivals(of: .topic("music-and-media")),
-            "the level a previous launch was on is arrived at once"
-        )
         model.stop()
     }
 
@@ -672,6 +433,75 @@ final class ManualAnswersTests: XCTestCase {
             manualCodeWashDark,
             "`--sunken` dark is #100E0B (`Color.kt:77`)"
         )
+    }
+
+    // MARK: - answer 75: the washes behind the little words
+
+    /// `Color.okInk`, as the sRGB components `DomovoiApp.swift` builds its
+    /// `UIColor` from — the cross-check, for the reason on ``fgMutedLight``.
+    private let okInkLight = ManualWash(red: 0.1169, green: 0.4659, blue: 0.1627)
+    private let okInkDark = ManualWash(red: 0.3807, green: 0.8332, blue: 0.4147)
+
+    /// **Every word on its wash reads**, in both themes, and these are the
+    /// numbers `Color.manualWash(_:)`'s doc comment states.
+    ///
+    /// Each wash is Android's translucency (`Color.kt:58-64`, `:86-92`)
+    /// composited onto the page the word is drawn on; each ink is the app's
+    /// text token for that tone. All are caption-sized text, so 4.5:1.
+    func testEveryWordOnItsWashReads() {
+        let pairs: [(String, ManualWash, ManualWash, Double)] = [
+            ("admin, light", warnInkLight, ManualTone.warn.wash(dark: false), 5.27),
+            ("admin, dark", warnInkDark, ManualTone.warn.wash(dark: true), 8.74),
+            ("preview/plugin, light", fgMutedLight, ManualTone.idle.wash(dark: false), 6.61),
+            ("preview/plugin, dark", fgMutedDark, ManualTone.idle.wash(dark: true), 7.40),
+            ("ok, light", okInkLight, ManualTone.ok.wash(dark: false), 5.12),
+            ("ok, dark", okInkDark, ManualTone.ok.wash(dark: true), 8.88),
+        ]
+        for (what, ink, wash, stated) in pairs {
+            let ratio = manualContrastRatio(ink, wash)
+            XCTAssertEqual(stated, ratio, accuracy: 0.01, "\(what): the stated ratio drifted")
+            XCTAssertGreaterThan(ratio, 4.5, "\(what) is under what caption text needs")
+        }
+
+        // Android's own amber ink on the same wash, which is why the port
+        // keeps `warnInk`: a fill is not text.
+        XCTAssertLessThan(
+            manualContrastRatio(ManualWash(hex: 0xFFA242), ManualTone.warn.wash(dark: false)), 2.0,
+            "Android's `c.warn` as text on its own `warnSoft` is under 2:1"
+        )
+
+        // The washes are tints you can see against the page.
+        XCTAssertEqual(1.087, manualContrastRatio(ManualTone.warn.wash(dark: false), pageLight), accuracy: 0.005)
+        XCTAssertEqual(1.126, manualContrastRatio(ManualTone.idle.wash(dark: false), pageLight), accuracy: 0.005)
+        XCTAssertEqual(1.256, manualContrastRatio(ManualTone.warn.wash(dark: true), pageDark), accuracy: 0.005)
+        XCTAssertEqual(1.144, manualContrastRatio(ManualTone.idle.wash(dark: true), pageDark), accuracy: 0.005)
+    }
+
+    /// **Amber behind `admin`, one grey behind the rest — and the badges'
+    /// grey is the inline words' grey** (Kamron's answer 75).
+    ///
+    /// The case the sabotage "every tag back on one grey" fails: `admin`'s
+    /// wash has to be the amber one, and amber is a wash whose red channel is
+    /// well over its blue; the grey is neutral.
+    func testAdminIsAmberAndTheGreysAreOne() {
+        XCTAssertEqual(.warn, ManualTone.ofTag("admin"), "inline `admin` is on amber, as Android's `warnSoft`")
+        XCTAssertEqual(.idle, ManualTone.ofTag("preview"), "inline `preview` is on Android's `idleSoft`")
+        XCTAssertEqual(.idle, ManualTone.ofTag("plugin"), "and `plugin`")
+        for dark in [false, true] {
+            let amber = ManualTone.warn.wash(dark: dark)
+            let grey = ManualTone.idle.wash(dark: dark)
+            XCTAssertGreaterThan(amber.red - amber.blue, 0.03, "the admin wash is amber (dark: \(dark))")
+            XCTAssertLessThan(abs(grey.red - grey.blue), 0.01, "the grey wash is a grey (dark: \(dark))")
+            XCTAssertNotEqual(amber, grey)
+        }
+        // Not the code wash and not Apple's `secondarySystemBackground`: the
+        // two greys the port had before.
+        XCTAssertNotEqual(manualCodeWashLight, ManualTone.idle.wash(dark: false))
+        XCTAssertNotEqual(ManualWash(hex: 0xF2F2F7), ManualTone.idle.wash(dark: false))
+        // Composited, not hand-picked: `#A09E9B` at 0x24 over white.
+        let expected = manualComposite(ManualWash(hex: 0xA09E9B), alpha: 36.0 / 255, over: ManualWash(hex: 0xFFFFFF))
+        XCTAssertEqual(expected, ManualTone.idle.wash(dark: false))
+        XCTAssertEqual(0.0, manualComposite(ManualWash(hex: 0xFFFFFF), alpha: 0, over: ManualWash(hex: 0x000000)).red, accuracy: 1e-9)
     }
 
     // MARK: - answer 30: the scramble's settle
@@ -880,7 +710,7 @@ final class ManualAnswersTests: XCTestCase {
     /// ``ManualModel/land(on:)`` exists because a counter maintained at three
     /// of four write sites is worse than none - and
     /// ``testArrivingAtALevelAgainIsANewArrival`` pinned the three that are
-    /// *not* `go`: `open(levels:)`, `up()` and `restore(saved:)`. A review's
+    /// *not* `go`: `up()` and `restore(saved:)`. A review's
     /// negative control then reverted all five branches of `go` to write
     /// `place` directly and the whole suite stayed green, which is the same
     /// gap restated: every pop this app actually performs goes through `go`.
@@ -975,7 +805,7 @@ final class ManualAnswersTests: XCTestCase {
         // The fifth branch, which needs no document: with nothing loaded `go`
         // can only mean Start here, and it still goes through the funnel.
         let blind = rig()
-        blind.open(levels: [.map])
+        blind.restore(saved: "map")
         XCTAssertEqual(.map, blind.place)
         blind.go("map")
         XCTAssertEqual(.start, blind.place, "with no document there is nowhere else to go")
@@ -1025,55 +855,30 @@ final class ManualAnswersTests: XCTestCase {
         }
     }
 
-    /// **Review 2's S3, as the arithmetic a test can reach.**
+    /// **Review 2's S3, as the arithmetic a test can reach**: both gates on a
+    /// node's bob.
     ///
-    /// Three of the four gates on a node's bob are decisions rather than
-    /// layout, and the one that is iOS's own - a level the stack has
-    /// **covered** holds still - shipped wrong and was found by a review
-    /// rather than by a case, because it lived in a ternary inside a
-    /// `@ViewBuilder`. It is
-    /// ``manualNodeFloatPeriod(at:reduceMotion:floatOn:onTop:)`` now, and
-    /// `ManualMapStage` passes its `isOnTop` into it.
-    ///
-    /// What is still train-only, and is written up as such: whether writing
-    /// `floating` with a `nil` animation actually *cancels* the
-    /// `repeatForever` already attached to the offset. This pins the value the
-    /// view is handed, which is the half that can be wrong silently.
-    func testOnlyTheLevelOnTopOfTheStackBobs() {
+    /// There was a third, "a covered level holds still", while a level was a
+    /// pushed screen and the map stayed mounted under the cluster above it.
+    /// Since answer 73 there is one stage and only the level's own cards are
+    /// built, so that gate is gone (``manualNodeFloatPeriod(at:reduceMotion:floatOn:)``).
+    func testOnlyReduceMotionAndTheKnobStillTheFloat() {
         for index in 0..<24 {
-            let moving = manualNodeFloatPeriod(
-                at: index, reduceMotion: false, floatOn: true, onTop: true
-            )
+            let moving = manualNodeFloatPeriod(at: index, reduceMotion: false, floatOn: true)
             XCTAssertEqual(
                 manualFloatPeriod(at: index), moving, accuracy: 1e-9,
-                "the stage on top bobs at Android's own period"
+                "a card bobs at Android's own period"
             )
-            // Not vacuous: the "on top" arm has to be a real period, or every
+            // Not vacuous: the moving arm has to be a real period, or every
             // assertion below would hold of a float that never ran at all.
             XCTAssertGreaterThan(moving, 5.0, "card \(index) would not bob at all")
-
             XCTAssertEqual(
-                0,
-                manualNodeFloatPeriod(
-                    at: index, reduceMotion: true, floatOn: true, onTop: true
-                ),
+                0, manualNodeFloatPeriod(at: index, reduceMotion: true, floatOn: true),
                 "Reduce Motion is still, as Android's own `bob` is"
             )
             XCTAssertEqual(
-                0,
-                manualNodeFloatPeriod(
-                    at: index, reduceMotion: false, floatOn: false, onTop: true
-                ),
+                0, manualNodeFloatPeriod(at: index, reduceMotion: false, floatOn: false),
                 "`-domovoi-manual-float-off` is still"
-            )
-            XCTAssertEqual(
-                0,
-                manualNodeFloatPeriod(
-                    at: index, reduceMotion: false, floatOn: true, onTop: false
-                ),
-                "a covered level is still - the stack keeps it mounted, and "
-                    + "three stages' worth of `repeatForever` behind two "
-                    + "covered screens is not what answer 31 was costed at"
             )
         }
     }

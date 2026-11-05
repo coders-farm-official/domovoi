@@ -8,23 +8,17 @@ import SwiftUI
 // Two levels — the centre with its ring of topics, and one topic's cluster of
 // pieces — and a camera that moves between them.
 //
-// **The arithmetic is ported line for line**, and so is the ornament, as of
-// Kamron's answers 30 and 31: the name scrambles into place
-// (``ManualScrambleName``) and the cards float (``ManualMapNode``'s
-// `floatPeriod`). Both stop under Reduce Motion, as the Kotlin's `reduce`
-// branches do (`ManualScreen.kt:687`, `:560`).
+// **The arithmetic is ported line for line**, and so is the ornament: the
+// name scrambles into place (``ManualScrambleName``, answer 30), on every
+// move down and up (answer 76); the cards float (``ManualMapNode``'s
+// `floatPeriod`, answer 31); and the camera glides between the map and a
+// cluster over 280 ms (``ManualMapStage``, answer 73). All three stop under
+// Reduce Motion, as the Kotlin's `reduce` branches do (`ManualScreen.kt:549`,
+// `:560`, `:687`).
 //
-// Two things of Android's are **not** here, both measured and both written
-// up where they happen: the wires do not follow the float
-// (``ManualMapStage/wires(_:size:)``), and there is no 280 ms camera zoom
-// between levels, because a level change is a different arm of
-// ``ManualLevelView``'s `switch` — a transition between two stages, not a
-// value change inside one, so there is no camera to move
-// (``ManualMapStage/body``, which has the whole reason). That held before
-// answer 32, while it was attempted on a stack of the manual's own, and
-// now that a level is a pushed screen (``ManualLevelHost``): how the levels
-// are mounted never came into it, and Kamron's entry 73 is the open
-// question of building the glide for real.
+// One thing of Android's is **not** here, measured and written up where it
+// happens: the wires do not follow the float (``ManualMapWires``). They do
+// follow the camera.
 // ---------------------------------------------------------------------------
 
 /// A world position and the scale the thing at it is drawn at — `Pos`
@@ -164,19 +158,16 @@ struct ManualMapGeo {
 
 /// The stage: the wires, the nodes, and the camera over them (`ManualMap`,
 /// `ManualScreen.kt:503`).
+///
+/// **One stage for the map and every cluster** (Kamron's answer 73):
+/// ``ManualLevelView`` keeps this view's identity across a move between them,
+/// so `focus` changes in place and the camera glides from one to the other.
 struct ManualMapStage: View {
 
     let doc: ManualDoc
     let manual: ManualModel
     let focus: ManualTopic?
     let reduceMotion: Bool
-
-    /// Which level this stage was pushed as — see ``ManualMapPage/place``.
-    ///
-    /// Two things read it, and neither can be derived from ``focus``:
-    /// ``levelKey`` (which arrival at this level the scramble keys on) and
-    /// ``isOnTop`` (whether this stage's cards float at all).
-    let place: ManualPlace
 
     /// A phone's node is one size for every node, so the rows never run into
     /// each other (`PHONE_NODE_DP`, `:161`).
@@ -204,15 +195,21 @@ struct ManualMapStage: View {
                 doc: doc, visible: manual.visiblePieces,
                 width: w, height: h, phone: phone, nodeWidth: nw, nodeHeight: nh
             )
-            let shown = shownIDs
-            let camera = focus.flatMap { geo.at["h:\($0.id)"] } ?? ManualMapPos(x: 0, y: 0, s: 1)
-            let k: CGFloat = focus == nil ? 1 : 1 / manualCluster
+            let hub = focus.flatMap { geo.at["h:\($0.id)"] }
+            let camera = ManualCamera.looking(
+                atHubX: hub.map { Double($0.x) },
+                y: hub.map { Double($0.y) },
+                cluster: Double(manualCluster)
+            )
             ZStack(alignment: .topLeading) {
-                wires(manualWires(geo, camera: camera, k: k, size: space.size), size: space.size)
-                nodes(geo, shown: shown, nodeWidth: nw, nodeHeight: nh)
+                ManualMapWires(
+                    camera: camera,
+                    lines: worldWires(geo),
+                    size: space.size
+                )
+                nodes(geo, shown: shownIDs, nodeWidth: nw, nodeHeight: nh)
                     .frame(width: w, height: h, alignment: .topLeading)
-                    .scaleEffect(k, anchor: .topLeading)
-                    .offset(x: w / 2 - camera.x * k, y: h / 2 - camera.y * k)
+                    .modifier(ManualCameraEffect(camera: camera))
             }
             .frame(width: w, height: h, alignment: .topLeading)
             .clipped()
@@ -226,22 +223,15 @@ struct ManualMapStage: View {
         .overlay {
             RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(.quaternary)
         }
-        // **No 280 ms camera animation, because there is no camera move to
-        // animate.** Android keeps one `ManualMap` composition and animates
-        // `focus` inside it (`MOVE_MS`, `ManualScreen.kt:549`). Here a level
-        // change is a different arm of ``ManualLevelView``'s
-        // switch, which SwiftUI gives a different identity, and `focus` is a
-        // `let` on a view built per level, so it cannot change within one
-        // stage's lifetime. The level change is a *transition* between two
-        // stages, not a value change inside one.
-        //
-        // An `.animation(…, value: focus?.id)` stood here until the review
-        // pointed out it could never fire. It is gone rather than kept with a
-        // comment explaining it: a modifier that cannot run is not an
-        // ornament this screen has, and the question of whether the zoom is
-        // worth rebuilding on top of a stack is in DECISIONS for Kamron.
-        // Reduce Motion is still honoured by the two ornaments that do run —
-        // the scramble and the float.
+        // **The 280 ms camera glide** — Android's three `animateFloatAsState`s
+        // on `k`, `cx` and `cy` with `tween(MOVE_MS, easing = EASE)`
+        // (`ManualScreen.kt:549-552`), keyed on the one thing that moves the
+        // camera. The camera is animated as those three numbers
+        // (``ManualCameraEffect``, ``ManualMapWires``), not as a scale and an
+        // offset, so its path is Android's (``ManualCamera`` has why that is
+        // a different path). Under Reduce Motion it is `nil` — no animation,
+        // the instant cut Android's `snap()` is.
+        .animation(reduceMotion ? nil : .manualGlide, value: focus?.id)
     }
 
     /// `shown` (`ManualScreen.kt:544`): the centre and its ring at level one,
@@ -265,97 +255,32 @@ struct ManualMapStage: View {
             .map { ("h:\(focus.id)", "p:\($0)") }
     }
 
-    /// The dashed cubic wires (`:567`). A `Canvas`, drawn **once per level**
-    /// where Android redraws it on every frame of the float
-    /// (`drawPath` inside the `InfiniteTransition`'s read, `:569`).
-    ///
-    /// So a wire's ends do not rise and fall with the two cards they join. It
-    /// is the one piece of the float that is given up, deliberately: a canvas
-    /// rebuilt 60 times a second for as long as the map is open is the battery
-    /// cost answer 31 was not worth, and a wire runs centre to centre between
-    /// two ~104-point cards, so the part of it that would move is the part
-    /// covered by the cards.
-    ///
-    /// **And that cost is one stage's, which is ``isOnTop``'s whole job.**
-    /// Answer 32 mounts a level as a screen on the shell's stack
-    /// (``ManualLevelHost``), so a map **stays mounted** under the cluster
-    /// pushed over it and two or three stages are alive at once. Only the top
-    /// one floats: `isOnTop` is a comparison against ``ManualModel/place``,
-    /// so the covered stages hold their cards still and there is one set of
-    /// `repeatForever` offsets on screen, which is what this decision was
-    /// costed against.
-    ///
-    /// That holds because a covered host draws the level it **owns** and not
-    /// the open one. It did not for one commit: ``ManualLevelHost``'s late
-    /// fallback could fire on a buried host, whose `shown` then became
-    /// `manual.place`, and a buried stage that believes it is on top is two
-    /// or three sets of offsets — the one thing this paragraph says cannot
-    /// happen. The fallback is now asked once per push and a working push
-    /// never reaches it (review round 1's finding 2). Honest limit: UIKit
-    /// taking a covered screen's view out of the window is what makes being
-    /// wrong about this cheap, not this comment.
-    ///
-    /// For one commit — `6d071463` to the one before this — the gate was
-    /// constant `true` because one level was mounted at a time; it is load
-    /// bearing again. The wires never followed in any case.
-    ///
-    /// Hidden from VoiceOver — it is a drawing of the links the nodes beside
-    /// it already are.
-    private func wires(_ lines: [ManualMapWire], size: CGSize) -> some View {
-        // The points are worked out **before** the renderer, so the closure
-        // captures a list of numbers and not this view — which holds a
-        // `@MainActor` model.
-        Canvas { context, _ in
-            for line in lines {
-                let my = (line.from.y + line.to.y) / 2
-                var path = Path()
-                path.move(to: line.from)
-                path.addCurve(
-                    to: line.to,
-                    control1: CGPoint(x: line.from.x, y: my),
-                    control2: CGPoint(x: line.to.x, y: my)
-                )
-                context.stroke(
-                    path,
-                    with: .color(Color.fgMuted.opacity(0.5)),
-                    style: StrokeStyle(lineWidth: 1.4, dash: [4, 4])
-                )
-            }
-        }
-        .frame(width: size.width, height: size.height)
-        .accessibilityHidden(true)
-    }
-
-    /// Every wire of the level on screen, in the stage's own coordinates
-    /// (`ManualScreen.kt:570`).
-    private func manualWires(
-        _ geo: ManualMapGeo,
-        camera: ManualMapPos,
-        k: CGFloat,
-        size: CGSize
-    ) -> [ManualMapWire] {
+    /// The level's wires in **world** coordinates; ``ManualMapWires`` puts
+    /// them on the stage through the camera, every frame of a glide.
+    private func worldWires(_ geo: ManualMapGeo) -> [ManualMapWire] {
         edgeIDs.compactMap { pair in
             guard let pa = geo.at[pair.0], let pb = geo.at[pair.1] else { return nil }
-            return ManualMapWire(
-                from: CGPoint(
-                    x: (pa.x - camera.x) * k + size.width / 2,
-                    y: (pa.y - camera.y) * k + size.height / 2
-                ),
-                to: CGPoint(
-                    x: (pb.x - camera.x) * k + size.width / 2,
-                    y: (pb.y - camera.y) * k + size.height / 2
-                )
-            )
+            return ManualMapWire(from: CGPoint(x: pa.x, y: pa.y), to: CGPoint(x: pb.x, y: pb.y))
         }
     }
 
-    /// Only the nodes of the level on screen are built.
+    /// Only the nodes of the level on screen are built — Android's `id in
+    /// shown` (`:621`), with the fade in and out it puts on each one.
     ///
-    /// Android fades every node in and out of one tree (`AnimatedVisibility`,
-    /// `:621`). Drawing the other level at zero opacity would leave it in the
-    /// accessibility tree, where VoiceOver would read a piece that is not on
-    /// screen and a test asking "is the radio node gone" would be answered by
-    /// a node nobody can see.
+    /// Android composes every node of every level and fades the others to
+    /// nothing (`AnimatedVisibility`). Drawing the other level at zero opacity
+    /// here would leave it in the accessibility tree, where VoiceOver would
+    /// read a piece that is not on screen and a test asking "is the radio node
+    /// gone" would be answered by a node nobody can see. So a node is
+    /// inserted and removed, and the **transition** is Android's fade:
+    /// `FADE_MS` with Compose's default easing (``ManualGlide/fade``), or
+    /// nothing at all under Reduce Motion (`snap()`, `:622-623`). A node on
+    /// its way out stays in the tree for those 180 ms.
+    ///
+    /// A move between the map and a cluster draws a different set of ids
+    /// (`domovoi`/`t:<id>` against `h:<id>`/`p:<id>`), so every card of the
+    /// level arrived at is a new view and its name retypes from the start —
+    /// Kamron's answer 76, on the way down and on the way up.
     private func nodes(
         _ geo: ManualMapGeo,
         shown: [String],
@@ -375,21 +300,17 @@ struct ManualMapStage: View {
                         height: nh,
                         levelKey: levelKey,
                         reduceMotion: reduceMotion,
-                        // `5.5 + (i % 4) * 0.9` seconds (`:562`), or zero
-                        // — Reduce Motion, a UI case that turned the float
-                        // off, or a level nothing is looking at. All
-                        // three gates and the reason for each are in
-                        // ``manualNodeFloatPeriod(at:reduceMotion:floatOn:onTop:)``,
-                        // in DomovoiKit rather than in this ternary because
-                        // the one that is iOS's own — only the top stage
-                        // animates (``wires(_:size:)``) — is review 2's S3,
-                        // and a decision no test could reach is how it came
-                        // to ship broken.
+                        // `5.5 + (i % 4) * 0.9` seconds (`:562`), or zero —
+                        // Reduce Motion, or a UI case that turned the float
+                        // off. Both gates are in
+                        // ``manualNodeFloatPeriod(at:reduceMotion:floatOn:)``,
+                        // in DomovoiKit rather than in this ternary, because a
+                        // decision no test could reach is how review 2's S3
+                        // came to ship broken.
                         floatPeriod: manualNodeFloatPeriod(
                             at: at,
                             reduceMotion: reduceMotion,
-                            floatOn: ManualFloatClock.on,
-                            onTop: isOnTop
+                            floatOn: ManualFloatClock.on
                         ),
                         // Android phases the sine by `i * 0.7` seconds
                         // (`:563`). Here it is a one-shot delay on a
@@ -403,48 +324,29 @@ struct ManualMapStage: View {
                     .frame(width: nw)
                     .scaleEffect(pos.s)
                     .offset(x: pos.x - nw / 2, y: pos.y - nh / 2)
-                    .transition(.opacity)
+                    .transition(reduceMotion ? AnyTransition.identity : AnyTransition.opacity.animation(.manualFade))
                 }
             }
         }
     }
 
-    /// The key the names' scramble restarts on: **which level this stage
-    /// draws, and which arrival at it** — the Kotlin's `levelKey` (`:593`,
-    /// handed to every `MapNode` at `:633`) with a count after it.
+    /// The key the names' scramble restarts on: **which level, and which
+    /// arrival at it** — the Kotlin's `levelKey` (`:593`, handed to every
+    /// `MapNode` at `:633`) with a count after it.
     ///
-    /// Android gets the arrival for free. `levelKey` is `focus ?: "map"` in
-    /// one composition, so when `focus` changes — down into a cluster or back
-    /// out of it — every node's `LaunchedEffect(key, text)` (`:686`) re-fires
-    /// and the whole level retypes itself. That is the ornament on the way
-    /// *up* as much as on the way down.
-    ///
-    /// SwiftUI does not. Two sibling clusters are the same arm of
-    /// ``ManualLevelView``'s switch with a different `focus`, so
-    /// the view is reused rather than rebuilt; and while the levels were a
-    /// `NavigationStack` of the manual's own the level below the one on
-    /// screen stayed mounted, so a pop restarted nothing at all. Either way
-    /// each level scrambled once, the first time it was reached, which is
-    /// the review's finding and half of what Kamron asked for.
-    /// ``ManualModel/arrivals(of:)`` is the missing half: coming back up
-    /// counts an arrival at the level it lands on, this key changes, and the
-    /// task restarts. Going *down* leaves the level left behind with its
-    /// count alone, so a stage nobody is looking at does not spend its
-    /// scramble out of sight.
+    /// Android retypes every node on every move, down and up (Kamron's answer
+    /// 76), because `levelKey` changes inside one composition and every
+    /// node's `LaunchedEffect(key, text)` (`:686`) re-fires. Here a move
+    /// between the map and a cluster inserts new cards (``nodes``), so the
+    /// retype starts with them; the arrival count
+    /// (``ManualModel/arrivals(of:)``) changes the key on every arrival as
+    /// well, so a card SwiftUI ever kept across a move would still retype.
     ///
     /// `#` separates them because a topic's id is a slug and cannot contain
     /// one, so `map#2` is unambiguous and readable in a log.
     private var levelKey: String {
-        "\(focus?.id ?? "map")#\(manual.arrivals(of: place))"
+        "\(focus?.id ?? "map")#\(manual.arrivals(of: manual.place))"
     }
-
-    /// Whether this stage is the level on top of the manual.
-    ///
-    /// Only the top one floats — see ``wires(_:size:)``. It is a comparison
-    /// of two `ManualPlace`s and not "is my focus the model's focus", so the
-    /// `.piece` fallback (``ManualLevelView``'s map for a piece the document lost)
-    /// is on top when it is on top.
-    private var isOnTop: Bool { manual.place == place }
 
     /// What a key in ``ManualMapGeo`` draws (`:603`).
     private func node(of id: String) -> ManualMapNodeContent? {
@@ -484,6 +386,124 @@ struct ManualMapStage: View {
     }
 }
 
+extension Animation {
+
+    /// The camera's glide: `tween(MOVE_MS = 280, easing = CubicBezierEasing(
+    /// 0.2f, 0f, 0f, 1f))` (`ManualScreen.kt:166-168`, `:549`).
+    static var manualGlide: Animation {
+        .timingCurve(
+            ManualGlide.curve.x1, ManualGlide.curve.y1,
+            ManualGlide.curve.x2, ManualGlide.curve.y2,
+            duration: ManualGlide.duration
+        )
+    }
+
+    /// A node's fade: `tween(FADE_MS = 180)` (`:167`, `:622-623`), whose
+    /// easing is Compose's default `FastOutSlowInEasing`.
+    static var manualFade: Animation {
+        .timingCurve(
+            ManualGlide.fadeCurve.x1, ManualGlide.fadeCurve.y1,
+            ManualGlide.fadeCurve.x2, ManualGlide.fadeCurve.y2,
+            duration: ManualGlide.fade
+        )
+    }
+}
+
+/// The camera, as the transform of the layer the nodes sit in — Android's
+/// `graphicsLayer { scaleX = k; scaleY = k; translationX = (w / 2 - cx * k) … }`
+/// (`ManualScreen.kt:585-591`).
+///
+/// A `GeometryEffect` whose animatable data is the camera's **three numbers**,
+/// so a glide interpolates `k`, `cx` and `cy` one by one and the transform is
+/// composed from them every frame, as Android's is. A `scaleEffect` beside an
+/// `offset` would interpolate the scale and the translation instead, and the
+/// translation is a product of the two — a different path across the stage.
+struct ManualCameraEffect: GeometryEffect {
+
+    var camera: ManualCamera
+
+    nonisolated var animatableData: AnimatablePair<Double, AnimatablePair<Double, Double>> {
+        get { AnimatablePair(camera.k, AnimatablePair(camera.x, camera.y)) }
+        set { camera = ManualCamera(k: newValue.first, x: newValue.second.first, y: newValue.second.second) }
+    }
+
+    nonisolated func effectValue(size: CGSize) -> ProjectionTransform {
+        let shift = camera.translation(width: Double(size.width), height: Double(size.height))
+        return ProjectionTransform(
+            CGAffineTransform(
+                a: CGFloat(camera.k), b: 0,
+                c: 0, d: CGFloat(camera.k),
+                tx: CGFloat(shift.x), ty: CGFloat(shift.y)
+            )
+        )
+    }
+}
+
+/// The dashed cubic wires (`:567`), put on the stage through the camera.
+///
+/// **They follow the camera, every frame of a glide**: this view is
+/// `Animatable` over the same three numbers as ``ManualCameraEffect``, so
+/// SwiftUI hands it each intermediate camera and the `Canvas` redraws — which
+/// is what Android's `Canvas` does reading `k`, `cx` and `cy` (`:573-576`).
+///
+/// **They do not follow the float.** Android also reads its bob inside that
+/// `Canvas` and so redraws every wire 60 times a second for as long as the map
+/// is open; here the float is one `repeatForever` offset per card on the
+/// render server, and the wires stand still between glides. A wire runs
+/// centre to centre between two ~104-point cards, so the part of it that
+/// would move is the part covered by the cards. That is the one piece of the
+/// float given up, deliberately (answer 31's battery cost).
+///
+/// Hidden from VoiceOver — it is a drawing of the links the nodes beside it
+/// already are.
+struct ManualMapWires: View, Animatable {
+
+    var camera: ManualCamera
+    /// In world coordinates.
+    let lines: [ManualMapWire]
+    let size: CGSize
+
+    nonisolated var animatableData: AnimatablePair<Double, AnimatablePair<Double, Double>> {
+        get { AnimatablePair(camera.k, AnimatablePair(camera.x, camera.y)) }
+        set { camera = ManualCamera(k: newValue.first, x: newValue.second.first, y: newValue.second.second) }
+    }
+
+    var body: some View {
+        // The points are worked out **before** the renderer, so the closure
+        // captures a list of numbers and not this view.
+        let onStage = lines.map { line in
+            let a = camera.onStage(
+                x: Double(line.from.x), y: Double(line.from.y),
+                width: Double(size.width), height: Double(size.height)
+            )
+            let b = camera.onStage(
+                x: Double(line.to.x), y: Double(line.to.y),
+                width: Double(size.width), height: Double(size.height)
+            )
+            return ManualMapWire(from: CGPoint(x: a.x, y: a.y), to: CGPoint(x: b.x, y: b.y))
+        }
+        return Canvas { context, _ in
+            for line in onStage {
+                let my = (line.from.y + line.to.y) / 2
+                var path = Path()
+                path.move(to: line.from)
+                path.addCurve(
+                    to: line.to,
+                    control1: CGPoint(x: line.from.x, y: my),
+                    control2: CGPoint(x: line.to.x, y: my)
+                )
+                context.stroke(
+                    path,
+                    with: .color(Color.fgMuted.opacity(0.5)),
+                    style: StrokeStyle(lineWidth: 1.4, dash: [4, 4])
+                )
+            }
+        }
+        .frame(width: size.width, height: size.height)
+        .accessibilityHidden(true)
+    }
+}
+
 /// What one node says and what it opens.
 struct ManualMapNodeContent: Equatable {
     let title: String
@@ -512,9 +532,8 @@ struct ManualMapNode: View {
     /// Which level this card belongs to **and which arrival at it**, so the
     /// name scrambles again each time a level opens — on the way up as well
     /// as down — and not on every redraw. The Kotlin's `levelKey` (`:593`,
-    /// passed to `MapNode` at `:633`), with the arrival count that SwiftUI's
-    /// view reuse makes necessary; ``ManualMapStage/levelKey`` has the
-    /// reasoning.
+    /// passed to `MapNode` at `:633`), with an arrival count;
+    /// ``ManualMapStage``'s `levelKey` has the reasoning.
     let levelKey: String
 
     /// Whether this person asked for less movement: no scramble, no float.
@@ -523,8 +542,8 @@ struct ManualMapNode: View {
     /// How long one bob takes, and how far into it this card starts
     /// (`bob`, `:559`: `5.5 + (i % 4) * 0.9` seconds at `:562`, phased by
     /// `i * 0.7` at `:563`). **Zero period means the card is still** —
-    /// Reduce Motion, a UI case with the float off, or a level that is not
-    /// the one on screen, and the caller decides which (``ManualMapStage``).
+    /// Reduce Motion, or a UI case with the float off, and the caller decides
+    /// which (``ManualMapStage``).
     let floatPeriod: Double
     let floatPhase: Double
 
@@ -619,11 +638,10 @@ struct ManualMapNode: View {
                         // witnesses in this one tree, are what the claim
                         // rests on.
                         //
-                        // It was written here that the wires in
-                        // ``ManualMapStage`` were a fourth witness — same
-                        // modifier, outside any `Button`, absent from the
-                        // same tree. They are not: ``ManualMapStage``'s
-                        // `wires(_:size:)` is a bare `Canvas` with no
+                        // It was written here that the wires were a fourth
+                        // witness — same modifier, outside any `Button`,
+                        // absent from the same tree. They are not:
+                        // ``ManualMapWires`` is a bare `Canvas` with no
                         // accessibility content of its own, so it is absent
                         // from an XCUITest tree with the modifier and
                         // without it. Its absence says nothing either way.
@@ -721,16 +739,14 @@ struct ManualMapNode: View {
         // `Canvas` reads, redrawing every wire 60 times a second. That is the
         // "battery sink" half of this decision, and the half that is given
         // up for it is that the wires do **not** follow: they are still drawn
-        // once per level (see ``ManualMapStage/wires(_:size:)``). Almost all
+        // between glides (see ``ManualMapWires``). Almost all
         // of a wire is behind the two cards it joins — they are ~104 points
         // tall and it runs centre to centre — so what moves is hidden and what
         // shows does not move.
         //
         // Nothing moves under Reduce Motion: the caller passes a zero period,
         // which is the same cut Android's own `bob` takes (`:560`,
-        // `if (reduce || id !in shown) return 0f`). The caller passes zero for
-        // a **covered** level too, so only the stage on top of the manual's
-        // stack is animating anything (``ManualMapStage/wires(_:size:)``).
+        // `if (reduce || id !in shown) return 0f`).
         //
         // The zero arm of the offset is not decoration either — a still card
         // has to sit **exactly** where the geometry put it, and without it
@@ -739,8 +755,8 @@ struct ManualMapNode: View {
         .offset(y: floats ? (floating ? -5 : 5) : 0)
         .animation(floatAnimation, value: floating)
         // **`onChange` and not `onAppear`.** ``floatPeriod`` can go to zero
-        // and back over one card's lifetime — a level that stops being the
-        // one on screen stops floating (``ManualMapStage/isOnTop``) — so
+        // and back over one card's lifetime — Reduce Motion switched on and
+        // off while the map is open — so
         // `floats` goes false and true again, and an `onAppear` that set
         // `floating = true` once would leave the card pinned at the top of
         // its arc with nothing left to animate. Driving `floating` *from*
@@ -751,8 +767,7 @@ struct ManualMapNode: View {
     }
 
     /// Whether this card bobs at all. Zero period is a still card — Reduce
-    /// Motion, a UI case that turned the float off, or a level that is not
-    /// the one on screen.
+    /// Motion, or a UI case that turned the float off.
     private var floats: Bool { floatPeriod > 0 }
 
     /// One bob, forever, or nothing at all.
@@ -839,9 +854,8 @@ struct ManualMapNode: View {
 // MARK: - the name that scrambles into place
 
 /// How fast a name scrambles: nine frames, 24 ms apart (`ScrambleText`,
-/// `:688` — `steps = 8`, `delay(24)`), so 216 ms of retyping — after
-/// ``leadIn``, which is the transition the level arrives on and the one thing
-/// here that has no Android counterpart.
+/// `:688` — `steps = 8`, `delay(24)`), so 216 ms of retyping, starting the
+/// moment the level arrives, as Android's does.
 ///
 /// The alphabet and the per-frame arithmetic are **not** here. They are
 /// ``manualScrambleGlyphs`` and
@@ -850,26 +864,21 @@ struct ManualMapNode: View {
 /// the settle arithmetic — the half of answer 30 that can be wrong without
 /// anybody seeing it on a screenshot — had no test anywhere, which is what
 /// the review found.
+///
+/// There used to be a 350 ms **lead-in**, frame 0 held for the length of a
+/// navigation push, because a level was a pushed screen and 216 ms of
+/// retyping started at the push was spent while the page was still sliding
+/// (review 3's F3). Since answer 73 nothing slides: a move to the map or a
+/// piece is a cut, and a move between the map and a cluster is Android's
+/// 280 ms glide, during which Android's own names retype in full view
+/// (`focus` changes inside one composition, `:593`). So the lead-in is gone
+/// and the timing is Android's.
 enum ManualScrambleClock {
 
     static let steps = manualScrambleSteps
 
     /// 24 ms, unless a DEBUG launch argument slows it down.
     static var frame: Duration { .milliseconds(frameMS) }
-
-    /// How long **frame 0** is held before the name retypes itself: the
-    /// length of the push or the pop the level arrives on.
-    ///
-    /// 350 ms is a `UINavigationController`'s own transition, measured for
-    /// this screen in `StubHouseUITests+Manual.swift`'s `manualGone(_:)` —
-    /// "a pop takes about 350 ms to animate". Android needs no such thing
-    /// (`focus` changes inside one composition, `ManualScreen.kt:593`, with
-    /// every node on screen throughout); a stack does, because 216 ms of
-    /// retyping started at the moment of the pop is spent entirely while the
-    /// stage is sliding. **Not** scaled by the frame knob below: it is a
-    /// transition, not a frame, and a case that asked for slow frames still
-    /// wants the real transition.
-    static let leadIn: Duration = .milliseconds(350)
 
     /// Whether a case asked for a slow scramble. The only state in which a
     /// node publishes ``ManualMapNode/scrambleState``.
@@ -1110,26 +1119,9 @@ struct ManualScrambleName: View {
     /// main-actor continuation, so a tail that ran would blank the live name
     /// for a frame and — worse — publish ``ManualMapNode/scrambleState`` as
     /// `"settled"` while the replacement was mid-scramble, which is the value
-    /// a UI case reads. Reachable by pushing into a cluster and popping back
-    /// inside one scramble. Nothing is left stuck `true` by returning early:
+    /// a UI case reads. Nothing is left stuck `true` by returning early:
     /// `.task(id:)` cancels on an id change, which starts the replacement that
     /// sets it, or on the view going away, which takes the state with it.
-    ///
-    /// ### Frame 0 is held for the length of the transition
-    ///
-    /// Android's names scramble "as the level opens" with no transition at
-    /// all: `focus` changes inside one composition (`ManualScreen.kt:593`) and
-    /// every node is on screen throughout. Here a level change swaps one
-    /// page for another, which takes about **350 ms** (measured in
-    /// `StubHouseUITests+Manual.swift`'s `manualGone(_:)`) against a scramble
-    /// that ships at 216 ms — so the straight port spent the whole ornament
-    /// while the stage was still sliding, which is review 3's F3 and the
-    /// second way for an effect Kamron called "meant to impress" to be
-    /// invisible. Holding **frame 0** for ``ManualScrambleClock/leadIn`` is
-    /// the cheapest honest fix and keeps the shape: the level arrives already
-    /// scrambled, and the nine frames of retyping then run where somebody can
-    /// see them. It is a delay on the *first* frame only, so the retype itself
-    /// is Android's 216 ms, unchanged.
     ///
     /// `@MainActor` and not nonisolated: it writes `@State` and a `@Binding`,
     /// and a nonisolated `async` method of a view that does that is the one
@@ -1151,9 +1143,7 @@ struct ManualScrambleName: View {
                 // alphabet next. `#` is in the alphabet.
                 manualScrambleGlyphs.randomElement() ?? "#"
             }
-            try? await Task.sleep(
-                for: frame == 0 ? ManualScrambleClock.leadIn : ManualScrambleClock.frame
-            )
+            try? await Task.sleep(for: ManualScrambleClock.frame)
             guard !Task.isCancelled else { return }
         }
         glyphs = ""
