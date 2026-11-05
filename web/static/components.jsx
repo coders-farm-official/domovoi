@@ -841,7 +841,16 @@ const useToast = () => {
    * lifted off the bottom edge by --dock-bottom and --player-h), so the
    * phone's tab strip and the docked player are no longer in its way. The
    * stack spans the viewport less a 16px gutter each side and lets clicks
-   * through between toasts (.toast-stack, styles.css). */
+   * through between toasts (.toast-stack, styles.css).
+   *
+   * ONE stack for the whole dashboard (2026-11-05, owner: notifications as
+   * uniform as possible): index.html has a static #toast-host, and every
+   * useToast, the shell's notices (ToastNotice) and the "Domovoi has been
+   * updated" bar go into it, so toasts from two hooks (a page's and the
+   * container guard's) stack instead of overlapping. Without the host (the
+   * standalone doc/sheet pages, the test harnesses) a hook draws its own
+   * stack in the same place. Inside a plugin's frame the group carries the
+   * plugin's other-theme accent (PluginToastAccent), never amber. */
   const askAbout = (t) => {
     dismiss(t.id);
     if (window.DomovoiHelp) {
@@ -849,11 +858,9 @@ const useToast = () => {
                                 message: [t.text, t.detail].filter(Boolean).join(' — ') });
     }
   };
-  const node = items.length > 0 && (
-    <div className="toast-stack theme-invert"
-         style={{ position: 'fixed', top: 'calc(var(--topbar-h, 52px) + var(--guard-banner-h, 0px) + 12px)',
-                  left: 16, right: 16, display: 'flex', flexDirection: 'column-reverse', alignItems: 'center',
-                  gap: 8, zIndex: 111, pointerEvents: 'none' }}>
+  const accent = useToastAccent();
+  const node = items.length > 0 && toastInStack(
+    <div className="toast-group" style={accent || undefined}>
       {items.map((t) => (t.stay ? (
         <div key={t.id} className="toast toast-stay" data-tone={t.tone}
              role={t.tone === 'err' ? 'alert' : 'status'}>
@@ -894,6 +901,46 @@ const useToast = () => {
   );
   return [fire, node, dismissKey];
 };
+
+/* The plugin frame's accent for the OTHER theme, for toasts drawn inside
+ * it (PluginPageFrame provides it). createContext is absent in the render
+ * harness, so both ends tolerate its absence. */
+const PluginToastAccent = React.createContext ? React.createContext(null) : null;
+const useToastAccent = () => (PluginToastAccent && React.useContext ? React.useContext(PluginToastAccent) : null);
+
+/* Put a toast group (or a notice) into the one shared stack, #toast-host
+ * (index.html), or, where there is none, into a stack of its own. */
+const toastInStack = (el) => {
+  const host = typeof document !== 'undefined' && document.getElementById
+    ? document.getElementById('toast-host') : null;
+  if (host && typeof ReactDOM !== 'undefined' && ReactDOM.createPortal) return ReactDOM.createPortal(el, host);
+  return <div className="toast-stack theme-invert">{el}</div>;
+};
+
+/* A notice that stays until acted on (the shell's "plugins changed —
+ * reload"): the toast look, in the same stack, above the fading toasts
+ * (.toast-notice, styles.css). `actions` [{ label, onClick, title }], the
+ * first one primary; `onDismiss` adds a close button. A status, or an
+ * alert for tone 'err'. */
+const ToastNotice = ({ text, detail = null, tone = 'info', actions = [], onDismiss = null }) => toastInStack(
+  <div className="toast toast-stay toast-notice" data-tone={tone} role={tone === 'err' ? 'alert' : 'status'}>
+    <div className="toast-stay-row">
+      <span className="toast-stay-dot"><StatusDot tone={tone === 'info' ? 'brand' : tone}/></span>
+      <div className="toast-stay-body">
+        <div className="toast-stay-text">{text}</div>
+        {detail && <div className="toast-stay-detail">{detail}</div>}
+      </div>
+      {onDismiss && <IconButton name="x" title="dismiss" aria-label="dismiss" onClick={onDismiss}/>}
+    </div>
+    {actions.length > 0 && (
+      <div className="toast-stay-actions">
+        {actions.map((a, i) => (
+          <Button key={i} variant={i === 0 ? 'primary' : 'secondary'} title={a.title} onClick={a.onClick}>{a.label}</Button>
+        ))}
+      </div>
+    )}
+  </div>
+);
 
 /* ---- The dashboard's one restart ------------------------------ */
 
@@ -1966,17 +2013,16 @@ const pluginAccentStyle = (accent, dark) => {
   return out;
 };
 
-/* The OTHER theme's accent, as --inv-* variables, for a toast inside the
- * frame: toasts draw in the other theme's palette (.theme-invert, useToast),
- * and styles.css maps these onto the brand tokens there. All or nothing:
- * with any one missing the toast keeps the inverted defaults. */
+/* The OTHER theme's accent, for a toast fired inside the frame: toasts
+ * draw in the other theme's palette (.theme-invert, useToast) in the one
+ * shared stack, outside the frame's DOM, so the frame hands these brand
+ * variables down through PluginToastAccent and the toast's group sets them
+ * inline. All or nothing: with any one missing the toast keeps the
+ * inverted defaults. */
 const PLUGIN_ACCENT_NAMES = Object.values(PLUGIN_ACCENT_VARS).flat();
 const pluginAccentInverseStyle = (accent, dark) => {
   const set = pluginAccentStyle(accent, !dark);
-  if (!PLUGIN_ACCENT_NAMES.every((n) => n in set)) return null;
-  const out = {};
-  PLUGIN_ACCENT_NAMES.forEach((n) => { out[`--inv-${n.slice(2)}`] = set[n]; });
-  return out;
+  return PLUGIN_ACCENT_NAMES.every((n) => n in set) ? set : null;
 };
 
 const PluginPageFrame = ({ plugin, page = null, children }) => {
@@ -1985,11 +2031,13 @@ const PluginPageFrame = ({ plugin, page = null, children }) => {
   const pg = page || {};
   const name = p.name || p.slug || 'plugin';
   const inverse = pluginAccentInverseStyle(p.accent, dark);
+  const content = PluginToastAccent
+    ? <PluginToastAccent.Provider value={inverse}>{children}</PluginToastAccent.Provider>
+    : children;
   return (
     <div className="plugin-frame" data-plugin={p.slug || ''}
          data-accent={(p.accent && p.accent.source) || 'none'}
-         data-accent-inverse={inverse ? '' : undefined}
-         style={{ ...pluginAccentStyle(p.accent, dark), ...(inverse || {}) }}>
+         style={pluginAccentStyle(p.accent, dark)}>
       <div className="plugin-frame-band" role="region" aria-label={`${name} plugin`}>
         <span className="plugin-frame-icon">
           <PluginNavIcon src={pg.nav_icon || null} srcDark={pg.nav_icon_dark || null} size={18}/>
@@ -2006,7 +2054,7 @@ const PluginPageFrame = ({ plugin, page = null, children }) => {
           <Icon name="chevron-right" size={14}/>
         </a>
       </div>
-      {children}
+      {content}
     </div>
   );
 };
@@ -4183,7 +4231,7 @@ Object.assign(window, {
   Icon, DomovoiGlyph, SleepingDomovoi, HeadphonesDomovoi, StatusDot, Pill, PreviewTag, PREVIEW_MEANS, RoomChip, Avatar,
   Card, Empty, Button, IconButton, Sidebar, Topbar, PageHeader, Stat, useToast, Tabs,
   CORE_NAV_ITEMS, buildNavItems, navItemsFor, CapabilitiesStore, useAiFeatures, aiFeaturesOn, AI_ONLY_ROUTES, PluginNavIcon, useDarkTheme, usePluginBadges,
-  PluginPageFrame, pluginAccentStyle,
+  PluginPageFrame, pluginAccentStyle, ToastNotice,
   SHARED_SCREEN_HIDDEN, useSharedScreen,
   PHONE_BAR_DEFAULT, PHONE_BAR_MAX, PHONE_BAR_MIN, PhoneBarStore, usePhoneBar, phoneBarRoutes, phoneBarEdit,
   SETTINGS_TAB_ROUTES, settingsTabRoute, resolveRoute, routeParts, routePage, currentRoute,

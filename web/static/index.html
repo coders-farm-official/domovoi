@@ -55,6 +55,11 @@
 </head>
 <body>
   <div id="root"></div>
+  <!-- The one stack every toast and notice goes into (components.jsx
+       useToast / ToastNotice, and the "Domovoi has been updated" bar
+       below): top-centre, the other theme's palette (styles.css
+       .toast-stack). Static, outside React, so the bar can use it too. -->
+  <div id="toast-host" class="toast-stack theme-invert"></div>
 
   <!-- Vendored locally under /vendor for a zero-external-request dashboard.
        Versions: react/react-dom 18.3.1 (development builds, unchanged),
@@ -452,15 +457,11 @@
             {/* A timer or reminder went off somewhere in the house: a card
                 that stays until dismissed (components.jsx). */}
             <TimerFireAlerts/>
+            {/* In the shared toast stack, above the fading toasts; stays
+                until reloaded (components.jsx ToastNotice). */}
             {pluginsStale && (
-              <div style={{ position: 'fixed', bottom: 'calc(var(--dock-bottom, 0px) + var(--player-h, 0px) + 24px)', right: 24, zIndex: 80,
-                            background: 'var(--overlay)', border: '1px solid var(--border)',
-                            borderRadius: 'var(--r-md)', boxShadow: 'var(--shadow-md)',
-                            padding: '10px 14px', fontSize: 13, display: 'flex',
-                            alignItems: 'center', gap: 10 }}>
-                plugins changed — reload to get the new pages
-                <Button variant="primary" onClick={() => window.location.reload()}>reload</Button>
-              </div>
+              <ToastNotice text="plugins changed — reload to get the new pages"
+                           actions={[{ label: 'reload', onClick: () => window.location.reload() }]}/>
             )}
           </div>
         </PlaybackProvider>
@@ -510,39 +511,55 @@
     function show() {
       if (done || document.getElementById('bundle-stale')) return;
       done = true;
+      // The toast look, in the shared stack at the top (#toast-host,
+      // styles.css .toast-stack), above the fading toasts; it stays until
+      // "reload" or "not now". On a page with no host (an older or a hand-
+      // made one) it makes a stack of its own in the same place.
       var bar = document.createElement('div');
       bar.id = 'bundle-stale';
+      bar.className = 'toast toast-stay toast-notice';
+      bar.setAttribute('data-tone', 'info');
       bar.setAttribute('role', 'status');
-      // --dock-bottom: above the phone's tab strip (0 on a desktop);
-      // --player-h: above the docked player while one shows.
-      bar.style.cssText = 'position:fixed;left:24px;bottom:calc(var(--dock-bottom, 0px) + var(--player-h, 0px) + 24px);z-index:120;' +
-        'max-width:min(420px,calc(100vw - 48px));background:var(--overlay,#222);' +
-        'color:var(--fg,#eee);border:1px solid var(--border,#444);' +
-        'border-radius:var(--r-md,10px);box-shadow:var(--shadow-md,0 6px 24px rgba(0,0,0,.35));' +
-        'padding:12px 14px;font-size:13px;line-height:1.45;display:flex;' +
-        'flex-wrap:wrap;align-items:center;gap:10px;';
-      var text = document.createElement('span');
-      text.style.cssText = 'flex:1 1 200px;';
+      var row = document.createElement('div');
+      row.className = 'toast-stay-row';
+      var dotBox = document.createElement('span');
+      dotBox.className = 'toast-stay-dot';
+      var dot = document.createElement('span');
+      dot.className = 'dot';
+      dot.style.background = 'var(--brand)';
+      dotBox.appendChild(dot);
+      var body = document.createElement('div');
+      body.className = 'toast-stay-body';
+      var text = document.createElement('div');
+      text.className = 'toast-stay-text';
       text.textContent = 'Domovoi has been updated. This tab is still running the ' +
-        'dashboard files it opened with \u2014 reload to pick up the new ones.';
+        'dashboard files it opened with — reload to pick up the new ones.';
+      body.appendChild(text);
+      row.appendChild(dotBox);
+      row.appendChild(body);
+      var actions = document.createElement('div');
+      actions.className = 'toast-stay-actions';
       var reload = document.createElement('button');
       reload.type = 'button';
+      reload.className = 'btn btn-primary';
       reload.textContent = 'reload';
-      reload.style.cssText = 'cursor:pointer;border-radius:var(--r-sm,8px);' +
-        'border:1px solid var(--brand,#e8a33d);background:var(--brand,#e8a33d);' +
-        'color:var(--brand-fg,#1b1b1b);padding:6px 12px;font:inherit;font-weight:600;';
       reload.addEventListener('click', function () { window.location.reload(); });
       var later = document.createElement('button');
       later.type = 'button';
+      later.className = 'btn btn-secondary';
       later.textContent = 'not now';
-      later.style.cssText = 'cursor:pointer;border-radius:var(--r-sm,8px);' +
-        'border:1px solid var(--border,#444);background:transparent;color:inherit;' +
-        'padding:6px 12px;font:inherit;';
       later.addEventListener('click', function () { bar.remove(); });
-      bar.appendChild(text);
-      bar.appendChild(reload);
-      bar.appendChild(later);
-      document.body.appendChild(bar);
+      actions.appendChild(reload);
+      actions.appendChild(later);
+      bar.appendChild(row);
+      bar.appendChild(actions);
+      var host = document.getElementById('toast-host');
+      if (!host) {
+        host = document.createElement('div');
+        host.className = 'toast-stack theme-invert';
+        document.body.appendChild(host);
+      }
+      host.appendChild(bar);
     }
 
     function check() {

@@ -1650,7 +1650,23 @@ a.home-att-row:hover { background: var(--brand-soft); }
    ones on a light page. The stack spans the viewport less 16px a side and
    lets clicks through; each toast takes them back. The tone is the left
    rail, in the ink tokens (a UI part: 3:1 or better on --overlay in both
-   palettes), plus the dot. */
+   palettes), plus the dot.
+   One stack for the whole dashboard: index.html's static #toast-host holds
+   every hook's toasts, the shell's notices and the "Domovoi has been
+   updated" bar, so they stack instead of overlapping. z-index 111: above
+   every layer in the ladder (see .cal-modal-bg) and the timer cards (85).
+   Under the topbar and the container guard's banner (--guard-banner-h). */
+.toast-stack {
+  position: fixed; top: calc(var(--topbar-h, 52px) + var(--guard-banner-h, 0px) + 12px);
+  left: 16px; right: 16px; z-index: 111; pointer-events: none;
+  display: flex; flex-direction: column-reverse; align-items: center; gap: 8px;
+}
+/* One hook's toasts: their own box only to carry a plugin frame's accent. */
+.toast-group { display: contents; }
+/* A notice that stays until acted on (ToastNotice, the bundle bar) sits
+   above the fading toasts: in a column-reverse stack a higher order is
+   nearer the top. */
+.toast-stack .toast-notice { order: 1; }
 .toast-stack .toast {
   pointer-events: auto; box-sizing: border-box; max-width: min(100%, 600px);
   background: var(--overlay); color: var(--fg);
@@ -1680,14 +1696,6 @@ a.home-att-row:hover { background: var(--brand-soft); }
 .toast-stay-detail { margin-top: 4px; font-size: var(--t-sm); color: var(--fg-muted); overflow-wrap: anywhere; white-space: pre-line; user-select: text; }
 .toast-stay-actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 8px 0 18px; }
 .toast-stay-actions .btn { max-width: 100%; }
-/* Inside a plugin's frame the brand tokens are the plugin's accent; the
-   inverted toast takes that accent's OTHER-theme values, which the frame
-   sets as --inv-* (components.jsx pluginAccentInverseStyle), never amber. */
-:root .plugin-frame[data-accent-inverse] .theme-invert {
-  --brand: var(--inv-brand); --brand-hover: var(--inv-brand-hover); --brand-press: var(--inv-brand-press);
-  --brand-fg: var(--inv-brand-fg); --fg-on-brand: var(--inv-fg-on-brand); --brand-soft: var(--inv-brand-soft);
-  --brand-halo: var(--inv-brand-halo); --brand-ring: var(--inv-brand-ring); --brand-ink: var(--inv-brand-ink);
-}
 @media (max-width: 760px) {
   .toast-brief { padding: 12px; gap: 10px; }
   .toast-stay { padding: 8px 4px 8px 12px; }
