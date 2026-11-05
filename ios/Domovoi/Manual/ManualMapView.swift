@@ -589,78 +589,59 @@ struct ManualMapNode: View {
                         .foregroundStyle(Color.fgMuted)
                         .multilineTextAlignment(.leading)
                         .fixedSize(horizontal: false, vertical: true)
-                        // **Out of the accessibility tree, because the frame
-                        // it claims is not its own.** The subtitle is not
-                        // lost: the card's own label below is
-                        // `"<title>: <subtitle>"`
+                        // **Hidden, and the hide is a no-op here — measured
+                        // three ways in train I005.** It is kept for one
+                        // reason, below.
+                        //
+                        // What I005's `manual-audit-topic` and
+                        // `manual-audit-map` trees show (the audit cases'
+                        // attachments):
+                        //
+                        //  1. this line is **in** the tree, with its hide
+                        //     applied: `StaticText … label: 'where it listens'`
+                        //     under the card's `Button`;
+                        //  2. so is the icon above, whose own
+                        //     `.accessibilityHidden(true)` is older than this
+                        //     branch: `Image … label: 'Radio'`;
+                        //  3. and Apple's audit **measured** this element on
+                        //     the topic level, hide and all — the one finding
+                        //     in train I005's manual was against the piece
+                        //     node's second line
+                        //     (`'one room, end to end   preview '`,
+                        //     `frame=(25.0, 461.3, 99.7, 30.3)`).
+                        //
+                        // The contrast with the wires in ``ManualMapStage``
+                        // is what makes this a rule and not a run of bad
+                        // luck: that `Canvas` carries the same modifier,
+                        // outside any `Button`, and is absent from the same
+                        // tree. Inside a `Button`'s label SwiftUI keeps the
+                        // leaves and drops what was said about them —
+                        // `ios/Domovoi/News/NewsPeopleChipRow.swift:94` has
+                        // the app-wide measurement, including that
+                        // `accessibilityElement(children: .ignore)` only adds
+                        // a wrapper around the control.
+                        //
+                        // **Why it stays.** Between I004 and I005 this
+                        // element's frame went back from the whole
+                        // `{177.7 × 104}` card to its own `{85.3 × 14.3}`
+                        // glyphs, and this modifier is the only edit it took
+                        // in between (I004 flagged the card-sized rectangle
+                        // twice at 1.35:1; I005's map audit is clean). That
+                        // is a correlation and not a mechanism — nothing here
+                        // can run a `NavigationStack` or an audit — so the
+                        // modifier is left where it is rather than removed to
+                        // find out on Kamron's screen.
+                        //
+                        // **What VoiceOver reads is the card's own label**
+                        // below, `"<title>: <subtitle>"`
                         // (``manualNodeReading(title:subtitle:)``), which is
-                        // Android's `contentDescription` and the only reading
-                        // VoiceOver gets of a node. A piece node's
-                        // `preview`/`plugin` **tags are** lost: they were
-                        // runs of this line, the label never had them, and
-                        // after this hide VoiceOver announces them nowhere —
-                        // as TalkBack does not (`ManualScreen.kt:655`).
-                        //
-                        // Measured, in the trains' own screenshots
-                        // (`testManual_AuditsClean`'s note has the method):
-                        //
-                        //  - I002, when this was a `String`:
-                        //    `label: 'where it listens'` at
-                        //    `{{25.1, 435.0}, {85.3, 14.3}}` — its own glyphs;
-                        //    its two most-covered colours are the card and
-                        //    `fgMuted`, 6.66:1.
-                        //  - I004, as an `AttributedString`:
-                        //    the same label at `{{14.0, 407.3}, {177.7, 104.0}}`
-                        //    — the **whole card**, twelve times the area, in
-                        //    the scrambling tree and in the settled one alike.
-                        //    That rectangle holds the card's 1-point border,
-                        //    so its two most-covered colours are
-                        //    `(242,242,247)` and `(210,210,215)` — **1.35:1**
-                        //    — and on the hub, whose border is `brandInk` at
-                        //    60%, `(187,150,99)` — 2.46:1.
-                        //
-                        // Why that rectangle and not the others: sub-4.5
-                        // pairs are **not** rare in this picture — the
-                        // `start here` pill holds the same 1.35:1 border pair
-                        // at higher coverage, the search field, `switch
-                        // server` and the `unverified` chip hold sub-4.5
-                        // pairs too, in both trains, and none was flagged.
-                        // What fits every rectangle measured is a model, not
-                        // Apple's documented rule: the audit compares the
-                        // **two most-covered colours inside a static text's
-                        // frame**. On I002's map and I004's, every static
-                        // text's top two are at 5.07:1 or better except these
-                        // three second lines in I004 (1.35, 1.35, 2.46); the
-                        // pill and the field are not static texts; the same
-                        // rule gives the code span's one attributed finding
-                        // its exact 1.108:1. It does **not** account for three
-                        // frames returning two findings (two of them share
-                        // one pair, which a de-duplicating audit would merge —
-                        // a guess, untested). Under the model the fix works
-                        // because the card's only remaining text is its
-                        // `Button` label, and the pill is the measured control
-                        // that a button holding this same pair is not flagged.
-                        //
-                        // **What is not established is the mechanism.** The
-                        // `AttributedString` is the only edit this line took
-                        // in the batch the frame changed in, and that is a
-                        // correlation, not a cause: ``ManualPiecePage``'s
-                        // washed paragraph is an `AttributedString` too and
-                        // its frame is its own four lines
-                        // (`361 × 64.3`), as is Start here's unwashed one.
-                        // Nothing here rests on knowing which: the element
-                        // leaves the tree either way, and the subtitle it
-                        // carries is in the card's label regardless. The cost is
-                        // stated and it is small — a future SwiftUI that gave
-                        // this line an honest frame again would not be
-                        // noticed, because a hidden element is not measured by
-                        // anything.
-                        //
-                        // `.accessibilityHidden` and not `.hidden()`: the line
-                        // is still drawn, still measured and still washes its
-                        // `preview`/`plugin` runs. Android does not announce
-                        // those pills either (`ManualScreen.kt:655` joins the
-                        // title and the subtitle and stops).
+                        // Android's `contentDescription` (`ManualScreen.kt:655`):
+                        // a `Button` is one stop whatever its label content
+                        // enumerates as. A piece node's `preview`/`plugin`
+                        // tags are in neither — they are runs of this line
+                        // and the label never had them — as TalkBack does not
+                        // announce them either (`:655` joins the title and
+                        // the subtitle and stops).
                         .accessibilityHidden(true)
                 }
             }
@@ -690,22 +671,29 @@ struct ManualMapNode: View {
         // .joinToString(": ")` (`:655`), so a node reads as one thing rather
         // than as two labels and a pair of pills.
         //
-        // **This is also what keeps the scramble out of VoiceOver's way, and
-        // since train I004 it is the ONLY thing that does.** The label is the
-        // node's real name, set here on the control; ``ManualScrambleName``
-        // is hidden from accessibility entire, because I004's `manual-audit-map`
-        // tree had the glyph frame in it as a static text of its own beside
-        // the real name (that view's note has the two lines). So the drawn
-        // glyphs are nobody's label, and a case that reaches a node by its
-        // name reaches it mid-scramble exactly as it does at rest
-        // (``testManual_ANodeIsNamedWhileItsNameScrambles``, which now counts
-        // the node's children for that reason).
+        // **This is what keeps the scramble out of VoiceOver's way, and it
+        // is the only thing that does.** The label is the node's real name,
+        // set here on the control, and a `Button` is **one** VoiceOver stop:
+        // whatever its label content enumerates as in an XCUITest tree, the
+        // reading is this string. So a case that reaches a node by its name
+        // reaches it mid-scramble exactly as it does at rest
+        // (``testManual_ANodeIsNamedWhileItsNameScrambles``).
         //
-        // It is now the only reading of the second line too (above), so the
-        // join is a rule with a test of its own rather than a ternary in a
-        // view body: ``manualNodeReading(title:subtitle:)``. Both texts under
-        // this control are hidden, and a label that lost half of itself would
-        // leave a node announced by its title alone with nothing objecting.
+        // It was written here that ``ManualScrambleName`` being hidden made
+        // the drawn glyphs "nobody's label". Train I005 says otherwise: with
+        // that hide in place the glyph frame is still a `StaticText` of its
+        // own under this `Button` (`'Domovoi'`, `'Domovo9'` and
+        // `'your home'` in the card at
+        // `testManual_ANodeIsNamedWhileItsNameScrambles`'s failure, which is
+        // what that case counted). The hide is a no-op inside a `Button`'s
+        // label — the second line above has the three witnesses — so this
+        // label is the belt and there are no braces.
+        //
+        // It is the only reading of the second line too (above), so the join
+        // is a rule with a test of its own rather than a ternary in a view
+        // body: ``manualNodeReading(title:subtitle:)``. A label that lost
+        // half of itself would leave a node announced by its title alone
+        // with nothing objecting.
         .accessibilityLabel(manualNodeReading(title: node.title, subtitle: node.subtitle))
         // The one thing a UI case can read about the scramble — see
         // ``scrambleState``. The **empty** string in every build that could
@@ -994,23 +982,33 @@ enum ManualFloatClock {
 /// audit measured in the same rectangles — the gibberish is the same black as
 /// the name, in a different number of pixels (2305 against 2130), so the
 /// rectangles are the same picture outside the name's own frame and not
-/// inside it. A re-lettering cannot fail a contrast check, so the
-/// hide below is answer 30's half and **not** the audit's fix; the second
-/// line's is.
+/// inside it. A re-lettering cannot fail a contrast check, so the hide below
+/// was never the audit's fix. Nor, it turns out, was the second line's: train
+/// I005 audited a map with both hides in place and came back clean, and in
+/// the same train Apple's audit **measured** the hidden second line on the
+/// topic level. What changed between the two audits is the frame
+/// (``ManualMapNode``'s second line has it, as a correlation).
 ///
-/// The fix is one modifier and not a redraw: the **whole** name — the
-/// laid-out copy, the overlay and the box they share — leaves the
-/// accessibility tree, and ``ManualMapNode``'s own label is what carries the
-/// name. It is the belt without the braces, deliberately: three sayings of
-/// one thing were what hid this, since two of them were inside a subtree
-/// nothing was checking.
+/// The modifier below was the answer to that, and **train I005 measured that
+/// it is a no-op**: with the hide on the composed name, the glyph frame is
+/// still a static text under the card. I005's
+/// `testManual_ANodeIsNamedWhileItsNameScrambles` counted a card holding
+/// `["Domovoi", "Domovo9", "your home"]`, and the same tree holds the icon,
+/// which has carried `.accessibilityHidden(true)` since long before any of
+/// this. Inside a `Button`'s label SwiftUI keeps the leaves and drops what
+/// was said about them; ``ManualMapNode``'s second line has the three
+/// witnesses and the one that cuts the other way (the wires `Canvas`, same
+/// modifier, outside a `Button`, absent from the same tree).
 ///
-/// What holds it is ``testManual_ANodeIsNamedWhileItsNameScrambles``, which
-/// counts this control's children while the glyphs are on screen, and
-/// ``testManual_ANodeCardIsOneElementAndNotFour``, which counts them at rest
-/// with a positive control that SwiftUI still exposes a button's children at
-/// all. The audit does not hold it and was never able to: with the glyphs
-/// measuring 18.82:1 there is nothing in them for a contrast check to find.
+/// So the reading is ``ManualMapNode``'s label and nothing else, and that is
+/// enough for answer 30's half: a `Button` is **one** VoiceOver stop, so what
+/// a reader hears on a card is `"<title>: <subtitle>"` whether or not the
+/// tree enumerates the glyphs beneath it. The modifier stays — it is free, it
+/// is the right thing to say about a decoration, and it would matter the day
+/// this name is drawn outside a control — but nothing rests on it, and no
+/// case asserts it works. What the two counting cases hold now is the thing
+/// that *can* be wrong: no leaf under a card carries anything but the card's
+/// own words.
 ///
 /// It stays in the **layout** and in the picture: `.accessibilityHidden` is
 /// not `.hidden()`, so the card is still measured by the real name and the
@@ -1052,12 +1050,9 @@ struct ManualScrambleName: View {
                         .clipped()
                 }
             }
-            // **Both copies leave the accessibility tree, from out here.**
-            // See this view's note: I004's tree carried the glyph frame as a
-            // static text of its own beside the real one, with the overlay's
-            // inner `.accessibilityHidden(true)` applied and not taken. One
-            // modifier on the composed view cannot be routed around the same
-            // way, and ``ManualMapNode`` sets the label this name is read by.
+            // Both copies, said once from out here — and a no-op inside a
+            // `Button`'s label, which train I005 measured and this view's
+            // note has. ``ManualMapNode``'s label is what the card reads as.
             .accessibilityHidden(true)
             // `LaunchedEffect(key, text)` (`:686`): the name scrambles again
             // when the level changes, and when the document changes under it,

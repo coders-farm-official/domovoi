@@ -201,11 +201,27 @@ struct ManualView: View {
         // through `openURL`. Anything that is not one of ours — the piece
         // page's `More detail` button, which opens GitHub — falls through to
         // the system, which is what `.systemAction` means.
-        .environment(\.openURL, OpenURLAction { url in
+        //
+        // **This reaches this screen's descendants and not a pushed level**,
+        // which is why ``ManualLevelHost`` is handed the same action and
+        // installs it again: see ``ManualLevelHost/links`` for what train
+        // I005 measured a page without it doing.
+        .environment(\.openURL, links)
+    }
+
+    /// What a tapped link in the document does, built once and installed on
+    /// every screen of this manual that can draw a page.
+    ///
+    /// It is a property and not a literal in `body` because a pushed level is
+    /// a different screen (``ManualLevelHost``) and needs the same value; the
+    /// closure reads `manual` through `self`, so it is the current model and
+    /// not one captured at first build, exactly as the literal was.
+    private var links: OpenURLAction {
+        OpenURLAction { url in
             guard let link = manualLink(of: url), let manual else { return .systemAction }
             follow(link, in: manual)
             return .handled
-        })
+        }
     }
 
     // MARK: - the four load states
@@ -326,7 +342,8 @@ struct ManualView: View {
                 manual: manual,
                 cached: cached,
                 depth: 0,
-                isTopRoute: isTopRoute
+                isTopRoute: isTopRoute,
+                links: links
             )
         }
     }
@@ -672,6 +689,31 @@ struct ManualLevelHost: View {
     /// and the dismissal resolve in one update.
     let isTopRoute: Bool
 
+    /// What a tapped link in this level's page does — the manual's own
+    /// ``ManualView/links``, installed again **on this screen**.
+    ///
+    /// `.environment(…)` applies to a view's descendants, and a level
+    /// presented through `navigationDestination(isPresented:)` is not one of
+    /// ``ManualView``'s: train I005 is the measurement. At a piece reached by
+    /// the search field — depth 3, the first train in which a piece was a
+    /// pushed screen — the openable `route:` link was tapped on its own
+    /// glyphs (`the rooms list`, `{{16.0, 426.0}, {103.0, 20.3}}`, tapped at
+    /// its centre) and **nothing happened at all**: the page was still drawn,
+    /// the link still underlined, the crumbs unchanged
+    /// (`overnight-trains/I005/ALL/att/testManual_AnUnopenableRouteLinkIsNotALink/manual-link-landed-on-rooms_0_*.png`).
+    /// The handler cannot have run — it collapses the levels before it
+    /// navigates (``ManualView/act(_:in:)``), so a run of it is visible
+    /// whatever `openSettingsTab` then does. The same case passed in trains
+    /// I002 and I004, where every level was drawn by the route's own screen
+    /// and the action was in scope.
+    ///
+    /// Without it a link is a control that cannot do what it says, which is
+    /// the one thing Kamron's no-misleading-controls rule will not have. It
+    /// is a `let` and not an `@Environment` read for the reason the
+    /// measurement gives: the environment is exactly what does not arrive
+    /// here.
+    let links: OpenURLAction
+
     /// What this host tells the host below it: that it has drawn. Depth 0 is
     /// told by nobody, so it defaults to a closure that does nothing.
     ///
@@ -731,6 +773,9 @@ struct ManualLevelHost: View {
             ManualLevelView(doc: doc, manual: manual, place: shown, scrolls: true)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        // The manual's link action, on this screen's own content — see
+        // ``links`` for the train that measured a pushed page without it.
+        .environment(\.openURL, links)
         .onAppear {
             onDrawn()
             if let own { lastOwn = own }
@@ -788,6 +833,7 @@ struct ManualLevelHost: View {
                     cached: cached,
                     depth: depth + 1,
                     isTopRoute: isTopRoute,
+                    links: links,
                     onDrawn: { deeperDrew = true }
                 )
             )

@@ -254,9 +254,11 @@ extension StubHouseUITests {
     ///
     /// Which it did not, before the review: the label this case reaches a node
     /// by predates the effect, so the whole of `ManualScrambleName` could be
-    /// removed and this passed. The drawn glyphs are nobody's label and
-    /// nobody's value — that is the point of the effect — so nothing in the
-    /// accessibility tree can carry *what* was drawn.
+    /// removed and this passed. The drawn glyphs are not the card's label and
+    /// not its value — that is the point of the effect — so nothing VoiceOver
+    /// stops on can carry *what* was drawn. (A leaf under the card does carry
+    /// it: train I005 measured that, and the subset assertion below is what
+    /// it cost. See the comment on that line.)
     ///
     /// What it can carry is **whether** a scramble is in flight, and that is
     /// now published as the node's accessibility value
@@ -324,46 +326,53 @@ extension StubHouseUITests {
                 + "running at all"
         )
 
-        // **The glyphs are in nobody's tree**, asserted while they are on
+        // **No glyph frame carries words**, asserted while the glyphs are on
         // screen, which is the half of answer 30 Kamron named ("leaving the
-        // accessibility label alone") and the half that shipped broken.
-        // Train I004's `manual-audit-map` tree had two static texts per node
-        // in one frame — `'Rooms & devices'` and `'Rooms & deX76H0'` — so the
-        // drawn glyphs *were* an element's label. (It is *not* what made that
-        // train's audit red: the glyphs measure the same 18.82:1 as the name
-        // they replace. ``testManual_AuditsClean``'s note has the pixels and
-        // what did.) ``ManualScrambleName`` is now hidden from accessibility
-        // entire, and so is the second line — its `AttributedString` frame
-        // claimed the whole card — so a node's card contributes **nothing** to
-        // the tree and is read by its own label, which the wait above already
-        // proved.
+        // accessibility label alone").
         //
-        // A label here is a hide that came off, and which one says which:
-        // the glyph run or the real name is ``ManualScrambleName``'s, the
-        // subtitle is the second line's. Zero is also what SwiftUI would
-        // report if it stopped exposing a merged button's children at all, so
-        // that reading gets a control of its own below rather than a comment
-        // saying it is unlikely.
-        let inside = card.staticTexts.allElementsBoundByIndex.map(\.label)
-        XCTAssertEqual(
-            inside, [],
-            "the centre node's card contributes \(inside) to the tree while "
-                + "its name is scrambling, and it should contribute nothing — "
-                + "the glyph run or the name is `ManualScrambleName`'s hide "
-                + "coming off, and \"\(StubManual.centreSubtitle)\" is the "
-                + "second line's"
+        // This line used to require the card to contribute **nothing**, and
+        // train I005 measured that it cannot: the card came back holding
+        // `["Domovoi", "Domovo9", "your home"]` with both
+        // `.accessibilityHidden(true)`s in place, and the same trees hold the
+        // node's icon, hidden since long before answer 30
+        // (`manual-audit-map-tree…txt`: `Image … label: 'Radio'`). Inside a
+        // `Button`'s label SwiftUI keeps the leaves and drops what was said
+        // about them — `NewsPeopleChipRow.swift:94` has the app-wide
+        // measurement, down to `accessibilityElement(children: .ignore)`
+        // only adding a wrapper — while the same modifier on the map's wires,
+        // outside a `Button`, does take them out of the very same tree.
+        //
+        // So what a card may contribute is **its own two words**, and the
+        // scramble frame is what may not: `'Domovo9'` is a label that exists
+        // for 216 ms and reads as nothing. VoiceOver itself stops once, on
+        // the card, and hears ``centreNodeLabel`` — the wait above is that
+        // claim — so this is the leaf-level belt on the same promise.
+        let inside = Set(card.staticTexts.allElementsBoundByIndex.map(\.label))
+        let allowed: Set<String> = [StubManual.centreNode, StubManual.centreSubtitle]
+        XCTAssertTrue(
+            inside.isSubset(of: allowed),
+            "the centre node's card carries \(inside.subtracting(allowed)) in "
+                + "the tree while its name is scrambling, and a card may carry "
+                + "only its own words \(allowed) — a frame of the scramble has "
+                + "become an element's label, which is the half of answer 30 "
+                + "Kamron named"
         )
-        // The control for the zero: a button whose children are still in the
-        // tree, on the same screen, in the same run. The phone bar's tabs are
-        // an `Image` and a `Text` under one label, so if SwiftUI had stopped
-        // exposing a button's children the count above would be zero for a
-        // reason that is not this screen's and this line says so first.
+        // The control for that subset: a button whose children are in the
+        // tree, on the same screen, in the same run. If SwiftUI ever did stop
+        // exposing a merged button's children, every card would be empty and
+        // the subset above would pass while asserting nothing.
         XCTAssertGreaterThan(
             app.buttons[StubManual.homeTabControl].firstMatch.staticTexts.count, 0,
             "no button on this screen exposes a static text of its own, so "
-                + "the empty node card above says nothing about either hide — "
-                + "SwiftUI has changed what a merged button contributes and "
-                + "this file's counting assertions are what to rewrite"
+                + "the card's leaves above say nothing — SwiftUI has changed "
+                + "what a merged button contributes and this file's counting "
+                + "assertions are what to rewrite"
+        )
+        XCTAssertFalse(
+            inside.isEmpty,
+            "the centre node's card has no leaves at all while a button on "
+                + "the same screen does, so this card is drawing neither its "
+                + "name nor its second line"
         )
         evidence(app, "manual-scramble-running")
 
@@ -400,16 +409,32 @@ extension StubHouseUITests {
     /// ``testManual_AuditsClean`` has the sampling, the model and what it
     /// does not explain.
     ///
-    /// So this counts what the audit cannot name. Every card on the map
-    /// contributes **no** static text of its own and is read by its label
-    /// (``manualNodeReading(title:subtitle:)``, which the package suite holds
-    /// word for word). Either hide coming off puts a label back here, and the
-    /// failure prints which: a title or a glyph run is
-    /// ``ManualScrambleName``'s, a second line is ``ManualMapNode``'s.
+    /// So this counts what the audit cannot name: **one control per card, and
+    /// no leaf under it carrying anything but that card's own two words.**
     ///
-    /// At rest, and `testManual_ANodeIsNamedWhileItsNameScrambles` does the
-    /// same count mid-scramble: the audit runs in that state, and this one is
-    /// the state a reader sees for the rest of the screen's life.
+    /// It required the card to contribute *nothing*, and train I005 measured
+    /// that it cannot: both of a card's texts are
+    /// `.accessibilityHidden(true)` and both came back in the tree, beside
+    /// the node icon, which has been hidden since long before any of this
+    /// (`I005/ALL/att/testManual_AuditsClean/manual-audit-map-tree…txt`:
+    /// `Image … label: 'Radio'`, `StaticText … 'Rooms & devices'`,
+    /// `StaticText … 'where it listens'`). Inside a `Button`'s label SwiftUI
+    /// keeps the leaves and drops what was said about them
+    /// (`NewsPeopleChipRow.swift:94`, app-wide, including that
+    /// `accessibilityElement(children: .ignore)` only adds a wrapper); the
+    /// same modifier on the map's wires, outside a `Button`, does take them
+    /// out of the same tree. The hide is kept — ``ManualMapNode``'s second
+    /// line says why, and what the frame did between the two trains — and
+    /// nothing asserts that it works, because it does not.
+    ///
+    /// What is still worth an assertion is the thing that **can** be wrong:
+    /// a word under a card that is not that card's. A scramble frame with a
+    /// label would be one, and that is the half of answer 30 Kamron named.
+    ///
+    /// At rest, and `testManual_ANodeIsNamedWhileItsNameScrambles` makes the
+    /// same claim mid-scramble, where the glyph run is on screen to carry a
+    /// label and the audit runs: this one is the state a reader sees for the
+    /// rest of the screen's life.
     ///
     /// The float is off (`manualLaunch`'s default) so that `frame` is read off
     /// a card that is holding position — a bobbing card's frame is a point in
@@ -426,33 +451,45 @@ extension StubHouseUITests {
         // The scramble is over by now at the shipping 24 ms — the pill tap,
         // the wait and the queries above cost more than its 350 ms lead-in
         // and eight frames — and this case does not depend on that either
-        // way: both of a card's texts are hidden in both states.
-        for label in [StubManual.centreNodeLabel, StubManual.roomsTopicLabel] {
-            let cards = app.buttons.matching(NSPredicate(format: "label == %@", label))
+        // way: a settled card's leaves are its own two words, and a
+        // scrambling one's third leaf would fail the same assertion.
+        let cards: [(label: String, words: Set<String>)] = [
+            (StubManual.centreNodeLabel, [StubManual.centreNode, StubManual.centreSubtitle]),
+            (StubManual.roomsTopicLabel, [StubManual.roomsTopic, StubManual.roomsTopicSubtitle]),
+        ]
+        for (label, words) in cards {
+            let matches = app.buttons.matching(NSPredicate(format: "label == %@", label))
             XCTAssertEqual(
-                cards.count, 1,
-                "\(label) is \(cards.count) controls on the map, not one — a "
+                matches.count, 1,
+                "\(label) is \(matches.count) controls on the map, not one — a "
                     + "card drawn twice is a level below this one still in the "
                     + "tree (`testManual_ASwipeFromAPieceGoesUpToItsTopic` has "
                     + "the premise)"
             )
-            let card = cards.firstMatch
-            let inside = card.staticTexts.allElementsBoundByIndex.map(\.label)
-            XCTAssertEqual(
-                inside, [],
-                "the card \"\(label)\" contributes \(inside) to the tree and "
-                    + "should contribute nothing: a title or a run of glyphs "
-                    + "is `ManualScrambleName`'s `.accessibilityHidden` coming "
-                    + "off, a second line is `ManualMapNode`'s — and that one "
-                    + "is the frame Apple's audit measured 1.35:1 inside"
+            let card = matches.firstMatch
+            let inside = Set(card.staticTexts.allElementsBoundByIndex.map(\.label))
+            XCTAssertTrue(
+                inside.isSubset(of: words),
+                "the card \"\(label)\" carries \(inside.subtracting(words)) in "
+                    + "the tree, and a card may carry only its own words "
+                    + "\(words). A frame of the scramble is "
+                    + "`ManualScrambleName` having become somebody's label; "
+                    + "anything else is a word this card does not draw"
+            )
+            XCTAssertFalse(
+                inside.isEmpty,
+                "the card \"\(label)\" has no leaves at all, while the control "
+                    + "below says a merged button still exposes its children — "
+                    + "so this card is drawing neither its name nor its second "
+                    + "line"
             )
         }
-        // The control for those zeroes, so an empty card cannot be SwiftUI
-        // having stopped exposing a merged button's children at all.
+        // The control for those subsets, so a card with no leaves cannot be
+        // SwiftUI having stopped exposing a merged button's children at all.
         XCTAssertGreaterThan(
             app.buttons[StubManual.homeTabControl].firstMatch.staticTexts.count, 0,
             "no button on this screen exposes a static text of its own, so the "
-                + "empty cards above say nothing about either hide"
+                + "cards' leaves above say nothing"
         )
         evidence(app, "manual-node-card-is-one-element")
     }
@@ -507,7 +544,11 @@ extension StubHouseUITests {
     ///
     /// Three things say it, and they say different halves:
     ///
-    ///  * the piece's page is **gone** — so the swipe did something;
+    ///  * the piece's page is **gone** — so the swipe did something. Two
+    ///    page-only controls say that: the `next:` footer and the page's own
+    ///    lowercased link back to its topic. Not the piece's **name**, which
+    ///    the cluster this swipe lands on draws as a card (train I005, and
+    ///    the comment at that assertion);
     ///  * the `map` pill is **still there** — so what it did was not pop the
     ///    route. Between `6d071463` and the commit that added this case back,
     ///    the gesture popped the route like every other screen's and the
@@ -599,9 +640,28 @@ extension StubHouseUITests {
             manualGone(app.buttons[StubManual.nextPlugins].firstMatch),
             "a swipe back from a piece left its page on screen"
         )
+        // **The page's own way back to its topic**, which is drawn on a
+        // piece's page and at no other level: the topic's title lowercased
+        // (`ManualPageView.swift:173`), where the crumb trail's copy of the
+        // same words is capitalised.
+        //
+        // This line used to wait for the static text `A Raspberry Pi room` to
+        // go, and train I005 measured that it never can: the cluster this
+        // swipe lands on **draws that piece as a card**, and the card's name
+        // is a leaf of it — `StaticText, {{25.0, 442.6}, {153.0, 15.7}},
+        // label: 'A Raspberry Pi room'` in that train's own
+        // `manual-audit-topic` tree. It was written when a card was expected
+        // to contribute nothing to the tree, which
+        // `testManual_ANodeCardIsOneElementAndNotFour` has since measured it
+        // does not. So the case asked the landing level to hide the one thing
+        // it has to draw, and the page's footer going (above) was the only
+        // half of it that discriminated.
         XCTAssertTrue(
-            manualGone(app.staticTexts[StubManual.piRoom].firstMatch),
-            "a swipe back from a piece left the piece's heading and crumb on screen"
+            manualGone(app.buttons[StubManual.piecePageTopicLink].firstMatch),
+            "a swipe back from a piece left the piece's page on screen: its "
+                + "own `\(StubManual.piecePageTopicLink)` link back to the "
+                + "topic is still drawn, and that control exists on a piece's "
+                + "page and nowhere else"
         )
         evidence(app, "manual-swipe-went-up-a-level")
         XCTAssertTrue(
@@ -1076,13 +1136,13 @@ extension StubHouseUITests {
             "the keyboard was still up over the piece: \(keyboard.frame)"
         )
         // The one named exception in this file, with its measurement in
-        // ``manualAudit(_:_:washedParagraph:)``: Apple's audit reports
+        // ``manualAudit(_:_:washedElement:)``: Apple's audit reports
         // `Contrast failed` against this paragraph because its frame holds
         // two backgrounds, and every ink it draws was measured off the
         // audit's own screenshot at 18.96 / 6.71 / 5.17 to 1. Any other
         // finding on this page still fails this case, including a
         // `Contrast failed` against any other element.
-        try manualAudit(app, "manual-audit-code-span", washedParagraph: StubManual.codeSpanParagraph)
+        try manualAudit(app, "manual-audit-code-span", washedElement: StubManual.codeSpanParagraph)
     }
 
     /// `searchManual` over **keywords**, and a result that navigates.
@@ -1712,7 +1772,16 @@ extension StubHouseUITests {
         // Mid-scramble here too, and for the same reason: the cluster's cards
         // are the same ``ManualMapNode``, so auditing it settled would audit
         // one fewer state of the same view.
-        try manualAudit(app, "manual-audit-topic")
+        //
+        // **The one named exception on this level**, and it is answer 34's
+        // wash in a node's second line, measured exactly as the code span's
+        // is — `manualAudit(_:_:washedElement:)` has the numbers and the
+        // control that sits beside it in this very picture. Any other
+        // element, and any other headline, still fails this case.
+        try manualAudit(
+            app, "manual-audit-topic",
+            washedElement: StubManual.piRoomNodeSecondLine
+        )
 
         // ---- a second page of the same shape, with other content in it.
         //
@@ -1940,14 +2009,45 @@ extension StubHouseUITests {
     /// is a static text (`type=48`) or none. A hit area, a contrast failure or
     /// an unlabelled control still lands in `rest` and still fails the case,
     /// and so does a Dynamic Type finding against anything that is not text.
-    /// ### The one `Contrast failed` this takes, and the measurement that
-    /// says it is not a colour
+    /// ### The `Contrast failed` this takes, and the measurement that says it
+    /// is not a colour
     ///
-    /// `washedParagraph` is a single element's **whole** label, passed by one
-    /// case. A `Contrast failed` naming a static text with exactly that label
-    /// is printed and not failed; everything else — any other headline, any
+    /// `washedElement` is a single element's **whole** label, passed by the
+    /// caller that knows which element on its screen draws answer 34's wash.
+    /// A `Contrast failed` naming a static text with exactly that label is
+    /// printed and not failed; everything else — any other headline, any
     /// other element, the same headline against anything else on the same
     /// screen — still fails, and nothing about ``floorAndRest(_:)`` changes.
+    ///
+    /// **Two screens pass one**, and they are the same finding twice: a
+    /// `Text` whose frame holds an opaque wash patch behind part of its
+    /// words. `manual-audit-code-span` is the piece page's paragraph (below);
+    /// `manual-audit-topic` is the piece **node's** second line, which train
+    /// I005 named — `element: type=48 label='one room, end to end   preview '
+    /// frame=(25.0, 461.3, 99.7, 30.3)`. Sampled off that train's own
+    /// screenshot (`manual-audit-topic_0_*.png`, 1178 × 2556 at 3×), in that
+    /// rectangle, with no clustering:
+    ///
+    ///  - the card `(242,242,247)` over **59.65%** and the wash
+    ///    `(230,230,234)` — `manualNodeWashLight`, `0xE6E6EA`, composited
+    ///    opaque — over **16.73%**: the two most-covered colours, **1.115:1**,
+    ///    and the pair carries no text;
+    ///  - `fgMuted` `(88,85,79)` over 3.30% of it, which on that wash is
+    ///    **5.967:1** — the number `ManualRules`' token arithmetic states as
+    ///    5.98, and body text needs 4.5;
+    ///  - **the control sits beside it in the same picture.** The sibling
+    ///    node's second line, same font, same ink, same card, no tag and so
+    ///    no wash (`'and what they say'`, `{102.3 × 14.3}`) has top-two
+    ///    `(242,242,247)` and `(88,85,79)` — **6.656:1** — and was not
+    ///    flagged; nor was the third (`'where it listens'`, 6.656:1), nor the
+    ///    card's title (18.819:1). One rectangle in three differs by one
+    ///    thing, and it is the wash.
+    ///
+    /// So the failing pair is a tint against the card it sits on, and every
+    /// pair that carries a glyph passes. Dropping the wash is the only other
+    /// answer and it is the one Kamron declined (answer 34); the cost of the
+    /// allowance — that element, on that screen, blind to a future colour
+    /// regression — is in `hx-manual/DECISIONS.md`.
     ///
     /// It exists because train I004 reported it against the one paragraph in
     /// the manual that mixes answer 34's washed runs into prose
@@ -2008,22 +2108,22 @@ extension StubHouseUITests {
     private func manualAudit(
         _ app: XCUIApplication,
         _ name: String,
-        washedParagraph: String? = nil
+        washedElement: String? = nil
     ) throws {
         let found = try auditIssues(app, name)
         let split = Self.floorAndRest(found)
         let scaling = split.rest.filter { Self.isManualDynamicTypeOnText($0) }
         let notScaling = split.rest.filter { !Self.isManualDynamicTypeOnText($0) }
-        let washed = washedParagraph.map { paragraph in
-            notScaling.filter { Self.isContrastOnTheWashedParagraph($0, paragraph) }
+        let washed = washedElement.map { element in
+            notScaling.filter { Self.isContrastOnTheWashedElement($0, element) }
         } ?? []
         let rest = notScaling.filter { !washed.contains($0) }
         evidence(app, name)
         print(
             "AUDIT [\(name)] floor=\(split.floor) text-scaling=\(scaling.count) "
-                + "washed-paragraph=\(washed.count)"
+                + "washed-element=\(washed.count)"
         )
-        for line in washed { print("AUDIT [\(name)] washed paragraph, measured: \(line)") }
+        for line in washed { print("AUDIT [\(name)] washed element, measured: \(line)") }
         XCTAssertTrue(
             rest.isEmpty,
             "\(name): Apple's audit named \(rest.count) element(s): "
@@ -2032,17 +2132,17 @@ extension StubHouseUITests {
     }
 
     /// `Contrast failed` against one named static text, and nothing else —
-    /// the signature ``manualAudit(_:_:washedParagraph:)`` explains.
+    /// the signature ``manualAudit(_:_:washedElement:)`` explains.
     ///
     /// Written against the exact text ``StubHouseUITests/oneLine(_:)``
     /// produces. A finding with no element, or against a different element,
     /// or with a different headline, does not match and still fails.
-    private static func isContrastOnTheWashedParagraph(
+    private static func isContrastOnTheWashedElement(
         _ line: String,
-        _ paragraph: String
+        _ element: String
     ) -> Bool {
         line.hasPrefix("Contrast failed: ")
-            && line.contains("| element: type=48 label='\(paragraph)' frame=(")
+            && line.contains("| element: type=48 label='\(element)' frame=(")
     }
 
     /// The one signature above, as a test of a line ``auditIssues`` wrote:
@@ -2534,15 +2634,38 @@ enum StubManual {
     /// A node's **whole** label: the Kotlin's `"<title>: <subtitle>"`
     /// (`ManualScreen.kt:655`), which is what the scramble must not change.
     static let centreNodeLabel = "Domovoi: your home"
-    /// The centre node's second line, which its card contributes to the tree
-    /// **nowhere**: the name is drawn by a view hidden from accessibility
-    /// outright (``ManualScrambleName``) and the second line is hidden too,
-    /// because the frame it claimed was the whole card. The card's own
-    /// label is ``centreNodeLabel`` and carries both words. Kept as a
-    /// constant because it is what a failure prints to say which of the two
-    /// hides came off.
+    /// The centre node's second line — a leaf of its card in the tree, with
+    /// its `.accessibilityHidden(true)` applied.
+    ///
+    /// Train I005 measured that the hide is a no-op inside a `Button`'s
+    /// label: the card came back holding `["Domovoi", "Domovo9", "your
+    /// home"]`, and the same trees hold the node icon, hidden since long
+    /// before any of this. What a reader hears is the card's own label
+    /// (``centreNodeLabel``), because a `Button` is one VoiceOver stop. So
+    /// this is one of the two words a leaf of the centre card is **allowed**
+    /// to carry; anything else is a scramble frame that got a label.
     static let centreSubtitle = "your home"
     static let roomsTopicLabel = "Rooms & devices: where it listens"
+    /// The rooms topic card's second line, the other allowed leaf of that
+    /// card. See ``centreSubtitle``.
+    static let roomsTopicSubtitle = "where it listens"
+    /// The piece node's second line **as the accessibility tree spells it**:
+    /// the subtitle, the `"  "` join and the `" preview "` run
+    /// ``ManualMapNode``'s `secondLine` builds, which is the only washed
+    /// second line in this document.
+    ///
+    /// Copied verbatim from the finding in
+    /// `overnight-trains/I005/ALL/testManual_AuditsClean.log` so that it is
+    /// the string Apple's audit actually names
+    /// (``manualAudit(_:_:washedElement:)``). A reworded fixture stops
+    /// matching and the case reds, which is the safe direction.
+    static let piRoomNodeSecondLine = "one room, end to end   preview "
+    /// The piece page's own way back to its topic: the topic's title,
+    /// **lowercased** (`ManualPageView.swift:173`), drawn on a piece's page
+    /// and nowhere else. The crumb trail's copy of the same words is
+    /// capitalised, and XCUITest matches labels case-sensitively, so this
+    /// reaches the page and only the page.
+    static let piecePageTopicLink = "rooms & devices"
 
     /// The phone bar's Home tab, by its accessibility label.
     ///
@@ -2577,7 +2700,7 @@ enum StubManual {
     /// Copied verbatim from
     /// `overnight-trains/I004/ALL/testManual_ACodeSpanIsWashedAndStillAudits.log`
     /// so that it is the string the audit actually names, and used by
-    /// ``manualAudit(_:_:washedParagraph:)``. If the fixture's sentence is
+    /// ``manualAudit(_:_:washedElement:)``. If the fixture's sentence is
     /// ever reworded this stops matching and the case reds, which is the safe
     /// direction.
     static let codeSpanParagraph =
