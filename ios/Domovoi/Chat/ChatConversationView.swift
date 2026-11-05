@@ -1032,8 +1032,45 @@ struct ChatConversationView: View {
 /// ``RoomsDropInRow``'s `.bordered` + ``Color/brandInk``, the drop-in button
 /// Kamron's answer 79 settled — and the enabled state is untouched.
 ///
-/// A modifier rather than two `Button`s in an `if`: one button, one accessible
-/// element, one place, which is what "the same place, greyed out" means.
+/// **It swaps the look by branching, and SwiftUI rebuilds the button when the
+/// state flips.** This comment used to claim the opposite — "one button, one
+/// accessible element" — and that claim was wrong: ``body(content:)`` below is
+/// a `@ViewBuilder` `if`/`else`, which compiles to `_ConditionalContent`, and
+/// SwiftUI's structural identity is positional. When `live` flips, the mounted
+/// branch is removed and the other inserted, `content` and all, so one
+/// `Button` in the source is not one button in the view tree. The call site is
+/// a single `Button` in a single place either way — that part of "the same
+/// place, greyed out" holds, and the `.disabled(_:)` there is what a screen
+/// reader and a UI case read — but the control is not a *persisting* one
+/// across the flip.
+///
+/// What that costs, so nobody has to re-derive it: a VoiceOver user resting on
+/// the dimmed send when the reply lands is focused on the element SwiftUI is
+/// about to replace, so they are not told it became available; and the
+/// re-enable is a swap rather than a state change, so it cannot animate as one
+/// control. **Neither is measured** — it needs a Simulator, and the UI case
+/// `StubHouseUITests.testChat_TheSendIsGreyedOutWhileAReplyIsBeingWritten`
+/// asserts nothing about focus retention, so nothing in the suite will fail if
+/// this gets worse. It is a known limit for the next sim train, not a
+/// measurement (2026-11-04).
+///
+/// **The fix that was weighed and not taken.** One custom `ButtonStyle`
+/// applied unconditionally, drawing both looks from `@Environment(\.isEnabled)`
+/// read in a nested label view, is this app's own idiom for exactly this
+/// problem — `SystemSettingsLayoutButtonStyle` and
+/// `SystemSettingsSpareButtonStyle` (both private, and both there because the
+/// platform fades a disabled control past what the call site asked for, train
+/// S002), ``AiSettingsOutlinedButtonStyle``, ``PrintingOutlineButtonStyle``,
+/// ``DocumentsEditorBarButtonStyle`` — and it
+/// would make one identity out of the two. It also means drawing
+/// `.borderedProminent`'s pill by hand, and the *enabled* state is the one
+/// that has a contrast measurement on it (``Color/brandFg`` on
+/// ``Color/brand``, 8.49:1 light and 9.87:1 dark, taken against Apple's own
+/// rendering). This unit cannot run a Simulator or an audit, so hand-drawing
+/// the audited state here would trade a comment that overclaimed for a look
+/// nobody can check — Kamron's standing rule 3: a design that measures fine is
+/// kept, with a narrow recorded limit. Take it when a train can see the
+/// screen.
 private struct ChatSendSkin: ViewModifier {
 
     /// Whether a send would be taken now (``ChatModel/canSend``).

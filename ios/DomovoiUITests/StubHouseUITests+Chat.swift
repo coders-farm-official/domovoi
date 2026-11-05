@@ -311,6 +311,24 @@ extension StubHouseUITests {
     /// ``ChatRules/sendOffered(typed:)``, which asks whether there is anything
     /// in the box, so a usable send on screen afterwards is also the proof
     /// that the typed words survived the stream.
+    ///
+    /// ### What this case does not cover
+    ///
+    /// **Whether VoiceOver's focus survives the re-enable.** `ChatSendSkin`
+    /// swaps the look with a `@ViewBuilder` `if`, so SwiftUI replaces the
+    /// button when the state flips rather than updating one (that type's doc
+    /// comment has the argument and the limit). This case reads the send
+    /// again *after* the reply lands, which is a fresh query and passes either
+    /// way, so it will not fail if focus is lost there. Asserting it needs
+    /// something this suite has no helper for — focus before and after a flip
+    /// the case does not control the timing of — and it was not added blind
+    /// from a machine that cannot run it. Recorded, not measured (2026-11-04).
+    ///
+    /// **Apple's audit over the greyed send.** `testChat_TheComposerAuditsWithItsSendDrawn`
+    /// audits the composer with the send **live** on an idle thread; no case
+    /// has ever measured the disabled pairing (`.bordered` +
+    /// ``Color/brandInk``), which is why that look was borrowed from the
+    /// audited ``RoomsDropInRow`` rather than invented.
     @MainActor
     func testChat_TheSendIsGreyedOutWhileAReplyIsBeingWritten() throws {
         let (app, landed) = openChat(fail: "slow")
