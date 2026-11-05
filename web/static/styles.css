@@ -1667,7 +1667,37 @@ a.home-att-row:hover { background: var(--brand-soft); }
    above the fading toasts: in a column-reverse stack a higher order is
    nearer the top. */
 .toast-stack .toast-notice { order: 1; }
-.toast-stack .toast {
+/* The timer / reminder alert cards (components.jsx TimerFireAlerts): the
+   toast look, top centre, in a layer of their own UNDER the dialogs (85;
+   the toast stack's 111 is above them: at that layer a card covered a
+   centred dialog's buttons on a 375px phone, 2026-09-30 review). They
+   start under whatever the toast host holds (--toast-stack-h, set by the
+   component from the host's height), so the two never overlap. */
+.timer-fire-alerts {
+  position: fixed; left: 16px; right: 16px; z-index: 85; pointer-events: none;
+  top: calc(var(--topbar-h, 52px) + var(--guard-banner-h, 0px) + 12px + var(--toast-stack-h, 0px));
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+}
+.timer-fire-card {
+  width: min(100%, 600px); padding: 12px 8px 12px 16px;
+  display: flex; align-items: flex-start; gap: 12px;
+}
+.timer-fire-dot { flex: none; padding-top: 12px; }
+.timer-fire-open { flex: 1; min-width: 0; cursor: pointer; padding-top: 4px; }
+.timer-fire-title { font-weight: 600; }
+.timer-fire-body { overflow-wrap: anywhere; margin-top: 2px; }
+.timer-fire-meta { font-size: var(--t-sm); color: var(--fg-muted); margin-top: 4px; }
+.timer-fire-foot {
+  pointer-events: auto; width: min(100%, 600px);
+  display: flex; justify-content: flex-end; align-items: center; gap: 8px;
+}
+@media (max-width: 760px) {
+  .timer-fire-card { padding: 8px 4px 8px 12px; }
+  .timer-fire-dot { padding-top: 19px; }
+  .timer-fire-open { padding-top: 11px; }
+}
+.toast-stack .toast,
+.timer-fire-alerts .toast {
   pointer-events: auto; box-sizing: border-box; max-width: min(100%, 600px);
   background: var(--overlay); color: var(--fg);
   border: 1px solid var(--border-strong); border-left: 3px solid var(--toast-rail, var(--border-strong));

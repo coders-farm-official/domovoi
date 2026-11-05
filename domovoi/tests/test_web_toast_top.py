@@ -49,6 +49,10 @@ def _use_toast() -> str:
     return comps[comps.index("const useToast"):comps.index("/* ---- Tabs")]
 
 
+# The toast look, shared by the toast stack and the timer alert cards.
+TOAST_RULE = ".toast-stack .toast,\n.timer-fire-alerts .toast"
+
+
 def _rule(css: str, selector: str) -> str:
     m = re.search(re.escape(selector) + r"\s*\{([^}]*)\}", css)
     assert m, selector
@@ -67,7 +71,7 @@ def test_the_stack_sits_at_the_top_under_the_topbar_and_the_guard_banner() -> No
     # The viewport less a 16px gutter a side (no sideways scroll on a 375px
     # phone), clicks passing through between toasts.
     assert "left: 16px; right: 16px;" in stack and "pointer-events: none;" in stack
-    toast_rule = _rule(css, ".toast-stack .toast")
+    toast_rule = _rule(css, TOAST_RULE)
     assert "pointer-events: auto;" in toast_rule
     assert "max-width: min(100%, 600px);" in toast_rule
     # Bigger: the type scale's 15px step, 12/16px of padding.
@@ -88,7 +92,7 @@ def test_the_stack_takes_the_other_themes_tokens() -> None:
     assert ":root:not([data-theme='dark']) .theme-invert { color-scheme: dark; }" in tokens
     # The toast's surfaces and text are tokens, never written colours.
     css = _src("styles.css")
-    toast_rule = _rule(css, ".toast-stack .toast")
+    toast_rule = _rule(css, TOAST_RULE)
     assert "background: var(--overlay); color: var(--fg);" in toast_rule
     assert not re.search(r"#[0-9a-f]{3,8}\b|oklch\(|rgb", toast_rule, re.I)
 
@@ -111,7 +115,7 @@ def test_each_tone_has_its_rail() -> None:
         assert f".toast[data-tone='{tone}']" in css
         assert f"--toast-rail: var(--{ink});" in _rule(css, f".toast[data-tone='{tone}']")
     # info keeps the neutral edge and the pulsing brand dot
-    assert "var(--toast-rail, var(--border-strong))" in _rule(css, ".toast-stack .toast")
+    assert "var(--toast-rail, var(--border-strong))" in _rule(css, TOAST_RULE)
 
 
 @pytest.mark.parametrize("palette", ["light", "dark"])
