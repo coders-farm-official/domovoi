@@ -1448,6 +1448,15 @@ extension StubHouseUITests {
                 rest.append("a second anonymous contrast finding: \(line)")
                 continue
             }
+            // A leaf the bottom edge cuts in half: the audit samples pixels,
+            // and half a line of text under the home indicator is not a
+            // colour. Train I005's sheet pass is the measurement — the last
+            // detection's title `—` (835.7…853.7, over the sheet's foot of
+            // 852.0) was reported while `Red Fire Serpent`, `Quills of the
+            // Arrow` and `Thirteen Palisades`, which are the same
+            // `Text(detection.title ?? dash)` with no `foregroundStyle` at
+            // all (`StationsDetailSheet.swift:542`), were not. The
+            // screenshot `stations-28-audit-sheet` shows the sliver.
             if line.hasPrefix(StationsAudit.contrast), let band = stationsAuditBand(line),
                band.maxY > viewportFoot, band.minY < viewportFoot {
                 print(
@@ -1489,23 +1498,49 @@ extension StubHouseUITests {
     /// the three signatures ``StationsAudit`` documents are the three this
     /// screen has had measured. Anything else the audit can say is a defect.
     ///
-    /// The sheet is audited as well as the screen, and a finding that names a
-    /// row **behind** the sheet is the signal that the sheet is not modal —
-    /// which is how the two `Contrast failed` behind Settings' forget dialog
-    /// were found. The sheet is its own scroll view, so the viewport foot is
-    /// read again with it open rather than reused.
+    /// The sheet is audited as well as the screen. It is its own scroll
+    /// view, so the viewport foot is read again with it open rather than
+    /// reused — and read as the **lowest** foot of the scroll views on
+    /// screen, because `firstMatch` returns the one *behind* the sheet.
+    ///
+    /// **A finding here is not evidence that the sheet is not modal**, which
+    /// is what this case said until train I005 measured it. Settings' forget
+    /// dialog is a ``DialogCard`` in a `ZStack` under a 35% scrim, where the
+    /// page behind really is drawn and really is audited; a `.sheet` is not
+    /// that. I005's sheet pass named exactly two elements, both inside the
+    /// sheet, while the same run's screen pass named eleven of the page's
+    /// leaves — so Apple's audit does not reach behind this presentation.
+    /// The page behind does stay in XCUI's *element* tree (it is in I005's
+    /// `stations-28-audit-sheet-tree`, scaled and inset by the presentation,
+    /// and in the passing `testMusicMore_AuditThePlaylistsTab`'s dump the
+    /// same way), which is a property of `.sheet` in this app rather than
+    /// anything about Stations.
     @MainActor
     func testStations_AuditFindsNothingNew() throws {
         guard #available(iOS 17.0, *) else {
             throw XCTSkip("performAccessibilityAudit needs iOS 17")
         }
-        // The foot of whatever scroll view is in front. `firstMatch` is the
-        // screen's own before the sheet opens and the sheet's after, which is
-        // why it is read twice.
+        // The foot of the **lowest** scroll view on screen, not
+        // `firstMatch`'s.
+        //
+        // With the detail sheet up, I005's tree holds two: the screen's own,
+        // which the presentation scales and insets to
+        // `{{16, 144.7}, {361, 621.6}}` (foot 766.3), and the sheet's,
+        // `{{0, 69}, {393, 783}}` (foot 852.0). `firstMatch` took the
+        // screen's — the documented behind-a-sheet trap — so the foot was
+        // 766.3 and the straddle branch of ``stationsClassify(_:viewportFoot:name:)``
+        // could not see that the last detection row was cut by the bottom
+        // edge. The screen's own pass has one scroll view and is unchanged
+        // at 770.0.
+        //
+        // `max`, not "the last one in the tree": every scroll view lives
+        // inside the 852-point window, so the highest foot this can return
+        // is the window's own bottom edge, and nothing drawn whole can be
+        // exempted by it.
         @MainActor
         func viewportFoot(_ app: XCUIApplication) -> CGFloat {
-            let scroller = app.scrollViews.firstMatch
-            return scroller.exists ? scroller.frame.maxY : .greatestFiniteMagnitude
+            let feet = app.scrollViews.allElementsBoundByIndex.map { $0.frame.maxY }
+            return feet.max() ?? .greatestFiniteMagnitude
         }
 
         let (app, landed) = openStations()
@@ -1533,8 +1568,9 @@ extension StubHouseUITests {
         XCTAssertEqual(
             [], stationsClassify(sheet.rest, viewportFoot: sheetFoot, name: "sheet"),
             "the audit named something with the detail sheet open that nothing has "
-                + "measured (floor: \(sheet.floor)) — a finding naming a row behind the "
-                + "sheet means the sheet is not modal"
+                + "measured (floor: \(sheet.floor), viewport foot: \(sheetFoot)) — the "
+                + "foot is the sheet's scroll view, 852.0 on a 393×852 phone; a foot of "
+                + "766.3 is the screen's own, behind the sheet"
         )
     }
 }
