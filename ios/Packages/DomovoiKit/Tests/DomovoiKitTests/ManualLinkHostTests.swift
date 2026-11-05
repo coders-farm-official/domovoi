@@ -59,6 +59,20 @@ final class ManualLinkHostTests: XCTestCase {
         in: ManualLinkHostTests.source(ManualLinkHostTests.manualScreenPath)
     )
 
+    /// One top-level type's **own** source: everything after its declaration,
+    /// up to the next top-level one. Every type in `ManualView.swift` is
+    /// declared at column 0, which is what `"\nstruct "` bounds the span at.
+    ///
+    /// `declarations` is how many times the declaration was found, so a case
+    /// can refuse to read a span it cannot locate exactly once.
+    private static func ownSource(
+        of typeName: String
+    ) -> (span: String, declarations: Int) {
+        let parts = Self.manualScreen.components(separatedBy: "struct \(typeName)")
+        let span = (parts.last ?? "").components(separatedBy: "\nstruct ").first ?? ""
+        return (span, parts.count - 1)
+    }
+
     /// **The guard that stops the readings below passing vacuously.** A
     /// renamed file reads as an empty string, and a requirement over nothing
     /// is satisfied by nothing.
@@ -102,19 +116,16 @@ final class ManualLinkHostTests: XCTestCase {
     /// the same three lines deleted, and this case fails on its second
     /// assertion.
     func testAPushedLevelInstallsTheManualsLinkAction() {
-        let halves = Self.manualScreen.components(separatedBy: "struct ManualLevelHost")
+        let host = Self.ownSource(of: "ManualLevelHost")
         XCTAssertEqual(
-            halves.count, 2,
-            "`struct ManualLevelHost` is written \(halves.count - 1) times in "
+            host.declarations, 1,
+            "`struct ManualLevelHost` is written \(host.declarations) times in "
                 + "the stripped source and this reading needs exactly one, "
-                + "because it splits the file there to read the host's own "
-                + "body apart from `ManualView`'s"
+                + "because it reads the host's own body apart from "
+                + "`ManualView`'s"
         )
-        // The host's own source: after its declaration, up to the next
-        // top-level one.
-        let host = (halves.last ?? "").components(separatedBy: "\nstruct ").first ?? ""
         XCTAssertTrue(
-            host.contains("let links: OpenURLAction"),
+            host.span.contains("let links: OpenURLAction"),
             "`ManualLevelHost` no longer takes the manual's link action. "
                 + "`.environment(\\.openURL, …)` on `ManualView` reaches that "
                 + "screen's descendants and not a level presented through "
@@ -123,7 +134,7 @@ final class ManualLinkHostTests: XCTestCase {
                 + "nothing at all"
         )
         XCTAssertTrue(
-            host.contains(".environment(\\.openURL, links)"),
+            host.span.contains(".environment(\\.openURL, links)"),
             "`ManualLevelHost` carries `links` and never installs it on its "
                 + "own content, so a pushed level's page still has whatever "
                 + "action the system handed it: a tapped link goes to "
@@ -133,12 +144,25 @@ final class ManualLinkHostTests: XCTestCase {
                 + "reading that cannot tell the two apart stays green with "
                 + "the fix deleted — see this case's note"
         )
+        let route = Self.ownSource(of: "ManualView")
+        XCTAssertEqual(
+            route.declarations, 1,
+            "`struct ManualView` is written \(route.declarations) times in the "
+                + "stripped source and this reading needs exactly one, because "
+                + "it reads the route's own body apart from the three types "
+                + "that sit between it and the host"
+        )
         XCTAssertTrue(
-            (halves.first ?? "").contains(".environment(\\.openURL, links)"),
+            route.span.contains(".environment(\\.openURL, links)"),
             "`ManualView`'s own body no longer installs the link action, so a "
                 + "link on the level the route itself draws — Start here, the "
                 + "map, every level at depth 0 — goes to `openURL` and "
-                + "nowhere. The host above covers the pushed levels only"
+                + "nowhere. The host above covers the pushed levels only. This "
+                + "is read inside `ManualView` and not over everything before "
+                + "the host, because `ManualEmptyState`, `ManualCachedLine` "
+                + "and `ManualLevelView` are in that span too and a reading "
+                + "that cannot tell them apart stays green with this install "
+                + "deleted — see this case's note"
         )
     }
 
