@@ -397,9 +397,9 @@ struct HomeRoomsView: View {
                     .frame(height: 3)
                     .tint(Color.brand)
                     .accessibilityHidden(true)
-                // ``roomClock(elapsedSec:song:)``: `1:12 / —` is the honest
-                // line for a radio station, and the spoken label reads the
-                // same string.
+                // ``roomClock(elapsedSec:song:)``: the elapsed alone for a
+                // stream or a zero duration, as Android (`HomeSections.kt:755`),
+                // and the spoken label reads the same string.
                 Text(roomClock(elapsedSec: elapsed, song: song))
                     .font(.caption.monospaced())
                     .foregroundStyle(Color.fgMuted)

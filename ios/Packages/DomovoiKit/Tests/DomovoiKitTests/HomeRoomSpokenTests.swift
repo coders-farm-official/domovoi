@@ -78,15 +78,27 @@ final class HomeRoomSpokenTests: XCTestCase {
         )
     }
 
-    /// A radio stream has no duration, and the clock says so with an em dash
-    /// rather than inventing an end.
-    func testAStreamWithNoDurationReadsItsDash() {
+    /// A radio stream has no duration, so the clock is the elapsed alone —
+    /// Android's `if (dur > 0) " / …" else ""` (`HomeSections.kt:755`). No
+    /// `/ —` for VoiceOver to read as "em dash".
+    func testAStreamWithNoDurationReadsTheElapsedAlone() {
         let radio = HomeSong(title: "FIP", durationSec: nil)
         let den = room("den", state: "play", song: radio, elapsed: 72)
-        XCTAssertEqual(roomClock(elapsedSec: 72, song: radio), "1:12 / —")
+        XCTAssertEqual(roomClock(elapsedSec: 72, song: radio), "1:12")
         XCTAssertEqual(
             spokenRoom(den, stale: false, elapsedSec: 72, nowMs: 0, timerLeftSec: nil),
-            "den, playing, FIP, 1:12 / —"
+            "den, playing, FIP, 1:12"
+        )
+    }
+
+    /// A zero duration is no duration on Android (`dur > 0`), not `/ 0:00`.
+    func testAZeroDurationReadsTheElapsedAlone() {
+        let zero = HomeSong(title: "FIP", durationSec: 0)
+        XCTAssertEqual(roomClock(elapsedSec: 72, song: zero), "1:12")
+        let den = room("den", state: "play", song: zero, elapsed: 72)
+        XCTAssertEqual(
+            spokenRoom(den, stale: false, elapsedSec: 72, nowMs: 0, timerLeftSec: nil),
+            "den, playing, FIP, 1:12"
         )
     }
 

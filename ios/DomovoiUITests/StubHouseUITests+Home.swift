@@ -23,10 +23,19 @@ import XCTest
 ///
 /// * the attention half: `.accessibilityElement(children: .ignore)` back on
 ///   the row's `Button` (`HomeAttentionView.swift`) → **2** elements;
-/// * the room half: the chips back outside the room's `Button`
-///   (`HomeRoomsView.swift`) → the kitchen's label ends at `/ 5:02` and the
-///   timer chip is a stop of its own, so the pattern does not match. That was
-///   the shipped state at `693810ee`: train I005's tree has a bare
+/// * the room half, two ways:
+///   - the chips' **words** out of the room's label → the kitchen's label
+///     ends at `/ 5:02`, so the `withChip` pattern does not match;
+///   - the chips' **view** back outside the room's `Button`
+///     (`HomeRoomsView.swift`) with the label left alone → the label still
+///     ends `…, 24m 50s` (it comes from `spokenRoom`, which reads
+///     `roomChips` wherever they are drawn), so the label checks pass; but
+///     the countdown `StaticText` is then no descendant of the row's
+///     `Button`, so `chipInRow` is **0**, not 1. A `Button` lists its child
+///     `Text`s under it whatever its label (train I005's tree: the attention
+///     row's `Button 0x10489bd80` holds `StaticText 'study is offline …'`
+///     and `StaticText '3h ago'`), so 1 is the count at the fix.
+///   The shipped state at `693810ee` had both: train I005's tree has a bare
 ///   `StaticText '24m 58s'` straight after `stop kitchen`.
 ///
 /// The words come from the stub house: `study` is offline (`fixtures`'
@@ -87,6 +96,18 @@ extension StubHouseUITests {
             "kitchen, playing, Harvest Moon · Neil Young, [0-9]+:[0-9]{2} / 5:02, .+"
         ).evaluate(with: roomLabel)
 
+        // The countdown chip must be **inside** the row's `Button`, not only
+        // in its label: `fmtLeft`'s shapes (`HomeTimers.swift`) — `45s`,
+        // `24m 50s`, `1h 2m`, `1d 3h`. Scoped to the row's own `Button`, so
+        // the Timers section's countdown for the same timer cannot count.
+        let countdown = "[0-9]+s|[0-9]+m [0-9]{2}s|[0-9]+h [0-9]+m|[0-9]+d [0-9]+h"
+        let chipInRow = app.buttons
+            .matching(NSPredicate(format: "label BEGINSWITH %@", roomPrefix))
+            .firstMatch
+            .descendants(matching: .staticText)
+            .matching(NSPredicate(format: "label MATCHES %@", countdown))
+            .count
+
         // One picture and one tree, whatever the verdicts, so a red is
         // readable from the attachment alone.
         evidence(app, "home-rows-one-element")
@@ -112,6 +133,12 @@ extension StubHouseUITests {
             withChip,
             "the kitchen reads `\(roomLabel)` — its timer chip is not in the row, so it is a bare "
                 + "countdown stop of its own (Android reads it with the room, `HomeSections.kt:776-777`)"
+        )
+        XCTAssertEqual(
+            chipInRow, 1,
+            "the kitchen's row Button holds \(chipInRow) countdown texts, not one — the timer chip is "
+                + "drawn outside the row, so VoiceOver reads it again as a bare stop after `stop kitchen` "
+                + "(Android draws it inside the clickable Column, `HomeSections.kt:776-777`)"
         )
     }
 }

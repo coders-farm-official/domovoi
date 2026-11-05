@@ -491,10 +491,14 @@ public func roomChips(_ room: HomeRoom, timerLeftSec: Int64?) -> [RoomChip] {
     return chips
 }
 
-/// `1:39 / 5:02` — and `1:12 / —` for a stream with no duration, which is the
-/// honest line for a radio station (``fmtDur(_:)``'s bare em dash).
+/// `1:39 / 5:02` — and the elapsed alone, `1:12`, when the song has no
+/// duration (a stream) or a zero one. That is Android's line,
+/// `fmtDur(elapsed) + if (dur > 0) " / ${fmtDur(dur)}" else ""`
+/// (`HomeSections.kt:755`), and the Rooms page's ``roomsSongClock(elapsed:duration:)``
+/// (`SatellitesScreen.kt:254`) — so VoiceOver never says "em dash" or
+/// `0:00` where TalkBack says nothing.
 public func roomClock(elapsedSec: Double, song: HomeSong) -> String {
-    "\(fmtDur(elapsedSec)) / \(fmtDur(song.durationSec))"
+    roomsSongClock(elapsed: elapsedSec, duration: song.durationSec)
 }
 
 /// What VoiceOver reads for a room's left side — **one** element, which is
