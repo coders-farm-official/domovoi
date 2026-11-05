@@ -910,7 +910,15 @@ struct ChatConversationView: View {
                 // its word and got the keyboard's instead of this view's
                 // button. The key now says `return` and puts in a newline,
                 // which is what it does; the button beside it is what sends.
-                TextField(ChatStrings.composerHint, text: $typed, axis: .vertical)
+                TextField(
+                    ChatStrings.composerHint,
+                    text: $typed,
+                    // Owner answer 65's vertical leg: a vertical-axis hint is
+                    // not a `UITextField` placeholder, so it needs the
+                    // prompt (`ShellHintPrompt` carries train I005's 1.70:1).
+                    prompt: ShellHintPrompt.text(ChatStrings.composerHint),
+                    axis: .vertical
+                )
                     .textFieldStyle(.roundedBorder)
                     .lineLimit(1...5)
                     .accessibilityLabel(ChatStrings.composerHint)

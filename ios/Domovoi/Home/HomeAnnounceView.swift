@@ -104,6 +104,10 @@ struct HomeAnnounceView: View {
         TextField(
             HomeAnnounceStrings.placeholder,
             text: $message,
+            // Owner answer 65's vertical leg: a vertical-axis hint is not a
+            // `UITextField` placeholder, so it needs the prompt
+            // (`ShellHintPrompt` carries train I005's 1.70:1 reading).
+            prompt: ShellHintPrompt.text(HomeAnnounceStrings.placeholder),
             axis: .vertical
         )
         .lineLimit(1...)

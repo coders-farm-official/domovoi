@@ -388,6 +388,10 @@ struct AudiobooksView: View {
                         books.typed(String(typed.filter { !$0.isNewline }))
                     }
                 ),
+                // Owner answer 65's vertical leg: a vertical-axis hint is not a
+                // `UITextField` placeholder, so it needs the prompt
+                // (`ShellHintPrompt` carries train I005's 1.70:1 reading).
+                prompt: ShellHintPrompt.text(AudiobooksStrings.searchPlaceholder),
                 axis: .vertical
             )
             .lineLimit(2...)

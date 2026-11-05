@@ -298,6 +298,10 @@ struct RoomsOverviewView: View {
         TextField(
             RoomsStrings.announcePlaceholder(room: room.roomID),
             text: Binding(get: { reads.announceDraft }, set: { reads.announceDraft = $0 }),
+            // Owner answer 65's vertical leg: a vertical-axis hint is not a
+            // `UITextField` placeholder, so it needs the prompt
+            // (`ShellHintPrompt` carries train I005's 1.70:1 reading).
+            prompt: ShellHintPrompt.text(RoomsStrings.announcePlaceholder(room: room.roomID)),
             axis: .vertical
         )
         .lineLimit(1...)

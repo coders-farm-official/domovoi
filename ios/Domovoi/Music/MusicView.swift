@@ -693,7 +693,17 @@ struct MusicFilters: View {
     @ViewBuilder
     private var searchField: some View {
         if typeSize.isAccessibilitySize {
-            TextField(MusicStrings.searchPlaceholder, text: searchText, axis: .vertical)
+            TextField(
+                MusicStrings.searchPlaceholder,
+                text: searchText,
+                // Owner answer 65's vertical leg. Train I005 measured this
+                // very field at 1.70:1 — Apple's placeholder grey, with
+                // `ShellHintInkAppearance`'s `UITextField` swap in place, so
+                // a vertical-axis hint is not that class's placeholder
+                // (`ShellHintPrompt` carries the reading).
+                prompt: ShellHintPrompt.text(MusicStrings.searchPlaceholder),
+                axis: .vertical
+            )
                 .onChange(of: music.query.search) { _, new in
                     if new.contains(where: \.isNewline) {
                         music.query.search = new.filter { !$0.isNewline }

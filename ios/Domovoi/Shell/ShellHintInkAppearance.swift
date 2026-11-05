@@ -44,13 +44,13 @@ import UIKit
 ///
 /// ### Why not the 39 call sites
 ///
-/// `TextField(…, prompt: Text(hint).foregroundColor(.fgMuted))` is SwiftUI's
-/// own way to colour a prompt and is what this file would be replaced by if
-/// the shape below is ever unwanted. It costs an edit in **39 files**, none of
-/// which this unit owns, and it is silent about the fortieth: a field written
-/// next month gets Apple's grey again. The instruction is kept in
-/// `design-notes/ios/batch-2026-11-03/gx-shell/REPORT.md` so that the choice
-/// stays reversible rather than forgotten.
+/// `TextField(…, prompt: Text(hint).foregroundStyle(.fgMuted))` is SwiftUI's
+/// own way to colour a prompt. It costs an edit per call site and is silent
+/// about the next one: a single-line field written next month gets Apple's
+/// grey again, where the swap below inks it with no edit at all. So the two
+/// mechanisms split by what each can reach — this one every `UITextField`
+/// placeholder in the process, ``ShellHintPrompt`` the vertical-axis fields
+/// this one cannot reach (see directly below).
 ///
 /// ### What is deliberately not here
 ///
@@ -58,13 +58,19 @@ import UIKit
 ///   property's setter and `attributedPlaceholder` is public; nothing here
 ///   names `_placeholderLabel` or any other underscored selector, which is the
 ///   recipe this one exists to avoid.
-/// * **No `UITextView` leg.** A `UITextView` has no placeholder of its own,
-///   and the field the vertical-axis case reads is a `UITextField` anyway:
-///   train I004's hierarchy for
-///   `testShell_TheHintInkIsReadableOnAVerticalField` has
-///   `TextField … placeholderValue: 'search title, artist, album, path…'` at
-///   AX5, where `MusicView.searchField` is `axis: .vertical`. One class covers
-///   both legs, and the `UITextView` line that was here covered neither.
+/// * **No vertical-axis leg, and the reading that settled it.** This file
+///   used to argue that one class covered both legs, from train I004's
+///   hierarchy: the AX5 element is reported as
+///   `TextField … placeholderValue: 'search title, artist, album, path…'`,
+///   therefore a `UITextField`. **Train I005 measured that it is not.** With
+///   both setters swapped and the single-line field reading 7.43:1 in the
+///   same run, the vertical-axis one read `rgb(188, 188, 193)` on
+///   `rgb(242, 242, 247)` — **1.70:1**, `UIColor.placeholderText` to the
+///   integer. An accessibility element's reported type is what SwiftUI says
+///   it is, not which UIKit class draws it, and this file read the first for
+///   the second. ``ShellHintPrompt`` is the vertical leg now, at those call
+///   sites, because SwiftUI's `prompt:` is the only place the colour of a
+///   prompt SwiftUI draws itself can be chosen.
 /// * **No sweep of existing windows.** ``install()`` runs in `DomovoiApp.init`,
 ///   before a view exists; a field built later is built through the setter.
 ///

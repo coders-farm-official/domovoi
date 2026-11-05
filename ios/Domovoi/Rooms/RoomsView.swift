@@ -400,7 +400,13 @@ struct RoomsBroadcastCard: View {
     /// labelled `send` would lie. Measured on 2026-11-02 against the Chat
     /// composer, which shipped that pair.
     private var field: some View {
-        TextField(RoomsStrings.broadcastPlaceholder, text: draft, axis: .vertical)
+        TextField(
+            RoomsStrings.broadcastPlaceholder,
+            text: draft,
+            // Owner answer 65's vertical leg (`ShellHintPrompt`).
+            prompt: ShellHintPrompt.text(RoomsStrings.broadcastPlaceholder),
+            axis: .vertical
+        )
             .lineLimit(1...)
             .font(.subheadline)
             .padding(.horizontal, 8)

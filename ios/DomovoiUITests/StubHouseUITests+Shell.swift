@@ -1373,21 +1373,19 @@ extension StubHouseUITests {
     /// readings above never reach it — review 1's S3, and it was right: both
     /// fields it measured were `.roundedBorder` single-line ones.
     ///
-    /// **This case is the only answer there is about that leg**, and in train
-    /// I004 it answered: `hint ink rgb(188, 188, 193) on rgb(242, 242, 247) —
-    /// 1.70:1`, Apple's grey, with the appearance proxy that was supposed to
-    /// override it in place. The same train's hierarchy also settled the class
-    /// the proxy was guessing at — `TextField … placeholderValue: 'search
-    /// title, artist, album, path…'` at AX5, a `UITextField` and not a
-    /// `UITextView` — so the vertical leg and the single-line one are one
-    /// mechanism, which is what `ShellHintInkAppearance` now swaps. Apple's
-    /// grey measures about 1.7:1 in a field and this ink about 6.7:1, far
-    /// enough apart that a 4.5 floor cannot confuse them. If this goes red,
-    /// the fix is
-    /// `TextField(…, prompt: Text(hint).foregroundColor(Color.fgMuted))` at
-    /// the 17 vertical-axis call sites in 15 files, which is in
-    /// gx-shell/REPORT.md because none of those files is this
-    /// unit's.
+    /// **This case is the only answer there is about that leg**, and it has
+    /// answered twice. Train I004: `1.70:1`, with the appearance proxy in
+    /// place. Train I005, with `ShellHintInkAppearance` swapping both of
+    /// `UITextField`'s placeholder setters and the single-line field in the
+    /// same run reading **7.43:1**: `hint ink rgb(188, 188, 193) on
+    /// rgb(242, 242, 247) — 1.70:1`, Apple's grey to the integer again. So
+    /// the two legs are **not** one mechanism — I004's reading of the
+    /// accessibility tree (`TextField … placeholderValue: …`, therefore a
+    /// `UITextField`) was a reading of what SwiftUI *reports*, not of what
+    /// draws it. The vertical leg is `ShellHintPrompt` at the call sites
+    /// since this fix. Apple's grey measures about 1.7:1 in a field and this
+    /// ink about 6.7:1, far enough apart that a 4.5 floor cannot confuse
+    /// them.
     ///
     /// No audit here. Music at AX5 is `MusicMore`'s screen to audit, and a
     /// finding against it would fail this case for another unit's work — the
@@ -1562,11 +1560,15 @@ extension StubHouseUITests {
             "the hint measures " + String(format: "%.2f", reading.ratio)
                 + ":1 (ink \(reading.ink) on \(reading.paper)) — Apple's "
                 + "placeholder grey reads about 1.7:1 there, so this is still "
-                + "the system colour: `ShellHintInkAppearance`'s swap of "
-                + "`UITextField`'s two placeholder setters did not reach this "
-                + "field. The fallback is "
-                + "`prompt: Text(hint).foregroundColor(Color.fgMuted)` at the "
-                + "call sites, in gx-shell/REPORT.md"
+                + "the system colour. Two mechanisms ink a hint and each "
+                + "covers one class of field: `ShellHintInkAppearance` swaps "
+                + "`UITextField`'s two placeholder setters (the single-line "
+                + "fields) and `ShellHintPrompt` supplies the `prompt:` of "
+                + "every `TextField(axis: .vertical)` (this one). A red here "
+                + "says which: a single-line reading of 1.7 is the swap, an "
+                + "AX5 one is a vertical field that was left without a "
+                + "prompt — `grep -rn \"axis: .vertical\" ios/Domovoi` "
+                + "against the list in hx-shell/REPORT.md"
         )
         guard audits else { return }
         let (_, rest) = Self.floorAndRest(try auditIssues(app, name))

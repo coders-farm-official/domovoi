@@ -168,6 +168,10 @@ struct CalendarEventEditorView: View {
                         titleError = nil
                     }
                 ),
+                // Owner answer 65's vertical leg: a vertical-axis hint is not a
+                // `UITextField` placeholder, so it needs the prompt
+                // (`ShellHintPrompt` carries train I005's 1.70:1 reading).
+                prompt: ShellHintPrompt.text(CalendarStrings.titlePlaceholder),
                 axis: .vertical
             )
             .lineLimit(2...)
@@ -202,6 +206,10 @@ struct CalendarEventEditorView: View {
                     get: { draft.location },
                     set: { typed in draft.location = typed.filter { !$0.isNewline } }
                 ),
+                // Owner answer 65's vertical leg: a vertical-axis hint is not a
+                // `UITextField` placeholder, so it needs the prompt
+                // (`ShellHintPrompt` carries train I005's 1.70:1 reading).
+                prompt: ShellHintPrompt.text(CalendarStrings.optional),
                 axis: .vertical
             )
             .lineLimit(2...)
@@ -221,6 +229,10 @@ struct CalendarEventEditorView: View {
             TextField(
                 CalendarStrings.optionalNotes,
                 text: Binding(get: { draft.description }, set: { draft.description = $0 }),
+                // Owner answer 65's vertical leg: a vertical-axis hint is not a
+                // `UITextField` placeholder, so it needs the prompt
+                // (`ShellHintPrompt` carries train I005's 1.70:1 reading).
+                prompt: ShellHintPrompt.text(CalendarStrings.optionalNotes),
                 axis: .vertical
             )
             .lineLimit(3...)

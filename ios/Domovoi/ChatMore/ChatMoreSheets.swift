@@ -322,7 +322,13 @@ struct ChatMoreReportSheetView: View {
                 .font(.caption)
                 .foregroundStyle(Color.fgMuted)
                 .fixedSize(horizontal: false, vertical: true)
-            TextField(ChatMoreStrings.reportNotePlaceholder, text: $note, axis: .vertical)
+            TextField(
+                ChatMoreStrings.reportNotePlaceholder,
+                text: $note,
+                // Owner answer 65's vertical leg (`ShellHintPrompt`).
+                prompt: ShellHintPrompt.text(ChatMoreStrings.reportNotePlaceholder),
+                axis: .vertical
+            )
                 .textFieldStyle(.roundedBorder)
                 .lineLimit(2...6)
                 .accessibilityLabel(ChatMoreStrings.reportNotePlaceholder)
