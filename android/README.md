@@ -1195,7 +1195,7 @@ web-dashboard plugin pages only; this app stays provider-agnostic.
   sections opens the dashboard instead.
 - Home shows the problem rows a household member may see and never the
   admin-only ones (satellites waiting for approval or adoption, updates,
-  disk) or the "this box isn't claimed yet" row: the app has no admin
+  disk) or the "this Domovoi isn't claimed yet" row: the app has no admin
   session to read them with. A plugin problem opens the dashboard's
   plugin list in the browser. The "everything" grid lists the app's own
   screens; plugin web pages stay on the dashboard.

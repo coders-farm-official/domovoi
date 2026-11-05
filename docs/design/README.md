@@ -21,7 +21,7 @@ This is a tech-forward management UI you'd reach from a laptop or a phone on the
 - No emoji. Status uses `<StatusDot/>`, not a colored-circle character.
 - Live things pulse (`domovoi-pulse`). Idle things don't.
 - Lowercase chrome (`now playing`, `online`, `failed`). Sentence case for content.
-- Cat glyph in three places only: top-left wordmark, next to Domovoi's own lines in feeds, empty states.
+- Cat glyph in four places only: top-left wordmark, next to Domovoi's own lines in feeds, empty states, and the first-run welcome and "you're all set" dialogs (owner request, 2026-11-04: the one moment the product greets someone).
 - Media acquisition UI speaks generically: "provider plugin", "source", "acquisition". Never name a specific external media platform or downloader tool anywhere in UI copy, sample data, or code (banned patterns, any case: `yout[u]be`, `yt[-_]?d[l]p` — written bracket-split here so this file itself passes the repo's vocabulary gate).
 - Likewise these reserved token patterns must never appear anywhere (any case): `har[l]ey`, `ric[h]ard`, `orche[s]trator`. The only product name is Domovoi; the mascot is just "the domovoi".
 - Reuse the primitives in `web/static/components.jsx`; don't fork copies of them.

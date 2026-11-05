@@ -610,10 +610,12 @@ On first boot the core service writes an 8-word **setup code** to
 as) and prints it to its console when it runs in a terminal. Run as a
 service, it never prints the code, so it stays out of the journal: read
 the file. Open the dashboard at
-`http://<server>:6369`, go to **Settings → System → Advanced → Admin → "set up
-admin"**, enter the setup code, and choose an admin password. (The same
-prompt also appears automatically the first time you attempt any
-admin-gated action.) The code is valid for 24 hours (restart the core for a
+`http://<server>:6369`: while nobody has claimed it, every page opens a
+welcome that asks for the setup code and an admin password (**Not now**
+puts it away for that browser; Home's **claim it** brings it back). The
+same form is under **Settings → System → Advanced → Admin → "set up
+admin"**, and also appears automatically the first time you attempt any
+admin-gated action. The code is valid for 24 hours (restart the core for a
 fresh one) and the file is deleted the moment setup completes. Until setup
 is done, configuration writes, service restarts, satellite code pushes and
 pairing changes answer 501 — finish setup first.
@@ -625,13 +627,15 @@ minutes, and **sign out** ends it at once.
 
 Day-to-day features work without logging in — the admin password gates the
 risky operations (plugin installs, configuration, credentials). The
-household **device token** in `~/.domovoi/device-token.txt` (also shown in
-the dashboard once you are logged in) is what your phones and dashboards
-will present for ordinary actions. Forgot the password? Run
+**household token** in `~/.domovoi/device-token.txt` (shown right after the
+claim, under "You're all set!", and later in Settings → Phones & browsers →
+Household token) is what your phones and dashboards present, once each, for
+ordinary actions; it is not the admin password. "Want an easier one?" there
+sets one of your own (at least 12 characters, e.g. `maple-river-lamp`). Forgot the password? Run
 `python -m domovoi.main --reset-admin` on the server to clear it and write a
 fresh setup code to the same file (printed too, in a terminal).
 
-Right after the admin account is set up, the dashboard asks whether this
+After that, the dashboard asks whether this
 Domovoi will have internet ([above](#will-your-domovoi-have-internet)).
 **Decide later** leaves a reminder on the Home page.
 

@@ -1263,6 +1263,27 @@ textarea.cal-inp { resize: vertical; min-height: 64px; line-height: 1.4; }
 .cal-modal .err   { font-size: 11px; color: var(--err-ink); font-family: var(--ff-mono); }
 .cal-modal .hint  { font-size: 10px; color: var(--fg-faint); margin-top: 2px; }
 .cal-modal .hint code { background: var(--sunken); padding: 1px 4px; border-radius: 3px; }
+/* The first-run welcome and "you're all set" (components.jsx FirstRun).
+   The one dialog that greets: the cat, a sentence-case headline, and the
+   claim form under it. Amber only on the cat and the primary button. */
+.cal-modal.first-run { max-width: 520px; }
+.first-run-hero { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 8px; padding: 6px 4px 2px; }
+.first-run-cat { color: var(--brand-ink); line-height: 0; }
+.first-run-title { font-size: 22px; font-weight: 600; letter-spacing: -0.01em; color: var(--fg); }
+.first-run-lede { font-size: 13px; line-height: 1.5; color: var(--fg-muted); max-width: 420px; }
+.first-run-who, .first-run-explain { font-size: 12px; line-height: 1.5; color: var(--fg-muted); }
+.first-run-explain strong { color: var(--fg); font-weight: 600; }
+.cal-modal .first-run-why { font-size: 11px; line-height: 1.5; }
+.cal-modal .first-run-where { font-size: 12px; line-height: 1.5; color: var(--fg-muted); }
+.first-run-where-toggle, .first-run-easier { align-self: flex-start; font-size: 12px; }
+.first-run-token-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.first-run-token {
+  flex: 1 1 240px; font-size: 17px; font-weight: 600; padding: 10px 12px;
+  border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--sunken);
+  user-select: all; overflow-wrap: anywhere; color: var(--fg);
+}
+.first-run-token-missing { font-size: 12px; color: var(--fg-muted); }
+.first-run-mine-acts { display: flex; gap: 8px; justify-content: flex-end; }
 /* The pair-this-browser modal's two ways in. The sign-in is the way out
    for someone who has never heard of the household token, so it gets the
    full width of the modal; "or paste the household token" is the fork to

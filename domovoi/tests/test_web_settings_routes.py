@@ -327,6 +327,7 @@ SCENARIOS: dict[str, dict] = {
 
 # Where the setup code is: the dialog and the Admin card, per host kind.
 for kind, caps in (("wsl", {"host_kind": "wsl"}), ("linux", {"host_kind": "linux"}),
+                   ("mac", {"host_kind": "mac"}),
                    ("unknown", None), ("old_server", {"plugins": []})):
     SCENARIOS[f"where_{kind}"] = {
         "files": [COMPONENTS, SETTINGS], "component": "LoginModal", "fnProps": ["onClose"],
@@ -593,6 +594,17 @@ def test_a_linux_server_is_told_about_the_file_only(driven) -> None:
         assert LINUX in hint and "installer" not in hint, name
 
 
+def test_a_mac_install_is_told_about_its_setup_window(driven) -> None:
+    """The Mac installer's VM (host_kind "mac"): its Setup window shows the
+    code, and the menu-bar cat's Repair or Uninstall Domovoi... opens the
+    Setup page that has Show Setup Code... (there is no menu item of that
+    name, mac/Sources/DomovoiMacKit/MenuItems.swift)."""
+    for name in ("where_mac", "card_mac"):
+        hint = driven[name]["hint"]
+        assert "Domovoi Setup window" in hint and "Show Setup Code…" in hint, name
+        assert LINUX not in hint and "Windows" not in hint, name
+
+
 @pytest.mark.parametrize("kind", ["unknown", "old_server"])
 def test_an_unknown_server_is_told_both(driven, kind) -> None:
     for name in (f"where_{kind}", f"card_{kind}"):
@@ -624,3 +636,7 @@ def test_the_servers_refusal_of_a_wrong_code_says_where_the_right_one_is(monkeyp
     linux = auth.setup_code_refusal()
     assert "~/.domovoi/setup-code.txt" in linux and "installer" not in linux
     assert windows.startswith("setup code required") and linux.startswith("setup code required")
+    monkeypatch.setattr(auth, "host_kind", lambda: "mac")
+    mac = auth.setup_code_refusal()
+    assert "Domovoi Setup window" in mac and "Show Setup Code" in mac
+    assert "~/.domovoi" not in mac and mac.startswith("setup code required")

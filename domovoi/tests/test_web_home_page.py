@@ -55,7 +55,7 @@ FILES = [
     "web/static/satellites.jsx", "web/static/calendar.jsx", "web/static/health.jsx", "web/static/home.jsx",
 ]
 COMPONENT = ("(window.__Auth = Auth, window.__DI = DeviceIdentity,"
-             " window.__rows = HomeAttentionRows, HomePage)")
+             " window.__rows = HomeAttentionRows, window.__FR = FirstRun, HomePage)")
 
 NOW = 1790330400000          # fri 25 sep 2026, 10:00 UTC
 MIN = 60 * 1000
@@ -367,7 +367,7 @@ SCENARIOS["unclaimed"] = scenario(
     house(**{"GET /api/auth/status": STATUS_UNCLAIMED}),
     "const before = w.__snap(h);"
     "await h.click({ type: 'button', text: 'claim it' });"
-    "return { before, modalAfterClick: w.__Auth.modalOpen };",
+    "return { before, modalAfterClick: w.__Auth.modalOpen, welcomeAfterClick: w.__FR.wanted };",
     # The boot register's answer (index.html), as a reload remembers it.
     ls={"domovoi-shared-screen": "0"},
 )
@@ -1031,13 +1031,18 @@ def test_unclaimed_box_says_so_first_and_offers_the_claim(driven) -> None:
     out = driven["unclaimed"]
     snap = out["before"]
     assert snap["attention"][0]["key"] == "claim"
-    assert "this box isn't claimed yet" in snap["attention"][0]["text"]
+    assert "this Domovoi isn't claimed yet" in snap["attention"][0]["text"]
+    assert "box" not in snap["attention"][0]["text"]
     assert "#manual" in snap["links"]
     # The pre-setup grace opens every read, the admin ones included.
     assert ADMIN_PATHS <= _fetched(snap)
     assert not any("pair this phone" in b["text"] for b in snap["buttons"])
     assert snap["modal"] is False
-    assert out["modalAfterClick"] is True
+    # "claim it" opens the first-run welcome, which holds the claim form
+    # (components.jsx FirstRun; test_web_first_run_welcome.py), past a
+    # "Not now" too — not the bare admin dialog.
+    assert out["welcomeAfterClick"] is True
+    assert out["modalAfterClick"] is False
 
 
 # ─── who sees problem rows ───────────────────────────────────────────────

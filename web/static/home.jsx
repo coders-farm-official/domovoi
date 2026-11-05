@@ -1282,6 +1282,12 @@ const HomePage = ({ counts, badges }) => {
 
   const onPair = () => { try { Auth.requestPairing(); } catch {} };
   const onSignIn = () => { try { Auth.requestLogin(); } catch {} };
+  // "claim it": the first-run welcome again (components.jsx FirstRun),
+  // which holds the claim form, even after its "Not now".
+  const onClaim = () => {
+    try { if (typeof FirstRun !== 'undefined') { FirstRun.open(); return; } } catch { /* below */ }
+    onSignIn();
+  };
 
   const name = (cfg.data && cfg.data.bot_name) || 'domovoi';
   const Broadcast = window.Broadcast;
@@ -1311,7 +1317,7 @@ const HomePage = ({ counts, badges }) => {
         <div className="home-col">
           <HomeAttention view={view} viewer={viewer} shared={shared} checking={checking}
                          failed={failed} refused={refused} checkedAt={checkedAt}
-                         onClaim={onSignIn} onSignIn={onSignIn}/>
+                         onClaim={onClaim} onSignIn={onSignIn}/>
           {Broadcast && (
             <div className="home-sec home-sec-announce">
               <Broadcast compact onlineCount={coreDown ? 0 : online.length} fire={fire}/>

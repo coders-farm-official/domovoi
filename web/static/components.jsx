@@ -2490,8 +2490,26 @@ const useHostKind = (wanted = true) => {
  * and the dialog). A Windows install (the installer's WSL system) never
  * shows anyone ~/.domovoi: its installer shows the code on its last page,
  * and running the installer again writes a fresh one (docs/WINDOWS_HOST.md).
- * Unknown: both, so neither kind of owner is sent somewhere that isn't. */
+ * Unknown: both, so neither kind of owner is sent somewhere that isn't.
+ *
+ * "mac" is the Linux VM the macOS installer runs (domovoi/host_kind.py on
+ * the Mac installer's branch). Its Setup window shows the code when it
+ * finishes; the menu-bar cat has no setup-code item of its own, but its
+ * "Repair or Uninstall Domovoi…" opens Setup's installed page, which has
+ * "Show Setup Code…" (mac/Sources/Domovoi/SetupViews.swift, MenuItems.swift).
+ * "darwin" is the core run straight on macOS (a developer's): the file. */
 const SetupCodeWhere = ({ kind }) => {
+  if (kind === 'mac') {
+    return (
+      <span className="setup-code-text">
+        Paste the setup code from the Domovoi Setup window on the Mac it’s
+        installed on, and choose an admin password. Closed that window? Click
+        the Domovoi cat in the Mac’s menu bar, choose Repair or Uninstall
+        Domovoi…, then Show Setup Code… (the Mac asks for its own
+        administrator password first).
+      </span>
+    );
+  }
   if (kind === 'wsl') {
     return (
       <span className="setup-code-text">
@@ -2513,9 +2531,10 @@ const SetupCodeWhere = ({ kind }) => {
   return (
     <span className="setup-code-text">
       Enter the setup code and choose an admin password. On Windows the
-      Domovoi installer showed the code on its last page; on a Linux server
-      it is in <code>~/.domovoi/setup-code.txt</code> (the core also prints
-      it when it runs in a terminal).
+      Domovoi installer showed the code on its last page; on a Mac the
+      Domovoi Setup window shows it; on a Linux server it is in{' '}
+      <code>~/.domovoi/setup-code.txt</code> (the core also prints it when it
+      runs in a terminal).
     </span>
   );
 };
@@ -2545,6 +2564,14 @@ const useFirstFieldFocus = (which) => {
   const ref = React.useRef(null);
   React.useLayoutEffect(() => { focusFirstField(ref.current); }, [which]);
   return ref;
+};
+
+// The first-run form's own checks, before anything is sent: the same two
+// for the admin setup dialog and the welcome (FirstRunWelcome below).
+const setupFormError = (password, confirm) => {
+  if (password.length < 10) return 'password must be at least 10 characters';
+  if (password !== confirm) return 'passwords do not match';
+  return null;
 };
 
 const LoginModal = ({ onClose }) => {
@@ -2594,8 +2621,8 @@ const LoginModal = ({ onClose }) => {
     if (busyRef.current) return;
     setErr(null);
     if (needsSetup) {
-      if (password.length < 10) { setErr('password must be at least 10 characters'); return; }
-      if (password !== confirm) { setErr('passwords do not match'); return; }
+      const bad = setupFormError(password, confirm);
+      if (bad) { setErr(bad); return; }
     }
     busyRef.current = true;
     setBusy(true);
@@ -2611,9 +2638,10 @@ const LoginModal = ({ onClose }) => {
     // Only the sign-in's own refusal lands here: login()/setup() reject
     // only when the server did not say yes.
     if (failed) { setErr(loginErrorText(failed)); return; }
-    // First-run setup done: ask the internet question next, when nobody
-    // (the Windows installer, env_bootstrap) has answered it yet.
-    if (needsSetup) InternetAsk.offer();
+    // First-run setup done: "you're all set" and the household token next
+    // (FirstRun below), then the internet question, when nobody (the
+    // Windows installer, env_bootstrap) has answered it yet.
+    if (needsSetup) FirstRun.claimed();
     // Signed in: auth.js has already taken the modal down. A host whose
     // onClose does more than that still hears about it — unless a NEW
     // prompt opened meanwhile, which is not this one to close.
@@ -2907,6 +2935,298 @@ const InternetFirstRunStep = ({ onClose }) => {
   );
 };
 
+/* ---- First run: the welcome, and "you're all set" -----------------
+ * Owner, 2026-11-04, after a real Mac install: a new owner opened the
+ * dashboard, everything looked usable, and nothing said "start here" —
+ * the only way in was a small Home row. Now, while the house is unclaimed,
+ * every page load opens a welcome that holds the claim itself (setup code
+ * → admin password), with where the code is on THIS kind of server. Its
+ * words also suit someone who is not the owner: anyone on the network
+ * lands here before the claim.
+ *
+ * "Not now" puts it away for this browser (localStorage; a browser that
+ * refuses storage forgets it at the next load) and the Home row stays as
+ * the reminder; that row's "claim it" opens the welcome again. It NEVER
+ * shows once the house is claimed: only a status read that says
+ * `setup_complete: false` opens it, so a guest on a claimed house, or a
+ * browser that could not read the status at all, never sees it.
+ *
+ * After a claim made in this tab (here or in the admin setup dialog) comes
+ * "you're all set" with the household token: what every phone, tablet and
+ * browser asks for once, which is not the admin password. "Want an easier
+ * one?" sets the household's own (POST /api/auth/device-token, the rule
+ * checked server-side as in Settings); "Keep this one" is one click. Then
+ * the internet question, as before.
+ *
+ * The token and the setup code stay in memory and in the request bodies:
+ * never in the address, the console, or an error line (the server's
+ * refusals don't repeat them, and none of these lines do either). */
+const WELCOME_DISMISS_KEY = 'domovoi-welcome-dismissed';
+const HOUSEHOLD_TOKEN_MIN = 12;
+
+const FirstRun = (() => {
+  let claiming = false;   // a claim from the welcome is on its way
+  let allSet = false;     // a claim just landed in this tab
+  let wanted = false;     // "claim it" asked for the welcome again
+  let putAway = false;    // "Not now" in this page, whatever storage does
+  const subs = new Set();
+  const notify = () => subs.forEach((fn) => { try { fn(); } catch { /* one bad subscriber */ } });
+  const stored = () => {
+    try { return localStorage.getItem(WELCOME_DISMISS_KEY) === '1'; } catch { return false; }
+  };
+  return {
+    get claiming() { return claiming; },
+    get allSet() { return allSet; },
+    get wanted() { return wanted; },
+    subscribe(fn) { subs.add(fn); return () => { subs.delete(fn); }; },
+    dismissed: () => putAway || stored(),
+    dismiss() {
+      putAway = true; wanted = false;
+      try { localStorage.setItem(WELCOME_DISMISS_KEY, '1'); } catch { /* this page only */ }
+      notify();
+    },
+    // The Home row's "claim it": the welcome again, past a "Not now".
+    open() { wanted = true; notify(); },
+    setClaiming(on) { claiming = !!on; notify(); },
+    claimed() { claiming = false; wanted = false; allSet = true; notify(); },
+    finish() {
+      allSet = false;
+      notify();
+      InternetAsk.offer();
+    },
+  };
+})();
+
+// Whether the welcome is on screen. Pure, so the rule is testable alone:
+// only a status read that says unclaimed opens it; a claim on its way
+// keeps it up until the answer (the status flips to claimed first).
+const welcomeShows = (status, { dismissed = false, wanted = false, claiming = false } = {}) => {
+  if (claiming) return true;
+  if (!status || status.setup_complete !== false) return false;
+  return wanted || !dismissed;
+};
+
+const FirstRunWelcome = () => {
+  const [code, setCode] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const [showWhere, setShowWhere] = useState(false);
+  const busyRef = React.useRef(false);
+  const hostKind = useHostKind(true);
+  const firstField = useFirstFieldFocus('welcome');
+
+  const submit = async () => {
+    if (busyRef.current) return;
+    setErr(null);
+    if (!code.trim()) { setErr('enter the setup code first'); return; }
+    const bad = setupFormError(password, confirm);
+    if (bad) { setErr(bad); return; }
+    busyRef.current = true;
+    setBusy(true);
+    FirstRun.setClaiming(true);
+    let failed = null;
+    try { await Auth.setup(code.trim(), password); } catch (e) { failed = e; }
+    busyRef.current = false;
+    setBusy(false);
+    if (failed) {
+      FirstRun.setClaiming(false);
+      setErr(loginErrorText(failed));
+      return;
+    }
+    FirstRun.claimed();
+  };
+  const enter = (e) => { if (e.key === 'Enter') submit(); };
+
+  return (
+    <div className="cal-modal-bg">
+      <div className="cal-modal first-run" role="dialog" aria-modal="true"
+           aria-label="Welcome to Domovoi" onClick={(e) => e.stopPropagation()}>
+        <div className="cal-modal-body">
+          <div className="first-run-hero">
+            <span className="first-run-cat"><DomovoiGlyph size={44}/></span>
+            <div className="first-run-title">Welcome to Domovoi!</div>
+            <div className="first-run-lede">
+              Your house spirit has moved in and is ready to look after your
+              music, files, rooms and more. One quick step makes it yours:
+              claim it with the setup code, then choose an admin password.
+            </div>
+          </div>
+          <div className="first-run-who">
+            Setting up Domovoi? Enter the setup code from the computer it’s
+            installed on. Someone else in your home setting it up? Choose
+            “Not now” — everything keeps working while they finish.
+          </div>
+          <div className="field">
+            <label>setup code</label>
+            <input className="cal-inp" value={code} ref={firstField}
+                   autoComplete="off" spellCheck={false}
+                   placeholder="eight-words-separated-by-dashes"
+                   onChange={(e) => setCode(e.target.value)} onKeyDown={enter}/>
+            <button type="button" className="home-link first-run-where-toggle"
+                    aria-expanded={showWhere} onClick={() => setShowWhere(!showWhere)}>
+              where’s my code?
+            </button>
+            {showWhere && (
+              <div className="hint setup-code-where first-run-where">
+                <SetupCodeWhere kind={hostKind}/>
+              </div>
+            )}
+          </div>
+          <div className="field">
+            <label>admin password (min 10 chars)</label>
+            <input className="cal-inp" type="password" value={password}
+                   autoComplete="new-password"
+                   onChange={(e) => setPassword(e.target.value)} onKeyDown={enter}/>
+          </div>
+          <div className="field">
+            <label>confirm password</label>
+            <input className="cal-inp" type="password" value={confirm}
+                   autoComplete="new-password"
+                   onChange={(e) => setConfirm(e.target.value)} onKeyDown={enter}/>
+          </div>
+          <div className="hint first-run-why">
+            The setup code is used once, today. The admin password is yours to
+            keep: Domovoi asks for it only when someone changes settings.
+          </div>
+          {err && <div className="err">{err}</div>}
+        </div>
+        <div className="cal-modal-foot">
+          <Button onClick={() => FirstRun.dismiss()} disabled={busy}>Not now</Button>
+          <Button variant="primary" icon="key" onClick={submit} disabled={busy || !password}>
+            {busy ? 'working…' : 'set password'}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const FirstRunAllSet = () => {
+  const [token, setToken] = useState(null);
+  const [loadErr, setLoadErr] = useState(false);
+  const [copied, setCopied] = useState(null);   // 'ok' | 'failed' | null
+  const [easier, setEasier] = useState(false);
+  const [mine, setMine] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [saveErr, setSaveErr] = useState(null);
+  const [changed, setChanged] = useState(false);
+  const load = async () => {
+    setLoadErr(false);
+    try {
+      const out = await apiGet('/api/auth/device-token', { quiet: true });
+      if (out && out.token) setToken(out.token); else setLoadErr(true);
+    } catch { setLoadErr(true); }
+  };
+  useEffect(() => { load(); }, []);
+
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(token); setCopied('ok'); } catch { setCopied('failed'); }
+  };
+  const wanted = mine.trim();
+  const tooShort = wanted.length < HOUSEHOLD_TOKEN_MIN;
+  const useMine = async () => {
+    if (tooShort || saving) return;
+    setSaveErr(null);
+    setSaving(true);
+    try {
+      const out = await apiPost('/api/auth/device-token', { token: wanted });
+      if (out && out.token) {
+        try { Auth.pair(out.token); } catch { /* re-paired by the next sign-in */ }
+        setToken(out.token);
+        setChanged(true);
+        setEasier(false);
+        setMine('');
+        setCopied(null);
+      }
+    } catch (e) {
+      // The server's own words ("at least 12 characters"); they never
+      // repeat the token.
+      if (!isAuthFailure(e)) setSaveErr(apiErrorText(e));
+    } finally { setSaving(false); }
+  };
+
+  return (
+    <div className="cal-modal-bg">
+      <div className="cal-modal first-run" role="dialog" aria-modal="true"
+           aria-label="You're all set" onClick={(e) => e.stopPropagation()}>
+        <div className="cal-modal-body">
+          <div className="first-run-hero">
+            <span className="first-run-cat"><DomovoiGlyph size={44}/></span>
+            <div className="first-run-title">You’re all set!</div>
+            <div className="first-run-lede">
+              Domovoi is yours. One last thing worth keeping: your household
+              token.
+            </div>
+          </div>
+          <div className="field">
+            <label>household token</label>
+            {token ? (
+              <div className="first-run-token-row">
+                <code className="mono first-run-token" data-testid="first-run-token">{token}</code>
+                <Button icon="copy" onClick={copy}>copy</Button>
+              </div>
+            ) : loadErr ? (
+              <div className="first-run-token-missing">
+                Couldn’t load it just now.{' '}
+                <button type="button" className="home-link" onClick={load}>try again</button>
+                {' '}· It’s always in Settings → Phones & browsers → Household token.
+              </div>
+            ) : (
+              <div className="first-run-token-missing">loading…</div>
+            )}
+            {copied === 'ok' && <div className="hint">copied</div>}
+            {copied === 'failed' && <div className="hint">copy failed — select the token and copy it by hand</div>}
+            {changed && <div className="hint">Saved: this is the household token now.</div>}
+          </div>
+          <div className="first-run-explain">
+            <strong>This is not your admin password.</strong> It’s the house
+            key: every phone, tablet and browser asks for it once, the first
+            time it connects to Domovoi. Your admin password is only for
+            changing settings.
+          </div>
+          {token && !easier && (
+            <button type="button" className="home-link first-run-easier"
+                    onClick={() => { setEasier(true); setSaveErr(null); }}>
+              Want an easier one?
+            </button>
+          )}
+          {easier && (
+            <div className="field first-run-mine">
+              <label>your own household token</label>
+              <input className="cal-inp mono" value={mine} autoFocus
+                     autoComplete="off" spellCheck={false}
+                     placeholder="maple-river-lamp"
+                     onChange={(e) => setMine(e.target.value)}
+                     onKeyDown={(e) => { if (e.key === 'Enter') useMine(); }}/>
+              <div className="hint">
+                At least {HOUSEHOLD_TOKEN_MIN} characters, so a neighbour can’t
+                guess it. A few words you can say out loud work well, like
+                maple-river-lamp.
+              </div>
+              {saveErr && <div className="err">{saveErr}</div>}
+              <div className="first-run-mine-acts">
+                <Button onClick={() => { setEasier(false); setMine(''); setSaveErr(null); }} disabled={saving}>
+                  cancel
+                </Button>
+                <Button variant="primary" onClick={useMine} disabled={tooShort || saving}>
+                  {saving ? 'saving…' : 'Use this'}
+                </Button>
+              </div>
+            </div>
+          )}
+        </div>
+        <div className="cal-modal-foot">
+          <Button variant="primary" onClick={() => FirstRun.finish()} disabled={saving}>
+            {changed ? 'Done' : 'Keep this one'}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const AuthModalHost = () => {
   const [, force] = React.useReducer((x) => x + 1, 0);
   // subscribeModal: every change, plus the login modal coming down the
@@ -2935,11 +3255,23 @@ const AuthModalHost = () => {
     return Auth.subscribeModal ? Auth.subscribeModal(onChange) : Auth.subscribe(onChange);
   }, []);
   useEffect(() => InternetAsk.subscribe(force), []);
+  useEffect(() => FirstRun.subscribe(force), []);
+  // The shell renders after the first status read (index.html, Auth.ready);
+  // one that failed is asked again here, so the welcome can still find an
+  // unclaimed house.
+  useEffect(() => {
+    try { if (!Auth.status && Auth.refreshStatus) Auth.refreshStatus(); } catch { /* auth.js absent */ }
+  }, []);
   // Keyed on the opening: a prompt that comes back is a fresh form, never
   // the last one's typed password and error.
   if (Auth.modalOpen) return <LoginModal key={`login-${Auth.modalSeq || 0}`} onClose={() => Auth.closeModal()}/>;
   if (Auth.pairModalOpen) return <PairModal onClose={() => Auth.closePairModal()}/>;
+  if (FirstRun.allSet) return <FirstRunAllSet/>;
   if (InternetAsk.open) return <InternetFirstRunStep onClose={() => InternetAsk.close()}/>;
+  if (welcomeShows(Auth.status, { dismissed: FirstRun.dismissed(), wanted: FirstRun.wanted,
+                                  claiming: FirstRun.claiming })) {
+    return <FirstRunWelcome/>;
+  }
   return null;
 };
 
@@ -3611,6 +3943,7 @@ Object.assign(window, {
   readRouteTab, useRouteTab, tabSlug, settingsTabHref, openSettingsTab, SETUP_ROUTE, ACOUSTID_KEY_ROUTE,
   SetupCodeWhere, useHostKind,
   relTime, fmtDur, webHref, LoginModal, PairModal, AuthModalHost,
+  FirstRun, welcomeShows, FirstRunWelcome, FirstRunAllSet,
   satCan, satBoardLabel, SAT_BOARD_LABELS,
   DeleteConfirmDialog, useDeleteConfirm, TrustServerPrompt, WriteBlockedNotice,
   CaptureChip, useAdminSignedIn, adminReloadState, useAdminReloadState,

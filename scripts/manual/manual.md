@@ -63,10 +63,13 @@ network.
 
 **Getting set up** (a checklist; each line ticks itself when it's done)
 
-1. **Claim the admin account** *(admin)*: [Settings → System → Advanced](#settings/advanced),
-   **set up admin**. Type the 8-word setup code and choose a password.
+1. **Claim the admin account** *(admin)*: the welcome that opens on a new
+   Domovoi's dashboard asks for it (or [Settings → System → Advanced](#settings/advanced),
+   **set up admin**). Type the 8-word setup code and choose a password.
    Where the code is: the Windows installer shows it on its last page; on
-   Linux it is in a file on the server. [More detail](README.md#2-claim-the-admin-account)
+   a Mac the Domovoi Setup window shows it; on Linux it is in a file on
+   the server. Then keep the household token it shows: every phone and
+   browser asks for it once. [More detail](README.md#2-claim-the-admin-account)
 2. **Answer the internet question**: Yes, Sometimes or No. You can change
    it later in [Settings → Privacy → Internet](#settings/internet).
 3. **Add your first room**: [Settings → Rooms & devices → Rooms](#settings/rooms).
