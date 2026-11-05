@@ -2420,9 +2420,21 @@ extension StubHouseUITests {
     /// sentence at 1235.0 and `drop in from this phone` at 1106.7, and it
     /// reports `floor=8 rest=0` (`I005/ALL/testRooms_Audit.log:383`).
     ///
+    /// All three excused elements are the page's own: `Settings` is a
+    /// descendant of the roster's scroll view
+    /// (`rooms-31-audit-roster-tree…:22, 24`) and `voice`, `registry default`
+    /// and the health sentence of the room's
+    /// (`rooms-27-dropin-ended-tree…:23, 47-49, 82`), which is why asking
+    /// `inPage` on both arms takes none of them back.
+    ///
     /// So this excuses a sample of the navigation bar's material, or of
     /// whatever the window draws where the page's own content is clipped
-    /// away — never a sample of the element. It is the same class as D57's `back to Rooms &
+    /// away — never a sample of the element. Both arms therefore ask
+    /// `inPage`: only the page's own content can be the thing one of those
+    /// two rectangles took the pixels away from. Everything else the window
+    /// draws in either rectangle — the bar's own `Back` and title, the phone
+    /// bar's four words, a sheet over the top — is drawn *there*, and a
+    /// finding against it is kept. It is the same class as D57's `back to Rooms &
     /// devices`, which Kamron answered with "the fix is the case scrolling it
     /// into view, not a colour" — except that a page taller than its viewport
     /// cannot have both ends on the window at once, which is why the finding
@@ -2444,6 +2456,25 @@ extension StubHouseUITests {
     ///    the bar — outside the bar's rectangle, so a finding against them
     ///    is kept. They are a known producer of real findings on other
     ///    screens.
+    ///  * **The navigation bar's own children**, which is the reason the
+    ///    *first* arm asks `inPage` and `!inBar` and not only
+    ///    `covered.contains`. The bar's rectangle is where it covers the
+    ///    page; what it covers the page *with* is its own content, and that
+    ///    is drawn. `Back` at `{{0, 93.3}, {44, 44}}` and a pushed room's bar
+    ///    title `kitchen` at `{{167, 105}, {59, 20.3}}` are wholly inside
+    ///    `covered` (`{{-1, 92.3}, {395, 46}}`) in all three of this unit's
+    ///    classified audits, and they are not hidden at all. Measured off
+    ///    this train's own screenshots (Pillow, the exact frames at 3x):
+    ///    the `Back` chevron is 466 pixels of `#975800` in every one of the
+    ///    three — the same glyph, fully drawn — against the bar material
+    ///    behind it, **5.13:1** on the roster (`#F3F4F3`), **5.22:1** on the
+    ///    ended drop-in (`#F5F6F5`) and **5.66:1** on the opened room
+    ///    (`#FFFFFF`); the bar title `kitchen` is `#000000` on `#F7F8F7`,
+    ///    **19.72:1**. All three clear 4.5:1, so nothing real was being
+    ///    hidden today — but a contrast finding against either was excused
+    ///    in silence, which is what this arm's `inPage` now ends. (A sheet's
+    ///    content inside that rectangle is the same case: a sheet is drawn
+    ///    *over* the bar, and this unit's drop-in case audits with one up.)
     ///  * **The phone bar below the page**, which is the reason the second
     ///    arm asks `inPage` and not only `minY >= page.maxY`. The page is
     ///    the tallest scroll view, `{{0, 93.3}, {393, 676.7}}` on all three
@@ -2549,6 +2580,17 @@ extension StubHouseUITests {
         func inPage(_ twin: (label: String, frame: CGRect)) -> Bool {
             shot.pageElements.contains { $0.label == twin.label && $0.frame == twin.frame }
         }
+        // **Is this element the navigation bar's own content?** Matched the
+        // same way, and for the same reason one rectangle over: the bar's
+        // children are inside `covered` because the bar draws them there,
+        // not because it hides them. In every I005 Rooms tree the bar is a
+        // sibling of the scroll view's ancestors, so `inPage` alone already
+        // keeps them; this is asked as well because that is a fact about
+        // today's view hierarchy and `!inBar` is a fact about the bar, and a
+        // toolbar placed inside the page later would still be drawn.
+        func inBar(_ twin: (label: String, frame: CGRect)) -> Bool {
+            shot.barElements.contains { $0.label == twin.label && $0.frame == twin.frame }
+        }
         func noPixels(_ line: String) -> Bool {
             guard line.hasPrefix(Self.roomsContrastFailed)
                 || line.hasPrefix(Self.roomsNearlyPassed) else { return false }
@@ -2557,16 +2599,23 @@ extension StubHouseUITests {
             guard !twins.isEmpty else { return false }
             let off = twins.allSatisfy { twin in
                 // Wholly behind the navigation bar, or clipped away by the
-                // page's own foot. The second is the page's content only:
-                // the window's phone bar is drawn below that foot and is
-                // perfectly visible there.
-                covered.contains(twin.frame)
+                // page's own foot. **Both arms are the page's content
+                // only**: the bar's children are drawn on the bar and the
+                // window's phone bar is drawn below the page's foot, so an
+                // element in neither list is inside one of those two
+                // rectangles because something put it there to be seen.
+                (inPage(twin) && !inBar(twin) && covered.contains(twin.frame))
                     || (inPage(twin) && twin.frame.minY >= page.maxY - 0.5)
             }
             if off {
                 print(
                     "ROOMS AUDIT no-pixels :: \(line) — on screen at "
-                        + twins.map { "\($0.frame)\(inPage($0) ? " in the page" : " outside the page")" }
+                        + twins.map {
+                            let whose = inBar($0)
+                                ? " on the navigation bar"
+                                : (inPage($0) ? " in the page" : " outside the page")
+                            return "\($0.frame)\(whose)"
+                        }
                             .joined(separator: ", ")
                         + ", with the bar at \(barFrame) and the page's foot at \(page.maxY)"
                 )
@@ -2607,6 +2656,14 @@ extension StubHouseUITests {
     /// drawn in full; in every I005 Rooms tree they are siblings of the
     /// scroll view's ancestors, not its descendants, which is the difference
     /// these two lists carry.
+    ///
+    /// The **navigation bar's own subtree** is read for the same reason, one
+    /// rectangle over: the bar covers the top of the page, but what it covers
+    /// the page with is the bar's own content, drawn in full. `Back` sits at
+    /// `{{0, 93.3}, {44, 44}}` and a pushed room's bar title `kitchen` at
+    /// `{{167, 105}, {59, 20.3}}` (`rooms-27-dropin-ended-tree…:16-18`),
+    /// both wholly inside the bar's rectangle and both perfectly legible in
+    /// the screenshot beside it.
     @MainActor
     func roomsWindowShot(_ app: XCUIApplication) -> RoomsWindowShot {
         let bar = app.navigationBars.firstMatch
@@ -2615,11 +2672,16 @@ extension StubHouseUITests {
         if let page {
             inside = Self.roomsLabelled(page.descendants(matching: .any))
         }
+        var chrome: [(label: String, frame: CGRect)] = []
+        if bar.exists {
+            chrome = Self.roomsLabelled(bar.descendants(matching: .any))
+        }
         return RoomsWindowShot(
             page: page?.frame ?? .zero,
             bar: bar.exists ? bar.frame : .zero,
             elements: Self.roomsLabelled(app.descendants(matching: .any)),
-            pageElements: inside
+            pageElements: inside,
+            barElements: chrome
         )
     }
 
@@ -2686,6 +2748,12 @@ struct RoomsWindowShot {
     /// bar, which is drawn below it. An element is "clipped away" only if it
     /// is in here.
     let pageElements: [(label: String, frame: CGRect)]
+
+    /// The same, for the **navigation bar's own subtree**. `bar` is where the
+    /// bar covers the page; the bar's own children are what it covers it
+    /// *with*, and they are drawn. An element is "behind the bar" only if it
+    /// is not in here.
+    let barElements: [(label: String, frame: CGRect)]
 }
 
 /// The words these cases match on, spelled out rather than imported.
