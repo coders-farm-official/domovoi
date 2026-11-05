@@ -5,8 +5,14 @@ import Foundation
 ///
 /// ### The bug this type is
 ///
+/// (Written while a level was a pushed screen. Since answer 73 every level is
+/// drawn on one screen and nothing of the manual is pushed, but a **route**
+/// pushed over the manual — the phone bar, a notification, a `route:` link —
+/// still covers it and still delivers `onDisappear`, so the reasoning below
+/// holds for that cover unchanged.)
+///
 /// Answer 32 (`fx-manual32`) made a level of the manual a **pushed screen**
-/// on the shell's own stack (``ManualLevelStack``). ``ManualView`` carried
+/// on the shell's own stack. ``ManualView`` carried
 /// `onDisappear { manual?.stop() }` from the days when the manual pushed
 /// nothing, so that line used to mean "the route was popped" — and the moment
 /// a level went on top of it, it meant "a screen covered me" as well. A

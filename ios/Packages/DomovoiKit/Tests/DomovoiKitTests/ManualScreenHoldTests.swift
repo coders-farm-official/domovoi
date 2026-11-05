@@ -43,8 +43,17 @@ import XCTest
 /// quote every symbol banned below, because they are the account of why it is
 /// banned.
 ///
+/// **Since answer 73** nothing of the manual is a pushed screen — every level
+/// is drawn on one screen — so the host and its push are gone, and so are the
+/// two cases that read them. What is left is still true: a route pushed over
+/// the manual covers it and delivers `onDisappear`, so the hold stays; and the
+/// manual's own swipe recogniser stays on the navigation controller's view
+/// while it is covered, so whether the manual is the route on top is part of
+/// whether that recogniser takes a swipe at all
+/// (``testTheSwipeIsOnlyTakenWhileTheManualIsOnTop``).
+///
 /// What none of this can do is prove SwiftUI delivers `onDisappear` on a
-/// cover, or that `navigationDestination(isPresented:)` pushes at all. Those
+/// cover, or that a recogniser in front of the pop gesture gets the touch. Those
 /// are runtime facts and a train is what reads them
 /// (`testManual_ASwipeFromAPieceGoesUpToItsTopic`). The point of the fixes is
 /// that the screen no longer depends on the first answer.
@@ -84,10 +93,9 @@ final class ManualScreenHoldTests: XCTestCase {
                 + "the wrong file"
         )
         XCTAssertTrue(
-            Self.manualScreen.contains("struct ManualLevelHost"),
-            "\(Self.manualScreenPath) has no `ManualLevelHost` in it — the "
-                + "level host moved, and the two readings about it below are "
-                + "now about nothing"
+            Self.manualScreen.contains("ManualBackSwipe("),
+            "\(Self.manualScreenPath) no longer puts `ManualBackSwipe` on the "
+                + "screen, so the reading about it below is about nothing"
         )
     }
 
@@ -109,13 +117,11 @@ final class ManualScreenHoldTests: XCTestCase {
     func testTheManualWritesNothingOnItsWayOut() {
         XCTAssertFalse(
             Self.manualScreen.contains("onDisappear"),
-            "\(Self.manualScreenPath) has an `onDisappear` again. A level of "
-                + "the manual is a pushed screen, so that callback arrives for "
-                + "a cover: the two things it used to carry stopped the live "
-                + "reads the pages above it draw, and made every buried level "
-                + "host believe its push had failed. `ManualScreenHold` and "
-                + "`ManualLevelHost.waitForTheScreenAbove()` are where those "
-                + "two belong"
+            "\(Self.manualScreenPath) has an `onDisappear` again. A route "
+                + "pushed over the manual covers it, so that callback arrives "
+                + "for a cover: `stop()` on it stops the live reads the manual "
+                + "draws when it is uncovered. `ManualScreenHold` is where the "
+                + "lifetime belongs"
         )
         XCTAssertFalse(
             Self.manualScreen.contains("stop()"),
@@ -138,75 +144,39 @@ final class ManualScreenHoldTests: XCTestCase {
         )
     }
 
-    /// **The level host asks "did my push land" once per push.**
+    /// **The manual takes a swipe only while it is the route on top** —
+    /// answer 74's recogniser, read off the screen and the recogniser.
     ///
-    /// Keyed on the presentation and not on the chain. Keyed on the chain, a
-    /// host that is already presenting a screen re-asks the question every
-    /// time the chain changes *above* it — and cannot have it answered,
-    /// because its child is already mounted and does not fire `onAppear`
-    /// twice. So at two or more levels deep every host below the top wrote
-    /// `deeperIsLate` 700 ms after every move, which is a state write on a
-    /// covered screen.
-    func testTheLevelHostAsksAboutItsPushOncePerPush() {
+    /// The recogniser sits on the navigation controller's view and stays there
+    /// while another route is pushed over the manual. If the decision it asks
+    /// lost the "on top" half, a swipe on Music would move the manual
+    /// underneath and pop nothing; if it lost the "fail at once" half, the
+    /// system's pop would never get a touch from Start here and nobody could
+    /// swipe out of the manual. `ManualAnswersTests.testASwipeBackGoesUpExactlyOneLevel`
+    /// pins the decision itself; this pins that the screen asks it with the
+    /// open route and that the recogniser obeys it.
+    func testTheSwipeIsOnlyTakenWhileTheManualIsOnTop() {
         XCTAssertTrue(
-            Self.manualScreen.contains(".task(id: presentsDeeper)"),
-            "`ManualLevelHost`'s late-push guard is not keyed on "
-                + "`presentsDeeper` any more. Keyed on anything that changes "
-                + "while the push stands — the chain, for one — it re-asks a "
-                + "question only a fresh `onAppear` can answer, and a working "
-                + "push reaches the fallback"
+            Self.manualScreen.contains("manualIsOnTop: model.navigation.route == .manual"),
+            "`ManualView` no longer tells the swipe decision whether the "
+                + "manual is the route on top, so its recogniser takes swipes "
+                + "meant for a screen pushed over it"
         )
-        XCTAssertFalse(
-            Self.manualScreen.contains("task(id: chain"),
-            "`ManualLevelHost`'s guard is keyed on the chain again, which is "
-                + "exactly what review round 1's finding 2 measured: every "
-                + "buried host falls back about a second after every move two "
-                + "levels deep"
+        let swipe = ShellFoldViewBodyTests.code(
+            in: Self.source("ios/Domovoi/Manual/ManualBackSwipe.swift")
         )
-        XCTAssertFalse(
-            Self.manualScreen.contains("onDrawn(false)"),
-            "`onDrawn` carries `false` again. It is one direction only — "
-                + "\"the screen above has drawn\" — because the callback that "
-                + "would carry the other one is `onDisappear`, which arrives "
-                + "for a cover"
-        )
-    }
-
-    /// **A level is presented only while the manual is the route on top.**
-    ///
-    /// Review round 1's finding 3. The levels hang off the **shell's** stack,
-    /// and four things append to that stack: the manual's own `route:` links,
-    /// the phone bar (drawn outside the stack, so it is tappable from a
-    /// pushed level), a notification tap, and a capability that went away. A
-    /// route pushed *underneath* presentations that hang off the screen below
-    /// it is a shape nobody here has measured, and the first build of answer
-    /// 32 guarded only the first of the four, inside `act(_:in:)`.
-    ///
-    /// Two halves, and the reading wants both: the gate, which is
-    /// declarative so that the push and the dismissal resolve in one update,
-    /// and the model's own collapse, so nothing is left asking to be pushed
-    /// again the moment the manual is uncovered.
-    func testALevelIsOnlyPresentedWhileTheManualIsOnTop() {
+        XCTAssertFalse(swipe.isEmpty, "ManualBackSwipe.swift read as empty — moved or renamed")
         XCTAssertTrue(
-            Self.manualScreen.contains("isTopRoute && ManualLevelStack.presentsDeeper"),
-            "`ManualLevelHost.presentsDeeper` no longer asks whether the "
-                + "manual is the route on top. Without it the phone bar "
-                + "pushes a route underneath three live presentations, which "
-                + "is the shape `act(_:in:)` goes out of its way to avoid for "
-                + "the two links it owns"
+            swipe.contains("guard decide() == .upALevel else { return false }"),
+            "the recogniser begins without asking the decision, so from Start "
+                + "here it swallows the swipe the system's pop needs to leave "
+                + "the manual"
         )
         XCTAssertTrue(
-            Self.manualScreen.contains("onChange(of: model.navigation.route)"),
-            "nothing on this screen notices that the manual stopped being the "
-                + "route on top, so the levels it left behind are asked for "
-                + "again the moment it is uncovered"
-        )
-        XCTAssertTrue(
-            Self.manualScreen.contains("guard !presented, isTopRoute else { return }"),
-            "the dismissal binding answers a dismissal that is the gate "
-                + "closing. Then it and the `onChange` both write, in an order "
-                + "nothing here fixes, and a stack left half-cut re-pushes a "
-                + "level on the way back"
+            swipe.contains("interactivePopGestureRecognizer?.require(toFail: edge)"),
+            "the system's pop no longer waits for the manual's recogniser, so "
+                + "a swipe from a level pops the route and leaves the manual — "
+                + "what entry 74 described at the accessibility sizes"
         )
     }
 }

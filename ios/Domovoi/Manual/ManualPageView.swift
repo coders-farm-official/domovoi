@@ -261,31 +261,20 @@ struct ManualMapPage: View {
     let focus: ManualTopic?
     let reduceMotion: Bool
 
-    /// **Which level this page was pushed as**, handed down rather than
-    /// derived from ``focus``.
-    ///
-    /// ``ManualMapStage`` needs two things that `focus` cannot answer: which
-    /// arrival at this level the scramble should key on, and whether this
-    /// page is the one on top of the manual's stack (only the top level's
-    /// cards float). Deriving it would get the `.piece` fallback wrong —
-    /// ``ManualLevelView`` draws a map for a piece the document no longer has, and
-    /// that page's `focus` is `nil` while its place is `.piece(…)`, so a
-    /// derived place would call the top level covered and hold its cards
-    /// still.
-    let place: ManualPlace
-
     /// See ``ManualStartPage/scrolls``.
     var scrolls: Bool = true
 
     var body: some View {
         ManualScrollIf(scrolls: scrolls) {
             VStack(alignment: .leading, spacing: 0) {
+                // The same stage for the map and for every cluster, so a move
+                // between them changes `focus` inside it and the camera
+                // glides (``ManualLevelView`` has why it is the same view).
                 ManualMapStage(
                     doc: doc,
                     manual: manual,
                     focus: focus,
-                    reduceMotion: reduceMotion,
-                    place: place
+                    reduceMotion: reduceMotion
                 )
                 // The topic's own introduction at level two, the document's
                 // map hint at level one, nothing when the document has
@@ -506,14 +495,24 @@ struct ManualPhraseChip: View {
     }
 }
 
-/// One word in a tone, on an opaque surface.
+/// One word in a tone, on an opaque surface — Android's `Pill`
+/// (`ui/components/Kit.kt:83`).
 ///
-/// Opaque on purpose, which is ``HomeTonePill``'s lesson and not a style
-/// preference: a contrast audit cannot read a colour that is whatever happens
-/// to be behind it, and `Color(.secondarySystemBackground)` is a colour.
-/// The ink is always a token — `warnInk`, `okInk`, `fgMuted` — never
-/// `.orange`, `.green` or `.red`, which measure 2.2:1 and 2.2:1 and 3.55:1 as
-/// text.
+/// **The wash is the tone's, as Android's is** (Kamron's answer 75):
+/// `toneSoft(tone)` (`Kit.kt:53`) — amber behind `warn` (the `admin` badge on
+/// a label block, `ManualScreen.kt:802`), green behind `ok`, and behind
+/// `idle` the same grey the inline `preview`/`plugin` words sit on
+/// (``Color/manualWash(_:)``). It used to be Apple's
+/// `secondarySystemBackground` for every tone, a third grey that matched
+/// neither Android nor the inline words.
+///
+/// Opaque on purpose, which is ``HomeTonePill``'s lesson: a contrast audit
+/// cannot read a colour that is whatever happens to be behind it, so each
+/// Android translucency is composited onto the page once
+/// (``ManualTone/wash(dark:)``). The ink is always a token — `warnInk`,
+/// `okInk`, `fgMuted` — never `.orange`, `.green` or `.red`, which measure
+/// 2.2:1 and 2.2:1 and 3.55:1 as text; nor Android's own `warn`/`ok`/`idle`
+/// inks (`toneColor`, `Kit.kt:44`), which are fills.
 struct ManualPill: View {
 
     enum Tone { case warn, ok, idle }
@@ -528,7 +527,7 @@ struct ManualPill: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
             .foregroundStyle(ink)
-            .background(Color(.secondarySystemBackground), in: Capsule())
+            .background(Color.manualWash(wash), in: Capsule())
     }
 
     private var ink: Color {
@@ -536,6 +535,14 @@ struct ManualPill: View {
         case .warn: return Color.warnInk
         case .ok: return Color.okInk
         case .idle: return Color.fgMuted
+        }
+    }
+
+    private var wash: ManualTone {
+        switch tone {
+        case .warn: return .warn
+        case .ok: return .ok
+        case .idle: return .idle
         }
     }
 }
@@ -582,10 +589,11 @@ extension Color {
     /// | run's ink | light (`#F5F3F0`) | dark (`#100E0B`) |
     /// |---|---|---|
     /// | `Color.primary` — a `p`, a list item, a table's first cell | **18.96:1** | **19.27:1** |
-    /// | ``Color/fgMuted`` — a note, a table's second cell, `preview`/`plugin` | **6.72:1** | **7.77:1** |
-    /// | ``Color/warnInk`` — the `{admin}` pill | **5.17:1** | **10.08:1** |
+    /// | ``Color/fgMuted`` — a note, a table's second cell | **6.72:1** | **7.77:1** |
     ///
-    /// Body text needs 4.5:1 and the weakest pairing is 5.17:1.
+    /// Body text needs 4.5:1 and the weakest pairing is 6.72:1. (The `{admin}`,
+    /// `{preview}` and `{plugin}` runs used to sit on this wash too; since
+    /// answer 75 they take Android's own tone washes, ``Color/manualWash(_:)``.)
     ///
     /// ### How strong the tint is, against the surface it is actually on
     ///
@@ -610,8 +618,8 @@ extension Color {
     ///
     /// ### Why it is not `secondarySystemBackground`
     ///
-    /// ``ManualPill`` — a pill that is its own view — takes that one, and it
-    /// is opaque too. This is the dashboard's own code-block token instead, so
+    /// That is a system grey with no counterpart on Android or the dashboard.
+    /// This is the dashboard's own code-block token instead, so
     /// an inline run on an iPhone is washed the same colour as the same run on
     /// the dashboard and on Android.
     static let manualCodeWash = Color(UIColor { traits in
@@ -633,6 +641,29 @@ extension Color {
     static let manualNodeWash = Color(UIColor { traits in
         opaque(traits.userInterfaceStyle == .dark ? manualNodeWashDark : manualNodeWashLight)
     })
+
+    /// The wash behind a manual word in this tone, light or dark — Kamron's
+    /// answer 75, Android's `warnSoft`/`okSoft`/`idleSoft` composited onto the
+    /// page (``ManualTone/wash(dark:)`` has the table and the arithmetic).
+    ///
+    /// Read by the inline `{tag}` runs (``ManualRichText``) **and** by the
+    /// stand-alone badges (``ManualPill``), so a `preview` in a sentence and a
+    /// `preview` beside a heading are one grey, and an `admin` in either place
+    /// is one amber.
+    ///
+    /// | ink on wash | light | dark |
+    /// |---|---|---|
+    /// | ``Color/warnInk`` on `warn` (`admin`) | **5.27:1** | **8.74:1** |
+    /// | ``Color/fgMuted`` on `idle` (`preview`, `plugin`, every grey badge) | **6.61:1** | **7.40:1** |
+    /// | ``Color/okInk`` on `ok` (a plugin that is up) | **5.12:1** | **8.88:1** |
+    ///
+    /// Every one is text at `caption`/`caption2` size, so 4.5:1 is the bar;
+    /// `ManualAnswersTests.testEveryWordOnItsWashReads` recomputes all six.
+    static func manualWash(_ tone: ManualTone) -> Color {
+        Color(UIColor { traits in
+            opaque(tone.wash(dark: traits.userInterfaceStyle == .dark))
+        })
+    }
 
     /// A ``ManualWash`` — three sRGB components and no alpha — as the
     /// `UIColor` a run's `backgroundColor` takes.
@@ -714,18 +745,17 @@ struct ManualRichText: View {
             // background (`:881`), so the wash has a space of air either side
             // of the word.
             //
-            // **One wash for all three names, where Android tints each.** Its
-            // `{admin}` is amber at 12% and `{preview}`/`{plugin}` grey at
-            // 14%, and both are translucencies — see
-            // ``Color/manualCodeWash``. The tone is carried by the ink, which
-            // is the rule ``ManualPill`` already follows on this very screen
-            // (one opaque surface, ``Color/warnInk`` or ``Color/fgMuted`` over
-            // it), and `admin` stays the only one in amber. Logged in
-            // DECISIONS.
+            // **Android's washes, one per name** (Kamron's answer 75):
+            // `admin` on `warnSoft`, `preview` and `plugin` on `idleSoft`
+            // (`ManualScreen.kt:878-880`), each composited opaque onto the
+            // page so it has a ratio (``Color/manualWash(_:)``). The ink is
+            // `warnInk` for `admin` where Android draws its `warn` fill —
+            // `#FFA242` on that amber is 1.84:1 — and `fgMuted` for the other
+            // two, which is Android's own `c.fgMuted`.
             var run = AttributedString(" \(word(of: name)) ")
             run.font = .system(.caption2)
             run.foregroundColor = name == "admin" ? Color.warnInk : Color.fgMuted
-            run.backgroundColor = Color.manualCodeWash
+            run.backgroundColor = Color.manualWash(ManualTone.ofTag(name))
             return run
         case .link(let text, let kind, let target):
             guard manual.linkIsLive(kind: kind, target: target),

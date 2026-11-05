@@ -768,24 +768,20 @@ public func manualFloatPeriod(at index: Int) -> Double {
 /// The period a node actually bobs at, **gates and all** — what
 /// `ManualMapView`'s `nodes(_:shown:nodeWidth:nodeHeight:)` hands each card.
 ///
-/// It lives here rather than inside the view's `ternary` because three of the
-/// four gates are decisions, not layout, and a decision with no test is how
-/// review 2's S3 came to ship:
+/// It lives here rather than inside the view's ternary because both gates are
+/// decisions, not layout, and a decision with no test is how review 2's S3
+/// came to ship:
 ///
 ///  * **Reduce Motion** is still, which is Android's own first line
 ///    (`bob`, `ManualScreen.kt:560`, `if (reduce || id !in shown) return 0f`);
 ///  * ``ManualFloatClock`` off is still — `-domovoi-manual-float-off`, so a UI
-///    case can drive a map that is holding position;
-///  * a level that is **not the one on screen** is still, and that one is
-///    iOS-only. Android fades every node of every level in and out of **one**
-///    composition, so it has no such level to animate. Here the manual's
-///    levels were an inner `NavigationStack` for one batch, which kept each
-///    level below the one on screen *mounted* — three stages' worth of
-///    `repeatForever` behind two covered screens, which is not what answer 31
-///    was costed at (``ManualMapStage/wires(_:size:)``). That stack is gone
-///    (`ManualView.ready(_:cached:_:)`) and `onTop` is `true` for the level
-///    on screen, so the gate costs nothing and is what keeps the cost one
-///    stage's if a second one is ever mounted again.
+///    case can drive a map that is holding position.
+///
+/// There was a third, `onTop`, while a level was a pushed screen and a covered
+/// map stayed mounted under the cluster above it. Since answer 73 there is one
+/// stage (`ManualView.swift`), the only nodes built are the level's own, and
+/// Android's `id !in shown` is what the view's `ForEach` already is — so the
+/// gate had nothing left to gate and is gone rather than passed a constant.
 ///
 /// Zero is a still card and **not** "no card": the view's zero arm pins the
 /// offset at the geometry's own position, because a `floating` that flips
@@ -794,10 +790,9 @@ public func manualFloatPeriod(at index: Int) -> Double {
 public func manualNodeFloatPeriod(
     at index: Int,
     reduceMotion: Bool,
-    floatOn: Bool,
-    onTop: Bool
+    floatOn: Bool
 ) -> Double {
-    guard !reduceMotion, floatOn, onTop else { return 0 }
+    guard !reduceMotion, floatOn else { return 0 }
     return manualFloatPeriod(at: index)
 }
 
@@ -840,3 +835,153 @@ public func manualFloatPhase(at index: Int) -> Double {
 public func manualNodeReading(title: String, subtitle: String) -> String {
     subtitle.isEmpty ? title : "\(title): \(subtitle)"
 }
+
+// MARK: - the washes behind the little words (answer 75)
+
+/// An Android wash — a colour at an alpha — composited **once** onto the
+/// surface it is drawn over, so that what the screen draws is opaque and has
+/// a ratio that can be stated.
+///
+/// Android's `warnSoft`, `idleSoft` and `okSoft` are translucencies
+/// (`Color.kt:56-64`, `:84-92`). A translucency over an unknown parent has no
+/// contrast ratio, which is why the port drew one opaque grey for every word
+/// until Kamron's answer 75 ("match Android"). Every one of these words is
+/// drawn on the **page** — a paragraph, a label block, a piece's heading, a
+/// live slot's bordered box with no fill (`ManualLiveBox`) — so the surface is
+/// the page's own background, ``manualPageLight``/``manualPageDark``.
+public func manualComposite(_ ink: ManualWash, alpha: Double, over page: ManualWash) -> ManualWash {
+    ManualWash(
+        red: ink.red * alpha + page.red * (1 - alpha),
+        green: ink.green * alpha + page.green * (1 - alpha),
+        blue: ink.blue * alpha + page.blue * (1 - alpha)
+    )
+}
+
+/// The page a manual run sits on: `systemBackground`, white in the light
+/// theme.
+public let manualPageLight = ManualWash(hex: 0xFFFFFF)
+
+/// And black in the dark one.
+public let manualPageDark = ManualWash(hex: 0x000000)
+
+/// The three washes a manual word can sit on — Android's `toneSoft(tone)`
+/// (`ui/components/Kit.kt:53`) for a stand-alone `Pill`, and the inline
+/// `{tag}` run's `Triple(label, fg, bg)` (`ManualScreen.kt:878-882`).
+public enum ManualTone: Equatable, Sendable {
+    /// `warnSoft`: the `admin` word, inline (`:879`) and on a label block
+    /// (`Pill(…, Tone.Warn)`, `:802`).
+    case warn
+    /// `okSoft`: a plugin that is up (`:958`).
+    case ok
+    /// `idleSoft`: `preview`, `plugin` and every other stand-alone word.
+    case idle
+
+    /// The wash, opaque over the page. `dark` is the dark theme.
+    ///
+    /// | tone | Android token (light / dark) | light | dark |
+    /// |---|---|---|---|
+    /// | warn | `warnSoft` `#1FFFA242` / `#29FFA84A` (`Color.kt:60`, `:88`) | `#FFF4E8` | `#291B0C` |
+    /// | ok | `okSoft` `#1F54BF5C` / `#2961D46A` (`Color.kt:58`, `:86`) | `#EAF7EB` | `#102211` |
+    /// | idle | `idleSoft` `#24A09E9B` / `#2E73716E` (`Color.kt:64`, `:92`) | `#F2F1F1` | `#151414` |
+    ///
+    /// Inks over them are the app's `warnInk`, `okInk` and `fgMuted` (not
+    /// Android's `warn`, which is a fill: `#FFA242` on the light amber wash is
+    /// 1.84:1). `ManualAnswersTests.testEveryWordOnItsWashReads` has the
+    /// ratios.
+    public func wash(dark: Bool) -> ManualWash {
+        switch (self, dark) {
+        case (.warn, false):
+            return manualComposite(ManualWash(hex: 0xFFA242), alpha: 0x1F / 255.0, over: manualPageLight)
+        case (.warn, true):
+            return manualComposite(ManualWash(hex: 0xFFA84A), alpha: 0x29 / 255.0, over: manualPageDark)
+        case (.ok, false):
+            return manualComposite(ManualWash(hex: 0x54BF5C), alpha: 0x1F / 255.0, over: manualPageLight)
+        case (.ok, true):
+            return manualComposite(ManualWash(hex: 0x61D46A), alpha: 0x29 / 255.0, over: manualPageDark)
+        case (.idle, false):
+            return manualComposite(ManualWash(hex: 0xA09E9B), alpha: 0x24 / 255.0, over: manualPageLight)
+        case (.idle, true):
+            return manualComposite(ManualWash(hex: 0x73716E), alpha: 0x2E / 255.0, over: manualPageDark)
+        }
+    }
+
+    /// Which wash an inline `{tag}` run takes: amber for `admin`, grey for
+    /// `preview`, `plugin` and anything else (`ManualScreen.kt:878-882`).
+    public static func ofTag(_ name: String) -> ManualTone {
+        name == "admin" ? .warn : .idle
+    }
+}
+
+// MARK: - the zoom glide between levels (answer 73)
+
+/// Android's camera move, as numbers: `MOVE_MS = 280`, `FADE_MS = 180` and
+/// `EASE = CubicBezierEasing(0.2f, 0f, 0f, 1f)` (`ManualScreen.kt:166-168`).
+///
+/// `MOVE_MS` drives the three `animateFloatAsState`s of the camera
+/// (`:549-552`) and `FADE_MS` each node's `AnimatedVisibility` (`:620-624`),
+/// whose `tween` takes Compose's default easing, `FastOutSlowInEasing` —
+/// `CubicBezierEasing(0.4f, 0f, 0.2f, 1f)`. **With animations off every move
+/// is a cut** (`snap()`, `:549` and `:622-623`): Android has no cross-fade
+/// fallback, so neither has this — Reduce Motion on iOS is the same instant
+/// change.
+///
+/// Only the map and a cluster glide. Start here and a piece's page are other
+/// arms of Android's `when` (`:344-347`), so a move to or from either is a
+/// cut there, and it is a cut here.
+public enum ManualGlide {
+    /// The camera's glide, seconds.
+    public static let duration = 0.28
+    /// The camera's easing control points.
+    public static let curve = (x1: 0.2, y1: 0.0, x2: 0.0, y2: 1.0)
+    /// A node's fade in and out, seconds.
+    public static let fade = 0.18
+    /// The fade's easing, Compose's `FastOutSlowInEasing`.
+    public static let fadeCurve = (x1: 0.4, y1: 0.0, x2: 0.2, y2: 1.0)
+}
+
+/// Where the map's camera looks and how far it is zoomed — the three floats
+/// Android animates, `k`, `cx` and `cy` (`ManualScreen.kt:550-552`).
+///
+/// **Three numbers, interpolated one by one.** That is what Android's three
+/// `animateFloatAsState`s do, and it is not the same path as interpolating the
+/// layer's translation: the translation is `size / 2 - c * k`, a product, so
+/// its midpoint is not the midpoint of its ends. `ManualMapView`'s camera
+/// effect animates exactly these three and composes the transform from them
+/// every frame (``transform(width:height:)``), so the glide is Android's.
+public struct ManualCamera: Equatable, Sendable {
+    public var k: Double
+    public var x: Double
+    public var y: Double
+
+    public init(k: Double, x: Double, y: Double) {
+        self.k = k
+        self.x = x
+        self.y = y
+    }
+
+    /// The map: the centre at 1:1. A cluster: its hub, at `1 / cluster`
+    /// (`val cam = focusTopic?.let { geo["h:${it.id}"] } ?: Pos(0f, 0f, 1f)`,
+    /// `:548`).
+    public static func looking(atHubX hx: Double?, y hy: Double?, cluster: Double) -> ManualCamera {
+        guard let hx, let hy else { return ManualCamera(k: 1, x: 0, y: 0) }
+        return ManualCamera(k: 1 / cluster, x: hx, y: hy)
+    }
+
+    /// Part of the way to another camera, each number on its own.
+    public func toward(_ other: ManualCamera, progress t: Double) -> ManualCamera {
+        ManualCamera(k: k + (other.k - k) * t, x: x + (other.x - x) * t, y: y + (other.y - y) * t)
+    }
+
+    /// The layer's translation at this camera, after scaling by `k` about the
+    /// top leading corner — Android's `graphicsLayer` at `:585-591`,
+    /// `TransformOrigin(0f, 0f)`, `translationX = (w / 2 - cx * k)`.
+    public func translation(width: Double, height: Double) -> (x: Double, y: Double) {
+        (width / 2 - x * k, height / 2 - y * k)
+    }
+
+    /// A world point on the stage — the wires' arithmetic (`:573-576`).
+    public func onStage(x px: Double, y py: Double, width: Double, height: Double) -> (x: Double, y: Double) {
+        ((px - x) * k + width / 2, (py - y) * k + height / 2)
+    }
+}
+
