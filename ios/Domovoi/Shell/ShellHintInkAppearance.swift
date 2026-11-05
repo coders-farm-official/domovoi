@@ -178,15 +178,21 @@ extension UITextField {
     /// choose one. Counted over `ios/Domovoi`, skipping comment lines and
     /// matching each `TextField(` to its closing paren: 51 `TextField` call
     /// sites, 16 of them `axis: .vertical`, and 14 pass
-    /// `prompt: ShellHintPrompt.text(…)`. Every one of the 14 is a
-    /// vertical-axis field, which train I005 measured is **not** a
-    /// `UITextField` placeholder, so none of them reaches this setter *today*
-    /// — but that is a reading about which fields exist now, not about what
-    /// this setter does, and it is the reading the earlier version of this
-    /// paragraph leaned on while asserting the opposite ("no call site chooses
-    /// one"). The run-wise write is what makes the claim true of the next
-    /// single-line field to pass a `prompt:` colour: it would otherwise be
-    /// overwritten here, and this file said that could not happen.
+    /// `prompt: ShellHintPrompt.text(…)`. All 14 are `axis: .vertical`, and
+    /// **one of them is measured**: train I005 read Music's AX5 search box
+    /// (`Music/MusicView.swift:704`) at `rgb(188, 188, 193)`, Apple's
+    /// placeholder grey, with both setters already swapped — so that one is
+    /// not a `UITextField` placeholder and does not reach this setter. The
+    /// other 13 are unmeasured here. Two of them are `.roundedBorder`
+    /// (`Chat/ChatConversationView.swift:919`,
+    /// `Assistant/AssistantPhoneConversationView.swift:535`), which is a
+    /// `UITextField` style, so those two may well reach this setter; nothing
+    /// in this tree says either way. The run-wise write is what makes the
+    /// paragraph's claim hold without needing to know: whichever of the 14
+    /// arrive here keep the colour they passed, and so does the next
+    /// single-line field to pass a `prompt:` colour, which the earlier
+    /// version of this paragraph said could not exist ("no call site chooses
+    /// one") while the same commit added 14.
     ///
     /// Nothing measured moves either way, which is why this is a comment
     /// correction with a one-line behaviour change behind it and not a fix to

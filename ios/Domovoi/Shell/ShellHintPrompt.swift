@@ -24,12 +24,16 @@ import SwiftUI
 /// That second reading is `UIColor.placeholderText` to the integer
 /// (`#3C3C43` at 30% over `secondarySystemBackground` is
 /// `0.3·60 + 0.7·242 = 187.4` and `0.3·67 + 0.7·247 = 193.0`), with both
-/// setters swapped — so a vertical-axis field's hint is **not** a
-/// `UITextField` placeholder and no swap of those setters can colour it.
-/// Which view SwiftUI uses instead is SwiftUI's business and this file does
-/// not claim to know it; what it does claim is the reading above, and that
-/// SwiftUI's own `prompt:` is the documented way to choose the colour of a
-/// prompt it draws itself.
+/// setters swapped — so **that** field's hint is not a `UITextField`
+/// placeholder and no swap of those setters can colour it. One field is what
+/// was measured: whether every `axis: .vertical` field in the app is the same
+/// kind of view is not measured anywhere in this tree, and two of the call
+/// sites are `.roundedBorder`, a `UITextField` style. Which view SwiftUI uses
+/// is SwiftUI's business and this file does not claim to know it. The prompt
+/// is right either way: it is the documented way to choose the colour of a
+/// prompt SwiftUI draws itself, and ``ShellHintInkAppearance`` now leaves a
+/// colour a call site chose alone, so a field that *does* reach the swapped
+/// setter keeps this one rather than being re-inked.
 ///
 /// ### What a call site changes, and what it must not
 ///
