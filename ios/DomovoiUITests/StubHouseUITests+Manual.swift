@@ -1098,8 +1098,17 @@ extension StubHouseUITests {
             manualOpen(app, search: StubManual.keywordYourMusic, piece: StubManual.yourMusic),
             "the manual never opened the piece with the inline words"
         )
-        let paragraph = app.staticTexts[StubManual.codeSpanParagraph].firstMatch
-        XCTAssertTrue(paragraph.waitForExistence(timeout: 15), "the paragraph with the inline words did not draw")
+        // By predicate, never by subscript: the paragraph's label is 133
+        // characters and XCUITest refuses a subscript identifier over 128
+        // with an exception that ends the case (train I007). The whole label
+        // is still compared, so the match is as exact as the subscript was.
+        let paragraph = manualExact(app.staticTexts, StubManual.codeSpanParagraph)
+        guard paragraph.waitForExistence(timeout: 15) else {
+            print("=== THE INLINE-WORDS PARAGRAPH NEVER DREW — tree follows ===")
+            print(app.debugDescription)
+            XCTFail("the paragraph with the inline words did not draw")
+            return
+        }
         XCTAssertTrue(manualScrollOnScreen(app, paragraph), "the paragraph could not be brought on screen")
         let codeWash = (245, 243, 240)
         let amberBlock = manualWashBlock(app, in: paragraph.frame, near: amber, unlike: [])
@@ -1261,16 +1270,27 @@ extension StubHouseUITests {
             "the keyboard was still up over the piece: \(keyboard.frame)"
         )
         // The one named exception in this file, with its measurement in
-        // ``manualAudit(_:_:washedElement:)``: Apple's audit reports
+        // ``manualAudit(_:_:washedElement:washes:)``: Apple's audit reports
         // `Contrast failed` against this paragraph because its frame holds
         // the page and wash patches behind part of its words. I004 measured
         // every ink off the audit's own screenshot at 18.96 / 6.71 / 5.17 to 1
         // when every inline word sat on `--sunken`; since answer 75 the
         // arithmetic is 18.96 (code) / 6.61 (grey pills) / 5.27 (`admin` on
-        // amber), and **the pixel measurement is due again** on the next
-        // train. Any other finding on this page still fails this case,
-        // including a `Contrast failed` against any other element.
-        try manualAudit(app, "manual-audit-code-span", washedElement: StubManual.codeSpanParagraph)
+        // amber). Train I007 measured them off pixels — 18.961 / 6.589 /
+        // 5.273 — and returned the same one finding **with no element**;
+        // that route is allowed once, and only after this screen's own
+        // pixels are read and clear 4.5 (``manualAudit(_:_:washedElement:washes:)``).
+        // Any other finding on this page still fails this case, including a
+        // `Contrast failed` against any other element.
+        try manualAudit(
+            app, "manual-audit-code-span",
+            washedElement: StubManual.codeSpanParagraph,
+            washes: [
+                ("code", StubManual.codeWash),
+                ("amber", StubManual.amberWash),
+                ("grey", StubManual.greyWash),
+            ]
+        )
     }
 
     /// `searchManual` over **keywords**, and a result that navigates.
@@ -1903,12 +1923,13 @@ extension StubHouseUITests {
         //
         // **The one named exception on this level**, and it is answer 34's
         // wash in a node's second line, measured exactly as the code span's
-        // is — `manualAudit(_:_:washedElement:)` has the numbers and the
+        // is — `manualAudit(_:_:washedElement:washes:)` has the numbers and the
         // control that sits beside it in this very picture. Any other
         // element, and any other headline, still fails this case.
         try manualAudit(
             app, "manual-audit-topic",
-            washedElement: StubManual.piRoomNodeSecondLine
+            washedElement: StubManual.piRoomNodeSecondLine,
+            washes: [("node", StubManual.nodeWash)]
         )
 
         // ---- a second page of the same shape, with other content in it.
@@ -2197,7 +2218,9 @@ extension StubHouseUITests {
     /// next train's `manual-audit-code-span` screenshot is where the new
     /// numbers get read off pixels, and if the audit's finding moves to
     /// another element or headline the case reds, which is the safe
-    /// direction.
+    /// direction. **Read in I007** (the section after this list): 18.961 /
+    /// 5.273 / 6.589 off the patches themselves, the arithmetic to within
+    /// 0.03 — and that train is the one where the finding lost its element.
     ///
     ///  1. **Every pairing the element draws was sampled off the audit's own
     ///     screenshot** (pre-answer-75; see above) (`att/.../manual-audit-code-span_0_*.png`, 1178×2556
@@ -2248,11 +2271,59 @@ extension StubHouseUITests {
     /// Here the element is honest and the allowance is the only answer short
     /// of dropping the wash, which is the answer Kamron gave. It is in
     /// `gx-manual/DECISIONS.md` for him, with the cost.
+    ///
+    /// ### The same finding with no element on it (train I007)
+    ///
+    /// I007 returned **one** `Contrast failed` on each of the two washed
+    /// screens, as I005 had, but with `element: nil` — so the signature above
+    /// could not match it and both cases redded. Attributed off the pictures
+    /// (`I007/SEL/att/…/manual-audit-code-span_0_*.png` and
+    /// `…/manual-audit-topic_0_*.png`, 1178 × 2556 at 3×), every text run and
+    /// glyph on both screens sampled against its own background:
+    ///
+    ///  - **the washed runs**, each read inside its own patch: the `code` run
+    ///    `(0,0,0)` on `#F5F3F0` **18.961:1**, `admin` `(157,83,0)` on amber
+    ///    `#FFF4E8` **5.273:1**, `preview`/`plugin` `(88,85,79)` on grey
+    ///    `#F2F1F1` **6.589:1**, the node's `preview` `(88,85,79)` on
+    ///    `#E6E6EA` **5.967:1** — the numbers `ManualAnswersTests` states;
+    ///  - **every leaf** on the two screens (35 and 37 static texts, buttons and images) at
+    ///    **5.07:1 or better**: the weakest are the phone bar's `home`
+    ///    `(151,88,0)` on `(242,242,247)` 5.07, the `map` pill 5.14, the
+    ///    crumbs and `zoom out` 5.66, `unverified` 5.72;
+    ///  - nothing cut by the viewport's edge on either screen (the topic's
+    ///    cards end at 659.3 against a viewport ending at 770.0), and the
+    ///    cards under the glide's transform read as above;
+    ///  - the one sub-4.5 ink in either picture is the search field's hint,
+    ///    `(197,197,199)` on white 1.72:1 — I007 ran `ebdc8351`, before
+    ///    `c4476be1` put the hint ink back (7.43:1) — and it is in the same
+    ///    field, same pixels, on `manual-audit-start` and `manual-audit-map`
+    ///    of the same train, which returned **no** contrast finding.
+    ///
+    /// And against I005, which named this finding: the topic screen differs
+    /// in no pixel between the two trains except the back control and the
+    /// hint (the cards moved 0.1 point); the piece page differs in those and
+    /// in the inline washes' tints only, inside
+    /// `(80.7, 429.7)–(313.7, 472.0)`, by at most 10 per channel. Same
+    /// picture, one finding, attributed once and not the next time — the
+    /// shape `assertTheChromeAuditsAtAX5` met on Home in I006.
+    ///
+    /// So the unattributed finding is taken on the **same** signature and no
+    /// wider: only where the caller names a washed element, only
+    /// `Contrast failed` with exactly ``manualAnonymousContrast``'s line, only
+    /// **one**, and only while the audit has not already named the washed
+    /// element (one finding, whichever way Apple reports it). Because an
+    /// anonymous finding could in principle be any element's, letting one
+    /// through costs a measurement every time:
+    /// ``manualAssertTheUnattributedContrastIsNotAColour(_:_:washedElement:washes:)``
+    /// reads the washed element's own patches and every leaf on the screen
+    /// off the app's own screenshot, prints each reading, and fails on any
+    /// under 4.5:1 or on a wash that is not there.
     @MainActor
     private func manualAudit(
         _ app: XCUIApplication,
         _ name: String,
-        washedElement: String? = nil
+        washedElement: String? = nil,
+        washes: [(name: String, rgb: (Int, Int, Int))] = []
     ) throws {
         let found = try auditIssues(app, name)
         let split = Self.floorAndRest(found)
@@ -2261,11 +2332,22 @@ extension StubHouseUITests {
         let washed = washedElement.map { element in
             notScaling.filter { Self.isContrastOnTheWashedElement($0, element) }
         } ?? []
-        let rest = notScaling.filter { !washed.contains($0) }
+        // At most one line, and only when the named route took nothing: a
+        // second identical anonymous line stays in `rest`.
+        var unattributed = 0
+        let rest = notScaling.filter { line in
+            if washed.contains(line) { return false }
+            if washedElement != nil, washed.isEmpty, unattributed == 0,
+               line == Self.manualAnonymousContrast {
+                unattributed += 1
+                return false
+            }
+            return true
+        }
         evidence(app, name)
         print(
             "AUDIT [\(name)] floor=\(split.floor) text-scaling=\(scaling.count) "
-                + "washed-element=\(washed.count)"
+                + "washed-element=\(washed.count) washed-element-unattributed=\(unattributed)"
         )
         for line in washed { print("AUDIT [\(name)] washed element, measured: \(line)") }
         XCTAssertTrue(
@@ -2273,10 +2355,131 @@ extension StubHouseUITests {
             "\(name): Apple's audit named \(rest.count) element(s): "
                 + rest.joined(separator: " || ")
         )
+        if unattributed > 0, let washedElement {
+            manualAssertTheUnattributedContrastIsNotAColour(
+                app, name, washedElement: washedElement, washes: washes
+            )
+        }
+    }
+
+    /// `Contrast failed` as ``auditIssues`` writes it when Apple attached no
+    /// element. Matched whole, so another headline or detail does not match.
+    static let manualAnonymousContrast = "Contrast failed: Contrast failed for element | element: nil"
+
+    /// WCAG's floor for body text, which every reading below is held to
+    /// whatever the text's size.
+    private static let manualContrastFloor = 4.5
+
+    /// What an unattributed `Contrast failed` costs: the screen measured off
+    /// the app's own screenshot, so the finding that was let through cannot
+    /// be a colour.
+    ///
+    /// Two readings, both printed:
+    ///
+    ///  1. **Each wash the caller names, inside the washed element**, with
+    ///     ``manualInkOnWash(_:in:scale:wash:)`` — the ink over that patch against
+    ///     the patch. A wash that is not there fails too: the allowance's
+    ///     reason would be gone.
+    ///  2. **Every static text, button and image on the window**, with
+    ///     ``manualLeafInk(_:in:)`` — the most-contrasting colour that covers
+    ///     at least 0.5% of the leaf's frame against its most common colour.
+    ///     A leaf whose frame holds nothing but its paper is printed and
+    ///     skipped; nothing else is.
+    ///
+    /// The search field's hint is not a leaf and is not read here; it is
+    /// `testShell_TheHintInkIsReadable`'s, and this train's own start and map
+    /// audits show the audit does not report it.
+    @MainActor
+    private func manualAssertTheUnattributedContrastIsNotAColour(
+        _ app: XCUIApplication,
+        _ name: String,
+        washedElement: String,
+        washes: [(name: String, rgb: (Int, Int, Int))]
+    ) {
+        let floor = Self.manualContrastFloor
+        guard let whole = app.screenshot().image.cgImage, app.frame.width > 0 else {
+            XCTFail(
+                "\(name): an unattributed `Contrast failed` was let through on the "
+                    + "washed element's signature and there is no screenshot to measure"
+            )
+            return
+        }
+        let window = app.frame
+        let element = manualExact(app.staticTexts, washedElement)
+        guard element.exists, window.contains(element.frame), element.frame.width > 2 else {
+            print("=== \(name): THE WASHED ELEMENT IS NOT WHOLLY ON SCREEN — tree follows ===")
+            print(app.debugDescription)
+            XCTFail(
+                "\(name): an unattributed `Contrast failed` was let through because "
+                    + "this screen draws the washed element '\(washedElement)', and it "
+                    + "is not wholly on screen (\(element.exists ? "\(element.frame)" : "absent"))"
+            )
+            return
+        }
+        XCTAssertFalse(
+            washes.isEmpty,
+            "\(name): the caller named a washed element and no wash to read in it"
+        )
+        for wash in washes {
+            let reading = manualInkOnWash(
+                whole,
+                in: manualPixelBox(whole, window, element.frame),
+                scale: CGFloat(whole.width) / window.width,
+                wash: wash.rgb
+            )
+            guard let reading else {
+                evidence(app, "\(name)-no-\(wash.name)-wash")
+                XCTFail(
+                    "\(name): the \(wash.name) wash \(wash.rgb) is not in the washed "
+                        + "element at \(element.frame), or carries no ink — the "
+                        + "allowance's reason is gone"
+                )
+                continue
+            }
+            print(
+                "AUDIT [\(name)] measured: \(wash.name) wash \(wash.rgb) carries ink "
+                    + "\(reading.ink) at " + String(format: "%.3f", reading.ratio)
+                    + ":1 (\(reading.rows) rows of it)"
+            )
+            XCTAssertGreaterThanOrEqual(
+                reading.ratio, floor,
+                "\(name): the ink on the \(wash.name) wash measures "
+                    + String(format: "%.3f", reading.ratio) + ":1 (\(reading.ink) on "
+                    + "\(wash.rgb)) — under \(floor):1, so the unattributed contrast "
+                    + "finding is this colour. Picture attached."
+            )
+        }
+        var read = 0
+        for kind in [XCUIElement.ElementType.staticText, .button, .image] {
+            for leaf in app.descendants(matching: kind).allElementsBoundByIndex {
+                guard leaf.exists else { continue }
+                let box = leaf.frame.intersection(window)
+                guard !box.isNull, box.width >= 2, box.height >= 2 else { continue }
+                guard let reading = manualLeafInk(whole, in: manualPixelBox(whole, window, box)) else {
+                    print("AUDIT [\(name)] measured: '\(leaf.label)' \(box) holds only its paper")
+                    continue
+                }
+                read += 1
+                print(
+                    "AUDIT [\(name)] measured: '\(leaf.label)' \(box) ink \(reading.ink) on "
+                        + "\(reading.paper) " + String(format: "%.3f", reading.ratio) + ":1"
+                )
+                XCTAssertGreaterThanOrEqual(
+                    reading.ratio, floor,
+                    "\(name): '\(leaf.label)' at \(box) measures "
+                        + String(format: "%.3f", reading.ratio) + ":1 (\(reading.ink) on "
+                        + "\(reading.paper)) while Apple returned an unattributed "
+                        + "`Contrast failed` this case let through on the washed "
+                        + "element's signature — the finding may be this leaf's. "
+                        + "Picture attached."
+                )
+            }
+        }
+        XCTAssertGreaterThan(read, 0, "\(name): no leaf on the screen could be measured")
     }
 
     /// `Contrast failed` against one named static text, and nothing else —
-    /// the signature ``manualAudit(_:_:washedElement:)`` explains.
+    /// the signature ``manualAudit(_:_:washedElement:washes:)`` explains.
     ///
     /// Written against the exact text ``StubHouseUITests/oneLine(_:)``
     /// produces. A finding with no element, or against a different element,
@@ -2609,11 +2812,29 @@ extension StubHouseUITests {
     ) -> (width: Int, scale: CGFloat, pixels: [(Int, Int, Int)])? {
         guard let whole = app.screenshot().image.cgImage, app.frame.width > 0 else { return nil }
         let scaleX = CGFloat(whole.width) / app.frame.width
-        let scaleY = CGFloat(whole.height) / app.frame.height
-        let wanted = CGRect(
+        guard let read = manualRead(whole, manualPixelBox(whole, app.frame, box)) else { return nil }
+        return (read.width, scaleX, read.pixels)
+    }
+
+    /// A rectangle in points as the rectangle of pixels it covers in a
+    /// screenshot of the window, rounded outwards and clipped to the image.
+    private func manualPixelBox(_ whole: CGImage, _ window: CGRect, _ box: CGRect) -> CGRect {
+        guard window.width > 0, window.height > 0 else { return .null }
+        let scaleX = CGFloat(whole.width) / window.width
+        let scaleY = CGFloat(whole.height) / window.height
+        return CGRect(
             x: box.minX * scaleX, y: box.minY * scaleY,
             width: box.width * scaleX, height: box.height * scaleY
         ).integral.intersection(CGRect(x: 0, y: 0, width: whole.width, height: whole.height))
+    }
+
+    /// The pixels of one rectangle of an image already taken, row by row,
+    /// with the crop's width — so a case that reads many rectangles of one
+    /// screen reads them all off the **same** picture.
+    private func manualRead(
+        _ whole: CGImage,
+        _ wanted: CGRect
+    ) -> (width: Int, pixels: [(Int, Int, Int)])? {
         guard !wanted.isNull, let crop = whole.cropping(to: wanted),
               crop.width > 2, crop.height > 2
         else { return nil }
@@ -2643,7 +2864,7 @@ extension StubHouseUITests {
             out.append((Int(r), Int(g), Int(b)))
         }
         guard out.count == width * height else { return nil }
-        return (width, scaleX, out)
+        return (width, out)
     }
 
     /// The most common colour inside a rectangle — the surface a short word
@@ -2710,6 +2931,127 @@ extension StubHouseUITests {
         abs(a.0 - b.0) <= 2 && abs(a.1 - b.1) <= 2 && abs(a.2 - b.2) <= 2
     }
 
+    /// WCAG 2's contrast between two sRGB colours.
+    private func manualRatio(_ a: (Int, Int, Int), _ b: (Int, Int, Int)) -> Double {
+        func channel(_ value: Int) -> Double {
+            let v = Double(value) / 255
+            return v <= 0.03928 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4)
+        }
+        func luminance(_ c: (Int, Int, Int)) -> Double {
+            0.2126 * channel(c.0) + 0.7152 * channel(c.1) + 0.0722 * channel(c.2)
+        }
+        let (x, y) = (luminance(a), luminance(b))
+        return (max(x, y) + 0.05) / (min(x, y) + 0.05)
+    }
+
+    private func manualKey(_ c: (Int, Int, Int)) -> Int { (c.0 << 16) | (c.1 << 8) | c.2 }
+    private func manualRGB(_ key: Int) -> (Int, Int, Int) {
+        ((key >> 16) & 0xFF, (key >> 8) & 0xFF, key & 0xFF)
+    }
+
+    /// One leaf's ink against its paper: the paper is the most common colour
+    /// in the leaf's pixels, the ink is whichever colour covering at least
+    /// 0.5% of them contrasts most with it. Nil when nothing but the paper
+    /// covers that much — a frame with nothing drawn in it.
+    ///
+    /// The 0.5% is what keeps a glyph's anti-aliased edge (a light grey over
+    /// a handful of pixels) from being read as the leaf's ink. On the I007
+    /// pictures every text leaf's ink covers 3% or more of it, and the
+    /// thinnest reading is a node card's whole button, whose title ink is
+    /// 0.90% of its 177 × 104 points.
+    private func manualLeafInk(
+        _ whole: CGImage,
+        in pixels: CGRect
+    ) -> (ink: (Int, Int, Int), paper: (Int, Int, Int), ratio: Double)? {
+        guard let read = manualRead(whole, pixels) else { return nil }
+        var counts: [Int: Int] = [:]
+        for pixel in read.pixels { counts[manualKey(pixel), default: 0] += 1 }
+        guard let top = counts.max(by: { $0.value < $1.value }) else { return nil }
+        let paper = manualRGB(top.key)
+        let enough = Double(read.pixels.count) * 0.005
+        let ink = counts
+            .filter { $0.key != top.key && Double($0.value) >= enough }
+            .map { (rgb: manualRGB($0.key), ratio: manualRatio(manualRGB($0.key), paper)) }
+            .max(by: { $0.ratio < $1.ratio })
+        guard let ink else { return nil }
+        return (ink.rgb, paper, ink.ratio)
+    }
+
+    /// The ink drawn **over one wash patch** inside a rectangle, against the
+    /// wash — the pair a glyph on that patch is read on.
+    ///
+    /// Row by row, with the paper (the rectangle's most common colour) as
+    /// the edge of every patch:
+    ///
+    ///  - a pixel is **wash** when it is within 2 of `wash` on every channel
+    ///    and the column above it has held wash for `side` rows (two points
+    ///    at the screenshot's scale), so the one-pixel light-grey edge of a
+    ///    prose glyph is never a patch;
+    ///  - a row is **inside** a patch from a run of `side` such pixels until
+    ///    the next paper pixel; every pixel in between that is neither wash
+    ///    nor paper is the patch's ink or its anti-aliasing;
+    ///  - the ink is the colour among those covering at least 1% of the
+    ///    patch's pixels that contrasts most with the wash.
+    ///
+    /// Nil when fewer than `side` rows hold a patch — the wash is not there —
+    /// or when nothing over the patch covers 1% of it.
+    /// The same reading, run over the I007 pictures, gives `admin` 5.273,
+    /// `preview`/`plugin` 6.589, the `code` run 18.961 and the node's
+    /// `preview` 5.967, which are the per-patch numbers taken by hand.
+    /// Built from iterators over rows, never by indexing the pixel array.
+    private func manualInkOnWash(
+        _ whole: CGImage,
+        in pixels: CGRect,
+        scale: CGFloat,
+        wash: (Int, Int, Int)
+    ) -> (ink: (Int, Int, Int), ratio: Double, rows: Int)? {
+        guard let read = manualRead(whole, pixels), read.width > 0 else { return nil }
+        var counts: [Int: Int] = [:]
+        for pixel in read.pixels { counts[manualKey(pixel), default: 0] += 1 }
+        guard let top = counts.max(by: { $0.value < $1.value }) else { return nil }
+        let paper = manualRGB(top.key)
+        let side = max(3, Int((2 * scale).rounded(.up)))
+        var heights = [Int](repeating: 0, count: read.width)
+        var row: [(Int, Int, Int)] = []
+        row.reserveCapacity(read.width)
+        var over: [Int: Int] = [:]
+        var washPixels = 0
+        var rows = 0
+        var it = read.pixels.makeIterator()
+        while let pixel = it.next() {
+            row.append(pixel)
+            guard row.count == read.width else { continue }
+            heights = zip(heights, row).map { manualNear($1, wash) ? $0 + 1 : 0 }
+            var inside = false
+            var entered = false
+            var run = 0
+            for (height, colour) in zip(heights, row) {
+                if manualNear(colour, wash) {
+                    run = height >= side ? run + 1 : 0
+                    if height >= side { washPixels += 1 }
+                    if run >= side { inside = true; entered = true }
+                    continue
+                }
+                run = 0
+                if manualNear(colour, paper) {
+                    inside = false
+                } else if inside {
+                    over[manualKey(colour), default: 0] += 1
+                }
+            }
+            if entered { rows += 1 }
+            row.removeAll(keepingCapacity: true)
+        }
+        guard rows >= side else { return nil }
+        let enough = Double(washPixels + over.values.reduce(0, +)) * 0.01
+        let ink = over
+            .filter { Double($0.value) >= enough }
+            .map { (rgb: manualRGB($0.key), ratio: manualRatio(manualRGB($0.key), wash)) }
+            .max(by: { $0.ratio < $1.ratio })
+        guard let ink else { return nil }
+        return (ink.rgb, ink.ratio, rows)
+    }
+
     /// An element by its **whole** label, of any kind.
     ///
     /// ``manualNode(_:_:)`` matches a node by the start of its label, which
@@ -2719,9 +3061,16 @@ extension StubHouseUITests {
     /// would be satisfied by a name with glyphs stuck on the end of it.
     @MainActor
     private func manualExact(_ app: XCUIApplication, _ label: String) -> XCUIElement {
-        app.descendants(matching: .any)
-            .matching(NSPredicate(format: "label == %@", label))
-            .firstMatch
+        manualExact(app.descendants(matching: .any), label)
+    }
+
+    /// The same whole-label match inside one kind of element. A predicate
+    /// rather than a subscript for any label, because a subscript identifier
+    /// over 128 characters raises instead of matching (I007's
+    /// `testManual_TheLittleWordsSitOnAndroidsWashes`).
+    @MainActor
+    private func manualExact(_ query: XCUIElementQuery, _ label: String) -> XCUIElement {
+        query.matching(NSPredicate(format: "label == %@", label)).firstMatch
     }
 
     /// Whether a drawn string is **one frame of this name scrambling**
@@ -2978,7 +3327,7 @@ enum StubManual {
     /// Copied verbatim from the finding in
     /// `overnight-trains/I005/ALL/testManual_AuditsClean.log` so that it is
     /// the string Apple's audit actually names
-    /// (``manualAudit(_:_:washedElement:)``). A reworded fixture stops
+    /// (``manualAudit(_:_:washedElement:washes:)``). A reworded fixture stops
     /// matching and the case reds, which is the safe direction.
     static let piRoomNodeSecondLine = "one room, end to end   preview "
     /// The piece page's own way back to its topic: the topic's title,
@@ -3034,12 +3383,25 @@ enum StubManual {
     /// Copied verbatim from
     /// `overnight-trains/I004/ALL/testManual_ACodeSpanIsWashedAndStillAudits.log`
     /// so that it is the string the audit actually names, and used by
-    /// ``manualAudit(_:_:washedElement:)``. If the fixture's sentence is
+    /// ``manualAudit(_:_:washedElement:washes:)``. If the fixture's sentence is
     /// ever reworded this stops matching and the case reds, which is the safe
     /// direction.
     static let codeSpanParagraph =
         "Copy files into the obsidian folder. Renaming it needs  admin , "
         + "a second folder is  preview , and the radio's own folder is  plugin ."
+
+    // ---- the four washes, light theme, as the screenshot draws them.
+    //
+    // Spelled out, this file's standing reason (the UI target does not import
+    // DomovoiKit): `manualCodeWashLight` `#F5F3F0` (`--sunken`, `Color.kt:49`),
+    // the `warn` pill's `#FFF4E8` and the `idle` pill's `#F2F1F1`
+    // (`ManualRules.swift` — `warnSoft`/`idleSoft` over the page,
+    // `Color.kt:60`, `:64`), and `manualNodeWashLight` `#E6E6EA` (`idleSoft`
+    // over the card). I007's pictures hold exactly these four.
+    static let codeWash = (245, 243, 240)
+    static let amberWash = (255, 244, 232)
+    static let greyWash = (242, 241, 241)
+    static let nodeWash = (230, 230, 234)
 
     // ---- the phrases.
     static let timePhrase = "what time is it"
