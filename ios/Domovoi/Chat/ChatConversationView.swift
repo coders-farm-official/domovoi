@@ -995,10 +995,18 @@ struct ChatConversationView: View {
                     // send, and ``Color/fgMuted`` on the composer's own
                     // surface, no fill, while it cannot. It replaced
                     // `ChatSendSkin`, whose disabled half was `.bordered` +
-                    // ``Color/brandInk`` — the 4.38:1 wash measured on
-                    // Rooms' drop-in in train I005 — and whose `if`/`else`
-                    // made the button a different view on each side of the
-                    // flip. Both are written up on the style.
+                    // `.tint(Color.brandInk)` with an explicit brandInk label,
+                    // and whose `if`/`else` made the button a different view
+                    // on each side of the flip. A *disabled* `.bordered` does
+                    // not draw the tint wash: it draws a grey fill. Train
+                    // I005 has those pixels (Rooms' disabled `queued`,
+                    // rooms-23-played-no-fulfiller, sampled at 3x): fill
+                    // rgb(222,222,224) on the card, SwiftUI's grey label
+                    // rgb(186,186,189) on it, **1.44:1**. The old send set
+                    // brandInk on its label; if that survived the disabled
+                    // state the pair was brandInk on #DEDEE0, **4.21:1**
+                    // (arithmetic, not a measurement of the send itself).
+                    // Under 4.5 either way. Both are written up on the style.
                     Button {
                         send()
                     } label: {

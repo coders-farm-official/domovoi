@@ -315,23 +315,28 @@ extension StubHouseUITests {
     /// ### The greyed send's own contrast, measured off its pixels
     ///
     /// Unit mx-ink (2026-11-05). The disabled look used to be `.bordered` +
-    /// ``Color/brandInk`` — a label on an 18% wash of itself, the pairing train
-    /// I005 measured at **4.38:1** on Rooms' drop-in (`#975800` on `#ECE1D1`)
-    /// — and it had been chosen *because* it was believed audited. It is now
+    /// `.tint(Color.brandInk)` with an explicit brandInk label, chosen
+    /// *because* it was believed audited. Disabled, `.bordered` draws no tint
+    /// wash but a grey fill: train I005's disabled `queued` on Rooms
+    /// (rooms-23-played-no-fulfiller, sampled at 3x) is a grey label
+    /// rgb(186,186,189) on rgb(222,222,224), **1.44:1**. It is now
     /// ``BrandFillButtonStyle``'s disabled state: ``Color/fgMuted`` on the
     /// composer's own surface with no fill, 7.43:1 on white by the tokens.
     ///
     /// The reading is ``inkContrast(_:in:)``, the hint cases' helper: the
     /// darkest and the lightest pixel in a box **inset into the middle of the
-    /// button**, so the box is inside the old chip on every side — under the
-    /// old look the lightest pixel there is the wash and the reading is about
-    /// 4.4, under the floor; under Android's literal `fgFaint` (`#B9B7B4`) it
-    /// is about 2.0. Both fail ``StubShell/contrastFloor``. Antialiasing makes
+    /// button**, so the box is inside the old chip on every side and the
+    /// lightest pixel there is the old grey fill. **Predicted**, not seen:
+    /// under the old look the reading is about 1.4 (I005's grey-on-grey
+    /// pair), or about 4.2 if the explicit brandInk label survived the
+    /// disabled state (`#975800` on `#DEDEE0`, 4.21:1 by arithmetic); under
+    /// Android's literal `fgFaint` (`#B9B7B4`) it is about 2.0. All three
+    /// fail ``StubShell/contrastFloor``. Antialiasing makes
     /// the darkest pixel lighter than the ink, so a pass has room.
     ///
     /// **Not proven by a sabotage run.** The rule is that a case must fail on
     /// the defect it names; unit mx-ink cannot boot a Simulator, so the
-    /// discrimination above is token arithmetic (4.38 and 2.00 under 4.5,
+    /// discrimination above is arithmetic (1.44, 4.21 and 2.00 under 4.5,
     /// 7.43 over it), not an observed red. The train is where it is seen.
     ///
     /// ### What this case does not cover
@@ -401,7 +406,8 @@ extension StubHouseUITests {
         // with the rest of the composer reads. The box is the middle of the
         // button: a quarter of its height in from top and bottom and a fifth of
         // its width in from each side, which is inside the old `.bordered`
-        // chip on every side, so that chip's wash would be the lightest pixel.
+        // chip on every side, so that chip's grey fill would be the lightest
+        // pixel.
         if let send {
             let frame = send.frame
             let box = frame.insetBy(dx: frame.width * 0.2, dy: frame.height * 0.25)
@@ -415,9 +421,11 @@ extension StubHouseUITests {
                     StubShell.contrastFloor,
                     "the greyed-out send measures " + String(format: "%.2f", reading.ratio)
                         + ":1 (label \(reading.ink) on \(reading.paper)) inside \(box), under "
-                        + "\(StubShell.contrastFloor):1. About 4.4 is `.bordered` + brandInk "
-                        + "again (a label on a wash of itself, 4.38:1 in I005); about 2.0 is "
-                        + "Android's fgFaint taken literally. BrandFillButtonStyle draws "
+                        + "\(StubShell.contrastFloor):1. Predicted for the old disabled "
+                        + "`.bordered` + brandInk look: about 1.4 (a grey label on the grey "
+                        + "disabled fill, I005's Rooms `queued`) or about 4.2 (brandInk on "
+                        + "#DEDEE0); about 2.0 is Android's fgFaint taken literally. "
+                        + "BrandFillButtonStyle draws "
                         + "fgMuted on the bare surface, 7.43:1 by the tokens"
                 )
             } else {
