@@ -1396,6 +1396,15 @@ extension StubHouseUITests {
         //    covered page under a presentation is that canvas dimmed, which
         //    is the condition NIGHT-RULES §3 records `fgMuted` failing on.
         //
+        // **All four eliminate the caption, and train I005 says they left a
+        // suspect out.** The caption measures 7.43:1 in that run's own
+        // screenshot of this sheet, so the eliminations hold — but `mute`,
+        // two rows above it, measured **4.38:1** there, which is what
+        // "Contrast nearly passed" names and the only pairing on the sheet
+        // under 4.5:1. It is fixed in `DropInCallSheet.swift` and the count
+        // below is re-pinned on that; the alternative outcome and what to do
+        // with it are written at the assertion.
+        //
         // The discriminator is below, after `hang up`: the same audit with
         // nothing over the room must report none of them. One that survives
         // the sheet coming down is the room screen drawing words it never
@@ -1430,13 +1439,35 @@ extension StubHouseUITests {
             // thing worth seeing. If it moves, re-measure from
             // `att/…/rooms-27-dropin-live-tree…` and the log's `covered ::`
             // lines and re-pin here — never widen it.
+            //
+            // **Re-pinned 1 -> 0 on a pixel measurement, and what to do if it
+            // comes back 1.** The one `Contrast nearly passed` was read as
+            // the covered page's, because the sheet's own `.caption` had been
+            // eliminated. Train I005's screenshot of this very sheet settles
+            // both halves with numbers: the caption measures **7.43:1**, and
+            // `mute` — `.buttonStyle(.bordered)` with `.tint(Color.brandInk)`,
+            // which draws the label in the tint over the tint at low opacity
+            // — was `#975800` on `#ECE1D1`, **4.38:1**. That is the one
+            // pairing on this sheet under 4.5:1, it is exactly what "contrast
+            // is not high enough ... unless font size is larger" names, and
+            // the elimination never considered it because the suspect it was
+            // written against was the caption. `DropInCallSheet.swift`'s
+            // `mute` draws no fill any more, so the finding it produced
+            // should be gone and this is pinned at none.
+            //
+            // If it comes back **1**, that is the older reading vindicated —
+            // the covered page's `fgMuted` sampled through the backdrop
+            // (7.43:1 on white, dimmed under a scrim) — and `[4, 1]` with
+            // that sentence is the re-pin, which is a measurement and not a
+            // widening.
             XCTAssertEqual(
-                [unexposed.count, nearlyPassed.count], [4, 1],
+                [unexposed.count, nearlyPassed.count], [4, 0],
                 "the backdrop's anonymous findings are no longer the four "
-                    + "`\(Self.roomsUnexposedText)` and the one "
-                    + "`\(Self.roomsNearlyPassed)` train I004 measured. The "
-                    + "page behind this sheet is the opened kitchen room; "
-                    + "re-measure before re-pinning:\n"
+                    + "`\(Self.roomsUnexposedText)` train I004 measured and "
+                    + "the none `\(Self.roomsNearlyPassed)` that `mute` losing "
+                    + "its 4.38:1 fill should leave. The page behind this "
+                    + "sheet is the opened kitchen room; re-measure before "
+                    + "re-pinning:\n"
                     + underTheSheet.joined(separator: "\n")
             )
         }
