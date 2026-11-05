@@ -59,8 +59,9 @@ import java.io.File
 
 /**
  * What differs between the two editors the shared host carries: which page
- * of the server it opens, how Back asks that page to close, and whether the
- * page may use the phone's photo picker, share sheet and print service.
+ * of the server it opens, how Back asks that page to close, whether the
+ * page may use the phone's photo picker, share sheet and print service, and
+ * whether its text follows the system text-size setting.
  */
 internal enum class WebEditorKind(
     /** The page on the server (web/static/doc.html or sheet.html). */
@@ -75,6 +76,11 @@ internal enum class WebEditorKind(
     val share: Boolean,
     /** print (PDF through Android's print service). */
     val print: Boolean,
+    /**
+     * The WebView's text zoom follows the system font scale (owner answer
+     * 72). Documents only: see the factory for why the sheet must not.
+     */
+    val followsTextSize: Boolean,
 ) {
     /** Formatted documents, Markdown and Word (web/static/doc_editor.jsx). */
     Document(
@@ -84,6 +90,7 @@ internal enum class WebEditorKind(
         pickPictures = true,
         share = true,
         print = true,
+        followsTextSize = true,
     ),
 
     /** Spreadsheets (.xlsx / .csv; web/static/sheet_editor.jsx, Univer). */
@@ -94,6 +101,7 @@ internal enum class WebEditorKind(
         pickPictures = false,
         share = false,
         print = false,
+        followsTextSize = false,
     );
 
     /** The page for one file: doc.html takes `?path=`, sheet.html `#path=`. */
@@ -221,8 +229,16 @@ internal fun WebEditorHost(app: AppContainer, relPath: String, kind: WebEditorKi
                         // 100 whatever the system font scale is, so the host
                         // has to pass it in; the page's own `-apple-system-body`
                         // rule is Apple-only and is dropped by this engine.
-                        // Only the editor, never the print copy below: a
-                        // printed page is paper and keeps the page's sizes.
+                        // Only the document editor, never the print copy below
+                        // (a printed page is paper and keeps the page's sizes)
+                        // and never the SHEET, which this same factory also
+                        // builds: Univer draws its cells to a canvas, which
+                        // textZoom cannot reach, while its formula bar, menus
+                        // and in-cell editor are DOM, which it does - so a
+                        // zoomed sheet would type at double size over a grid
+                        // that had not moved. Answer 72 is about documents;
+                        // the sheet keeps the page's own sizes, as on iOS,
+                        // whose sheets are a native screen.
                         //
                         // Know what this does, because it is NOT what the
                         // iOS half does: textZoom is a page-wide multiplier
@@ -243,7 +259,9 @@ internal fun WebEditorHost(app: AppContainer, relPath: String, kind: WebEditorKi
                         // activity in AndroidManifest.xml lists fontScale in
                         // configChanges, so a change while the app runs lands
                         // by activity recreation rather than live.
-                        settings.textZoom = (100f * ctx.resources.configuration.fontScale).roundToInt()
+                        if (kind.followsTextSize) {
+                            settings.textZoom = (100f * ctx.resources.configuration.fontScale).roundToInt()
+                        }
                         setBackgroundColor(android.graphics.Color.TRANSPARENT)
                         // The page handles every gesture itself (the sheet scrolls
                         // its grid under a dragging finger): no view around it may
