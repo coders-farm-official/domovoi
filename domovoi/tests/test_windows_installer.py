@@ -274,6 +274,8 @@ def test_the_pin_tool_pins_a_release_tag(tmp_path):
     blob = _git_bytes("cat-file", "blob", f"{rc1}:scripts/linux/provision.sh")
     assert f'#define ProvisionSha256 "{hashlib.sha256(blob).hexdigest()}"' in text
     assert "\n; #define ProvisionBundled\n" in text and "\n#define DashboardTabRoutes\n" in text
+    # rc1's dashboard is from before the first-run welcome.
+    assert "\n; #define DashboardWelcome\n" in text
     # rc1's provision.sh always pulls the AI models: no AI question.
     assert "\n; #define ProvisionAiChoice\n" in text
     assert b"\r" not in copy.read_bytes()
@@ -514,6 +516,21 @@ def test_setup_compiles_with_and_without_the_ai_question(tmp_path, ai_choice):
     assert (tmp_path / "DomovoiSetup.exe").is_file()
 
 
+@pytest.mark.skipif(sys.platform != "win32" or _iscc() is None, reason="needs Inno Setup 6's ISCC.exe")
+def test_setup_compiles_with_the_welcome_steps(tmp_path):
+    """The DashboardWelcome blocks nest inside FinishSteps' other #ifdefs:
+    compiled with the pin on, so the next -Pin past the welcome can't be
+    the first build to find out they don't."""
+    if not all((WIN / "build" / "bin" / n).is_file() for n in ("DomovoiHost.exe", "DomovoiSetupHelper.exe", "DomovoiTray.exe")):
+        pytest.skip("run windows\\build.ps1 first (ISCC packs its exes)")
+    args = [str(_iscc()), "/Q", f"/O{tmp_path}", "/FDomovoiSetup"]
+    if not _welcome_pinned():
+        args.append("/DDashboardWelcome")
+    proc = subprocess.run([*args, str(SCRIPT)], capture_output=True, text=True, timeout=600)
+    assert proc.returncode == 0, proc.stdout[-4000:] + proc.stderr[-4000:]
+    assert (tmp_path / "DomovoiSetup.exe").is_file()
+
+
 def _finish_section() -> str:
     s = SCRIPT.read_text(encoding="ascii")
     return s[s.index("{ -- the finish page"):s.index("{ -- the install (after the files are copied)")]
@@ -532,7 +549,8 @@ def test_the_finish_page_walks_through_the_admin_account_by_the_dashboards_label
         assert label in steps, label
     # "the Configuration tab" is the fallback for a dashboard from before the
     # tab addresses, whose last tab had that name; with them it is Advanced.
-    routed = steps[steps.index("#ifdef DashboardTabRoutes"):steps.index("#else")]
+    routed = steps[steps.index("#ifdef DashboardTabRoutes"):]
+    routed = routed[:routed.index("#else")]
     assert "Settings > Advanced" in routed and "Configuration" not in routed
     assert "CodeHint.Caption := FinishSteps;" in f
     # "It copies the code": Open Domovoi does, before it opens the page.
@@ -540,6 +558,65 @@ def test_the_finish_page_walks_through_the_admin_account_by_the_dashboards_label
     click = click[: click.index("\nend;")]
     assert click.index("CopyCodeClick(Sender);") < click.index("ShellExecAsOriginalUser('open', OpenUrl,")
     assert "shown only here; it works for 24 hours" in f
+
+
+def _welcome_pinned() -> bool:
+    return bool(re.search(r"^#define DashboardWelcome\s*$", PINS.read_text(encoding="ascii"), re.M))
+
+
+def _welcome_steps() -> tuple[str, str]:
+    """FinishSteps' two DashboardWelcome blocks: step 1, and step 3."""
+    f = _finish_section()
+    steps = f[f.index("function FinishSteps"):f.index("function GpuNames")]
+    first = steps[steps.index("#ifdef DashboardWelcome"):]
+    first = first[:first.index("#else")]
+    last = steps[steps.rindex("#ifdef DashboardWelcome"):]
+    last = last[:last.index("#endif")]
+    assert first != last
+    return first, last
+
+
+def test_the_finish_page_walks_through_the_welcome_by_its_own_words():
+    """Owner, 2026-11-04: Setup's "Open Domovoi" lands on the first-run
+    welcome too. With a dashboard that has it (pins.iss DashboardWelcome),
+    the steps name the welcome's words, and every quoted one is the
+    dashboard's own (web/static/components.jsx, where the welcome's tests
+    hold them), so renaming one there fails here."""
+    first, last = _welcome_steps()
+    jsx = (REPO_ROOT / "web" / "static" / "components.jsx").read_text(encoding="utf-8")
+    assert "Welcome to Domovoi!" in first and '"set up admin"' in first
+    assert "first-run admin setup" not in first and "Configuration" not in first
+    for words in ("You''re all set!", "household token", "Keep this one", "Want an easier one?",
+                  "not your admin password"):
+        assert words in last, words
+    for words in ("Welcome to Domovoi!", "You’re all set!", "Keep this one", "Want an easier one?",
+                  "This is not your admin password.", ">set up admin<", "'set password'",
+                  "<label>setup code</label>", "<label>confirm password</label>"):
+        assert words in jsx + (REPO_ROOT / "web" / "static" / "settings.jsx").read_text(encoding="utf-8"), words
+
+
+def test_the_welcome_pin_matches_the_pinned_commit():
+    """DashboardWelcome is on only when the dashboard at the pinned commit
+    has the welcome (build.ps1 -Pin looks for the same line): an older one
+    opens the admin setup dialog, and the steps must say that instead."""
+    commit = _pins()["DomovoiCommit"]
+    git = shutil.which("git")
+    if not git:
+        pytest.skip("no git")
+    proc = subprocess.run(
+        [git, "-C", str(REPO_ROOT), "cat-file", "-p", f"{commit}:web/static/components.jsx"],
+        capture_output=True,
+    )
+    if proc.returncode != 0:
+        pytest.skip(f"commit {commit[:7]} is not in this clone")
+    has = bool(re.search(r"^const FirstRunWelcome = ", proc.stdout.decode("utf-8"), re.M))
+    assert _welcome_pinned() == has, (
+        f"pins.iss DashboardWelcome is {'on' if _welcome_pinned() else 'off'}, but the dashboard at "
+        f"{commit[:7]} {'has' if has else 'does not have'} the first-run welcome")
+    # The line build.ps1 -Pin looks for is the one the dashboard has today.
+    today = (REPO_ROOT / "web" / "static" / "components.jsx").read_text(encoding="utf-8")
+    assert re.search(r"^const FirstRunWelcome = ", today, re.M)
+    assert '"(?m)^const FirstRunWelcome = "' in BUILD.read_text(encoding="ascii")
 
 
 # Windows' own Settings app, which the installer's words also name.

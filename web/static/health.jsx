@@ -114,7 +114,7 @@ const healthChecks = ({ viewer, health, rooms, plugins, pluginErrors, acq,
     const c = { key: 'claim', part: 'server', label: 'admin account', scope: 'setup', order: 1 };
     if (v.unclaimed) {
       add({ ...c, tone: 'err', claim: true,
-            text: "this box isn't claimed yet · anyone on the network can change settings" });
+            text: "this Domovoi isn't claimed yet · anyone on the network can change settings" });
     } else if (v.known) {
       add({ ...c, tone: 'ok', text: 'set up · changes need the admin password' });
     } else {

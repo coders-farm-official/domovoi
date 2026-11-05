@@ -402,6 +402,7 @@ Auth = {
   closeModal: () => { window.__auth.open = false; window.__auth.closes += 1; },
   closePairModal: () => {},
   setup: (code, pw) => { window.__auth.setup = [code, pw]; window.__auth.open = false;
+                         Auth.status = { setup_complete: true, authenticated: true };
                          return Promise.resolve({ ok: true, token: 'bearer-1' }); },
   login: (pw) => { window.__auth.login = pw; window.__auth.open = false;
                    return Promise.resolve({ ok: true, token: 'bearer-1' }); },
@@ -419,6 +420,13 @@ FIRST_RUN_SCRIPT = r"""
     await h.type({ type: 'input', nth: 1 }, 'correct horse battery');
     await h.type({ type: 'input', nth: 2 }, 'correct horse battery');
     await h.click({ type: 'button', text: 'set password' });
+    await w.__settle(h, 6);
+    // "You're all set" and the household token come first since
+    // 2026-11-04 (components.jsx FirstRun); keeping the token goes on.
+    // "Done" when the token didn't load (this stub serves none).
+    const keep = h.find({ type: 'button', text: 'Keep this one' }) ? 'Keep this one' : 'Done';
+    w.__allSet = !!h.find({ type: 'button', text: keep });
+    if (w.__allSet) await h.click({ type: 'button', text: keep });
   }
   await w.__settle(h, 6);
   const titles = () => h.findAll((e) => String(e.props.className || '') === 'ttl').map((e) => e.text);
@@ -433,7 +441,7 @@ FIRST_RUN_SCRIPT = r"""
   }
   await w.__settle(h);
   return { step, after: titles(), calls: h.calls.map((c) => ({ m: c.method, p: c.path, b: c.body })),
-           auth: w.__auth, store: w.__store.get(), events: w.__events };
+           auth: w.__auth, store: w.__store.get(), events: w.__events, allSet: !!w.__allSet };
 """
 
 
@@ -698,6 +706,7 @@ def test_wake_word_training_is_greyed_under_never(driven) -> None:
 def test_first_run_asks_the_internet_question_after_the_password(driven) -> None:
     o = driven["first_run_save"]
     assert o["auth"]["setup"] == ["one-two-three-four-five-six-seven-eight", "correct horse battery"]
+    assert o["allSet"] is True                       # the household token first
     assert o["step"]["titles"] == ["will this Domovoi have internet?"]
     assert [r["value"] for r in o["step"]["radios"]] == ["always", "sometimes", "never"]
     assert o["step"]["later"] is True and o["step"]["privacy"] is True
@@ -721,7 +730,8 @@ def test_the_step_is_not_offered_when_already_answered_or_on_a_plain_login(drive
     assert o["step"]["titles"] == []
     # It looked, and kept quiet. (/api/capabilities is the setup form's own
     # read: which kind of server, for where the setup code is.)
-    assert [c["p"] for c in o["calls"]] == ["/api/capabilities", "/api/config"]
+    # /api/auth/device-token is "you're all set" showing the household token.
+    assert [c["p"] for c in o["calls"]] == ["/api/capabilities", "/api/auth/device-token", "/api/config"]
     login = driven["login_never_asks"]
     assert login["auth"]["login"] == "correct horse battery"
     assert login["step"]["titles"] == []

@@ -207,8 +207,11 @@ const NPCard = ({ np, tick, guest, onPlayRandom, onPause, onResume, onSkip, onSt
            pair one press away — not a button whose answer is a prompt. */
         <div style={{ padding: '0 16px 14px', display: 'flex', alignItems: 'center', gap: 8,
                       justifyContent: 'flex-end', flexWrap: 'wrap' }}>
-          <span style={{ fontSize: 12, color: 'var(--fg-muted)' }}>pair this phone to start music here</span>
-          <Button icon="link" onClick={() => { try { Auth.requestPairing(); } catch {} }}>pair</Button>
+          <span style={{ fontSize: 12, color: 'var(--fg-muted)' }}>connect this browser to start music here</span>
+          <Button icon="link" onClick={() => {
+            try { if (typeof ConnectAsk !== 'undefined') { ConnectAsk.open(); return; } } catch { /* below */ }
+            try { Auth.requestPairing(); } catch {}
+          }}>connect</Button>
         </div>
       ) : (
         <div style={{ padding: '0 16px 14px', display: 'flex', justifyContent: 'flex-end' }}>
@@ -923,7 +926,7 @@ const guestRefusalText = (verb, e) => {
   const nested = e && e.detail && e.detail.detail;
   const said = typeof nested === 'string' ? nested : null;
   if (status === 401 || (said && /x-device-token|admin session required/i.test(said))) {
-    return `${verb}: guests can only change a room that's playing — pair this phone to do more`;
+    return `${verb}: guests can only change a room that's playing — connect this browser to do more`;
   }
   return `${verb}: ${said || apiErrorText(e)}`;
 };
@@ -1083,7 +1086,11 @@ const QueueTab = ({ rooms, nowPlaying, npError, fire, room: pickedRoom, onRoom }
     }
   };
 
-  const pairPhone = () => { try { Auth.requestPairing(); } catch {} };
+  // The connect prompt (components.jsx ConnectAsk); the pair prompt where it isn't loaded.
+  const pairPhone = () => {
+    try { if (typeof ConnectAsk !== 'undefined') { ConnectAsk.open(); return; } } catch { /* below */ }
+    try { Auth.requestPairing(); } catch {}
+  };
   const tapButton = (name, title, to, from) => (
     <IconButton name={name} title={title} disabled={busy || to == null}
                 onClick={() => moveTo(from, to)}/>
@@ -1147,7 +1154,7 @@ const QueueTab = ({ rooms, nowPlaying, npError, fire, room: pickedRoom, onRoom }
            is offered — on a press, never on its own. */
         <Empty glyph="headphones" title={`${room} isn't playing`}
                sub={queue?.blocked_reason || ''}
-               action={<Button icon="link" onClick={pairPhone}>pair this phone</Button>}/>
+               action={<Button icon="link" onClick={pairPhone}>connect this browser</Button>}/>
       ) : items.length === 0 ? (
         <Empty glyph="headphones" title="queue is empty"
                sub={`cast from the Player tab, or say "play something" in ${room}`}/>
@@ -1878,7 +1885,7 @@ const MusicPage = () => {
   // 2026-10-10: a guest may change a PLAYING room's queue).
   const onQueueInRoom = async (track, room_id) => {
     if (guest && !activeRooms.has(room_id)) {
-      fire(`${room_id} isn't playing — pair this phone to start music there`);
+      fire(`${room_id} isn't playing — connect this browser to start music there`);
       return;
     }
     try {

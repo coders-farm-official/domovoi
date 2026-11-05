@@ -201,6 +201,12 @@ signature, before it runs it.
    in the Admin box opens it). Paste the code into **setup code**, choose
    an admin password of at least 10 characters, type it again in
    **confirm password**, and click **set password**. A build whose pinned
+   dashboard has the first-run welcome (`DashboardWelcome` in `pins.iss`,
+   set by `-Pin` from the commit) says instead that the same address
+   greets you with **Welcome to Domovoi!**, which holds those three
+   fields, and that **You're all set!** then shows the household token
+   (not the admin password): copy it, and click **Keep this one** or
+   **Want an easier one?**. A build whose pinned
    commit predates the dashboard's tab addresses opens `#settings` instead
    (`DashboardTabRoutes` in `pins.iss`), and its steps say to click the
    Configuration tab first. The `?installed=` part is there because a
@@ -831,7 +837,8 @@ commit SHA that is in this clone and on `origin/main`'s history, and
 rewrites `pins.iss` in one go: `DomovoiCommit`, `DomovoiChannel` (`stable`
 unless `-Channel main`; `stable` needs a commit a `v*` tag names),
 `ProvisionSha256` (that commit's `provision.sh`, its exact bytes),
-`ProvisionBundled` off, `DashboardTabRoutes`, and `ProvisionAiChoice`
+`ProvisionBundled` off, `DashboardTabRoutes`, `DashboardWelcome` (on
+when that commit's dashboard has the first-run welcome), and `ProvisionAiChoice`
 (on when that `provision.sh` takes `--ai-models` / `--no-ai-models`: only
 then does Setup ask "Include AI chat and questions?"). Commit the changed
 `pins.iss` after the tag: the tag is the commit households run.

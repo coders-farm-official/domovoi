@@ -47,7 +47,8 @@
 
 #include "pins.iss"
 ; Where "Open Domovoi" lands (pins.iss, DashboardTabRoutes): Settings >
-; Advanced with the first-run admin setup open, in a dashboard that has the
+; Advanced with the first-run admin setup open (the first-run welcome in a
+; dashboard that has it: pins.iss DashboardWelcome), in a dashboard that has the
 ; tab addresses (the address keeps its first spelling, Configuration, which
 ; the dashboard still accepts: build.ps1 -Pin checks the pinned commit's
 ; SETUP_ROUTE); Settings on its first tab in one from before them, whose
@@ -892,15 +893,27 @@ end;
 { The steps to the admin account, by the dashboard's own labels (web/static:
   the Admin card's "set up admin", the "first-run admin setup" dialog and
   its "setup code", "confirm password" and "set password"; the dashboard's
-  domovoi/tests/test_web_settings_routes.py holds it to them). }
+  domovoi/tests/test_web_settings_routes.py holds it to them). With
+  DashboardWelcome (pins.iss) the same address opens the first-run welcome
+  instead: "Welcome to Domovoi!" with those three fields, then "You're all
+  set!" with the household token and "Keep this one"
+  (domovoi/tests/test_windows_installer.py holds these words to
+  web/static/components.jsx). }
 function FinishSteps: String;
 begin
+#ifdef DashboardWelcome
+  Result := '1. Click Open Domovoi. It copies the code and opens Domovoi, which greets you with "Welcome to Domovoi!" (if it doesn''t, click "set up admin" in the Admin box).' + #13#10;
+#else
 #ifdef DashboardTabRoutes
   Result := '1. Click Open Domovoi. It copies the code and opens Settings > Advanced with "first-run admin setup" showing (if it isn''t, click "set up admin" in the Admin box).' + #13#10;
 #else
   Result := '1. Click Open Domovoi. It copies the code and opens Domovoi''s Settings. Click the Configuration tab (the last one), then "set up admin" in the Admin box.' + #13#10;
 #endif
+#endif
   Result := Result + '2. Paste the code into "setup code", choose an admin password of at least 10 characters, type it again in "confirm password", and click "set password".';
+#ifdef DashboardWelcome
+  Result := Result + #13#10 + '3. Under "You''re all set!", copy your household token: every phone, tablet and browser asks for it once. It is not your admin password. Click "Keep this one", or "Want an easier one?" to choose your own.';
+#endif
 end;
 
 { The names of the graphics cards Setup found, each once, with a count for

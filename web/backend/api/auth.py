@@ -175,8 +175,19 @@ def setup_code_refusal() -> str:
     system (``wsl``) shows its code on the installer's last page, and
     nobody there can open ``~/.domovoi`` (docs/WINDOWS_HOST.md: run the
     installer again for a fresh code); everywhere else the code is the
-    file the core wrote."""
-    if host_kind() == "wsl":
+    file the core wrote. The macOS installer's Linux VM (``mac``, a kind
+    the Mac installer's host_kind adds) shows it in its Setup window, and
+    again from the menu-bar icon's Repair or Uninstall Domovoi... >
+    Show Setup Code...; nobody there opens the VM's ``~/.domovoi`` either."""
+    kind = host_kind()
+    if kind == "mac":
+        return (
+            "setup code required — use the one the Domovoi Setup window "
+            "showed on the Mac; closed it? Click the Domovoi cat in the "
+            "menu bar, choose Repair or Uninstall Domovoi..., then Show "
+            "Setup Code..."
+        )
+    if kind == "wsl":
         return (
             "setup code required — use the one on the last page of "
             "Domovoi's Windows installer; a code older than a day, or a "

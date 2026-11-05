@@ -4,6 +4,27 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-11-04 — a welcome on a new Domovoi
+
+A Domovoi nobody has claimed now greets every page load of its dashboard
+with a welcome that holds the claim itself: the setup code, then the admin
+password, with "where's my code?" for this kind of server (the Mac's
+Domovoi Setup window, the Windows installer's last page, the file on
+Linux). **Not now** puts it away for that browser; Home's "this Domovoi
+isn't claimed yet" row (it said "box") and its **claim it** stay as the
+reminder. Settings > Advanced (the address the Windows installer's Open
+Domovoi opens) and its **set up admin** open the same welcome. It never
+shows once the house is claimed. Right after a claim,
+"You're all set!" shows the household token with a copy button, says it
+is not the admin password, and offers one of your own. The phone app
+shows a "this Domovoi isn't set up yet" screen for an unclaimed server
+instead of a workspace.
+
+A browser that isn't connected to a claimed Domovoi is now greeted once
+with "Welcome! Enter this home's household token to connect this
+browser", with "Where do I find it?" and **Not now**; Home then shows a
+**Connect this browser** button instead of a faint "pair this phone" line.
+
 ## 2026-11-02 — a plugin upgrade may bump its own packages
 
 Upgrading a plugin whose new version pins a newer copy of its own tool
