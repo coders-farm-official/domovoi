@@ -92,12 +92,37 @@ final class ManualLinkHostTests: XCTestCase {
 
     /// **Every screen of the manual installs the link action.**
     ///
-    /// Three sayings, because any one of them missing is a link that does
-    /// nothing somewhere: the host has to be *given* the action (`links`) and
-    /// has to put it in its own environment, and `ManualView` has to keep
-    /// installing it for the levels the route itself draws (depth 0). All
-    /// three are textual, so a reflow of any of those lines reds this — the
-    /// failure messages say what each line was for.
+    /// Three sayings: the host has to be *given* the action (`links`), it has
+    /// to put it in its own environment, and `ManualView` has to keep its own
+    /// install for what the route draws outside a host. All three are
+    /// textual, so a reflow of any of those lines reds this — the failure
+    /// messages say what each line was for.
+    ///
+    /// ### Which install covers which screen
+    ///
+    /// Corrected 2026-11-04 by the integrator, on the verifier's open
+    /// finding. This case used to say that `ManualView`'s install is what
+    /// covers "every level at depth 0" and that the host covers "the pushed
+    /// levels only". The app refutes both halves: `ManualView.swift:340-347`
+    /// builds `ManualLevelHost(depth: 0, …, links: links)`, so the depth-0
+    /// level is drawn *inside* a host and is covered by that host's own
+    /// install at `:784`, exactly as every deeper level is. What is true:
+    ///
+    /// * `ManualView.swift:209` is the **outermost** install, so it reaches
+    ///   everything the route draws that is not inside a host —
+    ///   ``ManualTopBar``, the empty state, the cached line — and is a second
+    ///   cover over the depth-0 host's content as well.
+    /// * **Every** level, depth 0 included, is covered by the host that draws
+    ///   it. A *pushed* level has nothing else: it is presented through
+    ///   `navigationDestination(isPresented:)` and so is not an environment
+    ///   descendant of the view that installed the action, which is the I005
+    ///   measurement this whole file exists for.
+    ///
+    /// So the third saying holds a belt over the route's own chrome, not the
+    /// only cover for depth 0. Whether a document link is ever drawn outside
+    /// the depth-0 host is **not measured** — if it is not, that install is
+    /// belt without braces and the manual unit may want to drop the saying
+    /// rather than keep a message that has to explain itself.
     ///
     /// ### Each saying is read inside the **one type** it is about, and that
     /// is the whole case
@@ -168,9 +193,13 @@ final class ManualLinkHostTests: XCTestCase {
         XCTAssertTrue(
             route.span.contains(".environment(\\.openURL, links)"),
             "`ManualView`'s own body no longer installs the link action, so a "
-                + "link on the level the route itself draws — Start here, the "
-                + "map, every level at depth 0 — goes to `openURL` and "
-                + "nowhere. The host above covers the pushed levels only. This "
+                + "link in the route's own chrome — the top bar, the empty "
+                + "state, the cached line, anything it draws outside a "
+                + "`ManualLevelHost` — goes to `openURL` and nowhere. This is "
+                + "NOT the cover for depth 0: `ManualView` builds "
+                + "`ManualLevelHost(depth: 0, …, links: links)` and that host "
+                + "installs the action for the level itself, the same way "
+                + "every pushed level is covered. See this case's note. This "
                 + "is read inside `ManualView` and not over everything before "
                 + "the host, because `ManualEmptyState`, `ManualCachedLine` "
                 + "and `ManualLevelView` are in that span too and a reading "
