@@ -107,6 +107,37 @@ public enum HintInk {
     /// ``appFieldPaperDark``. Recomputed by `ShellFoldTests`, like the other.
     public static let darkArithmeticRatio = 6.86
 
+    /// The hint `ShellHintInkAppearance`'s attributed setter hands on: `text`
+    /// with its words and every other attribute kept, and `ink` written under
+    /// `key` over **the whole range**, whatever colour a run arrived with.
+    ///
+    /// **Whole range, because SwiftUI colours its own placeholder.** Commit
+    /// `ccba3f1c` inked only the runs with no colour, to keep "a colour a call
+    /// site chose". Train I006 then read the single-line Music field at
+    /// **1.72:1**, `rgb(197, 197, 199)` — Apple's `placeholderText` to the
+    /// integer — where I005, with this whole-range write, read **7.43:1**. A
+    /// prompt-less `TextField` reaches the setter with SwiftUI's grey already
+    /// on every run, so "leave a coloured run alone" left every run alone.
+    ///
+    /// The trade-off, written down: a future single-line field whose `prompt:`
+    /// passes a colour **other** than ``ink`` is re-inked to ``ink``. Nothing
+    /// pays it today — every `prompt:` colour in the app is `Color.fgMuted`,
+    /// which is built from ``ink`` — and telling SwiftUI's grey from a chosen
+    /// colour would mean recognising SwiftUI's exact colour object, which no
+    /// train has measured.
+    ///
+    /// In this package, with the key passed in, so that `swift test` on a
+    /// machine with no UIKit reads the rule (`HintInkPlaceholderTests`).
+    public static func inkingTheWholeHint(
+        _ text: NSAttributedString,
+        key: NSAttributedString.Key,
+        ink: Any
+    ) -> NSAttributedString {
+        let inked = NSMutableAttributedString(attributedString: text)
+        inked.addAttribute(key, value: ink, range: NSRange(location: 0, length: inked.length))
+        return inked
+    }
+
     #if canImport(UIKit)
     /// The ink itself: ``Color/fgMuted``, and what `ShellHintInkAppearance`
     /// puts in the placeholder's `NSAttributedString` — an attribute wants a

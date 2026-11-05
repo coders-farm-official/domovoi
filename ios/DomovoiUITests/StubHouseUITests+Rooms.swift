@@ -419,6 +419,65 @@ extension StubHouseUITests {
         return true
     }
 
+    /// Move the page's content **up** by `points` (negative moves it down),
+    /// with no momentum — the vertical sibling of ``roomsDrag(_:by:)``, for a
+    /// few points rather than a tab's width.
+    ///
+    /// Written for the drop-in case's audit position (train I006), where the
+    /// whole move is 3.7 points plus one, and the numbers are the ones this
+    /// suite has already measured rather than new ones:
+    ///
+    /// * **`withVelocity: .slow` and a hold before the lift.** The
+    ///   two-argument `press(forDuration:thenDragTo:)` ends in a flick —
+    ///   train R002 measured a drag asked for 143 points moving a page by
+    ///   294 (``musicMoreDrag(_:by:vertical:)``'s doc comment) — and lifting a
+    ///   stationary finger is what stops the content where the finger did.
+    /// * **No gesture under 24 points.** Less than a scroll view's pan slop is
+    ///   not a pan but a long press on whatever is under the finger. A move
+    ///   smaller than that is made as **two** pans, 24 points the other way
+    ///   and then 24 plus the move this way, so each gesture is a real pan
+    ///   and the net is the move asked for. The caller re-measures, so what
+    ///   the two pans actually moved is a reading, not an assumption.
+    /// * **Down the left margin**, `dx: 0.03` (x ≈ 12) as in
+    ///   ``printingDrag(_:by:)``: every row on a room's page starts at x = 16,
+    ///   so the finger hit-tests to the scroll view and holds no control, and
+    ///   the tab strip (x 16–377) never takes the pan.
+    /// * At most 80% of the page's height per gesture, starting near the edge
+    ///   the finger travels away from, so the whole gesture stays on the page.
+    ///
+    /// Answers false when nothing was asked for or the page is too short to
+    /// pan, so the caller can say that no gesture was made.
+    @MainActor
+    @discardableResult
+    func roomsDragVertically(_ page: XCUIElement, contentUpBy points: CGFloat) -> Bool {
+        let height = page.frame.height
+        guard points != 0, height > 80 else { return false }
+        let leastTravel: CGFloat = 24
+        /// One pan; `finger` is negative for a finger moving up.
+        func pan(_ finger: CGFloat) {
+            let travel = max(-height * 0.8, min(height * 0.8, finger))
+            let near: CGFloat = travel < 0 ? 0.9 : 0.1
+            let from = page.coordinate(withNormalizedOffset: CGVector(dx: 0.03, dy: near))
+            from.press(
+                forDuration: 0.4,
+                thenDragTo: from.withOffset(CGVector(dx: 0, dy: travel)),
+                withVelocity: .slow,
+                thenHoldForDuration: 0.4
+            )
+        }
+        // The finger moves the opposite way to the reading: content up is a
+        // finger moving up, which is a negative dy.
+        let finger = -points
+        if abs(finger) >= leastTravel {
+            pan(finger)
+        } else {
+            let away: CGFloat = finger < 0 ? 1 : -1
+            pan(away * leastTravel)
+            pan(finger - away * leastTravel)
+        }
+        return true
+    }
+
     /// Pick one of the seven tabs by its word.
     ///
     /// Scrolls the strip until the word is wholly inside it (``roomsBring``),
@@ -1564,14 +1623,81 @@ extension StubHouseUITests {
         if #available(iOS 17.0, *) {
             // **Where this page is, and who scrolled it.** XCUITest scrolls
             // to an element before it taps it, so reaching
-            // `drop in from this phone` moved this page 394.6 points
-            // (`att/…/rooms-27-dropin-ended-tree…`: the content sits at
-            // y=-257.3 in a scroll view at 93.3). Nothing puts it back, so
-            // the audit below is taken on a page whose head is under the
-            // navigation bar and whose foot is past the clip — which is a
-            // fact about the position, not about the colours, and
+            // `drop in from this phone` moved this page 380.6 points
+            // (train I006's `rooms-27-dropin-ended-tree…`: the content sits
+            // at y=-243.3 in a scroll view at 93.3; it was 394.6 and -257.3
+            // in I005, before the control lost 14 points of height). Nothing
+            // puts it back, so the audit below is taken on a page whose head
+            // is under the navigation bar and whose foot is past the clip —
+            // which is a fact about the position, not about the colours, and
             // ``roomsContrastWithNoPixels(_:on:after:)`` is where the
             // measurement that separates the two is written.
+            //
+            // **And no row may straddle the bar's lower edge** (train I006).
+            // That classifier excuses an element wholly under the bar and
+            // keeps one with any pixels showing, so a row *across* the edge
+            // is kept — and the 14 points the drop-in control lost moved the
+            // automatic scroll by 14, which put `registry default` at
+            // 123.0–141.0 against a bar ending at 137.3: 3.7 points of
+            // descenders under the hairline, the label's own ink 21:1, and a
+            // `Contrast failed` the classifier was right to keep. So the page
+            // is moved up by the largest overlap across that edge plus a
+            // point, measured, and then **asserted** to have nothing across
+            // it, so the next row-height change fails here loudly instead of
+            // flipping the excuse in silence. The drop-in control (726–770)
+            // moves by the same few points and must still be wholly on the
+            // window, because it is what this audit sits at the foot to read.
+            if let page = roomsScrollView(app, strip: false) {
+                let bar = app.navigationBars.firstMatch
+                let edge = bar.exists ? bar.frame.maxY : 0
+                /// The page's labelled elements an edge at `edge` runs
+                /// through, with half a point of slack, as `(label, frame)`.
+                /// UIKit's scroll indicators are not the page's content.
+                func acrossTheBar() -> [(label: String, frame: CGRect)] {
+                    Self.roomsLabelled(page.descendants(matching: .any)).filter { one in
+                        !one.label.contains("scroll bar")
+                            && Self.crosses(edge, one.frame)
+                    }
+                }
+                XCTAssertGreaterThan(edge, 0, "no navigation bar over the room's page, so no edge to clear")
+                for _ in 0..<3 {
+                    let across = acrossTheBar()
+                    guard let overlap = across.map({ $0.frame.maxY - edge }).max() else { break }
+                    print(
+                        "ROOMS dropin-after: \(across.count) element(s) across the bar's "
+                            + "edge at \(edge), largest overlap \(overlap) — moving the page up "
+                            + "\(overlap + 1): \(across.map { "'\($0.label)' \($0.frame)" })"
+                    )
+                    guard roomsDragVertically(page, contentUpBy: overlap + 1) else { break }
+                }
+                let still = acrossTheBar()
+                if !still.isEmpty { evidence(app, "rooms-27-dropin-across-the-bar") }
+                XCTAssertTrue(
+                    still.isEmpty,
+                    "the page still has element(s) across the navigation bar's lower edge at "
+                        + "\(edge) after measured drags, so the audit would sample a row "
+                        + "that is part bar and part page (I006's `registry default`): "
+                        + "\(still.map { "'\($0.label)' \($0.frame)" }) — tree printed above"
+                )
+                let control = app.buttons[RoomsStringsUnderTest.dropInFromThisPhone].firstMatch
+                let dropFrame = control.exists ? control.frame : .zero
+                if !(roomsInside(dropFrame, page.frame, vertical: true)
+                    && app.frame.contains(dropFrame) && dropFrame.height > 0) {
+                    evidence(app, "rooms-27-dropin-control-off-the-window")
+                }
+                XCTAssertTrue(
+                    dropFrame.height > 0
+                        && roomsInside(dropFrame, page.frame, vertical: true)
+                        && app.frame.contains(dropFrame),
+                    "`drop in from this phone` is at \(dropFrame), not wholly inside the "
+                        + "page's viewport \(page.frame) on the window, after moving the page "
+                        + "off the bar's edge — the audit below would not read the control it "
+                        + "sits at the foot of the page to read (tree printed above)"
+                )
+            } else {
+                print(app.debugDescription)
+                XCTFail("no page scroll view on the room's screen to clear the bar's edge on")
+            }
             let shot = roomsWindowShot(app)
             let bare = try auditIssues(app, "rooms-dropin-after")
             let bareSplit = Self.floorAndRest(bare)
@@ -2180,7 +2306,30 @@ extension StubHouseUITests {
         }
         evidence(app, "rooms-31-audit-roster")
         let rosterShot = roomsWindowShot(app)
-        let roster = try auditIssues(app, "rooms-roster")
+        // **Contrast first, on its own, then everything else** (train I006).
+        // This page sits at its maximum scroll offset (D57, above), and the
+        // audit's own Dynamic Type pass shrinks the content, so the offset is
+        // clamped; when the size comes back the page rests **33 points
+        // lower**. I006 was the only train whose roster ran Apple's contrast
+        // pass *after* that pass (its log prints the 12 Dynamic Type findings
+        // first; I001-I005, S004-S010 and X005 all put contrast first), and
+        // it returned eight `Contrast failed` against elements whose pixels
+        // pass — `Harvest Moon` black on grey at 18.60:1, `Broadcast` the
+        // same — every finding frame exactly +33.0 from this shot's tree, and
+        // the boxes landing on the gaps between cards
+        // (`i006-diag/rooms.md`, red 1). Frames from one layout, pixels from
+        // another. With `.contrast` run alone nothing re-lays the page out,
+        // so its frames and its pixels are the ones this shot holds; the
+        // Dynamic Type floor of 12 is counted by the second call, unchanged.
+        // ``roomsContrastWithNoPixels(_:on:after:)`` is **not** widened for
+        // it: it rightly excused none of the eight, whose pixels were visible.
+        let rosterContrast = try auditIssues(app, "rooms-roster", types: .contrast)
+        let rosterOthers = try auditIssues(
+            app,
+            "rooms-roster",
+            types: XCUIAccessibilityAuditType.all.subtracting(.contrast)
+        )
+        let roster = rosterContrast + rosterOthers
         let rosterSplit = Self.floorAndRest(roster)
         // **The other end of D57's scroll.** This page is 50.3 points taller
         // than its viewport (content 683 in a 632.7-point band, train I005's
@@ -2410,7 +2559,11 @@ extension StubHouseUITests {
     ///    to an element before it taps it, so reaching `drop in from this
     ///    phone` scrolled that page 394.6 points; the two config words end
     ///    up at y 92.7 and 109, wholly inside the same 44-point bar
-    ///    (`att/…/rooms-27-dropin-ended-tree…:47-49`).
+    ///    (`att/…/rooms-27-dropin-ended-tree…:47-49`). (Train I006: the
+    ///    control is 14 points shorter, the scroll 380.6, and
+    ///    `registry default` came to rest *across* the bar's edge, which this
+    ///    classifier rightly keeps — so the case now moves the page off that
+    ///    edge and asserts nothing straddles it before its window shot.)
     ///  * The same case's health sentence at `y=840.3`, 70 points **past the
     ///    scroll view's foot at 770** and behind the phone bar.
     ///

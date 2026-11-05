@@ -1699,6 +1699,51 @@ extension StubHouseUITests {
             .max(by: { $0.height < $1.height }) ?? .zero
     }
 
+    /// The static-text leaves that are **on the window but wholly outside the
+    /// page's viewport** — under the phone bar, or under the navigation bar —
+    /// returned as text, like ``newsCutLeaves(in:)``.
+    ///
+    /// ### Why, from train I006
+    ///
+    /// The page pass came back with one anonymous `Contrast failed` and no cut
+    /// leaf to allow it, and it is the same finding R005 had **named**:
+    /// `news-topic-word-tech`, `label='tech'`, `frame=(158.3, 790.7, 30.3,
+    /// 18.0)`. That row lies wholly below the page scroll view's foot (the
+    /// viewport is 93.3–770.0) and under the phone bar (774 on), and I006's
+    /// screenshot puts all three of its leaves on the bar's fill between the
+    /// `music` and `videos` captions. The checker measured a text element whose
+    /// pixels are the bar. Named, ``newsOutsideTheViewport(_:_:)`` discounts
+    /// it; anonymous, nothing did — R003, I003, I005 and I006 returned it as
+    /// `element: nil` from the same tree, R005 named it, and R004 went green
+    /// only because a wider chip gave it a cut leaf to hide behind
+    /// (`i006-diag/chat-news-states.md`, entry 2). Every *visible* text run on
+    /// that screenshot measured 5.05:1 or better.
+    ///
+    /// **Still a count, not a licence.** Each hidden leaf allows one anonymous
+    /// `Contrast failed` on the pass it was measured on, beside the cut
+    /// leaves; one more than `cut + hidden` still fails, and a **named**
+    /// finding inside the viewport still fails wherever it is. A leaf off the
+    /// window altogether is not counted — the checker does not sample pixels
+    /// that are not on the screen — and neither is a leaf an edge runs
+    /// through, which ``newsCutLeaves(in:)`` already counts.
+    ///
+    /// `[]` when there is no viewport to measure against: an unmeasured
+    /// viewport must not excuse a finding.
+    @MainActor
+    static func newsHiddenLeaves(in tree: XCUIElementSnapshot) -> [String] {
+        let viewport = newsPageViewport(in: tree)
+        let window = tree.frame
+        guard viewport.height > 0, window.height > 0 else { return [] }
+        return newsDescendants(tree)
+            .filter { node in
+                let box = node.frame
+                guard node.elementType == .staticText, box.height > 0 else { return false }
+                let outside = box.maxY <= viewport.minY || box.minY >= viewport.maxY
+                return outside && window.contains(box)
+            }
+            .map { newsOneLine($0) }
+    }
+
     /// The whole tree at one instant, or `nil` with a line saying why.
     ///
     /// `nil` is the conservative answer in both places that read it: no
@@ -1833,14 +1878,20 @@ extension StubHouseUITests {
         let tree = newsTree(app)
         let viewport = tree.map { Self.newsPageViewport(in: $0) } ?? .zero
         let cut = cutAllowed ? (tree.map { Self.newsCutLeaves(in: $0) } ?? []) : []
+        // The leaves on the window that the viewport hides wholly (train
+        // I006's `tech` under the phone bar): ``newsHiddenLeaves(in:)``. From
+        // the same snapshot, so no extra tree read, and under the same gate —
+        // the dialog pass allows nothing anonymous.
+        let hidden = cutAllowed ? (tree.map { Self.newsHiddenLeaves(in: $0) } ?? []) : []
         // Printed every pass, allowed for or not: a case that goes red here
         // next train needs to know what the edges were cutting, and a pass
         // whose count has changed is the first thing to read.
         for leaf in cut { print("NEWS AUDIT [\(what)] CUT :: \(leaf)") }
+        for leaf in hidden { print("NEWS AUDIT [\(what)] HIDDEN :: \(leaf)") }
         let split = Self.floorAndRest(try auditIssues(app, name))
         var counts: [String: Int] = [:]
         var rest: [String] = []
-        var anonymousAllowed = cut.count
+        var anonymousAllowed = cut.count + hidden.count
         for found in split.rest {
             // In this order, and each one narrow: a line no classifier claims
             // lands in `rest` and fails the caller.
@@ -1851,10 +1902,10 @@ extension StubHouseUITests {
             } else if behindADialog, Self.newsHiddenPageText(found) {
                 counts["the hidden page's text", default: 0] += 1
             } else if Self.newsAnonymousContrast(found), anonymousAllowed > 0 {
-                // One per cut leaf and no more — the count is this pass's own
-                // measurement, printed above, not a tolerance.
+                // One per cut or hidden leaf and no more — the count is this
+                // pass's own measurement, printed above, not a tolerance.
                 anonymousAllowed -= 1
-                counts["leaves an edge cuts in half", default: 0] += 1
+                counts["leaves an edge cuts in half or the viewport hides", default: 0] += 1
             } else {
                 rest.append(found)
             }

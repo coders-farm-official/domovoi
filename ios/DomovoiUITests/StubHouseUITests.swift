@@ -775,9 +775,21 @@ final class StubHouseUITests: XCTestCase {
     /// become a method. ``floorAndRest(_:)`` now depends on the difference
     /// being real, which is why the element is in the returned string and not
     /// only in the log.
+    ///
+    /// `types` is `.all` by default, which is what every caller asked for
+    /// before it existed. It is there for a page whose layout the audit's own
+    /// Dynamic Type pass moves: train I006 ran Apple's contrast pass *after*
+    /// that pass on the Rooms roster, which came back 33 points lower, so the
+    /// contrast findings were sampled at frames from a different layout than
+    /// their pixels (`i006-diag/rooms.md`). Such a page audits `.contrast`
+    /// alone first and the rest after (`testRooms_Audit`).
     @MainActor
     @available(iOS 17.0, *)
-    func auditIssues(_ app: XCUIApplication, _ name: String) throws -> [String] {
+    func auditIssues(
+        _ app: XCUIApplication,
+        _ name: String,
+        types: XCUIAccessibilityAuditType = .all
+    ) throws -> [String] {
         let wasContinuing = continueAfterFailure
         continueAfterFailure = true
         defer { continueAfterFailure = wasContinuing }
@@ -803,7 +815,7 @@ final class StubHouseUITests: XCTestCase {
         var found: [String] = []
         for attempt in 1...3 {
             let waitedOut = waitForNoNotificationBanner("\(name)/attempt-\(attempt)")
-            found = try runOneAudit(app, name)
+            found = try runOneAudit(app, name, types: types)
             // **The bar the audit leaves behind, named where it is read.**
             // `performAccessibilityAudit` overrides the content-size trait,
             // the shell folds its header into the navigation bar, and in
@@ -929,9 +941,13 @@ final class StubHouseUITests: XCTestCase {
     /// One pass of Apple's audit, with every issue it has — not the first.
     @MainActor
     @available(iOS 17.0, *)
-    private func runOneAudit(_ app: XCUIApplication, _ name: String) throws -> [String] {
+    private func runOneAudit(
+        _ app: XCUIApplication,
+        _ name: String,
+        types: XCUIAccessibilityAuditType
+    ) throws -> [String] {
         var found: [String] = []
-        try app.performAccessibilityAudit { issue in
+        try app.performAccessibilityAudit(for: types) { issue in
             // **The element is part of the record, not just the log.** The
             // eight are told apart from a real Dynamic Type defect by having
             // no element (``knownPushedBarFloor``), and a classifier that
@@ -953,6 +969,71 @@ final class StubHouseUITests: XCTestCase {
             return true
         }
         return found
+    }
+
+    // MARK: - the page's visible band, measured before an audit
+
+    /// The page's visible band on screen, and the text leaves an edge of it
+    /// cuts in half.
+    ///
+    /// Apple's contrast pass samples a straddling leaf's whole frame against
+    /// whatever the edge clips it to — a bar's material, the phone bar's tabs
+    /// — and returns that finding **attributed in one train and `element: nil`
+    /// in the next**. Home's media-request row is the recorded instance:
+    /// named in I005's `shell-home-ax5-audited`, anonymous in I006's, the same
+    /// row straddling the phone bar in both, and its own text 18.82:1. So a
+    /// case that has to tell an anonymous finding apart counts the straddlers
+    /// first, and allows anonymous contrast up to that count and no further.
+    ///
+    /// It was the inline measurement of ``testTheStatesTheAuditHadNeverSeen()``
+    /// until the I006 fix lifted it here, so that the shell's AX5 audit
+    /// (``assertTheChromeAuditsAtAX5``) reads the same rule rather than a
+    /// second copy of it.
+    struct ViewportBand {
+        let top: CGFloat
+        let bottom: CGFloat
+        /// Each straddling static-text leaf, as `'label' frame`, for the log.
+        let straddlers: [String]
+    }
+
+    /// Does `edge` run through `box`? Half a point of slack each way, so a
+    /// leaf that merely *touches* an edge is not a straddler.
+    static func crosses(_ edge: CGFloat, _ box: CGRect) -> Bool {
+        box.minY < edge - 0.5 && box.maxY > edge + 0.5
+    }
+
+    /// Measure the band and its straddlers **before** an audit: a tree read
+    /// taken afterwards is a read of wherever `performAccessibilityAudit`
+    /// left the page. Nil when there is no scroll view on screen, and so no
+    /// band to measure.
+    @MainActor
+    func measureViewportBand(_ app: XCUIApplication) -> ViewportBand? {
+        let views = app.scrollViews.allElementsBoundByIndex.map(\.frame)
+            .filter { $0.height > 0 }
+        guard let page = views.max(by: { $0.height < $1.height }) else { return nil }
+        // The **page's** scroll view is the tallest one on screen: the phone
+        // bar's lies on its side underneath it and a strip inside a page is
+        // shorter still. `bottom` is then the page's own foot or the top of
+        // whatever scroll view sits below it, whichever is higher — in the
+        // I002 trees the phone bar begins at 706 where the page ends at 702,
+        // and a row in that four-point gap is drawn by neither.
+        let below = views.filter { $0.minY >= page.maxY - 1 }.map(\.minY).min()
+        var top = page.minY
+        // And the navigation bar's foot where there is one: at accessibility
+        // sizes the shell's header is a large navigation title (answer 29),
+        // so the edge a row straddles at the top of a page can be the bar's
+        // bottom rather than the scroll view's minY.
+        let bar = app.navigationBars.firstMatch
+        if bar.exists, bar.frame.maxY > top { top = bar.frame.maxY }
+        let bottom = min(page.maxY, below ?? page.maxY)
+        var cut: [String] = []
+        for leaf in app.descendants(matching: .staticText).allElementsBoundByIndex {
+            let box = leaf.frame
+            if Self.crosses(top, box) || Self.crosses(bottom, box) {
+                cut.append("'\(leaf.label)' \(box)")
+            }
+        }
+        return ViewportBand(top: top, bottom: bottom, straddlers: cut)
     }
 
     // MARK: - the screen is not this app's alone
@@ -1036,7 +1117,10 @@ final class StubHouseUITests: XCTestCase {
     /// question with a catchable `throws`, so a banner that goes between two
     /// reads reads as *no banner*, which is what it is. **Never read a property
     /// off the element this returns** — it is for sending a gesture to, and
-    /// every geometry read goes through ``bannerFrame(of:)``.
+    /// every geometry read goes through ``bannerFrame(of:)``. (Since train
+    /// I006 nothing sends it one: the banner wait's swipe was itself a
+    /// failure no `try?` can catch, and was removed — see
+    /// ``waitForNoNotificationBanner(_:appearIn:clearIn:)``.)
     @MainActor
     func notificationBanner() -> XCUIElement? {
         let banner = notificationBannerQuery()
@@ -1094,9 +1178,26 @@ final class StubHouseUITests: XCTestCase {
     /// Two seconds, measured off I001's logs — the catch-up read answers
     /// within one.
     ///
-    /// A banner dismisses itself in about five seconds. The swipe is the
-    /// fallback for one that outstays that, and it is sent to the banner's own
-    /// element so the gesture cannot land on the app underneath.
+    /// A banner dismisses itself: every train's `BANNER` lines put that at
+    /// **7.4-8.5 s** from first sight (I003/I004 rooms-down 8.2 s, I005/I006
+    /// token-waiting 8.2 s, R004/R005 7.7-7.8 s). `clearIn`, 20 s, is more than
+    /// twice the longest of those, and **this wait makes no gesture.** It used
+    /// to swipe a banner that was still up after 8 s, and train I006 measured
+    /// what that cost: the swipe at 87.11 s was aimed at a banner that had
+    /// begun its own dismissal ~40 ms after the last frame check, SpringBoard
+    /// had it at `(8, -118, 377, 78.7)` by 87.20 s, and XCTest recorded
+    /// `Unable to perform Swipe up … visible frame is empty` against
+    /// `testTheStatesTheAuditHadNeverSeen` — a failure no `try?` can catch,
+    /// because every element gesture is check-then-act and an unresolvable
+    /// target is reported as a failure of the line that sent it. The swipe
+    /// fired at 8.2-8.5 s in every train that logged one, inside the natural
+    /// lifetime, and the "gone" ~1.2 s after it was the banner's own exit
+    /// (`i006-diag/chat-news-states.md`, entry 3). So the loop only reads
+    /// (`exists` and `try? snapshot()`, neither of which can fail a case)
+    /// and waits out `clearIn`; a banner that is still there at the end is
+    /// printed `STILL THERE` and its frame returned for the caller to
+    /// attribute.
+    ///
     /// It returns the **frame** of the banner it waited out, or `nil` if there
     /// was none, because the frame is what lets a finding be attributed to it
     /// by measurement instead of by argument. Train R001 printed one:
@@ -1121,36 +1222,11 @@ final class StubHouseUITests: XCTestCase {
         }
         guard let first = seen else { return nil }
         print("BANNER [\(name)] a notification banner is over the app at \(first) — waiting")
-        let swipeAfter = Date().addingTimeInterval(8)
         let clearBy = Date().addingTimeInterval(clearIn)
-        var swiped = false
         while Date() < clearBy {
-            guard let here = notificationBannerFrame() else {
+            guard notificationBannerFrame() != nil else {
                 print("BANNER [\(name)] gone")
                 return first
-            }
-            if !swiped, Date() > swipeAfter, here.height > 10 {
-                // **Two frames, 150 ms apart, before any gesture.** The swipe
-                // is the one read here that can still fail a case: a gesture
-                // sent to an element that has just gone is reported the same
-                // way the frame reads were (``notificationBanner()``), and
-                // there is no catchable form of it. A banner that is *leaving*
-                // moves while it goes — I005 logged one at y = -118 — so a
-                // frame that is identical across 150 ms is a banner that is
-                // staying put, and is the only one this swipes at. The one
-                // swipe in two trains (I004,
-                // `testTheStatesTheAuditHadNeverSeen.log:1522`, a banner up
-                // for 8 s at `(8.0, 56.0, 377.0, 66.0)`) is of that kind, and
-                // it cleared it. One whose frame keeps changing is left to the
-                // loop, which gives up at `clearIn` and says so in the log —
-                // a wait that ends honestly, rather than a gesture aimed at
-                // something that is moving.
-                usleep(150_000)
-                guard let still = notificationBannerFrame(), still == here else { continue }
-                guard let banner = notificationBanner() else { continue }
-                print("BANNER [\(name)] it outstayed its welcome — swiping it away")
-                banner.swipeUp()
-                swiped = true
             }
             usleep(300_000)
         }
@@ -2197,15 +2273,10 @@ final class StubHouseUITests: XCTestCase {
         var floors: [String: Int] = [:]
         /// The visible band of each state's page, and how many of its text
         /// leaves an edge of that band cuts in half. See the classification at
-        /// the foot of this case.
+        /// the foot of this case; the measurement is ``measureViewportBand(_:)``,
+        /// shared with the shell's AX5 audit since the I006 fix.
         var bands: [String: (top: CGFloat, bottom: CGFloat)] = [:]
         var straddlers: [String: Int] = [:]
-
-        /// Does `edge` run through `box`? Half a point of slack each way, so a
-        /// leaf that merely *touches* an edge is not a straddler.
-        func crosses(_ edge: CGFloat, _ box: CGRect) -> Bool {
-            box.minY < edge - 0.5 && box.maxY > edge + 0.5
-        }
 
         /// Audit whatever is on screen, under a name, having first waited for
         /// the one element that says this state is really the one on screen.
@@ -2227,35 +2298,12 @@ final class StubHouseUITests: XCTestCase {
             // straddler count are what the classification at the foot of this
             // case rests on, and a tree read taken afterwards would be a read
             // of wherever `performAccessibilityAudit` left the page.
-            let views = app.scrollViews.allElementsBoundByIndex.map(\.frame)
-                .filter { $0.height > 0 }
-            if let page = views.max(by: { $0.height < $1.height }) {
-                // The **page's** scroll view is the tallest one on screen: the
-                // phone bar's lies on its side underneath it and a strip
-                // inside a page is shorter still. `bottom` is then the page's
-                // own foot or the top of whatever scroll view sits below it,
-                // whichever is higher — in the I002 trees the phone bar begins
-                // at 706 where the page ends at 702, and a row in that
-                // four-point gap is drawn by neither.
-                let below = views.filter { $0.minY >= page.maxY - 1 }.map(\.minY).min()
-                var top = page.minY
-                // And the navigation bar's foot where there is one, because
-                // `wf/ios-b-shell` replaces ``ShellTopBar`` with a large
-                // navigation title at accessibility sizes (answer 29): once
-                // that merges, the edge a row straddles at the top of a page
-                // can be the bar's bottom rather than the scroll view's minY.
-                let bar = app.navigationBars.firstMatch
-                if bar.exists, bar.frame.maxY > top { top = bar.frame.maxY }
-                let bottom = min(page.maxY, below ?? page.maxY)
-                bands[name] = (top: top, bottom: bottom)
-                let texts = app.descendants(matching: .staticText)
-                    .allElementsBoundByIndex.map(\.frame)
-                straddlers[name] = texts.filter {
-                    crosses(top, $0) || crosses(bottom, $0)
-                }.count
+            if let band = measureViewportBand(app) {
+                bands[name] = (top: band.top, bottom: band.bottom)
+                straddlers[name] = band.straddlers.count
                 print(
-                    "SWEEP [\(name)] band top=\(top) bottom=\(bottom) "
-                        + "straddling text leaves=\(straddlers[name] ?? 0)"
+                    "SWEEP [\(name)] band top=\(band.top) bottom=\(band.bottom) "
+                        + "straddling text leaves=\(band.straddlers.count) \(band.straddlers)"
                 )
             } else {
                 print("SWEEP [\(name)] no scroll view — no viewport band to measure")
@@ -2491,7 +2539,7 @@ final class StubHouseUITests: XCTestCase {
             var dropped = 0
             for line in attributed {
                 guard let box = Self.frame(in: line), let band,
-                      crosses(band.top, box) || crosses(band.bottom, box) else {
+                      Self.crosses(band.top, box) || Self.crosses(band.bottom, box) else {
                     rest.append("\(name): \(line)")
                     continue
                 }

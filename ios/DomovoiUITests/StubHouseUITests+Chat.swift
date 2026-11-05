@@ -290,9 +290,14 @@ extension StubHouseUITests {
     /// Android draws the same button `enabled = canSend` with a faint tint
     /// (`ChatScreen.kt:1166-1171`). So the thing to assert is no longer an
     /// absence: the button is there, in the same place, and it is **not
-    /// enabled** — VoiceOver reads it and says *dimmed*, and it is not
-    /// hittable. ``ChatModel/send(_:)`` still queues nothing, so a tap would
-    /// be refused; that is why it is disabled rather than live.
+    /// enabled** — VoiceOver reads it and says *dimmed* — and **a tap on it
+    /// does nothing**: the case taps it mid-stream and, once the reply has
+    /// landed, finds no `and one more` bubble in the transcript and the words
+    /// still in the box. (This said "it is not hittable" until train I006:
+    /// `isHittable` is geometry only and is true of any drawn, uncovered
+    /// control, enabled or not, so that assertion could never pass on the
+    /// look answer 70 asked for.) ``ChatModel/send(_:)`` still queues nothing,
+    /// so a tap would be refused; that is why it is disabled rather than live.
     ///
     /// The field stays live while a reply streams, so a follow-up can be
     /// typed, and the words stay in the box.
@@ -423,10 +428,17 @@ extension StubHouseUITests {
             "the send is live while a reply is being written: ChatModel.send refuses it and "
                 + "queues nothing, so a tappable button there cannot do what it says"
         )
-        XCTAssertFalse(
-            send?.isHittable ?? true,
-            "the greyed-out send is still hittable, so a tap reaches a control that is refused"
-        )
+        // **Not `isHittable`, which this read until train I006.** It asserted
+        // `send?.isHittable == false`, and `XCUIElement.isHittable` is
+        // geometry only — the element exists, its hit point is on screen and
+        // nothing covers it. It never reads enabledness, so a greyed send that
+        // is drawn (answer 70 asks for it drawn) is hittable, and I006's tree
+        // showed exactly that: `Button … label: 'send', Disabled`, above the
+        // keyboard, with nothing over it. What a greyed send owes the person
+        // is that **a tap does nothing**, so that is what is read: the tap
+        // below, after the pixel readings so it cannot be mid-press in them,
+        // and the transcript and the composer once the reply has landed.
+        // The case's own `isEnabled` read above is what says it is greyed.
         // **The greyed send's label on its own surface** (mx-ink). Read
         // before the reply can land — the `finished` check below brackets it
         // with the rest of the composer reads. The box is the middle of the
@@ -500,6 +512,11 @@ extension StubHouseUITests {
                 )
             }
         }
+        // XCUITest delivers a tap to a disabled control (it checks geometry,
+        // not enabledness), and SwiftUI drops the action of a disabled
+        // button — so this is the person's tap, and its effect is read once
+        // the reply has landed, below.
+        send?.tap()
         XCTAssertFalse(
             chatComposerSends(app),
             "chatComposerSends read the dimmed send as a usable one, so every other case in "
@@ -528,6 +545,24 @@ extension StubHouseUITests {
             usleep(250_000)
         }
         evidence(app, "chat-send-back-after-reply")
+        // **The tap on the greyed send did nothing.** Read here, after the
+        // reply landed and the send's wait above, so a follow-up the app had
+        // queued or sent late has had every chance to show. A taken send puts
+        // the person's words in the transcript as a bubble whose label begins
+        // with them (``say(_:_:)`` reads exactly that as "the send was
+        // taken"), and clears the box; the composer's own label is its hint,
+        // so this query cannot find the box itself.
+        XCTAssertFalse(
+            startingWith(app, "and one more").exists,
+            "tapping the greyed send while the reply was being written sent the follow-up "
+                + "anyway: `and one more` is in the transcript (tree attached)"
+        )
+        XCTAssertEqual(
+            composerField(app).value as? String,
+            "and one more",
+            "the tap on the greyed send emptied the box: the words a greyed send keeps for "
+                + "later are gone (tree attached)"
+        )
         XCTAssertTrue(
             back,
             "the send never came back after the reply landed: a typed message with nothing on "
