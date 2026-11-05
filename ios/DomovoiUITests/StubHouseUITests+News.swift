@@ -1699,9 +1699,9 @@ extension StubHouseUITests {
             .max(by: { $0.height < $1.height }) ?? .zero
     }
 
-    /// The static-text leaves that are **on the window but wholly outside the
-    /// page's viewport** — under the phone bar, or under the navigation bar —
-    /// returned as text, like ``newsCutLeaves(in:)``.
+    /// The **rows** of the page that are on the window but wholly outside the
+    /// page's viewport — under the phone bar, or under the navigation bar —
+    /// one line per row, returned as text like ``newsCutLeaves(in:)``.
     ///
     /// ### Why, from train I006
     ///
@@ -1719,7 +1719,23 @@ extension StubHouseUITests {
     /// (`i006-diag/chat-news-states.md`, entry 2). Every *visible* text run on
     /// that screenshot measured 5.05:1 or better.
     ///
-    /// **Still a count, not a licence.** Each hidden leaf allows one anonymous
+    /// ### The page's own subtree, and one per row
+    ///
+    /// **Only the page scroll view's descendants.** The first version of this
+    /// walked the whole app tree and, on I006's page-pass tree, returned 11:
+    /// the four shell-header leaves (`domovoi / news`, `127.0.0.1:6601`,
+    /// `unverified`, `live`) and the four tab captions are outside the page's
+    /// viewport too, because they are not the page at all — they are chrome
+    /// drawn where it belongs — and counting them handed every cut-allowed
+    /// pass eight allowances for nothing (verifier, revision 1).
+    ///
+    /// **One per row, not one per leaf.** The topic row is three leaves
+    /// (`news-topic-kind-tech`, `-word-`, `-count-`, at y = 789.3 / 790.7 /
+    /// 792.5), and every train that saw it returned **one** finding. Leaves
+    /// whose vertical extents overlap are one row here, so I006's page pass
+    /// allows exactly the one finding every train has returned.
+    ///
+    /// **Still a count, not a licence.** Each hidden row allows one anonymous
     /// `Contrast failed` on the pass it was measured on, beside the cut
     /// leaves; one more than `cut + hidden` still fails, and a **named**
     /// finding inside the viewport still fails wherever it is. A leaf off the
@@ -1727,21 +1743,47 @@ extension StubHouseUITests {
     /// that are not on the screen — and neither is a leaf an edge runs
     /// through, which ``newsCutLeaves(in:)`` already counts.
     ///
-    /// `[]` when there is no viewport to measure against: an unmeasured
-    /// viewport must not excuse a finding.
+    /// `[]` when there is no page scroll view to measure against: an
+    /// unmeasured viewport must not excuse a finding.
     @MainActor
-    static func newsHiddenLeaves(in tree: XCUIElementSnapshot) -> [String] {
-        let viewport = newsPageViewport(in: tree)
+    static func newsHiddenRows(in tree: XCUIElementSnapshot) -> [String] {
         let window = tree.frame
-        guard viewport.height > 0, window.height > 0 else { return [] }
-        return newsDescendants(tree)
+        // The page's own scroll view — the tallest, as ``newsPageViewport(in:)``
+        // picks it — as a node, so its subtree and not the app's is walked.
+        guard
+            let page = newsDescendants(tree)
+                .filter({ $0.elementType == .scrollView && $0.frame.height > 0 })
+                .max(by: { $0.frame.height < $1.frame.height }),
+            window.height > 0
+        else { return [] }
+        let viewport = page.frame
+        let hidden = newsDescendants(page)
             .filter { node in
                 let box = node.frame
                 guard node.elementType == .staticText, box.height > 0 else { return false }
                 let outside = box.maxY <= viewport.minY || box.minY >= viewport.maxY
                 return outside && window.contains(box)
             }
-            .map { newsOneLine($0) }
+            .sorted { $0.frame.minY < $1.frame.minY }
+        // Group by vertical overlap: a leaf that starts above the current
+        // row's foot is in that row.
+        var rows: [String] = []
+        var current: (top: CGFloat, foot: CGFloat, lines: [String])?
+        for node in hidden {
+            let box = node.frame
+            if let row = current, box.minY < row.foot {
+                current = (row.top, max(row.foot, box.maxY), row.lines + [newsOneLine(node)])
+            } else {
+                if let row = current {
+                    rows.append("row \(row.top)–\(row.foot): " + row.lines.joined(separator: " | "))
+                }
+                current = (box.minY, box.maxY, [newsOneLine(node)])
+            }
+        }
+        if let row = current {
+            rows.append("row \(row.top)–\(row.foot): " + row.lines.joined(separator: " | "))
+        }
+        return rows
     }
 
     /// The whole tree at one instant, or `nil` with a line saying why.
@@ -1878,16 +1920,17 @@ extension StubHouseUITests {
         let tree = newsTree(app)
         let viewport = tree.map { Self.newsPageViewport(in: $0) } ?? .zero
         let cut = cutAllowed ? (tree.map { Self.newsCutLeaves(in: $0) } ?? []) : []
-        // The leaves on the window that the viewport hides wholly (train
-        // I006's `tech` under the phone bar): ``newsHiddenLeaves(in:)``. From
-        // the same snapshot, so no extra tree read, and under the same gate —
-        // the dialog pass allows nothing anonymous.
-        let hidden = cutAllowed ? (tree.map { Self.newsHiddenLeaves(in: $0) } ?? []) : []
+        // The page rows on the window that the viewport hides wholly (train
+        // I006's topic row under the phone bar): ``newsHiddenRows(in:)``, one
+        // per row and from the page's own subtree. From the same snapshot, so
+        // no extra tree read, and under the same gate — the dialog pass allows
+        // nothing anonymous.
+        let hidden = cutAllowed ? (tree.map { Self.newsHiddenRows(in: $0) } ?? []) : []
         // Printed every pass, allowed for or not: a case that goes red here
         // next train needs to know what the edges were cutting, and a pass
         // whose count has changed is the first thing to read.
         for leaf in cut { print("NEWS AUDIT [\(what)] CUT :: \(leaf)") }
-        for leaf in hidden { print("NEWS AUDIT [\(what)] HIDDEN :: \(leaf)") }
+        for row in hidden { print("NEWS AUDIT [\(what)] HIDDEN :: \(row)") }
         let split = Self.floorAndRest(try auditIssues(app, name))
         var counts: [String: Int] = [:]
         var rest: [String] = []
@@ -1902,10 +1945,10 @@ extension StubHouseUITests {
             } else if behindADialog, Self.newsHiddenPageText(found) {
                 counts["the hidden page's text", default: 0] += 1
             } else if Self.newsAnonymousContrast(found), anonymousAllowed > 0 {
-                // One per cut or hidden leaf and no more — the count is this
-                // pass's own measurement, printed above, not a tolerance.
+                // One per cut leaf or hidden row and no more — the count is
+                // this pass's own measurement, printed above, not a tolerance.
                 anonymousAllowed -= 1
-                counts["leaves an edge cuts in half or the viewport hides", default: 0] += 1
+                counts["leaves an edge cuts in half or rows the viewport hides", default: 0] += 1
             } else {
                 rest.append(found)
             }

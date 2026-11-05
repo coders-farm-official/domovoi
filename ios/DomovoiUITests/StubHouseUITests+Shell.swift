@@ -1019,20 +1019,38 @@ extension StubHouseUITests {
         }
     }
 
-    /// The large title's and the toolbar pill's own pixels, read whenever
-    /// ``assertTheChromeAuditsAtAX5`` lets an anonymous contrast finding
-    /// through on the page's geometry — so that an absorbed finding cannot be
-    /// one against the chrome.
+    /// The large title's and the toolbar pill's **glyphs'** own pixels, read
+    /// whenever ``assertTheChromeAuditsAtAX5`` lets an anonymous contrast
+    /// finding through on the page's geometry — so that an absorbed finding
+    /// cannot be one against the chrome.
     ///
-    /// Each reading is ``inkContrast(_:in:)`` over the element's frame inset
-    /// by a point: the darkest pixel in the box against the lightest. Train
-    /// I006's pictures give the expected values — the pill `rgb(157, 83, 0)`
-    /// on `rgb(249, 249, 248)`, **5.43:1**, and the title black on the bar.
+    /// Each reading is ``inkContrast(_:in:)``: the darkest pixel in a box
+    /// against the lightest, which is the *best* contrast in that box. So the
+    /// boxes are kept to **one thing each**:
     ///
-    /// What it cannot see: darkest-against-lightest is the *best* contrast in
-    /// the box, so a pill whose word is readable and whose separate warning
-    /// glyph is not would still pass here. That glyph, named, is what the
-    /// chrome filter above fails on; this closes only the anonymous route.
+    /// * the title's frame, inset by a point;
+    /// * the pill's `server.rack` image, on its own;
+    /// * the pill's `exclamationmark.triangle.fill` warning glyph, on its own,
+    ///   whenever the pill says `unverified` — the glyph this reading exists
+    ///   for (`Color.warnInk` on the collapsed bar's translucent material,
+    ///   the surface class that measured it at 4.21:1 on the `.quaternary`
+    ///   capsule). It is required, not optional: an unverified pill with no
+    ///   warning image to find fails here and prints the tree.
+    ///
+    /// The first version read the whole pill as one box (revision 1's M3):
+    /// the pill is one button holding both images, so a faded warning glyph
+    /// passed on the server glyph's ink — on every Home AX5 run, because a
+    /// row always straddles there and so this always runs. Read separately,
+    /// each glyph has to carry its own contrast. Train I006's whole-pill
+    /// reading was `rgb(157, 83, 0)` on `rgb(249, 249, 248)`, **5.43:1**; the
+    /// per-glyph values are the next train's to report.
+    ///
+    /// What it still cannot see: darkest-against-lightest inside one glyph's
+    /// box is that glyph's best pixel against its paper, so a glyph drawn with
+    /// a readable core and faded edges passes. And the floor is the body-text
+    /// ``StubShell/contrastFloor`` (4.5), stricter than the 3:1 WCAG asks of
+    /// a non-text glyph, on purpose: `warnInk` is the token already measured
+    /// failing a surface like this one.
     @MainActor
     private func assertTheChromeInkClearsTheFloor(
         _ app: XCUIApplication,
@@ -1050,19 +1068,40 @@ extension StubHouseUITests {
                 "connect"
             )
         ).firstMatch
-        for (what, element) in [("the large title", title), ("the toolbar pill", pill)] {
+        guard pill.exists else {
+            evidence(app, "\(name)-chrome-not-found")
+            XCTFail(
+                "an anonymous contrast finding was let through on \(name) on the page's "
+                    + "geometry, and there is no toolbar pill in a navigation bar to read — "
+                    + "so the finding cannot be ruled off the chrome. Tree printed above."
+            )
+            return
+        }
+        var boxes: [(what: String, element: XCUIElement, inset: CGFloat)] = [
+            ("the large title", title, 1),
+            ("the toolbar pill's server glyph",
+             pill.images.matching(identifier: "server.rack").firstMatch, 0),
+        ]
+        if pill.label.contains("unverified") {
+            boxes.append((
+                "the toolbar pill's warning glyph",
+                pill.images.matching(identifier: "exclamationmark.triangle.fill").firstMatch,
+                0
+            ))
+        }
+        for (what, element, inset) in boxes {
             let box = element.exists ? element.frame : .zero
             guard box.width > 2, box.height > 2 else {
                 evidence(app, "\(name)-chrome-not-found")
                 XCTFail(
                     "an anonymous contrast finding was let through on \(name) on "
-                        + "the page's geometry, and \(what) is not in a navigation "
-                        + "bar to read (frame \(box)) — so the finding cannot be "
-                        + "ruled off the chrome. Tree printed above."
+                        + "the page's geometry, and \(what) is not there to read "
+                        + "(frame \(box), pill '\(pill.label)') — so the finding "
+                        + "cannot be ruled off the chrome. Tree printed above."
                 )
                 continue
             }
-            guard let reading = inkContrast(app, in: box.insetBy(dx: 1, dy: 1)) else {
+            guard let reading = inkContrast(app, in: box.insetBy(dx: inset, dy: inset)) else {
                 evidence(app, "\(name)-chrome-unread")
                 XCTFail(
                     "an anonymous contrast finding was let through on \(name), "
@@ -1071,7 +1110,7 @@ extension StubHouseUITests {
                 continue
             }
             print(
-                "SHELL [\(name)] \(what) ink \(reading.ink) on \(reading.paper) — "
+                "SHELL [\(name)] \(what) ink \(reading.ink) on \(reading.paper) in \(box) — "
                     + String(format: "%.2f", reading.ratio) + ":1"
             )
             XCTAssertGreaterThanOrEqual(

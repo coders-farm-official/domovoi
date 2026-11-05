@@ -7,7 +7,7 @@ import XCTest
 /// `testVoiceSettings_Audit` and `testTheStatesTheAuditHadNeverSeen` — inside
 /// `StubHouseUITests`' banner wait, because `XCUIElement.frame` on a banner
 /// that had just dismissed itself is reported as a failure of the line that
-/// read it. ``StubHouseUITests/notificationBanner()`` carries the two logs'
+/// read it. ``StubHouseUITests/notificationBannerQuery()`` carries the two logs'
 /// timings; this file is the measurement that keeps the fix.
 ///
 /// Train I006 lost `testTheStatesTheAuditHadNeverSeen` there a second way:

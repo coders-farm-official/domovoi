@@ -557,11 +557,14 @@ extension StubHouseUITests {
             "tapping the greyed send while the reply was being written sent the follow-up "
                 + "anyway: `and one more` is in the transcript (tree attached)"
         )
-        XCTAssertEqual(
-            composerField(app).value as? String,
-            "and one more",
+        // `contains`, as the ChatMore cases read the box: a vertical field's
+        // value can carry more than the typed words (a trailing newline,
+        // say), and the claim is that the words are still there.
+        let kept = (composerField(app).value as? String) ?? ""
+        XCTAssertTrue(
+            kept.contains("and one more"),
             "the tap on the greyed send emptied the box: the words a greyed send keeps for "
-                + "later are gone (tree attached)"
+                + "later are gone — the composer holds '\(kept)' (tree attached)"
         )
         XCTAssertTrue(
             back,

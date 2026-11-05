@@ -781,8 +781,9 @@ final class StubHouseUITests: XCTestCase {
     /// Dynamic Type pass moves: train I006 ran Apple's contrast pass *after*
     /// that pass on the Rooms roster, which came back 33 points lower, so the
     /// contrast findings were sampled at frames from a different layout than
-    /// their pixels (`i006-diag/rooms.md`). Such a page audits `.contrast`
-    /// alone first and the rest after (`testRooms_Audit`).
+    /// their pixels (`i006-diag/rooms.md`) — and element detection with
+    /// them. Such a page audits everything but `.dynamicType` first and
+    /// `.dynamicType` alone after (`testRooms_Audit`).
     @MainActor
     @available(iOS 17.0, *)
     func auditIssues(
@@ -862,7 +863,7 @@ final class StubHouseUITests: XCTestCase {
             }
             // ``notificationBannerFrame()`` and not `notificationBanner()?.frame`:
             // a banner leaving as the audit ends used to fail the case here
-            // instead of reading as no banner (``notificationBanner()``).
+            // instead of reading as no banner (``notificationBannerQuery()``).
             guard let over = notificationBannerFrame() else {
                 // **Say what the retake was worth.** A clean audit taken after
                 // a banner was waited out is the measurement that attributes
@@ -1116,17 +1117,16 @@ final class StubHouseUITests: XCTestCase {
     /// ``bannerFrame(of:)`` is the whole fix: `snapshot()` asks the same
     /// question with a catchable `throws`, so a banner that goes between two
     /// reads reads as *no banner*, which is what it is. **Never read a property
-    /// off the element this returns** — it is for sending a gesture to, and
-    /// every geometry read goes through ``bannerFrame(of:)``. (Since train
-    /// I006 nothing sends it one: the banner wait's swipe was itself a
-    /// failure no `try?` can catch, and was removed — see
-    /// ``waitForNoNotificationBanner(_:appearIn:clearIn:)``.)
-    @MainActor
-    func notificationBanner() -> XCUIElement? {
-        let banner = notificationBannerQuery()
-        return banner.exists ? banner : nil
-    }
-
+    /// off the element this returns** — every geometry read goes through
+    /// ``bannerFrame(of:)``, and existence through `exists`.
+    ///
+    /// (This history used to sit on `notificationBanner()`, which handed out
+    /// the element for sending a gesture to. Since train I006 nothing sends
+    /// one — the banner wait's swipe was itself a failure no `try?` can
+    /// catch, and was removed, see
+    /// ``waitForNoNotificationBanner(_:appearIn:clearIn:)`` — so that function
+    /// had no caller and was deleted. This query is the one entry point.)
+    ///
     /// The query every banner read starts from. Building it resolves nothing,
     /// so this call cannot fail; resolving it is the part that can.
     @MainActor
@@ -1144,7 +1144,7 @@ final class StubHouseUITests: XCTestCase {
     /// `XCUIElement.snapshot()` throws a Swift error the caller may catch;
     /// `XCUIElement.frame` cannot throw, so XCTest reports the same condition
     /// as a failure of whichever line read it. See
-    /// ``notificationBanner()`` for the two cases that measurement cost.
+    /// ``notificationBannerQuery()`` for the two cases that measurement cost.
     @MainActor
     func bannerFrame(of element: XCUIElement) -> CGRect? {
         (try? element.snapshot())?.frame
@@ -2680,7 +2680,7 @@ final class StubHouseUITests: XCTestCase {
                 // from: it carries no element, so it cannot be attributed to
                 // the destination, and the one this case met in train I001
                 // was a notification banner over the whole app rather than
-                // anything either screen drew (``notificationBanner()``).
+                // anything either screen drew (``notificationBannerQuery()``).
                 let ours = split.rest.filter { !Self.isInside(content, $0) }
                 for line in split.rest where Self.isInside(content, line) {
                     print("AX5STRIP [\(variant)] the destination's own, not a bar's: \(line)")

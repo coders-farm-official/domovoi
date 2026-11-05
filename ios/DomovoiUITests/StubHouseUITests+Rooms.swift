@@ -1659,7 +1659,11 @@ extension StubHouseUITests {
                             && Self.crosses(edge, one.frame)
                     }
                 }
-                XCTAssertGreaterThan(edge, 0, "no navigation bar over the room's page, so no edge to clear")
+                if edge <= 0 { evidence(app, "rooms-27-dropin-no-navigation-bar") }
+                XCTAssertGreaterThan(
+                    edge, 0,
+                    "no navigation bar over the room's page, so no edge to clear (tree printed above)"
+                )
                 for _ in 0..<3 {
                     let across = acrossTheBar()
                     guard let overlap = across.map({ $0.frame.maxY - edge }).max() else { break }
@@ -2306,30 +2310,40 @@ extension StubHouseUITests {
         }
         evidence(app, "rooms-31-audit-roster")
         let rosterShot = roomsWindowShot(app)
-        // **Contrast first, on its own, then everything else** (train I006).
-        // This page sits at its maximum scroll offset (D57, above), and the
-        // audit's own Dynamic Type pass shrinks the content, so the offset is
-        // clamped; when the size comes back the page rests **33 points
-        // lower**. I006 was the only train whose roster ran Apple's contrast
-        // pass *after* that pass (its log prints the 12 Dynamic Type findings
-        // first; I001-I005, S004-S010 and X005 all put contrast first), and
-        // it returned eight `Contrast failed` against elements whose pixels
-        // pass — `Harvest Moon` black on grey at 18.60:1, `Broadcast` the
-        // same — every finding frame exactly +33.0 from this shot's tree, and
-        // the boxes landing on the gaps between cards
-        // (`i006-diag/rooms.md`, red 1). Frames from one layout, pixels from
-        // another. With `.contrast` run alone nothing re-lays the page out,
-        // so its frames and its pixels are the ones this shot holds; the
-        // Dynamic Type floor of 12 is counted by the second call, unchanged.
+        // **Everything but Dynamic Type first, then Dynamic Type on its own**
+        // (train I006, revised). This page sits at its maximum scroll offset
+        // (D57, above), and the audit's own Dynamic Type pass shrinks the
+        // content, so the offset is clamped; when the size comes back the
+        // page rests **33 points lower**. I006 was the only train whose
+        // roster ran Apple's contrast pass *after* that pass (its log prints
+        // the 12 Dynamic Type findings first; I001-I005, S004-S010 and X005
+        // all put contrast first), and it returned **nine** findings at
+        // shifted frames: eight `Contrast failed` against elements whose
+        // pixels pass — `Harvest Moon` black on grey at 18.60:1, `Broadcast`
+        // the same — every finding frame exactly +33.0 from this shot's tree
+        // and the boxes landing on the gaps between cards, and one anonymous
+        // `Potentially inaccessible text` (case log :686), which is **element
+        // detection** sampling the same moved page (`i006-diag/rooms.md`,
+        // red 1). Frames from one layout, pixels from another.
+        //
+        // So it is the type-size pass that is isolated, not contrast: the
+        // first call runs every audit type that reads the page *as laid out*
+        // (contrast, element detection, hit region, clipping, traits…), with
+        // nothing in it that re-lays the page out, so its frames and pixels
+        // are the ones this shot holds; the second runs `.dynamicType` alone,
+        // last, where its re-layout can move nothing still to be measured.
+        // The floor of 12 is all `Dynamic Type …` with no element, so it is
+        // counted out of the second call and `floorAndRest` reads the
+        // concatenation by headline exactly as it read one pass.
         // ``roomsContrastWithNoPixels(_:on:after:)`` is **not** widened for
         // it: it rightly excused none of the eight, whose pixels were visible.
-        let rosterContrast = try auditIssues(app, "rooms-roster", types: .contrast)
-        let rosterOthers = try auditIssues(
+        let rosterLaidOut = try auditIssues(
             app,
             "rooms-roster",
-            types: XCUIAccessibilityAuditType.all.subtracting(.contrast)
+            types: XCUIAccessibilityAuditType.all.subtracting(.dynamicType)
         )
-        let roster = rosterContrast + rosterOthers
+        let rosterTypeSize = try auditIssues(app, "rooms-roster", types: .dynamicType)
+        let roster = rosterLaidOut + rosterTypeSize
         let rosterSplit = Self.floorAndRest(roster)
         // **The other end of D57's scroll.** This page is 50.3 points taller
         // than its viewport (content 683 in a 632.7-point band, train I005's
