@@ -334,9 +334,9 @@ async def test_play_cascade_falls_to_provider_then_generic(monkeypatch: pytest.M
 
 @pytest.mark.asyncio
 async def test_play_cascade_graceful_absence_when_no_provider(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The design §10.2 absence copy: local miss + no podcast + NO
-    streaming-search provider registered → "no streaming provider is
-    installed", not a crash and not a bare couldn't-find."""
+    """Local miss + no podcast + NO streaming-search provider registered →
+    a plain "couldn't find anything called …" (owner, 2026-11-05: the
+    reply never mentions providers or plugins), not a crash."""
     from domovoi.handlers.spoken_audio import SpokenAudioHandler
 
     _use_miss_mpd()
@@ -350,8 +350,8 @@ async def test_play_cascade_graceful_absence_when_no_provider(monkeypatch: pytes
     ctx = Context(session_id=None, room_id="kitchen", online=True)
     assert CAPABILITIES.absent(STREAMING_SEARCH_PROVIDER)
     resp = await handler._play({"any": "some unknown song"}, ctx, None)
-    assert "no streaming provider is installed" in resp.text.lower()
-    assert "some unknown song" in resp.text.lower()
+    assert resp.text == "I couldn't find anything called some unknown song."
+    assert "provider" not in resp.text.lower()
 
 
 @pytest.mark.asyncio
@@ -585,8 +585,8 @@ async def test_play_local_miss_falls_back_to_provider_when_online() -> None:
 
 @pytest.mark.asyncio
 async def test_play_local_miss_no_provider_call_when_offline() -> None:
-    """Offline + no local match (+ no podcast) → graceful generic
-    'couldn't find anything' message; the provider is never consulted."""
+    """Offline + no local match (+ no podcast) → it says it can't look the
+    song up while offline; the provider is never consulted."""
     from domovoi.clients import mpd as mpd_module
 
     mpd_module._clients = {"kitchen": _NoMatchMPDStub()}
@@ -597,7 +597,9 @@ async def test_play_local_miss_no_provider_call_when_offline() -> None:
     assert m
     with _registered(_ExplodingProvider()):
         response = await handler._play_artist_from_match(m, ctx, None)
-    assert "couldn't find anything called" in response.text.lower()
+    assert response.text == (
+        "I don't have creep by radiohead, and I can't look it up while Domovoi is offline."
+    )
 
 
 @pytest.mark.asyncio
@@ -1120,3 +1122,29 @@ async def test_smart_skip_in_playlist_loops_at_end(db_session) -> None:
     # Looped back to track 1 (position 0).
     assert new_entry["last_track_id"] == 2001
     assert new_entry["last_position"] == 0
+
+
+@pytest.mark.asyncio
+async def test_play_cascade_survives_a_provider_that_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A streaming provider that raises is logged and the request is
+    answered as not found. (The log line used to call the method's own
+    ``said`` parameter, a string, so the turn crashed instead.)"""
+    from domovoi.handlers.spoken_audio import SpokenAudioHandler
+
+    _use_miss_mpd()
+
+    async def no_pod(self, ctx, session, show):
+        return None
+
+    monkeypatch.setattr(SpokenAudioHandler, "try_play_latest", no_pod)
+
+    class _Raises(_FakeStreamingProvider):
+        async def stream(self, room_id, candidate=None, *, query=None):
+            raise RuntimeError("provider is down")
+
+    ctx = Context(session_id=None, room_id="kitchen", online=True)
+    with _registered(_Raises()):
+        resp = await MusicHandler()._play(
+            {"title": "vrtx", "artist": "quilted moth"}, ctx, None, said="vrtx by quilted moth",
+        )
+    assert resp.text == "I couldn't find anything called vrtx by quilted moth."

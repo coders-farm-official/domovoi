@@ -684,30 +684,37 @@ class MusicHandler(MusicRoomsMixin, MusicChoiceMixin, Handler):
                     return pod_response
 
             # External streaming fallback — the capability seam (design
-            # §10.2). Present ⇒ the provider resolves a fresh stream URL and
-            # starts playback itself; absent ⇒ the design's graceful-absence
-            # copy. Keeps the chain (play X streams externally; later
-            # "play X" hits the local file once the user said "add it").
-            if ctx.online and q_display:
-                provider = CAPABILITIES.resolve(STREAMING_SEARCH_PROVIDER)
-                if provider is None:
-                    return Response(
-                        text=(
-                            f"I couldn't find {q_display} in your library, "
-                            "and no streaming provider is installed."
-                        ),
-                        session_id=ctx.session_id,
-                        matched_handler=self.name,
-                    )
+            # §10.2). Present and online ⇒ the provider resolves a fresh
+            # stream URL and starts playback itself (owner, 2026-11-05: a
+            # song you don't have just streams; "add it to my library"
+            # afterwards downloads it). Absent, offline, or nothing found ⇒
+            # _not_in_library says so, offering the named artist when the
+            # library has them. Keeps the chain (play X streams externally;
+            # later "play X" hits the local file once the user said "add it").
+            provider = CAPABILITIES.resolve(STREAMING_SEARCH_PROVIDER) if q_display else None
+            if provider is None:
+                return await self._not_in_library(
+                    query, q_display, "no_provider", ctx, session,
+                    allow_choice=allow_choice, avoid=avoid,
+                )
+            if not ctx.online:
+                return await self._not_in_library(
+                    query, q_display, "offline", ctx, session,
+                    allow_choice=allow_choice, avoid=avoid,
+                )
+            if q_display:
                 stream_response: Response | None = None
                 try:
                     stream_response = await provider.stream(
                         ctx.room_id, query=q_display
                     )
                 except Exception as e:
+                    # ``said`` is this method's parameter here (it shadows
+                    # log_privacy.said, which this line used to call and
+                    # crash on), so the request is left out of the line.
                     log.warning(
-                        "streaming provider %r failed for %r: %s",
-                        getattr(provider, "slug", "?"), said(q_display), e,
+                        "streaming provider %r failed for a play request: %s",
+                        getattr(provider, "slug", "?"), e,
                     )
                 if stream_response is not None:
                     # Tag the matched_handler so logs make the path visible,
@@ -718,10 +725,9 @@ class MusicHandler(MusicRoomsMixin, MusicChoiceMixin, Handler):
                         ctx, session, provider, q_display, stream_response
                     )
                     return stream_response
-            return Response(
-                text=f"I couldn't find anything called {q_display}.",
-                session_id=ctx.session_id,
-                matched_handler=self.name,
+            return await self._not_in_library(
+                query, q_display, "not_found", ctx, session,
+                allow_choice=allow_choice, avoid=avoid,
             )
         if ctx.session_id:
             try:
@@ -994,6 +1000,75 @@ class MusicHandler(MusicRoomsMixin, MusicChoiceMixin, Handler):
             self.name, ctx, text_, [phone_play.track_item(r) for r in rows],
             data={"song": {"title": first.title, "artist": first.artist}, "resolved": resolved},
         )
+
+    async def _not_in_library(
+        self,
+        query: dict,
+        q_display: str,
+        why: str,
+        ctx: Context,
+        session: AsyncSession,
+        *,
+        allow_choice: bool,
+        avoid: tuple,
+    ) -> Response:
+        """The reply when nothing the room can play has that name (owner,
+        2026-11-05). ``why``: ``"no_provider"`` (nothing installed that can
+        look songs up), ``"offline"`` (it is installed, but the box is
+        offline) or ``"not_found"`` (it looked and found nothing). A request
+        that named a song AND an artist the library has offers that artist
+        as a yes/no — "I don't have DTMF. Want me to shuffle Bad Bunny
+        instead?" — parked as the did-you-mean question, so "yes" shuffles
+        the artist and "no" ends it. The reply never mentions plugins or
+        providers by name. Everything else: "I couldn't find anything
+        called X." (or, offline with a provider, that it can't look it up)."""
+        title = str(query.get("title") or "").strip()
+        artist = str(query.get("artist") or "").strip()
+        offer = None
+        if title and artist:
+            offer = await self._artist_to_offer(artist, session, avoid=avoid)
+        if offer is not None:
+            name = await self._choice_phrase(offer, session)
+            if why == "offline":
+                statement = f"I don't have {title}, and I can't look it up while Domovoi is offline."
+                question = f"Want {name} instead?"
+            elif why == "not_found":
+                statement = f"I couldn't find {title} anywhere."
+                question = f"Want me to shuffle {name} instead?"
+            else:
+                statement = f"I don't have {title}."
+                question = f"Want me to shuffle {name} instead?"
+            if allow_choice:
+                reply = await self.offer_instead(
+                    offer, f"{statement} {question}", heard=f"{title} by {artist}",
+                    query=query, ctx=ctx, session=session,
+                )
+                if reply is not None:
+                    return reply
+            # Nobody can answer a question here (the dashboard's play box,
+            # a chat-mode tool call), or the same offer was just turned down.
+            return self._reply(ctx, statement)
+        if why == "offline":
+            return self._reply(
+                ctx, f"I don't have {q_display}, and I can't look it up while Domovoi is offline."
+            )
+        return self._reply(ctx, f"I couldn't find anything called {q_display}.")
+
+    @staticmethod
+    async def _artist_to_offer(artist: str, session: AsyncSession, *, avoid: tuple) -> Any:
+        """The library artist (a ``library_match.Candidate``) a request's
+        artist words name — sure or did-you-mean close — or None."""
+        from domovoi.handlers.shared import library_match
+
+        res = await library_match.resolve_request(
+            session, {"artist": artist}, kinds=frozenset({"artist", "credit"}),
+        )
+        best = res.best
+        if res.decision not in ("play", "ask") or best is None:
+            return None
+        if best.ref.type not in ("artist", "credit") or best.ref in avoid:
+            return None
+        return best
 
     async def _play_search_on_phone(
         self,

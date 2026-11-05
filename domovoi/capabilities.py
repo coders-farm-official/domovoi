@@ -8,7 +8,8 @@ degrade gracefully when nothing is registered (design §4.10, §10.2).
 The two seams core consumes today:
 
 * ``streaming-search-provider`` — MusicHandler's local-miss cascade and
-  smart-skip. Absent ⇒ "no streaming provider is installed" voice copy.
+  smart-skip. Absent ⇒ "I don't have <song>" voice copy, offering the
+  artist when the library has them (never a mention of providers).
 * ``media-acquisition-fulfiller`` — informational presence check for the
   acquisition queue's voice copy (the queue itself always accepts rows;
   a fulfiller drains them — design §4.8 graceful absence).
@@ -37,6 +38,8 @@ NOW_PLAYING_MATCHER = "now-playing-matcher"
 ACQUISITION_ABSENCE_MESSAGE = (
     "I've noted that down, but no media provider is installed to fetch it."
 )
+# No longer spoken by core (2026-11-05: replies never mention providers);
+# kept for plugins that imported it.
 STREAMING_ABSENCE_SUFFIX = "and no streaming provider is installed."
 
 

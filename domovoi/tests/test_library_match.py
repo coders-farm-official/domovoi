@@ -16,6 +16,7 @@ plays came from the resolver's exact file paths, and a miss is a real miss.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import random
@@ -168,6 +169,34 @@ def test_by_inside_a_title_stays_a_title() -> None:
     res = _res({"title": m.group(1), "artist": m.group(2)})
     assert res.decision == "play"
     assert _top(res)[:2] == ("title", "Stand By Me")
+
+
+def test_a_song_the_library_lacks_is_not_a_near_miss_of_its_artist() -> None:
+    # "play vrtx by brass lantern": a short title the library doesn't have,
+    # by an artist it does. The whole phrase "vrtx brass lantern" used to
+    # land Brass Lantern itself in the ask band ("Did you mean Brass
+    # Lantern?"), and a "yes" shuffled the artist instead of the song.
+    for title, artist in (("vrtx", "brass lantern"), ("qix", "brass lantern"),
+                          ("dtmf", "juniper hollow"), ("zorp", "juniper hollow"),
+                          ("lantern", "brass lantern")):
+        res = _res({"title": title, "artist": artist})
+        assert res.decision != "play", (title, artist, res)
+        assert all(c.ref.type not in ("artist", "credit") for c in res.candidates), (
+            title, artist, res,
+        )
+    assert _res({"title": "vrtx", "artist": "brass lantern"}).decision == "none"
+    # A name with "by" inside it is still found whole: the title's words
+    # are part of it.
+    res = _res({"title": "stand", "artist": "me"})
+    assert _top(res)[:2] == ("title", "Stand By Me")
+
+
+def test_an_artist_alone_and_a_near_title_still_resolve() -> None:
+    res = _res({"artist": "brass lantern"})
+    assert res.decision == "play" and _top(res)[:2] == ("artist", "Brass Lantern")
+    res = _res({"title": "winter statik", "artist": "brass lantern"})
+    assert res.decision == "play" and _top(res)[:2] == ("title", "Winter Static")
+    assert res.best.via == "by_split"
 
 
 def test_a_title_said_without_its_by_reaches_the_title() -> None:
@@ -1065,3 +1094,159 @@ async def test_no_session_and_errors_answer_none(monkeypatch) -> None:
     monkeypatch.setattr(settings, "music_match_enabled", False)
     assert (await lm.resolve_request(_Broken(), {"any": "pink"})).reason == "disabled"
     lm.reset_for_tests()
+
+
+# ─── A song the library doesn't have (owner, 2026-11-05) ────────────────
+
+
+class _OneStreamProvider:
+    """A streaming-search provider that plays whatever it is asked for."""
+
+    slug = "extstream"
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    async def search(self, query, *, limit=5):
+        return []
+
+    async def stream(self, room_id, candidate=None, *, query=None):
+        from domovoi.models import Response
+
+        self.calls.append(query)
+        return Response(text=f"Streaming {query}.", music_action="start")
+
+    async def similar(self, seed, *, limit=5):
+        return []
+
+
+@contextlib.contextmanager
+def _provider(provider):
+    from domovoi.capabilities import CAPABILITIES, STREAMING_SEARCH_PROVIDER
+
+    CAPABILITIES.register(STREAMING_SEARCH_PROVIDER, provider, slug=provider.slug)
+    try:
+        yield provider
+    finally:
+        CAPABILITIES.unregister(STREAMING_SEARCH_PROVIDER, slug=provider.slug)
+
+
+@pytest.fixture
+def no_podcast(monkeypatch):
+    from domovoi.handlers.spoken_audio import SpokenAudioHandler
+    from domovoi.tests.music_choice_testkit import clear_choice_parked
+
+    async def _none(self, ctx, session, show):
+        return None
+
+    monkeypatch.setattr(SpokenAudioHandler, "try_play_latest", _none)
+    clear_choice_parked()
+    yield
+    clear_choice_parked()
+
+
+async def _parked(session, ctx) -> dict:
+    from domovoi.db.repositories import SessionRepository
+
+    state = await SessionRepository(session).get_context(ctx.session_id) or {}
+    return state.get("pending_confirmation") or {}
+
+
+class _MissThenFilesMPD(_NothingFoundMPD):
+    """Today's search misses; the resolver's exact paths are recorded."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.files_calls: list[list[str]] = []
+
+    async def prepare_files(self, uris, *, start_sec: float = 0.0):
+        self.files_calls.append(list(uris))
+        return await super().prepare_files(uris, start_sec=start_sec)
+
+
+@requires_db
+async def test_a_missing_song_streams_when_a_provider_is_installed(db_session, music_dir, no_podcast) -> None:
+    await _seed(db_session, music_dir)
+    mpd_module._clients = {"kitchen": _NothingFoundMPD()}
+    ctx = await _ctx(db_session, online=True)
+    with _provider(_OneStreamProvider()) as provider:
+        r = await _say(MusicHandler(), "play vrtx by brass lantern", ctx, db_session)
+    # Straight to the stream: no "did you mean Brass Lantern?" first.
+    assert provider.calls == ["vrtx by brass lantern"]
+    assert r.text == "Streaming vrtx by brass lantern."
+    assert r.matched_handler == "music" and not r.expect_followup
+
+
+@requires_db
+async def test_a_missing_song_with_no_provider_offers_its_artist(db_session, music_dir, no_podcast) -> None:
+    await _seed(db_session, music_dir)
+    mpd = _MissThenFilesMPD()
+    mpd_module._clients = {"kitchen": mpd}
+    handler = MusicHandler()
+    ctx = await _ctx(db_session, online=True)
+    r = await _say(handler, "play vrtx by brass lantern", ctx, db_session)
+    assert r.text == "I don't have vrtx. Want me to shuffle Brass Lantern instead?"
+    assert "provider" not in r.text.lower() and "plugin" not in r.text.lower()
+    assert r.expect_followup is True and r.music_action is None
+    parked = await _parked(db_session, ctx)
+    assert parked["kind"] == "core.music_choice"
+    assert [c["ref"]["label"] for c in parked["candidates"]] == ["Brass Lantern"]
+
+    # "yes" shuffles the artist: every Brass Lantern track, by exact path.
+    r = await handler.handle_choice_reply(parked["kind"], parked, "yes", ctx, db_session)
+    assert r.music_action == "start"
+    assert r.text.startswith("Playing Brass Lantern")
+    brass = {t["file_path"] for t in TRACKS if t["artist"] == "Brass Lantern"}
+    assert set(mpd.files_calls[-1]) == brass
+
+    # "no" ends it, and the same request doesn't ask again straight away.
+    await _say(handler, "play vrtx by brass lantern", ctx, db_session)
+    parked = await _parked(db_session, ctx)
+    r = await handler.handle_choice_reply(parked["kind"], parked, "no", ctx, db_session)
+    assert r.text == "OK." and r.music_action is None
+    r = await _say(handler, "play vrtx by brass lantern", ctx, db_session)
+    assert r.text == "I don't have vrtx." and not r.expect_followup
+
+
+@requires_db
+async def test_a_missing_song_while_offline_says_it_cant_look_it_up(db_session, music_dir, no_podcast) -> None:
+    await _seed(db_session, music_dir)
+    mpd_module._clients = {"kitchen": _NothingFoundMPD()}
+    handler = MusicHandler()
+    ctx = await _ctx(db_session, online=False)
+    with _provider(_OneStreamProvider()) as provider:
+        r = await _say(handler, "play vrtx by brass lantern", ctx, db_session)
+        assert r.text == (
+            "I don't have vrtx, and I can't look it up while Domovoi is offline. "
+            "Want Brass Lantern instead?"
+        )
+        assert r.expect_followup is True
+        # No artist the library knows: no offer.
+        r = await _say(handler, "play vrtx by quilted moth", ctx, db_session)
+        assert r.text == (
+            "I don't have vrtx by quilted moth, and I can't look it up while Domovoi is offline."
+        )
+    assert provider.calls == []
+
+
+@requires_db
+async def test_a_missing_song_by_an_unknown_artist_is_just_not_found(db_session, music_dir, no_podcast) -> None:
+    await _seed(db_session, music_dir)
+    mpd_module._clients = {"kitchen": _NothingFoundMPD()}
+    ctx = await _ctx(db_session, online=True)
+    r = await _say(MusicHandler(), "play vrtx by quilted moth", ctx, db_session)
+    assert r.text == "I couldn't find anything called vrtx by quilted moth."
+    assert not r.expect_followup
+
+
+@requires_db
+async def test_the_artist_offer_is_a_plain_answer_where_nobody_can_reply(
+    db_session, music_dir, no_podcast
+) -> None:
+    await _seed(db_session, music_dir)
+    mpd_module._clients = {"kitchen": _NothingFoundMPD()}
+    ctx = await _ctx(db_session, online=True)
+    ctx.answerable = False
+    r = await _say(MusicHandler(), "play vrtx by brass lantern", ctx, db_session)
+    assert r.text == "I don't have vrtx." and not r.expect_followup
+    assert await _parked(db_session, ctx) == {}

@@ -443,7 +443,8 @@ well-known capability slugs; core call sites `resolve()` at use time and
 state, never an error. The seams core consumes today:
 
 * `streaming-search-provider` — the music handler's local-miss cascade and
-  smart-skip; absent ⇒ "no streaming provider is installed" voice copy.
+  smart-skip; absent ⇒ "I don't have <song>" (offering the artist when the
+  library has them), never a mention of providers.
 * `media-acquisition-fulfiller` — presence check for the acquisition queue's
   voice copy (the queue itself always accepts rows).
 * `now-playing-matcher` — favorites attribution.

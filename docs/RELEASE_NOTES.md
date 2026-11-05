@@ -4,6 +4,38 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-11-05 — a song you don't have, by an artist you do
+
+"Play <song> by <artist>" for a song the library doesn't have, by an
+artist it does, used to ask "Did you mean <artist>?", and a "yes"
+shuffled the artist instead of the song. The artist is no longer offered
+as a near miss of the whole request, so:
+
+- with a streaming media provider installed and Domovoi online, the song
+  just streams ("add it to my library" afterwards still downloads it);
+- with none installed: "I don't have <song>. Want me to shuffle <artist>
+  instead?" ("yes" shuffles the artist, "no" ends it);
+- installed but offline: "I don't have <song>, and I can't look it up
+  while Domovoi is offline. Want <artist> instead?";
+- the provider looked and found nothing: "I couldn't find <song>
+  anywhere. Want me to shuffle <artist> instead?";
+- no artist the library knows: "I couldn't find anything called <song>
+  by <artist>." Spoken replies no longer say "no streaming provider is
+  installed".
+
+A song whose title is a near miss ("play winter statik by …") is still
+played or asked about as before.
+
+Adding an external result whose title is "Artist - Title" no longer
+counts a library song as a duplicate just because its title is one word
+of that string (a library song called "Kettle" refused "Tin Kettle -
+Moth" as "already in your library"). The title after the dash is compared
+with library titles, the artist before it gates same-title songs by
+another artist, and a library title found inside the incoming string
+counts only when the other words are its artist. True duplicates
+("Radiohead - Creep (Official Video)" against Creep by Radiohead) are
+still caught.
+
 ## 2026-11-04 — a welcome on a new Domovoi
 
 A Domovoi nobody has claimed now greets every page load of its dashboard

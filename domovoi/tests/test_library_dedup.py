@@ -261,6 +261,68 @@ async def test_empty_incoming_title_returns_none(db_session) -> None:
     assert match is None
 
 
+# ─── DB-backed: "Artist - Title" strings and title fragments ────────────
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_library_title_that_is_a_fragment_of_another_name_is_no_duplicate(
+    db_session,
+) -> None:
+    """Owner report 2026-11-05 (names made up here): a library song
+    called "Kettle" by Morrow Vale made "Tin Kettle - Moth (Video
+    Lyrics)" — another artist's song — read as "already in your
+    library", because the library title sits inside the incoming string.
+    The split title ("Moth") is what is compared, and a library title
+    inside the whole string counts only when the rest names its artist."""
+    await _seed_library_track(db_session, title="Kettle", artist="Morrow Vale")
+
+    for incoming in ("Tin Kettle - Moth (Video Lyrics)", "Tin Kettle - Moth", "Tin Kettle Moth"):
+        match = await find_fuzzy_library_match(db_session, title=incoming, artist=None)
+        assert match is None, incoming
+        match = await find_fuzzy_library_match(db_session, title=incoming, artist="Tin Kettle")
+        assert match is None, incoming
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_true_duplicates_are_still_caught(db_session) -> None:
+    await _seed_library_track(db_session, title="Creep", artist="Radiohead")
+
+    for incoming, artist in (
+        ("Radiohead - Creep (Official Video)", None),     # the external title, split
+        ("Radiohead - Creep", "Radiohead"),
+        ("Creep by Radiohead", None),                     # the rest is the artist
+        ("Radiohead Creep", None),
+        ("Creep", "Radiohead"),
+    ):
+        match = await find_fuzzy_library_match(db_session, title=incoming, artist=artist)
+        assert match == {"title": "Creep", "artist": "Radiohead"}, (incoming, artist)
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_the_split_artist_gates_a_same_title_song(db_session) -> None:
+    """ "TLC - Creep" is not Radiohead's "Creep": the artist split from the
+    title takes the place of the artist the caller didn't pass."""
+    await _seed_library_track(db_session, title="Creep", artist="Radiohead")
+
+    assert await find_fuzzy_library_match(db_session, title="TLC - Creep", artist=None) is None
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_library_row_titled_artist_dash_title_still_matches(db_session) -> None:
+    """Rows indexed from bare file names can carry "Artist - Title" as
+    their title, with no artist."""
+    await _seed_library_track(db_session, title="Morrow Vale - Tin Roof", artist=None)
+
+    match = await find_fuzzy_library_match(
+        db_session, title="Morrow Vale - Tin Roof (Official Audio)", artist=None,
+    )
+    assert match is not None and match["title"] == "Morrow Vale - Tin Roof"
+
+
 # ─── Constant smoke tests ───────────────────────────────────────────────
 
 
