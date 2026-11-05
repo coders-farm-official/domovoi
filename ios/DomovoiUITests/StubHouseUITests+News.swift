@@ -1054,6 +1054,10 @@ extension StubHouseUITests {
         //    its own right. `ios/Domovoi/Home/` is in no unit's `owns` list
         //    this batch, so it is routed in this unit's REPORT.md under
         //    `for_others` with the file and line numbers, not edited here.
+        //    (Since then: the attention rows were relabelled on the Button in
+        //    94283d81, and the I005 tree showed the room cards were one
+        //    element already — the doubled half was the attention rows. Both
+        //    are pinned by `testHome_EachRowIsOneElement`.)
         // Nothing here is changed for it, because there is nothing honest to
         // change yet: no assertion of this case has run when it dies. What
         // was added is a **measurement** — `watchingTheProcess: true` on the

@@ -245,14 +245,21 @@ struct ChatMoreDraftCanvasView: View {
                 // the newest chip is still reachable as "v3" -- a label that
                 // joined the two words would make one chip in every draft
                 // spell itself differently.
-                .accessibilityElement(children: .ignore)
+                //
+                // **On the `Button`, with no `accessibilityElement(children:)`
+                // and no `.isButton`.** `.ignore` on a `Button` does not
+                // relabel it: SwiftUI mints a second element around it and
+                // leaves the Button inside, so every chip was two stops — the
+                // shape train I004's tree showed for Home's attention rows
+                // (`Button` wrapping `Button` at one frame) and R001/R002's
+                // for the News chips. The `.isButton` was only there because
+                // the minted wrapper was not a button. `.isSelected` stays: it
+                // is how the chip on screen is said rather than drawn.
                 .accessibilityLabel(ChatMoreStrings.version(version.version))
                 .accessibilityValue(
                     version.version == model.latest?.version ? ChatMoreStrings.latest : ""
                 )
-                .accessibilityAddTraits(
-                    version.version == model.selected ? [.isButton, .isSelected] : [.isButton]
-                )
+                .accessibilityAddTraits(version.version == model.selected ? .isSelected : [])
             }
         }
     }

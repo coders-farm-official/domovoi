@@ -186,9 +186,15 @@ struct HomeTimersView: View {
                 .tint(Color.brand)
                 .accessibilityHidden(true)
         }
-        // One element, one phrase: the room, the title and the time left read
-        // together. Three `Text`s in an `HStack` are three VoiceOver stops
-        // whose relation to each other a person has to guess.
+        // **A group, not one element — and that is Android's.** `.contain`
+        // keeps the title, the room and the countdown as stops of their own
+        // inside one container, and the cancel button as a control VoiceOver
+        // can act on; `.combine` would fold the button into a phrase and
+        // leave nothing to press. Android's `TimerRow` is not clickable
+        // (`HomeSections.kt:461-530`), so TalkBack reads the same three texts
+        // and the `cancel …` button separately. (This said "one element, one
+        // phrase" before, which `.contain` never was — train I005's tree has
+        // `pasta`, `kitchen` and `24m 58s` as three leaves under one `Other`.)
         .accessibilityElement(children: .contain)
     }
 
