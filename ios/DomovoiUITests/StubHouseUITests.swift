@@ -228,9 +228,33 @@ final class StubHouseUITests: XCTestCase {
     /// the subsystem is not verified here and cannot be from Windows**: it is
     /// read by `libsystem_trace` as the process starts, the tests set no
     /// `launchEnvironment` at all today, and the only instrument that can
-    /// answer is the byte count of the next train's simlog. If it works, a
-    /// session takes far longer to reach the quarantine threshold; if it does
-    /// not, nothing else about the run changes.
+    /// answer is the byte count of the next train's simlog.
+    ///
+    /// ### What it quietens is three quarters of the launches, not the session
+    ///
+    /// Only what ``launch(mode:paired:server:port:strip:push:pushDelay:args:)``
+    /// starts. Ten other sites build their own `XCUIApplication`, in files
+    /// outside this unit's list, and still launch at `OS_ACTIVITY_MODE=info`:
+    /// `+AiSettings:132`, `+Alerts:136`, `+Assistant:161`,
+    /// `+Audiobooks:103`, `+ChatMore:440` and `:482`, `+PhoneMedia:73`,
+    /// `+Player:203`, `+Screens:571`, `LaunchUITests:32` and `:48`.
+    /// Measured over `overnight-trains/I005/ALL/*.log`, counting `Launch
+    /// org.codersfarm.domovoi.dev.kamron`: **127 of that train's 522 app
+    /// opens (24%) are in cases belonging to those nine files** — an upper
+    /// bound on the untreated residue, since several of those cases call
+    /// ``launch(mode:paired:server:port:strip:push:pushDelay:args:)`` too.
+    ///
+    /// So the prediction here is about **the launches this helper starts**,
+    /// not about the session: those processes should write far less, and a
+    /// session should take correspondingly longer to reach the quarantine
+    /// threshold — but a quarter of the volume is untreated, so a quiet train
+    /// would not on its own prove the lever reached the subsystem, and a
+    /// quarantined one would not on its own prove it did not. The untreated
+    /// files are the internal control: if it works, the per-pid byte counts
+    /// for the Assistant, Alerts, Audiobooks and ChatMore processes stay
+    /// where I005 left them while every other process's falls. Routing them
+    /// through this helper is this unit's REPORT.md under `for_others` — it
+    /// is a one-line change per site, in seven files this unit may not edit.
     ///
     /// *What it costs, if it works:* the app process's own log lines — the
     /// `Beginning first match sequence` / `Current tree:` / `Fetching AX

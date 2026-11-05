@@ -1162,8 +1162,7 @@ extension StubHouseUITests {
             _ = XCTWaiter.wait(for: [settled], timeout: 3)
 
             pins += newsChipRowIsOneElement(app)
-            findings += try auditNews(app, "news", "the page")
-            // **Taken after the audit, not before the waits.**
+            // **The picture is taken after the audit, not before the waits.**
             //
             // It used to run the moment `openNews` returned, about ten
             // seconds and two waits before the audit sampled anything, and
@@ -1172,9 +1171,30 @@ extension StubHouseUITests {
             // (`floor=0 rest=1`, no `CUT ::` line — the four person chips end
             // at x = 293 inside a 377-point rail, so R004's explanation does
             // not apply), and the only picture beside it is of a different
-            // moment. A finding that will not attribute is read off the
-            // picture ([[audit-reports-one-issue]]), so the picture has to be
-            // of the state that was audited. Same one capture, moved.
+            // moment (`t = 15.31 s`, against an audit that sampled between
+            // `t ≈ 23.6 s` and `t = 28.3 s`). A finding that will not
+            // attribute is read off the picture ([[audit-reports-one-issue]]),
+            // so the picture has to be of the state that was audited. Same
+            // one capture, moved.
+            //
+            // **And taken on the way out as well**, because a throwing audit
+            // is this case's likeliest ending: `performAccessibilityAudit`
+            // throws when the app goes away mid-query, which is exactly the
+            // pass whose picture is wanted. ``evidence(_:_:)`` has its own
+            // app-is-gone guard and does not throw, so the `catch` costs
+            // nothing when there is nothing left to photograph.
+            //
+            // The foot and dialog passes keep their capture *before* their
+            // audit: measured in I005, `news-12-audited-foot` lands at
+            // `t = 41.43 s` and that pass's first measurement at
+            // `t = 41.61 s`, with nothing between them but the call — 0.2 s,
+            // not 8–13 s and two waits. Nothing to move.
+            do {
+                findings += try auditNews(app, "news", "the page")
+            } catch {
+                evidence(app, "news-12-audited")
+                throw error
+            }
             evidence(app, "news-12-audited")
 
             // ### 1b. The foot of the page — walked by this same process.
@@ -1558,14 +1578,38 @@ extension StubHouseUITests {
     /// ### Why this is one tree read rather than a query per element
     ///
     /// It was `app.scrollViews/.buttons/.staticTexts.allElementsBoundByIndex`
-    /// and then `.frame` on each, and **every one of those is a whole-tree
-    /// pass inside the app process**: I005's slice of this case logs 43
-    /// `Find the "…" Button`, 12 `Find the "…" StaticText` and 16 scroll-view
-    /// resolutions, against 229 hierarchy captures in that process's whole
-    /// life — so this helper and its neighbour are about a third of what the
-    /// process was asked for, at about 35 kB of log each (8 229 350 B over
-    /// 236 whole-tree passes, counted out of the kept simlog). One
+    /// and then `.frame` on each, and **every element resolved that way is a
+    /// whole-tree pass inside the app process**.
+    ///
+    /// What this helper and its neighbour asked for, counted in I005's slice
+    /// of this case: each pass that measures leaves resolved 30
+    /// `Find the StaticText (Element at index N)`, 27 `Find the Button
+    /// (Element at index N)` and 4 `Find the ScrollView (Element at index N)`
+    /// — 61 elements one at a time, in the block immediately before that
+    /// pass's `CUT ::` group (`t = 21.0–22.8 s` on the page pass,
+    /// `t = 41.6–43.4 s` on the foot) — and the dialog pass, which allows no
+    /// cut and so reads the viewport only, resolved two more at
+    /// `t ≈ 70.6 s`: **124 of the 235 `Find the …` lines in the whole case
+    /// slice**.
+    ///
+    /// What it cost the process, counted out of the kept simlog for pid
+    /// 83743 (this case's first process, the one I005 lost): 229 `Capturing
+    /// hierarchy with attributes` whole-tree dumps and 8 229 350 B over its
+    /// whole life — about 35 kB a pass — of which **187 captures and
+    /// 4 244 060 B fall inside those two bursts**. Per second it ran at
+    /// 30–38 captures and 0.6–0.9 MB while the helpers were resolving
+    /// (19:49:01–04, 19:49:22–24) against 1–2 captures and 43 kB a second
+    /// everywhere else. So the pair is about four fifths of the whole-tree
+    /// work this process was asked for and about half of what it wrote. One
     /// `snapshot()` answers all of it in process.
+    ///
+    /// (The 43 `Find the "…" Button` and 12 `Find the "…" StaticText` lines in
+    /// the same slice are **not** these helpers'. The 12 are
+    /// `news-story-meta-3xx`, from the `newsElement(…).waitForExistence`
+    /// lines; the 43 are `news-chip-…` / `news-category-…` /
+    /// `news-remove-topic-…`, from ``newsChipRowIsOneElement(_:)`` and the
+    /// taps. An earlier revision of this comment cited those two counts here
+    /// by mistake — they are named finds, and this helper resolved by index.)
     ///
     /// It is also the more honest measurement: the viewport and the leaves
     /// now come from **one instant**, where before the scroll view's frame
