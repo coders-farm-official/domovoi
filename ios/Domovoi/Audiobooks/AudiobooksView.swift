@@ -354,8 +354,10 @@ struct AudiobooksView: View {
         Button(books.reindexing ? AudiobooksStrings.indexing : AudiobooksStrings.reindex) {
             books.reindex()
         }
-        .buttonStyle(.bordered)
-        .tint(Color.brandInk)
+        // Android's `OutlinedButton` (`AudiobooksScreen.kt:200`): no fill, so
+        // the label is read on the page and not on a wash of itself — the
+        // `.bordered` chip was 4.38:1 (unit mx-ink, InkButtonStyles.swift).
+        .buttonStyle(InkOutlineButtonStyle())
         .disabled(books.reindexing)
         .accessibilityLabel(AudiobooksStrings.reindex)
     }

@@ -337,9 +337,13 @@ struct PhonesAndBrowsersPanel: View {
                 .foregroundStyle(display == .noIdentityOffered ? AnyShapeStyle(Color.warnInk) : AnyShapeStyle(Color.fgMuted))
                 .fixedSize(horizontal: false, vertical: true)
             if display.offersPinning {
+                // Android's filled `Button` (`ConnectionPanel.kt:441`):
+                // ``Color/brandFg`` on ``Color/brand``, 8.50:1. The `.bordered`
+                // chip it replaces read the ink on a wash of itself over this
+                // card, about 4.06:1 (measured on Printing's card in I001 —
+                // unit mx-ink, InkButtonStyles.swift).
                 Button(ShellStrings.pinThisIdentity) { model.pinTheOfferedIdentity() }
-                    .buttonStyle(.bordered)
-                    .tint(Color.brandInk)
+                    .buttonStyle(BrandFillButtonStyle())
             }
         }
     }
@@ -383,8 +387,9 @@ struct PhonesAndBrowsersPanel: View {
                     model.showToast(ShellStrings.noLongerPaired)
                     model.refresh()
                 }
-                .buttonStyle(.bordered)
-                .tint(Color.brandInk)
+                // Android's filled `Button` (`ConnectionPanel.kt:229`), for
+                // the pin button's reason above (unit mx-ink).
+                .buttonStyle(BrandFillButtonStyle())
             }
         }
     }

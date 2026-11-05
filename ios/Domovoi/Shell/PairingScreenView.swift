@@ -80,9 +80,12 @@ struct PairingScreenView: View {
                             .foregroundStyle(Color.fgMuted)
                             .fixedSize(horizontal: false, vertical: true)
                     }
+                    // Android's `OutlinedButton` (`PairingScreen.kt:108`): no
+                    // fill, the ink on the page — the `.bordered` chip read it
+                    // on a wash of itself, 4.38:1 (unit mx-ink,
+                    // InkButtonStyles.swift).
                     Button(ShellStrings.notNow) { model.dismissPairing() }
-                        .buttonStyle(.bordered)
-                        .tint(Color.brandInk)
+                        .buttonStyle(InkOutlineButtonStyle())
                 }
                 .padding(24)
                 .frame(maxWidth: 480)
@@ -124,9 +127,10 @@ struct TrustAgainSheet: View {
             }
             HStack {
                 Spacer()
+                // Android's `OutlinedButton` (`IdentityChanged.kt:101`), for
+                // the same reason (unit mx-ink).
                 Button(trustAgainNo) { model.dismissTrustAgain() }
-                    .buttonStyle(.bordered)
-                    .tint(Color.brandInk)
+                    .buttonStyle(InkOutlineButtonStyle())
                 Button(trustAgainYes) { model.confirmTrustAgain() }
                     .buttonStyle(.borderedProminent)
                     // The app's tint is `brandInk` (`DomovoiApp.swift`), so

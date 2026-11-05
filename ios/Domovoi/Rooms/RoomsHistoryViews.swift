@@ -401,12 +401,12 @@ struct RoomsPlayedRow: View {
         return Button(queued ? RoomsStrings.queued : RoomsStrings.add) {
             model.addToLibrary(room, row)
         }
-        .buttonStyle(.bordered)
-        .tint(Color.brandInk)
+        // Android's `OutlinedButton` (`SatHistoryTabs.kt:372`): no fill. The
+        // `.bordered` chip read the ink on a wash of itself over this row's
+        // grey card — about 4.0:1 by the tokens, worse than the 4.38:1
+        // measured on the white page (unit mx-ink, InkButtonStyles.swift).
+        .buttonStyle(InkOutlineButtonStyle())
         .font(.subheadline)
-        .fixedSize(horizontal: false, vertical: true)
-        .frame(minHeight: 44)
-        .contentShape(.rect)
         .disabled(queued)
     }
 }
@@ -541,12 +541,12 @@ struct RoomsTimerRow: View {
         Button(RoomsStrings.cancel) {
             model.cancelTimer(room, timer)
         }
-        .buttonStyle(.bordered)
-        .tint(Color.errInk)
+        // Android's `OutlinedButton` (`SatHistoryTabs.kt:501`): no fill. The
+        // red ink kept; the wash taken away, which on a grey card cost
+        // ``Color/errInk`` its 4.5:1 (4.16:1 on `#F5F5F5` by the tokens; 5.58
+        // without it — unit mx-ink, InkButtonStyles.swift).
+        .buttonStyle(InkOutlineButtonStyle(ink: .errInk))
         .font(.subheadline)
-        .fixedSize(horizontal: false, vertical: true)
-        .frame(minHeight: 44)
-        .contentShape(.rect)
         .disabled(reads.cancelling.contains(timer.id))
     }
 }

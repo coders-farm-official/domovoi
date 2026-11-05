@@ -158,16 +158,18 @@ struct SystemSettingsProblemsCard: View {
             // for this one (`ProblemReports.kt:86`).
             model.showToast(SystemSettingsStrings.problemReportCopied)
         }
-        .buttonStyle(.bordered)
-        .frame(minHeight: 44)
+        // Android's `OutlinedButton`s (`ProblemReports.kt:84`, `:88`): no
+        // fill. The untinted `.bordered` took the app's ``Color/brandInk``
+        // tint (`DomovoiApp.swift:232`) and read it on a wash of itself, about
+        // 4.06:1 on a card (unit mx-ink, InkButtonStyles.swift).
+        .buttonStyle(InkOutlineButtonStyle())
         ShareLink(
             item: report,
             subject: Text(SystemSettingsStrings.problemReportSubject)
         ) {
             Text(SystemSettingsStrings.share)
-                .frame(minHeight: 44)
         }
-        .buttonStyle(.bordered)
+        .buttonStyle(InkOutlineButtonStyle())
         Button(SystemSettingsStrings.clear) {
             problems.confirmingClear = true
         }

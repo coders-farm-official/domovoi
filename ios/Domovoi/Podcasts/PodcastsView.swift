@@ -264,28 +264,19 @@ struct PodcastsView: View {
                     .frame(minHeight: 44)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            .buttonStyle(.bordered)
-            // **The tint, because a bordered button's label is the accent
-            // colour** and this app's accent is ``Color/brand`` — amber, which
-            // its own doc comment calls "a fill, never text" at 2.05:1 on
-            // white. Apple's audit reported "Contrast is not high enough for
-            // element unless font size is larger" against this button on train
-            // S004; Stations got the same finding on six untinted chips in the
-            // same run. ``Color/brandInk`` is 5.65:1, and it is what every
-            // other `.bordered` button in this app already names
-            // (`HomeTimersView.swift:290`, `ConnectionDialogView.swift:445`).
-            .tint(Color.brandInk)
-            // **And the label colour, which the tint alone does not settle.**
-            // A `.bordered` button draws a wash of its own tint behind the
-            // label as well as in it, and the wash lifts the background: the
-            // ink is 5.4:1 on white but about 4.4:1 on a 12-15% amber wash
-            // over white, which is the band Apple reports as "not high enough
-            // unless font size is larger" — and did report, against this
-            // button, on train S007 after the tint above had already been
-            // put right. ``Color/brandFg`` is near-black, so it is over 15:1
-            // on the wash whatever iOS picks for its opacity, and it is what
-            // this app already draws on amber.
-            .foregroundStyle(Color.brandFg)
+            // Android's `OutlinedButton` (`PodcastsScreen.kt:133`), drawn by
+            // ``InkOutlineButtonStyle`` (unit mx-ink): no fill, so the label is
+            // ``Color/brandInk`` on the page — 5.66:1 light, 11.03:1 dark.
+            //
+            // The history, so it is not re-derived: train S004 failed the
+            // untinted chip (the amber ``Color/brand`` as text, 2.05:1); the
+            // ``Color/brandInk`` tint then failed S007 on its own wash (the ink
+            // on an 18% wash of itself is 4.38:1); the ``Color/brandFg`` label
+            // that cured S007 is near-black, and in dark mode the wash behind
+            // it is dark too — about **1.2:1** on the dark page by the tokens
+            // (`#1C0E00` on `#2D1F07`; the dark wash opacity is an estimate).
+            // Taking the wash away is what cures all three.
+            .buttonStyle(InkOutlineButtonStyle())
             .disabled(podcasts.polling)
 
             Button {

@@ -323,10 +323,11 @@ struct FilesView: View {
             // every time from a blocked phone ([[no-misleading-controls]]).
             if let files, let printing,
                printing.offersScan(libraryID: files.selectedID, canWrite: files.canWrite) {
+                // Android's `OutlinedButton` (`FilesScreen.kt:540`) — no fill,
+                // the `.bordered` chip's wash cost the ink its 4.5:1 (unit
+                // mx-ink, InkButtonStyles.swift). The style draws the 44.
                 Button(PrintingStrings.scanHeaderButton) { scanning = true }
-                    .buttonStyle(.bordered)
-                    .tint(Color.brandInk)
-                    .frame(minHeight: 44)
+                    .buttonStyle(InkOutlineButtonStyle())
             }
             if let files {
                 // A word, not Android's circular-arrow icon: an arrow in a

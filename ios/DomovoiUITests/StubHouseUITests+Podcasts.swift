@@ -949,7 +949,12 @@ extension StubHouseUITests {
     ///    behind the label, and that wash lifts the background enough to drop
     ///    ``Color/brandInk`` from 5.4:1 on white to about 4.4:1 on it - which
     ///    is exactly the band Apple reports as "unless font size is larger".
-    ///    The label is ``Color/brandFg`` now, near-black on a pale amber pill.
+    ///    S007 first answered it with a ``Color/brandFg`` label on that pill,
+    ///    which is near-invisible in dark mode (about 1.2:1 on black). Since
+    ///    unit mx-ink (2026-11-05) `poll now` is ``InkOutlineButtonStyle``,
+    ///    Android's OutlinedButton (`PodcastsScreen.kt:133`): ``Color/brandInk``
+    ///    on the page itself, a half-strength ink stroke and no fill, 5.66:1 on
+    ///    white and 11.03:1 on black by the tokens.
     ///  - `Contrast failed` on one `0/0 downloaded` was **not** real, and the
     ///    geometry says why: `performAccessibilityAudit` scrolls the page it
     ///    audits. The content offset went 137.3 → -326.3 during that one run

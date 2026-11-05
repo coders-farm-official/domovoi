@@ -99,27 +99,18 @@ struct RoomsDropInRow: View {
                 // findings against the same pairing
                 // (`CalendarScreenView.swift:183-192`).
                 //
-                // `.plain` draws no disabled state of its own, which is why
-                // the ink and the outline are chosen by ``canDropIn`` here: a
-                // control that cannot do what it says must not look live
-                // (NIGHT-RULES §3), and this one is disabled in three real
-                // room states.
-                .foregroundStyle(canDropIn ? Color.brandInk : Color.fgMuted)
-                .padding(.horizontal, 12)
-                .frame(minHeight: 44)
-                // The shape `.bordered` drew, kept: a continuous rounded
-                // rectangle rather than a capsule, because this label wraps
-                // at an accessibility size and a pill around three lines of
-                // text is not what that style would have drawn.
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(
-                        (canDropIn ? Color.brandInk : Color.fgMuted).opacity(0.45),
-                        lineWidth: 1
-                    )
-                )
-                .contentShape(.rect)
+                // **The shared ``InkOutlineButtonStyle`` since unit mx-ink**,
+                // which is this row's fix made once for every site of the same
+                // pairing: label in ``Color/brandInk`` on the surface, a
+                // half-strength stroke, no fill, a 44-point target, and the
+                // disabled ink (``Color/fgMuted``, 7.43:1 on white) chosen by
+                // `@Environment(\.isEnabled)` — so the `.disabled` below is the
+                // one statement of whether this control is live, rather than a
+                // second reading of ``canDropIn`` for the colour. A control
+                // that cannot do what it says must not look live (NIGHT-RULES
+                // §3), and this one is disabled in three real room states.
         }
-        .buttonStyle(.plain)
+        .buttonStyle(InkOutlineButtonStyle())
         // Unavailable rather than absent, because the room is on screen and
         // the reason is on it: the status pill two lines up for a room that
         // is not connected (`target_offline`, `phone_dropin.py:80-81`), the
