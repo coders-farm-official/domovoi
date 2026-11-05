@@ -445,6 +445,95 @@ public func inCallChip(_ room: HomeRoom) -> String? {
 /// `pause kitchen`, `resume kitchen`, `stop kitchen`.
 public func transportLabel(_ verb: String, room: String) -> String { "\(verb) \(room)" }
 
+// MARK: - the row, spoken
+
+/// One chip under a room, in the order Android draws them
+/// (`HomeSections.kt:775-781`): the soonest timer, the call, the dead screen,
+/// the weak link.
+///
+/// A value, so that what the row **draws** and what it **says** are one list:
+/// ``HomeRoomsView`` draws ``roomChips(_:timerLeftSec:)`` and
+/// ``spokenRoom(_:stale:elapsedSec:nowMs:timerLeftSec:)`` reads the same one.
+public enum RoomChip: Equatable, Sendable {
+    case timer(Int64)
+    case inCall(String)
+    case screenStopped
+    case weakWifi
+
+    /// The chip's words. The glyph beside them is never the only carrier.
+    public var label: String {
+        switch self {
+        case .timer(let left): return fmtLeft(left)
+        case .inCall(let words): return words
+        case .screenStopped: return HomeRoomStrings.screenStopped
+        case .weakWifi: return HomeRoomStrings.weakWifi
+        }
+    }
+
+    /// Idle for the timer and the call, warn for the two faults — Android's
+    /// `HomeChip` is muted ink and `Pill("screen stopped", Tone.Warn)` is warn.
+    public var tone: HealthTone {
+        switch self {
+        case .timer, .inCall: return .idle
+        case .screenStopped, .weakWifi: return .warn
+        }
+    }
+}
+
+/// The chips a room row draws, in Android's order (`HomeSections.kt:775-781`):
+/// `nextTimerLeft`, `call`, `kioskDead(r)`, `weak`.
+public func roomChips(_ room: HomeRoom, timerLeftSec: Int64?) -> [RoomChip] {
+    var chips: [RoomChip] = []
+    if let timerLeftSec { chips.append(.timer(timerLeftSec)) }
+    if let call = inCallChip(room) { chips.append(.inCall(call)) }
+    if kioskDead(room) { chips.append(.screenStopped) }
+    if weakWifi(room) { chips.append(.weakWifi) }
+    return chips
+}
+
+/// `1:39 / 5:02` — and `1:12 / —` for a stream with no duration, which is the
+/// honest line for a radio station (``fmtDur(_:)``'s bare em dash).
+public func roomClock(elapsedSec: Double, song: HomeSong) -> String {
+    "\(fmtDur(elapsedSec)) / \(fmtDur(song.durationSec))"
+}
+
+/// What VoiceOver reads for a room's left side — **one** element, which is
+/// what TalkBack reads for the same row on Android.
+///
+/// Android's left side is one `Modifier.clickable` `Column`
+/// (`HomeSections.kt:712-782`), and a clickable node merges its descendants'
+/// semantics: the room id, the pill, the song line, the clock and **every
+/// chip** are one TalkBack stop. `StatusDot` and `HomeBar` carry no semantics
+/// and `HomeChip`'s icon is `contentDescription = null`, so none of them adds
+/// a word. The transport buttons sit outside that `Column` and stay stops of
+/// their own, as ``transportLabel(_:room:)`` names them.
+///
+/// The chips are the part iOS had wrong: they were drawn under the button,
+/// so a timer chip was a bare `24m 58s` stop with nothing to say whose it
+/// was (train I005's kept tree: `StaticText … label: '24m 58s'` after
+/// `stop kitchen`).
+public func spokenRoom(
+    _ room: HomeRoom,
+    stale: Bool,
+    elapsedSec: Double,
+    nowMs: Int64,
+    timerLeftSec: Int64?
+) -> String {
+    var parts = [room.roomID]
+    if let pill = roomPill(room, stale: stale) { parts.append(pill.label) }
+    switch roomSecondLine(room) {
+    case .song(let song):
+        parts.append(songLine(song))
+        parts.append(roomClock(elapsedSec: elapsedSec, song: song))
+    case .lastSeen(let iso):
+        parts.append(lastSeenLine(iso, nowMs: nowMs))
+    case let other:
+        if let text = other.text { parts.append(text) }
+    }
+    parts += roomChips(room, timerLeftSec: timerLeftSec).map(\.label)
+    return parts.joined(separator: ", ")
+}
+
 /// Which transport buttons a room row draws (`HomeSections.kt:784-795`).
 ///
 /// **Only `online && !stale`, and nothing at all for a quiet room** —

@@ -102,9 +102,12 @@ struct NewsPeopleChipRow: View {
     ///         StaticText, {{16, 217.3}, {113, 44}}, label: 'Kamron'
     ///
     /// It is app-wide, not News's and not the integration's:
-    /// ``HomeAttentionView``'s rows are `Button` + `children: .ignore` +
-    /// `accessibilityLabel` and come out the same three-deep shape in the very
-    /// same run (`R002/Alerts/.../alerts-no-late-ring-row-tree…txt`).
+    /// ``HomeAttentionView``'s rows were `Button` + `children: .ignore` +
+    /// `accessibilityLabel` and came out the same three-deep shape in the very
+    /// same run (`R002/Alerts/.../alerts-no-late-ring-row-tree…txt`). Those
+    /// rows were relabelled on the `Button` itself in `94283d81` and train
+    /// I005 drew each as one; the last `.ignore`-on-a-`Button` in the app,
+    /// Chat's draft version chips, went the same way in the mx-home unit.
     ///
     /// What **does** produce one childless element is a button whose label is
     /// a single `Text`, which is every clean pill in this app: the nine
