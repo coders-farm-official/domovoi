@@ -740,7 +740,10 @@ final class StubHouseUITests: XCTestCase {
                 )
                 return [Self.appGoneAudit] + found
             }
-            guard let over = notificationBanner()?.frame else {
+            // ``notificationBannerFrame()`` and not `notificationBanner()?.frame`:
+            // a banner leaving as the audit ends used to fail the case here
+            // instead of reading as no banner (``notificationBanner()``).
+            guard let over = notificationBannerFrame() else {
                 // **Say what the retake was worth.** A clean audit taken after
                 // a banner was waited out is the measurement that attributes
                 // the previous run's findings, and it is worth one line in the
@@ -887,13 +890,92 @@ final class StubHouseUITests: XCTestCase {
     /// Deliberately **not** "any SpringBoard text near the top": SpringBoard's
     /// tree holds the whole Home screen behind us, icon captions included, so
     /// a frame test would report a banner on every call.
+    ///
+    /// ### Nothing here may fail a case, and for two trains it did
+    ///
+    /// Train I005 failed `testVoiceSettings_Audit` and
+    /// `testTheStatesTheAuditHadNeverSeen` — neither of which is about
+    /// notifications — on one sentence each:
+    ///
+    /// ```
+    /// Failed to get matching snapshot: No matches found for first query match
+    /// sequence: `Descendants matching type Any` -> `Elements matching
+    /// predicate '"NotificationShortLookView" IN identifiers'`, given input App
+    /// element pid: 91341
+    /// ```
+    ///
+    /// pid 91341 is SpringBoard, and both deaths are in this helper pair. The
+    /// logs time them to the millisecond:
+    ///
+    ///  * `I005/ALL/testVoiceSettings_Audit.log` — `t = 24.11s Checking
+    ///    existence of "NotificationShortLookView" Any`, then `t = 24.18s Find
+    ///    the …`, `retry 1`, `retry 2`, failure at `:926`, which was
+    ///    `notificationBanner().map { $0.frame }`.
+    ///  * `I005/ALL/testTheStatesTheAuditHadNeverSeen.log` — the same pair at
+    ///    `t = 67.78s` / `t = 67.86s`, failure at `:942`, which was
+    ///    `banner.frame.height` in the swipe branch.
+    ///
+    /// So `exists` answered **yes** and the frame read 70 ms later resolved
+    /// **nothing**: the banner dismissed itself in the gap between the two
+    /// reads. `exists` is the only non-throwing resolution XCUITest has; a
+    /// property read (`frame`, `label`, `value`) that resolves nothing is
+    /// reported as a test failure, and `setUp`'s `continueAfterFailure = false`
+    /// then ends the case. A banner is *moving* while this runs — I005's first
+    /// wait printed one at `(8.0, -118.0, 377.0, 78.67)`, 118 points above the
+    /// top of the screen — so that gap is exactly the window it leaves in.
+    ///
+    /// ``bannerFrame(of:)`` is the whole fix: `snapshot()` asks the same
+    /// question with a catchable `throws`, so a banner that goes between two
+    /// reads reads as *no banner*, which is what it is. **Never read a property
+    /// off the element this returns** — it is for sending a gesture to, and
+    /// every geometry read goes through ``bannerFrame(of:)``.
     @MainActor
     func notificationBanner() -> XCUIElement? {
-        let banner = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let banner = notificationBannerQuery()
+        return banner.exists ? banner : nil
+    }
+
+    /// The query every banner read starts from. Building it resolves nothing,
+    /// so this call cannot fail; resolving it is the part that can.
+    @MainActor
+    func notificationBannerQuery() -> XCUIElement {
+        XCUIApplication(bundleIdentifier: "com.apple.springboard")
             .descendants(matching: .any)
             .matching(identifier: "NotificationShortLookView")
             .firstMatch
-        return banner.exists ? banner : nil
+    }
+
+    /// `element`'s frame, or `nil` when it resolves to nothing — and **never a
+    /// test failure**, which is the only reason this function exists rather
+    /// than `element.frame`.
+    ///
+    /// `XCUIElement.snapshot()` throws a Swift error the caller may catch;
+    /// `XCUIElement.frame` cannot throw, so XCTest reports the same condition
+    /// as a failure of whichever line read it. See
+    /// ``notificationBanner()`` for the two cases that measurement cost.
+    @MainActor
+    func bannerFrame(of element: XCUIElement) -> CGRect? {
+        (try? element.snapshot())?.frame
+    }
+
+    /// The frame of the notification banner over the app, or `nil` when there
+    /// is none — and `nil`, not a failure, for one caught mid-dismissal.
+    ///
+    /// **`exists` first, for the clock and not for safety.** An unresolvable
+    /// query is not answered at once: I005's failing log is
+    /// `t = 24.18s Find the …`, `t = 25.27s retry 1`, `t = 26.38s retry 2`,
+    /// error at `t = 26.49s` — 2.3 seconds per read that finds nothing, where
+    /// `Checking existence of …` answers in about 80 ms (the same log's clear
+    /// loop steps 0.39 s apart on a 0.3 s sleep). Nearly every call here is
+    /// made on a screen with no banner at all, three per audit, so taking the
+    /// slow path for the ordinary case would add minutes to a full class. The
+    /// race this function exists for is reached with `exists` **true**, which
+    /// is the one case that goes on to ``bannerFrame(of:)``.
+    @MainActor
+    func notificationBannerFrame() -> CGRect? {
+        let banner = notificationBannerQuery()
+        guard banner.exists else { return nil }
+        return bannerFrame(of: banner)
     }
 
     /// Wait until no notification banner is on screen, and say so in the log.
@@ -923,11 +1005,11 @@ final class StubHouseUITests: XCTestCase {
         appearIn: TimeInterval = 2,
         clearIn: TimeInterval = 20
     ) -> CGRect? {
-        var seen = notificationBanner().map { $0.frame }
+        var seen = notificationBannerFrame()
         let appearBy = Date().addingTimeInterval(appearIn)
         while seen == nil, Date() < appearBy {
             usleep(200_000)
-            seen = notificationBanner().map { $0.frame }
+            seen = notificationBannerFrame()
         }
         guard let first = seen else { return nil }
         print("BANNER [\(name)] a notification banner is over the app at \(first) — waiting")
@@ -935,11 +1017,29 @@ final class StubHouseUITests: XCTestCase {
         let clearBy = Date().addingTimeInterval(clearIn)
         var swiped = false
         while Date() < clearBy {
-            guard let banner = notificationBanner() else {
+            guard let here = notificationBannerFrame() else {
                 print("BANNER [\(name)] gone")
                 return first
             }
-            if !swiped, Date() > swipeAfter, banner.frame.height > 10 {
+            if !swiped, Date() > swipeAfter, here.height > 10 {
+                // **Two frames, 150 ms apart, before any gesture.** The swipe
+                // is the one read here that can still fail a case: a gesture
+                // sent to an element that has just gone is reported the same
+                // way the frame reads were (``notificationBanner()``), and
+                // there is no catchable form of it. A banner that is *leaving*
+                // moves while it goes — I005 logged one at y = -118 — so a
+                // frame that is identical across 150 ms is a banner that is
+                // staying put, and is the only one this swipes at. The one
+                // swipe in two trains (I004,
+                // `testTheStatesTheAuditHadNeverSeen.log:1522`, a banner up
+                // for 8 s at `(8.0, 56.0, 377.0, 66.0)`) is of that kind, and
+                // it cleared it. One whose frame keeps changing is left to the
+                // loop, which gives up at `clearIn` and says so in the log —
+                // a wait that ends honestly, rather than a gesture aimed at
+                // something that is moving.
+                usleep(150_000)
+                guard let still = notificationBannerFrame(), still == here else { continue }
+                guard let banner = notificationBanner() else { continue }
                 print("BANNER [\(name)] it outstayed its welcome — swiping it away")
                 banner.swipeUp()
                 swiped = true
