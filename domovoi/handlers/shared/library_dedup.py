@@ -47,6 +47,8 @@ import re
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from domovoi.library_naming import parse_title_artist
+
 
 # ─── Tuning constants ────────────────────────────────────────────────────
 
@@ -135,11 +137,15 @@ async def find_fuzzy_library_match(
     ----------
     session
         Active async SQLAlchemy session. The query reuses it (one
-        round-trip) rather than opening its own scope, so the caller
-        controls transaction boundaries.
+        round-trip per reading) rather than opening its own scope, so the
+        caller controls transaction boundaries.
     title
         Incoming title to match. Whitespace-only or empty returns
-        None immediately.
+        None immediately. An external "Artist - Title" string is split
+        first (:func:`domovoi.library_naming.parse_title_artist`): its
+        title is compared with library titles, and its artist stands in
+        for a missing ``artist`` (in both readings: the split title, then
+        the whole string).
     artist
         Optional incoming artist. If non-empty AND the matched
         library row also has a non-empty artist, the artist
@@ -152,6 +158,13 @@ async def find_fuzzy_library_match(
         cruft); radio paths typically don't (song identification
         returns already-clean titles). Default True for backwards-
         compat with the original pre-extraction behavior.
+
+    A library title found INSIDE the incoming one ("Creep" inside
+    "Creep by Radiohead") is a duplicate only when the rest of the
+    incoming words name the artist (the row's, or the one passed in):
+    a library song called "Bunny" is not "Bad Bunny - DtMF" (owner
+    report 2026-11-05: that download was refused as "already in your
+    library").
 
     Returns
     -------
@@ -167,12 +180,58 @@ async def find_fuzzy_library_match(
         return None
 
     incoming_artist = (artist or "").strip() or None
+    readings: list[tuple[str, str | None]] = []
+    parsed_artist, parsed_title = parse_title_artist(cleaned)
+    if parsed_artist:
+        incoming_artist = incoming_artist or parsed_artist
+        if parsed_title and len(parsed_title) >= 3:
+            readings.append((parsed_title, incoming_artist))
+    readings.append((cleaned, incoming_artist))
 
-    row = (
+    for query, query_artist in readings:
+        match = await _match_one(session, query, query_artist)
+        if match is not None:
+            return match
+    return None
+
+
+#: How many title-similar rows one reading weighs in Python.
+_CANDIDATES = 25
+#: Words that may sit beside a title without making it another song.
+_FILLER_WORDS = frozenset({"by", "ft", "feat", "featuring", "and", "the", "a", "with", "x"})
+_WORD_RE = re.compile(r"[^\W_]+", re.UNICODE)
+
+
+def _words(s: str | None) -> list[str]:
+    return _WORD_RE.findall((s or "").lower())
+
+
+def _rest_names_artist(query: str, lib_title: str, artists: list[str]) -> bool:
+    """Whether the incoming words left over once the library title's are
+    taken out name one of ``artists`` (or are only filler): "Creep by
+    Radiohead" against "Creep" by Radiohead, yes; "Bad Bunny DtMF"
+    against "Bunny" by someone else, no."""
+    taken = set(_words(lib_title))
+    rest = [w for w in _words(query) if w not in taken and w not in _FILLER_WORDS]
+    if not rest:
+        return True
+    for name in artists:
+        known = set(_words(name))
+        if known and all(w in known for w in rest):
+            return True
+    return False
+
+
+async def _match_one(
+    session: AsyncSession, query: str, incoming_artist: str | None
+) -> dict[str, str | None] | None:
+    rows = (
         await session.execute(
             text(
                 """
-                SELECT title, artist
+                SELECT title, artist,
+                       word_similarity(LOWER(:cleaned), LOWER(title)) AS query_in_title,
+                       word_similarity(LOWER(title), LOWER(:cleaned)) AS title_in_query
                 FROM library_tracks
                 WHERE LENGTH(title) >= :min_lib_len
                   AND GREATEST(
@@ -202,18 +261,27 @@ async def find_fuzzy_library_match(
                           word_similarity(LOWER(title), LOWER(:cleaned)),
                           word_similarity(LOWER(:cleaned), LOWER(title))
                        ) DESC
-                LIMIT 1
+                LIMIT :limit
                 """
             ),
             {
-                "cleaned": cleaned,
+                "cleaned": query,
                 "incoming_artist": incoming_artist,
                 "min_lib_len": MIN_LIBRARY_TITLE_LEN,
                 "title_threshold": FUZZY_TITLE_THRESHOLD,
                 "artist_threshold": FUZZY_ARTIST_THRESHOLD,
+                "limit": _CANDIDATES,
             },
         )
-    ).first()
-    if row is None:
-        return None
-    return {"title": row.title, "artist": row.artist}
+    ).all()
+    for row in rows:
+        # The incoming title (nearly) whole inside the library's: "Creep"
+        # against "Creep (Remastered)" or a row titled "Radiohead - Creep".
+        if float(row.query_in_title) >= FUZZY_TITLE_THRESHOLD:
+            return {"title": row.title, "artist": row.artist}
+        # The library title inside the incoming one: a duplicate only when
+        # the other words are the artist, never a fragment of another name.
+        artists = [a for a in (row.artist, incoming_artist) if a]
+        if _rest_names_artist(query, row.title, artists):
+            return {"title": row.title, "artist": row.artist}
+    return None

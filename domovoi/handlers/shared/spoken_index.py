@@ -952,8 +952,28 @@ def resolve_by(
     by_ranked = rank(index, combos)
     whole: tuple[Ranked, str] = ([], f"{t} by {a}")
     whole_top = -1.0
+    # The whole phrase stands for ONE name ("stand by me", the band Sent By
+    # Ravens). An artist that scores no better on it than on the artist's
+    # words alone is just the artist named again: "dtmf by bad bunny" is
+    # not a near miss of Bad Bunny. Such a request — a song the library
+    # doesn't have, by an artist it does — goes on to today's search and
+    # the streaming fallback instead of asking "did you mean Bad Bunny?"
+    # (owner, 2026-11-05). A song the whole phrase finds still counts: a
+    # misheard title is often recognisable only with its artist.
+    artist_alone = (
+        score_reading(index, a, ARTIST_KINDS, phrase=False, cap=cap) if a else {}
+    )
+    ents = index.entities
     for phrase_text in (f"{t} by {a}", f"{t} {a}"):
         ranked, heard = resolve_any(index, phrase_text, kinds, cap=cap)
+        ranked = [
+            (i, h) for i, h in ranked
+            if not (
+                ents[i].type in ARTIST_KINDS
+                and i in artist_alone
+                and artist_alone[i].score >= h.score
+            )
+        ]
         top = ranked[0][1].score if ranked else -1.0
         if top > whole_top:
             whole, whole_top = (ranked, heard), top

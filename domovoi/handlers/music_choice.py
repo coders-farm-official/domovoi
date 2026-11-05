@@ -528,6 +528,55 @@ class MusicChoiceMixin:
             data={"choice": [c.to_dict() for c in candidates]},
         )
 
+    async def offer_instead(
+        self,
+        cand: Candidate,
+        prompt: str,
+        *,
+        heard: str,
+        query: Mapping[str, str],
+        ctx: Context,
+        session: AsyncSession,
+    ) -> Response | None:
+        """Offer ``cand`` in place of a song the house doesn't have ("I
+        don't have X. Want me to shuffle Y instead?"), parked as the SAME
+        ``core.music_choice`` question :meth:`ask_did_you_mean` parks, so
+        "yes" plays it, "no" ends it ("OK.") and a name plays that. None —
+        the caller just says it doesn't have the song — when nobody can
+        answer here, asking is switched off, or this offer was turned down
+        a moment ago for the same words."""
+        if not settings.music_choice_enabled or ctx.session_id is None or not ctx.answerable:
+            return None
+        if was_declined(ctx.session_id, heard, [cand]):
+            return None
+        payload = {
+            "candidates": [cand.to_dict()],
+            "query": {k: v for k, v in query.items() if isinstance(v, str)},
+            "heard": heard,
+            "room_id": ctx.room_id,
+            "expires_at": time.time() + CHOICE_TTL_SEC,
+            **_play_room(ctx),
+        }
+        try:
+            await request_confirmation(
+                session, ctx.session_id, kind=MUSIC_CHOICE_KIND,
+                handler=self.name, data=payload, prompt=prompt,  # type: ignore[attr-defined]
+            )
+        except Exception as e:  # noqa: BLE001 — the plain answer is still an answer
+            log.warning("music: couldn't park the offer of another artist: %s", type(e).__name__)
+            return None
+        log.info(
+            "music: offered %s:%s for %r (not in the library)",
+            cand.ref.type, cand.ref.label, said(heard),
+        )
+        return Response(
+            text=prompt,
+            session_id=ctx.session_id,
+            matched_handler=self.name,  # type: ignore[attr-defined]
+            expect_followup=True,
+            data={"choice": [cand.to_dict()]},
+        )
+
     async def tell_lyric_match(
         self,
         res: Resolution,
