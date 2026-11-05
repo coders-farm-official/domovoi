@@ -1448,15 +1448,23 @@ extension StubHouseUITests {
                 rest.append("a second anonymous contrast finding: \(line)")
                 continue
             }
-            // A leaf the bottom edge cuts in half: the audit samples pixels,
-            // and half a line of text under the home indicator is not a
-            // colour. Train I005's sheet pass is the measurement — the last
-            // detection's title `—` (835.7…853.7, over the sheet's foot of
-            // 852.0) was reported while `Red Fire Serpent`, `Quills of the
-            // Arrow` and `Thirteen Palisades`, which are the same
-            // `Text(detection.title ?? dash)` with no `foregroundStyle` at
-            // all (`StationsDetailSheet.swift:542`), were not. The
-            // screenshot `stations-28-audit-sheet` shows the sliver.
+            // A leaf whose **frame** the viewport foot cuts while its ink is
+            // drawn whole: the audit samples pixels, and a line box that ends
+            // past the edge is a position, not a colour. Train I005's sheet
+            // pass is the measurement — the last detection's title `—`
+            // (835.7…853.7, over the sheet's foot of 852.0) was reported,
+            // while `Red Fire Serpent`, `Quills of the Arrow` and `Thirteen
+            // Palisades`, which are the same `Text(detection.title ?? dash)`
+            // with no `foregroundStyle` at all
+            // (`StationsDetailSheet.swift:542`), were not.
+            //
+            // Sampled from `stations-28-audit-sheet` (1178×2556, 3 px per
+            // point): the dash's 105 black pixels are (0,0,0) on (255,255,255)
+            // — 21:1, byte-identical to those three unnamed siblings — and
+            // they sit at y 845.3…846.3, 5.7 pt clear of the 852-point screen
+            // edge. The glyph renders whole; the only part of the 18-pt line
+            // box that is off screen is 1.7 pt of empty leading below it.
+            // Positional, not chromatic.
             if line.hasPrefix(StationsAudit.contrast), let band = stationsAuditBand(line),
                band.maxY > viewportFoot, band.minY < viewportFoot {
                 print(
@@ -1533,10 +1541,19 @@ extension StubHouseUITests {
         // edge. The screen's own pass has one scroll view and is unchanged
         // at 770.0.
         //
-        // `max`, not "the last one in the tree": every scroll view lives
-        // inside the 852-point window, so the highest foot this can return
-        // is the window's own bottom edge, and nothing drawn whole can be
-        // exempted by it.
+        // `max`, not "the last one in the tree": with a sheet up the scroll
+        // view being audited is the sheet's, and of the two feet in I005's
+        // dump — the page's 766.3 behind it and the sheet's 852.0 — the
+        // sheet's is the greater. It is also the more permissive of the two,
+        // so what the straddle branch of
+        // ``stationsClassify(_:viewportFoot:name:)`` can forgive is worth
+        // saying plainly: a leaf the viewport foot **cuts**, whether that
+        // foot is the phone bar's top edge (I001 and I002 exempted
+        // `Favourite Kestrel 01`, 765.5…783.5, over a foot of 770.0) or the
+        // screen's bottom edge (I005's `—`, 835.7…853.7 over 852.0). A leaf
+        // wholly above the foot, or wholly below it, is never exempted —
+        // which is why the three other detection titles, ending at 653.7,
+        // 720.3 and 787.0, are still checked in the same pass.
         @MainActor
         func viewportFoot(_ app: XCUIApplication) -> CGFloat {
             let feet = app.scrollViews.allElementsBoundByIndex.map { $0.frame.maxY }
