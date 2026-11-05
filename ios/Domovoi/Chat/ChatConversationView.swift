@@ -988,16 +988,23 @@ struct ChatConversationView: View {
                     // drawn on the amber. Measured 8.49:1 light, 9.87:1 dark.
                     // ``AssistantPhoneConversationView/composer`` is where
                     // this was fixed first and is the model it is copied from.
-                    // The disabled look is ``ChatSendSkin``'s, and why it is
-                    // not a dimmed `.borderedProminent` is written there.
+                    //
+                    // **Both looks are ``BrandFillButtonStyle``'s**, one
+                    // unconditional style (unit mx-ink, 2026-11-05): the
+                    // same ``Color/brandFg`` on ``Color/brand`` while it can
+                    // send, and ``Color/fgMuted`` on the composer's own
+                    // surface, no fill, while it cannot. It replaced
+                    // `ChatSendSkin`, whose disabled half was `.bordered` +
+                    // ``Color/brandInk`` — the 4.38:1 wash measured on
+                    // Rooms' drop-in in train I005 — and whose `if`/`else`
+                    // made the button a different view on each side of the
+                    // flip. Both are written up on the style.
                     Button {
                         send()
                     } label: {
                         Text(ChatStrings.send)
-                            .foregroundStyle(chat.canSend ? Color.brandFg : Color.brandInk)
                     }
-                    .modifier(ChatSendSkin(live: chat.canSend))
-                    .frame(minHeight: 44)
+                    .buttonStyle(BrandFillButtonStyle())
                     .disabled(!chat.canSend)
                 }
                 // **Nothing at all with a blank box and no mic to put there**
@@ -1011,8 +1018,8 @@ struct ChatConversationView: View {
                 // [[no-misleading-controls]] is about, and the dimmed
                 // `.borderedProminent` that stood here is also what Apple's
                 // audit failed on contrast in train S005: grey glyphs on a
-                // grey fill. (That is the shape ``ChatSendSkin`` avoids for
-                // the reply-in-progress state above.)
+                // grey fill. (That is the shape ``BrandFillButtonStyle``
+                // avoids for the reply-in-progress state above.)
             }
             .padding(12)
         }
@@ -1023,74 +1030,6 @@ struct ChatConversationView: View {
         // second send while one is running and a house with AI off all send
         // nothing — and the box is cleared only when something did.
         if chat.send(typed) { typed = "" }
-    }
-}
-
-/// The send button's look, which is the only thing that changes when a reply
-/// is being written.
-///
-/// Kamron's answer 70 asked for Android's greyed-out send in that state
-/// (`ChatScreen.kt:1166-1171`: `enabled = canSend`, and `tint = if (canSend)
-/// brand else fgFaint` — a faint glyph on no fill, not a dimmed filled pill).
-/// Keeping `.borderedProminent` and letting `.disabled` dim it is the shape
-/// Apple's audit failed for contrast in train S005: the system replaces the
-/// amber with its own grey fill and dims the label on top of it, which is grey
-/// glyphs on a grey fill. So the disabled state borrows the look this app
-/// already ships for a drawn-and-disabled control —
-/// ``RoomsDropInRow``'s `.bordered` + ``Color/brandInk``, the drop-in button
-/// Kamron's answer 79 settled — and the enabled state is untouched.
-///
-/// **It swaps the look by branching, and SwiftUI rebuilds the button when the
-/// state flips.** This comment used to claim the opposite — "one button, one
-/// accessible element" — and that claim was wrong: ``body(content:)`` below is
-/// a `@ViewBuilder` `if`/`else`, which compiles to `_ConditionalContent`, and
-/// SwiftUI's structural identity is positional. When `live` flips, the mounted
-/// branch is removed and the other inserted, `content` and all, so one
-/// `Button` in the source is not one button in the view tree. The call site is
-/// a single `Button` in a single place either way — that part of "the same
-/// place, greyed out" holds, and the `.disabled(_:)` there is what a screen
-/// reader and a UI case read — but the control is not a *persisting* one
-/// across the flip.
-///
-/// What that costs, so nobody has to re-derive it: a VoiceOver user resting on
-/// the dimmed send when the reply lands is focused on the element SwiftUI is
-/// about to replace, so they are not told it became available; and the
-/// re-enable is a swap rather than a state change, so it cannot animate as one
-/// control. **Neither is measured** — it needs a Simulator, and the UI case
-/// `StubHouseUITests.testChat_TheSendIsGreyedOutWhileAReplyIsBeingWritten`
-/// asserts nothing about focus retention, so nothing in the suite will fail if
-/// this gets worse. It is a known limit for the next sim train, not a
-/// measurement (2026-11-04).
-///
-/// **The fix that was weighed and not taken.** One custom `ButtonStyle`
-/// applied unconditionally, drawing both looks from `@Environment(\.isEnabled)`
-/// read in a nested label view, is this app's own idiom for exactly this
-/// problem — `SystemSettingsLayoutButtonStyle` and
-/// `SystemSettingsSpareButtonStyle` (both private, and both there because the
-/// platform fades a disabled control past what the call site asked for, train
-/// S002), ``AiSettingsOutlinedButtonStyle``, ``PrintingOutlineButtonStyle``,
-/// ``DocumentsEditorBarButtonStyle`` — and it
-/// would make one identity out of the two. It also means drawing
-/// `.borderedProminent`'s pill by hand, and the *enabled* state is the one
-/// that has a contrast measurement on it (``Color/brandFg`` on
-/// ``Color/brand``, 8.49:1 light and 9.87:1 dark, taken against Apple's own
-/// rendering). This unit cannot run a Simulator or an audit, so hand-drawing
-/// the audited state here would trade a comment that overclaimed for a look
-/// nobody can check — Kamron's standing rule 3: a design that measures fine is
-/// kept, with a narrow recorded limit. Take it when a train can see the
-/// screen.
-private struct ChatSendSkin: ViewModifier {
-
-    /// Whether a send would be taken now (``ChatModel/canSend``).
-    let live: Bool
-
-    @ViewBuilder
-    func body(content: Content) -> some View {
-        if live {
-            content.buttonStyle(.borderedProminent).tint(Color.brand)
-        } else {
-            content.buttonStyle(.bordered).tint(Color.brandInk)
-        }
     }
 }
 

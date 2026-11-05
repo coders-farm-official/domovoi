@@ -311,11 +311,11 @@ struct HomeTimersView: View {
             Button(busy ? HomeTimerStrings.cancelling : HomeTimerStrings.cancel) {
                 onCancel(timer)
             }
-            .buttonStyle(.bordered)
-            .tint(Color.brandInk)
-            .fixedSize(horizontal: false, vertical: true)
-            .frame(minHeight: 44)
-            .contentShape(.rect)
+            // Android's `OutlinedButton` with its label in `fg`
+            // (`HomeSections.kt:510-521`): no fill, the primary ink. The
+            // `.bordered` + brand-ink chip it replaces read its label on a
+            // wash of itself, 4.38:1 (unit mx-ink, InkButtonStyles.swift).
+            .buttonStyle(InkOutlineButtonStyle(ink: .primary))
             .disabled(busy)
             .accessibilityLabel(HomeTimerStrings.cancelLabel(timer, shared: shared))
         }

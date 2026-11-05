@@ -1676,8 +1676,13 @@ extension StubHouseUITests {
     ///
     /// The box is handed in already inset, so the field's own border is not the
     /// reading.
+    ///
+    /// Internal rather than private since unit mx-ink: the Chat case
+    /// `testChat_TheSendIsGreyedOutWhileAReplyIsBeingWritten` measures the
+    /// greyed send's label on its own surface with this same reading, so the
+    /// two pixel measurements in the suite are one helper, not two.
     @MainActor
-    private func inkContrast(
+    func inkContrast(
         _ app: XCUIApplication,
         in box: CGRect
     ) -> (ratio: Double, ink: String, paper: String)? {

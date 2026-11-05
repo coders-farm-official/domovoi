@@ -204,19 +204,17 @@ struct PodcastSubscribeSheet: View {
                     .frame(minHeight: 44)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            .buttonStyle(.bordered)
-            // ``Color/brandInk``, never the inherited accent: a bordered
-            // button's label *is* the tint, and this app's accent is
-            // ``Color/brand`` at 2.05:1 on white. Apple's audit failed the
-            // grid's `poll now` for exactly that on train S004
-            // (`PodcastsView.swift:216`); this sheet is not audited by a case
-            // here, so it is the same fix made before the same finding.
-            .tint(Color.brandInk)
-            // And the label colour with it, for the reason train S007 made
-            // measurable on `poll now`: the wash a bordered button draws
-            // behind its label costs the ink about a point of contrast
-            // (`PodcastsView.swift:227-237`).
-            .foregroundStyle(Color.brandFg)
+            // Android's filled `Button` on both tabs (`PodcastsSubscribe.kt:150`
+            // `search`, `:200` `subscribe`), drawn by ``BrandFillButtonStyle``
+            // (unit mx-ink): ``Color/brandFg`` on ``Color/brand`` while it can
+            // act, ``Color/fgMuted`` with no fill while it cannot. What it
+            // replaces was `.bordered` + ``Color/brandInk`` with a
+            // ``Color/brandFg`` label — fine in light (13.5:1 on the wash) and
+            // near-black on a dark wash in dark mode, about **1.6:1** on the
+            // sheet by the tokens (an 18% wash of `#F9AD26` over `#1C1C1E` is
+            // `#44361F`; the dark opacity is an estimate, the light one is
+            // measured). No case audits this sheet in dark mode.
+            .buttonStyle(BrandFillButtonStyle())
             .disabled(!enabled)
         }
     }
@@ -274,11 +272,12 @@ struct PodcastDiscoveryRow: View {
                         .frame(minHeight: 44)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                .buttonStyle(.bordered)
-                // ``Color/brandInk``, for the field's reason above, and
-                // ``Color/brandFg`` on it for the wash's.
-                .tint(Color.brandInk)
-                .foregroundStyle(Color.brandFg)
+                // Android's `OutlinedButton` (`PodcastsSubscribe.kt:179`): no
+                // fill, the label in ``Color/brandInk`` on the sheet (5.66:1
+                // light, 8.94:1 on the dark sheet). The `.bordered` wash it
+                // replaces put a ``Color/brandFg`` label on a dark wash in
+                // dark mode, about 1.6:1 (unit mx-ink, InkButtonStyles.swift).
+                .buttonStyle(InkOutlineButtonStyle())
                 .disabled(busy)
                 // Fifteen hits means fifteen buttons all saying `add`, so
                 // each one says what it adds.

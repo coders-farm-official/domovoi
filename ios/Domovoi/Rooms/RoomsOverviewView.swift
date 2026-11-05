@@ -442,12 +442,14 @@ struct RoomsOverviewView: View {
                 Button(RoomsStrings.hangUp) {
                     model.hangUp(room)
                 }
-                .buttonStyle(.bordered)
-                .tint(Color.errInk)
+                //
+                // **No fill** (unit mx-ink): Android's control is an
+                // `OutlinedButton` (`SatOverviewTab.kt:520`), and `.bordered`
+                // read the ink on a wash of itself — 4.50:1 on white, 4.16:1
+                // on a grey card, by the tokens. ``InkOutlineButtonStyle``
+                // keeps the red ink on the bare surface (6.08 / 5.58).
+                .buttonStyle(InkOutlineButtonStyle(ink: .errInk))
                 .font(.subheadline)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(minHeight: 44)
-                .contentShape(.rect)
                 Text(RoomsStrings.dropInHelp)
                     .font(.footnote)
                     .foregroundStyle(Color.fgMuted)

@@ -543,9 +543,15 @@ struct AssistantPhoneConversationView: View {
                     // written (`AssistantChat.kt:143`), which is why there is
                     // no disabled `send`: the one control in that spot always
                     // does something.
+                    //
+                    // Android's stop is a brand-tinted glyph with no container
+                    // (`AssistantChat.kt:376-378`). The untinted `.bordered`
+                    // here took the app's ``Color/brandInk`` tint
+                    // (`DomovoiApp.swift:232`) and read it on a wash of itself,
+                    // 4.38:1 on white; ``InkOutlineButtonStyle`` keeps the ink
+                    // on the bare surface, 5.66:1 (unit mx-ink).
                     Button(AssistantStrings.stop) { phone.stop() }
-                        .buttonStyle(.bordered)
-                        .frame(minHeight: 44)
+                        .buttonStyle(InkOutlineButtonStyle())
                 } else if ChatRules.sendOffered(typed: typed), !phone.sending {
                     // **Something is typed** — ``ChatRules/sendOffered(typed:)``
                     // and not this screen's own copy of the trim. The rule is

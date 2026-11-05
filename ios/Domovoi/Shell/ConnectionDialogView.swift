@@ -615,9 +615,13 @@ struct TrustServerCard: View {
                 .fixedSize(horizontal: false, vertical: true)
             HStack {
                 Spacer()
+                // Android's `OutlinedButton` (`ServerPicker.kt:395`): no
+                // fill, so `cancel` is the ink on the card and not on a wash
+                // of itself (that `.bordered` chip is 4.38:1 on white — unit
+                // mx-ink, InkButtonStyles.swift; not opened by any case here:
+                // this sheet starts a LAN sweep).
                 Button(ShellStrings.trustCancel, action: onCancel)
-                    .buttonStyle(.bordered)
-                    .tint(Color.brandInk)
+                    .buttonStyle(InkOutlineButtonStyle())
                 Button(ShellStrings.trustConfirm, action: onConfirm)
                     .buttonStyle(.borderedProminent)
                     // The app's tint is `brandInk` (`DomovoiApp.swift`), so
@@ -677,9 +681,10 @@ struct ForgetServerCard: View {
             }
             HStack {
                 Spacer()
+                // Android's `OutlinedButton` (`ForgetServer.kt:100`), for the
+                // trust card's reason above (unit mx-ink).
                 Button(forgetServerCancel, action: onCancel)
-                    .buttonStyle(.bordered)
-                    .tint(Color.brandInk)
+                    .buttonStyle(InkOutlineButtonStyle())
                 // **No brand colour here.** A destructive role draws itself
                 // red whatever the tint is, and forgetting a server is the
                 // one button on this sheet that should not look like the

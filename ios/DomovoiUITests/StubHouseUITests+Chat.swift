@@ -312,23 +312,44 @@ extension StubHouseUITests {
     /// in the box, so a usable send on screen afterwards is also the proof
     /// that the typed words survived the stream.
     ///
+    /// ### The greyed send's own contrast, measured off its pixels
+    ///
+    /// Unit mx-ink (2026-11-05). The disabled look used to be `.bordered` +
+    /// ``Color/brandInk`` — a label on an 18% wash of itself, the pairing train
+    /// I005 measured at **4.38:1** on Rooms' drop-in (`#975800` on `#ECE1D1`)
+    /// — and it had been chosen *because* it was believed audited. It is now
+    /// ``BrandFillButtonStyle``'s disabled state: ``Color/fgMuted`` on the
+    /// composer's own surface with no fill, 7.43:1 on white by the tokens.
+    ///
+    /// The reading is ``inkContrast(_:in:)``, the hint cases' helper: the
+    /// darkest and the lightest pixel in a box **inset into the middle of the
+    /// button**, so the box is inside the old chip on every side — under the
+    /// old look the lightest pixel there is the wash and the reading is about
+    /// 4.4, under the floor; under Android's literal `fgFaint` (`#B9B7B4`) it
+    /// is about 2.0. Both fail ``StubShell/contrastFloor``. Antialiasing makes
+    /// the darkest pixel lighter than the ink, so a pass has room.
+    ///
+    /// **Not proven by a sabotage run.** The rule is that a case must fail on
+    /// the defect it names; unit mx-ink cannot boot a Simulator, so the
+    /// discrimination above is token arithmetic (4.38 and 2.00 under 4.5,
+    /// 7.43 over it), not an observed red. The train is where it is seen.
+    ///
     /// ### What this case does not cover
     ///
-    /// **Whether VoiceOver's focus survives the re-enable.** `ChatSendSkin`
-    /// swaps the look with a `@ViewBuilder` `if`, so SwiftUI replaces the
-    /// button when the state flips rather than updating one (that type's doc
-    /// comment has the argument and the limit). This case reads the send
-    /// again *after* the reply lands, which is a fresh query and passes either
-    /// way, so it will not fail if focus is lost there. Asserting it needs
-    /// something this suite has no helper for — focus before and after a flip
-    /// the case does not control the timing of — and it was not added blind
-    /// from a machine that cannot run it. Recorded, not measured (2026-11-04).
+    /// **Whether VoiceOver's focus survives the re-enable.** Since mx-ink the
+    /// send is one unconditional `ButtonStyle` reading `isEnabled`, so SwiftUI
+    /// updates one button rather than swapping two (the old `ChatSendSkin`
+    /// branched, and that was the limit recorded here). That is a fact about
+    /// the view tree, not a measurement: this case reads the send again
+    /// *after* the reply lands, which is a fresh query and passes either way,
+    /// and the suite has no focus-before-and-after helper. Recorded, not
+    /// measured.
     ///
     /// **Apple's audit over the greyed send.** `testChat_TheComposerAuditsWithItsSendDrawn`
     /// audits the composer with the send **live** on an idle thread; no case
-    /// has ever measured the disabled pairing (`.bordered` +
-    /// ``Color/brandInk``), which is why that look was borrowed from the
-    /// audited ``RoomsDropInRow`` rather than invented.
+    /// runs Apple's audit over the disabled state. The pixel reading above is
+    /// the measurement of that state's label contrast; the audit's other
+    /// headlines (hit area, Dynamic Type) are not taken on it.
     @MainActor
     func testChat_TheSendIsGreyedOutWhileAReplyIsBeingWritten() throws {
         let (app, landed) = openChat(fail: "slow")
@@ -375,6 +396,38 @@ extension StubHouseUITests {
             send?.isHittable ?? true,
             "the greyed-out send is still hittable, so a tap reaches a control that is refused"
         )
+        // **The greyed send's label on its own surface** (mx-ink). Read
+        // before the reply can land — the `finished` check below brackets it
+        // with the rest of the composer reads. The box is the middle of the
+        // button: a quarter of its height in from top and bottom and a fifth of
+        // its width in from each side, which is inside the old `.bordered`
+        // chip on every side, so that chip's wash would be the lightest pixel.
+        if let send {
+            let frame = send.frame
+            let box = frame.insetBy(dx: frame.width * 0.2, dy: frame.height * 0.25)
+            if let reading = inkContrast(app, in: box) {
+                print(
+                    "CHAT [chat-send-greyed-mid-reply] label \(reading.ink) on \(reading.paper) in "
+                        + "\(box) of \(frame) — " + String(format: "%.2f", reading.ratio) + ":1"
+                )
+                XCTAssertGreaterThan(
+                    reading.ratio,
+                    StubShell.contrastFloor,
+                    "the greyed-out send measures " + String(format: "%.2f", reading.ratio)
+                        + ":1 (label \(reading.ink) on \(reading.paper)) inside \(box), under "
+                        + "\(StubShell.contrastFloor):1. About 4.4 is `.bordered` + brandInk "
+                        + "again (a label on a wash of itself, 4.38:1 in I005); about 2.0 is "
+                        + "Android's fgFaint taken literally. BrandFillButtonStyle draws "
+                        + "fgMuted on the bare surface, 7.43:1 by the tokens"
+                )
+            } else {
+                print(app.debugDescription)
+                XCTFail(
+                    "could not read the greyed-out send's pixels in \(box) of \(frame) — no "
+                        + "screenshot to measure, or the box left it (tree printed above)"
+                )
+            }
+        }
         XCTAssertFalse(
             chatComposerSends(app),
             "chatComposerSends read the dimmed send as a usable one, so every other case in "

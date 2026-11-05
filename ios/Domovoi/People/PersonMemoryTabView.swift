@@ -105,9 +105,13 @@ struct PersonMemoryTabView: View {
             .submitLabel(.done)
             .onSubmit { detail.saveMemory() }
             .accessibilityLabel(PeopleStrings.addMemoryPlaceholder)
+            // Android's filled `Button` (`PersonTabs.kt:185`), drawn by
+            // ``BrandFillButtonStyle`` (unit mx-ink). The untinted `.bordered`
+            // it replaces took the app's ``Color/brandInk`` tint
+            // (`DomovoiApp.swift:232`) and read it on a wash of itself, about
+            // 4.06:1 on a card; disabled, it is ``Color/fgMuted`` with no fill.
             Button(PeopleStrings.save) { detail.saveMemory() }
-                .buttonStyle(.bordered)
-                .frame(minHeight: 44)
+                .buttonStyle(BrandFillButtonStyle())
                 // Disabled while blank, as Android's is — and also while a
                 // write is in flight: the memories route does **not** upsert
                 // (`people.py:461`), so a second tap on a slow house would
@@ -201,9 +205,10 @@ struct PersonMemoryTabView: View {
                 .submitLabel(.done)
                 .onSubmit { detail.saveFavorite() }
                 .accessibilityLabel(PeopleStrings.favoriteValuePlaceholder)
+                // Android's filled `Button` (`PersonTabs.kt:290-293`), for the
+                // memory row's reason above (unit mx-ink).
                 Button(PeopleStrings.save) { detail.saveFavorite() }
-                    .buttonStyle(.bordered)
-                    .frame(minHeight: 44)
+                    .buttonStyle(BrandFillButtonStyle())
                     // Both fields, as Android requires both: a `save` that
                     // could only ever 422 is a control that cannot do what it
                     // says.
