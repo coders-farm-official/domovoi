@@ -137,12 +137,114 @@ final class ChatSendRuleTests: XCTestCase {
         )
     }
 
+    // MARK: - while a reply is being written
+
+    /// **Answer 70's state, at the model**: the composer still has a send to
+    /// draw while a reply is being written, and the send it draws cannot send.
+    ///
+    /// Kamron's answer 70 (2026-11-04) took Android's greyed-out send over the
+    /// empty spot this screen shipped (`ChatScreen.kt:1166-1171`,
+    /// `enabled = canSend`). The composer draws the button whenever
+    /// ``ChatRules/sendOffered(typed:)`` says there is something in the box and
+    /// disables it on `!canSend`, so the three facts the view depends on are
+    /// pinned here:
+    ///
+    ///  * ``ChatModel/composerOffered`` **stays true** while a reply streams —
+    ///    the box is still there and the words stay in it;
+    ///  * ``ChatRules/sendOffered(typed:)`` **stays true** for words typed
+    ///    mid-reply, which is what draws the button at all;
+    ///  * ``ChatModel/canSend`` is **false**, and ``ChatModel/send(_:)``
+    ///    refuses — which is why the drawn button is disabled rather than live.
+    ///    Nothing is queued, and `.disabled` is what says so.
+    ///
+    /// And when the reply lands the send is usable again, which is the other
+    /// half of the answer.
+    ///
+    /// **What this case does not cover.** It pins the model, not the view, and
+    /// every fact it asserts was already true before answer 70 was built — it
+    /// passes unchanged against the old composer, which drew nothing in that
+    /// state. `pkgtest` builds the package alone and cannot see
+    /// `ios/Domovoi/`, so dropping `.disabled(!canSend)` from the composer
+    /// leaves this case (and the whole package suite) green: measured on
+    /// 2026-11-04, exit 0, no failures. The owner of the behaviour answer 70
+    /// changed is the UI case
+    /// `StubHouseUITests.testChat_TheSendIsGreyedOutWhileAReplyIsBeingWritten`,
+    /// which reads the drawn button for `isEnabled` and hittability on a
+    /// Simulator. This one is the regression net under it: it fails if the
+    /// model ever stops offering a composer, stops offering a send for words
+    /// typed mid-reply, or starts letting `send(_:)` through while a reply is
+    /// being written — each of which would make the view's `.disabled` read
+    /// the wrong thing.
+    func testTheSendIsStillOfferedAndCannotSendWhileAReplyIsBeingWritten() async {
+        StubURLProtocol.reset()
+        defer { StubURLProtocol.reset() }
+        StubURLProtocol.dispatch { request in
+            let path = request.url
+                .flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false) }?.path ?? ""
+            switch path {
+            case "/api/health":
+                return .json((try? TestIdentity.real.healthBody(challenge: nil)) ?? "{}")
+            case "/api/chat/threads":
+                return .json(#"{"id":77,"title":"new chat","updated_at":"2026-11-02T19:00:00+00:00"}"#)
+            default:
+                guard path.hasSuffix("/messages") else { return .json("{}", status: 404) }
+                return .json(
+                    """
+                    event: done
+                    data: {"id":11,"role":"assistant","content":"in about a minute","model":"llama3.2:latest"}
+
+                    """,
+                    headers: ["Content-Type": "text/event-stream"]
+                )
+            }
+        }
+
+        let model = newChatModel()
+        model.startNewChat()
+        XCTAssertTrue(model.canSend, "the rig cannot send at all, so this asserts nothing")
+        // `send` sets `sending` before it awaits anything, which is what lets
+        // the three assertions below be read against a live reply without a
+        // clock (`ChatModelTests.testWhatSendRefusesToSend` reads it the same
+        // way).
+        XCTAssertTrue(model.send("slowly now"), "the first message did not go out")
+        XCTAssertTrue(model.sending, "no reply is being written, so this case asserts nothing")
+
+        let typedNext = "and one more"
+        XCTAssertTrue(
+            model.composerOffered,
+            "the composer went away while a reply was being written, so there is nowhere for a "
+                + "greyed-out send to be drawn and the typed words are gone with it"
+        )
+        XCTAssertTrue(
+            ChatRules.sendOffered(typed: typedNext),
+            "words typed mid-reply ask for no send, so answer 70's button would not be drawn"
+        )
+        XCTAssertFalse(
+            model.canSend,
+            "the send would be drawn live while a reply is being written, and every press of it "
+                + "is refused"
+        )
+        XCTAssertFalse(
+            model.send(typedNext),
+            "a second message went out while a reply was being written: nothing is queued, so a "
+                + "live send there is a control that cannot do what it says"
+        )
+
+        await settleUntil({ !model.sending }, "the reply")
+        XCTAssertTrue(
+            model.canSend,
+            "the send never came back when the reply landed: a typed message with nothing on "
+                + "screen that can send it"
+        )
+    }
+
     // MARK: - the rig
 
     /// A model with a trusted server and no house behind it.
     ///
     /// `ChatModelTests` has the same five lines; its `rig()` is private to
-    /// that file and installs a `House`, which none of the cases here wants.
+    /// that file and installs a `House`, which the cases here either do not
+    /// want or (answer 70's) install for themselves, in two paths.
     private func newChatModel() -> ChatModel {
         let address = "http://10.0.0.42:6369"
         let store = InMemoryShellStore(serverURL: address, token: "household-abc")
@@ -155,5 +257,21 @@ final class ChatSendRuleTests: XCTestCase {
             configuration: StubURLProtocol.session(timeout: 1)
         )
         return ChatModel(in: container, deviceID: "ios-1", pins: ChatPinBook(place: SavedStateBox()))
+    }
+
+    /// Every task that could have run gets its chance, up to a bound.
+    ///
+    /// `ChatModelTests` has the same helper and it is private to that file.
+    private func settleUntil(
+        _ done: @MainActor () -> Bool,
+        _ what: String = "the model",
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async {
+        for _ in 0..<3000 {
+            if done() { return }
+            await Task.yield()
+        }
+        XCTFail("\(what) never settled in 3000 yields", file: file, line: line)
     }
 }
