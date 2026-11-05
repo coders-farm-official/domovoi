@@ -101,7 +101,8 @@ def ratio(fg: Colour, bg: Colour) -> float:
 
 
 def _block(css: str, selector: str) -> dict[str, str]:
-    m = re.search(re.escape(selector) + r"\s*\{(.*?)\n\}", css, re.S)
+    # The selector may head a list (`:root,\n:root[data-theme='dark'] .theme-invert {`).
+    m = re.search(re.escape(selector) + r"(?:\s*,[^{]*)?\s*\{(.*?)\n\}", css, re.S)
     assert m, selector
     body = re.sub(r"/\*.*?\*/", "", m.group(1), flags=re.S)
     return dict(re.findall(r"--([\w-]+)\s*:\s*([^;]+);", body))

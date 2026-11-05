@@ -647,7 +647,7 @@ def test_a_toast_outranks_every_overlay_it_can_be_fired_from():
     """z-index 60 under an opaque z-80 takeover is why pressing Save
     looked like it did nothing: the editor's own message was painted
     behind the editor."""
-    toast = re.search(r"gap: 8, zIndex: (\d+), maxWidth",
+    toast = re.search(r"gap: 8, zIndex: (\d+), pointerEvents",
                       (STATIC / "components.jsx").read_text(encoding="utf-8"))
     assert toast, "the toast host's zIndex moved — update this test"
     toast_z = int(toast.group(1))
