@@ -33,6 +33,11 @@ extension StubHouseUITests {
     /// The app is deliberately **not** launched. Nothing in the claim is about
     /// this app or the stub house, and a launch would make a case about one
     /// XCUITest read depend on a house being up.
+    ///
+    /// It costs about two and a half seconds and all of them are XCUITest's:
+    /// a query that resolves nothing is retried twice before it answers
+    /// (I005's log: `Find the …`, `retry 1`, `retry 2`, 2.3 s), which is why
+    /// ``StubHouseUITests/notificationBannerFrame()`` asks `exists` first.
     @MainActor
     func testBanner_AnUnresolvableBannerReadsAsNoBannerNotAsAFailure() {
         let absent = XCUIApplication(bundleIdentifier: "com.apple.springboard")

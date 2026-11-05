@@ -960,9 +960,22 @@ final class StubHouseUITests: XCTestCase {
 
     /// The frame of the notification banner over the app, or `nil` when there
     /// is none — and `nil`, not a failure, for one caught mid-dismissal.
+    ///
+    /// **`exists` first, for the clock and not for safety.** An unresolvable
+    /// query is not answered at once: I005's failing log is
+    /// `t = 24.18s Find the …`, `t = 25.27s retry 1`, `t = 26.38s retry 2`,
+    /// error at `t = 26.49s` — 2.3 seconds per read that finds nothing, where
+    /// `Checking existence of …` answers in about 80 ms (the same log's clear
+    /// loop steps 0.39 s apart on a 0.3 s sleep). Nearly every call here is
+    /// made on a screen with no banner at all, three per audit, so taking the
+    /// slow path for the ordinary case would add minutes to a full class. The
+    /// race this function exists for is reached with `exists` **true**, which
+    /// is the one case that goes on to ``bannerFrame(of:)``.
     @MainActor
     func notificationBannerFrame() -> CGRect? {
-        bannerFrame(of: notificationBannerQuery())
+        let banner = notificationBannerQuery()
+        guard banner.exists else { return nil }
+        return bannerFrame(of: banner)
     }
 
     /// Wait until no notification banner is on screen, and say so in the log.
@@ -1020,7 +1033,10 @@ final class StubHouseUITests: XCTestCase {
                 // swipe in two trains (I004,
                 // `testTheStatesTheAuditHadNeverSeen.log:1522`, a banner up
                 // for 8 s at `(8.0, 56.0, 377.0, 66.0)`) is of that kind, and
-                // it cleared it.
+                // it cleared it. One whose frame keeps changing is left to the
+                // loop, which gives up at `clearIn` and says so in the log —
+                // a wait that ends honestly, rather than a gesture aimed at
+                // something that is moving.
                 usleep(150_000)
                 guard let still = notificationBannerFrame(), still == here else { continue }
                 guard let banner = notificationBanner() else { continue }
