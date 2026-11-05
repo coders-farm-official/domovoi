@@ -31,7 +31,8 @@ together, in installer\pins.iss: DomovoiCommit (the commit), DomovoiChannel
 (-Channel), ProvisionSha256 (that commit's scripts/linux/provision.sh, the
 bytes GitHub serves; LF only), ProvisionBundled (off: provision.sh is
 fetched from that commit), DashboardTabRoutes (whether its dashboard has
-the tab addresses) and ProvisionAiChoice (whether its provision.sh takes
+the tab addresses), DashboardWelcome (whether its dashboard greets an
+unclaimed house with the first-run welcome) and ProvisionAiChoice (whether its provision.sh takes
 --ai-models / --no-ai-models: Setup asks about AI chat and questions only
 then). Takes a release tag (v1.0.0, v1.0.0-rc2: refs/tags only,
 never a branch) or a full commit SHA, which must be in this clone and on
@@ -138,6 +139,10 @@ function Set-Pins([string]$Ref, [string]$Channel, [string]$File) {
     if ($routes -and ($setupRoutes -cnotcontains $routeMatch.Groups[1].Value)) {
         throw ("the dashboard at $sha has SETUP_ROUTE '" + $routeMatch.Groups[1].Value + "', which build.ps1 doesn't know: check that Setup's link still lands on the admin setup, then add it to `$setupRoutes")
     }
+    # The first-run welcome (components.jsx FirstRunWelcome, 2026-11-04):
+    # its dashboard opens it at Setup's address, and the last page's steps
+    # then name the welcome's words instead of the admin setup dialog's.
+    $welcome = [regex]::IsMatch($jsx, "(?m)^const FirstRunWelcome = ")
     # The usage lines ProvisionScript.SupportsAiChoice looks for.
     $aiChoice = $text.Contains("`n  --ai-models ") -and $text.Contains("`n  --no-ai-models ")
 
@@ -149,11 +154,13 @@ function Set-Pins([string]$Ref, [string]$Channel, [string]$File) {
     $pins = Set-PinLine $pins '^(; )?#define ProvisionBundled[ \t]*$' '; #define ProvisionBundled'
     if ($routes) { $line = '#define DashboardTabRoutes' } else { $line = '; #define DashboardTabRoutes' }
     $pins = Set-PinLine $pins '^(; )?#define DashboardTabRoutes[ \t]*$' $line
+    if ($welcome) { $line = '#define DashboardWelcome' } else { $line = '; #define DashboardWelcome' }
+    $pins = Set-PinLine $pins '^(; )?#define DashboardWelcome[ \t]*$' $line
     if ($aiChoice) { $line = '#define ProvisionAiChoice' } else { $line = '; #define ProvisionAiChoice' }
     $pins = Set-PinLine $pins '^(; )?#define ProvisionAiChoice[ \t]*$' $line
     [System.IO.File]::WriteAllBytes($File, [System.Text.Encoding]::ASCII.GetBytes($pins))
     $tagText = if ($tags) { ' (' + (($tags -split "`n") -join ', ') + ')' } else { '' }
-    Write-Output ("pinned $sha$tagText, channel $Channel, provision.sh sha256 $provSha (" + $script.Length + " bytes, fetched from that commit), tab addresses " + $(if ($routes) { 'on' } else { 'off' }) + ", AI question " + $(if ($aiChoice) { 'on' } else { 'off' }) + ": $File")
+    Write-Output ("pinned $sha$tagText, channel $Channel, provision.sh sha256 $provSha (" + $script.Length + " bytes, fetched from that commit), tab addresses " + $(if ($routes) { 'on' } else { 'off' }) + ", welcome " + $(if ($welcome) { 'on' } else { 'off' }) + ", AI question " + $(if ($aiChoice) { 'on' } else { 'off' }) + ": $File")
 }
 
 # Disabled hook: when signing comes back, sign DomovoiHost.exe and

@@ -3,7 +3,8 @@
 ; new pin is one edit, and the pins that belong together move together:
 ; `windows\build.ps1 -Pin <tag or SHA>` rewrites DomovoiCommit,
 ; DomovoiChannel, ProvisionSha256, ProvisionBundled (off),
-; DashboardTabRoutes and ProvisionAiChoice from that commit in one go, and
+; DashboardTabRoutes, DashboardWelcome and ProvisionAiChoice from that
+; commit in one go, and
 ; domovoi/tests/test_windows_installer.py fails while they disagree.
 ;
 ; Linux-side pins (docker-ce, models, Whisper, Ollama, images, the Python
@@ -39,6 +40,15 @@
 ; build.ps1 -Pin sets it from the commit; domovoi/tests/test_windows_installer.py
 ; checks it.
 #define DashboardTabRoutes
+
+; Does the dashboard at that commit greet an unclaimed house with the
+; first-run welcome (FirstRunWelcome in web/static/components.jsx,
+; 2026-11-04)? Then the same address opens the welcome, which holds the
+; claim and ends in "You're all set!" with the household token, and the last
+; page's steps say so. Without it they name the first-run admin setup
+; dialog, as before. build.ps1 -Pin sets it from the commit;
+; domovoi/tests/test_windows_installer.py checks it.
+; #define DashboardWelcome
 
 ; Does provision.sh at that commit take --ai-models / --no-ai-models (AI
 ; chat and questions optional, 2026-10-21; ProvisionScript.SupportsAiChoice

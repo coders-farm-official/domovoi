@@ -19,7 +19,7 @@ and when clicking around our URL should change."
   falls through to Home.
 * ``#settings/configuration/setup`` is what the Windows installers already
   out open (``#settings/advanced/setup`` since 2026-10-21): on an unclaimed
-  box Advanced opens the first-run admin setup by itself (as it does at
+  box Advanced opens the first-run welcome by itself (as it does at
   ``#settings/advanced``); on a box claimed before the visit it says so in
   one line and nothing opens.
 * Where the setup code is, in the words of the kind of server
@@ -251,7 +251,7 @@ SCENARIOS: dict[str, dict] = {
         "script": r"""
           const w = h.global('window');
           h.render(); await w.__settle(h);
-          return { opened: w.__opened, text: h.text().join(' '),
+          return { opened: w.__opened, welcome: !!(w.FirstRun && w.FirstRun.wanted), text: h.text().join(' '),
                    note: !!h.find((e) => w.__cls(e).includes('admin-already-set-up')) };
         """,
     },
@@ -262,7 +262,7 @@ SCENARIOS: dict[str, dict] = {
         "script": r"""
           const w = h.global('window');
           h.render(); await w.__settle(h);
-          return { opened: w.__opened };
+          return { opened: w.__opened, welcome: !!(w.FirstRun && w.FirstRun.wanted) };
         """,
     },
     "claim_other_tab_unclaimed": {
@@ -272,7 +272,7 @@ SCENARIOS: dict[str, dict] = {
         "script": r"""
           const w = h.global('window');
           h.render(); await w.__settle(h);
-          return { opened: w.__opened };
+          return { opened: w.__opened, welcome: !!(w.FirstRun && w.FirstRun.wanted) };
         """,
     },
     "claim_route_claimed": {
@@ -283,7 +283,7 @@ SCENARIOS: dict[str, dict] = {
           const w = h.global('window');
           h.render(); await w.__settle(h);
           const note = h.find((e) => w.__cls(e).includes('admin-already-set-up'));
-          return { opened: w.__opened, note: note ? w.__deep(note) : null, hash: w.location.hash };
+          return { opened: w.__opened, welcome: !!(w.FirstRun && w.FirstRun.wanted), note: note ? w.__deep(note) : null, hash: w.location.hash };
         """,
     },
     "claim_route_claimed_live": {
@@ -295,7 +295,7 @@ SCENARIOS: dict[str, dict] = {
           const w = h.global('window');
           h.render(); await w.__settle(h);
           const note = h.find((e) => w.__cls(e).includes('admin-already-set-up'));
-          return { opened: w.__opened, note: note ? w.__deep(note) : null };
+          return { opened: w.__opened, welcome: !!(w.FirstRun && w.FirstRun.wanted), note: note ? w.__deep(note) : null };
         """,
     },
     "claimed_plain_config_has_no_note": {
@@ -305,7 +305,7 @@ SCENARIOS: dict[str, dict] = {
         "script": r"""
           const w = h.global('window');
           h.render(); await w.__settle(h);
-          return { opened: w.__opened, note: !!h.find((e) => w.__cls(e).includes('admin-already-set-up')) };
+          return { opened: w.__opened, welcome: !!(w.FirstRun && w.FirstRun.wanted), note: !!h.find((e) => w.__cls(e).includes('admin-already-set-up')) };
         """,
     },
     "claimed_here_drops_the_marker": {
@@ -319,7 +319,7 @@ SCENARIOS: dict[str, dict] = {
           // The claim succeeded (auth.js signedIn): the status says so.
           h.global('Auth').status = { setup_complete: true, authenticated: true };
           h.rerender(); await w.__settle(h);
-          return { before, after: w.location.hash, opened: w.__opened,
+          return { before, after: w.location.hash, opened: w.__opened, welcome: !!(w.FirstRun && w.FirstRun.wanted),
                    note: !!h.find((e) => w.__cls(e).includes('admin-already-set-up')) };
         """,
     },
@@ -546,33 +546,38 @@ def test_links_into_settings_name_their_tab() -> None:
 
 
 def test_the_installers_address_opens_the_setup_on_an_unclaimed_box(driven) -> None:
+    # Since 2026-11-04 (owner): the first-run welcome, which holds the claim
+    # form and ends in "you're all set" (components.jsx FirstRun), not the
+    # bare admin setup dialog.
     o = driven["claim_route_unclaimed"]
-    assert o["opened"] == 1
+    assert o["welcome"] is True and o["opened"] == 0
     assert o["note"] is False
     assert "set up admin" in o["text"]                     # the card's button, if it is closed
     # Advanced itself does the same, once per arrival.
-    assert driven["claim_plain_config_unclaimed"]["opened"] == 1
+    plain = driven["claim_plain_config_unclaimed"]
+    assert plain["welcome"] is True and plain["opened"] == 0
     # Other tabs don't.
-    assert driven["claim_other_tab_unclaimed"]["opened"] == 0
+    other = driven["claim_other_tab_unclaimed"]
+    assert other["welcome"] is False and other["opened"] == 0
 
 
 def test_the_installers_address_is_harmless_on_a_claimed_box(driven) -> None:
     o = driven["claim_route_claimed"]
-    assert o["opened"] == 0
+    assert o["opened"] == 0 and o["welcome"] is False
     assert o["note"] == "This Domovoi’s admin account is already set up: sign in with its password."
     assert o["hash"] == "#settings/advanced/setup"
     live = driven["claim_route_claimed_live"]
-    assert live["opened"] == 0
+    assert live["opened"] == 0 and live["welcome"] is False
     assert live["note"] == "This Domovoi’s admin account is already set up, and you’re signed in."
     # The note is the marker's: plain Advanced on a claimed box has none.
-    assert driven["claimed_plain_config_has_no_note"] == {"opened": 0, "note": False}
+    assert driven["claimed_plain_config_has_no_note"] == {"opened": 0, "welcome": False, "note": False}
 
 
 def test_a_claim_made_on_the_installers_address_drops_the_marker(driven) -> None:
     o = driven["claimed_here_drops_the_marker"]
     assert o["before"] == "#settings/advanced/setup"
     assert o["after"] == "#settings/advanced"              # a reload won't say "already"
-    assert o["opened"] == 1 and o["note"] is False
+    assert o["welcome"] is True and o["opened"] == 0 and o["note"] is False
 
 
 # ─── where the setup code is ─────────────────────────────────────────────

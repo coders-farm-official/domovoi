@@ -720,7 +720,8 @@ const VoicesPanel = () => {
  * the window is a reloaded tab "view only" (adminReloadState, components.jsx).
  *
  * On an unclaimed box, arriving here (the tab, or its address
- * #settings/advanced) opens the first-run admin setup by itself, once
+ * #settings/advanced) opens the first-run welcome (2026-11-04; the admin
+ * setup dialog before) by itself, once
  * per arrival, as soon as a fresh status read says the box is unclaimed:
  * the setup code field has the focus, so a new owner pastes and goes.
  * `setupAsked` is the installer's address, #settings/advanced/setup
@@ -729,6 +730,14 @@ const VoicesPanel = () => {
  * the address (replaced in place), so a reload doesn't call the box
  * claimed "already".
  */
+// The claim form on an unclaimed house: the first-run welcome
+// (components.jsx FirstRun), which holds it and ends in "you're all set";
+// the bare admin setup dialog only where the welcome isn't loaded.
+const openClaim = () => {
+  try { if (typeof FirstRun !== 'undefined') { FirstRun.open(); return; } } catch { /* below */ }
+  Auth.openModal();
+};
+
 const AdminSection = ({ setupAsked = false }) => {
   const [, force] = React.useReducer((x) => x + 1, 0);
   // live / resumable / view only, and until when a reload keeps it.
@@ -742,7 +751,7 @@ const AdminSection = ({ setupAsked = false }) => {
       if (!alive || !s) return;
       const unclaimed = s.setup_complete === false;
       setArrived(unclaimed ? 'unclaimed' : 'claimed');
-      if (unclaimed && !Auth.modalOpen) Auth.openModal();
+      if (unclaimed && !Auth.modalOpen) openClaim();
     }, () => { /* unreachable: the card says "checking…" and offers the button */ });
     return () => { alive = false; un(); };
   }, []);
@@ -830,7 +839,7 @@ const AdminSection = ({ setupAsked = false }) => {
         )}
         <span style={{ flex: 1 }}/>
         {needsSetup
-          ? <Button variant="primary" onClick={() => Auth.openModal()}>set up admin</Button>
+          ? <Button variant="primary" onClick={openClaim}>set up admin</Button>
           : live
             ? <Button onClick={signOut}>sign out</Button>
             : viewOnly

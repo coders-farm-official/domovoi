@@ -21,7 +21,7 @@ This is a tech-forward management UI you'd reach from a laptop or a phone on the
 - No emoji. Status uses `<StatusDot/>`, not a colored-circle character.
 - Live things pulse (`domovoi-pulse`). Idle things don't.
 - Lowercase chrome (`now playing`, `online`, `failed`). Sentence case for content.
-- Cat glyph in four places only: top-left wordmark, next to Domovoi's own lines in feeds, empty states, and the first-run welcome and "you're all set" dialogs (owner request, 2026-11-04: the one moment the product greets someone).
+- Cat glyph where the product speaks as itself: the top-left wordmark, next to Domovoi's own lines in feeds, empty states, and first-run and onboarding moments (a welcome, a "you're all set"). Not as decoration on ordinary pages, buttons or rows.
 - Media acquisition UI speaks generically: "provider plugin", "source", "acquisition". Never name a specific external media platform or downloader tool anywhere in UI copy, sample data, or code (banned patterns, any case: `yout[u]be`, `yt[-_]?d[l]p` — written bracket-split here so this file itself passes the repo's vocabulary gate).
 - Likewise these reserved token patterns must never appear anywhere (any case): `har[l]ey`, `ric[h]ard`, `orche[s]trator`. The only product name is Domovoi; the mascot is just "the domovoi".
 - Reuse the primitives in `web/static/components.jsx`; don't fork copies of them.
@@ -49,7 +49,7 @@ Linear is iris-purple, Vercel is monochrome, Tailscale is teal — picking a coo
 
 ## Content fundamentals
 
-The product talks like a competent, slightly dry sysadmin who knows you personally. Not chatty, not corporate, not cute — a *terminal* that happens to have rounded corners.
+Day to day, the product talks like a competent, slightly dry sysadmin who knows you personally. Not chatty, not corporate, not cute — a *terminal* that happens to have rounded corners. That is a recommendation for everyday chrome, not a rule: first-run and onboarding moments (the welcome on a new Domovoi, "You're all set!") may be warm and glad to see you, with the cat beside them, as long as they stay plain-English and say exactly what to do next.
 
 **Voice & tone**
 - Direct. "3 satellites online" — never "You currently have 3 satellites that are online."

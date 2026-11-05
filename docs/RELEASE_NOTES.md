@@ -12,7 +12,9 @@ password, with "where's my code?" for this kind of server (the Mac's
 Domovoi Setup window, the Windows installer's last page, the file on
 Linux). **Not now** puts it away for that browser; Home's "this Domovoi
 isn't claimed yet" row (it said "box") and its **claim it** stay as the
-reminder. It never shows once the house is claimed. Right after a claim,
+reminder. Settings > Advanced (the address the Windows installer's Open
+Domovoi opens) and its **set up admin** open the same welcome. It never
+shows once the house is claimed. Right after a claim,
 "You're all set!" shows the household token with a copy button, says it
 is not the admin password, and offers one of your own. The phone app
 shows a "this Domovoi isn't set up yet" screen for an unclaimed server
