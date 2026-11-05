@@ -3000,6 +3000,7 @@ const FirstRun = (() => {
   let allSet = false;     // a claim just landed in this tab
   let wanted = false;     // "claim it" asked for the welcome again
   let putAway = null;     // "Not now" in this page (its key), whatever storage does
+  let tokenVersion = 0;   // bumped by every household token saved from "you're all set"
   const subs = new Set();
   const notify = () => subs.forEach((fn) => { try { fn(); } catch { /* one bad subscriber */ } });
   const stored = () => {
@@ -3009,7 +3010,14 @@ const FirstRun = (() => {
     get claiming() { return claiming; },
     get allSet() { return allSet; },
     get wanted() { return wanted; },
+    get tokenVersion() { return tokenVersion; },
     subscribe(fn) { subs.add(fn); return () => { subs.delete(fn); }; },
+    // A save of the household token settled. The "you're all set" step on
+    // screen may not be the one that started it: a save refused for want
+    // of the sign-in puts the login in front (unmounting the step), and
+    // data.js replays the save only after the step came back and read the
+    // OLD token. Every mounted step re-reads on this (review 2026-11-04).
+    tokenChanged() { tokenVersion += 1; notify(); },
     dismissed: () => putAway === firstRunKey(WELCOME_DISMISS_KEY) || stored(),
     dismiss() {
       putAway = firstRunKey(WELCOME_DISMISS_KEY); wanted = false;
@@ -3022,6 +3030,7 @@ const FirstRun = (() => {
     claimed() { claiming = false; wanted = false; allSet = true; notify(); },
     finish() {
       allSet = false;
+      tokenVersion = 0;
       notify();
       InternetAsk.offer();
     },
@@ -3059,8 +3068,10 @@ const FirstRunWelcome = () => {
     FirstRun.setClaiming(true);
     let failed = null;
     try { await Auth.setup(code.trim(), password); } catch (e) { failed = e; }
-    busyRef.current = false;
-    setBusy(false);
+    // busy stays on through the re-check below: a second Enter in the gap
+    // would start another claim.
+    const idle = () => { busyRef.current = false; setBusy(false); };
+    if (!failed) idle();
     if (failed) {
       // A welcome left standing on a house claimed since (another tab or
       // browser claimed it, or this claim landed and its answer was lost)
@@ -3068,6 +3079,7 @@ const FirstRunWelcome = () => {
       // welcome, and a 409 opens the admin sign-in in its place.
       let st = null;
       try { st = Auth.refreshStatus ? await Auth.refreshStatus() : null; } catch { st = null; }
+      idle();
       FirstRun.setClaiming(false);
       const claimedSince = !!st && st.setup_complete !== false;
       if (claimedSince || (failed && failed.status === 409)) {
@@ -3181,7 +3193,12 @@ const FirstRunAllSet = () => {
       if (out && out.token) setToken(out.token); else setLoadErr(true);
     } catch { setLoadErr(true); }
   };
-  useEffect(() => { load(); }, []);
+  // Once on mount, and again whenever a save settles anywhere
+  // (FirstRun.tokenChanged): a save replayed after a sign-in lands after
+  // this step was remounted and had read the old token.
+  const tokenVersion = FirstRun.tokenVersion;
+  useEffect(() => { load(); }, [tokenVersion]);
+  const changedHere = changed || tokenVersion > 0;
 
   const copy = async () => {
     setCopied((await copyToClipboard(token)) ? 'ok' : 'failed');
@@ -3201,9 +3218,9 @@ const FirstRunAllSet = () => {
         setEasier(false);
         setMine('');
         setCopied(null);
-        // A save that waited on a sign-in prompt and was replayed: what
-        // the server holds now is the word, so read it back.
-        load();
+        // Every mounted step reads it back (this one may have been
+        // unmounted by a sign-in prompt meanwhile).
+        FirstRun.tokenChanged();
       }
     } catch (e) {
       // The server's own words ("at least 12 characters"); they never
@@ -3243,7 +3260,7 @@ const FirstRunAllSet = () => {
             )}
             {copied === 'ok' && <div className="hint">copied</div>}
             {copied === 'failed' && <div className="hint">copy failed — select the token and copy it by hand</div>}
-            {changed && <div className="hint">Saved: this is the household token now.</div>}
+            {changedHere && <div className="hint">Saved: this is the household token now.</div>}
           </div>
           <div className="first-run-explain">
             <strong>This is not your admin password.</strong> It’s the house
@@ -3284,7 +3301,7 @@ const FirstRunAllSet = () => {
         </div>
         <div className="cal-modal-foot">
           <Button variant="primary" onClick={() => FirstRun.finish()} disabled={saving}>
-            {changed || !token ? 'Done' : 'Keep this one'}
+            {changedHere || !token ? 'Done' : 'Keep this one'}
           </Button>
         </div>
       </div>
@@ -3332,6 +3349,11 @@ const ConnectAsk = (() => {
     },
     open() { wanted = true; notify(); },
     done() { wanted = false; notify(); },
+    // The older pair prompt (data.js, a refused device-tier read) was just
+    // closed without pairing: that was this page's answer too, so the
+    // connect prompt doesn't ask again behind it (review 2026-11-04). For
+    // this page only; nothing is stored.
+    quietForPage() { wanted = false; putAway = key(); notify(); },
   };
 })();
 
@@ -3448,7 +3470,9 @@ const AuthModalHost = () => {
   // Keyed on the opening: a prompt that comes back is a fresh form, never
   // the last one's typed password and error.
   if (Auth.modalOpen) return <LoginModal key={`login-${Auth.modalSeq || 0}`} onClose={() => Auth.closeModal()}/>;
-  if (Auth.pairModalOpen) return <PairModal onClose={() => Auth.closePairModal()}/>;
+  if (Auth.pairModalOpen) {
+    return <PairModal onClose={() => { Auth.closePairModal(); ConnectAsk.quietForPage(); }}/>;
+  }
   if (FirstRun.allSet) return <FirstRunAllSet/>;
   if (InternetAsk.open) return <InternetFirstRunStep onClose={() => InternetAsk.close()}/>;
   if (welcomeShows(Auth.status, { dismissed: FirstRun.dismissed(), wanted: FirstRun.wanted,

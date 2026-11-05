@@ -208,7 +208,10 @@ const NPCard = ({ np, tick, guest, onPlayRandom, onPause, onResume, onSkip, onSt
         <div style={{ padding: '0 16px 14px', display: 'flex', alignItems: 'center', gap: 8,
                       justifyContent: 'flex-end', flexWrap: 'wrap' }}>
           <span style={{ fontSize: 12, color: 'var(--fg-muted)' }}>connect this browser to start music here</span>
-          <Button icon="link" onClick={() => { try { Auth.requestPairing(); } catch {} }}>pair</Button>
+          <Button icon="link" onClick={() => {
+            try { if (typeof ConnectAsk !== 'undefined') { ConnectAsk.open(); return; } } catch { /* below */ }
+            try { Auth.requestPairing(); } catch {}
+          }}>connect</Button>
         </div>
       ) : (
         <div style={{ padding: '0 16px 14px', display: 'flex', justifyContent: 'flex-end' }}>

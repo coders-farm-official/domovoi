@@ -264,6 +264,26 @@ SCENARIOS["connect_dismissed_before"] = scenario(
     table(STATUS_CLAIMED), "return snap();", ls={"domovoi-connect-dismissed": "1"})
 
 
+# ── review round 2 ───────────────────────────────────────────────────────
+# A save that settles while another "you're all set" is mounted (the
+# login prompt unmounted the first, data.js replayed the save later):
+# FirstRun.tokenChanged makes the mounted one read the token again.
+SCENARIOS["token_changed_notice"] = scenario(
+    table(**{"GET /api/auth/device-token": {"__seq": [
+        {"token": TOKEN, "header": "X-Device-Token"}, {"token": TOKEN, "header": "X-Device-Token"},
+        {"token": MINE, "header": "X-Device-Token"}]}}),
+    f"await claim({json.dumps(CODE)}); const before = snap();"
+    "w.__FR.tokenChanged(); await w.__flush(h, 8);"
+    "return { before, after: snap() };")
+# Closing the older pair prompt is this page's answer: the connect prompt
+# doesn't ask again behind it.
+SCENARIOS["pair_modal_closed"] = scenario(
+    table(STATUS_CLAIMED),
+    "const first = snap(); w.__Auth.requestPairing(); await w.__flush(h);"
+    "const pairing = { open: w.__Auth.pairModalOpen, text: snap().text };"
+    "await h.click((e) => w.__cls(e).includes('cal-modal-bg')); await w.__flush(h);"
+    "return { first, pairing, after: snap(), stored: h.global('localStorage').getItem('domovoi-connect-dismissed') };")
+
 @pytest.fixture(scope="module")
 def driven(tmp_path_factory) -> dict:
     node = shutil.which("node")
@@ -524,3 +544,21 @@ def test_connect_not_now_and_back(driven) -> None:
     assert out["after"]["dialog"] is None and out["key"] == "1"
     assert out["again"]["dialog"] == "Connect this browser"
     assert driven["connect_dismissed_before"]["dialog"] is None
+
+
+# ── review round 2 ───────────────────────────────────────────────────────
+
+def test_a_settled_save_makes_the_mounted_step_read_the_token_again(driven) -> None:
+    out = driven["token_changed_notice"]
+    assert out["before"]["token"] == TOKEN
+    assert out["after"]["token"] == MINE
+    assert "Done" in [b["text"] for b in out["after"]["buttons"]]
+
+
+def test_one_token_prompt_at_a_time(driven) -> None:
+    out = driven["pair_modal_closed"]
+    assert out["first"]["dialog"] == "Connect this browser"
+    assert out["pairing"]["open"] is True
+    assert "Welcome!" not in out["pairing"]["text"]          # the pair prompt alone
+    assert out["after"]["dialog"] is None                    # not asked again behind it
+    assert out["stored"] is None                             # for this page only
