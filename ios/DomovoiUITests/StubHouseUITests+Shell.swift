@@ -89,6 +89,16 @@ extension StubHouseUITests {
         /// claims against the app's own field background (6.67:1).
         static let contrastFloor = 4.5
 
+        /// How far apart, in WCAG relative luminance, the lightest pixel
+        /// inside the Chat composer's greyed-out send and the lightest pixel
+        /// of the composer beside it may read before the send counts as
+        /// having a fill (unit mx-ink r2). Under ``BrandFillButtonStyle`` both
+        /// are the surface, a gap of 0; the old disabled `.bordered` fill
+        /// over white is rgb(233,233,235), luminance 0.816 against 1.000, a
+        /// gap of 0.18. 0.04 is about rgb(250,250,250) on white: clear of
+        /// both, with room for a screenshot's rounding.
+        static let sendSurfaceTolerance = 0.04
+
         /// What a **typed** glyph must clear, which is a different question
         /// from the hint's floor: the primary ink reads near 20:1 on a white
         /// field and the muted ink about 7, so a reading under this means
@@ -1680,12 +1690,16 @@ extension StubHouseUITests {
     /// Internal rather than private since unit mx-ink: the Chat case
     /// `testChat_TheSendIsGreyedOutWhileAReplyIsBeingWritten` measures the
     /// greyed send's label on its own surface with this same reading, so the
-    /// two pixel measurements in the suite are one helper, not two.
+    /// two pixel measurements in the suite are one helper, not two. It also
+    /// hands back the lightest pixel's relative luminance, so that case can
+    /// compare the paper inside the button with the surface beside it: a
+    /// translucent disabled fill reads above the floor on white, and only
+    /// that comparison sees it.
     @MainActor
     func inkContrast(
         _ app: XCUIApplication,
         in box: CGRect
-    ) -> (ratio: Double, ink: String, paper: String)? {
+    ) -> (ratio: Double, ink: String, paper: String, paperLuminance: Double)? {
         guard let whole = app.screenshot().image.cgImage, app.frame.width > 0 else { return nil }
         // The screenshot is in pixels and the frame is in points, and the
         // factor between them is read rather than assumed: a Simulator's scale
@@ -1758,7 +1772,8 @@ extension StubHouseUITests {
         return (
             ratio: (lightest.luminance + 0.05) / (darkest.luminance + 0.05),
             ink: say(darkest.rgb),
-            paper: say(lightest.rgb)
+            paper: say(lightest.rgb),
+            paperLuminance: lightest.luminance
         )
     }
 }

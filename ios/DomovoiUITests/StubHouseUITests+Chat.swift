@@ -317,27 +317,53 @@ extension StubHouseUITests {
     /// Unit mx-ink (2026-11-05). The disabled look used to be `.bordered` +
     /// `.tint(Color.brandInk)` with an explicit brandInk label, chosen
     /// *because* it was believed audited. Disabled, `.bordered` draws no tint
-    /// wash but a grey fill: train I005's disabled `queued` on Rooms
-    /// (rooms-23-played-no-fulfiller, sampled at 3x) is a grey label
-    /// rgb(186,186,189) on rgb(222,222,224), **1.44:1**. It is now
+    /// wash but a grey fill, and the fill is **translucent**: train I005's
+    /// disabled `queued` on Rooms (rooms-23-played-no-fulfiller, sampled at
+    /// 3x) is rgb(222,222,224) over a card of rgb(241,241,242), which is
+    /// `secondarySystemFill` (rgba(120,120,128,0.16)) composited exactly. The
+    /// grey label there is rgb(186,186,189), **1.44:1** on that fill. The
+    /// composer sits on white (I005's chat-send-back-after-reply is solid
+    /// rgb(255,255,255) beside the send), and the same fill over white is
+    /// rgb(233,233,235). It is now
     /// ``BrandFillButtonStyle``'s disabled state: ``Color/fgMuted`` on the
     /// composer's own surface with no fill, 7.43:1 on white by the tokens.
     ///
-    /// The reading is ``inkContrast(_:in:)``, the hint cases' helper: the
-    /// darkest and the lightest pixel in a box **inset into the middle of the
-    /// button**, so the box is inside the old chip on every side and the
-    /// lightest pixel there is the old grey fill. **Predicted**, not seen:
-    /// under the old look the reading is about 1.4 (I005's grey-on-grey
-    /// pair), or about 4.2 if the explicit brandInk label survived the
-    /// disabled state (`#975800` on `#DEDEE0`, 4.21:1 by arithmetic); under
-    /// Android's literal `fgFaint` (`#B9B7B4`) it is about 2.0. All three
-    /// fail ``StubShell/contrastFloor``. Antialiasing makes
-    /// the darkest pixel lighter than the ink, so a pass has room.
+    /// Two readings, both from ``inkContrast(_:in:)``, the hint cases'
+    /// helper (the darkest and the lightest pixel in a box):
+    ///
+    /// 1. **The label's contrast**, in a box **inset into the middle of the
+    ///    button**, so the box is inside the old chip on every side and the
+    ///    lightest pixel there is the old grey fill. Floor
+    ///    ``StubShell/contrastFloor``. Antialiasing makes the darkest pixel
+    ///    lighter than the ink, so a pass has room.
+    /// 2. **No fill**: the lightest pixel in that box against the lightest
+    ///    pixel in a strip of the composer **just right of the button** (the
+    ///    composer's 12-point padding), within
+    ///    ``StubShell/sendSurfaceTolerance`` in relative luminance. Under ``BrandFillButtonStyle`` both are the
+    ///    surface itself (255 on white); under the old look the box's is the
+    ///    fill, about 233 (luminance about 0.82 against 1.0).
+    ///
+    /// Reading 2 is there because reading 1 alone does **not** tell the old
+    /// look from the new in one branch. **Predicted**, not seen, for the old
+    /// disabled `.bordered` + brandInk: if SwiftUI greys the label, reading 1
+    /// is about 1.4-1.6 (I005's grey label on the fill) and fails the floor.
+    /// If the explicit brandInk label survived the disabled state, reading 1
+    /// is `#975800` on `#E9E9EB`, **4.67:1** by arithmetic, which is over 4.5
+    /// and passes; only reading 2 fails it. Android's literal `fgFaint`
+    /// (`#B9B7B4`) on white is 2.00 and fails reading 1. So reading 2 fails
+    /// the old look in both branches, and reading 1 is what fails a label
+    /// with no fill behind it that is still too faint, such as `fgFaint`.
     ///
     /// **Not proven by a sabotage run.** The rule is that a case must fail on
     /// the defect it names; unit mx-ink cannot boot a Simulator, so the
-    /// discrimination above is arithmetic (1.44, 4.21 and 2.00 under 4.5,
-    /// 7.43 over it), not an observed red. The train is where it is seen.
+    /// discrimination above is arithmetic (reading 1: about 1.4 and 2.00
+    /// under 4.5, 4.67 and 7.43 over it; reading 2: about 0.18 apart under the
+    /// old fill, 0 under the new look), not an observed red. The train is
+    /// where it is seen, and its sabotage run says which branch is real.
+    ///
+    /// **Light mode only.** The tolerance is symmetric, so a fill that reads
+    /// *lighter* than a dark surface would also fail it, but no dark-mode
+    /// pixel of either look has been sampled.
     ///
     /// ### What this case does not cover
     ///
@@ -423,11 +449,49 @@ extension StubHouseUITests {
                         + ":1 (label \(reading.ink) on \(reading.paper)) inside \(box), under "
                         + "\(StubShell.contrastFloor):1. Predicted for the old disabled "
                         + "`.bordered` + brandInk look: about 1.4 (a grey label on the grey "
-                        + "disabled fill, I005's Rooms `queued`) or about 4.2 (brandInk on "
-                        + "#DEDEE0); about 2.0 is Android's fgFaint taken literally. "
-                        + "BrandFillButtonStyle draws "
+                        + "disabled fill, I005's Rooms `queued`); about 2.0 is Android's "
+                        + "fgFaint taken literally. (If the old explicit brandInk label "
+                        + "survived, it is 4.67 on the fill over white and passes here; the "
+                        + "no-fill reading below is what fails it.) BrandFillButtonStyle draws "
                         + "fgMuted on the bare surface, 7.43:1 by the tokens"
                 )
+                // **No fill behind the label** (mx-ink r2). The strip is in
+                // the composer's own 12-point padding right of the button,
+                // clear of BrandFillButtonStyle's stroke, and the same height
+                // as the box. With the explicit brandInk label surviving the
+                // disabled state the old look reads 4.67:1 above, so this is
+                // the only reading that fails it in that branch.
+                let right = min(frame.maxX + 8, app.frame.maxX)
+                let strip = CGRect(
+                    x: frame.maxX + 2,
+                    y: box.minY,
+                    width: max(right - frame.maxX - 2, 0),
+                    height: box.height
+                )
+                if let surface = inkContrast(app, in: strip) {
+                    let gap = abs(reading.paperLuminance - surface.paperLuminance)
+                    print(
+                        "CHAT [chat-send-greyed-mid-reply] paper \(reading.paper) in the send, "
+                            + "\(surface.paper) beside it in \(strip) — luminance gap "
+                            + String(format: "%.3f", gap)
+                    )
+                    XCTAssertLessThanOrEqual(
+                        gap,
+                        StubShell.sendSurfaceTolerance,
+                        "the greyed-out send has a fill behind its label: its lightest pixel is "
+                            + "\(reading.paper) where the composer beside it is \(surface.paper) "
+                            + "(luminance gap " + String(format: "%.3f", gap) + ", over "
+                            + "\(StubShell.sendSurfaceTolerance)). Predicted for the old disabled "
+                            + "`.bordered`: rgb(233,233,235) on white, a gap of about 0.18. "
+                            + "BrandFillButtonStyle draws no fill while disabled"
+                    )
+                } else {
+                    print(app.debugDescription)
+                    XCTFail(
+                        "could not read the composer's surface in \(strip) beside the send at "
+                            + "\(frame) — the strip left the screenshot (tree printed above)"
+                    )
+                }
             } else {
                 print(app.debugDescription)
                 XCTFail(
