@@ -188,6 +188,71 @@ final class StubHouseUITests: XCTestCase {
     /// the ones being watched.
     static let ordinaryTypeSize = "UICTContentSizeCategoryL"
 
+    /// Whether this run keeps the app process's os_log output.
+    ///
+    /// `TEST_RUNNER_DOMOVOI_UI_OSLOG=keep xcodebuild test …` sets it — the
+    /// `TEST_RUNNER_` prefix is how xcodebuild hands an environment variable
+    /// to the test runner process, and it is stripped on the way in. Anything
+    /// else, including it being unset, means the launched app is quietened by
+    /// ``freshApp()``.
+    static let keepingTheAppsLog =
+        ProcessInfo.processInfo.environment["DOMOVOI_UI_OSLOG"]?.lowercased() == "keep"
+
+    /// Every `XCUIApplication` this file launches, with the one environment
+    /// variable that is a lever on the vanish.
+    ///
+    /// ### What is measured, and what is not
+    ///
+    /// Trains I004 and I005 each lost the app twice to a `SIGSEGV` inside an
+    /// XCTest accessibility query, every one of the four preceded by
+    /// `QUARANTINED DUE TO HIGH LOGGING VOLUME` two milliseconds earlier
+    /// (1 034 app processes, 4 quarantines, 4 signals, no counterexample in
+    /// either direction). What tracks the deaths is **not** the dying
+    /// process's own rate — it ranked 419th of 513 in one of them — but what
+    /// the whole session had written: the first quarantine came at 1.809 GB /
+    /// 2h14m in I004 and 1.828 GB / 2h15m in I005.
+    /// `design-notes/ios/batch-2026-11-03/VANISH-TRACE-I005.md` carries the
+    /// numbers and the method.
+    ///
+    /// **95.9% of that volume is `com.apple.dt.xctest:Default`** — the
+    /// automation framework's own accessibility chatter, emitted from inside
+    /// *this* process: about 5 200 `Fetching AX attributes` and 81 whole-tree
+    /// dumps per case. The app's own `Logger`/`os_log` contributes nothing
+    /// measurable: no Domovoi-owned subsystem appears anywhere in the
+    /// 29 million lines of I005's log, so gating the app's own logging would
+    /// be a change with nothing behind it.
+    ///
+    /// `OS_ACTIVITY_MODE=disable` is the only lever on that volume a test
+    /// file has, because the subsystem belongs to code injected into the app
+    /// rather than to anything this repository calls. **Whether it reaches
+    /// the subsystem is not verified here and cannot be from Windows**: it is
+    /// read by `libsystem_trace` as the process starts, the tests set no
+    /// `launchEnvironment` at all today, and the only instrument that can
+    /// answer is the byte count of the next train's simlog. If it works, a
+    /// session takes far longer to reach the quarantine threshold; if it does
+    /// not, nothing else about the run changes.
+    ///
+    /// *What it costs, if it works:* the app process's own log lines — the
+    /// `Beginning first match sequence` / `Current tree:` / `Fetching AX
+    /// attributes` trace that let the two I005 deaths be located to the query
+    /// in flight, and its CFNetwork and UIKit lines with them. A vanish is
+    /// still **detected and dated** from outside the process (`runningboardd`
+    /// reports the signal and the pid), just not located. `keep` above turns
+    /// the trace back on for a targeted re-run of one case.
+    ///
+    /// The device-wide `log config --subsystem com.apple.dt.xctest --mode
+    /// level:off` is the trace's first recommendation and the surer one, but
+    /// it belongs to `stub_run.sh`, which is outside this unit's files: it is
+    /// in this unit's REPORT.md under `for_others`.
+    @MainActor
+    func freshApp() -> XCUIApplication {
+        let app = XCUIApplication()
+        if !Self.keepingTheAppsLog {
+            app.launchEnvironment["OS_ACTIVITY_MODE"] = "disable"
+        }
+        return app
+    }
+
     /// `server: false` saves nothing, which is the local-media shell — no
     /// workspace, no phone bar, and the same ``ShellTopBar``. It is the only
     /// way from here to audit the chrome without Home's content under it.
@@ -202,7 +267,7 @@ final class StubHouseUITests: XCTestCase {
         pushDelay: Double? = nil,
         args: [String] = []
     ) -> XCUIApplication {
-        let app = XCUIApplication()
+        let app = freshApp()
         app.launchArguments = server ? ["-domovoi-server", "127.0.0.1:\(port)"] : []
         if server, paired {
             app.launchArguments += ["-domovoi-token", Self.token]
@@ -3044,19 +3109,82 @@ final class StubHouseUITests: XCTestCase {
         // The two heights printed side by side are still the instrument, and
         // they are now also the check on that: the floor below is 2x and this
         // row clears it by much more.
+        //
+        // **The resume line is matched by its shape, because its position is
+        // whatever the run left behind.** It was written down as
+        // `0:10 / 0:40` and the house never says that: the strip is built
+        // from the stub's `WATCHED` store, which starts empty and is written
+        // by whichever earlier case last saved a position (`stubhouse.py:465`,
+        // `:1311`), and both trains that kept this case's tree show
+        // `0:05 / 0:40`. Measured: in I004 **and** I005 the `resume` leaf was
+        // found at neither type size — `SCALE [large]` and `SCALE [AX5]`
+        // print five lines, never six — so one of the five leaves Apple
+        // flagged has never been measured here, and `seen.count ==
+        // leaves.count` could never be true, which spent the whole flick
+        // budget every pass (48 iterations of six queries in I004, 37 in
+        // I005). The position before the slash is the part that moves; the
+        // duration is this fixture's video and is the half worth pinning.
+        //
+        // A leading `~` is the one bit of punctuation this needs: the rest is
+        // a regular expression the label has to match. Without it a leaf is
+        // its exact label — the way `app.staticTexts[said]` asks for it, by
+        // identifier or label.
+        func matches(_ said: String, _ node: XCUIElementSnapshot) -> Bool {
+            guard said.hasPrefix("~") else {
+                return node.label == said || node.identifier == said
+            }
+            return node.label.range(of: String(said.dropFirst()), options: .regularExpression)
+                != nil
+        }
         let leaves = [
             ("count", "showing 50 of 60 videos"),
             ("heading", "Movies · 54"),
             ("strip-heading", "recently played"),
             ("caption", "a long one.mp4"),
             ("caption-long", "01 she said \"no\".mp4"),
-            ("resume", "0:10 / 0:40"),
+            ("resume", "~^[0-9]+:[0-9]{2} / 0:40$"),
         ]
-        func heights(_ app: XCUIApplication) -> [String: CGFloat] {
+        // **One read of the tree a flick, not six queries a flick.**
+        //
+        // This asked `app.staticTexts[label].firstMatch.exists` for all six
+        // labels every iteration, already-found ones included, and five of
+        // the six are usually absent — and a query that finds nothing walks
+        // the whole tree. Measured in I005's log: 222 of this case's 327
+        // `Checking existence of` activities are these six (37 iterations x
+        // 6), and the app process they ran in wrote **51.4 MB**, the heaviest
+        // logger of the 521 in that train, at about 113 kB of log per
+        // whole-tree pass (51 350 516 B over 455 first-match sequences and
+        // hierarchy captures, counted out of the kept simlog).
+        //
+        // `snapshot()` is one capture that answers all six in process, so a
+        // flick costs one whole-tree pass instead of six, and leaves already
+        // seen cost none. The measurement itself is untouched: the same
+        // labels, the same `frame.height`, taken in the same pre-order a
+        // `firstMatch` resolves in. Whether the bytes fall with the passes
+        // only the next train can say.
+        //
+        // This is a reduction in what this case contributes to the session's
+        // log volume, which is what the quarantine tracks — it is not a fix
+        // for the vanish, and nothing here can be: the app died in a query
+        // Apple's own audit made, in a process that was the train's heaviest
+        // logger only by coincidence of ordering (VANISH-TRACE-I005.md §4).
+        func heights(_ app: XCUIApplication, skipping seen: [String: CGFloat]) throws
+            -> [String: CGFloat]
+        {
+            let wanted = leaves.filter { seen[$0.0] == nil }
+            guard !wanted.isEmpty else { return [:] }
             var out: [String: CGFloat] = [:]
-            for (leaf, label) in leaves {
-                let text = app.staticTexts[label].firstMatch
-                if text.exists { out[leaf] = text.frame.height }
+            let root = try app.snapshot()
+            var stack: [XCUIElementSnapshot] = [root]
+            while let node = stack.popLast() {
+                if node.elementType == .staticText {
+                    for (leaf, says) in wanted where out[leaf] == nil && matches(says, node) {
+                        out[leaf] = node.frame.height
+                    }
+                }
+                // Reversed, so popping walks the children in tree order —
+                // which is the order `firstMatch` takes them in.
+                stack.append(contentsOf: node.children.reversed())
             }
             return out
         }
@@ -3084,7 +3212,7 @@ final class StubHouseUITests: XCTestCase {
             var seen: [String: CGFloat] = [:]
             let flicks = mode == Self.ordinaryTypeSize ? 6 : 40
             for flick in 0...flicks {
-                for (leaf, height) in heights(app) where seen[leaf] == nil {
+                for (leaf, height) in try heights(app, skipping: seen) {
                     seen[leaf] = height
                 }
                 if flick == 0 { evidence(app, "4A-videos-scale-\(label)") }

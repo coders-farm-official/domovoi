@@ -933,7 +933,7 @@ extension StubHouseUITests {
     ///
     /// The one anonymous finding that is *not* floor and not a defect is a
     /// `Contrast failed` for a leaf an edge has halved, and it is allowed
-    /// one-for-one against ``newsCutLeaves(_:)``'s count for that pass — a
+    /// one-for-one against ``newsCutLeaves(in:)``'s count for that pass — a
     /// number this case measures from the app and prints, never a total it
     /// carries. R003: one cut leaf and one such finding on the page, three
     /// and three at the foot, none and none behind the dialog.
@@ -1115,7 +1115,6 @@ extension StubHouseUITests {
             let (app, landed) = openNews(watchingTheProcess: true)
             defer { app.terminate() }
             if !landed { mishaps.append("News never drew a person's heading") }
-            evidence(app, "news-12-audited")
 
             // **The page has to have settled before the first audit, or the
             // findings arrive with nothing on them.**
@@ -1154,7 +1153,7 @@ extension StubHouseUITests {
             // scroller halves); round 3 took the bubble out of the tree, so
             // the same cut now arrives with nothing to name. The run's
             // screenshot is what attributes it — the fourth chip is drawn as
-            // a circle and no word. ``newsCutLeaves(_:)`` counts it, one
+            // a circle and no word. ``newsCutLeaves(in:)`` counts it, one
             // anonymous contrast finding is allowed per cut leaf, and a
             // second one still fails this case.
             _ = newsElement(app, "news-story-meta-301").waitForExistence(timeout: 25)
@@ -1164,6 +1163,19 @@ extension StubHouseUITests {
 
             pins += newsChipRowIsOneElement(app)
             findings += try auditNews(app, "news", "the page")
+            // **Taken after the audit, not before the waits.**
+            //
+            // It used to run the moment `openNews` returned, about ten
+            // seconds and two waits before the audit sampled anything, and
+            // train I005 is what that cost: the page pass reported one
+            // `Contrast failed` with no element and no leaf measured cut
+            // (`floor=0 rest=1`, no `CUT ::` line — the four person chips end
+            // at x = 293 inside a 377-point rail, so R004's explanation does
+            // not apply), and the only picture beside it is of a different
+            // moment. A finding that will not attribute is read off the
+            // picture ([[audit-reports-one-issue]]), so the picture has to be
+            // of the state that was audited. Same one capture, moved.
+            evidence(app, "news-12-audited")
 
             // ### 1b. The foot of the page — walked by this same process.
             //
@@ -1172,8 +1184,8 @@ extension StubHouseUITests {
             // in the comment at the top of this case. Nothing about the pass
             // itself changes: the page audit above has run, nothing has been
             // tapped, and every number this pass stands on — the viewport
-            // (``newsPageViewport(_:)``) and the leaves the edges cut
-            // (``newsCutLeaves(_:)``) — is measured again inside
+            // (``newsPageViewport(in:)``) and the leaves the edges cut
+            // (``newsCutLeaves(in:)``) — is measured again inside
             // ``auditNews(_:_:_:behindADialog:allowingLeavesCutByAnEdge:)``
             // after the swipes below, so it reads this scroll position and
             // not the one the page pass read.
@@ -1245,7 +1257,7 @@ extension StubHouseUITests {
             // of the picked chip's amber, and not one of the three words is
             // legible. Three cut leaves, three anonymous findings, and the
             // six chips below them — identical ink, same pass — measured
-            // 5.07:1 and audited clean. ``newsCutLeaves(_:)`` carries the
+            // 5.07:1 and audited clean. ``newsCutLeaves(in:)`` carries the
             // count; a fourth anonymous finding fails this case.
             for _ in 0..<12 { app.swipeUp(velocity: .slow) }
             evidence(app, "news-12-audited-foot")
@@ -1470,7 +1482,7 @@ extension StubHouseUITests {
     /// this discount is honest.
     ///
     /// **Narrow on purpose**: contrast only, and only outside the edges
-    /// ``newsPageViewport(_:)`` measured from the app at audit time. A
+    /// ``newsPageViewport(in:)`` measured from the app at audit time. A
     /// finding against anything inside the viewport still fails.
     ///
     /// The viewport arrives as a rectangle rather than as an app to ask,
@@ -1491,7 +1503,7 @@ extension StubHouseUITests {
 
     /// A `Contrast failed` the audit would not attribute — the shape, not the
     /// permission to ignore one. ``auditNews(_:_:_:behindADialog:allowingLeavesCutByAnEdge:)``
-    /// allows these **only** up to the number of leaves ``newsCutLeaves(_:)``
+    /// allows these **only** up to the number of leaves ``newsCutLeaves(in:)``
     /// measured an edge cutting in half on that very pass.
     static func newsAnonymousContrast(_ line: String) -> Bool {
         line.hasPrefix("Contrast failed") && line.hasSuffix("| element: nil")
@@ -1500,7 +1512,7 @@ extension StubHouseUITests {
     /// The leaves this screen is showing the audit in **halves**: the ones an
     /// edge runs through, measured from the app at audit time and returned as
     /// text so no live element escapes onto the path that reads the findings
-    /// (the reason ``newsPageViewport(_:)`` is taken early — train S011).
+    /// (the reason ``newsPageViewport(in:)`` is taken early — train S011).
     ///
     /// Two edges cut on this screen, and both are counted:
     ///
@@ -1542,19 +1554,39 @@ extension StubHouseUITests {
     /// anonymous `Contrast failed` more than there are cut leaves still fails
     /// this case, as does any other anonymous headline, and a named finding
     /// is still placed by its own frame.
+    ///
+    /// ### Why this is one tree read rather than a query per element
+    ///
+    /// It was `app.scrollViews/.buttons/.staticTexts.allElementsBoundByIndex`
+    /// and then `.frame` on each, and **every one of those is a whole-tree
+    /// pass inside the app process**: I005's slice of this case logs 43
+    /// `Find the "…" Button`, 12 `Find the "…" StaticText` and 16 scroll-view
+    /// resolutions, against 229 hierarchy captures in that process's whole
+    /// life — so this helper and its neighbour are about a third of what the
+    /// process was asked for, at about 35 kB of log each (8 229 350 B over
+    /// 236 whole-tree passes, counted out of the kept simlog). One
+    /// `snapshot()` answers all of it in process.
+    ///
+    /// It is also the more honest measurement: the viewport and the leaves
+    /// now come from **one instant**, where before the scroll view's frame
+    /// and the last leaf's could be a second apart.
+    ///
+    /// The geometry is unchanged — same two edges, same strict crossings,
+    /// same `type=… id='…' label='…' frame=(…)` line, which is what
+    /// ``frame(in:)`` parses and what the `CUT ::` lines in a train's log
+    /// are read as.
     @MainActor
-    private func newsCutLeaves(_ app: XCUIApplication) -> [String] {
-        let scrollers = app.scrollViews.allElementsBoundByIndex
-        guard let page = scrollers.max(by: { $0.frame.height < $1.frame.height }) else {
+    static func newsCutLeaves(in tree: XCUIElementSnapshot) -> [String] {
+        let nodes = newsDescendants(tree)
+        let scrollers = nodes.filter { $0.elementType == .scrollView }.map(\.frame)
+        guard let viewport = scrollers.max(by: { $0.height < $1.height }),
+            viewport.height > 0
+        else {
             return []
         }
-        let viewport = page.frame
-        guard viewport.height > 0 else { return [] }
 
-        // Both queries resolved once. Every one of these is a round trip to
-        // the app, and this runs three times a case.
-        let controls = app.buttons.allElementsBoundByIndex
-        let leaves = app.staticTexts.allElementsBoundByIndex + controls
+        let controls = nodes.filter { $0.elementType == .button }
+        let leaves = nodes.filter { $0.elementType == .staticText } + controls
         var cut = leaves.filter { leaf in
             let box = leaf.frame
             guard box.height > 0 else { return false }
@@ -1564,7 +1596,7 @@ extension StubHouseUITests {
 
         // The people chip row lying on its side — strictly shorter than the
         // page, and only while the page is actually showing it.
-        if let rail = scrollers.min(by: { $0.frame.height < $1.frame.height })?.frame,
+        if let rail = scrollers.min(by: { $0.height < $1.height }),
             rail.height > 0,
             rail.height < viewport.height,
             rail.minY >= viewport.minY,
@@ -1577,7 +1609,7 @@ extension StubHouseUITests {
                     || (box.minX < rail.maxX && box.maxX > rail.maxX)
             }
         }
-        return cut.map { Self.oneLine($0) }
+        return cut.map { newsOneLine($0) }
     }
 
     /// The frame of the page's own scroll view — the taller of the two on
@@ -1587,10 +1619,57 @@ extension StubHouseUITests {
     /// treats as "discount nothing": an unmeasured viewport must not excuse a
     /// finding.
     @MainActor
-    private func newsPageViewport(_ app: XCUIApplication) -> CGRect {
-        app.scrollViews.allElementsBoundByIndex
-            .max(by: { $0.frame.height < $1.frame.height })?
-            .frame ?? .zero
+    static func newsPageViewport(in tree: XCUIElementSnapshot) -> CGRect {
+        newsDescendants(tree)
+            .filter { $0.elementType == .scrollView }
+            .map(\.frame)
+            .max(by: { $0.height < $1.height }) ?? .zero
+    }
+
+    /// The whole tree at one instant, or `nil` with a line saying why.
+    ///
+    /// `nil` is the conservative answer in both places that read it: no
+    /// viewport discounts nothing, and no cut leaves allow nothing. A tree
+    /// that could not be read is almost always a process that has gone, and
+    /// ``auditIssues(_:_:)`` is the one that says so properly — it reads
+    /// `app.state`, which needs no snapshot and is safe after the app has
+    /// died (train I002's phantom Voices findings).
+    @MainActor
+    private func newsTree(_ app: XCUIApplication) -> XCUIElementSnapshot? {
+        do {
+            return try app.snapshot()
+        } catch {
+            print("NEWS AUDIT :: the tree could not be read: \(error)")
+            return nil
+        }
+    }
+
+    /// Every descendant of `tree`, in the order a query resolves them.
+    ///
+    /// Pre-order and the root excluded, which is what
+    /// `descendants(matching:)` returns; the children are pushed reversed so
+    /// that popping walks them in tree order.
+    @MainActor
+    static func newsDescendants(_ tree: XCUIElementSnapshot) -> [XCUIElementSnapshot] {
+        var out: [XCUIElementSnapshot] = []
+        var stack = Array(tree.children.reversed())
+        while let node = stack.popLast() {
+            out.append(node)
+            stack.append(contentsOf: node.children.reversed())
+        }
+        return out
+    }
+
+    /// One snapshot as one line, in ``oneLine(_:)``'s exact wording — the
+    /// `CUT ::` lines in every train's log are read as this shape, and
+    /// ``frame(in:)`` parses the rectangle out of it.
+    @MainActor
+    static func newsOneLine(_ node: XCUIElementSnapshot) -> String {
+        let id = node.identifier
+        return "type=\(node.elementType.rawValue)"
+            + (id.isEmpty ? "" : " id='\(id)'")
+            + " label='\(node.label)'"
+            + " frame=\(node.frame)"
     }
 
     /// A Dynamic Type finding against a **story's meta line**, which this
@@ -1670,11 +1749,17 @@ extension StubHouseUITests {
         // **Measured before the audit runs, while the app is certainly
         // there.** Reading it per finding put a live query to the app on the
         // path that reads the audit's results; see
-        // ``newsOutsideTheViewport(_:_:)``. ``newsCutLeaves(_:)`` is taken on
+        // ``newsOutsideTheViewport(_:_:)``. ``newsCutLeaves(in:)`` is taken on
         // the same line and for the same reason, and it comes back as text so
         // that printing it cannot put a query there either.
-        let viewport = newsPageViewport(app)
-        let cut = cutAllowed ? newsCutLeaves(app) : []
+        //
+        // **One read of the tree for both**, where this used to resolve every
+        // scroll view, button and static text one element at a time: see
+        // ``newsCutLeaves(in:)`` for what that cost in a train's log. A tree
+        // that could not be read discounts nothing and allows nothing.
+        let tree = newsTree(app)
+        let viewport = tree.map { Self.newsPageViewport(in: $0) } ?? .zero
+        let cut = cutAllowed ? (tree.map { Self.newsCutLeaves(in: $0) } ?? []) : []
         // Printed every pass, allowed for or not: a case that goes red here
         // next train needs to know what the edges were cutting, and a pass
         // whose count has changed is the first thing to read.
