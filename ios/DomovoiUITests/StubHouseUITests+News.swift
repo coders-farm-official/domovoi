@@ -1184,6 +1184,15 @@ extension StubHouseUITests {
             // app-is-gone guard and does not throw, so the `catch` costs
             // nothing when there is nothing left to photograph.
             //
+            // **It is a trade, not a strict improvement.** If the app dies in
+            // the two waits above rather than inside the audit, `auditNews`
+            // does not throw — it reports `UNMEASURED` — so no `catch` fires
+            // and the capture below writes evidence's app-is-gone note where
+            // the old position would have had a picture of the landing page.
+            // A picture of the landing page is not a picture of the audited
+            // state, so this is the right way round, but that is the case it
+            // loses.
+            //
             // The foot and dialog passes keep their capture *before* their
             // audit: measured in I005, `news-12-audited-foot` lands at
             // `t = 41.43 s` and that pass's first measurement at
@@ -1586,22 +1595,38 @@ extension StubHouseUITests {
     /// `Find the StaticText (Element at index N)`, 27 `Find the Button
     /// (Element at index N)` and 4 `Find the ScrollView (Element at index N)`
     /// — 61 elements one at a time, in the block immediately before that
-    /// pass's `CUT ::` group (`t = 21.0–22.8 s` on the page pass,
-    /// `t = 41.6–43.4 s` on the foot) — and the dialog pass, which allows no
+    /// pass's `CUT ::` group (`t = 21.0–22.9 s` on the page pass,
+    /// `t = 41.6–43.8 s` on the foot) — and the dialog pass, which allows no
     /// cut and so reads the viewport only, resolved two more at
-    /// `t ≈ 70.6 s`: **124 of the 235 `Find the …` lines in the whole case
-    /// slice**.
+    /// `t = 70.52–70.54 s`: **124 of the 235 `Find the …` lines in the whole
+    /// case slice**.
     ///
-    /// What it cost the process, counted out of the kept simlog for pid
-    /// 83743 (this case's first process, the one I005 lost): 229 `Capturing
-    /// hierarchy with attributes` whole-tree dumps and 8 229 350 B over its
-    /// whole life — about 35 kB a pass — of which **187 captures and
-    /// 4 244 060 B fall inside those two bursts**. Per second it ran at
-    /// 30–38 captures and 0.6–0.9 MB while the helpers were resolving
-    /// (19:49:01–04, 19:49:22–24) against 1–2 captures and 43 kB a second
-    /// everywhere else. So the pair is about four fifths of the whole-tree
-    /// work this process was asked for and about half of what it wrote. One
-    /// `snapshot()` answers all of it in process.
+    /// What it cost the process, measured out of the kept simlog for pid
+    /// 83743 (this case's first process, the one I005 lost) by bucketing
+    /// every line it wrote — continuation lines of a multi-line dump
+    /// attributed to the entry that owns them — into deciseconds: 229
+    /// `Capturing hierarchy with attributes` whole-tree dumps and
+    /// **8 229 350 B** over its whole life. The two helper bursts,
+    /// 19:49:01.4–03.3 (the page pass) and 19:49:22.0–24.2 (the foot), are
+    /// **155 of those 229 captures and 3 433 264 B** — about two thirds of
+    /// the whole-tree work this process was asked for and about two fifths of
+    /// what it wrote, at about 22 kB a capture against the process's own
+    /// 36 kB average. One `snapshot()` answers all of it in process, so the
+    /// three passes cost three captures.
+    ///
+    /// **The bursts either side are not this pair's**, and an earlier
+    /// revision of this comment quoted a window instead of the helpers:
+    /// 19:49:01.1–01.3 (7 captures, 146 857 B) is
+    /// ``newsChipRowIsOneElement(_:)``'s existence checks, and
+    /// 19:49:03.4–04.0 (25 captures, 663 939 B) together with
+    /// 19:49:29.5–29.9 (15 captures, 313 455 B — the second this process
+    /// died) is Apple's own audit resolving its findings' frames. Nothing
+    /// here touches either. Nor is the rest of the life quiet: 19:48:52–58,
+    /// inside `openNews`'s waits, wrote **2 923 213 B, 36% of everything
+    /// this process ever logged**, in seven seconds with two captures,
+    /// because a first-match poll walks the tree as well. This pair is the
+    /// largest thing this file can cut; it is not the largest thing in the
+    /// log.
     ///
     /// (The 43 `Find the "…" Button` and 12 `Find the "…" StaticText` lines in
     /// the same slice are **not** these helpers'. The 12 are
