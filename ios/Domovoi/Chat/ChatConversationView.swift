@@ -965,7 +965,7 @@ struct ChatConversationView: View {
                     //
                     // ``ChatModel/send(_:)`` still queues nothing — its guard
                     // is `!content.isEmpty, canSend, conversationOpen`
-                    // (`ChatModel.swift:601`) — so this is not a button that
+                    // (`ChatModel.swift:607`) — so this is not a button that
                     // will fire later; it is Android's greyed-out one, which is
                     // what the answer chose, and `.disabled` is what keeps it
                     // out of VoiceOver's reach: it reads the word and says

@@ -158,9 +158,23 @@ final class ChatSendRuleTests: XCTestCase {
     ///    Nothing is queued, and `.disabled` is what says so.
     ///
     /// And when the reply lands the send is usable again, which is the other
-    /// half of the answer. The sabotage this fails on is a composer that drops
-    /// `.disabled(!canSend)`: `send` would then be tappable and refuse every
-    /// press.
+    /// half of the answer.
+    ///
+    /// **What this case does not cover.** It pins the model, not the view, and
+    /// every fact it asserts was already true before answer 70 was built — it
+    /// passes unchanged against the old composer, which drew nothing in that
+    /// state. `pkgtest` builds the package alone and cannot see
+    /// `ios/Domovoi/`, so dropping `.disabled(!canSend)` from the composer
+    /// leaves this case (and the whole package suite) green: measured on
+    /// 2026-11-04, exit 0, no failures. The owner of the behaviour answer 70
+    /// changed is the UI case
+    /// `StubHouseUITests.testChat_TheSendIsGreyedOutWhileAReplyIsBeingWritten`,
+    /// which reads the drawn button for `isEnabled` and hittability on a
+    /// Simulator. This one is the regression net under it: it fails if the
+    /// model ever stops offering a composer, stops offering a send for words
+    /// typed mid-reply, or starts letting `send(_:)` through while a reply is
+    /// being written — each of which would make the view's `.disabled` read
+    /// the wrong thing.
     func testTheSendIsStillOfferedAndCannotSendWhileAReplyIsBeingWritten() async {
         StubURLProtocol.reset()
         defer { StubURLProtocol.reset() }

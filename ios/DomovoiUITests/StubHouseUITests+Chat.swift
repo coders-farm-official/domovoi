@@ -73,6 +73,11 @@ extension StubHouseUITests {
     /// message go". ``chatComposerSendButton(_:)`` is the one that asks only
     /// whether it is drawn, and the two together are what the streaming case
     /// reads.
+    ///
+    /// **So this is not the helper for an absence assertion.** A case that
+    /// means "nothing is drawn in that spot" has to ask
+    /// ``chatComposerSendButton(_:)`` for nil, or a disabled send drawn where
+    /// none belongs passes it — the two blank-box cases below ask that way.
     @MainActor
     func chatComposerSends(_ app: XCUIApplication) -> Bool {
         guard let send = chatComposerSendButton(app) else { return false }
@@ -209,8 +214,13 @@ extension StubHouseUITests {
         field.tap()
         evidence(app, "chat-new-blank-composer")
 
-        XCTAssertFalse(
-            chatComposerSends(app),
+        // Existence, not `isEnabled`: the question here is whether the spot is
+        // empty on a blank box. Since answer 70 a *disabled* send is a real
+        // thing this composer draws, so `chatComposerSends` — which reads
+        // `isEnabled` — would pass against one drawn on a blank box, which is
+        // exactly the control this case exists to forbid.
+        XCTAssertNil(
+            chatComposerSendButton(app),
             "a brand-new chat with a blank box drew a send — the control that cannot do what "
                 + "it says, on a blank box"
         )
@@ -253,8 +263,11 @@ extension StubHouseUITests {
             app.buttons[ChatMoreStringsUnderTest.talk].waitForExistence(timeout: 10),
             "a thread with a blank box drew no mic — the mic-or-send rule has changed"
         )
-        XCTAssertFalse(
-            chatComposerSends(app),
+        // Existence again, for the reason spelt out in the new-chat case: the
+        // rule named below is that the two are never both *on screen*, and a
+        // greyed-out send is on screen.
+        XCTAssertNil(
+            chatComposerSendButton(app),
             "the mic and a send are both on screen — Android's one rule here is that they "
                 + "never are (ChatScreen.kt:1157, :1165)"
         )
