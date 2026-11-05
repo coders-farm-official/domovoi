@@ -114,69 +114,20 @@ struct ManualBackSwipe: UIViewRepresentable {
         }
     }
 
+    /// One manual screen's closures, handed to the shared recognisers while
+    /// that screen is in a window.
     @MainActor
-    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+    final class Coordinator {
 
         var decide: @MainActor () -> ManualBack = { .notTheManuals }
         var goUp: @MainActor () -> Void = {}
 
-        private let edge = UIScreenEdgePanGestureRecognizer()
-        private var content: UIPanGestureRecognizer?
-        private weak var installedOn: UIView?
-
-        override init() {
-            super.init()
-            edge.edges = .left
-            edge.name = "manual.back.edge"
-            edge.delegate = self
-            edge.addTarget(self, action: #selector(swiped(_:)))
-        }
-
         func install(on navigation: UINavigationController) {
-            guard let view = navigation.view, installedOn !== view else { return }
-            uninstall()
-            view.addGestureRecognizer(edge)
-            navigation.interactivePopGestureRecognizer?.require(toFail: edge)
-            #if compiler(>=6.2)
-            if #available(iOS 26, *), let pop = navigation.interactiveContentPopGestureRecognizer {
-                let pan = UIPanGestureRecognizer(target: self, action: #selector(swiped(_:)))
-                pan.name = "manual.back.content"
-                pan.delegate = self
-                view.addGestureRecognizer(pan)
-                pop.require(toFail: pan)
-                content = pan
-            }
-            #endif
-            installedOn = view
+            ManualBackSwipeHub.shared.serve(self, on: navigation)
         }
 
         func uninstall() {
-            edge.view?.removeGestureRecognizer(edge)
-            if let content { content.view?.removeGestureRecognizer(content) }
-            content = nil
-            installedOn = nil
-        }
-
-        func gestureRecognizerShouldBegin(_ recognizer: UIGestureRecognizer) -> Bool {
-            guard decide() == .upALevel else { return false }
-            if recognizer === edge { return true }
-            // The content swipe: only one that is mostly to the right, which
-            // is the system's own content pop's rule.
-            guard let pan = recognizer as? UIPanGestureRecognizer else { return false }
-            let velocity = pan.velocity(in: pan.view)
-            return velocity.x > 0 && abs(velocity.x) > abs(velocity.y)
-        }
-
-        @objc private func swiped(_ recognizer: UIPanGestureRecognizer) {
-            guard recognizer.state == .ended else { return }
-            let travel = recognizer.translation(in: recognizer.view).x
-            let speed = recognizer.velocity(in: recognizer.view).x
-            let width = recognizer.view?.bounds.width ?? 0
-            guard ManualBackSwipe.isCommitted(travel: travel, speed: speed, width: width) else { return }
-            // Asked again: a route could have been pushed over the manual
-            // while the finger was down.
-            guard decide() == .upALevel else { return }
-            goUp()
+            ManualBackSwipeHub.shared.release(self)
         }
     }
 
@@ -184,5 +135,83 @@ struct ManualBackSwipe: UIViewRepresentable {
     /// own pop commits.
     nonisolated static func isCommitted(travel: CGFloat, speed: CGFloat, width: CGFloat) -> Bool {
         travel > width * 0.25 || speed > 400
+    }
+}
+
+/// The recognisers themselves: **one set per navigation controller, for the
+/// life of the app**, serving whichever manual screen is current.
+///
+/// Not one set per visit, and that is deliberate. `require(toFail:)` cannot be
+/// undone, so a set installed per visit and removed on the way out leaves the
+/// system's pop with a failure requirement on every recogniser the manual ever
+/// had. UIKit only weighs a requirement on a recogniser that is part of the
+/// touch, so a removed one should not hold the pop up — but "should not" about
+/// a dependency graph nobody here can inspect is exactly the kind of argument
+/// this track has learned to stop making. One set, installed once, removes the
+/// question: when no manual is current, ``decide`` is `.notTheManuals`, every
+/// swipe fails in `gestureRecognizerShouldBegin`, and the pop proceeds.
+@MainActor
+final class ManualBackSwipeHub: NSObject, UIGestureRecognizerDelegate {
+
+    static let shared = ManualBackSwipeHub()
+
+    /// The manual screen being served, if one is in a window.
+    private weak var current: ManualBackSwipe.Coordinator?
+
+    /// The navigation controllers' views that already carry the set.
+    private let served = NSHashTable<UIView>.weakObjects()
+
+    /// The leading-edge recogniser of each served view, so the check below
+    /// can tell it from the content one.
+    private let edges = NSHashTable<UIGestureRecognizer>.weakObjects()
+
+    func serve(_ coordinator: ManualBackSwipe.Coordinator, on navigation: UINavigationController) {
+        current = coordinator
+        guard let view = navigation.view, !served.contains(view) else { return }
+        served.add(view)
+        let edge = UIScreenEdgePanGestureRecognizer(target: self, action: #selector(swiped(_:)))
+        edge.edges = .left
+        edge.delegate = self
+        view.addGestureRecognizer(edge)
+        edges.add(edge)
+        navigation.interactivePopGestureRecognizer?.require(toFail: edge)
+        #if compiler(>=6.2)
+        if #available(iOS 26, *), let pop = navigation.interactiveContentPopGestureRecognizer {
+            let pan = UIPanGestureRecognizer(target: self, action: #selector(swiped(_:)))
+            pan.delegate = self
+            view.addGestureRecognizer(pan)
+            pop.require(toFail: pan)
+        }
+        #endif
+    }
+
+    func release(_ coordinator: ManualBackSwipe.Coordinator) {
+        if current === coordinator { current = nil }
+    }
+
+    private func decide() -> ManualBack {
+        current?.decide() ?? .notTheManuals
+    }
+
+    func gestureRecognizerShouldBegin(_ recognizer: UIGestureRecognizer) -> Bool {
+        guard decide() == .upALevel else { return false }
+        if edges.contains(recognizer) { return true }
+        // The content swipe: only one that is mostly to the right, which is
+        // the system's own content pop's rule.
+        guard let pan = recognizer as? UIPanGestureRecognizer else { return false }
+        let velocity = pan.velocity(in: pan.view)
+        return velocity.x > 0 && abs(velocity.x) > abs(velocity.y)
+    }
+
+    @objc private func swiped(_ recognizer: UIPanGestureRecognizer) {
+        guard recognizer.state == .ended else { return }
+        let travel = recognizer.translation(in: recognizer.view).x
+        let speed = recognizer.velocity(in: recognizer.view).x
+        let width = recognizer.view?.bounds.width ?? 0
+        guard ManualBackSwipe.isCommitted(travel: travel, speed: speed, width: width) else { return }
+        // Asked again: a route could have been pushed over the manual while
+        // the finger was down.
+        guard decide() == .upALevel, let current else { return }
+        current.goUp()
     }
 }
