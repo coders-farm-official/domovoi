@@ -180,7 +180,15 @@ struct FileMoveSheet: View {
                     .frame(minHeight: 44)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            .buttonStyle(.borderedProminent)
+            // Android's filled `Button` (its theme's `primary`/`onPrimary`, `brand` and
+            // `brandFg`). Until unit ix-fill this was a `.borderedProminent` with no
+            // tint, so it filled with the app's ``Color/brandInk`` and drew a white
+            // label: 5.65:1 light and **1.91:1** dark, and grey on grey disabled.
+            // The disabled look matters most here: the refusal is this
+            // button's label, and ``BrandFillButtonStyle`` draws it in
+            // ``Color/fgMuted`` on the sheet (7.43:1) rather than dimmed on a
+            // grey fill.
+            .buttonStyle(BrandFillButtonStyle())
             .disabled(!picker.canMoveHere)
             .padding(16)
         }

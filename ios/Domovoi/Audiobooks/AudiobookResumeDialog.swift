@@ -79,27 +79,19 @@ struct AudiobookResumeDialog: View {
             if let offer = plan.offer {
                 // The filled look, written out rather than chosen by a
                 // variable: `buttonStyle(_:)` takes a concrete type, so
-                // `.borderedProminent` and `.bordered` cannot be the two arms
-                // of one expression.
+                // ``BrandFillButtonStyle`` and `.bordered` cannot be the two
+                // arms of one expression.
                 Button(BookContinueRules.text(offer)) {
                     onPlay(offer.positionSec)
                 }
-                .buttonStyle(.borderedProminent)
-                // The app's tint is `brandInk`, so a prominent button left
-                // alone fills with the ink and draws near-black `brandFg` on
-                // it at 3.08:1. The fill is the other token, and 8.49:1 with
-                // this label colour (`ConnectionDialogView.swift:455`).
-                .tint(Color.brand)
-                .foregroundStyle(Color.brandFg)
+                .buttonStyle(BrandFillButtonStyle())
             }
             if plan.positionSec > 5 {
                 if plan.offer == nil {
                     Button(AudiobooksStrings.resumeAt(plan.positionSec)) {
                         onPlay(plan.positionSec)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .tint(Color.brand)
-                    .foregroundStyle(Color.brandFg)
+                    .buttonStyle(BrandFillButtonStyle())
                 } else {
                     Button(AudiobooksStrings.resumeAt(plan.positionSec)) {
                         onPlay(plan.positionSec)

@@ -111,9 +111,7 @@ struct RoomsSettingsTabView: View {
             Button(RoomsStrings.quietSave) {
                 model.saveQuietHours(room, mode: "custom")
             }
-            .buttonStyle(.borderedProminent)
-            .tint(Color.brand)
-            .foregroundStyle(Color.brandFg)
+            .buttonStyle(BrandFillButtonStyle())
             .font(.subheadline)
             .fixedSize(horizontal: false, vertical: true)
             .frame(minHeight: 44)

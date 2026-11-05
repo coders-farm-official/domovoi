@@ -85,11 +85,7 @@ struct NewsPersonView: View {
     /// internet is on. DECISIONS.md, "A 409 says the server's own sentence".
     private var pollButton: some View {
         Button(detail.pollLabel) { detail.pollNow() }
-            .buttonStyle(.borderedProminent)
-            .tint(Color.brand)
-            // `.borderedProminent` draws a white label, which is 2.05:1 on
-            // the amber; this is the measured 8.49:1 pair.
-            .foregroundStyle(Color.brandFg)
+            .buttonStyle(BrandFillButtonStyle())
             .disabled(detail.polling)
             .frame(minHeight: 44)
             .accessibilityIdentifier("news-poll")

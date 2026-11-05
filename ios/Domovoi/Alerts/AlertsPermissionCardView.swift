@@ -127,13 +127,7 @@ struct AlertsPermissionCardView: View {
             // install, from one place, after one sentence.
             Task { await model.askIOS() }
         }
-        .buttonStyle(.borderedProminent)
-        // The app's tint is the ink, so a prominent button would fill with
-        // the ink and draw near-black `brandFg` on it at 3.08:1. The fill is
-        // the other token, and 8.49:1 with this label colour — the same pair
-        // the trust dialog's confirm uses, and for the same measurement.
-        .tint(Color.brand)
-        .foregroundStyle(Color.brandFg)
+        .buttonStyle(BrandFillButtonStyle())
         .frame(minHeight: 44)
         .contentShape(.rect)
         .accessibilityIdentifier("alerts-ask-confirm")

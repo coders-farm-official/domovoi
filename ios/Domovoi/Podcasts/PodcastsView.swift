@@ -286,21 +286,13 @@ struct PodcastsView: View {
                     .frame(minHeight: 44)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            .buttonStyle(.borderedProminent)
-            // The other half of the same pattern: a prominent button draws the
-            // tint as its **fill**, so this one takes ``Color/brand`` where
-            // its neighbour takes the ink (`HomeAnnounceView.swift:158-163`).
-            //
-            // **The `foregroundStyle` is half of it, and it was missing.**
-            // This comment used to say the fill had ``Color/brandFg`` over it
-            // and nothing in the code made that true: SwiftUI draws a
-            // prominent button's label white unless it is told otherwise, and
-            // white on this amber is 2.05:1. Apple's audit failed it outright
-            // on train S007 — a finding this file had been classifying as a
-            // measurement artifact, against a comment that was arguing for
-            // its own correctness.
-            .tint(Color.brand)
-            .foregroundStyle(Color.brandFg)
+            // The fill and its label as one pair, from the style. As a
+            // `.borderedProminent` this took the amber fill and no label
+            // colour, so SwiftUI drew the label white at 2.05:1 and Apple's
+            // audit failed it on train S007 — beside a comment that said the
+            // label was ``Color/brandFg``. The colour is no longer a second
+            // modifier a site can leave out (unit ix-fill).
+            .buttonStyle(BrandFillButtonStyle())
         }
     }
 

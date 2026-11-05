@@ -1203,8 +1203,24 @@ extension StubHouseUITests {
     /// the screen beside it measured as doing nothing twice (trains S006,
     /// S009). A presentation takes the whole screen out of the window.
     ///
-    /// So the three readings are: one `forget` control, nothing of the panel
-    /// in the tree, and no audit finding naming a view behind the card.
+    /// So the readings are: one `forget` control, nothing of the panel in the
+    /// tree, no audit finding naming a view behind the card — and none naming
+    /// the card itself.
+    ///
+    /// ### The fourth reading is the one this case let through
+    ///
+    /// From train I004 to I011 Apple's audit reported `Contrast failed`
+    /// against `label='forget'` — the card's own confirm, white on amber at
+    /// 2.05:1 — and this case logged `audit floor 0, rest 1` and **passed**.
+    /// Its last assertion filtered the card's own vocabulary out of the
+    /// findings before asserting, so a finding on the card could only ever be
+    /// printed in a failure message that never fired. The reason given was
+    /// review 1's N4: the card belonged to another unit, and its defects
+    /// should not red a case about what is behind it. That reasoning is the
+    /// hole: a dialog is audited **only** here, so excusing its findings here
+    /// excused them everywhere (unit ix-fill). The card's own findings now
+    /// fail the case, after the `behind` reading, with a message that says
+    /// which of the two it is.
     @MainActor
     @available(iOS 17.0, *)
     func testShell_ADialogLeavesNothingBehindIt() throws {
@@ -1266,6 +1282,53 @@ extension StubHouseUITests {
                 + "content"
         )
 
+        // **The confirm's own pixels, read before the audit.** A band through
+        // the middle of `forget`, inset from its ends, holds only the fill and
+        // the label's glyphs, so its darkest and lightest pixels are the
+        // label-on-fill pair. Train I011's screenshot of this card reads
+        // `(255,255,255)` on `(242,166,24)` there, **2.05:1**, which is what
+        // the audit's `Contrast failed` was about and what this case passed
+        // with. ``DangerFillButtonStyle`` draws `dangerFg` on `danger`,
+        // 5.91:1 by the tokens. Read here rather than left to the audit
+        // alone, because the audit says only "failed", never by how much.
+        let confirm = app.buttons
+            .matching(NSPredicate(format: "label == %@", ShellStringsUnderTest.forget))
+            .firstMatch
+        let confirmFrame = confirm.frame
+        XCTAssertTrue(
+            confirm.exists && confirmFrame.width > 24 && confirmFrame.height > 14,
+            "the card's `forget` has no frame to read (\(confirmFrame)) — tree "
+                + "follows\n" + app.debugDescription
+        )
+        let band = CGRect(
+            x: confirmFrame.minX + 10,
+            y: confirmFrame.midY - 5,
+            width: confirmFrame.width - 20,
+            height: 10
+        )
+        if let reading = inkContrast(app, in: band) {
+            print(
+                "SHELL [shell-forget-card] confirm label \(reading.ink) / "
+                    + "\(reading.paper): \(String(format: "%.2f", reading.ratio)):1 "
+                    + "in \(band)"
+            )
+            XCTAssertGreaterThanOrEqual(
+                reading.ratio,
+                StubShell.contrastFloor,
+                "the forget card's `forget` reads \(reading.ink) against "
+                    + "\(reading.paper), \(String(format: "%.2f", reading.ratio)):1, "
+                    + "in \(band) — under the body-text floor. I011's was white on "
+                    + "amber, 2.05:1: a filled button whose label colour the site "
+                    + "did not choose. A ratio near 1 means the band found no "
+                    + "glyph at all; picture attached as `shell-forget-card`."
+            )
+        } else {
+            XCTFail(
+                "could not read the pixels of `forget` in \(band) — tree follows\n"
+                    + app.debugDescription
+            )
+        }
+
         let found = try auditIssues(app, "shell-forget-card")
         let (floor, all) = Self.floorAndRest(found)
         print("SHELL [shell-forget-card] audit floor \(floor), rest \(all.count)")
@@ -1309,45 +1372,53 @@ extension StubHouseUITests {
                 + "whose element is in no tree is printed above instead — the "
                 + "audit reading a view that is off the screen.)"
         )
-        // **Everything else the audit attributed, except the card's own.**
+        // **The card's own findings fail too.** This used to filter them out
+        // as another unit's (review 1, N4) and assert only on what was left,
+        // which is how `forget` failing contrast on every train from I004 to
+        // I011 passed here — see the doc comment. They are told apart from a
+        // stranger by the words they carry, so the message can say which.
         //
-        // This was `rest == []`, which is a tripwire for another unit's work:
-        // ``ForgetServerCard`` belongs to the player unit, and a finding
-        // against the card itself would have failed *this* case, whose subject
-        // is what is **behind** a dialog (review 1, N4). So the card's own
-        // vocabulary is named and anything outside it is a stranger — which is
-        // stricter than the old sweep, not weaker: a view behind the card that
-        // the `behind` filter above does not know about still fails here, and
-        // it would have been swallowed by a filter written the other way round.
-        //
-        // The card's own leaves, by the words they carry: `forget this
-        // server?`, the address under it (`the server at …`, the label Apple's
-        // audit asked for), the paragraph's opening, `cancel` and `forget`.
-        // **`the server at ` and not the bare address**: the
-        // pill behind the card says `127.0.0.1:6601` as well, which is why the
-        // bare address is in the `behind` list above, and a filter that let
-        // either one through would stop telling them apart.
-        let cardsOwn = [
+        // The card's own leaves: `forget this server?`, the address under it
+        // (`the server at …`, the label Apple's audit asked for), the
+        // paragraph's opening, `cancel` and `forget`. **`the server at ` and
+        // not the bare address**: the pill behind the card says
+        // `127.0.0.1:6601` as well, which is why the bare address is in the
+        // `behind` list above, and a filter that let either one through would
+        // stop telling them apart.
+        let cardsWords = [
             ShellStringsUnderTest.forgetServerTitle,
             "the server at ",
             "This phone will forget ",
             ShellStringsUnderTest.forget,
             "cancel",
         ]
-        //
-        // `rest` is already the findings the tree holds where the audit put
-        // them (the split above), so an off-the-screen presenting view
-        // cannot arrive here as a stranger.
+        let cardsOwn = rest.filter { line in
+            cardsWords.contains { line.contains($0) }
+        }
+        XCTAssertEqual(
+            cardsOwn,
+            [],
+            "Apple's audit names the forget card's OWN leaves: \(cardsOwn). "
+                + "These are defects of `ForgetServerCard` "
+                + "(`ConnectionDialogView.swift`), not of what is behind it — "
+                + "train I011's was `forget` drawn white on amber, 2.05:1, by a "
+                + "`.borderedProminent` that named no label colour. Picture "
+                + "attached as `shell-forget-card`."
+        )
+        // **And everything else the audit attributed.** `rest` is already the
+        // findings the tree holds where the audit put them (the split above),
+        // so an off-the-screen presenting view cannot arrive here; what does is
+        // a view behind the card that the `behind` list does not know about, or
+        // an anonymous finding of a kind the floor does not count.
         let strangers = rest.filter { line in
-            !cardsOwn.contains { line.contains($0) }
+            !cardsWords.contains { line.contains($0) }
         }
         XCTAssertEqual(
             strangers,
             [],
             "the audit attributed findings to views that are neither the forget "
                 + "card's nor on the list this case knows to look for: "
-                + "\(strangers). The card's own findings, which belong to "
-                + "whoever owns `ForgetServerCard`, were \(rest)."
+                + "\(strangers)."
         )
     }
 

@@ -86,7 +86,11 @@ struct ManualStartPage: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(minHeight: 44)
                 }
-                .buttonStyle(.borderedProminent)
+                // Android's filled `Button` (its theme's `primary`/`onPrimary`, `brand` and
+                // `brandFg`). Until unit ix-fill this was a `.borderedProminent` with no
+                // tint, so it filled with the app's ``Color/brandInk`` and drew a white
+                // label: 5.65:1 light and **1.91:1** dark, and grey on grey disabled.
+                .buttonStyle(BrandFillButtonStyle())
                 .padding(.top, 8)
             }
             .padding(16)

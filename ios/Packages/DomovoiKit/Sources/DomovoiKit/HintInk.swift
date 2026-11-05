@@ -174,8 +174,10 @@ public enum HintInk {
 /// shared change": Android fills its hang-up button with `colors.err` and
 /// draws white on it (`PhoneDropinCall.kt:180-183`), this target had
 /// ``Color/errInk`` and nothing to pair it with, and a `.borderedProminent`
-/// button tinted with an **ink** token drew its own label at 3.08:1 — so
-/// `DropInCallSheet` shipped `.bordered` with `.tint(Color.errInk)` instead.
+/// button tinted with an **ink** token draws its own white label on it at
+/// 2.99:1 in dark mode (the 3.08:1 this sentence used to give is the brand
+/// pair's, `brandFg` on `brandInk`) — so `DropInCallSheet` shipped
+/// `.bordered` with `.tint(Color.errInk)` instead.
 /// ``Color/danger`` and ``Color/dangerFg`` are the pair.
 ///
 /// Review 3's S5 was right about the shape of what was wrong with that: the
@@ -196,15 +198,18 @@ public enum HintInk {
 /// In light mode the fill is the same colour as ``Color/errInk``
 /// (`oklch(0.52 0.19 25)` is both `--danger` and `--err-ink`), which is why
 /// tinting a prominent button with the ink looked right in light mode and read
-/// 3.08:1 in dark.
+/// 2.99:1 in dark.
 ///
 /// ### Who calls it
 ///
-/// `ios/Domovoi/DropIn/DropInCallSheet.swift`'s `leave` button, since the
-/// integration of this batch: `.borderedProminent` with `.tint(Color.danger)`
-/// and the label in ``Color/dangerFg``. The two files belonged to two
-/// different units, which is why this shipped with no caller on
-/// `wf/ios-b-shell` and why the call site was typed on `wf/ios-b-all`
+/// `DangerFillButtonStyle` in `ios/Domovoi/Shell/InkButtonStyles.swift`, which
+/// draws ``Color/dangerFg`` on ``Color/danger`` as one pair, and through it two
+/// buttons: `DropInCallSheet.swift`'s `leave` and the forget-server card's
+/// `forget` (`ConnectionDialogView.swift`), both since unit ix-fill. Before
+/// that the drop-in `leave` was `.borderedProminent` with
+/// `.tint(Color.danger)` and the label in ``Color/dangerFg``, typed on
+/// `wf/ios-b-all` because the two files belonged to two different units —
+/// which is why this shipped with no caller on `wf/ios-b-shell`
 /// (`design-notes/ios/batch-2026-11-03/shell/DECISIONS.md` §3b,
 /// `INTEGRATION.md`). **A seam with no caller is its own defect class on this
 /// track** — a seam built, tested and never read is how `TokenVault` shipped

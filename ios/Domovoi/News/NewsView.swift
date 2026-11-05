@@ -306,9 +306,20 @@ struct NewsRemoveTopicCard: View {
                     .frame(minHeight: 44)
                     .contentShape(.rect)
                     .accessibilityIdentifier("news-remove-cancel")
+                // **No fill, as Android has none.** `ConfirmDialog`'s confirm
+                // is a `TextButton` with its label in `colors.err` when
+                // `destructive` (`Dialogs.kt:36-38`). This was a
+                // `.borderedProminent` with no tint, so it filled with the
+                // app's ``Color/brandInk`` (or with red, for the destructive
+                // role — either way) and drew a white label on it: 5.65:1
+                // light at best, **1.91:1** on the dark ink. The words are now
+                // ``Color/errInk`` on the card itself, drawn by the style so
+                // the role cannot repaint them: 6.08:1 on white and 5.70:1 on
+                // the dark sheet (``InkOutlineButtonStyle``'s table; unit
+                // ix-fill). The stroke is that style's, beside a `cancel`
+                // that has none — the one detail that is not Android's.
                 Button(NewsStrings.remove, role: .destructive, action: onConfirm)
-                    .buttonStyle(.borderedProminent)
-                    .frame(minHeight: 44)
+                    .buttonStyle(InkOutlineButtonStyle(ink: .errInk))
                     .accessibilityIdentifier("news-remove-confirm")
             }
         }

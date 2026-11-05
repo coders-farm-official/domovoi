@@ -213,9 +213,7 @@ struct AudiobookDetailView: View {
                     Button(detail.playWord) {
                         detail.playOrResume()
                     }
-                    .buttonStyle(.borderedProminent)
-                    .tint(Color.brand)
-                    .foregroundStyle(Color.brandFg)
+                    .buttonStyle(BrandFillButtonStyle())
                 }
                 if let saves, detail.canSave, let book = detail.book {
                     SaveToDeviceButton(

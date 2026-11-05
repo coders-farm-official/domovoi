@@ -255,13 +255,7 @@ struct ServerPickerPanel: View {
                     }
                 }
                 .disabled(!picker.manualButtonEnabled)
-                .buttonStyle(.borderedProminent)
-                // The app's tint is `brandInk` (`DomovoiApp.swift`), so
-                // a prominent button would fill with the ink and draw
-                // near-black `brandFg` on it at 3.08:1. The fill is the
-                // other token, and 8.49:1 with this label colour.
-                .tint(Color.brand)
-                .foregroundStyle(Color.brandFg)
+                .buttonStyle(BrandFillButtonStyle())
             }
             if let error = picker.manualError {
                 Text(error)
@@ -623,13 +617,7 @@ struct TrustServerCard: View {
                 Button(ShellStrings.trustCancel, action: onCancel)
                     .buttonStyle(InkOutlineButtonStyle())
                 Button(ShellStrings.trustConfirm, action: onConfirm)
-                    .buttonStyle(.borderedProminent)
-                    // The app's tint is `brandInk` (`DomovoiApp.swift`), so
-                    // a prominent button would fill with the ink and draw
-                    // near-black `brandFg` on it at 3.08:1. The fill is the
-                    // other token, and 8.49:1 with this label colour.
-                    .tint(Color.brand)
-                    .foregroundStyle(Color.brandFg)
+                    .buttonStyle(BrandFillButtonStyle())
             }
         }
     }
@@ -685,18 +673,28 @@ struct ForgetServerCard: View {
                 // trust card's reason above (unit mx-ink).
                 Button(forgetServerCancel, action: onCancel)
                     .buttonStyle(InkOutlineButtonStyle())
-                // **No brand colour here.** A destructive role draws itself
-                // red whatever the tint is, and forgetting a server is the
-                // one button on this sheet that should not look like the
-                // friendly one. `--danger` is its own token in
-                // `colors_and_type.css` for the same reason.
+                // **Red, as Android's is** (`ForgetServer.kt:101-104`, a
+                // filled `Button` on `colors.err`): forgetting a server is
+                // the one button on this sheet that should not look like the
+                // friendly one, and `--danger` is its own token in
+                // `colors_and_type.css` for that reason.
+                //
+                // **What stood here was amber with a white label, 2.05:1** —
+                // train I011's screenshot samples `(255,255,255)` on
+                // `(242,166,24)`, and Apple's audit named `forget` for
+                // "Contrast failed" on every train from I004 on. It was a
+                // `.borderedProminent` with `.tint(Color.brand)` and no label
+                // colour, under a comment saying a destructive role "draws
+                // itself red whatever the tint is" (the explicit tint won: the
+                // fill was amber) and that the pair was 8.49:1 "with this
+                // label colour" (there was none, so SwiftUI drew white).
+                //
+                // ``DangerFillButtonStyle`` draws ``Color/dangerFg`` on
+                // ``Color/danger`` itself, 5.91:1 light and 6.53:1 dark — not
+                // Android's `brandFg` on `#EA3C3F`, which is 4.33:1 light; the
+                // style's doc comment has the comparison (unit ix-fill).
                 Button(forgetServerConfirm, role: .destructive, action: onConfirm)
-                    .buttonStyle(.borderedProminent)
-                    // The app's tint is `brandInk` (`DomovoiApp.swift`), so
-                    // a prominent button would fill with the ink and draw
-                    // near-black `brandFg` on it at 3.08:1. The fill is the
-                    // other token, and 8.49:1 with this label colour.
-                    .tint(Color.brand)
+                    .buttonStyle(DangerFillButtonStyle())
             }
         }
     }

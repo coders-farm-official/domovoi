@@ -27,6 +27,10 @@ import SwiftUI
 // label. `PrintingOutlineButtonStyle` and `AiSettingsOutlinedButtonStyle`
 // made the same move on their own screens earlier and are left where they are.
 //
+// Unit ix-fill (2026-11-05) moved every `.borderedProminent` in the app onto
+// the filled shape too, and added its destructive twin,
+// ``DangerFillButtonStyle``: see ``BrandFillButtonStyle`` for why.
+//
 // ### One unconditional style, so the control keeps its identity
 //
 // Both read `@Environment(\.isEnabled)` inside a label view (a `ButtonStyle`
@@ -110,13 +114,31 @@ struct InkOutlineButtonLabel: View {
 /// Android's filled `Button`: ``Color/brandFg`` on ``Color/brand`` while it
 /// can act, and the ``InkOutlineButtonStyle`` disabled look while it cannot.
 ///
-/// Enabled is the pair this app already measured on `.borderedProminent`
-/// (``Color/brandFg`` on ``Color/brand``): **8.50:1** light, **9.92:1** dark
-/// by the tokens' sRGB (the token comment's 8.49 / 9.87 are the same pair
-/// rounded from its `oklch`). Drawn here by hand rather than by
-/// `.borderedProminent`, because that style, disabled, swaps the amber for
-/// its own grey fill and dims the label on it — grey on grey, the shape
-/// Apple's audit failed in train S005.
+/// Enabled is **8.50:1** light and **9.92:1** dark at 8-bit sRGB (`#281600`
+/// on `#F2A618`, `#1C0E00` on `#F9AD26` — the pixels a screenshot holds; train
+/// I011's Stations `search` and Alerts `ask iOS` both sample at exactly
+/// 8.50). The token comment's 8.49 / 9.87 are the same pair from the
+/// unrounded sRGB in `DomovoiApp.swift`.
+///
+/// ### Why this and never `.borderedProminent`
+///
+/// **The label colour is this style's, not the call site's.** A prominent
+/// button draws its label **white** unless something else names a colour,
+/// and white on this amber is **2.05:1** — train I011's forget card, sampled
+/// at `(255,255,255)` on `(242,166,24)`, where the site had `.tint(Color.brand)`
+/// and no label colour and a comment beside it claiming 8.49:1. Every
+/// `.borderedProminent` in the app depended on each site remembering a
+/// second modifier, and sites forgot it: S007's `subscribe`, S010's
+/// `search`, the forget card from I004 to I011 — and the five that named no
+/// tint at all filled with the app's ``Color/brandInk`` and drew white on
+/// it, 5.65:1 light and **1.91:1** dark. Disabled,
+/// that style also swaps the amber for its own grey fill and dims the label
+/// on it — grey on grey, **1.47:1** on Images' `generate` (S004–S006) and the
+/// shape Apple's audit failed in train S005. `FilledButtonLabelTests` in the
+/// kit now fails on any `.borderedProminent` in `ios/Domovoi`, and a filled
+/// button takes one of these two styles. (Calendar's selected-view capsule,
+/// a `.plain` button that draws ``Color/brandFg`` on ``Color/brand`` inside its
+/// own label, is the one pair drawn by hand.)
 ///
 /// Disabled draws **no fill**: ``Color/fgMuted`` on the surface inside a
 /// half-strength stroke of the same ink (7.43:1 on white, 6.85:1 on the dark
@@ -129,17 +151,49 @@ struct InkOutlineButtonLabel: View {
 /// flips. That is the identity limit the Chat send's old `ChatSendSkin`
 /// recorded (an `if`/`else` in a modifier compiles to `_ConditionalContent`),
 /// and it is why the send now takes this style.
+///
+/// **Name no colour inside the label.** A `.foregroundStyle` on the label's
+/// own `Text` wins over the one this style sets, in both states, which is how
+/// a fill comes to carry a colour nobody measured against it.
 struct BrandFillButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
-        BrandFillButtonLabel(configuration: configuration)
+        FillButtonLabel(configuration: configuration, fill: .brand, text: .brandFg)
     }
 }
 
-/// ``BrandFillButtonStyle``'s body as a `View`, for the environment read.
-struct BrandFillButtonLabel: View {
+/// ``BrandFillButtonStyle``'s destructive twin: ``Color/dangerFg`` on
+/// ``Color/danger`` — hang up, forget a server — with the same disabled look.
+///
+/// **5.91:1** light and **6.53:1** dark (``DangerInk/lightArithmeticRatio``,
+/// ``DangerInk/darkArithmeticRatio``, recomputed from the kit's constants by
+/// `ShellFoldTests`). The text token flips with the theme because white on
+/// the dark fill is 2.99:1 (``DangerInk/whiteOnTheDarkFillRatio``).
+///
+/// **Android's two red buttons are not this pair, and neither clears 4.5:1 in
+/// both themes.**
+/// Its filled `hang up` is white on `colors.err` (`PhoneDropinCall.kt:180-183`,
+/// `#EA3C3F`: **4.03:1** light, 2.98:1 dark) and its `forget` is `brandFg` on
+/// the same red (`ForgetServer.kt:103`: **4.33:1** light, 6.33:1 dark). The
+/// shape is Android's — a filled red button — and the colours are the
+/// stylesheet's `--danger` pair, which is what clears the floor in both
+/// themes. Standing rule 1 follows Android on small details; a pair under
+/// the floor is not one of them.
+struct DangerFillButtonStyle: ButtonStyle {
+
+    func makeBody(configuration: Configuration) -> some View {
+        FillButtonLabel(configuration: configuration, fill: .danger, text: .dangerFg)
+    }
+}
+
+/// The two fill styles' body as a `View`, for the environment read: one
+/// shape, one disabled look, and the fill and its text always passed as a
+/// **pair** — a call site cannot name one without the other.
+struct FillButtonLabel: View {
 
     let configuration: ButtonStyleConfiguration
+    let fill: Color
+    let text: Color
 
     @Environment(\.isEnabled) private var isEnabled
 
@@ -148,7 +202,7 @@ struct BrandFillButtonLabel: View {
     var body: some View {
         let shape = InkButtonMetrics.shape
         return configuration.label
-            .foregroundStyle(isEnabled ? Color.brandFg : Color.fgMuted)
+            .foregroundStyle(isEnabled ? text : Color.fgMuted)
             .fixedSize(horizontal: false, vertical: true)
             .padding(.horizontal, side)
             .padding(.vertical, InkButtonMetrics.vertical)
@@ -156,7 +210,7 @@ struct BrandFillButtonLabel: View {
             // of them clear, so no state of this button is a different view.
             .background {
                 shape
-                    .fill(isEnabled ? Color.brand : Color.clear)
+                    .fill(isEnabled ? fill : Color.clear)
                     .overlay(
                         shape.strokeBorder(
                             isEnabled ? Color.clear : Color.fgMuted.opacity(0.5),

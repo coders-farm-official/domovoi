@@ -190,9 +190,7 @@ struct ScanSheetView: View {
                 Button(scan.busy ? PrintingStrings.scanning : PrintingStrings.scanButton) {
                     scan.start()
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(Color.brand)
-                .foregroundStyle(Color.brandFg)
+                .buttonStyle(BrandFillButtonStyle())
                 .disabled(!scan.canScan)
             }
             // `can_scan_more` is `state == "waiting"`, computed server-side
@@ -204,9 +202,7 @@ struct ScanSheetView: View {
             }
             if scan.canFinish {
                 Button(PrintingStrings.doneButton) { scan.finish() }
-                    .buttonStyle(.borderedProminent)
-                    .tint(Color.brand)
-                    .foregroundStyle(Color.brandFg)
+                    .buttonStyle(BrandFillButtonStyle())
             }
             if scan.scan?.finished == false {
                 Button(PrintingStrings.cancel) { scan.cancel() }

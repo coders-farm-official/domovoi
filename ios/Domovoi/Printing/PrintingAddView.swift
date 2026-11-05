@@ -87,12 +87,7 @@ struct PrintingAddView: View {
                         )
                     }
                     Button(PrintingStrings.add) { add() }
-                        .buttonStyle(.borderedProminent)
-                        // ``Color/brand`` as a fill with ``Color/brandFg`` on
-                        // it, never the ink as a fill — the measurement
-                        // ``PhonesAndBrowsersPanel`` carries.
-                        .tint(Color.brand)
-                        .foregroundStyle(Color.brandFg)
+                        .buttonStyle(BrandFillButtonStyle())
                         .disabled(!canAdd)
                 }
                 .padding(16)
