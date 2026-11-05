@@ -523,9 +523,15 @@ public final class ChatModel {
     /// Whether a send would be taken **now**.
     ///
     /// The one gate ``send(_:)`` and both composers ask. Nothing is queued: a
-    /// send refused because a reply is being written is simply refused, which
-    /// is why neither composer draws a send in that state (the views carry the
-    /// reasoning, and this batch's DECISIONS.md the departure from Android).
+    /// send refused because a reply is being written is simply refused.
+    ///
+    /// **The house chat's composer draws its send in that state anyway, and
+    /// disables it** — Kamron's answer 70 (2026-11-04), which is Android's own
+    /// shape (`ChatScreen.kt:1166-1171`, `enabled = canSend`). Inside a drawn
+    /// composer this expression is exactly `!sending`, because
+    /// ``composerOffered`` is that composer's precondition, so
+    /// `.disabled(!canSend)` there says *a reply is being written* and nothing
+    /// else. The views carry the rest of the reasoning.
     public var canSend: Bool { composerOffered && !sending }
 
     /// Show one page more of the open thread (``ChatTranscriptWindow``, D64).

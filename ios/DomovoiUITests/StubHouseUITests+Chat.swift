@@ -59,15 +59,36 @@ extension StubHouseUITests {
         return (app, false)
     }
 
-    /// Whether the composer offers a send **of its own** — never the
-    /// keyboard's key, which shares the word.
+    /// Whether the composer offers a send **that can send now** — never the
+    /// keyboard's key, which shares the word, and never the greyed-out one.
     ///
     /// The positive form is ``StubHouseUITests/composerSend(_:)``; this is the
-    /// question D8 asks, which is whether there is one at all. It does not
+    /// question D8 asks, which is whether there is a usable one. It does not
     /// wait: a control that is supposed to be absent must not be waited for,
     /// or the case spends ten seconds proving nothing.
+    ///
+    /// **`isEnabled` is part of the question since Kamron's answer 70.** The
+    /// send is now drawn and disabled while a reply is being written
+    /// (Android's shape), so existence alone no longer answers "can this
+    /// message go". ``chatComposerSendButton(_:)`` is the one that asks only
+    /// whether it is drawn, and the two together are what the streaming case
+    /// reads.
     @MainActor
     func chatComposerSends(_ app: XCUIApplication) -> Bool {
+        guard let send = chatComposerSendButton(app) else { return false }
+        return send.isEnabled
+    }
+
+    /// The composer's own send **however it is drawn**, enabled or greyed out,
+    /// or nil where none is on screen above the keyboard.
+    ///
+    /// Split out of ``chatComposerSends(_:)`` for answer 70: the composer
+    /// draws a disabled send while a reply is being written, and the case for
+    /// that state has to tell "drawn and dimmed" from "not drawn at all" —
+    /// which is the whole of what the answer changed. It does not wait, for
+    /// the same reason the other one does not.
+    @MainActor
+    func chatComposerSendButton(_ app: XCUIApplication) -> XCUIElement? {
         let keyboard = app.keyboards.firstMatch
         let keyboardTop = keyboard.exists ? keyboard.frame.minY : .greatestFiniteMagnitude
         let all = app.buttons.matching(
@@ -76,9 +97,9 @@ extension StubHouseUITests {
         for index in 0..<all.count {
             let candidate = all.element(boundBy: index)
             guard candidate.exists else { continue }
-            if candidate.frame.maxY <= keyboardTop { return true }
+            if candidate.frame.maxY <= keyboardTop { return candidate }
         }
-        return false
+        return nil
     }
 
     /// The frame of the **highest** element on screen whose label is exactly
@@ -249,17 +270,19 @@ extension StubHouseUITests {
         )
     }
 
-    /// **No send while a reply is being written** — the other half of D8's
-    /// rule, and the state review round 2 found still drawing the dimmed
-    /// `.borderedProminent` that Apple's audit failed in train S005.
+    /// **The send is drawn and greyed out while a reply is being written** —
+    /// Kamron's answer 70 (2026-11-04), which took Android's shape over the
+    /// empty spot this screen shipped.
+    ///
+    /// Android draws the same button `enabled = canSend` with a faint tint
+    /// (`ChatScreen.kt:1166-1171`). So the thing to assert is no longer an
+    /// absence: the button is there, in the same place, and it is **not
+    /// enabled** — VoiceOver reads it and says *dimmed*, and it is not
+    /// hittable. ``ChatModel/send(_:)`` still queues nothing, so a tap would
+    /// be refused; that is why it is disabled rather than live.
     ///
     /// The field stays live while a reply streams, so a follow-up can be
-    /// typed; what is withheld is the button. ``ChatModel/send(_:)`` guards on
-    /// `canSend` and **queues nothing**, so a send drawn in this state is a
-    /// control that cannot do what it says — and the shape it drew was the
-    /// grey-glyphs-on-a-grey-fill one. Android draws it faint-and-disabled
-    /// (`ChatScreen.kt:1166-1171`); this is the departure, and the batch's
-    /// DECISIONS.md carries it for Kamron.
+    /// typed, and the words stay in the box.
     ///
     /// ### Why the window is real, and how this case says so if it is not
     ///
@@ -271,12 +294,12 @@ extension StubHouseUITests {
     /// than trusting the clock. A window that closed early fails this case
     /// with its own message instead of passing it for the wrong reason.
     ///
-    /// And the send **comes back**: it can only be drawn by
+    /// And the send **comes back enabled**: it can only be drawn at all by
     /// ``ChatRules/sendOffered(typed:)``, which asks whether there is anything
-    /// in the box, so a send on screen afterwards is also the proof that the
-    /// typed words survived the stream.
+    /// in the box, so a usable send on screen afterwards is also the proof
+    /// that the typed words survived the stream.
     @MainActor
-    func testChat_NoSendIsDrawnWhileAReplyIsBeingWritten() throws {
+    func testChat_TheSendIsGreyedOutWhileAReplyIsBeingWritten() throws {
         let (app, landed) = openChat(fail: "slow")
         XCTAssertTrue(landed, "the thread list never answered")
         XCTAssertTrue(
@@ -304,13 +327,27 @@ extension StubHouseUITests {
             "the reply had already finished before the follow-up was typed: this case needs a "
                 + "reply still being written, so give the stub a longer one"
         )
-        evidence(app, "chat-send-withheld-mid-reply")
+        evidence(app, "chat-send-greyed-mid-reply")
 
+        let send = chatComposerSendButton(app)
+        XCTAssertNotNil(
+            send,
+            "no send is drawn while a reply is being written — answer 70 asked for Android's "
+                + "greyed-out button in the same place, not an empty spot"
+        )
+        XCTAssertFalse(
+            send?.isEnabled ?? true,
+            "the send is live while a reply is being written: ChatModel.send refuses it and "
+                + "queues nothing, so a tappable button there cannot do what it says"
+        )
+        XCTAssertFalse(
+            send?.isHittable ?? true,
+            "the greyed-out send is still hittable, so a tap reaches a control that is refused"
+        )
         XCTAssertFalse(
             chatComposerSends(app),
-            "a send is drawn while a reply is being written — ChatModel.send refuses it and "
-                + "queues nothing, and the dimmed .borderedProminent is what Apple's audit "
-                + "failed in train S005"
+            "chatComposerSends read the dimmed send as a usable one, so every other case in "
+                + "this file that asks it is now asking a weaker question"
         )
         XCTAssertFalse(
             app.buttons[ChatMoreStringsUnderTest.talk].exists,
@@ -319,12 +356,12 @@ extension StubHouseUITests {
         )
         XCTAssertFalse(
             finished.exists,
-            "the reply finished while the composer was being read, so the two assertions above "
+            "the reply finished while the composer was being read, so the assertions above "
                 + "were not read against a streaming reply"
         )
 
-        // And when the reply lands, the send is back — with the words still
-        // there, which is what being drawn at all says.
+        // And when the reply lands, the send is usable again — with the words
+        // still there, which is what being drawn at all says.
         XCTAssertTrue(
             finished.waitForExistence(timeout: 40),
             "the reply never finished, so nothing was waiting for the send to come back"

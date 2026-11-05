@@ -936,7 +936,7 @@ struct ChatConversationView: View {
                     .foregroundStyle(Color.brandInk)
                     .accessibilityLabel(ChatMoreStrings.talk)
                     .disabled(!chat.canSend)
-                } else if ChatRules.sendOffered(typed: typed), chat.canSend {
+                } else if ChatRules.sendOffered(typed: typed) {
                     // **Something is typed** — ``ChatRules/sendOffered(typed:)``,
                     // which is the send's own question and deliberately not the
                     // mic's read backwards. That rule's doc comment has the
@@ -947,6 +947,30 @@ struct ChatConversationView: View {
                     // never both drawn: with a blank box and a thread the first
                     // branch takes it, and with words in the box this one does.
                     //
+                    // **Drawn and disabled while a reply is being written** —
+                    // Kamron's answer 70 (2026-11-04): "greyed-out send while a
+                    // reply is written, as Android", under his standing rule 1,
+                    // that a small detail follows Android. Android draws this
+                    // same spot's button `enabled = canSend` with a faint tint
+                    // (`ChatScreen.kt:1166-1171`), and inside this composer
+                    // `chat.canSend` is exactly `!chat.sending`:
+                    // ``ChatModel/canSend`` is `composerOffered && !sending`
+                    // and ``ChatModel/composerOffered`` is this whole
+                    // composer's own precondition. So the `.disabled` below
+                    // means *a reply is being written* and nothing else. The
+                    // field stays live, the typed words stay in it, and the
+                    // button re-enables itself when the reply lands. This
+                    // replaces the empty spot that used to be drawn here, the
+                    // one departure from Android this batch asked him about.
+                    //
+                    // ``ChatModel/send(_:)`` still queues nothing — its guard
+                    // is `!content.isEmpty, canSend, conversationOpen`
+                    // (`ChatModel.swift:601`) — so this is not a button that
+                    // will fire later; it is Android's greyed-out one, which is
+                    // what the answer chose, and `.disabled` is what keeps it
+                    // out of VoiceOver's reach: it reads the word and says
+                    // *dimmed*, and it is not hittable.
+                    //
                     // **The label's colour is named, not inherited** (D8,
                     // Kamron's answer 8: "same send-key fix on the house
                     // chat's composer"). `.borderedProminent` draws a WHITE
@@ -956,14 +980,17 @@ struct ChatConversationView: View {
                     // drawn on the amber. Measured 8.49:1 light, 9.87:1 dark.
                     // ``AssistantPhoneConversationView/composer`` is where
                     // this was fixed first and is the model it is copied from.
+                    // The disabled look is ``ChatSendSkin``'s, and why it is
+                    // not a dimmed `.borderedProminent` is written there.
                     Button {
                         send()
                     } label: {
-                        Text(ChatStrings.send).foregroundStyle(Color.brandFg)
+                        Text(ChatStrings.send)
+                            .foregroundStyle(chat.canSend ? Color.brandFg : Color.brandInk)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .tint(Color.brand)
+                    .modifier(ChatSendSkin(live: chat.canSend))
                     .frame(minHeight: 44)
+                    .disabled(!chat.canSend)
                 }
                 // **Nothing at all with a blank box and no mic to put there**
                 // (D8). That is the brand-new chat: Android's spot holds the
@@ -976,40 +1003,8 @@ struct ChatConversationView: View {
                 // [[no-misleading-controls]] is about, and the dimmed
                 // `.borderedProminent` that stood here is also what Apple's
                 // audit failed on contrast in train S005: grey glyphs on a
-                // grey fill.
-                //
-                // **And nothing at all while a reply is being written**, which
-                // is the second half of the same rule and what review round 2
-                // found still drawn here. `chat.canSend` is in the branch's
-                // own condition rather than a `.disabled(!chat.canSend)` under
-                // it, for two reasons:
-                //
-                //  * ``ChatModel/send(_:)`` does not queue anything. Its guard
-                //    is `!content.isEmpty, canSend, conversationOpen`
-                //    (`ChatModel.swift:590`), so a message typed while a reply
-                //    streams is refused outright and the person has to tap
-                //    again when the reply lands. The comment that used to sit
-                //    here said the send "WILL go out, as soon as the reply
-                //    before it lands", and that was simply not true of this
-                //    model — the kind of argument-in-a-comment this track has
-                //    been bitten by before.
-                //  * the shape it drew instead was the dimmed
-                //    `.borderedProminent` — the one Apple's audit failed on
-                //    contrast in train S005 — and no case ever visited it,
-                //    because the composer's audit types and measures while the
-                //    thread is idle.
-                //
-                // **This is a departure from Android**, which draws the send
-                // faint-and-disabled while `sending`
-                // (`ChatScreen.kt:1166-1171`: `enabled = canSend`, `tint = if
-                // (canSend) brand else fgFaint`). It is logged in this batch's
-                // DECISIONS.md for Kamron, and it is the same trade the blank
-                // box above already makes: a control that cannot do what it
-                // says is not drawn. The field itself stays live, so the
-                // message can still be typed while the last reply finishes —
-                // what is withheld is only the button that would refuse it.
-                // ``StubHouseUITests/testChat_NoSendIsDrawnWhileAReplyIsBeingWritten()``
-                // is the case, and it asserts the send comes back.
+                // grey fill. (That is the shape ``ChatSendSkin`` avoids for
+                // the reply-in-progress state above.)
             }
             .padding(12)
         }
@@ -1020,6 +1015,37 @@ struct ChatConversationView: View {
         // second send while one is running and a house with AI off all send
         // nothing — and the box is cleared only when something did.
         if chat.send(typed) { typed = "" }
+    }
+}
+
+/// The send button's look, which is the only thing that changes when a reply
+/// is being written.
+///
+/// Kamron's answer 70 asked for Android's greyed-out send in that state
+/// (`ChatScreen.kt:1166-1171`: `enabled = canSend`, and `tint = if (canSend)
+/// brand else fgFaint` — a faint glyph on no fill, not a dimmed filled pill).
+/// Keeping `.borderedProminent` and letting `.disabled` dim it is the shape
+/// Apple's audit failed for contrast in train S005: the system replaces the
+/// amber with its own grey fill and dims the label on top of it, which is grey
+/// glyphs on a grey fill. So the disabled state borrows the look this app
+/// already ships for a drawn-and-disabled control —
+/// ``RoomsDropInRow``'s `.bordered` + ``Color/brandInk``, the drop-in button
+/// Kamron's answer 79 settled — and the enabled state is untouched.
+///
+/// A modifier rather than two `Button`s in an `if`: one button, one accessible
+/// element, one place, which is what "the same place, greyed out" means.
+private struct ChatSendSkin: ViewModifier {
+
+    /// Whether a send would be taken now (``ChatModel/canSend``).
+    let live: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if live {
+            content.buttonStyle(.borderedProminent).tint(Color.brand)
+        } else {
+            content.buttonStyle(.bordered).tint(Color.brandInk)
+        }
     }
 }
 
