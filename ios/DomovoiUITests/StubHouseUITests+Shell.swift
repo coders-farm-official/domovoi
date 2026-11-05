@@ -703,7 +703,11 @@ extension StubHouseUITests {
     ///    unit's work. A finding Apple returns with **no element** is asserted
     ///    on as well, separately: that is how a contrast finding against the
     ///    collapsed bar arrives (I002, R002 and R003), and a filter over
-    ///    labels cannot see it (review 3, S4).
+    ///    labels cannot see it (review 3, S4). Since the I006 fix an
+    ///    anonymous *contrast* finding is allowed up to the text leaves the
+    ///    page's band cuts in half (``measureViewportBand(_:)``, measured
+    ///    before the audit), and whenever one is let through the title's and
+    ///    the pill's own pixels must clear ``StubShell/contrastFloor``.
     ///
     /// The swipe is `.slow` on the page's own scroll view and not on the app:
     /// a plain `swipeUp()` steps over rows, and a swipe on the app can land on
@@ -887,6 +891,20 @@ extension StubHouseUITests {
         crumb: String,
         named name: String
     ) throws {
+        // **The band and its straddlers, before the audit** — the rule
+        // ``testTheStatesTheAuditHadNeverSeen()`` reads, through the same
+        // helper. Measured first because a tree read after the audit is a read
+        // of wherever the audit left the page. See the anonymous allowance
+        // below for what it is for.
+        let band = measureViewportBand(app)
+        if let band {
+            print(
+                "SHELL [\(name)] band top=\(band.top) bottom=\(band.bottom) "
+                    + "straddling text leaves=\(band.straddlers.count) \(band.straddlers)"
+            )
+        } else {
+            print("SHELL [\(name)] no scroll view — no viewport band, so no straddlers")
+        }
         let (floor, rest) = Self.floorAndRest(try auditIssues(app, name))
         print("SHELL [\(name)] audit: floor \(floor), rest \(rest.count) — \(rest)")
         // The chrome's two leaves, by the words only they carry. The pill's
@@ -930,25 +948,60 @@ extension StubHouseUITests {
         // leaf most likely to arrive that way here is the one this reading
         // exists for: a warning glyph on a translucent collapsed bar.
         //
-        // The cost, taken deliberately: Home and Videos are other units'
-        // screens, so an anonymous finding can be theirs and this can red for
-        // their work — the opposite trade from the assertion above. A shell
-        // case that cannot see the shape this track keeps getting is worth
-        // less than one that occasionally names the wrong owner, and the
-        // message says how to tell: **read the picture, not the line.**
+        // ### Anonymous contrast is allowed by geometry, and only that far
+        //
+        // This used to fail on **every** anonymous finding, and its comment
+        // called the cost — "an anonymous finding can be theirs and this can
+        // red for their work" — a trade taken on purpose. Train I006 paid it:
+        // `shell-home-ax5-audited` came back `floor 6, rest 1`, the one an
+        // anonymous `Contrast failed`, where I005 had returned the same
+        // finding **named** — Home's media-request row,
+        // `frame=(48.0, 577.3, 313.0, 290.7)`, straddling the phone bar's top
+        // (its own text 18.82:1, `i006-diag/shell.md`). Same picture, same
+        // row, attributed once and not the next time. The states case had
+        // already solved that shape by geometry, so this borrows its rule
+        // through ``measureViewportBand(_:)``:
+        //
+        //  * an anonymous `Contrast failed` is allowed up to the number of
+        //    text leaves the band's edges cut in half, less the attributed
+        //    contrast findings already on such a leaf;
+        //  * one past that count fails, and so does an anonymous finding of
+        //    any **other** kind, as before;
+        //  * and the loophole that opens — an anonymous finding against the
+        //    chrome absorbed because some row happens to straddle — is closed
+        //    by reading the chrome's own pixels whenever one is let through
+        //    (``assertTheChromeInkClearsTheFloor``): if the title or the pill
+        //    measures under ``StubShell/contrastFloor``, this fails anyway.
         let anonymous = rest.filter { $0.hasSuffix("| element: nil") }
+        let anonymousContrast = anonymous.filter { $0.hasPrefix("Contrast failed") }
+        let anonymousOther = anonymous.filter { !$0.hasPrefix("Contrast failed") }
+        let namedOnAnEdge = rest.filter { line in
+            guard line.hasPrefix("Contrast failed"), let band,
+                  let box = Self.elementFrame(in: line) else { return false }
+            return Self.crosses(band.top, box) || Self.crosses(band.bottom, box)
+        }.count
+        let straddling = band?.straddlers.count ?? 0
+        let allowance = max(0, straddling - namedOnAnEdge)
+        let letThrough = Array(anonymousContrast.prefix(allowance))
+        let pastTheCount = Array(anonymousContrast.dropFirst(allowance))
+        for line in letThrough {
+            print(
+                "SHELL [\(name)] unattributed contrast, one of \(straddling) "
+                    + "straddling leaves (\(namedOnAnEdge) already named on an edge) :: \(line)"
+            )
+        }
         XCTAssertEqual(
-            anonymous,
+            anonymousOther + pastTheCount,
             [],
-            "Apple returned \(anonymous.count) finding(s) it could not "
-                + "attribute on \(name): \(anonymous). `floorAndRest` has "
-                + "already taken out the two known anonymous headlines, so "
-                + "these are findings of some other kind with no element — "
-                + "which is how a contrast finding against the collapsed bar's "
-                + "own glyph arrives (I002, R002 and R003). **Read the "
-                + "attached picture to attribute it.** A row of Home's or "
-                + "Videos' belongs to that unit, and this allowance grows by "
-                + "that signature and no other; the large title or the toolbar "
+            "Apple returned finding(s) it could not attribute on \(name), past "
+                + "what the page's geometry accounts for: \(anonymousOther.count) "
+                + "of a kind other than contrast, and \(pastTheCount.count) "
+                + "contrast finding(s) beyond the \(straddling) text leaves the "
+                + "band's edges cut in half (\(namedOnAnEdge) of those already "
+                + "named): \(anonymousOther + pastTheCount). `floorAndRest` has "
+                + "already taken out the two known anonymous headlines. **Read "
+                + "the attached picture to attribute it.** A row of Home's or "
+                + "Videos' belongs to that unit; the large title or the toolbar "
                 + "pill is this unit's and is the defect reading 6 is for. "
                 + "ONE of these has already been attributed and fixed: a "
                 + "`Text clipped` on a pushed screen at AX5 is the back "
@@ -961,6 +1014,115 @@ extension StubHouseUITests {
                 + "holds it; if that case is red too, this line is the same "
                 + "defect and not a second one."
         )
+        if !letThrough.isEmpty {
+            assertTheChromeInkClearsTheFloor(app, crumb: crumb, named: name)
+        }
+    }
+
+    /// The large title's and the toolbar pill's **glyphs'** own pixels, read
+    /// whenever ``assertTheChromeAuditsAtAX5`` lets an anonymous contrast
+    /// finding through on the page's geometry — so that an absorbed finding
+    /// cannot be one against the chrome.
+    ///
+    /// Each reading is ``inkContrast(_:in:)``: the darkest pixel in a box
+    /// against the lightest, which is the *best* contrast in that box. So the
+    /// boxes are kept to **one thing each**:
+    ///
+    /// * the title's frame, inset by a point;
+    /// * the pill's `server.rack` image, on its own;
+    /// * the pill's `exclamationmark.triangle.fill` warning glyph, on its own,
+    ///   whenever the pill says `unverified` — the glyph this reading exists
+    ///   for (`Color.warnInk` on the collapsed bar's translucent material,
+    ///   the surface class that measured it at 4.21:1 on the `.quaternary`
+    ///   capsule). It is required, not optional: an unverified pill with no
+    ///   warning image to find fails here and prints the tree.
+    ///
+    /// The first version read the whole pill as one box (revision 1's M3):
+    /// the pill is one button holding both images, so a faded warning glyph
+    /// passed on the server glyph's ink — on every Home AX5 run, because a
+    /// row always straddles there and so this always runs. Read separately,
+    /// each glyph has to carry its own contrast. Train I006's whole-pill
+    /// reading was `rgb(157, 83, 0)` on `rgb(249, 249, 248)`, **5.43:1**; the
+    /// per-glyph values are the next train's to report.
+    ///
+    /// What it still cannot see: darkest-against-lightest inside one glyph's
+    /// box is that glyph's best pixel against its paper, so a glyph drawn with
+    /// a readable core and faded edges passes. And the floor is the body-text
+    /// ``StubShell/contrastFloor`` (4.5), stricter than the 3:1 WCAG asks of
+    /// a non-text glyph, on purpose: `warnInk` is the token already measured
+    /// failing a surface like this one.
+    @MainActor
+    private func assertTheChromeInkClearsTheFloor(
+        _ app: XCUIApplication,
+        crumb: String,
+        named name: String
+    ) {
+        let trimmed = crumb.trimmingCharacters(in: .whitespaces)
+        let title = app.navigationBars.staticTexts.matching(
+            NSPredicate(format: "label == %@ OR label == %@", crumb, trimmed)
+        ).firstMatch
+        let pill = app.navigationBars.buttons.matching(
+            NSPredicate(
+                format: "label BEGINSWITH %@ OR label == %@",
+                StubShell.toolbarPillPrefix,
+                "connect"
+            )
+        ).firstMatch
+        guard pill.exists else {
+            evidence(app, "\(name)-chrome-not-found")
+            XCTFail(
+                "an anonymous contrast finding was let through on \(name) on the page's "
+                    + "geometry, and there is no toolbar pill in a navigation bar to read — "
+                    + "so the finding cannot be ruled off the chrome. Tree printed above."
+            )
+            return
+        }
+        var boxes: [(what: String, element: XCUIElement, inset: CGFloat)] = [
+            ("the large title", title, 1),
+            ("the toolbar pill's server glyph",
+             pill.images.matching(identifier: "server.rack").firstMatch, 0),
+        ]
+        if pill.label.contains("unverified") {
+            boxes.append((
+                "the toolbar pill's warning glyph",
+                pill.images.matching(identifier: "exclamationmark.triangle.fill").firstMatch,
+                0
+            ))
+        }
+        for (what, element, inset) in boxes {
+            let box = element.exists ? element.frame : .zero
+            guard box.width > 2, box.height > 2 else {
+                evidence(app, "\(name)-chrome-not-found")
+                XCTFail(
+                    "an anonymous contrast finding was let through on \(name) on "
+                        + "the page's geometry, and \(what) is not there to read "
+                        + "(frame \(box), pill '\(pill.label)') — so the finding "
+                        + "cannot be ruled off the chrome. Tree printed above."
+                )
+                continue
+            }
+            guard let reading = inkContrast(app, in: box.insetBy(dx: inset, dy: inset)) else {
+                evidence(app, "\(name)-chrome-unread")
+                XCTFail(
+                    "an anonymous contrast finding was let through on \(name), "
+                        + "and \(what)'s pixels at \(box) could not be read"
+                )
+                continue
+            }
+            print(
+                "SHELL [\(name)] \(what) ink \(reading.ink) on \(reading.paper) in \(box) — "
+                    + String(format: "%.2f", reading.ratio) + ":1"
+            )
+            XCTAssertGreaterThanOrEqual(
+                reading.ratio,
+                StubShell.contrastFloor,
+                "\(what) measures " + String(format: "%.2f", reading.ratio)
+                    + ":1 (ink \(reading.ink) on \(reading.paper)) on \(name), "
+                    + "while Apple returned an anonymous contrast finding this "
+                    + "case let through on the page's geometry — the finding may "
+                    + "be the chrome's and not the straddling row's. Picture attached."
+            )
+        }
     }
 
     /// How much of the window the page must hold once the header has scrolled

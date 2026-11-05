@@ -7,8 +7,13 @@ import XCTest
 /// `testVoiceSettings_Audit` and `testTheStatesTheAuditHadNeverSeen` — inside
 /// `StubHouseUITests`' banner wait, because `XCUIElement.frame` on a banner
 /// that had just dismissed itself is reported as a failure of the line that
-/// read it. ``StubHouseUITests/notificationBanner()`` carries the two logs'
+/// read it. ``StubHouseUITests/notificationBannerQuery()`` carries the two logs'
 /// timings; this file is the measurement that keeps the fix.
+///
+/// Train I006 lost `testTheStatesTheAuditHadNeverSeen` there a second way:
+/// the wait's swipe at a banner already leaving. The swipe is gone, so the
+/// wait has **no gesture left to fail** — only reads, which these two cases
+/// measure (see the second one's doc for what that does not cover).
 extension StubHouseUITests {
 
     /// A banner element that resolves to nothing reads as **no frame**, not as
@@ -64,6 +69,28 @@ extension StubHouseUITests {
     /// worst. Either outcome is a pass — a frame means a banner was there and
     /// was waited out, `nil` means there was none. What is being measured is
     /// that neither one is a failure, and how long it took.
+    ///
+    /// ### What this covers, and what it does not
+    ///
+    /// **It covers the read path**: `exists`, then `try? snapshot()`, polled
+    /// to a deadline — which, since the I006 fix, is *all*
+    /// ``StubHouseUITests/waitForNoNotificationBanner(_:appearIn:clearIn:)``
+    /// does. It used to swipe a banner still up after 8 s, and that swipe
+    /// failed `testTheStatesTheAuditHadNeverSeen` in I006 (`Unable to perform
+    /// Swipe up … visible frame is empty`, a banner that began its own
+    /// dismissal ~40 ms after the last check). **This case could never have
+    /// seen that**, for two reasons: in I006 it ran with no banner on screen
+    /// ("returned no banner after 0.548s"), so it never entered the loop; and
+    /// its `clearIn: 5` is under the swipe's 8 s, so the swipe branch was
+    /// unreachable from here even with a banner up. No case can schedule a
+    /// banner that stays past 8 s and then vanishes mid-gesture.
+    ///
+    /// So the claim "the wait never fails the case" now rests on the wait
+    /// **making no gesture at all** — a property of its code, readable in
+    /// it, not something this case measures — and this case measures only
+    /// that the reads return, in bounded time. It does not cover a banner
+    /// that outstays `clearIn` (the wait prints `STILL THERE` and returns its
+    /// frame; the caller attributes findings under it).
     @MainActor
     func testBanner_TheWaitAlwaysReturnsAndNeverFailsTheCase() {
         let started = Date()

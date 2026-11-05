@@ -27,10 +27,12 @@ import UIKit
 ///
 /// ### What this does instead, and why it is the smallest thing that works
 ///
-/// SwiftUI gives the field a plain `placeholder` string — train I004's trees
-/// show `placeholderValue: 'search title, artist, album, path…'` on the
-/// element, and ``StubHouseUITests`` asserts that value — and UIKit then draws
-/// it in `UIColor.placeholderText` because no `attributedPlaceholder` was set.
+/// SwiftUI sets the field's placeholder — train I004's trees show
+/// `placeholderValue: 'search title, artist, album, path…'` on the element,
+/// and ``StubHouseUITests`` asserts that value — and it arrives in
+/// `UIColor.placeholderText`. (This paragraph used to say SwiftUI sets a
+/// *plain* string; train I006 says it reaches the attributed setter with its
+/// grey already on every run — see that setter's comment below.)
 /// `attributedPlaceholder` is the one public, documented place the colour of a
 /// placeholder can be chosen, and it is per-field: there is no appearance
 /// proxy, no environment value and no SwiftUI modifier for it.
@@ -171,36 +173,39 @@ extension UITextField {
     }
 
     /// The same for the attributed setter: whatever is handed in keeps its
-    /// text and its other attributes, and the runs that carry **no**
-    /// `.foregroundColor` get ``HintInk/ink``.
+    /// text and its other attributes, and **the whole range** is written in
+    /// ``HintInk/ink`` — a colour a run arrived with included.
     ///
-    /// **A colour a call site chose is left alone**, because call sites now
-    /// choose one. Counted over `ios/Domovoi`, skipping comment lines and
-    /// matching each `TextField(` to its closing paren: 51 `TextField` call
-    /// sites, 16 of them `axis: .vertical`, and 14 pass
-    /// `prompt: ShellHintPrompt.text(…)`. All 14 are `axis: .vertical`, and
-    /// **one of them is measured**: train I005 read Music's AX5 search box
-    /// (`Music/MusicView.swift:704`) at `rgb(188, 188, 193)`, Apple's
-    /// placeholder grey, with both setters already swapped — so that one is
-    /// not a `UITextField` placeholder and does not reach this setter. The
-    /// other 13 are unmeasured here. Two of them are `.roundedBorder`
-    /// (`Chat/ChatConversationView.swift:919`,
-    /// `Assistant/AssistantPhoneConversationView.swift:535`), which is a
-    /// `UITextField` style, so those two may well reach this setter; nothing
-    /// in this tree says either way. The run-wise write is what makes the
-    /// paragraph's claim hold without needing to know: whichever of the 14
-    /// arrive here keep the colour they passed, and so does the next
-    /// single-line field to pass a `prompt:` colour, which the earlier
-    /// version of this paragraph said could not exist ("no call site chooses
-    /// one") while the same commit added 14.
+    /// **Why the whole range, from two trains' readings.** Commit `ccba3f1c`
+    /// inked only the runs with no `.foregroundColor`, so that "a colour a call
+    /// site chose" would survive. Train I006 then read the single-line Music
+    /// search box (`MusicView.searchField`'s prompt-less `TextField`) at
+    /// `rgb(197, 197, 199)` on white, **1.72:1** — `UIColor.placeholderText`
+    /// to the integer — where I005, with the whole-range write, had read
+    /// `rgb(88, 85, 79)`, **7.43:1**. Nothing else on that path changed
+    /// between the two trains, and the plain leg above inks whatever it builds
+    /// and passes it through here unchanged under the flag, so the reading
+    /// left is that SwiftUI hands this setter a string that already carries
+    /// **its own placeholder grey on every run**. "Leave a coloured run alone"
+    /// was "leave every run alone": the swap was installed, was called, and
+    /// changed nothing on any single-line field.
     ///
-    /// Nothing measured moves either way, which is why this is a comment
-    /// correction with a one-line behaviour change behind it and not a fix to
-    /// a reading: every colour a call site passes today is `Color.fgMuted`,
-    /// which *is* ``HintInk/ink`` (`DomovoiApp.swift:336`), so a run that
-    /// keeps its own colour and a run that is overwritten end the same
-    /// pixels. The 35 single-line fields that pass no colour at all are why
-    /// this leg is still here.
+    /// The paragraph that used to stand here argued "nothing measured moves
+    /// either way", because every colour *our* `prompt:` call sites pass is
+    /// `Color.fgMuted`. It counted only the colours this app passes and never
+    /// asked whether SwiftUI colours the 35 prompt-less fields itself — the
+    /// case that matters, and the one I006 measured.
+    ///
+    /// **The trade-off, on purpose.** A future single-line field whose
+    /// `prompt:` passes a colour *other* than ``HintInk/ink`` is re-inked to
+    /// ``HintInk/ink``. Nothing pays it today: every `prompt:` colour in the
+    /// app is `Color.fgMuted`, which is built from ``HintInk/ink``. Telling
+    /// SwiftUI's grey apart from a chosen colour would mean matching SwiftUI's
+    /// exact colour object, which no train has measured, so it is not tried.
+    /// The rule is ``HintInk/inkingTheWholeHint(_:key:ink:)`` so that
+    /// `HintInkPlaceholderTests` reads it — and reads that this setter calls
+    /// it — on the Mac with no Simulator; `testShell_TheHintInkIsReadable` is
+    /// the pixel reading.
     ///
     /// The recursion is bounded by the same flag: this calls the **original**
     /// attributed setter by name (the implementations are exchanged), so it
@@ -213,20 +218,7 @@ extension UITextField {
         }
         shellHintInkIsApplying = true
         defer { shellHintInkIsApplying = false }
-        let inked = NSMutableAttributedString(attributedString: text)
-        // The ranges are collected first and written after: a mutation inside
-        // `enumerateAttribute` is only documented to be safe within the range
-        // handed to it, and a hint colour is not worth depending on that.
-        var uncoloured: [NSRange] = []
-        inked.enumerateAttribute(
-            .foregroundColor,
-            in: NSRange(location: 0, length: inked.length)
-        ) { colour, range, _ in
-            if colour == nil { uncoloured.append(range) }
-        }
-        for range in uncoloured {
-            inked.addAttribute(.foregroundColor, value: HintInk.ink, range: range)
-        }
+        let inked = HintInk.inkingTheWholeHint(text, key: .foregroundColor, ink: HintInk.ink)
         shellHintInkSetAttributedPlaceholder(inked)
     }
 }

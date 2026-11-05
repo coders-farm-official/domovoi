@@ -31,9 +31,11 @@ import SwiftUI
 /// sites are `.roundedBorder`, a `UITextField` style. Which view SwiftUI uses
 /// is SwiftUI's business and this file does not claim to know it. The prompt
 /// is right either way: it is the documented way to choose the colour of a
-/// prompt SwiftUI draws itself, and ``ShellHintInkAppearance`` now leaves a
-/// colour a call site chose alone, so a field that *does* reach the swapped
-/// setter keeps this one rather than being re-inked.
+/// prompt SwiftUI draws itself. A field that *does* reach the swapped setter
+/// is re-inked in ``HintInk/ink`` over the whole hint — train I006 showed
+/// that leaving a coloured run alone left SwiftUI's own grey alone too — and
+/// since this prompt's colour *is* that ink, the pixels are the same either
+/// way.
 ///
 /// ### What a call site changes, and what it must not
 ///
