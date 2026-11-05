@@ -78,11 +78,44 @@ struct RoomsDropInRow: View {
             Label(DropInStrings.dropInFromThisPhone, systemImage: "phone.bubble")
                 .font(.subheadline)
                 .fixedSize(horizontal: false, vertical: true)
+                // **Not `.buttonStyle(.bordered)`, measured.** That style
+                // draws the label in the tint *and* the fill in the tint at
+                // low opacity, and train I005's audit failed this button by
+                // name: `Contrast nearly passed … label='drop in from this
+                // phone'` (`testRooms_DropInFromThisPhoneIsHeardAndHungUp
+                // .log:537-544`). The picture settles what the frame cannot:
+                // in `att/…/rooms-27-dropin-ended….png` the capsule is drawn
+                // whole, nothing over it and nothing clipping its glyphs, so
+                // the sample is of its colours — `#975800` on `#ECE1D1`,
+                // **4.38:1**, under the 4.5:1 body text needs. (``Color
+                // /brandInk`` itself is 5.66:1 on this page's white canvas,
+                // measured off the same pixels: the fill is what loses it.)
+                //
+                // Android draws an `OutlinedButton` (`PhoneDropinCall.kt:82`)
+                // — a tinted label on the surface with an outline, no fill —
+                // so the fill was an iOS-only divergence in the first place,
+                // and the port keeps the label on the page's own canvas. The
+                // Calendar item reached the same place from train S002's four
+                // findings against the same pairing
+                // (`CalendarScreenView.swift:183-192`).
+                //
+                // `.plain` draws no disabled state of its own, which is why
+                // the ink and the outline are chosen by ``canDropIn`` here: a
+                // control that cannot do what it says must not look live
+                // (NIGHT-RULES §3), and this one is disabled in three real
+                // room states.
+                .foregroundStyle(canDropIn ? Color.brandInk : Color.fgMuted)
+                .padding(.horizontal, 12)
                 .frame(minHeight: 44)
+                .overlay(
+                    Capsule().strokeBorder(
+                        (canDropIn ? Color.brandInk : Color.fgMuted).opacity(0.45),
+                        lineWidth: 1
+                    )
+                )
                 .contentShape(.rect)
         }
-        .buttonStyle(.bordered)
-        .tint(Color.brandInk)
+        .buttonStyle(.plain)
         // Unavailable rather than absent, because the room is on screen and
         // the reason is on it: the status pill two lines up for a room that
         // is not connected (`target_offline`, `phone_dropin.py:80-81`), the
