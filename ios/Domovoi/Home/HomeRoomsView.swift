@@ -152,39 +152,24 @@ struct HomeRoomsView: View {
         let armed = arm.isArmed(nowMs: nowMs)
         // Armed, it is about to stop other people's rooms, so it stops looking
         // like the friendly control. `errInk` is 6.08:1 where `.red` is 3.55.
-        // In flight it cannot be pressed, and `.plain` draws no disabled
-        // state of its own, so the muted ink says so.
-        let ink = stoppingAll ? Color.fgMuted : (armed ? Color.errInk : Color.brandInk)
+        // In flight it cannot be pressed; ``InkOutlineButtonStyle`` draws the
+        // disabled state in the muted ink itself.
+        let ink = armed ? Color.errInk : Color.brandInk
         return Button(action: onStopAll) {
             Text(arm.label(count: candidates.count, busy: stoppingAll, nowMs: nowMs))
                 .font(.subheadline)
-                .fixedSize(horizontal: false, vertical: true)
                 .multilineTextAlignment(.leading)
-                // **Not `.buttonStyle(.bordered)`.** That style washes the
-                // surface in the tint and then draws the label in the same
-                // tint, and the pairing has measured under 4.5:1 three
-                // times in this app: `#975800` on `#ECE1D1`, **4.38:1**, on
-                // the drop-in control and on the call sheet's `mute` (train
-                // I005, `hx-rooms/REPORT.md`), and 4.06:1 on the printer
-                // card (I001). Not measured on this button — it is drawn only
-                // for two or more playing rooms, and the stub house plays
-                // one — so this is the class's fix, not this site's
-                // measurement. ``Color/brandInk`` on
-                // the page's own canvas is 5.66:1. This is
-                // ``RoomsDropInRow``'s fix, copied: a tinted label on the
-                // canvas inside an outline, no fill — which is also what
-                // Android draws unarmed (`OutlinedButton`,
-                // `HomeSections.kt:672`).
-                .foregroundStyle(ink)
-                .padding(.horizontal, 12)
-                .frame(minHeight: 44)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .strokeBorder(ink.opacity(0.45), lineWidth: 1)
-                )
-                .contentShape(.rect)
         }
-        .buttonStyle(.plain)
+        // **Not `.buttonStyle(.bordered)`.** That style washes the surface in
+        // the tint and draws the label in the same tint, measured under 4.5:1
+        // three times in this app (`#975800` on `#ECE1D1`, 4.38:1, the drop-in
+        // control and the call sheet's `mute`, train I005; 4.06:1 on the
+        // printer card, I001). Not measured on this button: it is drawn only
+        // for two or more playing rooms, and the stub house plays one. The
+        // app-wide outline style is the class's fix: tinted label on the
+        // canvas inside a stroke, no fill, which is Android's unarmed
+        // `OutlinedButton` (`HomeSections.kt:672`).
+        .buttonStyle(InkOutlineButtonStyle(ink: ink))
         .disabled(stoppingAll)
     }
 
