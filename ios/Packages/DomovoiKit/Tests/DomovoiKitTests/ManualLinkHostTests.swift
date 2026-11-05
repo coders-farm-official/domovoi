@@ -92,29 +92,42 @@ final class ManualLinkHostTests: XCTestCase {
 
     /// **Every screen of the manual installs the link action.**
     ///
-    /// Two sayings, because one without the other is a link that still does
-    /// nothing: the host has to be *given* the action (`links`) and has to
-    /// put it in its own environment. Both are textual, so a reflow of either
-    /// line reds this — the failure messages say what each line was for.
+    /// Three sayings, because any one of them missing is a link that does
+    /// nothing somewhere: the host has to be *given* the action (`links`) and
+    /// has to put it in its own environment, and `ManualView` has to keep
+    /// installing it for the levels the route itself draws (depth 0). All
+    /// three are textual, so a reflow of any of those lines reds this — the
+    /// failure messages say what each line was for.
     ///
-    /// ### Each saying is read in the host's **own** source, and that is the
-    /// whole case
+    /// ### Each saying is read inside the **one type** it is about, and that
+    /// is the whole case
     ///
     /// `.environment(\.openURL, links)` is written twice in this file:
-    /// `ManualView`'s own body, which was never the bug, and
-    /// ``ManualLevelHost``'s, which is the fix. A `contains` over the whole
-    /// stripped source cannot tell them apart, and it was measured not to:
-    /// on throwaway branch `wf/ios-b-hx-manual-sab1` the three lines that
-    /// install the action on the host were deleted — the I005 defect
-    /// restored — and all three cases in this file passed, `PKGTEST exit 0`.
-    /// So the source is split on the host's own declaration and the second
-    /// saying is required **inside that one type**, bounded at the next
-    /// top-level declaration (every type in this file is at column 0, and
-    /// `struct ManualTopBar` is what follows the host).
+    /// `ManualView`'s own body (`ManualView.swift:209`), which was never the
+    /// bug, and ``ManualLevelHost``'s (`:784`), which is the fix. A `contains`
+    /// over a span that holds both cannot tell them apart, and twice it was
+    /// measured not to:
     ///
-    /// `wf/ios-b-hx-manual-sab2` is the measurement that this version bites:
-    /// the same three lines deleted, and this case fails on its second
-    /// assertion.
+    /// * `wf/ios-b-hx-manual-sab1`: the host's three lines deleted — the I005
+    ///   defect restored — and all three cases here passed, `PKGTEST exit 0`,
+    ///   when the host's saying was a `contains` over the whole stripped
+    ///   source.
+    /// * `wf/ios-b-hx-manual-sab2`: `ManualView.swift:209` deleted and one
+    ///   install moved into `ManualLevelView`, and the last saying passed,
+    ///   `Executed 3 tests, with 0 failures`, when it was a `contains` over
+    ///   everything *before* the host — a span that holds four top-level
+    ///   types, `ManualView`, `ManualEmptyState`, `ManualCachedLine` and
+    ///   `ManualLevelView`, while the failure message names the first.
+    ///
+    /// So each saying is read in ``ownSource(of:)``'s span: after that type's
+    /// own declaration, up to the next top-level one (every type in this file
+    /// is at column 0). `wf/ios-b-hx-manual-sab3` is the measurement that the
+    /// last saying now bites — sab2's injection again, the install deleted
+    /// from `ManualView` and the line written into `ManualLevelView`, and
+    /// this case fails on it: `Executed 3 tests, with 1 failure`,
+    /// `PKGTEST exit: 1`. (That injection is text, not a build: pkgtest
+    /// compiles `DomovoiKit` and not `ios/Domovoi/`, and text is all these
+    /// readings read.)
     func testAPushedLevelInstallsTheManualsLinkAction() {
         let host = Self.ownSource(of: "ManualLevelHost")
         XCTAssertEqual(
