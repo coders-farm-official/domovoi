@@ -470,12 +470,15 @@ public enum RoomChip: Equatable, Sendable {
         }
     }
 
-    /// Idle for the timer and the call, warn for the two faults — Android's
-    /// `HomeChip` is muted ink and `Pill("screen stopped", Tone.Warn)` is warn.
+    /// Warn for the stopped screen alone — Android's
+    /// `Pill("screen stopped", Tone.Warn)` (`HomeSections.kt:779`). The timer,
+    /// the call and weak wi-fi are all a muted `HomeChip`
+    /// (`HomeSections.kt:777-780`, drawn in `fgMuted` at `:836-837`), so weak
+    /// wi-fi is idle here too, not a second fault.
     public var tone: HealthTone {
         switch self {
-        case .timer, .inCall: return .idle
-        case .screenStopped, .weakWifi: return .warn
+        case .timer, .inCall, .weakWifi: return .idle
+        case .screenStopped: return .warn
         }
     }
 }

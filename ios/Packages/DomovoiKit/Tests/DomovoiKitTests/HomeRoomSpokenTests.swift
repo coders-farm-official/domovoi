@@ -118,7 +118,7 @@ final class HomeRoomSpokenTests: XCTestCase {
         )
         XCTAssertEqual(
             roomChips(tv, timerLeftSec: 45).map(\.tone),
-            [.idle, .idle, .warn, .warn]
+            [.idle, .idle, .warn, .idle]
         )
         XCTAssertEqual(
             spokenRoom(tv, stale: false, elapsedSec: 0, nowMs: 0, timerLeftSec: 45),
