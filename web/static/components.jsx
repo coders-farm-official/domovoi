@@ -3605,7 +3605,7 @@ const WriteBlockedNotice = ({ reason, children }) => {
  * The owner missed a garage timer because he was not in the garage, and
  * the dashboard only listed timers. Now every room announces every
  * room's timers (the core), and an open dashboard says so too: a card
- * per fire, bottom right, that STAYS until someone dismisses it — the
+ * per fire, at the top, that STAYS until someone dismisses it — the
  * point is the person who was not in the room, so it is not the 12 s
  * toast. Rendered once, by the App shell in index.html.
  *
@@ -3632,6 +3632,14 @@ const WriteBlockedNotice = ({ reason, children }) => {
  * dialogs (z-index 85: over the full-screen editors at 80, under the
  * confirm dialogs at 90 and the modals at 100), so it never covers the
  * buttons of a dialog someone is using.
+ *
+ * Where (2026-11-05, owner: notifications as uniform as possible): top
+ * centre with the toasts, in the toast look (.toast: the other theme's
+ * palette, 15px, the tone as the left rail), but in a layer of its own
+ * at 85, because the toast stack (111) is above the dialogs. The two
+ * share one column: the cards start right under whatever the toast host
+ * (#toast-host, index.html) holds — its height is watched and handed to
+ * the cards as --toast-stack-h — so a toast never lies over a card.
  *
  * A reminder's words stay off a shared screen (the kitchen tablet an
  * admin marked), and off any browser the server masked them for (no
@@ -3753,19 +3761,15 @@ const TimerFireCard = ({ f, shared, onDismiss }) => {
   const openHome = () => { try { window.location.hash = 'home'; } catch { /* no location */ } };
   const when = TimerFireClock(f.fired_at);
   return (
-    <div className="timer-fire-card" data-fire={f.id}
-         style={{ background: 'var(--overlay)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)',
-                  boxShadow: 'var(--shadow-md), var(--inner-highlight)', padding: '10px 8px 10px 14px',
-                  display: 'flex', alignItems: 'flex-start', gap: 10, fontSize: 13, color: 'var(--fg)' }}>
-      <span style={{ paddingTop: 4 }}><StatusDot tone={TimerFireTone(f)}/></span>
+    <div className="toast timer-fire-card" data-fire={f.id} data-tone={TimerFireTone(f)}>
+      <span className="timer-fire-dot"><StatusDot tone={TimerFireTone(f)}/></span>
       <div className="timer-fire-open" role="link" tabIndex={0} title="open home" onClick={openHome}
-           onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openHome(); } }}
-           style={{ flex: 1, minWidth: 0, cursor: 'pointer' }}>
-        <div className="timer-fire-title" style={{ fontWeight: 600 }}>{TimerFireTitle(f)}</div>
+           onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openHome(); } }}>
+        <div className="timer-fire-title">{TimerFireTitle(f)}</div>
         {body != null && (
-          <div className="timer-fire-body" style={{ overflowWrap: 'anywhere', marginTop: 2 }}>{body}</div>
+          <div className="timer-fire-body">{body}</div>
         )}
-        <div className="timer-fire-meta mono" style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 4 }}>
+        <div className="timer-fire-meta mono">
           {f.summary ? `${f.summary} · ${when}` : when}
         </div>
       </div>
@@ -3951,6 +3955,23 @@ const TimerFireAlerts = () => {
     const t = setInterval(bump, 30 * 1000);
     return () => clearInterval(t);
   }, [anyShown]);
+  // Under the toasts, never under a toast: the cards start below whatever
+  // the toast host holds (its height + the 8px gap, 0 while it is empty).
+  const stackRef = React.useRef(null);
+  React.useLayoutEffect(() => {
+    const el = stackRef.current;
+    const host = typeof document !== 'undefined' && document.getElementById
+      ? document.getElementById('toast-host') : null;
+    if (!el || !host) return undefined;
+    const place = () => {
+      const hgt = host.offsetHeight;
+      el.style.setProperty('--toast-stack-h', hgt > 0 ? `${hgt + 8}px` : '0px');
+    };
+    place();
+    let ro = null;
+    try { ro = new ResizeObserver(place); ro.observe(host); } catch { /* placed once */ }
+    return () => { if (ro) ro.disconnect(); };
+  }, [anyShown]);
   if (!anyShown) return null;
 
   const dismiss = (id) => setDismissed((cur) => TimerFireStore.dismiss(id, cur));
@@ -3961,22 +3982,19 @@ const TimerFireAlerts = () => {
   };
   const visible = phone && !expanded ? 1 : TIMER_FIRE_VISIBLE;
   const more = shown.length - visible;
-  const chip = { fontSize: 11, color: 'var(--fg-muted)', background: 'var(--overlay)',
-                 border: '1px solid var(--border)', borderRadius: 'var(--r-sm)', padding: '2px 8px' };
-  /* The toast's lifted bottom (useToast) — clear of the phone's tab strip
-   * and the docked player. z-index 85: over the full-screen editors (80),
-   * under the confirm dialogs (90), the modals (100) and the toast (111),
-   * so a card that stays never covers a dialog's buttons or a toast. */
+  const chip = { fontSize: 13, color: 'var(--fg-muted)', background: 'var(--overlay)',
+                 border: '1px solid var(--border-strong)', borderRadius: 'var(--r-sm)', padding: '2px 8px' };
+  /* Top centre under the toast host (.timer-fire-alerts, styles.css).
+   * z-index 85: over the full-screen editors (80), under the confirm
+   * dialogs (90), the modals (100) and the toast (111), so a card that
+   * stays never covers a dialog's buttons or a toast. */
   return (
-    <div className="timer-fire-alerts" role="alert"
-         style={{ position: 'fixed', right: 16, bottom: 'calc(var(--dock-bottom, 0px) + var(--player-h, 0px) + 24px)',
-                  zIndex: 85, width: 'min(340px, calc(100vw - 32px))',
-                  display: 'flex', flexDirection: 'column', gap: 8 }}>
+    <div className="timer-fire-alerts theme-invert" role="alert" ref={stackRef}>
       {shown.slice(0, visible).map((f) => (
         <TimerFireCard key={f.id} f={f} shared={shared} onDismiss={() => dismiss(f.id)}/>
       ))}
       {shown.length > 1 && (
-        <div className="timer-fire-foot" style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 8 }}>
+        <div className="timer-fire-foot">
           {phone && expanded && (
             <button type="button" className="btn btn-ghost timer-fire-fewer mono" style={chip}
                     onClick={() => setExpanded(false)}>fewer</button>

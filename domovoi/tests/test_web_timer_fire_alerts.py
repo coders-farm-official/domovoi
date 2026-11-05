@@ -619,16 +619,30 @@ def test_the_shell_renders_the_alerts_once() -> None:
     assert re.search(r"\bTimerFireAlerts\s*,", exports)
 
 
-def test_the_stack_sits_above_the_dock_and_under_the_dialogs_and_toasts() -> None:
-    """Bottom right on the toast's lifted edge. z-index 85: over the
-    full-screen editors (80), under the confirm dialogs (90), the modals
-    (100) and the toast (111) — at 110 a card that stays covered a
-    centred dialog's buttons on a 375px phone (2026-09-30 review)."""
+def test_the_stack_sits_at_the_top_under_the_toasts_and_the_dialogs() -> None:
+    """Top centre since 2026-11-05 (owner: notifications as uniform as
+    possible), in the toast look, right under whatever the toast host holds.
+    z-index 85: over the full-screen editors (80), under the confirm dialogs
+    (90), the modals (100) and the toast (111) — at 110 a card that stays
+    covered a centred dialog's buttons on a 375px phone (2026-09-30
+    review)."""
     comps = (REPO_ROOT / "web" / "static" / "components.jsx").read_text(encoding="utf-8")
     block = comps[comps.index("const TimerFireAlerts = "):comps.index("/* expose to other Babel scripts */")]
-    assert "bottom: 'calc(var(--dock-bottom, 0px) + var(--player-h, 0px) + 24px)'" in block
-    assert "zIndex: 85" in block
-    css_toast = (REPO_ROOT / "web" / "static" / "styles.css").read_text(encoding="utf-8")
+    assert "bottom" not in block.split("return (", 1)[-1]
+    assert 'className="timer-fire-alerts theme-invert" role="alert" ref={stackRef}' in block
+    assert "document.getElementById('toast-host')" in block
+    assert "el.style.setProperty('--toast-stack-h', hgt > 0 ? `${hgt + 8}px` : '0px');" in block
+    card = comps[comps.index("const TimerFireCard = "):comps.index("const TimerFireAlerts = ")]
+    assert 'className="toast timer-fire-card" data-fire={f.id} data-tone={TimerFireTone(f)}' in card
+    css_all = (REPO_ROOT / "web" / "static" / "styles.css").read_text(encoding="utf-8")
+    alerts = re.search(r"\n\.timer-fire-alerts \{([^}]*)\}", css_all).group(1)
+    assert "z-index: 85;" in alerts and "position: fixed;" in alerts and "bottom" not in alerts
+    assert ("top: calc(var(--topbar-h, 52px) + var(--guard-banner-h, 0px) + 12px"
+            " + var(--toast-stack-h, 0px));") in alerts
+    assert "left: 16px; right: 16px;" in alerts and "pointer-events: none;" in alerts
+    # the toast look: one rule for both
+    assert ".toast-stack .toast,\n.timer-fire-alerts .toast {" in css_all
+    css_toast = css_all
     stack = css_toast[css_toast.index(".toast-stack {"):]
     assert "z-index: 111;" in stack[:stack.index("}")]
     confirm = comps[comps.index("const DeleteConfirmDialog"):comps.index("const DeleteConfirmDialog") + 600]
