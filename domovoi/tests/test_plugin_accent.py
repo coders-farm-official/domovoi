@@ -89,7 +89,8 @@ def _passes(tokens: dict[str, str], theme: str) -> list[str]:
 
 
 def _css_block(css: str, selector: str) -> dict[str, str]:
-    m = re.search(re.escape(selector) + r"\s*\{(.*?)\n\}", css, re.S)
+    # The selector may head a list (`:root,\n:root[data-theme='dark'] .theme-invert {`).
+    m = re.search(re.escape(selector) + r"(?:\s*,[^{]*)?\s*\{(.*?)\n\}", css, re.S)
     assert m, selector
     body = re.sub(r"/\*.*?\*/", "", m.group(1), flags=re.S)
     return dict(re.findall(r"--([\w-]+)\s*:\s*([^;]+);", body))
@@ -110,14 +111,21 @@ def test_surfaces_match_the_token_file() -> None:
 
 def test_core_amber_is_still_cores_alone() -> None:
     # The token file keeps amber; nothing in the shared stylesheet re-points
-    # --brand (only the plugin frame does, inline, on its own wrapper).
+    # --brand (only the plugin frame does, inline, on its own wrapper), save
+    # the one rule that hands an inverted toast inside a plugin's frame the
+    # plugin's own other-theme accent (--inv-*, set by the frame).
     css = TOKENS_CSS.read_text(encoding="utf-8")
     light = _css_block(css, "/* ---- BASE TOKENS — light (default) -------------------------- */\n:root")
     dark = _css_block(css, ":root[data-theme='dark']")
     assert light["brand"].strip() == "oklch(0.78 0.16 75)"
     assert dark["brand"].strip() == "oklch(0.80 0.16 75)"
     styles = (REPO_ROOT / "web" / "static" / "styles.css").read_text(encoding="utf-8")
-    assert not re.search(r"--brand(-[a-z]+)?\s*:", styles)
+    frame_rule = re.search(r":root \.plugin-frame\[data-accent-inverse\] \.theme-invert \{([^}]*)\}", styles)
+    assert frame_rule
+    for name, value in re.findall(r"--((?:brand|fg-on-brand)[\w-]*)\s*:\s*([^;]+);", frame_rule.group(1)):
+        assert value.strip() == f"var(--inv-{name})", name
+    rest = styles.replace(frame_rule.group(0), "")
+    assert not re.search(r"--brand(-[a-z]+)?\s*:", rest)
 
 
 # ─── deriving the tokens ─────────────────────────────────────────────────

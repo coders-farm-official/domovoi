@@ -466,11 +466,13 @@ def test_a_sidebar_handed_the_badges_polls_nothing_itself(driven) -> None:
 def test_toasts_clear_the_phone_strip_and_the_docked_player() -> None:
     """Fixed at bottom: 24px they covered the tab strip for up to 12 s;
     lifted by the strip alone they still covered the docked player's play
-    button (measured at 375px: three "queued" toasts over the bar)."""
+    button (measured at 375px: three "queued" toasts over the bar). Since
+    2026-11-05 the toasts sit at the top instead (test_web_toast_top.py),
+    clear of both; the bottom-edge notices below still lift."""
     lifted = "bottom: 'calc(var(--dock-bottom, 0px) + var(--player-h, 0px) + 24px)'"
     comps = _src("components.jsx")
     toast = comps[comps.index("const useToast"):comps.index("/* ---- Tabs")]
-    assert lifted in toast and "bottom: 24," not in toast
+    assert "bottom:" not in toast
     html = _src("index.html")
     assert lifted in html                                            # "plugins changed"
     assert "bottom:calc(var(--dock-bottom, 0px) + var(--player-h, 0px) + 24px)" in html  # "Domovoi has been updated"

@@ -1643,26 +1643,58 @@ a.home-att-row:hover { background: var(--brand-soft); }
   .chat-input { font-size: 16px; }
 }
 
-/* A toast that stays (components.jsx useToast, fire(msg, { stay: true })):
-   an error to read, closed by its own button. */
+/* Toasts (components.jsx useToast), 2026-11-05: at the top, centred, 15px,
+   and in the other theme's palette — .theme-invert on the stack
+   (colors_and_type.css) re-points every token inside it, so the rules
+   below name ordinary tokens and get light ones on a dark page and dark
+   ones on a light page. The stack spans the viewport less 16px a side and
+   lets clicks through; each toast takes them back. The tone is the left
+   rail, in the ink tokens (a UI part: 3:1 or better on --overlay in both
+   palettes), plus the dot. */
+.toast-stack .toast {
+  pointer-events: auto; box-sizing: border-box; max-width: min(100%, 600px);
+  background: var(--overlay); color: var(--fg);
+  border: 1px solid var(--border-strong); border-left: 3px solid var(--toast-rail, var(--border-strong));
+  border-radius: var(--r-md); box-shadow: var(--shadow-md), var(--inner-highlight);
+  font-size: var(--t-md); line-height: 1.45;
+}
+.toast[data-tone='ok']   { --toast-rail: var(--ok-ink); }
+.toast[data-tone='warn'] { --toast-rail: var(--warn-ink); }
+.toast[data-tone='err']  { --toast-rail: var(--err-ink); }
+/* One that fades: one row, click anywhere to dismiss. */
+.toast-brief {
+  min-width: min(100%, 320px); padding: 12px 16px;
+  display: flex; align-items: center; gap: 12px; cursor: pointer;
+}
+.toast-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+/* A toast that stays (fire(msg, { stay: true })): an error to read,
+   closed by its own button. */
 .toast-stay {
-  width: min(90vw, 560px); background: var(--overlay); border: 1px solid var(--border);
-  border-left: 3px solid var(--err); border-radius: var(--r-md);
-  box-shadow: var(--shadow-md), var(--inner-highlight);
-  padding: 8px 6px 8px 12px; font-size: 13px; color: var(--fg);
+  width: min(100%, 600px); padding: 12px 8px 12px 16px;
   display: flex; flex-direction: column; gap: 8px;
 }
-.toast-stay-row { display: flex; align-items: flex-start; gap: 8px; }
-.toast-stay-dot { flex: none; padding-top: 7px; }
-.toast-stay-body { flex: 1; min-width: 0; padding-top: 4px; line-height: 1.45; }
+.toast-stay-row { display: flex; align-items: flex-start; gap: 12px; }
+.toast-stay-dot { flex: none; padding-top: 12px; }
+.toast-stay-body { flex: 1; min-width: 0; padding-top: 4px; }
 .toast-stay-text { overflow-wrap: anywhere; user-select: text; }
-.toast-stay-detail { margin-top: 4px; font-size: 12px; color: var(--fg-muted); overflow-wrap: anywhere; white-space: pre-line; user-select: text; }
-.toast-stay-actions { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 6px 2px 18px; }
+.toast-stay-detail { margin-top: 4px; font-size: var(--t-sm); color: var(--fg-muted); overflow-wrap: anywhere; white-space: pre-line; user-select: text; }
+.toast-stay-actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 8px 0 18px; }
 .toast-stay-actions .btn { max-width: 100%; }
+/* Inside a plugin's frame the brand tokens are the plugin's accent; the
+   inverted toast takes that accent's OTHER-theme values, which the frame
+   sets as --inv-* (components.jsx pluginAccentInverseStyle), never amber. */
+:root .plugin-frame[data-accent-inverse] .theme-invert {
+  --brand: var(--inv-brand); --brand-hover: var(--inv-brand-hover); --brand-press: var(--inv-brand-press);
+  --brand-fg: var(--inv-brand-fg); --fg-on-brand: var(--inv-fg-on-brand); --brand-soft: var(--inv-brand-soft);
+  --brand-halo: var(--inv-brand-halo); --brand-ring: var(--inv-brand-ring); --brand-ink: var(--inv-brand-ink);
+}
 @media (max-width: 760px) {
+  .toast-brief { padding: 12px; gap: 10px; }
+  .toast-stay { padding: 8px 4px 8px 12px; }
   .toast-stay .btn-icon { width: 44px; height: 44px; }
-  .toast-stay-dot { padding-top: 14px; }
+  .toast-stay-dot { padding-top: 19px; }
   .toast-stay-body { padding-top: 11px; }
+  .toast-stay-actions { padding: 0 8px 4px 14px; }
   .toast-stay-actions .btn { height: 44px; }
 }
 
@@ -1974,7 +2006,7 @@ a.home-att-row:hover { background: var(--brand-soft); }
 .help-check { font-size: 12px; color: var(--fg-muted); display: flex; gap: 6px; align-items: center; }
 .help-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .help-report { display: flex; flex-direction: column; gap: 8px; }
-.toast-help { margin-left: 6px; background: none; border: 0; padding: 0; font: inherit; font-size: 12px;
+.toast-help { margin-left: 6px; background: none; border: 0; padding: 0; font: inherit; font-size: var(--t-sm);
   color: var(--brand-ink); text-decoration: underline; cursor: pointer; white-space: nowrap; }
 @media (max-width: 760px) {
   .help-backdrop { padding-top: 16px; }

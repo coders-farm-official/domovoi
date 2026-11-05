@@ -791,7 +791,21 @@ const satBoardLabel = (s) => {
  * any toast has it with `help: { code }` (reportMutationFailure passes the
  * error's code). It opens help prefilled with the code, the message and the
  * page. `help: false` leaves it off.
+ *
+ * `tone` ('info' | 'ok' | 'warn' | 'err') colours the toast's left rail
+ * and dot. Default: 'err' for one that stays or carries help (a failure:
+ * reportMutationFailure), 'info' otherwise. An error is announced as an
+ * alert, anything else as a polite status.
+ *
+ * Where (2026-11-05, owner: toasts at the bottom went unnoticed): at the
+ * TOP of the screen, centred, just under the topbar and the container
+ * guard's banner (--guard-banner-h, set while it shows), 15px text, and in
+ * the OTHER theme's palette (.theme-invert, colors_and_type.css): a light
+ * toast on a dark page, a dark one on a light page. Inside a plugin's
+ * frame the brand tokens are the plugin's accent for that other theme
+ * (PluginPageFrame, styles.css), never amber.
  */
+const TOAST_TONES = ['info', 'ok', 'warn', 'err'];
 const useToast = () => {
   const [items, setItems] = React.useState([]);
   const nextId = React.useRef(0);
@@ -806,6 +820,8 @@ const useToast = () => {
                    detail: o.detail ? String(o.detail) : null,
                    actions: Array.isArray(o.actions) ? o.actions : null,
                    help: o.help === false ? null : (o.help || (o.stay ? {} : null)) };
+    item.tone = TOAST_TONES.includes(o.tone) ? o.tone
+      : (item.stay || (item.help && o.help) ? 'err' : 'info');
     setItems((cur) => [...cur.filter((t) => !item.key || t.key !== item.key), item]);
     if (item.stay) return;
     const ttl = Math.min(12000, 2400 + text.length * 35);
@@ -819,12 +835,13 @@ const useToast = () => {
    * editor looked like it had done nothing at all. A toast reports what
    * just happened to the surface the operator is looking at, so it has to
    * clear whatever that surface is — the same argument that raised
-   * .cal-modal-bg from 30 to 100. `--dock-bottom` lifts it above the
-   * phone's tab strip (it is 0 on a desktop), and `--player-h` above the
-   * docked player while one shows (styles.css, html.mp-docked). Above the
-   * timer alert cards (TimerFireAlerts, 85), which share that bottom edge
-   * on a phone and stay until dismissed: the answer to a press must never
-   * sit under them. */
+   * .cal-modal-bg from 30 to 100. Above the timer alert cards
+   * (TimerFireAlerts, 85), which stay until dismissed: the answer to a
+   * press must never sit under them. At the top since 2026-11-05 (it was
+   * lifted off the bottom edge by --dock-bottom and --player-h), so the
+   * phone's tab strip and the docked player are no longer in its way. The
+   * stack spans the viewport less a 16px gutter each side and lets clicks
+   * through between toasts (.toast-stack, styles.css). */
   const askAbout = (t) => {
     dismiss(t.id);
     if (window.DomovoiHelp) {
@@ -833,14 +850,15 @@ const useToast = () => {
     }
   };
   const node = items.length > 0 && (
-    <div className="toast-stack"
-         style={{ position: 'fixed', bottom: 'calc(var(--dock-bottom, 0px) + var(--player-h, 0px) + 24px)', left: '50%', transform: 'translateX(-50%)',
-                  display: 'flex', flexDirection: 'column-reverse', alignItems: 'center',
-                  gap: 8, zIndex: 111, maxWidth: 'min(90vw, 560px)' }}>
+    <div className="toast-stack theme-invert"
+         style={{ position: 'fixed', top: 'calc(var(--topbar-h, 52px) + var(--guard-banner-h, 0px) + 12px)',
+                  left: 16, right: 16, display: 'flex', flexDirection: 'column-reverse', alignItems: 'center',
+                  gap: 8, zIndex: 111, pointerEvents: 'none' }}>
       {items.map((t) => (t.stay ? (
-        <div key={t.id} className="toast toast-stay" role="alert">
+        <div key={t.id} className="toast toast-stay" data-tone={t.tone}
+             role={t.tone === 'err' ? 'alert' : 'status'}>
           <div className="toast-stay-row">
-            <span className="toast-stay-dot"><StatusDot tone="err"/></span>
+            <span className="toast-stay-dot"><StatusDot tone={t.tone === 'info' ? 'brand' : t.tone}/></span>
             <div className="toast-stay-body">
               <div className="toast-stay-text">{t.text}</div>
               {t.detail && <div className="toast-stay-detail">{t.detail}</div>}
@@ -862,13 +880,10 @@ const useToast = () => {
           )}
         </div>
       ) : (
-        <div key={t.id} onClick={() => dismiss(t.id)} title="dismiss"
-             style={{ background: 'var(--overlay)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)',
-                      boxShadow: 'var(--shadow-md), var(--inner-highlight)', padding: '10px 14px',
-                      fontSize: 13, color: 'var(--fg)', display: 'flex', alignItems: 'center', gap: 8,
-                      cursor: 'pointer' }}>
-          <StatusDot tone="brand" live/>
-          <span style={{ overflowWrap: 'anywhere' }}>{t.text}</span>
+        <div key={t.id} className="toast toast-brief" data-tone={t.tone} onClick={() => dismiss(t.id)} title="dismiss"
+             role={t.tone === 'err' ? 'alert' : 'status'}>
+          <StatusDot tone={t.tone === 'info' ? 'brand' : t.tone} live={t.tone === 'info'}/>
+          <span className="toast-text">{t.text}</span>
           {t.help && (
             <button type="button" className="toast-help" title="open help about this error"
                     onClick={(e) => { e.stopPropagation(); askAbout(t); }}>ask Domovoi about this</button>
@@ -1951,15 +1966,30 @@ const pluginAccentStyle = (accent, dark) => {
   return out;
 };
 
+/* The OTHER theme's accent, as --inv-* variables, for a toast inside the
+ * frame: toasts draw in the other theme's palette (.theme-invert, useToast),
+ * and styles.css maps these onto the brand tokens there. All or nothing:
+ * with any one missing the toast keeps the inverted defaults. */
+const PLUGIN_ACCENT_NAMES = Object.values(PLUGIN_ACCENT_VARS).flat();
+const pluginAccentInverseStyle = (accent, dark) => {
+  const set = pluginAccentStyle(accent, !dark);
+  if (!PLUGIN_ACCENT_NAMES.every((n) => n in set)) return null;
+  const out = {};
+  PLUGIN_ACCENT_NAMES.forEach((n) => { out[`--inv-${n.slice(2)}`] = set[n]; });
+  return out;
+};
+
 const PluginPageFrame = ({ plugin, page = null, children }) => {
   const dark = useDarkTheme();
   const p = plugin || {};
   const pg = page || {};
   const name = p.name || p.slug || 'plugin';
+  const inverse = pluginAccentInverseStyle(p.accent, dark);
   return (
     <div className="plugin-frame" data-plugin={p.slug || ''}
          data-accent={(p.accent && p.accent.source) || 'none'}
-         style={pluginAccentStyle(p.accent, dark)}>
+         data-accent-inverse={inverse ? '' : undefined}
+         style={{ ...pluginAccentStyle(p.accent, dark), ...(inverse || {}) }}>
       <div className="plugin-frame-band" role="region" aria-label={`${name} plugin`}>
         <span className="plugin-frame-icon">
           <PluginNavIcon src={pg.nav_icon || null} srcDark={pg.nav_icon_dark || null} size={18}/>
