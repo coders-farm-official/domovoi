@@ -496,6 +496,11 @@ const Auth = (() => {
       memoryRefused = null;
     },
     isPaired: () => !!usableDeviceToken(),
+    // A localStorage key for the current server, as the household token's
+    // own (`key@<server>`; the bare key for the box that served the page):
+    // the first-run welcome's and the connect prompt's "Not now" are one
+    // household's answer, not every server's.
+    perServerKey: (key) => perServer(key),
     // What is stored, refused or not (the Household token card's "this
     // browser holds it").
     storedDeviceToken: () => readDeviceToken(),

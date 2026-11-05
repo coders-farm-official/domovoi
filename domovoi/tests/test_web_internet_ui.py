@@ -423,8 +423,10 @@ FIRST_RUN_SCRIPT = r"""
     await w.__settle(h, 6);
     // "You're all set" and the household token come first since
     // 2026-11-04 (components.jsx FirstRun); keeping the token goes on.
-    w.__allSet = !!h.find({ type: 'button', text: 'Keep this one' });
-    if (w.__allSet) await h.click({ type: 'button', text: 'Keep this one' });
+    // "Done" when the token didn't load (this stub serves none).
+    const keep = h.find({ type: 'button', text: 'Keep this one' }) ? 'Keep this one' : 'Done';
+    w.__allSet = !!h.find({ type: 'button', text: keep });
+    if (w.__allSet) await h.click({ type: 'button', text: keep });
   }
   await w.__settle(h, 6);
   const titles = () => h.findAll((e) => String(e.props.className || '') === 'ttl').map((e) => e.text);

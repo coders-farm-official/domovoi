@@ -52,7 +52,8 @@ HARNESS = Path(__file__).with_name("jsx_interact_harness.js")
 COMPONENTS = REPO_ROOT / "web" / "static" / "components.jsx"
 
 FILES = ["web/static/auth.js", "web/static/data.js", "web/static/components.jsx"]
-COMPONENT = "(window.__Auth = Auth, window.__FR = FirstRun, window.__shows = welcomeShows, AuthModalHost)"
+COMPONENT = ("(window.__Auth = Auth, window.__FR = FirstRun, window.__CA = ConnectAsk,"
+             " window.__shows = welcomeShows, AuthModalHost)")
 
 CODE = "apple-brick-cloud-drum-eagle-flute-grape-house"
 PASSWORD = "correct horse battery"
@@ -154,7 +155,11 @@ SCENARIOS["claim_then_keep"] = scenario(
     "await h.click({ type: 'button', text: 'Keep this one' }); await w.__flush(h, 10);"
     "return { allSet, after: snap() };")
 SCENARIOS["claim_then_easier"] = scenario(
-    table(**{"POST /api/auth/device-token": {"token": MINE, "header": "X-Device-Token"}}),
+    # autoPair's read, "you're all set"'s, then the read-back after the save.
+    table(**{"POST /api/auth/device-token": {"token": MINE, "header": "X-Device-Token"},
+             "GET /api/auth/device-token": {"__seq": [
+                 {"token": TOKEN, "header": "X-Device-Token"}, {"token": TOKEN, "header": "X-Device-Token"},
+                 {"token": MINE, "header": "X-Device-Token"}]}}),
     f"await claim({json.dumps(CODE)});"
     "await h.click({ type: 'button', text: 'Want an easier one?' }); await w.__flush(h);"
     "const field = (e) => e.type === 'input' && e.props.placeholder === 'maple-river-lamp';"
@@ -188,6 +193,75 @@ SCENARIOS["dialog_claim"] = scenario(
     "const dialog = snap();"
     f"await claim({json.dumps(CODE)});"
     "return { dialog, after: snap() };")
+
+
+# ── review round 1 (2026-11-04) ──────────────────────────────────────────
+# A welcome standing on a house claimed since (another tab, or this claim's
+# answer lost): the 409 re-reads the status, the welcome closes and the
+# admin sign-in opens in its place.
+SCENARIOS["stale_409"] = scenario(
+    table(**{"GET /api/auth/status": {"__seq": [STATUS_UNCLAIMED, STATUS_CLAIMED]},
+             "POST /api/auth/setup": {"__status": 409, "__body": {"detail": "admin setup already completed"}}}),
+    f"const before = snap(); await claim({json.dumps(CODE)});"
+    "return { before, after: snap(), login: w.__Auth.modalOpen };")
+# Claimed elsewhere while it stood open: coming back to the tab closes it.
+SCENARIOS["focus_rereads"] = scenario(
+    table(**{"GET /api/auth/status": {"__seq": [STATUS_UNCLAIMED, STATUS_CLAIMED]}}),
+    "const before = snap(); w.__fire('focus'); await w.__flush(h, 8); return { before, after: snap() };")
+# "Not now" is per server.
+_SERVER = "http://192.168.1.20:6369"
+SCENARIOS["dismissed_other_server"] = scenario(
+    table(), "return snap();", ls={"domovoi-server": _SERVER, DISMISS_KEY: "1"})
+SCENARIOS["dismissed_this_server"] = scenario(
+    table(), "return snap();", ls={"domovoi-server": _SERVER, f"{DISMISS_KEY}@{_SERVER}": "1"})
+SCENARIOS["not_now_keyed"] = scenario(
+    table(), "await h.click({ type: 'button', text: 'Not now' }); await w.__flush(h);"
+    f"return {{ bare: h.global('localStorage').getItem({json.dumps(DISMISS_KEY)}),"
+    f" keyed: h.global('localStorage').getItem({json.dumps(DISMISS_KEY + '@' + _SERVER)}) }};",
+    ls={"domovoi-server": _SERVER})
+# The token didn't load: no "Keep this one" over nothing.
+SCENARIOS["token_unloaded"] = scenario(
+    table(**{"GET /api/auth/device-token": {"__status": 500, "__body": {"detail": "no"}}}),
+    f"await claim({json.dumps(CODE)}); return snap();")
+# Plain http on the LAN: no navigator.clipboard; the textarea copy works.
+_COPY_STUBS = (
+    "window.isSecureContext = false; window.__copied = [];"
+    "document.body = { appendChild: (n) => { window.__node = n; }, removeChild: () => {} };"
+    "document.createElement = () => ({ setAttribute() {}, style: {}, select() {} });"
+    "document.execCommand = (c) => { window.__copied.push(c + ':' + window.__node.value); return true; };"
+)
+SCENARIOS["copy_on_plain_http"] = scenario(
+    table(),
+    _COPY_STUBS.replace("window.", "w.").replace("document.", "h.global('document').")
+    + f"await claim({json.dumps(CODE)});"
+    "await h.click({ type: 'button', text: 'copy' }); return { s: snap(), copied: w.__copied };")
+
+# ── the connect prompt: a claimed house, an unpaired browser ─────────────
+REFUSAL = {"__status": 401, "__body": {"detail": "X-Device-Token or admin session required"}}
+WRONG = "not-the-household-token"
+SCENARIOS["connect_guest"] = scenario(table(STATUS_CLAIMED), "return snap();")
+SCENARIOS["connect_paired"] = scenario(table(STATUS_CLAIMED), "return snap();",
+                                       ls={"domovoi-device-token": "house-token"})
+SCENARIOS["connect_admin"] = scenario(table(STATUS_ADMIN), "return snap();")
+SCENARIOS["connect_unclaimed"] = scenario(table(), "return snap();")
+SCENARIOS["connect_wrong_token"] = scenario(
+    table(STATUS_CLAIMED, **{"GET /api/satellites": REFUSAL}),
+    f"await h.type((e) => e.type === 'input' && e.props.autoComplete === 'off', {json.dumps(WRONG)});"
+    "await h.click({ type: 'button', text: 'Connect' }); await w.__flush(h); return snap();")
+SCENARIOS["connect_right_token"] = scenario(
+    table(STATUS_CLAIMED, **{"GET /api/satellites": []}),
+    f"await h.type((e) => e.type === 'input' && e.props.autoComplete === 'off', {json.dumps(TOKEN)});"
+    "await h.click({ type: 'button', text: 'Connect' }); await w.__flush(h); return snap();")
+SCENARIOS["connect_where"] = scenario(
+    table(STATUS_CLAIMED),
+    "await h.click({ type: 'button', text: 'Where do I find it?' }); await w.__flush(h); return snap();")
+SCENARIOS["connect_not_now"] = scenario(
+    table(STATUS_CLAIMED),
+    "await h.click({ type: 'button', text: 'Not now' }); await w.__flush(h); const after = snap();"
+    "w.__CA.open(); await w.__flush(h);"
+    "return { after, key: h.global('localStorage').getItem('domovoi-connect-dismissed'), again: snap() };")
+SCENARIOS["connect_dismissed_before"] = scenario(
+    table(STATUS_CLAIMED), "return snap();", ls={"domovoi-connect-dismissed": "1"})
 
 
 @pytest.fixture(scope="module")
@@ -234,7 +308,9 @@ def test_an_unclaimed_house_is_welcomed_with_the_claim_form_itself(driven) -> No
                                   "status_unreadable"])
 def test_it_never_shows_on_a_claimed_house_or_without_a_status(driven, name) -> None:
     s = driven[name]
-    assert s["dialog"] is None, s["text"]
+    # A guest on a claimed house may get the connect prompt instead
+    # (below); never the welcome.
+    assert s["dialog"] in (None, "Connect this browser"), s["text"]
     assert "Welcome to Domovoi" not in s["text"]
     assert "POST /api/auth/setup" not in s["fetches"]
 
@@ -353,3 +429,98 @@ def test_the_admin_setup_dialog_claim_lands_on_all_set_too(driven) -> None:
     assert "first-run admin setup" in out["dialog"]["text"]
     assert out["after"]["dialog"] == "You're all set"
     assert out["after"]["token"] == TOKEN
+
+
+# ── review round 1 ───────────────────────────────────────────────────────
+
+def test_a_stale_welcome_on_a_house_claimed_since_closes_and_offers_the_sign_in(driven) -> None:
+    out = driven["stale_409"]
+    assert out["before"]["dialog"] == "Welcome to Domovoi"
+    after = out["after"]
+    assert after["dialog"] is None
+    assert out["login"] is True
+    assert "admin login" in after["text"]                  # the sign-in, not the setup form
+    assert "Welcome to Domovoi!" not in after["text"]
+
+
+def test_coming_back_to_the_tab_rereads_the_status(driven) -> None:
+    out = driven["focus_rereads"]
+    assert out["before"]["dialog"] == "Welcome to Domovoi"
+    # Now a claimed house this browser isn't paired with: the connect
+    # prompt, never the welcome.
+    assert out["after"]["dialog"] == "Connect this browser"
+    assert out["after"]["fetches"].count("GET /api/auth/status") >= 2
+
+
+def test_not_now_is_per_server(driven) -> None:
+    assert driven["dismissed_other_server"]["dialog"] == "Welcome to Domovoi"
+    assert driven["dismissed_this_server"]["dialog"] is None
+    keyed = driven["not_now_keyed"]
+    assert keyed["bare"] is None and keyed["keyed"] == "1"
+
+
+def test_no_keep_this_one_without_a_token(driven) -> None:
+    s = driven["token_unloaded"]
+    assert s["dialog"] == "You're all set" and s["token"] is None
+    texts = [b["text"] for b in s["buttons"]]
+    assert "Done" in texts and "Keep this one" not in texts
+    assert "Settings → Rooms & devices → Phones & browsers → Household token" in s["text"]
+
+
+def test_copy_works_on_plain_http(driven) -> None:
+    out = driven["copy_on_plain_http"]
+    assert out["copied"] == [f"copy:{TOKEN}"]
+    assert "copied" in out["s"]["text"] and "copy failed" not in out["s"]["text"]
+
+
+# ── the connect prompt ───────────────────────────────────────────────────
+
+def test_an_unpaired_browser_on_a_claimed_house_is_asked_to_connect(driven) -> None:
+    s = driven["connect_guest"]
+    assert s["dialog"] == "Connect this browser"
+    assert "Welcome!" in s["text"]
+    assert "Enter this home’s household token to connect this browser" in s["text"]
+    assert "household token" in s["text"] and "not the admin password" in s["text"]
+    texts = [b["text"] for b in s["buttons"]]
+    assert "Connect" in texts and "Not now" in texts and "Where do I find it?" in texts
+    assert "phone" not in " ".join(texts)
+
+
+@pytest.mark.parametrize("name", ["connect_paired", "connect_admin"])
+def test_never_to_a_paired_or_signed_in_browser(driven, name) -> None:
+    assert driven[name]["dialog"] is None
+
+
+def test_never_on_an_unclaimed_house(driven) -> None:
+    # The welcome's job.
+    assert driven["connect_unclaimed"]["dialog"] == "Welcome to Domovoi"
+
+
+def test_a_wrong_token_says_so_without_repeating_it(driven) -> None:
+    s = driven["connect_wrong_token"]
+    assert s["dialog"] == "Connect this browser"
+    assert "that isn't this home's household token" in s["text"]
+    assert WRONG not in s["text"]
+    assert s["paired"] is None
+    # In a header, never an address.
+    _no_secret_in_an_address(s, WRONG)
+
+
+def test_the_right_token_connects_and_the_prompt_goes(driven) -> None:
+    s = driven["connect_right_token"]
+    assert s["dialog"] is None
+    assert s["paired"] == TOKEN
+    _no_secret_in_an_address(s, TOKEN)
+
+
+def test_where_do_i_find_it(driven) -> None:
+    s = driven["connect_where"]
+    assert ("Ask whoever set up Domovoi — it’s in Settings → Rooms & devices → Phones & browsers"
+            " → Household token.") in s["text"]
+
+
+def test_connect_not_now_and_back(driven) -> None:
+    out = driven["connect_not_now"]
+    assert out["after"]["dialog"] is None and out["key"] == "1"
+    assert out["again"]["dialog"] == "Connect this browser"
+    assert driven["connect_dismissed_before"]["dialog"] is None

@@ -3975,13 +3975,13 @@ const HouseholdTokenCard = ({ fire }) => {
     } catch { return false; }
   })();
 
+  // copyToClipboard (components.jsx): plain http on the LAN has no
+  // navigator.clipboard, so it falls back to the hidden-textarea copy.
   const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(token);
-      fire('household token copied');
-    } catch {
-      fire('copy failed — select the token and copy it by hand');
-    }
+    const ok = typeof copyToClipboard === 'function'
+      ? await copyToClipboard(token)
+      : await navigator.clipboard.writeText(token).then(() => true, () => false);
+    fire(ok ? 'household token copied' : 'copy failed — select the token and copy it by hand');
   };
 
   const rotate = async () => {

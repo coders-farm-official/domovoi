@@ -2964,25 +2964,56 @@ const InternetFirstRunStep = ({ onClose }) => {
 const WELCOME_DISMISS_KEY = 'domovoi-welcome-dismissed';
 const HOUSEHOLD_TOKEN_MIN = 12;
 
+// A "Not now" key for the server this page talks to (Auth.perServerKey).
+const firstRunKey = (key) => {
+  try { if (typeof Auth !== 'undefined' && Auth.perServerKey) return Auth.perServerKey(key); } catch { /* below */ }
+  return key;
+};
+
+/* Copy a secret to the clipboard. The dashboard is usually opened over
+ * plain http on the LAN, where browsers withhold navigator.clipboard
+ * (secure contexts only), so the hidden-textarea copy is the fallback
+ * (chat.jsx chatCopyText, help.jsx). Resolves true when it copied. */
+const copyToClipboard = async (text) => {
+  try {
+    if (navigator.clipboard && window.isSecureContext !== false) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch { /* the fallback below */ }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0;pointer-events:none';
+    document.body.appendChild(ta);
+    ta.select();
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch { ok = false; }
+    document.body.removeChild(ta);
+    return !!ok;
+  } catch { return false; }
+};
+
 const FirstRun = (() => {
   let claiming = false;   // a claim from the welcome is on its way
   let allSet = false;     // a claim just landed in this tab
   let wanted = false;     // "claim it" asked for the welcome again
-  let putAway = false;    // "Not now" in this page, whatever storage does
+  let putAway = null;     // "Not now" in this page (its key), whatever storage does
   const subs = new Set();
   const notify = () => subs.forEach((fn) => { try { fn(); } catch { /* one bad subscriber */ } });
   const stored = () => {
-    try { return localStorage.getItem(WELCOME_DISMISS_KEY) === '1'; } catch { return false; }
+    try { return localStorage.getItem(firstRunKey(WELCOME_DISMISS_KEY)) === '1'; } catch { return false; }
   };
   return {
     get claiming() { return claiming; },
     get allSet() { return allSet; },
     get wanted() { return wanted; },
     subscribe(fn) { subs.add(fn); return () => { subs.delete(fn); }; },
-    dismissed: () => putAway || stored(),
+    dismissed: () => putAway === firstRunKey(WELCOME_DISMISS_KEY) || stored(),
     dismiss() {
-      putAway = true; wanted = false;
-      try { localStorage.setItem(WELCOME_DISMISS_KEY, '1'); } catch { /* this page only */ }
+      putAway = firstRunKey(WELCOME_DISMISS_KEY); wanted = false;
+      try { localStorage.setItem(putAway, '1'); } catch { /* this page only */ }
       notify();
     },
     // The Home row's "claim it": the welcome again, past a "Not now".
@@ -3031,12 +3062,43 @@ const FirstRunWelcome = () => {
     busyRef.current = false;
     setBusy(false);
     if (failed) {
+      // A welcome left standing on a house claimed since (another tab or
+      // browser claimed it, or this claim landed and its answer was lost)
+      // would answer 409 for ever. Ask again: a claimed house closes the
+      // welcome, and a 409 opens the admin sign-in in its place.
+      let st = null;
+      try { st = Auth.refreshStatus ? await Auth.refreshStatus() : null; } catch { st = null; }
       FirstRun.setClaiming(false);
+      const claimedSince = !!st && st.setup_complete !== false;
+      if (claimedSince || (failed && failed.status === 409)) {
+        try { Auth.requestLogin(); } catch { /* the Home row says how */ }
+        return;
+      }
       setErr(loginErrorText(failed));
       return;
     }
     FirstRun.claimed();
   };
+  // Claimed elsewhere while this stood open: coming back to the tab asks
+  // again, and a claimed house closes it (welcomeShows).
+  useEffect(() => {
+    const again = () => {
+      try {
+        if (typeof document !== 'undefined' && document.hidden) return;
+        if (!busyRef.current && Auth.refreshStatus) Auth.refreshStatus();
+      } catch { /* keep what is known */ }
+    };
+    try {
+      window.addEventListener('focus', again);
+      document.addEventListener('visibilitychange', again);
+    } catch { return undefined; }
+    return () => {
+      try {
+        window.removeEventListener('focus', again);
+        document.removeEventListener('visibilitychange', again);
+      } catch { /* gone */ }
+    };
+  }, []);
   const enter = (e) => { if (e.key === 'Enter') submit(); };
 
   return (
@@ -3122,7 +3184,7 @@ const FirstRunAllSet = () => {
   useEffect(() => { load(); }, []);
 
   const copy = async () => {
-    try { await navigator.clipboard.writeText(token); setCopied('ok'); } catch { setCopied('failed'); }
+    setCopied((await copyToClipboard(token)) ? 'ok' : 'failed');
   };
   const wanted = mine.trim();
   const tooShort = wanted.length < HOUSEHOLD_TOKEN_MIN;
@@ -3139,6 +3201,9 @@ const FirstRunAllSet = () => {
         setEasier(false);
         setMine('');
         setCopied(null);
+        // A save that waited on a sign-in prompt and was replayed: what
+        // the server holds now is the word, so read it back.
+        load();
       }
     } catch (e) {
       // The server's own words ("at least 12 characters"); they never
@@ -3171,7 +3236,7 @@ const FirstRunAllSet = () => {
               <div className="first-run-token-missing">
                 Couldn’t load it just now.{' '}
                 <button type="button" className="home-link" onClick={load}>try again</button>
-                {' '}· It’s always in Settings → Phones & browsers → Household token.
+                {' '}· It’s always in Settings → Rooms & devices → Phones & browsers → Household token.
               </div>
             ) : (
               <div className="first-run-token-missing">loading…</div>
@@ -3219,7 +3284,124 @@ const FirstRunAllSet = () => {
         </div>
         <div className="cal-modal-foot">
           <Button variant="primary" onClick={() => FirstRun.finish()} disabled={saving}>
-            {changed ? 'Done' : 'Keep this one'}
+            {changed || !token ? 'Done' : 'Keep this one'}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+/* ---- Connect this browser (a claimed house, an unpaired browser) ----
+ * Owner, 2026-11-04 (Train 1): a browser that isn't paired with a claimed
+ * house got only a faint "pair this phone…" line on Home — "phone" even in
+ * a Mac's browser — and a page that looked half broken ("calendar
+ * unavailable"). Now every such browser is greeted once: one field for
+ * the household token, Connect, "Where do I find it?", and "Not now",
+ * which keeps today's limited view and leaves Home a clear "Connect this
+ * browser" button that opens this again.
+ *
+ * The same path the pair prompt uses (Auth.checkAndPair: one read carrying
+ * the candidate, stored only when the server takes it), so the token goes
+ * in a request header, never in an address, and a refusal never repeats
+ * what was typed. Never on an unclaimed house (the welcome's job), never
+ * to a paired or signed-in browser, and not to one holding a token the
+ * server refused (the token notice and the pair prompt say that). "Not
+ * now" is per server, as the welcome's. */
+const CONNECT_DISMISS_KEY = 'domovoi-connect-dismissed';
+const CONNECT_REFUSED_TEXT = "that isn't this home's household token — check it with whoever set up Domovoi and try again";
+const CONNECT_WHERE_TEXT = 'Ask whoever set up Domovoi — it’s in Settings → Rooms & devices → Phones & browsers → Household token.';
+
+const ConnectAsk = (() => {
+  let wanted = false;     // Home's "Connect this browser"
+  let putAway = null;     // "Not now" in this page (its key)
+  const subs = new Set();
+  const notify = () => subs.forEach((fn) => { try { fn(); } catch { /* one bad subscriber */ } });
+  const key = () => firstRunKey(CONNECT_DISMISS_KEY);
+  return {
+    get wanted() { return wanted; },
+    subscribe(fn) { subs.add(fn); return () => { subs.delete(fn); }; },
+    dismissed: () => {
+      if (putAway === key()) return true;
+      try { return localStorage.getItem(key()) === '1'; } catch { return false; }
+    },
+    dismiss() {
+      wanted = false; putAway = key();
+      try { localStorage.setItem(putAway, '1'); } catch { /* this page only */ }
+      notify();
+    },
+    open() { wanted = true; notify(); },
+    done() { wanted = false; notify(); },
+  };
+})();
+
+// Whether the connect prompt is on screen. Pure. `held`: this browser
+// still holds a household token for the server (refused or waiting).
+const connectShows = (status, { paired = false, signedIn = false, held = false,
+                                dismissed = false, wanted = false } = {}) => {
+  if (!status || status.setup_complete !== true) return false;
+  if (paired || signedIn || status.authenticated) return false;
+  if (wanted) return true;
+  return !held && !dismissed;
+};
+
+const ConnectPrompt = () => {
+  const [value, setValue] = useState('');
+  const [err, setErr] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [where, setWhere] = useState(false);
+  const field = useFirstFieldFocus('connect');
+  const connect = async () => {
+    setErr(null);
+    if (!value.trim()) { setErr('type the household token first'); return; }
+    if (busy) return;
+    setBusy(true);
+    let out;
+    try { out = await Auth.checkAndPair(value); } catch { out = { kind: 'unavailable' }; }
+    setBusy(false);
+    if (out.kind === 'accepted') { ConnectAsk.done(); return; }
+    if (out.kind === 'refused') setErr(CONNECT_REFUSED_TEXT);
+    else if (out.kind === 'waiting') setErr(pairWaitText(out.waitMs || 0));
+    else setErr(PAIR_UNCHECKED_TEXT);
+  };
+  return (
+    <div className="cal-modal-bg">
+      <div className="cal-modal first-run" role="dialog" aria-modal="true"
+           aria-label="Connect this browser" onClick={(e) => e.stopPropagation()}>
+        <div className="cal-modal-body">
+          <div className="first-run-hero">
+            <span className="first-run-cat"><DomovoiGlyph size={44}/></span>
+            <div className="first-run-title">Welcome!</div>
+            <div className="first-run-lede">
+              Enter this home’s household token to connect this browser to
+              Domovoi: your music, rooms, files and calendar, with live updates.
+            </div>
+          </div>
+          <div className="field">
+            <label>household token</label>
+            <input className="cal-inp mono" value={value} ref={field}
+                   autoComplete="off" spellCheck={false}
+                   onChange={(e) => setValue(e.target.value)}
+                   onKeyDown={(e) => { if (e.key === 'Enter') connect(); }}/>
+            <button type="button" className="home-link first-run-where-toggle"
+                    aria-expanded={where} onClick={() => setWhere(!where)}>
+              Where do I find it?
+            </button>
+            {where && <div className="hint first-run-where connect-where">{CONNECT_WHERE_TEXT}</div>}
+          </div>
+          <div className="first-run-who">
+            It’s the house key every phone, tablet and browser asks for once —
+            not the admin password. Set up this Domovoi yourself?{' '}
+            <button type="button" className="home-link" onClick={() => { try { Auth.openModal(); } catch { /* auth.js absent */ } }}>
+              sign in as the admin
+            </button>{' '}instead.
+          </div>
+          {err && <div className="err">{err}</div>}
+        </div>
+        <div className="cal-modal-foot">
+          <Button onClick={() => ConnectAsk.dismiss()} disabled={busy}>Not now</Button>
+          <Button variant="primary" icon="link" onClick={connect} disabled={busy || !value.trim()}>
+            {busy ? 'checking…' : 'Connect'}
           </Button>
         </div>
       </div>
@@ -3256,6 +3438,7 @@ const AuthModalHost = () => {
   }, []);
   useEffect(() => InternetAsk.subscribe(force), []);
   useEffect(() => FirstRun.subscribe(force), []);
+  useEffect(() => ConnectAsk.subscribe(force), []);
   // The shell renders after the first status read (index.html, Auth.ready);
   // one that failed is asked again here, so the welcome can still find an
   // unclaimed house.
@@ -3271,6 +3454,16 @@ const AuthModalHost = () => {
   if (welcomeShows(Auth.status, { dismissed: FirstRun.dismissed(), wanted: FirstRun.wanted,
                                   claiming: FirstRun.claiming })) {
     return <FirstRunWelcome/>;
+  }
+  let paired = false; let signedIn = false; let held = false;
+  try {
+    paired = typeof Auth.isPaired !== 'function' || !!Auth.isPaired();
+    signedIn = !!(Auth.isLoggedIn && Auth.isLoggedIn());
+    held = !paired && !!(Auth.storedDeviceToken && Auth.storedDeviceToken());
+  } catch { /* an Auth without them: say nothing */ paired = true; }
+  if (connectShows(Auth.status, { paired, signedIn, held, dismissed: ConnectAsk.dismissed(),
+                                  wanted: ConnectAsk.wanted })) {
+    return <ConnectPrompt/>;
   }
   return null;
 };
@@ -3943,7 +4136,8 @@ Object.assign(window, {
   readRouteTab, useRouteTab, tabSlug, settingsTabHref, openSettingsTab, SETUP_ROUTE, ACOUSTID_KEY_ROUTE,
   SetupCodeWhere, useHostKind,
   relTime, fmtDur, webHref, LoginModal, PairModal, AuthModalHost,
-  FirstRun, welcomeShows, FirstRunWelcome, FirstRunAllSet,
+  FirstRun, welcomeShows, FirstRunWelcome, FirstRunAllSet, copyToClipboard,
+  ConnectAsk, connectShows, ConnectPrompt,
   satCan, satBoardLabel, SAT_BOARD_LABELS,
   DeleteConfirmDialog, useDeleteConfirm, TrustServerPrompt, WriteBlockedNotice,
   CaptureChip, useAdminSignedIn, adminReloadState, useAdminReloadState,
