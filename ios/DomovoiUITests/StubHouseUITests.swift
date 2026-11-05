@@ -188,6 +188,119 @@ final class StubHouseUITests: XCTestCase {
     /// the ones being watched.
     static let ordinaryTypeSize = "UICTContentSizeCategoryL"
 
+    /// Whether this run keeps the app process's os_log output.
+    ///
+    /// `TEST_RUNNER_DOMOVOI_UI_OSLOG=keep xcodebuild test …` sets it — the
+    /// `TEST_RUNNER_` prefix is how xcodebuild hands an environment variable
+    /// to the test runner process, and it is stripped on the way in. Anything
+    /// else, including it being unset, means the launched app is quietened by
+    /// ``freshApp()``.
+    static let keepingTheAppsLog =
+        ProcessInfo.processInfo.environment["DOMOVOI_UI_OSLOG"]?.lowercased() == "keep"
+
+    /// Every `XCUIApplication` this file launches, with the one environment
+    /// variable that is a lever on the vanish.
+    ///
+    /// ### What is measured, and what is not
+    ///
+    /// Trains I004 and I005 each lost the app twice to a `SIGSEGV` inside an
+    /// XCTest accessibility query, every one of the four preceded by
+    /// `QUARANTINED DUE TO HIGH LOGGING VOLUME` two milliseconds earlier
+    /// (1 034 app processes, 4 quarantines, 4 signals, no counterexample in
+    /// either direction). What tracks the deaths is **not** the dying
+    /// process's own rate — it ranked 419th of 513 in one of them — but what
+    /// the whole session had written: the first quarantine came at 1.809 GB /
+    /// 2h14m in I004 and 1.828 GB / 2h15m in I005.
+    /// `design-notes/ios/batch-2026-11-03/VANISH-TRACE-I005.md` carries the
+    /// numbers and the method.
+    ///
+    /// **95.9% of that volume is `com.apple.dt.xctest:Default`** — the
+    /// automation framework's own accessibility chatter, emitted from inside
+    /// *this* process: about 5 200 `Fetching AX attributes` and 81 whole-tree
+    /// dumps per case. The app's own `Logger`/`os_log` contributes nothing
+    /// measurable: no Domovoi-owned subsystem appears anywhere in the
+    /// 29 million lines of I005's log, so gating the app's own logging would
+    /// be a change with nothing behind it.
+    ///
+    /// `OS_ACTIVITY_MODE=disable` is the only lever on that volume a test
+    /// file has, because the subsystem belongs to code injected into the app
+    /// rather than to anything this repository calls. **Whether it reaches
+    /// the subsystem is not verified here and cannot be from Windows**: it is
+    /// read by `libsystem_trace` as the process starts, the tests set no
+    /// `launchEnvironment` at all today, and the only instrument that can
+    /// answer is the byte count of the next train's simlog.
+    ///
+    /// ### What it quietens is most of the launches, not the session
+    ///
+    /// Only what ``launch(mode:paired:server:port:strip:push:pushDelay:args:)``
+    /// starts. **Eleven** other sites build their own `XCUIApplication`, in
+    /// **nine** files outside this unit's list, and still launch at
+    /// `OS_ACTIVITY_MODE=info`: `+AiSettings:132`, `+Alerts:136`,
+    /// `+Assistant:161`, `+Audiobooks:103`, `+ChatMore:440` and `:482`,
+    /// `+PhoneMedia:73`, `+Player:203`, `+Screens:571`, `LaunchUITests:32`
+    /// and `:48` (`grep -rn "XCUIApplication()" ios/DomovoiUITests` returns
+    /// twelve lines; the twelfth is this helper). Two further files reach
+    /// those launchers across a file boundary: `+Chat:788` and `:872` call
+    /// `assistantLaunch`, `+Transfers:682` calls `phoneLaunch`.
+    ///
+    /// Counted case by case over `overnight-trains/I005/ALL/*.log` — `Launch
+    /// org.codersfarm.domovoi.dev.kamron` per case log, each case attributed
+    /// to the file that declares it, cross-checked against which launcher
+    /// each case calls — **69 of that train's 522 app opens (13.2%) are
+    /// untreated**, and they are named rather than bounded. Fifty-nine are
+    /// whole files, where every open comes from the file's own launcher:
+    /// `+AiSettings` 7, `+Alerts` 10, `+Assistant` 18, `+PhoneMedia` 24. The
+    /// other ten are one open each, in cases whose file is otherwise
+    /// treated: `testChatMore_TheCanvasShowsChangesForAVersionNotSeenHere`,
+    /// `testChatMore_AHandEditSavesAsTheNextVersionAndA409SaysSo`,
+    /// `testChatMore_ATalkTurnPutsBothRowsInTheThread`,
+    /// `testChatMore_ATurnTooLongSaysTheServersSentence`,
+    /// `testScreens_EachWarnAgainAnnouncesItsKind`,
+    /// `testAudiobooks_AFreshBookGoesStraightToPlay`,
+    /// `testPlayer_ThereIsNoHiddenHarnessScreen`,
+    /// `testChat_TheHousesConversationSaysItsPlaceInItsHeader`,
+    /// `testChat_ThePlaceIsInTheHeaderAtTheLargestTypeSize` and
+    /// `testTransfers_ABigPhoneFileGoesThroughTheStreamedDoor`.
+    /// `LaunchUITests`'s two sites contributed nothing: neither of its cases
+    /// has a log in that train.
+    ///
+    /// So the prediction here is about **the 453 opens this helper starts**,
+    /// not about the session: those processes should write far less, and a
+    /// session should take correspondingly longer to reach the quarantine
+    /// threshold — but an eighth of the opens is untreated, so a quiet train
+    /// would not on its own prove the lever reached the subsystem, and a
+    /// quarantined one would not on its own prove it did not.
+    ///
+    /// **The internal control is those sixty-nine opens, by case and not by
+    /// file.** If the lever works, their per-pid byte counts stay where I005
+    /// left them while the other 453 fall. Splitting the train by file
+    /// instead marks three processes wrongly — the two `+Chat` cases and the
+    /// one `+Transfers` case above are untreated in files a reader would
+    /// otherwise put on the treated side. Routing every site through this
+    /// helper is in this unit's REPORT.md under `for_others`: a one-line
+    /// change per site, in nine files this unit may not edit.
+    ///
+    /// *What it costs, if it works:* the app process's own log lines — the
+    /// `Beginning first match sequence` / `Current tree:` / `Fetching AX
+    /// attributes` trace that let the two I005 deaths be located to the query
+    /// in flight, and its CFNetwork and UIKit lines with them. A vanish is
+    /// still **detected and dated** from outside the process (`runningboardd`
+    /// reports the signal and the pid), just not located. `keep` above turns
+    /// the trace back on for a targeted re-run of one case.
+    ///
+    /// The device-wide `log config --subsystem com.apple.dt.xctest --mode
+    /// level:off` is the trace's first recommendation and the surer one, but
+    /// it belongs to `stub_run.sh`, which is outside this unit's files: it is
+    /// in this unit's REPORT.md under `for_others`.
+    @MainActor
+    func freshApp() -> XCUIApplication {
+        let app = XCUIApplication()
+        if !Self.keepingTheAppsLog {
+            app.launchEnvironment["OS_ACTIVITY_MODE"] = "disable"
+        }
+        return app
+    }
+
     /// `server: false` saves nothing, which is the local-media shell — no
     /// workspace, no phone bar, and the same ``ShellTopBar``. It is the only
     /// way from here to audit the chrome without Home's content under it.
@@ -202,7 +315,7 @@ final class StubHouseUITests: XCTestCase {
         pushDelay: Double? = nil,
         args: [String] = []
     ) -> XCUIApplication {
-        let app = XCUIApplication()
+        let app = freshApp()
         app.launchArguments = server ? ["-domovoi-server", "127.0.0.1:\(port)"] : []
         if server, paired {
             app.launchArguments += ["-domovoi-token", Self.token]
@@ -3110,9 +3223,12 @@ final class StubHouseUITests: XCTestCase {
     /// measures them. Anything that really is stuck fails here, and nothing
     /// is excluded from the audit on the strength of a belief.
     ///
-    /// A leaf that is not on screen at AX5 is skipped rather than failed: at
-    /// that size the count line alone is 105 points tall and the grid's first
-    /// tile is most of the way down the window.
+    /// A leaf that is not on screen **at AX5** is skipped rather than failed:
+    /// at that size the count line alone is 105 points tall and the grid's
+    /// first tile is most of the way down the window. **At the ordinary size
+    /// it is a failure**, since every one of the six is in that size's
+    /// flick-0 tree in both I004 and I005 — see the guard below, and what two
+    /// trains cost by not having it.
     ///
     /// ### What train I001 changed here, and what it did not
     ///
@@ -3121,8 +3237,8 @@ final class StubHouseUITests: XCTestCase {
     /// above this page, one read of a still screen finds **none** of these
     /// five at AX5 — the grid is unbuilt below a 331.7-point header in a
     /// 178.7-point window. The leaves are taken as they appear while the page
-    /// is flicked (``phoneSourceFlick(_:)``), and a leaf never seen is still
-    /// skipped rather than failed.
+    /// is flicked (``phoneSourceFlick(_:)``), and a leaf never seen at AX5 is
+    /// still skipped rather than failed.
     @MainActor
     func testTheVideosGridTextGrowsAtAX5() throws {
         // **`caption-long` is here because of train R004's audit finding,
@@ -3144,19 +3260,120 @@ final class StubHouseUITests: XCTestCase {
         // The two heights printed side by side are still the instrument, and
         // they are now also the check on that: the floor below is 2x and this
         // row clears it by much more.
+        //
+        // **The resume line is matched by its shape, because its position is
+        // whatever the run left behind.** It was written down as
+        // `0:10 / 0:40` and the house never says that: the strip is built
+        // from the stub's `WATCHED` store, which starts empty and is written
+        // by whichever earlier case last saved a position (`stubhouse.py:465`,
+        // `:1311`), and both trains that kept this case's tree show
+        // `0:05 / 0:40`.
+        //
+        // **The duration is matched by shape too, for the same reason the
+        // position is.** The stub gives `a long one.mp4` forty seconds and
+        // every other video seven (`stubhouse.py:1916`), and the strip's
+        // first entry is whichever video an earlier case watched last — so
+        // pinning `/ 0:40` would turn a run that happened to watch one of the
+        // short videos into a red with nothing wrong. What this leaf is for
+        // is the **height** of a `position / duration` line at two type
+        // sizes; which video it is belongs to the cases that assert the
+        // strip's content.
+        //
+        // The shape asked for is the two-field `m:ss / m:ss` form
+        // ``VideoRow/resumeLine`` builds for this fixture's seconds
+        // (`VideoModels.swift:124`). Its other branch — the position alone,
+        // when the server sent no usable duration — does not match, and
+        // should not: the stub always sends one, so a resume line that has
+        // lost its duration is a change worth going red for, not noise.
+        //
+        // Measured: the `resume` leaf was never found in
+        // either train — I004 printed `SCALE [large]` and `SCALE [AX5]` with
+        // five lines each and I005 printed five `SCALE [large]` lines and no
+        // AX5 line at all (it lost the app first) — so one of the five leaves
+        // Apple flagged has never been measured here, and `seen.count ==
+        // leaves.count` could never be true, which spent the whole flick
+        // budget every pass (48 iterations of six queries in I004, 37 in
+        // I005). The position before the slash is the part that moves; the
+        // duration is this fixture's video and is the half worth pinning.
+        //
+        // A leading `~` is the one bit of punctuation this needs: the rest is
+        // a regular expression the label has to match. Without it a leaf is
+        // its exact label — the way `app.staticTexts[said]` asks for it, by
+        // identifier or label.
+        func matches(_ said: String, _ node: XCUIElementSnapshot) -> Bool {
+            guard said.hasPrefix("~") else {
+                return node.label == said || node.identifier == said
+            }
+            return node.label.range(of: String(said.dropFirst()), options: .regularExpression)
+                != nil
+        }
         let leaves = [
             ("count", "showing 50 of 60 videos"),
             ("heading", "Movies · 54"),
             ("strip-heading", "recently played"),
             ("caption", "a long one.mp4"),
             ("caption-long", "01 she said \"no\".mp4"),
-            ("resume", "0:10 / 0:40"),
+            ("resume", "~^[0-9]+:[0-9]{2} / [0-9]+:[0-9]{2}$"),
         ]
-        func heights(_ app: XCUIApplication) -> [String: CGFloat] {
+        // **One read of the tree a flick, not six queries a flick.**
+        //
+        // This asked `app.staticTexts[label].firstMatch.exists` for all six
+        // labels every iteration, already-found ones included, and five of
+        // the six are usually absent — and a query that finds nothing walks
+        // the whole tree. Measured in I005's case log: **230 of this case's
+        // 327 `Checking existence of` activities are these six** (37
+        // iterations, plus 8 retries after the app had gone). Measured for
+        // its process, pid 27135, out of the kept simlog: 51 350 516 B over
+        // 455 whole-tree passes — 241 `Beginning first match sequence` and
+        // 214 `Capturing hierarchy with attributes`, about 113 kB a pass —
+        // the heaviest-logging app process of the 521 in that train. So 230
+        // of its 241 first-match sequences are this one loop.
+        //
+        // `snapshot()` is one capture that answers all six in process, so a
+        // flick costs one whole-tree pass instead of six, and leaves already
+        // seen cost none. The measurement itself is untouched: the same
+        // labels, the same `frame.height`, taken in the same pre-order a
+        // `firstMatch` resolves in. Whether the bytes fall with the passes
+        // only the next train can say.
+        //
+        // **This is not a fix for the vanish, and the reason is the session,
+        // not this case.** The app died *in* one of these queries: I005 lost
+        // pid 27135 at 20:55:26.724 = `t = 127.0 s`, three milliseconds into
+        // a `Descendants matching type StaticText` first-match sequence, and
+        // the case log's line at that instant (`:998`) is `Checking existence
+        // of "recently played" StaticText` — the third of the six labels, in
+        // this loop. (An earlier revision of this comment said the death was
+        // inside Apple's own audit; that was the *other* I005 death, in News.
+        // This case calls no `performAccessibilityAudit` at all.) But the
+        // quarantine is not metered per process: 1 034 app processes across
+        // I004 and I005, 4 quarantines, and one of the four deaths was a
+        // process in the bottom fifth of its train by log rate (419/513).
+        // What matches is the whole session's accumulated bytes at the
+        // moment — 1.809 GB and 1.828 GB (VANISH-TRACE-I005.md §4).
+        //
+        // So the size of this cut is the size of its effect on that clock,
+        // and it is small: 230 passes at about 113 kB is roughly 26 MB out of
+        // a train that wrote 2.69 GB, so the 1.8 GB mark arrives about 1%
+        // later — two minutes in three and a half hours. The lever that
+        // matters is `log config --subsystem com.apple.dt.xctest`, in
+        // `stub_run.sh`, which this unit may not edit.
+        func heights(_ app: XCUIApplication, skipping seen: [String: CGFloat]) throws
+            -> [String: CGFloat]
+        {
+            let wanted = leaves.filter { seen[$0.0] == nil }
+            guard !wanted.isEmpty else { return [:] }
             var out: [String: CGFloat] = [:]
-            for (leaf, label) in leaves {
-                let text = app.staticTexts[label].firstMatch
-                if text.exists { out[leaf] = text.frame.height }
+            let root = try app.snapshot()
+            var stack: [XCUIElementSnapshot] = [root]
+            while let node = stack.popLast() {
+                if node.elementType == .staticText {
+                    for (leaf, says) in wanted where out[leaf] == nil && matches(says, node) {
+                        out[leaf] = node.frame.height
+                    }
+                }
+                // Reversed, so popping walks the children in tree order —
+                // which is the order `firstMatch` takes them in.
+                stack.append(contentsOf: node.children.reversed())
             }
             return out
         }
@@ -3184,7 +3401,7 @@ final class StubHouseUITests: XCTestCase {
             var seen: [String: CGFloat] = [:]
             let flicks = mode == Self.ordinaryTypeSize ? 6 : 40
             for flick in 0...flicks {
-                for (leaf, height) in heights(app) where seen[leaf] == nil {
+                for (leaf, height) in try heights(app, skipping: seen) {
                     seen[leaf] = height
                 }
                 if flick == 0 { evidence(app, "4A-videos-scale-\(label)") }
@@ -3203,6 +3420,54 @@ final class StubHouseUITests: XCTestCase {
 
         let small = measured["large"] ?? [:]
         let big = measured["AX5"] ?? [:]
+
+        // **A leaf this case names and never finds at the ordinary size now
+        // fails it.** Until this guard it did not: `heights` silently skips a
+        // label the screen has stopped saying, `compared` below counts only
+        // the leaves present at *both* sizes, and the floor is `compared >=
+        // 2` — so a moved label printed one fewer `SCALE [...]` line and the
+        // case went green. That is not hypothetical. `resume` was written
+        // down as `0:10 / 0:40`, the house says `0:05 / 0:40`, and I004 and
+        // I005 both printed five lines and passed with one of the five leaves
+        // Apple flagged never measured at all. Change `0:05 / 0:40` to
+        // `0:05 of 0:40` in the house, or move any of the other five, and
+        // this case must say so instead of comparing one fewer.
+        //
+        // Measured at the ordinary size: all six are in the flick-0 tree of
+        // both trains that kept one.
+        // `I005/ALL/att/testTheVideosGridTextGrowsAtAX5/4A-videos-scale-large-tree….txt`
+        // has `showing 50 of 60 videos` (:33), `recently played` (:34),
+        // `a long one.mp4` (:40 — the strip's caption, which is the one a
+        // pre-order walk reaches first), `0:05 / 0:40` (:41), `Movies · 54`
+        // (:47) and `01 she said "no".mp4` (:56); I004's tree is the same
+        // screen (`:33`, `:41`). So requiring the six at `large` asks for
+        // nothing this app has not been drawing.
+        //
+        // **Two of them are required as a pair rather than absolutely**,
+        // because they are cross-case state and not this case's own fixture:
+        // the recently-played strip is built from the stub's `WATCHED` store,
+        // which starts empty, is filled by whichever earlier case saved a
+        // position, and is emptied by `/api/_test/reset-watched`
+        // (`stubhouse.py:1325`). Run alone, or after a case that cleared it,
+        // this screen has no strip and neither leaf is a defect. But the
+        // resume line lives *inside* the strip — in the tree above both are
+        // in the same `ScrollView` — so a heading found with no resume line
+        // beside it is a label that moved, and that is red.
+        //
+        // `{ $0.0 }`, not `\.0`: a key path cannot name a tuple element.
+        var never = leaves.map { $0.0 }.filter { small[$0] == nil }
+        if small["strip-heading"] == nil, small["resume"] == nil {
+            never.removeAll { $0 == "strip-heading" || $0 == "resume" }
+            print("SCALE [large] no recently-played strip in this run: its two leaves are not required")
+        }
+        XCTAssertEqual(
+            [],
+            never,
+            "a leaf this case names was never found at the ordinary type size, so it was never "
+                + "measured at either size: the label has moved, or the screen has stopped "
+                + "drawing it"
+        )
+
         var compared = 0
         var stuck: [String] = []
         for (leaf, height) in small.sorted(by: { $0.key < $1.key }) {
