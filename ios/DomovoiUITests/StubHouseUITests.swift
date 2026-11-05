@@ -776,21 +776,16 @@ final class StubHouseUITests: XCTestCase {
     /// being real, which is why the element is in the returned string and not
     /// only in the log.
     ///
-    /// `types` is `.all` by default, which is what every caller asked for
-    /// before it existed. It is there for a page whose layout the audit's own
-    /// Dynamic Type pass moves: train I006 ran Apple's contrast pass *after*
-    /// that pass on the Rooms roster, which came back 33 points lower, so the
-    /// contrast findings were sampled at frames from a different layout than
-    /// their pixels (`i006-diag/rooms.md`) — and element detection with
-    /// them. Such a page audits everything but `.dynamicType` first and
-    /// `.dynamicType` alone after (`testRooms_Audit`).
+    /// **Always every audit type, in one pass.** Train I008 measured that
+    /// splitting the types does not keep a page still: on the Rooms roster
+    /// the call without `.dynamicType` still swept the type sizes and moved
+    /// the page 33 points. It also changed the anonymous floor, because
+    /// `.dynamicType` alone returned none of the twelve. A page the audit
+    /// moves is detected and retaken by its caller instead
+    /// (`testRooms_Audit`, `i008-rooms/REPORT.md`).
     @MainActor
     @available(iOS 17.0, *)
-    func auditIssues(
-        _ app: XCUIApplication,
-        _ name: String,
-        types: XCUIAccessibilityAuditType = .all
-    ) throws -> [String] {
+    func auditIssues(_ app: XCUIApplication, _ name: String) throws -> [String] {
         let wasContinuing = continueAfterFailure
         continueAfterFailure = true
         defer { continueAfterFailure = wasContinuing }
@@ -816,7 +811,7 @@ final class StubHouseUITests: XCTestCase {
         var found: [String] = []
         for attempt in 1...3 {
             let waitedOut = waitForNoNotificationBanner("\(name)/attempt-\(attempt)")
-            found = try runOneAudit(app, name, types: types)
+            found = try runOneAudit(app, name)
             // **The bar the audit leaves behind, named where it is read.**
             // `performAccessibilityAudit` overrides the content-size trait,
             // the shell folds its header into the navigation bar, and in
@@ -942,13 +937,9 @@ final class StubHouseUITests: XCTestCase {
     /// One pass of Apple's audit, with every issue it has — not the first.
     @MainActor
     @available(iOS 17.0, *)
-    private func runOneAudit(
-        _ app: XCUIApplication,
-        _ name: String,
-        types: XCUIAccessibilityAuditType
-    ) throws -> [String] {
+    private func runOneAudit(_ app: XCUIApplication, _ name: String) throws -> [String] {
         var found: [String] = []
-        try app.performAccessibilityAudit(for: types) { issue in
+        try app.performAccessibilityAudit { issue in
             // **The element is part of the record, not just the log.** The
             // eight are told apart from a real Dynamic Type defect by having
             // no element (``knownPushedBarFloor``), and a classifier that
