@@ -460,16 +460,18 @@ struct FilesView: View {
     /// **The hint is short on screen and whole to a reader.** Train I004's
     /// audit named this field `Text clipped: Text of this element may be
     /// clipped at larger Dynamic Type sizes | type=49 label='filter this
-    /// folder…' frame=(16.0, 401.3, 361.0, 34.0)`, and it was right: the
-    /// nineteen glyphs of Android's sentence want 436 points at AX5 inside
-    /// the 345 a 361-point `.roundedBorder` field offers, measured off the
-    /// two trees of that same train (``FileStrings/filterPlaceholderShort``
-    /// carries the arithmetic and the leaves it is calibrated on). A hint
+    /// folder…' frame=(16.0, 401.3, 361.0, 34.0)`, and the words are too
+    /// long for it at AX5: Android's nineteen glyphs draw 125.3 points of
+    /// ink at `large` in that train's own screenshot, which at its measured
+    /// 3.118× type scale is about 391 against the 345 a 361-point
+    /// `.roundedBorder` field offers (``FileStrings/filterPlaceholderShort``
+    /// carries the measurement). A hint
     /// nobody at that type size can finish reading is a hint with nothing in
     /// it, which is the reading `NewsTopicsView.freeform` took on the same
     /// finding, so this field takes the same shape: Android's whole sentence
     /// is still the accessibility label, and the drawn hint drops the words
-    /// the breadcrumb row immediately above already says.
+    /// the breadcrumb immediately above already says (its crumb names the
+    /// folder the filter applies to).
     ///
     /// **What is *not* done here, and why.** The alternative was to keep the
     /// long hint and move it to a wrapping `Text` above the field at
