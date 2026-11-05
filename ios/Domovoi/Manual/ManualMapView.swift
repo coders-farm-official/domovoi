@@ -590,37 +590,56 @@ struct ManualMapNode: View {
                         .multilineTextAlignment(.leading)
                         .fixedSize(horizontal: false, vertical: true)
                         // **Out of the accessibility tree, because the frame
-                        // it claims is not its own.** The words are not lost:
-                        // the card's own label below is `"<title>: <subtitle>"`
+                        // it claims is not its own.** The subtitle is not
+                        // lost: the card's own label below is
+                        // `"<title>: <subtitle>"`
                         // (``manualNodeReading(title:subtitle:)``), which is
                         // Android's `contentDescription` and the only reading
-                        // VoiceOver ever gets of a node.
+                        // VoiceOver gets of a node. A piece node's
+                        // `preview`/`plugin` **tags are** lost: they were
+                        // runs of this line, the label never had them, and
+                        // after this hide VoiceOver announces them nowhere —
+                        // as TalkBack does not (`ManualScreen.kt:655`).
                         //
-                        // Measured, in train I004's own screenshots:
+                        // Measured, in the trains' own screenshots
+                        // (`testManual_AuditsClean`'s note has the method):
                         //
                         //  - I002, when this was a `String`:
                         //    `label: 'where it listens'` at
-                        //    `{{25.1, 435.0}, {85.3, 14.3}}` — its own glyphs,
-                        //    and the only pair inside it is `fgMuted` on the
-                        //    card, 6.66:1.
+                        //    `{{25.1, 435.0}, {85.3, 14.3}}` — its own glyphs;
+                        //    its two most-covered colours are the card and
+                        //    `fgMuted`, 6.66:1.
                         //  - I004, as an `AttributedString`:
                         //    the same label at `{{14.0, 407.3}, {177.7, 104.0}}`
                         //    — the **whole card**, twelve times the area, in
                         //    the scrambling tree and in the settled one alike.
-                        //    That rectangle holds the card's own 1-point
-                        //    border, so the strongest failing pair in it is
-                        //    `(242,242,247)` against `(210,210,215)` —
-                        //    **1.35:1** — and on the hub, whose border is
-                        //    `brandInk` at 60%, `(187,150,99)` — 2.46:1.
+                        //    That rectangle holds the card's 1-point border,
+                        //    so its two most-covered colours are
+                        //    `(242,242,247)` and `(210,210,215)` — **1.35:1**
+                        //    — and on the hub, whose border is `brandInk` at
+                        //    60%, `(187,150,99)` — 2.46:1.
                         //
-                        // Those are the only sub-4.5 pairs anywhere in the
-                        // picture Apple returned two unattributable
-                        // `Contrast failed` findings on: the card rectangles
-                        // of I002's clean audit and I004's dirty one are
-                        // identical to the pixel, inks and all
-                        // (``testManual_AuditsClean``'s note has the method
-                        // and the counts). A tight frame cannot contain that
-                        // pair; this one does, and nothing repainted.
+                        // Why that rectangle and not the others: sub-4.5
+                        // pairs are **not** rare in this picture — the
+                        // `start here` pill holds the same 1.35:1 border pair
+                        // at higher coverage, the search field, `switch
+                        // server` and the `unverified` chip hold sub-4.5
+                        // pairs too, in both trains, and none was flagged.
+                        // What fits every rectangle measured is a model, not
+                        // Apple's documented rule: the audit compares the
+                        // **two most-covered colours inside a static text's
+                        // frame**. On I002's map and I004's, every static
+                        // text's top two are at 5.07:1 or better except these
+                        // three second lines in I004 (1.35, 1.35, 2.46); the
+                        // pill and the field are not static texts; the same
+                        // rule gives the code span's one attributed finding
+                        // its exact 1.108:1. It does **not** account for three
+                        // frames returning two findings (two of them share
+                        // one pair, which a de-duplicating audit would merge —
+                        // a guess, untested). Under the model the fix works
+                        // because the card's only remaining text is its
+                        // `Button` label, and the pill is the measured control
+                        // that a button holding this same pair is not flagged.
                         //
                         // **What is not established is the mechanism.** The
                         // `AttributedString` is the only edit this line took
@@ -630,8 +649,8 @@ struct ManualMapNode: View {
                         // its frame is its own four lines
                         // (`361 × 64.3`), as is Start here's unwashed one.
                         // Nothing here rests on knowing which: the element
-                        // leaves the tree either way, and the words it carries
-                        // are in the card's label regardless. The cost is
+                        // leaves the tree either way, and the subtitle it
+                        // carries is in the card's label regardless. The cost is
                         // stated and it is small — a future SwiftUI that gave
                         // this line an honest frame again would not be
                         // noticed, because a hidden element is not measured by
@@ -971,9 +990,11 @@ enum ManualFloatClock {
 /// card with it — in the scrambling tree and the settled one alike
 /// (``ManualMapNode``'s second line has the measurement and the ratios).
 /// Sampled off I004's own screenshot, the glyph frames measure
-/// `(0,0,0)` on `(242,242,247)`, **18.82:1**, pixel-for-pixel what I002's
-/// clean audit measured in the same rectangles — the gibberish is the same
-/// black as the name. A re-lettering cannot fail a contrast check, so the
+/// `(0,0,0)` on `(242,242,247)`, **18.82:1**, the same ratio I002's clean
+/// audit measured in the same rectangles — the gibberish is the same black as
+/// the name, in a different number of pixels (2305 against 2130), so the
+/// rectangles are the same picture outside the name's own frame and not
+/// inside it. A re-lettering cannot fail a contrast check, so the
 /// hide below is answer 30's half and **not** the audit's fix; the second
 /// line's is.
 ///

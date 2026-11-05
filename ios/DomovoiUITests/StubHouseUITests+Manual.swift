@@ -392,10 +392,13 @@ extension StubHouseUITests {
     /// `element: nil`, so a red there says "something on the map", and the
     /// thing that was wrong was a rectangle: the node's second line claimed
     /// the whole `{177.7 × 104}` card instead of its own `{85.3 × 14.3}`
-    /// from the batch answer 34 made it an `AttributedString` in, and a
-    /// card-sized rectangle contains the card's own border — 1.35:1, 2.46:1 on the hub —
-    /// where a tight one contains only `fgMuted` on the card at 6.66:1.
-    /// ``testManual_AuditsClean`` has the sampling and the counts.
+    /// from the batch answer 34 made it an `AttributedString` in. A
+    /// card-sized rectangle's two most-covered colours are the card and its
+    /// own border — 1.35:1, 2.46:1 on the hub — where a tight one's are the
+    /// card and `fgMuted`, 6.66:1. That this is what the audit measures is a
+    /// model that fits every rectangle sampled, not a documented rule;
+    /// ``testManual_AuditsClean`` has the sampling, the model and what it
+    /// does not explain.
     ///
     /// So this counts what the audit cannot name. Every card on the map
     /// contributes **no** static text of its own and is read by its label
@@ -1575,11 +1578,15 @@ extension StubHouseUITests {
     /// (`I004/ALL/att/testManual_AuditsClean/manual-audit-map_0_115C….png`
     /// against `I002/…/manual-audit-map_0_0B78….png`):
     ///
-    ///  - **Each node's card rectangle is the same picture in both.**
-    ///    `(242,242,247)` over 92.0% of it, the `.quaternary` border
-    ///    `(210,210,215)` over 2.7%, `fgMuted` `(88,85,79)` over 0.6%. The
-    ///    hub's border is `(187,150,99)` — `brandInk` at 60% — over 2.6%.
-    ///    Nothing was repainted between the two trains.
+    ///  - **Each node's card rectangle is the same picture in both, outside
+    ///    the name's own frame.** `(242,242,247)` over about 93% of it and
+    ///    the `.quaternary` border `(210,210,215)` over about 2.5% (rooms
+    ///    2.7%, music 2.5% clustering within RGB distance 14; VERIFY-2 got
+    ///    2.46% / 2.33% with its own rounding). The hub's border is
+    ///    `(187,150,99)` — `brandInk` at 60% — over about 2% (2.1% here,
+    ///    2.04% in VERIFY-2). The coverages depend on how the rectangle is
+    ///    rounded to pixels; the colours and ratios do not. Nothing was
+    ///    repainted between the two trains.
     ///  - **The glyphs are the same ink as the name.** In the name's own
     ///    frame, I004's gibberish measures `(0,0,0)` on the card at
     ///    **18.82:1** and I002's real name measures 18.82:1, the same to the
@@ -1591,10 +1598,35 @@ extension StubHouseUITests {
     ///    `{177.7 × 104}` card between the two trains; answer 34 making it
     ///    an `AttributedString` is the only edit it took in between, and
     ///    ``ManualMapNode``'s second line says why that is a correlation and
-    ///    not a proven mechanism. The tight frame's only pair was `fgMuted` on the card,
-    ///    6.66:1. The card-sized one contains the card's own border:
-    ///    **1.35:1**, and 2.46:1 on the hub. Those three frames hold the only
-    ///    sub-4.5 pairs in the audited picture, and there are two findings.
+    ///    not a proven mechanism. The tight frame's two most-covered colours
+    ///    were the card and `fgMuted`, 6.66:1. The card-sized one's are the
+    ///    card and its own border: **1.35:1**, and 2.46:1 on the hub.
+    ///
+    /// **Why those frames, when sub-4.5 pairs are all over this picture.**
+    /// They are not the only ones: in the same screenshot, in both trains, the
+    /// `start here` pill holds the identical 1.35:1 border pair at 5.5% of
+    /// its rectangle, the search field 1.72:1, `switch server` 1.36:1, and the
+    /// `unverified` chip's fill sits 1.18:1 on white — none flagged. The model
+    /// that fits every rectangle sampled (a model, not Apple's documented
+    /// rule) is that the audit compares the **two most-covered colours inside
+    /// a static text's frame**:
+    ///
+    ///  - every static text on I002's map and on I004's has a top-two pair of
+    ///    5.07:1 or better, except I004's three card-sized second lines
+    ///    (1.35, 1.35, 2.46) — I002 clean, I004 not;
+    ///  - the pill and the field are a `Button` and a `TextField`, so they
+    ///    are not measured; `unverified`'s top two are white and its ink;
+    ///  - the code span's one finding, the only one that *was* attributed, is
+    ///    its paragraph's top two, white and the wash, at exactly 1.108:1;
+    ///  - Start here's fencepost paragraph, the same `361 × 64.3` shape, is
+    ///    white and black at 21:1, and that audit returned nothing.
+    ///
+    /// What it does **not** explain is the count: three frames under the
+    /// model, two findings. Two of the three share one pair, so an audit that
+    /// de-duplicates by pair would report two — a guess, untested. Under the
+    /// model the fix works because the card's only remaining text is its
+    /// `Button` label, and the pill is the measured control that a button
+    /// holding the same pair is not flagged; the next train is the test.
     ///
     /// So the fix is the second line leaving the tree, not a wait, and the
     /// audit runs on the state the findings came back in. A wait would have
@@ -1656,11 +1688,11 @@ extension StubHouseUITests {
         // is the state the two findings came back on.** There was a 1.5 s
         // wait here for one commit, and it was wrong: it removed the only
         // state this screen has ever returned a finding in, so the audit
-        // could not tell the fix from its absence. The audit's note has the
-        // measurement that makes the wait unnecessary — the card rectangles
-        // are identical to the pixel between the scrambling frame and the
-        // settled one — and the state with the extra elements in it is the
-        // stricter of the two.
+        // could not tell the fix from its absence. The audit's note has why
+        // the wait is unnecessary: with both of a card's texts hidden the
+        // scrambling and settled trees are the same elements, and what the
+        // earlier state adds is a different picture (glyphs drawn) and the
+        // guarantee that the hides hold while they are.
         try manualAudit(app, "manual-audit-map")
 
         // ---- the topic, which is the piece page's chrome without its page.
