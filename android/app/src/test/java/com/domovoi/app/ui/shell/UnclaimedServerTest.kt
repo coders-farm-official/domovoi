@@ -50,6 +50,13 @@ class UnclaimedServerTest {
         assertFalse(text.contains("household token"))
     }
 
+    @Test fun onlyTheButtonsOwnReadSaysStillNotSetUp() {
+        assertTrue(saysStillUnclaimed(fromButton = true, read = false))
+        assertFalse("claimed now: the screen just goes", saysStillUnclaimed(fromButton = true, read = true))
+        assertFalse("the read failed: nothing to say", saysStillUnclaimed(fromButton = true, read = null))
+        assertFalse("a resume or socket change", saysStillUnclaimed(fromButton = false, read = false))
+    }
+
     @Test fun anUnclaimedServerIsStillTheWorkspaceSideSoItsScreenShows() {
         // The screen renders in place of the workspace (ShellContent), so a
         // reachable unclaimed server must not drop to local media...

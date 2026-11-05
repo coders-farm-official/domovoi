@@ -170,6 +170,9 @@ fun AppShell() {
     // fails keeps what was known: a doubtful answer never blocks the house.
     var setupComplete by remember(serverUrl) { mutableStateOf<Boolean?>(null) }
     var claimChecks by remember(serverUrl) { mutableIntStateOf(0) }
+    // Set by "Check again" and spent by the read it starts: only that read
+    // may say "still not set up" (a later resume or socket change is quiet).
+    var askedByButton by remember(serverUrl) { mutableStateOf(false) }
     var checkingClaim by remember(serverUrl) { mutableStateOf(false) }
     LaunchedEffect(serverUrl, connected, unreachable, claimChecks, shellLifecycle) {
         if (serverUrl.isBlank() || unreachable || setupComplete == true) return@LaunchedEffect
@@ -186,7 +189,9 @@ fun AppShell() {
             }
             checkingClaim = false
             if (read != null) setupComplete = read
-            if (claimChecks > 0 && read == false) toast(UNCLAIMED_STILL)
+            val fromButton = askedByButton
+            askedByButton = false
+            if (saysStillUnclaimed(fromButton, read)) toast(UNCLAIMED_STILL)
         }
     }
     val unclaimed = showsUnclaimed(serverUrl, setupComplete)
@@ -260,7 +265,10 @@ fun AppShell() {
                 // Kept in a saveable slot so a trip through local media
                 // (server out of reach) returns to the same screen.
                 ShellMode.Workspace -> workspaceState.SaveableStateProvider(serverUrl) {
-                    ShellContent(trouble, unclaimed, checkingClaim, onCheckAgain = { claimChecks += 1 })
+                    ShellContent(trouble, unclaimed, checkingClaim, onCheckAgain = {
+                        askedByButton = true
+                        claimChecks += 1
+                    })
                 }
             }
             // Toasts overlay. This Column is a SIBLING of the shells, so the

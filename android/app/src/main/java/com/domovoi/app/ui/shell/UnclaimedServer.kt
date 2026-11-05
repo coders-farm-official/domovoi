@@ -71,6 +71,11 @@ internal fun unclaimedText(address: String): String =
 /** What a check that found it still unclaimed says. */
 internal const val UNCLAIMED_STILL = "still not set up — claim it on the dashboard first"
 
+/** Whether a status read says [UNCLAIMED_STILL]: only the read "Check again"
+ *  started, and only when it found the house still unclaimed. The reads a
+ *  resume or a socket change start are quiet. Pure. */
+internal fun saysStillUnclaimed(fromButton: Boolean, read: Boolean?): Boolean = fromButton && read == false
+
 internal const val UNCLAIMED_HINT =
     "Not the one setting it up? Ask whoever installed Domovoi, or use this phone's own music, " +
         "videos and files until it's ready."
