@@ -1570,14 +1570,14 @@ extension StubHouseUITests {
             // the audit below is taken on a page whose head is under the
             // navigation bar and whose foot is past the clip — which is a
             // fact about the position, not about the colours, and
-            // ``roomsContrastWithNoPixels(_:on:)`` is where the
+            // ``roomsContrastWithNoPixels(_:on:after:)`` is where the
             // measurement that separates the two is written.
             let shot = roomsWindowShot(app)
             let bare = try auditIssues(app, "rooms-dropin-after")
             let bareSplit = Self.floorAndRest(bare)
             let stillThere = bareSplit.rest.filter(Self.roomsAnonymousUnderAPresentation)
             let named = bareSplit.rest.filter { !stillThere.contains($0) }
-            let seen = roomsContrastWithNoPixels(named, on: shot)
+            let seen = roomsContrastWithNoPixels(named, on: shot, after: app)
             print(
                 "ROOMS AUDIT dropin-after floor=\(bareSplit.floor) "
                     + "rest=\(bareSplit.rest.count) anonymous=\(stillThere.count) "
@@ -2188,10 +2188,10 @@ extension StubHouseUITests {
         // head under the navigation bar — and train I005 reported
         // `Contrast failed … label='Settings'`, the section's page title,
         // which `rooms-31-audit-roster….png` shows is not on the window at
-        // all. ``roomsContrastWithNoPixels(_:on:)`` holds the whole
+        // all. ``roomsContrastWithNoPixels(_:on:after:)`` holds the whole
         // measurement and what it refuses to excuse; the lines it takes out
         // are printed with their frames, never dropped in silence.
-        let rosterSeen = roomsContrastWithNoPixels(rosterSplit.rest, on: rosterShot)
+        let rosterSeen = roomsContrastWithNoPixels(rosterSplit.rest, on: rosterShot, after: app)
         let rosterRest = roomsOursOnly(rosterSeen.measured)
         print(
             "ROOMS AUDIT roster floor=\(rosterSplit.floor) rest=\(rosterSplit.rest.count) "
@@ -2207,7 +2207,7 @@ extension StubHouseUITests {
         // The same classification, for the same reason, though this screen
         // opens at the top of its page and train I005 had nothing for it to
         // take out (`rest=0`).
-        let detailSeen = roomsContrastWithNoPixels(detailSplit.rest, on: detailShot)
+        let detailSeen = roomsContrastWithNoPixels(detailSplit.rest, on: detailShot, after: app)
         let detailRest = roomsOursOnly(detailSeen.measured)
         print(
             "ROOMS AUDIT detail floor=\(detailSplit.floor) rest=\(detailSplit.rest.count) "
@@ -2420,8 +2420,9 @@ extension StubHouseUITests {
     /// sentence at 1235.0 and `drop in from this phone` at 1106.7, and it
     /// reports `floor=8 rest=0` (`I005/ALL/testRooms_Audit.log:383`).
     ///
-    /// So this excuses a sample of the navigation bar's material or of
-    /// nothing at all. It is the same class as D57's `back to Rooms &
+    /// So this excuses a sample of the navigation bar's material, or of
+    /// whatever the window draws where the page's own content is clipped
+    /// away — never a sample of the element. It is the same class as D57's `back to Rooms &
     /// devices`, which Kamron answered with "the fix is the case scrolling it
     /// into view, not a colour" — except that a page taller than its viewport
     /// cannot have both ends on the window at once, which is why the finding
@@ -2443,11 +2444,50 @@ extension StubHouseUITests {
     ///    the bar — outside the bar's rectangle, so a finding against them
     ///    is kept. They are a known producer of real findings on other
     ///    screens.
-    ///  * **Anything at all, when the bar is folded.** The audit's own
+    ///  * **The phone bar below the page**, which is the reason the second
+    ///    arm asks `inPage` and not only `minY >= page.maxY`. The page is
+    ///    the tallest scroll view, `{{0, 93.3}, {393, 676.7}}` on all three
+    ///    Rooms screens, so its foot is at 770 — and the window's own tab
+    ///    bar is **below** that and fully drawn: four `Button`s at y=774 and
+    ///    four `StaticText`s at y≈799–800, in every I005 Rooms tree
+    ///    (`rooms-31-audit-roster-tree…:93-106`, the same in the detail and
+    ///    `dropin-live` trees), and the roster screenshot shows the bar
+    ///    whole. A bare `minY >= page.maxY` was true for all eight, so any
+    ///    contrast finding against `home`, `music`, `videos` or `chat` was
+    ///    excused in silence in all three audits — and that pairing is not
+    ///    hypothetical: measured off `rooms-31-audit-roster….png`, the
+    ///    selected word `home` is `#975800` on `#F2F2F7`, **5.07:1**, which
+    ///    clears 4.5:1 by 0.57, and `music` is `#58554F` on the same,
+    ///    6.66:1. (Brand ink on a tinted surface is what measured 4.38:1 on
+    ///    `drop in from this phone` in the same train.) Those eight are not
+    ///    the page's descendants in any of the trees, so `inPage` is false
+    ///    for them and a finding against one now fails the case.
+    ///  * **Anything at all, when the audit folded the bar.** The audit's own
     ///    re-layout leaves a 96-point navigation bar on some screens
-    ///    (`StubHouseUITests.swift:295-302`), and then the frames read here
-    ///    are not the frames the audit sampled. The guard is a height, and
-    ///    every finding is kept when it trips.
+    ///    (`StubHouseUITests.swift:295-302`, and `auditIssues` prints it at
+    ///    `:708-717`), and then the frames read here are not the frames the
+    ///    audit sampled. So the bar is read **twice** — in the shot before
+    ///    the audit and again from `app` after it — and every finding is
+    ///    kept when either read is 60 points or more, or when the second is
+    ///    taller than the first. A guard that only read the shot could never
+    ///    trip on the fold the audit itself causes.
+    ///
+    /// ### What that guard does *not* prove
+    ///
+    /// An unchanged bar is not a promise that nothing moved. Train I005's
+    /// roster is the counterexample: the bar is 44.0 before the audit
+    /// (`rooms-31-audit-roster-tree…:16`) and no fold is printed after it,
+    /// yet Apple's finding carries `frame=(16.0, 136.0, 78.67, 26.33)`
+    /// against the tree's `{{16.0, 103.0}, {78.7, 26.3}}` — a 33-point
+    /// re-layout the guard cannot see. The guard catches the fold that is
+    /// known to persist, and nothing more.
+    ///
+    /// That is why the `Settings` verdict does not rest on this classifier
+    /// alone. The title is `Text(ShellStrings.settingsTitle).font(.title2)`
+    /// with no `foregroundStyle` (`RouteScreen.swift:367`) — `Color.primary`
+    /// on the white page, which is about 16:1 and cannot fail a contrast
+    /// check at any size. Whatever Apple sampled there, it was not that
+    /// text's own pixels.
     ///
     /// Frames come from ``roomsWindowShot(_:)``, taken **before** the audit,
     /// rather than from the finding's own `frame=`: that one is written
@@ -2456,16 +2496,38 @@ extension StubHouseUITests {
     /// Twins are read by label and **all** of them must be off the window —
     /// the Button and the StaticText of one control share a label, which is
     /// how `drop in from this phone` stays in `measured`.
+    ///
+    /// - Parameter app: read **after** the audit, for the bar's second
+    ///   measurement. This function is only ever called once `auditIssues`
+    ///   has returned, so this read is the post-audit one.
     @MainActor
     func roomsContrastWithNoPixels(
         _ lines: [String],
-        on shot: RoomsWindowShot
+        on shot: RoomsWindowShot,
+        after app: XCUIApplication
     ) -> (noPixels: [String], measured: [String]) {
         let barFrame = shot.bar
         guard !barFrame.isEmpty, barFrame.height < 60 else {
             print(
                 "ROOMS AUDIT no-pixels: the navigation bar is \(barFrame) and not the "
                     + "ordinary 44 points — nothing classified"
+            )
+            return ([], lines)
+        }
+        // **The bar again, now that the audit has run.** The fold the shot
+        // is afraid of is one the audit *causes*, so a pre-audit read is
+        // 44.0 by construction and could never see it. In train I003 the bar
+        // stayed folded after the audit on about twenty screens, which is
+        // what makes this read worth taking — and when it is folded, every
+        // frame in the shot is ~52 points from where the audit sampled it.
+        let barNow = app.navigationBars.firstMatch
+        let barAfter = barNow.exists ? barNow.frame : .zero
+        guard !barAfter.isEmpty, barAfter.height < 60,
+              barAfter.height <= barFrame.height + 0.5 else {
+            print(
+                "ROOMS AUDIT no-pixels: the navigation bar is \(barAfter) after the audit "
+                    + "against \(barFrame) before it — the audit re-laid this screen out "
+                    + "and the shot's frames are not what Apple sampled; nothing classified"
             )
             return ([], lines)
         }
@@ -2479,6 +2541,14 @@ extension StubHouseUITests {
         }
         let covered = barFrame.insetBy(dx: -1, dy: -1)
         let seen = shot.elements
+        // **Is this element the page's own content?** Matched by label *and*
+        // frame, because the two lists are read in the same pass of the same
+        // tree, so the one element appears in both with the one frame — and
+        // a label alone would let the tab bar's `home` borrow a row called
+        // `home` inside the page.
+        func inPage(_ twin: (label: String, frame: CGRect)) -> Bool {
+            shot.pageElements.contains { $0.label == twin.label && $0.frame == twin.frame }
+        }
         func noPixels(_ line: String) -> Bool {
             guard line.hasPrefix(Self.roomsContrastFailed)
                 || line.hasPrefix(Self.roomsNearlyPassed) else { return false }
@@ -2486,12 +2556,18 @@ extension StubHouseUITests {
             let twins = seen.filter { $0.label == label }
             guard !twins.isEmpty else { return false }
             let off = twins.allSatisfy { twin in
-                covered.contains(twin.frame) || twin.frame.minY >= page.maxY - 0.5
+                // Wholly behind the navigation bar, or clipped away by the
+                // page's own foot. The second is the page's content only:
+                // the window's phone bar is drawn below that foot and is
+                // perfectly visible there.
+                covered.contains(twin.frame)
+                    || (inPage(twin) && twin.frame.minY >= page.maxY - 0.5)
             }
             if off {
                 print(
                     "ROOMS AUDIT no-pixels :: \(line) — on screen at "
-                        + twins.map { "\($0.frame)" }.joined(separator: ", ")
+                        + twins.map { "\($0.frame)\(inPage($0) ? " in the page" : " outside the page")" }
+                            .joined(separator: ", ")
                         + ", with the bar at \(barFrame) and the page's foot at \(page.maxY)"
                 )
             }
@@ -2524,16 +2600,37 @@ extension StubHouseUITests {
     /// in the screenshot beside it, which is this one. So the geometry is
     /// taken where the case put the screen, in the same breath as the
     /// evidence, and the classification is against that.
+    ///
+    /// The page's own subtree is read as well as the window's, because "past
+    /// the page's foot" is only a statement about pixels for something the
+    /// page draws. The phone bar's eight leaves sit below that foot and are
+    /// drawn in full; in every I005 Rooms tree they are siblings of the
+    /// scroll view's ancestors, not its descendants, which is the difference
+    /// these two lists carry.
     @MainActor
     func roomsWindowShot(_ app: XCUIApplication) -> RoomsWindowShot {
         let bar = app.navigationBars.firstMatch
+        let page = roomsScrollView(app, strip: false)
+        var inside: [(label: String, frame: CGRect)] = []
+        if let page {
+            inside = Self.roomsLabelled(page.descendants(matching: .any))
+        }
         return RoomsWindowShot(
-            page: roomsScrollView(app, strip: false)?.frame ?? .zero,
+            page: page?.frame ?? .zero,
             bar: bar.exists ? bar.frame : .zero,
-            elements: app.descendants(matching: .any).allElementsBoundByIndex
-                .filter { $0.exists && !$0.label.isEmpty }
-                .map { (label: $0.label, frame: $0.frame) }
+            elements: Self.roomsLabelled(app.descendants(matching: .any)),
+            pageElements: inside
         )
+    }
+
+    /// Every element of `query` that exists and carries a label, as the pair
+    /// ``RoomsWindowShot`` keeps. One reader, so the window's list and the
+    /// page's cannot be built two different ways and then compared.
+    @MainActor
+    static func roomsLabelled(_ query: XCUIElementQuery) -> [(label: String, frame: CGRect)] {
+        query.allElementsBoundByIndex
+            .filter { $0.exists && !$0.label.isEmpty }
+            .map { (label: $0.label, frame: $0.frame) }
     }
 
     /// The `label='…'` of a finding Apple attributed, or nil for one it did
@@ -2567,7 +2664,7 @@ extension StubHouseUITests {
 /// Where a Rooms screen's chrome and content were at one moment.
 ///
 /// Taken by ``StubHouseUITests/roomsWindowShot(_:)`` beside the evidence and
-/// read by ``StubHouseUITests/roomsContrastWithNoPixels(_:on:)``; that pair's
+/// read by ``StubHouseUITests/roomsContrastWithNoPixels(_:on:after:)``; that pair's
 /// doc comments carry the measurements. A struct rather than three arguments
 /// so the three readings cannot be taken at three different moments, which is
 /// the whole point of taking them before the audit.
@@ -2583,6 +2680,12 @@ struct RoomsWindowShot {
     /// Every element with a label, so a finding's `label='…'` can be placed —
     /// and so twins that share one can both be checked.
     let elements: [(label: String, frame: CGRect)]
+
+    /// The same, for the **page's own subtree** only. `page.maxY` is where
+    /// the page clips its content; it says nothing about the window's phone
+    /// bar, which is drawn below it. An element is "clipped away" only if it
+    /// is in here.
+    let pageElements: [(label: String, frame: CGRect)]
 }
 
 /// The words these cases match on, spelled out rather than imported.
