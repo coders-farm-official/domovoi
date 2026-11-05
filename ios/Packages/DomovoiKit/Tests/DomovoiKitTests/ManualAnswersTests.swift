@@ -151,8 +151,13 @@ final class ManualAnswersTests: XCTestCase {
     /// **Answer 73's numbers are Android's.** `MOVE_MS = 280`, `FADE_MS = 180`
     /// and `EASE = CubicBezierEasing(0.2f, 0f, 0f, 1f)` (`ManualScreen.kt:166-168`),
     /// and the fade's `tween` takes Compose's default `FastOutSlowInEasing`,
-    /// `(0.4, 0, 0.2, 1)`. The view builds its two `Animation`s from these and
-    /// from nothing else (`ManualMapView.swift`, `Animation.manualGlide`).
+    /// `(0.4, 0, 0.2, 1)`.
+    ///
+    /// **This pins the numbers only.** That the view builds its two
+    /// `Animation`s from them, puts the glide on the stage keyed on the focus,
+    /// cuts under Reduce Motion and moves the camera as three numbers is
+    /// `ManualMotionSourceTests`' — revision 1's verifier sabotaged all of
+    /// that with this case green.
     func testTheGlideIsAndroids() {
         XCTAssertEqual(0.28, ManualGlide.duration, accuracy: 1e-9, "MOVE_MS")
         XCTAssertEqual(0.18, ManualGlide.fade, accuracy: 1e-9, "FADE_MS")

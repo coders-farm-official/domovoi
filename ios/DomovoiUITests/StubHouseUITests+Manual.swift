@@ -44,7 +44,8 @@ import XCTest
 //    than a read on the next line, because a node fades out over 180 ms.
 //
 // **`@SceneStorage` outlives a launch.** The screen keeps which level it was
-// on the way Android's `rememberSaveable` does, and on iOS that survives a
+// on, as Android's `rememberSaveable` promises to (Android's shell then drops
+// it on every route change — `ManualView`'s `act(_:in:)`), and on iOS that survives a
 // cold start of the same install — so every case here puts the screen on a
 // known level with the `start here` or `map` pill rather than assuming one.
 // ---------------------------------------------------------------------------
@@ -759,14 +760,21 @@ extension StubHouseUITests {
     }
 
     /// The phone bar still works from a deep level, and the manual is where
-    /// it was left when you come back — as Android's is.
+    /// it was left when you come back — **which Android's is not**.
     ///
     /// The phone bar is drawn outside the shell's stack (`WorkspaceView.swift:82`)
     /// and its tabs append a `Route` to the same path. While a level was a
     /// pushed screen that was a route pushed underneath live presentations,
     /// and the manual collapsed itself to Start here to avoid it (DECISIONS
-    /// D32B). With one screen there is nothing to collapse, so — Android's
-    /// `rememberSaveable` `at` — coming back lands on the piece.
+    /// D32B). With one screen there is nothing to collapse, so coming back
+    /// lands on the piece.
+    ///
+    /// Android declares `at` a `rememberSaveable` (`ManualScreen.kt:290`) and
+    /// then loses it: `ScreenRouter` composes only the current route and the
+    /// shell's `SaveableStateProvider` is keyed on the server
+    /// (`AppShell.kt:231`), so opening Music disposes `ManualScreen` and the
+    /// manual restarts at Start here. That is an Android defect, read and not
+    /// copied (``ManualView``'s `act(_:in:)` has the reading).
     ///
     /// The swipe back from Music is also the other half of answer 74's
     /// recogniser: it stays on the navigation controller's view while Music is
@@ -813,7 +821,9 @@ extension StubHouseUITests {
             "a swipe back from Music did not come back to the manual's piece. "
                 + "If Music is still on screen, the manual's recogniser took a "
                 + "swipe that was Music's; if the manual is on Start here, it "
-                + "lost its level on the way out, which Android does not"
+                + "lost its level on the way out — Android's defect (its "
+                + "`ManualScreen` is disposed with the route), not this port's "
+                + "design"
         )
         evidence(app, "manual-phone-bar-back-to-the-piece")
     }
@@ -1033,8 +1043,23 @@ extension StubHouseUITests {
     ///    colour is the amber;
     ///  * the `preview` badge on a piece's heading — its most common colour is
     ///    the grey;
-    ///  * the one paragraph with all three inline words — it holds amber
-    ///    pixels and grey pixels. Before answer 75 it held neither.
+    ///  * the one paragraph with all three inline words — it holds a **block**
+    ///    of amber and a block of grey: a square two points on a side, every
+    ///    pixel of it within 2 of the wash. Before answer 75 it held neither.
+    ///
+    /// **A block, not a count** (revision 1, the verifier's M2). The first
+    /// shape of this case counted matching pixels over the paragraph's
+    /// frame, and the grey half could not fail: black prose anti-aliased on
+    /// white puts light greys on every glyph edge, and the fixture sentence
+    /// rendered with **no** grey wash at all held 179 pixels within 2 of
+    /// `#F2F1F1`. An edge is a pixel or two wide; a wash behind a caption
+    /// word is a patch — its leading space alone is a column about 3 × 13
+    /// points, and the strip under the baseline of `review` or `admin` is
+    /// about 30 × 2.7 — so a two-point square of the wash's colour is in
+    /// every washed word and in no glyph edge. The grey must also be nearer
+    /// `#F2F1F1` than the code run's `#F5F3F0`, which is three away on red:
+    /// the `obsidian` run's wash shares the paragraph, and without that it
+    /// could stand in for a missing grey.
     @MainActor
     func testManual_TheLittleWordsSitOnAndroidsWashes() throws {
         control("reset-fixtures", "{}", port: 6601, what: "the manual fixture's seed")
@@ -1076,19 +1101,27 @@ extension StubHouseUITests {
         let paragraph = app.staticTexts[StubManual.codeSpanParagraph].firstMatch
         XCTAssertTrue(paragraph.waitForExistence(timeout: 15), "the paragraph with the inline words did not draw")
         XCTAssertTrue(manualScrollOnScreen(app, paragraph), "the paragraph could not be brought on screen")
-        let amberPixels = manualCount(app, in: paragraph.frame, near: amber)
-        let greyPixels = manualCount(app, in: paragraph.frame, near: grey)
-        print("MANUAL wash inline paragraph \(paragraph.frame): amber=\(amberPixels) grey=\(greyPixels)")
-        evidence(app, "manual-washes")
-        XCTAssertGreaterThan(
-            amberPixels, 20,
-            "the paragraph holds \(amberPixels) amber pixels: inline `admin` is "
-                + "not on Android's amber"
+        let codeWash = (245, 243, 240)
+        let amberBlock = manualWashBlock(app, in: paragraph.frame, near: amber, unlike: [])
+        let greyBlock = manualWashBlock(app, in: paragraph.frame, near: grey, unlike: [codeWash])
+        print(
+            "MANUAL wash inline paragraph \(paragraph.frame): "
+                + "amber=\(String(describing: amberBlock)) grey=\(String(describing: greyBlock)) "
+                + "(side = the block's side in pixels, widest = the widest run of "
+                + "columns that hold one)"
         )
-        XCTAssertGreaterThan(
-            greyPixels, 20,
-            "the paragraph holds \(greyPixels) grey pixels: inline `preview` and "
-                + "`plugin` are not on Android's grey"
+        evidence(app, "manual-washes")
+        XCTAssertTrue(
+            amberBlock.map { $0.widest >= $0.side } ?? false,
+            "the paragraph holds no amber block (\(String(describing: amberBlock))): "
+                + "inline `admin` is not on Android's amber"
+        )
+        XCTAssertTrue(
+            greyBlock.map { $0.widest >= $0.side } ?? false,
+            "the paragraph holds no grey block (\(String(describing: greyBlock))): "
+                + "inline `preview` and `plugin` are not on Android's grey — "
+                + "light greys on glyph edges do not count, and neither does "
+                + "the code run's wash"
         )
     }
 
@@ -1166,19 +1199,26 @@ extension StubHouseUITests {
     /// **Answer 34**: an inline `code` run and the inline pills are drawn on
     /// an opaque wash, and Apple's audit reads them.
     ///
-    /// The ratios are arithmetic, not a guess:
-    /// ``manualContrastRatio(_:_:)`` over `--sunken` gives 18.96:1 for
-    /// `Color.primary`, 6.72:1 for `fgMuted` and 5.17:1 for `warnInk` in the
-    /// light theme, and 19.27:1 / 7.77:1 / 10.08:1 in the dark one — the
-    /// table is in `Color.manualCodeWash`'s doc comment, and the numbers come
-    /// out of the same sRGB values the view builds its colour from, so the
-    /// claim cannot drift from the pixels.
+    /// **Since answer 75 the run and the pills sit on three different
+    /// washes** (revision 1 restated this; the earlier text described every
+    /// inline word on `--sunken`). The ratios are arithmetic, not a guess,
+    /// from ``manualContrastRatio(_:_:)`` over the same sRGB values the view
+    /// builds its colours from:
+    ///
+    ///  * the `code` run, `Color.primary` on `--sunken` `#F5F3F0`
+    ///    (``Color/manualCodeWash``): 18.96:1 light, 19.27:1 dark
+    ///    (`ManualAnswersTests.testEveryRatioTheWashCommentsState`);
+    ///  * `admin`, `warnInk` on Android's `warnSoft` composited onto the page,
+    ///    `#FFF4E8` / `#291B0C`: **5.27:1** light, 8.74:1 dark;
+    ///  * `preview` and `plugin`, `fgMuted` on `idleSoft` composited,
+    ///    `#F2F1F1` / `#151414`: 6.61:1 light, 7.40:1 dark
+    ///    (`ManualAnswersTests.testEveryWordOnItsWashReads`).
     ///
     /// What a case can add to that is Apple's own measurement of the drawn
     /// page, which is what this does. `Your music` is the one piece with an
     /// inline `code` span (`obsidian`) and all three pills in it, so this
     /// audit covers every ink-on-wash pairing at once — including `admin`,
-    /// the weakest at 5.17:1. A translucent wash would make those numbers
+    /// the weakest at 5.27:1. A translucent wash would make those numbers
     /// untrue and this is where it would show.
     ///
     /// ### What this case does **not** guard, said plainly
@@ -1187,19 +1227,17 @@ extension StubHouseUITests {
     /// review was right to say so. A wash is three pixel values inside a
     /// `Text`'s attributed string: it is not an element, it has no label and
     /// no value, and the accessibility tree a UI case queries cannot see it.
-    /// Pixel-sampling a screenshot was considered and rejected — the washed
-    /// run is a substring of a paragraph, so there is no frame to sample it
-    /// in, and a case that sampled the paragraph's frame would be reading
-    /// mostly page background either way.
     ///
-    /// So answer 34 is guarded in two places and neither is this one:
-    /// `ManualAnswersTests.testEveryRatioTheWashCommentsState` holds the
-    /// numbers, the two washes and the measurement that says why there are
-    /// two of them; and the evidence screenshot is what says the wash is on
-    /// the run at all. **One assignment per run kind is guarded by review
-    /// only.** What this case is for is the other half: that the page a
-    /// reviewer looked at still passes Apple's audit, at the ordinary type
-    /// size, with the keyboard down.
+    /// So the washes are guarded elsewhere: the numbers by
+    /// `ManualAnswersTests.testEveryRatioTheWashCommentsState` and
+    /// `testEveryWordOnItsWashReads`, and the pills' washes being on the
+    /// screen at all by ``testManual_TheLittleWordsSitOnAndroidsWashes``,
+    /// which samples this paragraph's frame for a two-point **block** of each
+    /// pill wash (a count of matching pixels could not fail: glyph edges hold
+    /// light greys). The `code` run's own wash is still guarded by review and
+    /// the evidence screenshot only. What this case is for is the other half:
+    /// that the page a reviewer looked at still passes Apple's audit, at the
+    /// ordinary type size, with the keyboard down.
     @MainActor
     func testManual_ACodeSpanIsWashedAndStillAudits() throws {
         control("reset-fixtures", "{}", port: 6601, what: "the manual fixture's seed")
@@ -1225,10 +1263,13 @@ extension StubHouseUITests {
         // The one named exception in this file, with its measurement in
         // ``manualAudit(_:_:washedElement:)``: Apple's audit reports
         // `Contrast failed` against this paragraph because its frame holds
-        // two backgrounds, and every ink it draws was measured off the
-        // audit's own screenshot at 18.96 / 6.71 / 5.17 to 1. Any other
-        // finding on this page still fails this case, including a
-        // `Contrast failed` against any other element.
+        // the page and wash patches behind part of its words. I004 measured
+        // every ink off the audit's own screenshot at 18.96 / 6.71 / 5.17 to 1
+        // when every inline word sat on `--sunken`; since answer 75 the
+        // arithmetic is 18.96 (code) / 6.61 (grey pills) / 5.27 (`admin` on
+        // amber), and **the pixel measurement is due again** on the next
+        // train. Any other finding on this page still fails this case,
+        // including a `Contrast failed` against any other element.
         try manualAudit(app, "manual-audit-code-span", washedElement: StubManual.codeSpanParagraph)
     }
 
@@ -2141,17 +2182,35 @@ extension StubHouseUITests {
     /// frame=(16.0, 407.67, 361.0, 64.33)`). Four things say it is the
     /// audit's heuristic and not this app's ink:
     ///
+    /// **Re-measurement due (revision 1).** All five readings below were
+    /// taken **before answer 75** (train I004; reading 4 is I002's), when every inline word sat
+    /// on `--sunken` `#F5F3F0`. Since answer 75 the paragraph's frame holds
+    /// the page and three wash colours: the `code` run's `#F5F3F0` (1.108:1
+    /// against the page), `admin`'s amber `#FFF4E8` (1.087:1) and the grey
+    /// `#F2F1F1` under `preview` and `plugin` (1.126:1). The inks on them are
+    /// arithmetic until a train samples them again: 18.96:1 for the `code`
+    /// run, **5.27:1** for `warnInk` on amber, **6.61:1** for `fgMuted` on the
+    /// grey (`ManualAnswersTests.testEveryWordOnItsWashReads`), every one over
+    /// 4.5:1, and the strongest wash-against-page pair is still under 1.2:1
+    /// and carries no text. The allowance is matched by **signature** — this
+    /// element's whole label, `Contrast failed` only — so it stands; the
+    /// next train's `manual-audit-code-span` screenshot is where the new
+    /// numbers get read off pixels, and if the audit's finding moves to
+    /// another element or headline the case reds, which is the safe
+    /// direction.
+    ///
     ///  1. **Every pairing the element draws was sampled off the audit's own
-    ///     screenshot** (`att/.../manual-audit-code-span_0_*.png`, 1178×2556
+    ///     screenshot** (pre-answer-75; see above) (`att/.../manual-audit-code-span_0_*.png`, 1178×2556
     ///     at 3× for a 393-point screen). The wash is `(245, 243, 240)`,
     ///     opaque as answer 34 asked. On it: the `code` run's ink `(0, 0, 0)`
     ///     at **18.96:1**, `preview` and `plugin` at `(88, 85, 79)` —
     ///     `fgMuted` — at **6.71:1**, and `admin` at `(157, 83, 0)` —
     ///     `warnInk` — at **5.17:1**. The prose outside the washes is black
     ///     on white. Body text needs 4.5:1 and the weakest is 5.17:1.
-    ///  2. Those are the numbers `ManualAnswersTests.testEveryRatioTheWashCommentsState`
-    ///     computes from the tokens (18.96 / 6.72 / 5.17), so the pixels and
-    ///     the arithmetic agree to the second decimal.
+    ///  2. Those were the numbers `ManualAnswersTests.testEveryRatioTheWashCommentsState`
+    ///     computes from the `--sunken` tokens (18.96 / 6.72 / 5.17), so the
+    ///     pixels and the arithmetic agreed to the second decimal. The pills'
+    ///     arithmetic is now `testEveryWordOnItsWashReads`' (5.27 / 6.61).
     ///  3. **The same inks and the same wash pass this same audit, in this
     ///     same train, when they are their own elements.** Start here draws
     ///     an `{admin}` pill and a `code` run with tight frames of their own
@@ -2538,6 +2597,16 @@ extension StubHouseUITests {
     /// same way. Nil when there is no screenshot or the rectangle is off it.
     @MainActor
     private func manualPixels(_ app: XCUIApplication, in box: CGRect) -> [(Int, Int, Int)]? {
+        manualCrop(app, in: box)?.pixels
+    }
+
+    /// ``manualPixels(_:in:)`` with the crop's width in pixels and the
+    /// screenshot's scale, for a reading that needs rows.
+    @MainActor
+    private func manualCrop(
+        _ app: XCUIApplication,
+        in box: CGRect
+    ) -> (width: Int, scale: CGFloat, pixels: [(Int, Int, Int)])? {
         guard let whole = app.screenshot().image.cgImage, app.frame.width > 0 else { return nil }
         let scaleX = CGFloat(whole.width) / app.frame.width
         let scaleY = CGFloat(whole.height) / app.frame.height
@@ -2573,7 +2642,8 @@ extension StubHouseUITests {
         while let r = it.next(), let g = it.next(), let b = it.next(), it.next() != nil {
             out.append((Int(r), Int(g), Int(b)))
         }
-        return out
+        guard out.count == width * height else { return nil }
+        return (width, scaleX, out)
     }
 
     /// The most common colour inside a rectangle — the surface a short word
@@ -2587,11 +2657,51 @@ extension StubHouseUITests {
         return ((top.key >> 16) & 0xFF, (top.key >> 8) & 0xFF, top.key & 0xFF)
     }
 
-    /// How many pixels inside a rectangle are within 2 of a colour on every
-    /// channel.
+    /// Whether a rectangle holds a **patch** of one colour, rather than
+    /// pixels of it: the widest run of columns, in any row, over which the
+    /// colour has stood at least `side` pixels tall — so `widest >= side`
+    /// means a `side × side` square of it exists. `side` is two points at the
+    /// screenshot's own scale (six pixels at 3×).
+    ///
+    /// A pixel counts when it is within 2 of `colour` on every channel
+    /// **and** nearer `colour` than every colour in `unlike` (summed over the
+    /// channels), so a neighbouring wash a few units away cannot stand in for
+    /// it. Built row by row from an iterator, never by indexing a pixel
+    /// array: a trap here ends the whole run.
     @MainActor
-    private func manualCount(_ app: XCUIApplication, in box: CGRect, near colour: (Int, Int, Int)) -> Int {
-        (manualPixels(app, in: box) ?? []).filter { manualNear($0, colour) }.count
+    private func manualWashBlock(
+        _ app: XCUIApplication,
+        in box: CGRect,
+        near colour: (Int, Int, Int),
+        unlike others: [(Int, Int, Int)]
+    ) -> (side: Int, widest: Int)? {
+        guard let crop = manualCrop(app, in: box), crop.width > 0 else { return nil }
+        func distance(_ a: (Int, Int, Int), _ b: (Int, Int, Int)) -> Int {
+            abs(a.0 - b.0) + abs(a.1 - b.1) + abs(a.2 - b.2)
+        }
+        func counts(_ pixel: (Int, Int, Int)) -> Bool {
+            guard manualNear(pixel, colour) else { return false }
+            let mine = distance(pixel, colour)
+            return others.allSatisfy { distance(pixel, $0) > mine }
+        }
+        let side = max(3, Int((2 * crop.scale).rounded(.up)))
+        var heights = [Int](repeating: 0, count: crop.width)
+        var row: [(Int, Int, Int)] = []
+        row.reserveCapacity(crop.width)
+        var widest = 0
+        var it = crop.pixels.makeIterator()
+        while let pixel = it.next() {
+            row.append(pixel)
+            guard row.count == crop.width else { continue }
+            heights = zip(heights, row).map { counts($1) ? $0 + 1 : 0 }
+            var run = 0
+            for height in heights {
+                run = height >= side ? run + 1 : 0
+                widest = max(widest, run)
+            }
+            row.removeAll(keepingCapacity: true)
+        }
+        return (side, widest)
     }
 
     /// Within 2 on every channel — tight enough that the four washes this

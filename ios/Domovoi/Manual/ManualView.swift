@@ -113,6 +113,11 @@ struct ManualView: View {
     /// `at` in a `rememberSaveable` (`ManualScreen.kt:290`) — the same
     /// promise `@SceneStorage` makes: it survives a process death and dies
     /// with the app's removal. The string is ``ManualPlace/saved``.
+    ///
+    /// **The promise, not Android's shell.** Android loses this value every
+    /// time another route is opened, because the composable holding it is
+    /// disposed (``act(_:in:)`` has the reading); this screen is covered
+    /// instead and keeps it.
     @SceneStorage("manual.place") private var savedPlace = "start"
 
     /// Read here as well as in ``ManualTopBar``: who owns the scroll view
@@ -352,12 +357,23 @@ struct ManualView: View {
 
     /// `onRoute` (`ManualScreen.kt:321-327`).
     ///
-    /// **The manual keeps its level when a link opens another screen**, as
-    /// Android's does: `at` is untouched by `navigate(...)`, so coming back
-    /// lands on the piece the link was in. While a level was a pushed screen
-    /// this collapsed the manual to Start here first (DECISIONS D32B), because
-    /// a route pushed underneath live presentations was a shape nobody had
-    /// measured; with one screen there is nothing presented to collapse.
+    /// **The manual keeps its level when a link opens another screen, and
+    /// Android's does not** — an Android defect read, not copied. Android's
+    /// `at` is a `rememberSaveable` (`ManualScreen.kt:290`), which is a
+    /// promise to keep the place; but `ScreenRouter` (`ScreenRouter.kt:56`)
+    /// composes only the current route, and the shell's one
+    /// `SaveableStateProvider` is keyed on the server's address
+    /// (`AppShell.kt:231`), not on the route. So `navigate(...)` disposes
+    /// `ManualScreen`, its saveable goes with it, and coming back starts again
+    /// at `"start"`. Here the manual is covered, not destroyed (``hold``'s
+    /// doc), so its model keeps `place` and coming back lands on the piece
+    /// the link was in. Recorded for the Android defects ledger in this
+    /// unit's report (`design-notes/ios/batch-2026-11-05/manual/REPORT.md`, revision 1).
+    ///
+    /// While a level was a pushed screen this collapsed the manual to Start
+    /// here first (DECISIONS D32B), because a route pushed underneath live
+    /// presentations was a shape nobody had measured; with one screen there
+    /// is nothing presented to collapse.
     private func act(_ open: ManualOpen, in manual: ManualModel) {
         switch open {
         case .screen(let route):
