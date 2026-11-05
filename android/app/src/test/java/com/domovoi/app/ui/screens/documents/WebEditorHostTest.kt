@@ -78,6 +78,16 @@ class WebEditorHostTest {
         assertEquals(setters.toString(), 1, setters.size)
         val factory = src.substringAfter("factory = { ctx ->").substringBefore("setBackgroundColor")
         assertTrue(factory.contains("settings.textZoom"))
+        // ...and only for a DOCUMENT. The same factory builds the sheet
+        // (Univer), whose cells are canvas text textZoom cannot reach while
+        // its formula bar and in-cell editor are DOM text it does: a zoomed
+        // sheet types at double size over a grid that has not moved. The
+        // setter sits inside the per-kind gate, and the gate is false for
+        // the sheet - either one alone would let the zoom leak back.
+        val gated = Regex("""if \(kind\.followsTextSize\) \{\s*settings\.textZoom = [^\n]+\s*\}""")
+        assertTrue("the setter sits inside the per-kind gate", gated.containsMatchIn(factory))
+        assertTrue(WebEditorKind.Document.followsTextSize)
+        assertFalse("the sheet must not take the text zoom", WebEditorKind.Sheet.followsTextSize)
         // Not pinned here, because a test that pins prose is a test that
         // fails on a reword: the measured limit (textZoom is page-wide, so
         // the chrome scales too and the fixed-height controls are cramped at

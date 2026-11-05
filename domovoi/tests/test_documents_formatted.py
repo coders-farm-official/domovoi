@@ -590,7 +590,9 @@ def test_the_documents_writing_follows_the_phones_text_size_setting():
     """Owner answer 72 (2026-11-04, under his rule 2): the phone's document
     editor IS this page (answer 21 chose that shape so there is one editor),
     and its writing did not follow the phone's large-text setting - only the
-    chrome around it grew.
+    chrome around it grew. What is pinned here is the SOURCE of both halves;
+    the iOS half has been measured only in Chromium with Dynamic Type
+    simulated, never rendered in WKWebView.
 
     The two halves are pinned here because they are one feature in two
     engines, each invisible in the other's source - and they do NOT behave
@@ -600,10 +602,26 @@ def test_the_documents_writing_follows_the_phones_text_size_setting():
       Dynamic Type body size, so iOS needs no host code at all, and only the
       writing moves: the toolbar, the note strip and the pop-ups keep the px
       they set for themselves. The family is put straight back afterwards - a
-      document's text must not change shape with a phone setting.
+      document's text must not change shape with a phone setting. Text the
+      person sized by hand (the toolbar's Text size writes an inline
+      ``font-size: 14pt``, which an inherited size cannot move) follows too:
+      the editor's VIEW of such a run - a textStyle mark view, never the
+      saved HTML - adds ``de-sized`` and ``--de-k`` (its size over the page's
+      16px), and a stylesheet rule behind ``@supports (font:
+      -apple-system-body)`` sizes it ``--de-k`` times the writing. Measured
+      in headless Chrome with the real stylesheet and that rule's two Apple
+      conditions simulated: writing 24px -> a 14pt run 28px (desktop 16 ->
+      18.67, the same 1.1667), 34px -> 39.67, inside a heading too; at a fine
+      pointer, and in a touch Chromium without the simulation, every size is
+      exactly base's; getHTML() is byte-identical to base in all eight runs.
     * Every non-Apple engine drops that shorthand as invalid, so Android's
       half is ``textZoom`` in ``WebEditorHost.kt`` from the system font scale,
-      on the editor only and never on the print copy. ``textZoom`` is a
+      on the DOCUMENT editor only - never the print copy, and never the
+      spreadsheet that the same WebView factory builds, whose Univer grid is
+      canvas text textZoom cannot reach under DOM chrome it does (a zoomed
+      sheet would type at double size over cells that had not moved). That
+      zoom already multiplies a hand-sized run, which is why the run rule
+      above is Apple-only: twice would compound it. ``textZoom`` is a
       PAGE-WIDE multiplier, so on Android the chrome scales too. Measured in
       Chromium at 375x812 at the equivalent of fontScale 2.0 (the Android
       maximum) nothing clips and the toolbar still scrolls sideways, but the
@@ -642,6 +660,35 @@ def test_the_documents_writing_follows_the_phones_text_size_setting():
         'font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; line-height: 1.6; }'
         in jsx
     )
+    # Text sized by hand follows too, by a rule in the same coarse block,
+    # Apple-only: Android's textZoom already multiplies an inline size, and
+    # doing it twice there would compound the zoom.
+    coarse = jsx.split(gate, 1)[1].split("\n}\n", 1)[0]
+    assert "  @supports (font: -apple-system-body) {" in coarse
+    assert "    .de-paper .ProseMirror { --de-body: 1em; }" in coarse
+    assert (
+        "    .de-paper .ProseMirror .de-sized { font-size: calc(var(--de-k) * var(--de-body)) !important; }"
+        in coarse
+    )
+    # registered as a length, so the 1em resolves on the writing and is
+    # inherited as that size (an unregistered one would re-resolve per span,
+    # against a heading's size inside a heading)
+    assert "@property --de-body { syntax: '<length>'; inherits: true; initial-value: 16px; }" in jsx
+    # The run's class and ratio come from a MARK VIEW, which only draws: the
+    # saved file is written from the schema (renderHTML, still just the
+    # font-size), so neither the class nor --de-k can reach it.
+    assert "renderHTML: (attrs) => (attrs.fontSize ? { style: `font-size: ${attrs.fontSize}` } : {})," in jsx
+    font_size_ext = jsx.split("const buildFontSize = (T) =>", 1)[1].split("\n  });\n", 1)[0]
+    assert "markViews: {" in font_size_ext and "textStyle: (mark, view, inline) => {" in font_size_ext
+    assert "DOMSerializer.renderSpec(document, mark.type.spec.toDOM(mark, inline), null, mark.attrs)" in font_size_ext
+    assert "out.dom.classList.add('de-sized');" in font_size_ext
+    assert "out.dom.style.setProperty('--de-k'," in font_size_ext
+    serialized = font_size_ext.split("addGlobalAttributes()", 1)[1].split("addCommands()", 1)[0]
+    assert "renderHTML:" in serialized
+    assert "de-sized" not in serialized and "--de-k" not in serialized
+    # pt over 12, px over 16 (the page's own writing), rem from the page root
+    ratio = jsx.split("const sizeRatio = (v) => {", 1)[1].split("\n  };\n", 1)[0]
+    assert "if (u === 'pt') return n / 12;" in ratio and "if (u === 'px') return n / 16;" in ratio
     # a code block scales with the writing instead of staying at 14px.
     # Scoped to the editor's own rule: PRINT_CSS keeps 14px on purpose, because
     # a printed page is paper and does not follow a phone setting.
@@ -677,3 +724,13 @@ def test_the_documents_writing_follows_the_phones_text_size_setting():
     assert len(setters) == 1, setters
     factory = kt.split("factory = { ctx ->", 1)[1].split("setBackgroundColor", 1)[0]
     assert "settings.textZoom" in factory
+    # ...behind the per-kind gate, which is true for the document and false
+    # for the sheet: the same factory builds the Univer spreadsheet page.
+    flines = [ln.strip() for ln in factory.splitlines()]
+    at = next(i for i, ln in enumerate(flines) if ln.startswith("settings.textZoom"))
+    assert flines[at - 1] == "if (kind.followsTextSize) {" and flines[at + 1] == "}"
+    kinds = kt.split("internal enum class WebEditorKind(", 1)[1].split("fun page(", 1)[0]
+    document_kind = kinds.split("    Document(", 1)[1].split("    ),", 1)[0]
+    sheet_kind = kinds.split("    Sheet(", 1)[1].split("    );", 1)[0]
+    assert "followsTextSize = true," in document_kind
+    assert "followsTextSize = false," in sheet_kind

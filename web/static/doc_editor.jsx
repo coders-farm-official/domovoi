@@ -541,9 +541,9 @@
    WHAT EACH ENGINE DOES -- the two halves of this feature are NOT the same
    behaviour, and the difference is the thing to know before touching either:
 
-   * WebKit (iPhone, iPad). The rule below is the only one added, so ONLY the
-     writing scales: the toolbar, the note strip and the pop-ups keep the px
-     they set for themselves. Two consequences worth knowing. The size
+   * WebKit (iPhone, iPad). The rules below touch only the writing, so ONLY
+     the writing scales: the toolbar, the note strip and the pop-ups keep the
+     px they set for themselves. Two consequences worth knowing. The size
      re-resolves live, mid-edit. And -apple-system-body is 17px at the DEFAULT
      content size category, so an iPhone renders a document at 17px where a
      desktop browser renders it at 16px -- the two platforms no longer match
@@ -566,6 +566,9 @@
      limit, not an oversight. Capping the zoom was the alternative and was
      rejected: someone who asks for 200% text and silently gets 150% is the
      misleading-control shape Kamron ruled out.
+     The host sets it for the DOCUMENT editor only: the same WebView factory
+     builds the spreadsheet editor, whose Univer grid is canvas text that
+     textZoom cannot reach under DOM chrome that it does.
      Two more Android-only facts: the host reads fontScale in the AndroidView
      factory, and none of the activities in AndroidManifest.xml lists
      fontScale in configChanges, so a change made while the app is running
@@ -583,11 +586,36 @@
    untouched at every window size; a touch Chromium matches this query and
    still gets nothing, because the declaration is dropped there.
 
+   TEXT THE PERSON SIZED BY HAND. The toolbar's Text size writes an inline
+   font-size: 14pt (any size but 12), and the saved file keeps it. An inline
+   size beats the inherited one, so on WebKit such a run would stay 14pt
+   while the writing round it followed Dynamic Type -- whereas textZoom
+   multiplies it on Android. To follow Android, the editor's VIEW of a sized
+   run (the textStyle mark view in buildFontSize; never the saved HTML,
+   which is written from the schema, not from the view) carries the class
+   de-sized and --de-k, its size as a multiple of the page's own 16px
+   (14pt is 18.67px, so 1.1667). --de-body is registered as a length, so the
+   1em it is given on the writing is resolved THERE, to the size the writing
+   really is, and inherited as that length; a sized run is then --de-k times
+   it, which keeps it in proportion to the writing even inside a heading.
+   pt, px and rem are converted; em and % are already relative and need
+   nothing. At the page's own 16px the result is the inline size (--de-k
+   is kept to four decimals), and the !important is what lets a stylesheet
+   beat an inline style.
+   It is behind @supports (font: -apple-system-body), true only on Apple's
+   engine: Android scales these runs already, and doing it twice there would
+   compound the zoom.
+
    NOTE: no backticks in here. This whole stylesheet is a JS template
    literal, and one in a comment ends the string. */
+@property --de-body { syntax: '<length>'; inherits: true; initial-value: 16px; }
 @media (pointer: coarse) {
   .de-paper .ProseMirror { font: -apple-system-body;
     font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; line-height: 1.6; }
+  @supports (font: -apple-system-body) {
+    .de-paper .ProseMirror { --de-body: 1em; }
+    .de-paper .ProseMirror .de-sized { font-size: calc(var(--de-k) * var(--de-body)) !important; }
+  }
 }
 `;
   const injectCss = () => {
@@ -724,6 +752,21 @@
     },
   });
 
+  /* A sized run's size as a multiple of the page's own 16px writing (12pt),
+   * or null when it needs nothing: em and % are relative already. rem is
+   * the page root's, read once (the dashboard's root is 13px, not 16). */
+  let rootPx = 0;
+  const sizeRatio = (v) => {
+    const m = /^(\d{1,3}(?:\.\d{1,2})?)(pt|px|rem)$/i.exec(v || '');
+    if (!m) return null;
+    const n = parseFloat(m[1]);
+    const u = m[2].toLowerCase();
+    if (u === 'pt') return n / 12;
+    if (u === 'px') return n / 16;
+    if (!rootPx) rootPx = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+    return (n * rootPx) / 16;
+  };
+
   const buildFontSize = (T) => T.Extension.create({
     name: 'fontSize',
     addOptions() { return { types: ['textStyle'] }; },
@@ -747,6 +790,31 @@
         setFontSize: (size) => ({ chain }) => chain().setMark('textStyle', { fontSize: size }).run(),
         unsetFontSize: () => ({ chain }) => chain().setMark('textStyle', { fontSize: null }).removeEmptyTextStyle().run(),
       };
+    },
+    // How the editor DRAWS a sized run, and only that (owner answer 72): the
+    // same span the schema writes, plus the class and --de-k the stylesheet
+    // needs to keep the run in proportion to the writing when a phone's
+    // text setting moves it (see TEXT THE PERSON SIZED BY HAND in the CSS).
+    // A mark view is the view's own: getHTML(), copy and print all serialize
+    // from the schema, so the saved file never sees either, and a re-read
+    // of this span takes its size from style.fontSize, which is untouched.
+    addProseMirrorPlugins() {
+      return [new T.pm.state.Plugin({
+        key: new T.pm.state.PluginKey('sizedRunView'),
+        props: {
+          markViews: {
+            textStyle: (mark, view, inline) => {
+              const out = T.pm.model.DOMSerializer.renderSpec(document, mark.type.spec.toDOM(mark, inline), null, mark.attrs);
+              const k = sizeRatio(mark.attrs.fontSize);
+              if (k != null && out.dom.nodeType === 1) {
+                out.dom.classList.add('de-sized');
+                out.dom.style.setProperty('--de-k', String(Math.round(k * 10000) / 10000));
+              }
+              return out;
+            },
+          },
+        },
+      })];
     },
   });
 
