@@ -2672,7 +2672,9 @@ enum StubManual {
     /// The bare word, as `StubHouseUITests.swift:2521` reaches the same four
     /// tabs — they are the suite's one control that is a button with a static
     /// text of its own on every screen, which is what makes it the positive
-    /// control for a node card contributing nothing.
+    /// control for the leaves a node card is allowed to carry: if SwiftUI
+    /// ever stopped exposing a merged button's children, every card would
+    /// come back empty and those assertions would pass on nothing.
     static let homeTabControl = "Home"
     /// `ManualStrings.next("next", piece: "What plugins add")` — the footer
     /// that exists on a piece's page and on no other level.
