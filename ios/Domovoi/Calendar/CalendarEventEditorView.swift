@@ -168,9 +168,11 @@ struct CalendarEventEditorView: View {
                         titleError = nil
                     }
                 ),
-                // Owner answer 65's vertical leg: a vertical-axis hint is not a
-                // `UITextField` placeholder, so it needs the prompt
-                // (`ShellHintPrompt` carries train I005's 1.70:1 reading).
+                // Owner answer 65's vertical leg. Train I005 measured one vertical-axis
+                // field (Music's, at AX5: 1.70:1 with both `UITextField` placeholder
+                // setters swizzled), and the swizzle did not reach it, so the hint is
+                // passed as a prompt here too; whether the swizzle would reach this
+                // particular field is unmeasured.
                 prompt: ShellHintPrompt.text(CalendarStrings.titlePlaceholder),
                 axis: .vertical
             )
@@ -206,9 +208,11 @@ struct CalendarEventEditorView: View {
                     get: { draft.location },
                     set: { typed in draft.location = typed.filter { !$0.isNewline } }
                 ),
-                // Owner answer 65's vertical leg: a vertical-axis hint is not a
-                // `UITextField` placeholder, so it needs the prompt
-                // (`ShellHintPrompt` carries train I005's 1.70:1 reading).
+                // Owner answer 65's vertical leg. Train I005 measured one vertical-axis
+                // field (Music's, at AX5: 1.70:1 with both `UITextField` placeholder
+                // setters swizzled), and the swizzle did not reach it, so the hint is
+                // passed as a prompt here too; whether the swizzle would reach this
+                // particular field is unmeasured.
                 prompt: ShellHintPrompt.text(CalendarStrings.optional),
                 axis: .vertical
             )
@@ -229,9 +233,11 @@ struct CalendarEventEditorView: View {
             TextField(
                 CalendarStrings.optionalNotes,
                 text: Binding(get: { draft.description }, set: { draft.description = $0 }),
-                // Owner answer 65's vertical leg: a vertical-axis hint is not a
-                // `UITextField` placeholder, so it needs the prompt
-                // (`ShellHintPrompt` carries train I005's 1.70:1 reading).
+                // Owner answer 65's vertical leg. Train I005 measured one vertical-axis
+                // field (Music's, at AX5: 1.70:1 with both `UITextField` placeholder
+                // setters swizzled), and the swizzle did not reach it, so the hint is
+                // passed as a prompt here too; whether the swizzle would reach this
+                // particular field is unmeasured.
                 prompt: ShellHintPrompt.text(CalendarStrings.optionalNotes),
                 axis: .vertical
             )
