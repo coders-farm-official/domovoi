@@ -330,9 +330,7 @@ struct RoomsOverviewView: View {
         Button(RoomsStrings.send) {
             model.announce(to: room)
         }
-        .buttonStyle(.borderedProminent)
-        .tint(Color.brand)
-        .foregroundStyle(Color.brandFg)
+        .buttonStyle(BrandFillButtonStyle())
         .font(.subheadline)
         .fixedSize(horizontal: false, vertical: true)
         .frame(minHeight: 44)
@@ -438,9 +436,10 @@ struct RoomsOverviewView: View {
                 // The tint is the **ink** token and not ``Color/danger``:
                 // this draws its own label, so the colour has to be one that
                 // is readable as text on the card (rule §3), where a
-                // prominent button needs the fill/`dangerFg` pair the sheet
-                // uses. ``RoomsBroadcastCard`` records the 3.08:1 a
-                // prominent button tinted with the ink measured.
+                // filled button needs the fill/`dangerFg` pair the sheet
+                // uses (``DangerFillButtonStyle``). A prominent button tinted
+                // with the ink draws white on it, 2.99:1 on the dark
+                // `#FF5F5B` (``DangerInk/whiteOnTheDarkFillRatio``).
                 Button(RoomsStrings.hangUp) {
                     model.hangUp(room)
                 }

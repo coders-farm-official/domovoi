@@ -191,26 +191,17 @@ struct DropInCallSheet: View {
                 systemImage: "phone.down"
             )
             .font(.subheadline)
-            // **``Color/dangerFg`` and not `.white`, and on the label and not
-            // on the `Button`.** `--danger-fg` flips with the theme because
-            // white on the dark fill (`#FF5F5B`) is 2.99:1 —
-            // ``DangerInk/whiteOnTheDarkFillRatio``, which is the number the
-            // pair exists to avoid. The pair measures 5.91:1 light and 6.53:1
-            // dark (``DangerInk/lightArithmeticRatio``,
-            // ``DangerInk/darkArithmeticRatio``), recomputed by
-            // `ShellFoldTests`.
-            //
-            // It is on the `Label` because `.borderedProminent` picks its own
-            // label colour out of the style, and a `.foregroundStyle` applied
-            // outside the `Button` is the half of that pair SwiftUI is free to
-            // win. Inside, it is the label's own colour.
-            .foregroundStyle(Color.dangerFg)
+            // **No colour here.** ``DangerFillButtonStyle`` draws
+            // ``Color/dangerFg`` on ``Color/danger`` itself, and a colour
+            // named on the label would win over the style's.
             .fixedSize(horizontal: false, vertical: true)
             .frame(minHeight: 44)
             .contentShape(.rect)
         }
         // **Filled, as Android's is** (`PhoneDropinCall.kt:180-183`:
-        // `colors.err` with white on it).
+        // `colors.err` with white on it — 4.03:1 light and 2.98:1 dark, so
+        // the colours are the stylesheet's `--danger` pair instead:
+        // ``DangerFillButtonStyle`` has the numbers).
         //
         // ### And deliberately NOT the same shape as `hang up` two sections up
         //
@@ -232,10 +223,14 @@ struct DropInCallSheet: View {
         // on it, both built from ``DangerInk`` — which is what the rooms
         // unit asked for under "needs a shared change" and why this button
         // shipped `.bordered` with `.tint(Color.errInk)` until the
-        // integration. A prominent button tinted with the *ink* token drew
-        // its own label at 3.08:1, the measurement ``RoomsBroadcastCard``
-        // records; the two-token pair is how that is avoided in both themes.
-        .buttonStyle(.borderedProminent)
-        .tint(Color.danger)
+        // integration. The ink is not a fill: white on it is 2.99:1 in dark
+        // mode (``DangerInk/whiteOnTheDarkFillRatio``), and the two-token pair
+        // is how that is avoided in both themes.
+        //
+        // A style rather than `.borderedProminent` + `.tint(Color.danger)` +
+        // a colour on the label (unit ix-fill): that shape worked here, but
+        // it is three modifiers a site has to remember, and the forget card
+        // forgot the third one.
+        .buttonStyle(DangerFillButtonStyle())
     }
 }

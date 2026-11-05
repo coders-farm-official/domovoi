@@ -225,10 +225,14 @@ struct DomovoiApp: App {
                 //
                 // ``Color/brandInk`` is 5.65:1 on white and is what the
                 // stylesheet has for "the brand as text or a meaningful
-                // graphic". The six `.borderedProminent` buttons name
-                // ``Color/brand`` back for their fill, because near-black
-                // ``Color/brandFg`` on the ink would be 3.08:1 — the fill
-                // role and the text role are two tokens for a reason.
+                // graphic". A filled button does not inherit it: it takes
+                // ``BrandFillButtonStyle``, which draws ``Color/brandFg`` on
+                // ``Color/brand`` itself, because near-black on the ink would
+                // be 3.08:1 and white on it is 1.91:1 in dark mode — the fill
+                // role and the text role are two tokens for a reason. A
+                // `.borderedProminent` left untinted fills with this ink and
+                // draws white on it; none is left (unit ix-fill, and
+                // `FilledButtonLabelTests` keeps it that way).
                 .tint(Color.brandInk)
                 // The alerts' hint: the model goes into the environment for
                 // Home's timers card to draw a row from, and the lifecycle
@@ -423,10 +427,11 @@ extension Color {
     /// **6.08:1** on white, **6.30:1** on the dark canvas.
     ///
     /// **This is an ink, not a fill.** A destructive button filled with it
-    /// draws its own label at 3.08:1 in dark mode, which is why
+    /// draws its own white label at 2.99:1 in dark mode, which is why
     /// `DropInCallSheet` shipped `.bordered` with `.tint(Color.errInk)` until
     /// the pair existed; the fill is ``Color/danger`` with ``Color/dangerFg``
-    /// on it, and that is what that button uses now. The note is
+    /// on it, drawn by ``DangerFillButtonStyle``, and that is what that
+    /// button uses now. The note is
     /// here because there is no `Color.err` or `Color.errFill` to grep for —
     /// the stylesheet calls the pair `--danger`, so this target does too, and
     /// anyone looking for Android's `colors.err` lands on this token first.
@@ -449,12 +454,15 @@ extension Color {
     /// Android's white (white on the dark fill is 2.99:1), and why it is two
     /// tokens.
     ///
-    /// Its one caller is `ios/Domovoi/DropIn/DropInCallSheet.swift`'s `leave`
-    /// button — `.borderedProminent` with `.tint(Color.danger)` and the label
-    /// in ``Color/dangerFg``, which is Android's filled `hang up`
-    /// (`PhoneDropinCall.kt:180-183`). It had none on `wf/ios-b-shell`,
-    /// because that file was the rooms unit's; the call site was typed on the
-    /// batch's integration branch (shell's DECISIONS §3b, `INTEGRATION.md`).
+    /// Its one caller is ``DangerFillButtonStyle``, which draws it with
+    /// ``Color/dangerFg`` on it as one pair; that style's two callers are
+    /// `ios/Domovoi/DropIn/DropInCallSheet.swift`'s `leave` (Android's filled
+    /// `hang up`, `PhoneDropinCall.kt:180-183`) and the forget-server card's
+    /// `forget` in `ConnectionDialogView.swift` (`ForgetServer.kt:101-104`).
+    /// The token had no caller on `wf/ios-b-shell`, because the drop-in file
+    /// was the rooms unit's; the first call site was typed on the batch's
+    /// integration branch (shell's DECISIONS §3b, `INTEGRATION.md`), and both
+    /// moved onto the style in unit ix-fill.
     static let danger = Color(DangerInk.fill)
 
     /// `--danger-fg`: the text drawn **on** ``Color/danger``, the same way

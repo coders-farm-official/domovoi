@@ -432,12 +432,7 @@ struct RoomsBroadcastCard: View {
         Button(RoomsStrings.broadcastButton) {
             model.broadcast()
         }
-        .buttonStyle(.borderedProminent)
-        // The app's tint is `brandInk`, so a prominent button would fill with
-        // the ink and draw near-black `brandFg` on it at 3.08:1. The fill is
-        // the other token, and 8.49:1 with this label colour.
-        .tint(Color.brand)
-        .foregroundStyle(Color.brandFg)
+        .buttonStyle(BrandFillButtonStyle())
         .font(.subheadline)
         .fixedSize(horizontal: false, vertical: true)
         .frame(minHeight: 44)

@@ -562,19 +562,19 @@ struct AssistantPhoneConversationView: View {
                     // the literal a change to the rule applied to the house's
                     // composer only (review round 2, finding 3).
                     //
-                    // The label's colour is named rather than inherited.
-                    // `.borderedProminent` draws a WHITE label on the accent,
-                    // and white on `Color.brand` is **2.05:1** — the arithmetic
-                    // is in the token's own doc comment, which says to use
-                    // ``Color/brandFg`` for text drawn on the amber.
+                    // ``BrandFillButtonStyle``, which draws ``Color/brandFg``
+                    // on ``Color/brand`` itself — the house composer's send
+                    // (`ChatConversationView.swift`) is the same style. This
+                    // was a `.borderedProminent` with the colour named on the
+                    // label's `Text`, which worked (a prominent button draws
+                    // a WHITE label otherwise, 2.05:1 on the amber) and was one
+                    // more site that had to remember it (unit ix-fill).
                     Button {
                         send()
                     } label: {
-                        Text(ChatStrings.send).foregroundStyle(Color.brandFg)
+                        Text(ChatStrings.send)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .tint(Color.brand)
-                    .frame(minHeight: 44)
+                    .buttonStyle(BrandFillButtonStyle())
                 }
                 // **Nothing at all with a blank composer.** Android does not
                 // draw a greyed send there either — with a blank draft the

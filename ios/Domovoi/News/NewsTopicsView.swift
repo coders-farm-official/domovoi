@@ -154,13 +154,10 @@ struct NewsTopicsCardView: View {
             .accessibilityIdentifier("news-freeform")
 
             if detail.canAddTopic {
-                // The poll button's pair: `.borderedProminent` draws a white
-                // label, which is 2.05:1 on the amber, and `brandFg` is the
-                // measured 8.49:1 one.
+                // The poll button's style: ``Color/brandFg`` on
+                // ``Color/brand``, 8.50:1, both drawn by the style.
                 Button(NewsStrings.addTopic) { detail.addFreeform() }
-                    .buttonStyle(.borderedProminent)
-                    .tint(Color.brand)
-                    .foregroundStyle(Color.brandFg)
+                    .buttonStyle(BrandFillButtonStyle())
                     .frame(minHeight: 44)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("news-add-topic")
@@ -474,9 +471,7 @@ struct NewsFeedsListView: View {
             // ``freeform``'s note says why for both.
             if feeds.canAddFeed {
                 Button(NewsStrings.addFeed) { feeds.addFeed() }
-                    .buttonStyle(.borderedProminent)
-                    .tint(Color.brand)
-                    .foregroundStyle(Color.brandFg)
+                    .buttonStyle(BrandFillButtonStyle())
                     .frame(minHeight: 44)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("news-add-feed-\(feeds.topicID)")

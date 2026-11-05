@@ -161,12 +161,7 @@ struct HomeAnnounceView: View {
             .frame(minWidth: 52, minHeight: 44)
             .contentShape(.rect)
         }
-        .buttonStyle(.borderedProminent)
-        // The app's tint is `brandInk`, so a prominent button would fill with
-        // the ink and draw near-black `brandFg` on it at 3.08:1. The fill is
-        // the other token, and 8.49:1 with this label colour.
-        .tint(Color.brand)
-        .foregroundStyle(Color.brandFg)
+        .buttonStyle(BrandFillButtonStyle())
         .disabled(!enabled)
         .accessibilityLabel(HomeAnnounceStrings.announceInEveryRoom)
     }

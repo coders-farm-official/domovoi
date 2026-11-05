@@ -181,9 +181,7 @@ struct PrintSheetView: View {
             Button(job.sending ? PrintingStrings.sending : PrintingStrings.printButton) {
                 job.submit()
             }
-            .buttonStyle(.borderedProminent)
-            .tint(Color.brand)
-            .foregroundStyle(Color.brandFg)
+            .buttonStyle(BrandFillButtonStyle())
             .disabled(!job.canPrint)
             if job.previewing {
                 ProgressView()
