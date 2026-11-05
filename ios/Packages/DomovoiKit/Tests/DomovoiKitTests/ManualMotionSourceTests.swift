@@ -106,14 +106,78 @@ final class ManualMotionSourceTests: XCTestCase {
     /// is one `.animation` on the stage, keyed on the one value that moves the
     /// camera; without it the camera cuts at every setting, and with `focus`
     /// replaced by anything else it glides on the wrong change.
+    ///
+    /// Revision 2: the count alone passed with the modifier moved off `body`
+    /// onto `ManualMapWires` (the wires glide, the nodes cut —
+    /// `wf/ios-b-mx-manual-v2sab1` @ 49c23cd0), so it is also pinned as the
+    /// **last** modifier of `body`: the text runs straight into `body`'s
+    /// closing brace and the next member, `shownIDs`.
     func testTheStageGlidesOnTheFocusAndCutsUnderReduceMotion() {
         let stage = Self.span("struct ManualMapStage:", in: "ManualMapView.swift") ?? ""
+        let glide = ".animation(reduceMotion?nil:.manualGlide,value:focus?.id)"
         XCTAssertEqual(
-            1, Self.occurrences(of: ".animation(reduceMotion?nil:.manualGlide,value:focus?.id)", in: stage),
+            1, Self.occurrences(of: glide, in: stage),
             "`ManualMapStage` no longer carries `.animation(reduceMotion ? nil : "
                 + ".manualGlide, value: focus?.id)` exactly once: the map → "
                 + "cluster move is a cut at every setting, or glides on the wrong "
                 + "change, or glides under Reduce Motion where Android's is `snap()`"
+        )
+        XCTAssertEqual(
+            1, Self.occurrences(of: glide + "}privatevarshownIDs", in: stage),
+            "the glide is no longer `ManualMapStage.body`'s outermost modifier: "
+                + "on anything narrower (the wires alone, say) the rest of the "
+                + "stage cuts"
+        )
+    }
+
+    /// **Reduce Motion reaches the stage** (revision 2).
+    ///
+    /// The ternaries above read the stage's `reduceMotion`; this pins where
+    /// that comes from. `ManualLevelView` reads the platform's answer
+    /// (Android's `ANIMATOR_DURATION_SCALE == 0`, `ManualScreen.kt:292`) and
+    /// hands it to `ManualMapPage`, which hands it to `ManualMapStage`. With
+    /// either hand-off replaced by `false` the map glides under Reduce Motion
+    /// and every reading above stays green — the verifier's sabotage
+    /// `wf/ios-b-mx-manual-v2sab1` @ 49c23cd0 did exactly that and passed.
+    /// The word counts stop a local `let reduceMotion = false` shadowing the
+    /// one passed in.
+    func testReduceMotionIsHandedFromTheEnvironmentToTheStage() {
+        let level = Self.span("struct ManualLevelView:", in: "ManualView.swift") ?? ""
+        XCTAssertEqual(
+            1, Self.occurrences(of: "@Environment(\\.accessibilityReduceMotion)privatevarreduceMotion", in: level),
+            "`ManualLevelView` no longer reads Reduce Motion from the environment"
+        )
+        XCTAssertEqual(
+            1,
+            Self.occurrences(
+                of: "ManualMapPage(doc:doc,manual:manual,focus:doc.topic(place.topicID),reduceMotion:reduceMotion,scrolls:scrolls)",
+                in: level
+            ),
+            "`ManualLevelView` no longer passes the environment's Reduce Motion to `ManualMapPage`"
+        )
+        XCTAssertEqual(
+            3, Self.occurrences(of: "reduceMotion", in: level),
+            "`ManualLevelView` names `reduceMotion` other than in its declaration and its one hand-off"
+        )
+        let page = Self.span("struct ManualMapPage:", in: "ManualPageView.swift") ?? ""
+        XCTAssertEqual(1, Self.occurrences(of: "letreduceMotion:Bool", in: page), "`ManualMapPage` no longer takes Reduce Motion in")
+        XCTAssertEqual(
+            1,
+            Self.occurrences(
+                of: "ManualMapStage(doc:doc,manual:manual,focus:focus,reduceMotion:reduceMotion)",
+                in: page
+            ),
+            "`ManualMapPage` no longer passes its Reduce Motion to `ManualMapStage`"
+        )
+        XCTAssertEqual(
+            3, Self.occurrences(of: "reduceMotion", in: page),
+            "`ManualMapPage` names `reduceMotion` other than in its property and its one hand-off"
+        )
+        let stage = Self.span("struct ManualMapStage:", in: "ManualMapView.swift") ?? ""
+        XCTAssertEqual(1, Self.occurrences(of: "letreduceMotion:Bool", in: stage), "`ManualMapStage` no longer takes Reduce Motion in")
+        XCTAssertEqual(
+            0, Self.occurrences(of: "reduceMotion=", in: stage),
+            "`ManualMapStage` shadows its Reduce Motion with a local"
         )
     }
 
@@ -185,6 +249,12 @@ final class ManualMotionSourceTests: XCTestCase {
         let wires = Self.span("struct ManualMapWires:", in: "ManualMapView.swift") ?? ""
         XCTAssertTrue(wires.hasPrefix("structManualMapWires:View,Animatable{"), "`ManualMapWires` is no longer `Animatable`")
         XCTAssertTrue(wires.contains(pair), "`ManualMapWires` no longer animates the camera's three numbers")
+        // Revision 2: the getter alone passed with a no-op setter
+        // (`set { _ = newValue }`), which drops every interpolated frame, so
+        // the camera cuts (v2sab1 @ 49c23cd0). SwiftUI animates by setting.
+        let setter = "set{camera=ManualCamera(k:newValue.first,x:newValue.second.first,y:newValue.second.second)}"
+        XCTAssertEqual(1, Self.occurrences(of: setter, in: effect), "`ManualCameraEffect`'s animatable data no longer sets the camera, so each frame is dropped and the nodes cut")
+        XCTAssertEqual(1, Self.occurrences(of: setter, in: wires), "`ManualMapWires`' animatable data no longer sets the camera, so each frame is dropped and the wires cut")
     }
 
     /// **The map and every cluster are one arm, so one stage.**
