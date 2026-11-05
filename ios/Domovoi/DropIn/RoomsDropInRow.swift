@@ -84,7 +84,7 @@ struct RoomsDropInRow: View {
                 // name: `Contrast nearly passed … label='drop in from this
                 // phone'` (`testRooms_DropInFromThisPhoneIsHeardAndHungUp
                 // .log:537-544`). The picture settles what the frame cannot:
-                // in `att/…/rooms-27-dropin-ended….png` the capsule is drawn
+                // in `att/…/rooms-27-dropin-ended….png` the control is drawn
                 // whole, nothing over it and nothing clipping its glyphs, so
                 // the sample is of its colours — `#975800` on `#ECE1D1`,
                 // **4.38:1**, under the 4.5:1 body text needs. (``Color
@@ -107,8 +107,12 @@ struct RoomsDropInRow: View {
                 .foregroundStyle(canDropIn ? Color.brandInk : Color.fgMuted)
                 .padding(.horizontal, 12)
                 .frame(minHeight: 44)
+                // The shape `.bordered` drew, kept: a continuous rounded
+                // rectangle rather than a capsule, because this label wraps
+                // at an accessibility size and a pill around three lines of
+                // text is not what that style would have drawn.
                 .overlay(
-                    Capsule().strokeBorder(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(
                         (canDropIn ? Color.brandInk : Color.fgMuted).opacity(0.45),
                         lineWidth: 1
                     )
