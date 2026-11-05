@@ -3167,7 +3167,26 @@ final class StubHouseUITests: XCTestCase {
         // from the stub's `WATCHED` store, which starts empty and is written
         // by whichever earlier case last saved a position (`stubhouse.py:465`,
         // `:1311`), and both trains that kept this case's tree show
-        // `0:05 / 0:40`. Measured: the `resume` leaf was never found in
+        // `0:05 / 0:40`.
+        //
+        // **The duration is matched by shape too, for the same reason the
+        // position is.** The stub gives `a long one.mp4` forty seconds and
+        // every other video seven (`stubhouse.py:1916`), and the strip's
+        // first entry is whichever video an earlier case watched last — so
+        // pinning `/ 0:40` would turn a run that happened to watch one of the
+        // short videos into a red with nothing wrong. What this leaf is for
+        // is the **height** of a `position / duration` line at two type
+        // sizes; which video it is belongs to the cases that assert the
+        // strip's content.
+        //
+        // The shape asked for is the two-field `m:ss / m:ss` form
+        // ``VideoRow/resumeLine`` builds for this fixture's seconds
+        // (`VideoModels.swift:124`). Its other branch — the position alone,
+        // when the server sent no usable duration — does not match, and
+        // should not: the stub always sends one, so a resume line that has
+        // lost its duration is a change worth going red for, not noise.
+        //
+        // Measured: the `resume` leaf was never found in
         // either train — I004 printed `SCALE [large]` and `SCALE [AX5]` with
         // five lines each and I005 printed five `SCALE [large]` lines and no
         // AX5 line at all (it lost the app first) — so one of the five leaves
@@ -3194,7 +3213,7 @@ final class StubHouseUITests: XCTestCase {
             ("strip-heading", "recently played"),
             ("caption", "a long one.mp4"),
             ("caption-long", "01 she said \"no\".mp4"),
-            ("resume", "~^[0-9]+:[0-9]{2} / 0:40$"),
+            ("resume", "~^[0-9]+:[0-9]{2} / [0-9]+:[0-9]{2}$"),
         ]
         // **One read of the tree a flick, not six queries a flick.**
         //
@@ -3334,6 +3353,7 @@ final class StubHouseUITests: XCTestCase {
         // resume line lives *inside* the strip — in the tree above both are
         // in the same `ScrollView` — so a heading found with no resume line
         // beside it is a label that moved, and that is red.
+        //
         // `{ $0.0 }`, not `\.0`: a key path cannot name a tuple element.
         var never = leaves.map { $0.0 }.filter { small[$0] == nil }
         if small["strip-heading"] == nil, small["resume"] == nil {
