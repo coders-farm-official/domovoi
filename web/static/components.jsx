@@ -3087,7 +3087,7 @@ const FirstRunWelcome = () => {
                    onChange={(e) => setConfirm(e.target.value)} onKeyDown={enter}/>
           </div>
           <div className="hint first-run-why">
-            The setup code is used once, today. The admin password is yours to
+            The setup code is used once, to claim Domovoi. The admin password is yours to
             keep: Domovoi asks for it only when someone changes settings.
           </div>
           {err && <div className="err">{err}</div>}
