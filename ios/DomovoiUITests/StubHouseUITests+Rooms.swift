@@ -1,3 +1,4 @@
+import UIKit
 import XCTest
 
 /// Settings → Rooms, driven against the stub house.
@@ -2310,41 +2311,93 @@ extension StubHouseUITests {
         }
         evidence(app, "rooms-31-audit-roster")
         let rosterShot = roomsWindowShot(app)
-        // **Everything but Dynamic Type first, then Dynamic Type on its own**
-        // (train I006, revised). This page sits at its maximum scroll offset
-        // (D57, above), and the audit's own Dynamic Type pass shrinks the
-        // content, so the offset is clamped; when the size comes back the
-        // page rests **33 points lower**. I006 was the only train whose
-        // roster ran Apple's contrast pass *after* that pass (its log prints
-        // the 12 Dynamic Type findings first; I001-I005, S004-S010 and X005
-        // all put contrast first), and it returned **nine** findings at
-        // shifted frames: eight `Contrast failed` against elements whose
-        // pixels pass — `Harvest Moon` black on grey at 18.60:1, `Broadcast`
-        // the same — every finding frame exactly +33.0 from this shot's tree
-        // and the boxes landing on the gaps between cards, and one anonymous
-        // `Potentially inaccessible text` (case log :686), which is **element
-        // detection** sampling the same moved page (`i006-diag/rooms.md`,
-        // red 1). Frames from one layout, pixels from another.
+        // The picture the foot's own ink is read from, in the same breath as
+        // the shot, while D57's scroll has the foot drawn whole.
+        let rosterPicture = app.screenshot().image.cgImage
+        // **The audit moves this page, so its pixel findings are retaken
+        // where it leaves it** (trains I006 and I008).
         //
-        // So it is the type-size pass that is isolated, not contrast: the
-        // first call runs every audit type that reads the page *as laid out*
-        // (contrast, element detection, hit region, clipping, traits…), with
-        // nothing in it that re-lays the page out, so its frames and pixels
-        // are the ones this shot holds; the second runs `.dynamicType` alone,
-        // last, where its re-layout can move nothing still to be measured.
-        // The floor of 12 is all `Dynamic Type …` with no element, so it is
-        // counted out of the second call and `floorAndRest` reads the
-        // concatenation by headline exactly as it read one pass.
-        // ``roomsContrastWithNoPixels(_:on:after:)`` is **not** widened for
-        // it: it rightly excused none of the eight, whose pixels were visible.
-        let rosterLaidOut = try auditIssues(
-            app,
-            "rooms-roster",
-            types: XCUIAccessibilityAuditType.all.subtracting(.dynamicType)
-        )
-        let rosterTypeSize = try auditIssues(app, "rooms-roster", types: .dynamicType)
-        let roster = rosterLaidOut + rosterTypeSize
-        let rosterSplit = Self.floorAndRest(roster)
+        // This page sits at its maximum scroll offset (D57, above). Some
+        // audit type re-lays the page out at smaller type sizes, the offset
+        // is clamped, and when the size comes back the page rests **33.0
+        // points lower**. The recording proves it frame by frame:
+        //  * I008's frames shift 99 pixels (33 points at 3x) across the first
+        //    audit call.
+        //  * They shift 0 across the second. That call started from the
+        //    clamped offset, so the clamp had nothing left to take.
+        //  * I005's recording makes the identical move.
+        //
+        // Since I006, Apple's pixel-sampled checks have straddled that move:
+        // frames from one layout, pixels from the other. Both trains returned
+        // the same nine findings at the same frames, each exactly +33.0 from
+        // this shot's tree:
+        //  * eight `Contrast failed`, against elements this picture measures
+        //    at 4.99:1 to 18.60:1;
+        //  * one `Potentially inaccessible text | element: nil`.
+        //
+        // **Isolating `.dynamicType` did not help** (I008 ran everything but
+        // `.dynamicType`, then `.dynamicType` alone). The first call still
+        // swept the type sizes and still moved the page. It also returned the
+        // same nine. And `.dynamicType` alone returned none of the 12
+        // anonymous findings the floor below counts, so that split also
+        // changed what the floor measures.
+        //
+        // Why Apple's sampling changed in I006 is not established. The tree,
+        // the pictures and the move are identical to I005's
+        // (`i008-rooms/REPORT.md`). So this does not depend on the order
+        // Apple runs its checks in. It depends on the one thing measured: a
+        // page at rest is the same before and after an audit.
+        //  * Audit once, as every train up to I006 did. That call keeps the
+        //    floor's shape and judges everything that is not a sample of
+        //    pixels.
+        //  * If the page moved, the pixel-sampled findings are **not a
+        //    measurement**. Each is printed with this case's own reading of
+        //    the element's ink, and fails if that reading is under 4.5:1.
+        //  * Then they are retaken at the position the audit leaves the page
+        //    in. A position the audit cannot move, which the retake checks.
+        let rosterFirst = try auditIssues(app, "rooms-roster")
+        let rosterSplit = Self.floorAndRest(rosterFirst)
+        let rosterSettled = roomsWindowShot(app)
+        let rosterMoves = Self.roomsPageMoves(from: rosterShot, to: rosterSettled)
+        let rosterOther = rosterSplit.rest.filter { !Self.roomsSamplesPixels($0) }
+        var rosterPixelLines = rosterSplit.rest.filter(Self.roomsSamplesPixels)
+        var rosterJudgedOn = rosterShot
+        if rosterMoves.isEmpty {
+            print("ROOMS AUDIT roster: the audit left the page where it was — one pass is the measurement")
+        } else {
+            print(
+                "ROOMS AUDIT roster: the audit moved the page — "
+                    + rosterMoves.map { "'\($0.label)' by \($0.dy)" }.joined(separator: ", ")
+                    + " — so its \(rosterPixelLines.count) pixel-sampled finding(s) are retaken there"
+            )
+            roomsAssertOwnInk(
+                rosterPixelLines,
+                on: rosterShot,
+                picture: rosterPicture,
+                window: app.frame,
+                name: "rooms-roster"
+            )
+            evidence(app, "rooms-31-audit-roster-settled")
+            let retake = try auditIssues(app, "rooms-roster-settled")
+            let movedAgain = Self.roomsPageMoves(from: rosterSettled, to: roomsWindowShot(app))
+            XCTAssertTrue(
+                movedAgain.isEmpty,
+                "the retaken roster audit moved the page as well — "
+                    + movedAgain.map { "'\($0.label)' by \($0.dy)" }.joined(separator: ", ")
+                    + " — so its contrast findings are not a measurement either"
+            )
+            // Only the retake's pixel samples are judged here. Everything
+            // else it returns is the same fact as the first call's (a font or
+            // a geometry is true at either position), and the first call has
+            // already judged it, so this is printed and not counted twice.
+            let retakeSplit = Self.floorAndRest(retake)
+            for line in retakeSplit.rest where !Self.roomsSamplesPixels(line) {
+                print("ROOMS AUDIT roster retake (judged in the first pass) :: \(line)")
+            }
+            print("ROOMS AUDIT roster retake floor=\(retakeSplit.floor) (not counted)")
+            rosterPixelLines = retakeSplit.rest.filter(Self.roomsSamplesPixels)
+            rosterJudgedOn = rosterSettled
+        }
         // **The other end of D57's scroll.** This page is 50.3 points taller
         // than its viewport (content 683 in a 632.7-point band, train I005's
         // roster tree), so bringing the foot wholly onto the window puts the
@@ -2354,11 +2407,24 @@ extension StubHouseUITests {
         // all. ``roomsContrastWithNoPixels(_:on:after:)`` holds the whole
         // measurement and what it refuses to excuse; the lines it takes out
         // are printed with their frames, never dropped in silence.
-        let rosterSeen = roomsContrastWithNoPixels(rosterSplit.rest, on: rosterShot, after: app)
-        let rosterRest = roomsOursOnly(rosterSeen.measured)
+        let rosterSeen = roomsContrastWithNoPixels(rosterPixelLines, on: rosterJudgedOn, after: app)
+        // **And the foot, where the retake has to leave it.** At the settled
+        // position the page is drawn 33 points lower than at D57's, which
+        // puts `back to Rooms & devices` across the page's foot again. On train I008's numbers that
+        // is 743-787 against a foot at 770. That is D57's clipped measurement,
+        // and this one element is read off the D57 picture instead.
+        let rosterFoot = roomsClippedFootMeasured(
+            rosterSeen.measured,
+            clippedOn: rosterJudgedOn,
+            drawnWholeOn: rosterShot,
+            picture: rosterPicture,
+            window: app.frame
+        )
+        let rosterRest = roomsOursOnly(rosterOther + rosterFoot.kept)
         print(
             "ROOMS AUDIT roster floor=\(rosterSplit.floor) rest=\(rosterSplit.rest.count) "
-                + "no-pixels=\(rosterSeen.noPixels.count) ours=\(rosterRest.count)"
+                + "moved=\(!rosterMoves.isEmpty) no-pixels=\(rosterSeen.noPixels.count) "
+                + "clipped-foot=\(rosterFoot.allowed.count) ours=\(rosterRest.count)"
         )
 
         XCTAssertTrue(roomsOpenRoom(app, "kitchen"), "the kitchen card did not open")
@@ -2460,11 +2526,17 @@ extension StubHouseUITests {
         // the claim that those are the platform's and not a real defect.
         // Still an equality, for the reason below: a floor that grows again
         // is the thing worth seeing.
+        //
+        // **It is counted from the first, single-pass call only.** That call
+        // has the shape I004, I005 and I006 each measured at twelve. The
+        // retake is not counted, because it would count the same bars twice.
+        // I008's split (`.dynamicType` alone) returned **0**, which is why
+        // the split is gone.
         XCTAssertEqual(
             rosterSplit.floor,
             12,
             "the Rooms roster's anonymous floor is \(rosterSplit.floor), not the "
-                + "12 measured on train I004: " + roster.joined(separator: " | ")
+                + "12 measured on train I004: " + rosterFirst.joined(separator: " | ")
         )
         //
         // **This number was measured before D56**, when the detail was drawn
@@ -2797,6 +2869,263 @@ extension StubHouseUITests {
             if noPixels(line) { off.append(line) } else { measured.append(line) }
         }
         return (off, measured)
+    }
+
+    // MARK: - an audit that moves the page it is measuring (I006, I008)
+
+    /// Whether a finding is one of the kinds Apple reads **off pixels**:
+    /// either of the two contrast headlines, or element detection's "text
+    /// here belonging to no element". These are the kinds a page that moves
+    /// under the audit can make up. A font, a hit area or a trait is a fact
+    /// about the view at any scroll position, and is not one of them.
+    static func roomsSamplesPixels(_ line: String) -> Bool {
+        line.hasPrefix(roomsContrastFailed)
+            || line.hasPrefix(roomsNearlyPassed)
+            || line.hasPrefix(roomsUnexposedText)
+    }
+
+    /// Every page element that is in both shots under a label it carries
+    /// **exactly once** in each, and whose frame differs between them by
+    /// more than half a point.
+    ///
+    /// An empty answer is what "the page did not move" means here. Labels
+    /// that change as the stub plays (`1:41 / 5:02`, and the kitchen card
+    /// whose label carries it) appear once in each shot under two different
+    /// strings, so they are not compared, and they need no special case.
+    /// Built from `filter` and `first`, never by indexing a list.
+    static func roomsPageMoves(
+        from before: RoomsWindowShot,
+        to after: RoomsWindowShot
+    ) -> [(label: String, dy: CGFloat)] {
+        var moves: [(label: String, dy: CGFloat)] = []
+        for one in before.pageElements {
+            guard before.pageElements.filter({ $0.label == one.label }).count == 1 else { continue }
+            let there = after.pageElements.filter { $0.label == one.label }
+            guard there.count == 1, let now = there.first else { continue }
+            let dx = now.frame.minX - one.frame.minX
+            let dy = now.frame.minY - one.frame.minY
+            if abs(dx) > 0.5 || abs(dy) > 0.5 || abs(now.frame.height - one.frame.height) > 0.5 {
+                moves.append((label: one.label, dy: dy))
+            }
+        }
+        return moves
+    }
+
+    /// WCAG's floor for body text, which every reading below is held to
+    /// whatever the text's size, as the Manual's measured allowance holds its
+    /// own (`StubHouseUITests+Manual.swift`, `manualContrastFloor`).
+    static let roomsContrastFloor = 4.5
+
+    /// This case's own reading of every element that a pixel-sampled finding
+    /// names, at the frame where the element was drawn when `picture` was
+    /// taken. Each reading is printed, and a reading under 4.5:1 **fails**.
+    ///
+    /// This is what keeps a retake from hiding a colour. A finding taken
+    /// across the page's move is not a measurement, but the element it names
+    /// is drawn whole in `picture` (D57 brought the page there). If its ink
+    /// really is under the floor, this fails on that ink, retake or no
+    /// retake. A finding with no element has nothing to read, and is printed.
+    /// Its retake is the measurement.
+    @MainActor
+    func roomsAssertOwnInk(
+        _ lines: [String],
+        on shot: RoomsWindowShot,
+        picture: CGImage?,
+        window: CGRect,
+        name: String
+    ) {
+        for line in lines {
+            guard let label = Self.roomsLabel(in: line) else {
+                print("ROOMS AUDIT \(name) across-the-move, retaken :: \(line)")
+                continue
+            }
+            let twins = shot.pageElements.filter {
+                $0.label == label && shot.page.contains($0.frame) && $0.frame.minY >= shot.bar.maxY - 0.5
+            }
+            guard let picture, !twins.isEmpty else {
+                print(
+                    "ROOMS AUDIT \(name) across-the-move, retaken :: \(line) — no whole "
+                        + "frame for '\(label)' in the shot, or no picture, so not read"
+                )
+                continue
+            }
+            for twin in twins {
+                guard let reading = Self.roomsLeafInk(picture, window: window, frame: twin.frame) else {
+                    print(
+                        "ROOMS AUDIT \(name) across-the-move, retaken :: '\(label)' at "
+                            + "\(twin.frame) holds only its paper"
+                    )
+                    continue
+                }
+                print(
+                    "ROOMS AUDIT \(name) across-the-move, retaken, measured :: '\(label)' at "
+                        + "\(twin.frame) ink \(reading.ink) on \(reading.paper) "
+                        + String(format: "%.2f", reading.ratio) + ":1 — \(line)"
+                )
+                XCTAssertGreaterThanOrEqual(
+                    reading.ratio,
+                    Self.roomsContrastFloor,
+                    "\(name): '\(label)' measures " + String(format: "%.2f", reading.ratio)
+                        + ":1 (\(reading.ink) on \(reading.paper)) where it was drawn at "
+                        + "\(twin.frame). Apple's finding against it was taken across the "
+                        + "page's move, but this reading was not, so the colour is the defect"
+                )
+            }
+        }
+    }
+
+    /// The one **measured allowance** on the roster, by signature:
+    /// `back to Rooms & devices` clipped by the page's foot at the position
+    /// the audit leaves the page in.
+    ///
+    /// A line is allowed only when **all** of these hold, and each is
+    /// printed:
+    ///  * its headline is one of the two contrast headlines;
+    ///  * its label is exactly ``ShellStringsUnderTest/backToRooms``;
+    ///  * in `clippedOn`, every page element with that label **straddles**
+    ///    the page's foot, partly above it and partly below. This is D57's
+    ///    geometry: "half a button against whatever is past the clip is not
+    ///    a measurement of the button";
+    ///  * in `drawnWholeOn`, taken with `picture`, that element is wholly
+    ///    inside the page and below the bar;
+    ///  * and its ink in `picture` measures **4.5:1 or better**.
+    ///
+    /// Everything else, including this label at any other geometry, is
+    /// kept, so it fails its case.
+    @MainActor
+    func roomsClippedFootMeasured(
+        _ lines: [String],
+        clippedOn settled: RoomsWindowShot,
+        drawnWholeOn whole: RoomsWindowShot,
+        picture: CGImage?,
+        window: CGRect
+    ) -> (allowed: [String], kept: [String]) {
+        let foot = ShellStringsUnderTest.backToRooms
+        var allowed: [String] = []
+        var kept: [String] = []
+        for line in lines {
+            guard line.hasPrefix(Self.roomsContrastFailed) || line.hasPrefix(Self.roomsNearlyPassed),
+                  Self.roomsLabel(in: line) == foot
+            else {
+                kept.append(line)
+                continue
+            }
+            let edge = settled.page.maxY
+            let clipped = settled.pageElements.filter { $0.label == foot }
+            let straddles = !clipped.isEmpty && clipped.allSatisfy {
+                $0.frame.minY < edge - 0.5 && $0.frame.maxY > edge + 0.5
+            }
+            let drawn = whole.pageElements.filter {
+                $0.label == foot && whole.page.contains($0.frame) && $0.frame.minY >= whole.bar.maxY - 0.5
+            }
+            guard straddles, let picture, let at = drawn.first,
+                  let reading = Self.roomsLeafInk(picture, window: window, frame: at.frame)
+            else {
+                print(
+                    "ROOMS AUDIT roster clipped-foot NOT allowed :: \(line) — straddles=\(straddles) "
+                        + "at \(clipped.map { "\($0.frame)" }.joined(separator: ", ")) against the "
+                        + "foot at \(edge); drawn whole at "
+                        + "\(drawn.map { "\($0.frame)" }.joined(separator: ", "))"
+                )
+                kept.append(line)
+                continue
+            }
+            let summary = "ink \(reading.ink) on \(reading.paper) "
+                + String(format: "%.2f", reading.ratio) + ":1"
+            guard reading.ratio >= Self.roomsContrastFloor else {
+                print("ROOMS AUDIT roster clipped-foot NOT allowed, measured \(summary) :: \(line)")
+                kept.append(line)
+                continue
+            }
+            print(
+                "ROOMS AUDIT roster clipped-foot, measured :: \(line) — clipped at "
+                    + "\(clipped.map { "\($0.frame)" }.joined(separator: ", ")) by the page's foot "
+                    + "at \(edge); drawn whole at \(at.frame) before the audit: \(summary)"
+            )
+            allowed.append(line)
+        }
+        return (allowed, kept)
+    }
+
+    /// One element's ink against its paper, off a screenshot. The paper is
+    /// the most common colour in the element's frame. The ink is whichever
+    /// colour covering at least 0.5% of the frame contrasts most with the
+    /// paper. Nil when nothing but the paper covers that much: a frame with
+    /// nothing drawn in it.
+    ///
+    /// This is the same reading as the Manual's `manualLeafInk`, which is
+    /// private to that file. Run over train I008's roster picture, it gives
+    /// `Harvest Moon` and `Broadcast` `#000000` on `#F1F1F2` 18.60:1,
+    /// `-48 dBm · 72 Mbit/s` `#1E7729` 4.99:1, `active now`, `3h ago` and `—`
+    /// `#58554F` 6.58:1, `broadcast` `#281600` on `#F2A618` 8.50:1, and the
+    /// foot `#975800` on `#FFFFFF` 5.66:1. The pixels are read from an
+    /// iterator, never by indexing an array: a trap here ends the whole run.
+    static func roomsLeafInk(
+        _ image: CGImage,
+        window: CGRect,
+        frame: CGRect
+    ) -> (ink: String, paper: String, ratio: Double)? {
+        guard window.width > 0, window.height > 0 else { return nil }
+        let sx = CGFloat(image.width) / window.width
+        let sy = CGFloat(image.height) / window.height
+        let box = CGRect(
+            x: (frame.minX - window.minX) * sx,
+            y: (frame.minY - window.minY) * sy,
+            width: frame.width * sx,
+            height: frame.height * sy
+        ).integral.intersection(CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        guard !box.isNull, box.width >= 2, box.height >= 2, let crop = image.cropping(to: box) else {
+            return nil
+        }
+        let width = crop.width
+        let height = crop.height
+        var bytes = [UInt8](repeating: 0, count: width * height * 4)
+        let drew = bytes.withUnsafeMutableBytes { raw -> Bool in
+            guard let context = CGContext(
+                data: raw.baseAddress,
+                width: width,
+                height: height,
+                bitsPerComponent: 8,
+                bytesPerRow: width * 4,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            ) else { return false }
+            context.draw(crop, in: CGRect(x: 0, y: 0, width: width, height: height))
+            return true
+        }
+        guard drew else { return nil }
+        var counts: [Int: Int] = [:]
+        var total = 0
+        var it = bytes.makeIterator()
+        while let r = it.next(), let g = it.next(), let b = it.next(), it.next() != nil {
+            counts[(Int(r) << 16) | (Int(g) << 8) | Int(b), default: 0] += 1
+            total += 1
+        }
+        guard total > 0, let paper = counts.max(by: { $0.value < $1.value })?.key else { return nil }
+        let enough = Double(total) * 0.005
+        let ink = counts
+            .filter { $0.key != paper && Double($0.value) >= enough }
+            .map { (key: $0.key, ratio: roomsRatio($0.key, paper)) }
+            .max(by: { $0.ratio < $1.ratio })
+        guard let ink else { return nil }
+        return (
+            ink: String(format: "#%06lX", ink.key),
+            paper: String(format: "#%06lX", paper),
+            ratio: ink.ratio
+        )
+    }
+
+    /// WCAG 2's contrast between two packed `0xRRGGBB` sRGB colours.
+    static func roomsRatio(_ a: Int, _ b: Int) -> Double {
+        func channel(_ value: Int) -> Double {
+            let v = Double(value & 0xFF) / 255
+            return v <= 0.03928 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4)
+        }
+        func luminance(_ c: Int) -> Double {
+            0.2126 * channel(c >> 16) + 0.7152 * channel(c >> 8) + 0.0722 * channel(c)
+        }
+        let (x, y) = (luminance(a), luminance(b))
+        return (max(x, y) + 0.05) / (min(x, y) + 0.05)
     }
 
     /// Where this screen's page, navigation bar and every labelled element
