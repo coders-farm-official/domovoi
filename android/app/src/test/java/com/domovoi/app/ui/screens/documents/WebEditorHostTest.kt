@@ -60,6 +60,43 @@ class WebEditorHostTest {
     }
 
     @Test
+    fun `the editor's writing follows the system text size and the print copy does not`() {
+        // Owner answer 72: the document's writing follows the system
+        // text-size setting. The page's own mechanism (font:
+        // -apple-system-body) is Apple-only and this engine drops it, so on
+        // Android the host passes the scale in. Pinned HERE as well as in the
+        // server suite's test_documents_formatted.py, because an Android
+        // change that drops the line would otherwise go red only in pytest,
+        // where an Android reviewer does not look.
+        assertTrue(src.contains("settings.textZoom = (100f * ctx.resources.configuration.fontScale).roundToInt()"))
+        assertTrue(src.contains("import kotlin.math.roundToInt"))
+        // Exactly one place sets it, and it is the editor's own factory - the
+        // print copy is paper and keeps the page's sizes. Counting the whole
+        // file is what makes that true whatever order the functions are
+        // declared in.
+        val setters = src.lines().filter { it.contains("textZoom") && !it.trim().startsWith("//") }
+        assertEquals(setters.toString(), 1, setters.size)
+        val factory = src.substringAfter("factory = { ctx ->").substringBefore("setBackgroundColor")
+        assertTrue(factory.contains("settings.textZoom"))
+        // ...and only for a DOCUMENT. The same factory builds the sheet
+        // (Univer), whose cells are canvas text textZoom cannot reach while
+        // its formula bar and in-cell editor are DOM text it does: a zoomed
+        // sheet types at double size over a grid that has not moved. The
+        // setter sits inside the per-kind gate, and the gate is false for
+        // the sheet - either one alone would let the zoom leak back.
+        val gated = Regex("""if \(kind\.followsTextSize\) \{\s*settings\.textZoom = [^\n]+\s*\}""")
+        assertTrue("the setter sits inside the per-kind gate", gated.containsMatchIn(factory))
+        assertTrue(WebEditorKind.Document.followsTextSize)
+        assertFalse("the sheet must not take the text zoom", WebEditorKind.Sheet.followsTextSize)
+        // Not pinned here, because a test that pins prose is a test that
+        // fails on a reword: the measured limit (textZoom is page-wide, so
+        // the chrome scales too and the fixed-height controls are cramped at
+        // fontScale 2.0) is recorded in the comment above the line and in
+        // web/static/doc_editor.jsx, next to the sizes it was measured
+        // against.
+    }
+
+    @Test
     fun `the print copy is released and only documents print or share`() {
         assertTrue(src.contains("ReleasingAdapter(inner) { release(view) }"))
         assertTrue(src.contains("if (!kind.share) return"))

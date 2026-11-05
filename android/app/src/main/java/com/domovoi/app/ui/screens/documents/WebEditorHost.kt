@@ -50,6 +50,7 @@ import com.domovoi.app.AppContainer
 import com.domovoi.app.net.CleartextPolicy
 import com.domovoi.app.ui.components.LoadingState
 import com.domovoi.app.ui.theme.Domovoi
+import kotlin.math.roundToInt
 import kotlinx.coroutines.runBlocking
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
@@ -58,8 +59,9 @@ import java.io.File
 
 /**
  * What differs between the two editors the shared host carries: which page
- * of the server it opens, how Back asks that page to close, and whether the
- * page may use the phone's photo picker, share sheet and print service.
+ * of the server it opens, how Back asks that page to close, whether the
+ * page may use the phone's photo picker, share sheet and print service, and
+ * whether its text follows the system text-size setting.
  */
 internal enum class WebEditorKind(
     /** The page on the server (web/static/doc.html or sheet.html). */
@@ -74,6 +76,11 @@ internal enum class WebEditorKind(
     val share: Boolean,
     /** print (PDF through Android's print service). */
     val print: Boolean,
+    /**
+     * The WebView's text zoom follows the system font scale (owner answer
+     * 72). Documents only: see the factory for why the sheet must not.
+     */
+    val followsTextSize: Boolean,
 ) {
     /** Formatted documents, Markdown and Word (web/static/doc_editor.jsx). */
     Document(
@@ -83,6 +90,7 @@ internal enum class WebEditorKind(
         pickPictures = true,
         share = true,
         print = true,
+        followsTextSize = true,
     ),
 
     /** Spreadsheets (.xlsx / .csv; web/static/sheet_editor.jsx, Univer). */
@@ -93,6 +101,7 @@ internal enum class WebEditorKind(
         pickPictures = false,
         share = false,
         print = false,
+        followsTextSize = false,
     );
 
     /** The page for one file: doc.html takes `?path=`, sheet.html `#path=`. */
@@ -215,6 +224,44 @@ internal fun WebEditorHost(app: AppContainer, relPath: String, kind: WebEditorKi
                 factory = { ctx ->
                     WebView(ctx).apply {
                         lockDown(settings)
+                        // The document's writing follows the system text-size
+                        // setting (owner answer 72). A WebView's textZoom is
+                        // 100 whatever the system font scale is, so the host
+                        // has to pass it in; the page's own `-apple-system-body`
+                        // rule is Apple-only and is dropped by this engine.
+                        // Only the document editor, never the print copy below
+                        // (a printed page is paper and keeps the page's sizes)
+                        // and never the SHEET, which this same factory also
+                        // builds: Univer draws its cells to a canvas, which
+                        // textZoom cannot reach, while its formula bar, menus
+                        // and in-cell editor are DOM, which it does - so a
+                        // zoomed sheet would type at double size over a grid
+                        // that had not moved. Answer 72 is about documents;
+                        // the sheet keeps the page's own sizes, as on iOS,
+                        // whose sheets are a native screen.
+                        //
+                        // Know what this does, because it is NOT what the
+                        // iOS half does: textZoom is a page-wide multiplier
+                        // on every computed text size, so the toolbar, the
+                        // note strip and the pop-ups scale with the writing
+                        // here, while on WebKit only the writing moves. It
+                        // cannot be scoped to one selector from the host.
+                        // Measured at fontScale 2.0 (the Android maximum)
+                        // nothing clips and the toolbar still scrolls
+                        // sideways, but the fixed-height controls are
+                        // cramped: the 13px .de-btn label becomes 26px in a
+                        // height: 32px box and .de-select truncates inside
+                        // max-width: 150px. That is a recorded limit (see
+                        // the matching comment in web/static/doc_editor.jsx).
+                        // Capping the zoom was rejected: asking for 200% and
+                        // silently getting 150% is a misleading control.
+                        // fontScale is read once in this factory, and no
+                        // activity in AndroidManifest.xml lists fontScale in
+                        // configChanges, so a change while the app runs lands
+                        // by activity recreation rather than live.
+                        if (kind.followsTextSize) {
+                            settings.textZoom = (100f * ctx.resources.configuration.fontScale).roundToInt()
+                        }
                         setBackgroundColor(android.graphics.Color.TRANSPARENT)
                         // The page handles every gesture itself (the sheet scrolls
                         // its grid under a dragging finger): no view around it may

@@ -456,7 +456,10 @@
 .de-paper p { margin: 0 0 .7em; }
 .de-paper a { color: #1a5fb4; text-decoration: underline; cursor: text; }
 .de-paper blockquote { margin: 1em 0; padding: .2em 0 .2em 1em; border-left: 3px solid #c8c8c8; color: #555; }
-.de-paper pre { background: #f5f5f4; border-radius: 6px; padding: 12px 14px; overflow-x: auto; font: 14px/1.5 ui-monospace, "JetBrains Mono", Consolas, monospace; color: #1d1d1f; }
+/* .875em, not 14px: at the page's own 16px this is the same 14px it always
+   was, and on a touch screen it follows the writing size with everything
+   else (owner answer 72). Headings, code spans and quotes were already em. */
+.de-paper pre { background: #f5f5f4; border-radius: 6px; padding: 12px 14px; overflow-x: auto; font: .875em/1.5 ui-monospace, "JetBrains Mono", Consolas, monospace; color: #1d1d1f; }
 .de-paper code { font-family: ui-monospace, "JetBrains Mono", Consolas, monospace; font-size: .92em; background: #f1f1ef; border-radius: 4px; padding: .1em .3em; }
 .de-paper pre code { background: none; padding: 0; font-size: inherit; }
 .de-paper hr { border: 0; border-top: 1px solid #d0d0d0; margin: 1.5em 0; }
@@ -521,6 +524,98 @@
   .de-paper { padding: 20px 16px 80px; box-shadow: none; min-height: 100%; max-width: none; flex: 1 0 auto; width: 100%; }
   .de-paper .ProseMirror { min-height: 60vh; }
   .de-fig[data-align="left"], .de-fig[data-align="right"] { float: none; margin: 1em auto; }
+}
+/* The document's writing follows the platform's text-size setting on a touch
+   screen (owner answer 72, under his rule 2). The phone app shows THIS page in
+   a web view rather than a native editor (answer 21), so the size has to come
+   from here or the two editors drift apart. Only the writing was stuck: the
+   chrome around it already grew with the setting.
+
+   font: -apple-system-body is the mechanism WKWebView honours: it resolves to
+   the current Dynamic Type body size and re-resolves when the setting changes
+   while the editor is open, with no host code and no bridge message. It
+   carries the system family with it, so the family is put straight back to
+   the document's own stack on the next line (a document's text must not
+   change shape with a phone setting) and the line height back to 1.6.
+
+   WHAT EACH ENGINE DOES -- the two halves of this feature are NOT the same
+   behaviour, and the difference is the thing to know before touching either:
+
+   * WebKit (iPhone, iPad). The rules below touch only the writing, so ONLY
+     the writing scales: the toolbar, the note strip and the pop-ups keep the
+     px they set for themselves. Two consequences worth knowing. The size
+     re-resolves live, mid-edit. And -apple-system-body is 17px at the DEFAULT
+     content size category, so an iPhone renders a document at 17px where a
+     desktop browser renders it at 16px -- the two platforms no longer match
+     at their defaults.
+   * Chromium (Android WebView). -apple-system-body is an invalid value there,
+     so the whole shorthand is dropped and the 16px rule above still stands.
+     That is why Android's half is WebSettings.textZoom in the host
+     (WebEditorHost.kt) and not more CSS -- and textZoom is a PAGE-WIDE
+     multiplier on every computed text size, so on Android the CHROME scales
+     with the writing. It cannot be scoped to one selector from the host.
+     Measured in Chromium at 375x812 with this stylesheet, label sizes scaled
+     by hand to stand in for textZoom 200 (fontScale 2.0, the Android
+     maximum): the .de-btn label goes 13px -> 26px inside its fixed
+     height: 32px (line box about 31px, so it fits by a pixel), .de-pop input
+     the same, .de-fig-bar button 12px -> 24px inside height: 30px, .de-select
+     at 26px truncates the style name inside its max-width: 150px, and .de-note
+     grows from 28px to 40px tall. Nothing clips, and .de-toolbar still
+     computes overflow-x: auto, so every control stays reachable -- but those
+     fixed-height controls are CRAMPED at that setting. That is a recorded
+     limit, not an oversight. Capping the zoom was the alternative and was
+     rejected: someone who asks for 200% text and silently gets 150% is the
+     misleading-control shape Kamron ruled out.
+     The host sets it for the DOCUMENT editor only: the same WebView factory
+     builds the spreadsheet editor, whose Univer grid is canvas text that
+     textZoom cannot reach under DOM chrome that it does.
+     Two more Android-only facts: the host reads fontScale in the AndroidView
+     factory, and none of the activities in AndroidManifest.xml lists
+     fontScale in configChanges, so a change made while the app is running
+     does land -- but by activity recreation, not live like WebKit. And
+     Configuration.fontScale is the LINEAR scale, so at Android 14's largest
+     settings this text grows more than native text does elsewhere in the app.
+
+   Gated on pointer: coarse, and deliberately NOT on a width. The gate is
+   needed because -apple-system-body on macOS is 13px, so a desktop Safari
+   window dragged narrow would otherwise SHRINK the text. A width was wrong
+   because the app ships on iPad as well (project.yml
+   TARGETED_DEVICE_FAMILY "1,2"): a max-width would have left an iPad's
+   document stuck at 16px while an Android tablet, whose textZoom is
+   unconditional, scaled. A desktop browser has a fine pointer and so is
+   untouched at every window size; a touch Chromium matches this query and
+   still gets nothing, because the declaration is dropped there.
+
+   TEXT THE PERSON SIZED BY HAND. The toolbar's Text size writes an inline
+   font-size: 14pt (any size but 12), and the saved file keeps it. An inline
+   size beats the inherited one, so on WebKit such a run would stay 14pt
+   while the writing round it followed Dynamic Type -- whereas textZoom
+   multiplies it on Android. To follow Android, the editor's VIEW of a sized
+   run (the textStyle mark view in buildFontSize; never the saved HTML,
+   which is written from the schema, not from the view) carries the class
+   de-sized and --de-k, its size as a multiple of the page's own 16px
+   (14pt is 18.67px, so 1.1667). --de-body is registered as a length, so the
+   1em it is given on the writing is resolved THERE, to the size the writing
+   really is, and inherited as that length; a sized run is then --de-k times
+   it, which keeps it in proportion to the writing even inside a heading.
+   pt, px and rem are converted; em and % are already relative and need
+   nothing. At the page's own 16px the result is the inline size (--de-k
+   is kept to four decimals), and the !important is what lets a stylesheet
+   beat an inline style.
+   It is behind @supports (font: -apple-system-body), true only on Apple's
+   engine: Android scales these runs already, and doing it twice there would
+   compound the zoom.
+
+   NOTE: no backticks in here. This whole stylesheet is a JS template
+   literal, and one in a comment ends the string. */
+@property --de-body { syntax: '<length>'; inherits: true; initial-value: 16px; }
+@media (pointer: coarse) {
+  .de-paper .ProseMirror { font: -apple-system-body;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; line-height: 1.6; }
+  @supports (font: -apple-system-body) {
+    .de-paper .ProseMirror { --de-body: 1em; }
+    .de-paper .ProseMirror .de-sized { font-size: calc(var(--de-k) * var(--de-body)) !important; }
+  }
 }
 `;
   const injectCss = () => {
@@ -657,6 +752,21 @@
     },
   });
 
+  /* A sized run's size as a multiple of the page's own 16px writing (12pt),
+   * or null when it needs nothing: em and % are relative already. rem is
+   * the page root's, read once (the dashboard's root is 13px, not 16). */
+  let rootPx = 0;
+  const sizeRatio = (v) => {
+    const m = /^(\d{1,3}(?:\.\d{1,2})?)(pt|px|rem)$/i.exec(v || '');
+    if (!m) return null;
+    const n = parseFloat(m[1]);
+    const u = m[2].toLowerCase();
+    if (u === 'pt') return n / 12;
+    if (u === 'px') return n / 16;
+    if (!rootPx) rootPx = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+    return (n * rootPx) / 16;
+  };
+
   const buildFontSize = (T) => T.Extension.create({
     name: 'fontSize',
     addOptions() { return { types: ['textStyle'] }; },
@@ -680,6 +790,31 @@
         setFontSize: (size) => ({ chain }) => chain().setMark('textStyle', { fontSize: size }).run(),
         unsetFontSize: () => ({ chain }) => chain().setMark('textStyle', { fontSize: null }).removeEmptyTextStyle().run(),
       };
+    },
+    // How the editor DRAWS a sized run, and only that (owner answer 72): the
+    // same span the schema writes, plus the class and --de-k the stylesheet
+    // needs to keep the run in proportion to the writing when a phone's
+    // text setting moves it (see TEXT THE PERSON SIZED BY HAND in the CSS).
+    // A mark view is the view's own: getHTML(), copy and print all serialize
+    // from the schema, so the saved file never sees either, and a re-read
+    // of this span takes its size from style.fontSize, which is untouched.
+    addProseMirrorPlugins() {
+      return [new T.pm.state.Plugin({
+        key: new T.pm.state.PluginKey('sizedRunView'),
+        props: {
+          markViews: {
+            textStyle: (mark, view, inline) => {
+              const out = T.pm.model.DOMSerializer.renderSpec(document, mark.type.spec.toDOM(mark, inline), null, mark.attrs);
+              const k = sizeRatio(mark.attrs.fontSize);
+              if (k != null && out.dom.nodeType === 1) {
+                out.dom.classList.add('de-sized');
+                out.dom.style.setProperty('--de-k', String(Math.round(k * 10000) / 10000));
+              }
+              return out;
+            },
+          },
+        },
+      })];
     },
   });
 

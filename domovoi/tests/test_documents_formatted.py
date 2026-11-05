@@ -584,3 +584,153 @@ def test_the_page_is_paper_in_every_theme_and_a_tap_anywhere_types():
     assert "view.focus();" in jsx and "Selection.atEnd(doc)" in jsx
     assert "t.closest('.de-fig, a, button, input, label, select, textarea, .de-pop')" in jsx
     assert "!editor.isEditable" in jsx
+
+
+def test_the_documents_writing_follows_the_phones_text_size_setting():
+    """Owner answer 72 (2026-11-04, under his rule 2): the phone's document
+    editor IS this page (answer 21 chose that shape so there is one editor),
+    and its writing did not follow the phone's large-text setting - only the
+    chrome around it grew. What is pinned here is the SOURCE of both halves;
+    the iOS half has been measured only in Chromium with Dynamic Type
+    simulated, never rendered in WKWebView.
+
+    The two halves are pinned here because they are one feature in two
+    engines, each invisible in the other's source - and they do NOT behave
+    the same way:
+
+    * WebKit (iPhone, iPad) resolves ``-apple-system-body`` to the live
+      Dynamic Type body size, so iOS needs no host code at all, and only the
+      writing moves: the toolbar, the note strip and the pop-ups keep the px
+      they set for themselves. The family is put straight back afterwards - a
+      document's text must not change shape with a phone setting. Text the
+      person sized by hand (the toolbar's Text size writes an inline
+      ``font-size: 14pt``, which an inherited size cannot move) follows too:
+      the editor's VIEW of such a run - a textStyle mark view, never the
+      saved HTML - adds ``de-sized`` and ``--de-k`` (its size over the page's
+      16px), and a stylesheet rule behind ``@supports (font:
+      -apple-system-body)`` sizes it ``--de-k`` times the writing. Measured
+      in headless Chrome with the real stylesheet and that rule's two Apple
+      conditions simulated: writing 24px -> a 14pt run 28px (desktop 16 ->
+      18.67, the same 1.1667), 34px -> 39.67, inside a heading too; at a fine
+      pointer, and in a touch Chromium without the simulation, every size is
+      exactly base's; getHTML() is byte-identical to base in all eight runs.
+    * Every non-Apple engine drops that shorthand as invalid, so Android's
+      half is ``textZoom`` in ``WebEditorHost.kt`` from the system font scale,
+      on the DOCUMENT editor only - never the print copy, and never the
+      spreadsheet that the same WebView factory builds, whose Univer grid is
+      canvas text textZoom cannot reach under DOM chrome it does (a zoomed
+      sheet would type at double size over cells that had not moved). That
+      zoom already multiplies a hand-sized run, which is why the run rule
+      above is Apple-only: twice would compound it. ``textZoom`` is a
+      PAGE-WIDE multiplier, so on Android the chrome scales too. Measured in
+      Chromium at 375x812 at the equivalent of fontScale 2.0 (the Android
+      maximum) nothing clips and the toolbar still scrolls sideways, but the
+      fixed-height controls are cramped - the 13px ``.de-btn`` label becomes
+      26px inside ``height: 32px`` and ``.de-select`` truncates inside
+      ``max-width: 150px``. A recorded limit; capping the zoom was rejected
+      because asking for 200% and silently getting 150% is a misleading
+      control.
+
+    The gate is ``pointer: coarse`` with NO width: the gate is needed because
+    ``-apple-system-body`` is 13px on macOS, so a desktop Safari window
+    dragged narrow would SHRINK the text instead; a width was wrong because
+    the app ships on iPad too (``ios/project.yml`` TARGETED_DEVICE_FAMILY
+    "1,2") and a max-width would have left an iPad stuck at 16px while an
+    Android tablet scaled. A desktop browser has a fine pointer, so it is
+    untouched at every size, and the 16px rule above still states the page's
+    own size.
+    """
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    jsx = (root / "web" / "static" / "doc_editor.jsx").read_text(encoding="utf-8")
+
+    # the page's own size is still the desktop size, unconditionally
+    assert ".de-paper .ProseMirror { outline: none; flex: 1 1 auto; min-height: 900px; font: 16px/1.6" in jsx
+
+    # ...and a touch screen follows the platform setting instead. Gate and rule
+    # are pinned together: a max-width creeping back onto this query would
+    # leave the iPad, and the iPhone at split-view widths, out again.
+    gate = "@media (pointer: coarse) {"
+    rule = "  .de-paper .ProseMirror { font: -apple-system-body;"
+    lines = jsx.splitlines()
+    assert lines[lines.index(gate) + 1] == rule
+    # the family and line height come back, so only the SIZE follows the setting
+    assert (
+        'font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; line-height: 1.6; }'
+        in jsx
+    )
+    # Text sized by hand follows too, by a rule in the same coarse block,
+    # Apple-only: Android's textZoom already multiplies an inline size, and
+    # doing it twice there would compound the zoom.
+    coarse = jsx.split(gate, 1)[1].split("\n}\n", 1)[0]
+    assert "  @supports (font: -apple-system-body) {" in coarse
+    assert "    .de-paper .ProseMirror { --de-body: 1em; }" in coarse
+    assert (
+        "    .de-paper .ProseMirror .de-sized { font-size: calc(var(--de-k) * var(--de-body)) !important; }"
+        in coarse
+    )
+    # registered as a length, so the 1em resolves on the writing and is
+    # inherited as that size (an unregistered one would re-resolve per span,
+    # against a heading's size inside a heading)
+    assert "@property --de-body { syntax: '<length>'; inherits: true; initial-value: 16px; }" in jsx
+    # The run's class and ratio come from a MARK VIEW, which only draws: the
+    # saved file is written from the schema (renderHTML, still just the
+    # font-size), so neither the class nor --de-k can reach it.
+    assert "renderHTML: (attrs) => (attrs.fontSize ? { style: `font-size: ${attrs.fontSize}` } : {})," in jsx
+    font_size_ext = jsx.split("const buildFontSize = (T) =>", 1)[1].split("\n  });\n", 1)[0]
+    assert "markViews: {" in font_size_ext and "textStyle: (mark, view, inline) => {" in font_size_ext
+    assert "DOMSerializer.renderSpec(document, mark.type.spec.toDOM(mark, inline), null, mark.attrs)" in font_size_ext
+    assert "out.dom.classList.add('de-sized');" in font_size_ext
+    assert "out.dom.style.setProperty('--de-k'," in font_size_ext
+    serialized = font_size_ext.split("addGlobalAttributes()", 1)[1].split("addCommands()", 1)[0]
+    assert "renderHTML:" in serialized
+    assert "de-sized" not in serialized and "--de-k" not in serialized
+    # pt over 12, px over 16 (the page's own writing), rem from the page root
+    ratio = jsx.split("const sizeRatio = (v) => {", 1)[1].split("\n  };\n", 1)[0]
+    assert "if (u === 'pt') return n / 12;" in ratio and "if (u === 'px') return n / 16;" in ratio
+    # a code block scales with the writing instead of staying at 14px.
+    # Scoped to the editor's own rule: PRINT_CSS keeps 14px on purpose, because
+    # a printed page is paper and does not follow a phone setting.
+    assert ".de-paper pre {" in jsx and "font: .875em/1.5 ui-monospace" in jsx
+    editor_css = jsx.split("const PRINT_CSS", 1)[0]
+    assert "font: 14px/1.5 ui-monospace" not in editor_css
+
+    # On WebKit the controls keep their own fixed sizes, so a document at AX5
+    # costs them nothing. Each pin is read out of that control's OWN rule:
+    # "height: 32px" alone also matches .de-pop's input, so asserting it
+    # against the whole file would pass with .de-btn's height deleted.
+    btn = next(line for line in jsx.splitlines() if line.startswith(".de-btn {"))
+    assert "height: 32px;" in btn
+    pop_input = next(line for line in jsx.splitlines() if line.startswith('.de-pop input[type="url"]'))
+    assert "height: 32px;" in pop_input
+    # and the toolbar stays usable at the Android page-wide zoom because it
+    # scrolls sideways - overflow-x, not the scrollbar cosmetic next to it
+    toolbar = jsx.split(".de-toolbar {", 1)[1].split("}", 1)[0]
+    assert "overflow-x: auto;" in toolbar and "white-space: nowrap;" in toolbar
+
+    kt = (
+        root / "android" / "app" / "src" / "main" / "java" / "com" / "domovoi"
+        / "app" / "ui" / "screens" / "documents" / "WebEditorHost.kt"
+    ).read_text(encoding="utf-8")
+    assert "settings.textZoom = (100f * ctx.resources.configuration.fontScale).roundToInt()" in kt
+    assert "import kotlin.math.roundToInt" in kt
+    # exactly one place sets it, and it is the editor's own factory. Counting
+    # the file is what makes the print copy (javaScript = false) safe: an
+    # earlier version of this test read the text after lockDown's declaration,
+    # which only covered the print WebView by accident of declaration order.
+    setters = [ln.strip() for ln in kt.splitlines()
+               if "textZoom" in ln and not ln.strip().startswith("//")]
+    assert len(setters) == 1, setters
+    factory = kt.split("factory = { ctx ->", 1)[1].split("setBackgroundColor", 1)[0]
+    assert "settings.textZoom" in factory
+    # ...behind the per-kind gate, which is true for the document and false
+    # for the sheet: the same factory builds the Univer spreadsheet page.
+    flines = [ln.strip() for ln in factory.splitlines()]
+    at = next(i for i, ln in enumerate(flines) if ln.startswith("settings.textZoom"))
+    assert flines[at - 1] == "if (kind.followsTextSize) {" and flines[at + 1] == "}"
+    kinds = kt.split("internal enum class WebEditorKind(", 1)[1].split("fun page(", 1)[0]
+    document_kind = kinds.split("    Document(", 1)[1].split("    ),", 1)[0]
+    sheet_kind = kinds.split("    Sheet(", 1)[1].split("    );", 1)[0]
+    assert "followsTextSize = true," in document_kind
+    assert "followsTextSize = false," in sheet_kind
