@@ -20,10 +20,16 @@ import XCTest
 /// happened**: the piece was still drawn, the link still underlined, the
 /// crumbs unchanged
 /// (`overnight-trains/I005/ALL/att/testManual_AnUnopenableRouteLinkIsNotALink/manual-link-landed-on-rooms_0_*.png`).
-/// The handler cannot have run: it collapses the manual's levels before it
-/// navigates (`ManualView.act(_:in:)`), so any run of it moves the screen.
-/// The same case passed in trains I002 and I004, where every level was drawn
-/// by the route's own screen.
+/// The handler cannot have run **past its guard**: once it has a link and a
+/// model it collapses the manual's levels before it navigates
+/// (`ManualView.act(_:in:)`), so a run that gets that far moves the screen.
+/// Two branches do move nothing — the first line's
+/// `guard let link = manualLink(of: url), let manual else { return .systemAction }`
+/// (`ManualView.swift:221`) and `act`'s `.nothing` arm (`:475`) — and neither
+/// fits: this link's URL is one this file minted and parses, and `route:` with
+/// a target is not `.nothing`. The same case passed in trains I002 and I004
+/// with that same minting and parsing code, where every level was drawn by the
+/// route's own screen; the push is the only thing that changed.
 ///
 /// Nothing in this repository can run a `NavigationStack`, let alone read
 /// SwiftUI's environment, so what the fix gets here is a reading of the
@@ -76,9 +82,39 @@ final class ManualLinkHostTests: XCTestCase {
     /// nothing: the host has to be *given* the action (`links`) and has to
     /// put it in its own environment. Both are textual, so a reflow of either
     /// line reds this — the failure messages say what each line was for.
+    ///
+    /// ### Each saying is read in the host's **own** source, and that is the
+    /// whole case
+    ///
+    /// `.environment(\.openURL, links)` is written twice in this file:
+    /// `ManualView`'s own body, which was never the bug, and
+    /// ``ManualLevelHost``'s, which is the fix. A `contains` over the whole
+    /// stripped source cannot tell them apart, and it was measured not to:
+    /// on throwaway branch `wf/ios-b-hx-manual-sab1` the three lines that
+    /// install the action on the host were deleted — the I005 defect
+    /// restored — and all three cases in this file passed, `PKGTEST exit 0`.
+    /// So the source is split on the host's own declaration and the second
+    /// saying is required **inside that one type**, bounded at the next
+    /// top-level declaration (every type in this file is at column 0, and
+    /// `struct ManualTopBar` is what follows the host).
+    ///
+    /// `wf/ios-b-hx-manual-sab2` is the measurement that this version bites:
+    /// the same three lines deleted, and this case fails on its second
+    /// assertion.
     func testAPushedLevelInstallsTheManualsLinkAction() {
+        let halves = Self.manualScreen.components(separatedBy: "struct ManualLevelHost")
+        XCTAssertEqual(
+            halves.count, 2,
+            "`struct ManualLevelHost` is written \(halves.count - 1) times in "
+                + "the stripped source and this reading needs exactly one, "
+                + "because it splits the file there to read the host's own "
+                + "body apart from `ManualView`'s"
+        )
+        // The host's own source: after its declaration, up to the next
+        // top-level one.
+        let host = (halves.last ?? "").components(separatedBy: "\nstruct ").first ?? ""
         XCTAssertTrue(
-            Self.manualScreen.contains("let links: OpenURLAction"),
+            host.contains("let links: OpenURLAction"),
             "`ManualLevelHost` no longer takes the manual's link action. "
                 + "`.environment(\\.openURL, …)` on `ManualView` reaches that "
                 + "screen's descendants and not a level presented through "
@@ -87,11 +123,22 @@ final class ManualLinkHostTests: XCTestCase {
                 + "nothing at all"
         )
         XCTAssertTrue(
-            Self.manualScreen.contains(".environment(\\.openURL, links)"),
-            "`links` is carried and never installed, so a pushed level's page "
-                + "still has whatever action the system handed it: a tapped "
-                + "link goes to `openURL` and nowhere. Both sayings are "
-                + "needed — see this case's note"
+            host.contains(".environment(\\.openURL, links)"),
+            "`ManualLevelHost` carries `links` and never installs it on its "
+                + "own content, so a pushed level's page still has whatever "
+                + "action the system handed it: a tapped link goes to "
+                + "`openURL` and nowhere, which is what train I005 measured. "
+                + "This is read inside the host and not over the file, "
+                + "because `ManualView`'s own body says the same line and a "
+                + "reading that cannot tell the two apart stays green with "
+                + "the fix deleted — see this case's note"
+        )
+        XCTAssertTrue(
+            (halves.first ?? "").contains(".environment(\\.openURL, links)"),
+            "`ManualView`'s own body no longer installs the link action, so a "
+                + "link on the level the route itself draws — Start here, the "
+                + "map, every level at depth 0 — goes to `openURL` and "
+                + "nowhere. The host above covers the pushed levels only"
         )
     }
 

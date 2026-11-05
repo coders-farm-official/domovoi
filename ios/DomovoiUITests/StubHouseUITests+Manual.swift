@@ -257,8 +257,9 @@ extension StubHouseUITests {
     /// removed and this passed. The drawn glyphs are not the card's label and
     /// not its value — that is the point of the effect — so nothing VoiceOver
     /// stops on can carry *what* was drawn. (A leaf under the card does carry
-    /// it: train I005 measured that, and the subset assertion below is what
-    /// it cost. See the comment on that line.)
+    /// it: train I005 measured that, twice, and the leaf-level reading below
+    /// is what it cost — it allows a frame of this name's own glyph run and
+    /// forbids every other word. See the comment on that line.)
     ///
     /// What it can carry is **whether** a scramble is in flight, and that is
     /// now published as the node's accessibility value
@@ -326,41 +327,58 @@ extension StubHouseUITests {
                 + "running at all"
         )
 
-        // **No glyph frame carries words**, asserted while the glyphs are on
-        // screen, which is the half of answer 30 Kamron named ("leaving the
-        // accessibility label alone").
+        // **No foreign word under this card**, asserted while the glyphs are
+        // on screen.
         //
-        // This line used to require the card to contribute **nothing**, and
-        // train I005 measured that it cannot: the card came back holding
-        // `["Domovoi", "Domovo9", "your home"]` with both
-        // `.accessibilityHidden(true)`s in place, and the same trees hold the
-        // node's icon, hidden since long before answer 30
+        // What this line is *not*, twice over. It first required the card to
+        // contribute **nothing**, and train I005 measured that it cannot: the
+        // card came back holding `["Domovoi", "Domovo9", "your home"]` with
+        // both `.accessibilityHidden(true)`s in place, and the same trees
+        // hold the node's icon, hidden since long before answer 30
         // (`manual-audit-map-tree…txt`: `Image … label: 'Radio'`). Inside a
         // `Button`'s label SwiftUI keeps the leaves and drops what was said
         // about them — `NewsPeopleChipRow.swift:94` has the app-wide
-        // measurement, down to `accessibilityElement(children: .ignore)`
-        // only adding a wrapper — while the same modifier on the map's wires,
-        // outside a `Button`, does take them out of the very same tree.
+        // measurement, down to `accessibilityElement(children: .ignore)` only
+        // adding a wrapper.
         //
-        // So what a card may contribute is **its own two words**, and the
-        // scramble frame is what may not: `'Domovo9'` is a label that exists
-        // for 216 ms and reads as nothing. VoiceOver itself stops once, on
-        // the card, and hears ``centreNodeLabel`` — the wait above is that
-        // claim — so this is the leaf-level belt on the same promise.
+        // It then required the card's own two words, which is the **same
+        // measurement refused**: `"Domovo9"` is the glyph overlay's leaf, so
+        // with no app change that set is `["Domovoi", "Domovo9", "your home"]`
+        // again in the next train. There is no modifier that takes a leaf out
+        // of a `Button`'s label (DECISIONS D-HX2), so a card whose name is
+        // drawn through an overlay effect carries a third leaf mid-scramble,
+        // full stop. **A scramble frame is allowed here and said so**, and
+        // what is left of answer 30's half ("leaving the accessibility label
+        // alone") is the ``manualExact(_:_:)`` wait above, on the real name,
+        // mid-scramble: VoiceOver stops once, on the card, and hears
+        // ``centreNodeLabel``. There is no leaf-level belt on that promise.
+        //
+        // What is still worth asserting, and what a glyph frame is told apart
+        // from it by: a leaf under this card carrying a word that is neither
+        // the card's own nor a frame of its own name — another node's name, a
+        // crumb, a tag, a cluster's heading. ``manualIsAScrambleFrame(_:of:)``
+        // is `manualScrambleFrame`'s own contract (same character count,
+        // spaces kept, every unsettled character from the glyph alphabet),
+        // which no other word on this screen satisfies.
         let inside = Set(card.staticTexts.allElementsBoundByIndex.map(\.label))
-        let allowed: Set<String> = [StubManual.centreNode, StubManual.centreSubtitle]
+        let own: Set<String> = [StubManual.centreNode, StubManual.centreSubtitle]
+        let foreign = inside.subtracting(own).filter {
+            !manualIsAScrambleFrame($0, of: StubManual.centreNode)
+        }
         XCTAssertTrue(
-            inside.isSubset(of: allowed),
-            "the centre node's card carries \(inside.subtracting(allowed)) in "
-                + "the tree while its name is scrambling, and a card may carry "
-                + "only its own words \(allowed) — a frame of the scramble has "
-                + "become an element's label, which is the half of answer 30 "
-                + "Kamron named"
+            foreign.isEmpty,
+            "the centre node's card carries \(foreign) in the tree while its "
+                + "name is scrambling, and a card may carry only its own words "
+                + "\(own) and a frame of \"\(StubManual.centreNode)\" "
+                + "scrambling (same length, spaces kept, the rest from "
+                + "the glyph alphabet). Everything in that list is a word "
+                + "this card does not draw — a level below this one still in "
+                + "the tree, or somebody else's name under this control"
         )
-        // The control for that subset: a button whose children are in the
+        // The control for that reading: a button whose children are in the
         // tree, on the same screen, in the same run. If SwiftUI ever did stop
         // exposing a merged button's children, every card would be empty and
-        // the subset above would pass while asserting nothing.
+        // the line above would pass while asserting nothing.
         XCTAssertGreaterThan(
             app.buttons[StubManual.homeTabControl].firstMatch.staticTexts.count, 0,
             "no button on this screen exposes a static text of its own, so "
@@ -428,13 +446,21 @@ extension StubHouseUITests {
     /// nothing asserts that it works, because it does not.
     ///
     /// What is still worth an assertion is the thing that **can** be wrong:
-    /// a word under a card that is not that card's. A scramble frame with a
-    /// label would be one, and that is the half of answer 30 Kamron named.
+    /// **one control per card, and no word under it but that card's own
+    /// two.**
     ///
-    /// At rest, and `testManual_ANodeIsNamedWhileItsNameScrambles` makes the
-    /// same claim mid-scramble, where the glyph run is on screen to carry a
-    /// label and the audit runs: this one is the state a reader sees for the
-    /// rest of the screen's life.
+    /// **At rest, and the subset here is exact because of it.** Train I005
+    /// measured this card's leaves at this point in this case as
+    /// `["Domovoi", "your home"]` — nothing else
+    /// (`overnight-trains/I005/ALL/testManual_ANodeCardIsOneElementAndNotFour.log:66`).
+    /// So a glyph run among them here is not the overlay doing its job: it is
+    /// a name that never settled, which at the shipping 24 ms is a card
+    /// showing glyphs to a reader for the rest of the screen's life. That is
+    /// the one thing this case catches that
+    /// `testManual_ANodeIsNamedWhileItsNameScrambles` cannot, and it is why
+    /// this one does **not** allow a scramble frame where that one has to:
+    /// mid-scramble the overlay's leaf is in the tree by measurement
+    /// (`["Domovoi", "Domovo9", "your home"]`), and at rest it is not.
     ///
     /// The float is off (`manualLaunch`'s default) so that `frame` is read off
     /// a card that is holding position — a bobbing card's frame is a point in
@@ -450,9 +476,10 @@ extension StubHouseUITests {
         XCTAssertTrue(centre.waitForExistence(timeout: 20), "the map drew no centre node")
         // The scramble is over by now at the shipping 24 ms — the pill tap,
         // the wait and the queries above cost more than its 350 ms lead-in
-        // and eight frames — and this case does not depend on that either
-        // way: a settled card's leaves are its own two words, and a
-        // scrambling one's third leaf would fail the same assertion.
+        // and eight frames — and that is the state this case asserts on:
+        // I005 measured the centre card's leaves here as its own two words
+        // (`["Domovoi", "your home"]`), so the subset below is exact, and a
+        // glyph run among them is a name that never settled.
         let cards: [(label: String, words: Set<String>)] = [
             (StubManual.centreNodeLabel, [StubManual.centreNode, StubManual.centreSubtitle]),
             (StubManual.roomsTopicLabel, [StubManual.roomsTopic, StubManual.roomsTopicSubtitle]),
@@ -471,10 +498,13 @@ extension StubHouseUITests {
             XCTAssertTrue(
                 inside.isSubset(of: words),
                 "the card \"\(label)\" carries \(inside.subtracting(words)) in "
-                    + "the tree, and a card may carry only its own words "
-                    + "\(words). A frame of the scramble is "
-                    + "`ManualScrambleName` having become somebody's label; "
-                    + "anything else is a word this card does not draw"
+                    + "the tree, and at rest a card carries only its own words "
+                    + "\(words) (I005's measurement). A run of glyphs from "
+                    + "\(StubManual.scrambleGlyphs.count) characters of upper "
+                    + "case, digits and symbols is `ManualScrambleName` never "
+                    + "having settled; anything else is a word this card does "
+                    + "not draw — a level below this one still in the tree, or "
+                    + "somebody else's name under this control"
             )
             XCTAssertFalse(
                 inside.isEmpty,
@@ -2454,6 +2484,48 @@ extension StubHouseUITests {
             .firstMatch
     }
 
+    /// Whether a drawn string is **one frame of this name scrambling**
+    /// rather than a word of its own.
+    ///
+    /// Train I005 measured that a node's card carries the glyph overlay's
+    /// leaf while its name is scrambling: mid-scramble the centre node held
+    /// `["Domovoi", "Domovo9", "your home"]` with both
+    /// `.accessibilityHidden(true)`s in place, and there is no modifier that
+    /// takes a leaf out of a `Button`'s label (DECISIONS D-HX2). So a case
+    /// that reads the leaves under a card has to tell that frame apart from a
+    /// word the card does not draw, and this is how.
+    ///
+    /// It is `manualScrambleFrame(of:frame:steps:glyph:)`'s own contract
+    /// (`ManualRules.swift:744`), which holds at every frame:
+    ///
+    ///  * the character **count** never changes;
+    ///  * a **space** is never replaced;
+    ///  * a character that has not settled yet is one of the glyph alphabet
+    ///    (``StubManual/scrambleGlyphs``).
+    ///
+    /// No other word on the map satisfies all three against this name: the
+    /// alphabet is upper case, digits and symbols, and a sibling node's name,
+    /// a crumb or a tag is a different length or carries lower-case letters
+    /// in places this name does not.
+    ///
+    /// The glyph alphabet is **spelled out** here rather than imported, this
+    /// file's standing reason: the UI test target does not import DomovoiKit,
+    /// so a renamed or re-spelled constant in the app must not silently
+    /// follow. `ManualAnswersTests` pins the alphabet itself in the package.
+    @MainActor
+    private func manualIsAScrambleFrame(_ drawn: String, of name: String) -> Bool {
+        let drawn = Array(drawn)
+        let name = Array(name)
+        guard drawn.count == name.count else { return false }
+        for (at, character) in drawn.enumerated() {
+            if character == name[at] { continue }
+            // A space that came back as something else is not this effect.
+            if name[at] == " " { return false }
+            if !StubManual.scrambleGlyphs.contains(character) { return false }
+        }
+        return true
+    }
+
     /// Wait for an element's accessibility **value** to become this string.
     ///
     /// Only one thing in this item publishes a value and only while a case
@@ -2643,7 +2715,9 @@ enum StubManual {
     /// before any of this. What a reader hears is the card's own label
     /// (``centreNodeLabel``), because a `Button` is one VoiceOver stop. So
     /// this is one of the two words a leaf of the centre card is **allowed**
-    /// to carry; anything else is a scramble frame that got a label.
+    /// to carry, beside a frame of the name scrambling
+    /// (``StubHouseUITests/manualIsAScrambleFrame(_:of:)``); anything else is
+    /// a word this card does not draw.
     static let centreSubtitle = "your home"
     static let roomsTopicLabel = "Rooms & devices: where it listens"
     /// The rooms topic card's second line, the other allowed leaf of that
@@ -2666,6 +2740,17 @@ enum StubManual {
     /// capitalised, and XCUITest matches labels case-sensitively, so this
     /// reaches the page and only the page.
     static let piecePageTopicLink = "rooms & devices"
+
+    /// The alphabet a scrambling name is drawn from — `GLYPHS`,
+    /// `ManualScreen.kt:169`, which DomovoiKit holds as
+    /// `manualScrambleGlyphs` (`ManualRules.swift:703`).
+    ///
+    /// Spelled out rather than imported, this file's standing reason: the UI
+    /// test target does not import DomovoiKit, so a query that silently
+    /// followed a renamed or re-spelled constant would stop testing what it
+    /// claims to. Used by
+    /// ``StubHouseUITests/manualIsAScrambleFrame(_:of:)``.
+    static let scrambleGlyphs = Set("ABCDEFGHKMNPRSTVXZ0123456789#%&*/<>")
 
     /// The phone bar's Home tab, by its accessibility label.
     ///

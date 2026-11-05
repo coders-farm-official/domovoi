@@ -701,10 +701,16 @@ struct ManualLevelHost: View {
     /// its centre) and **nothing happened at all**: the page was still drawn,
     /// the link still underlined, the crumbs unchanged
     /// (`overnight-trains/I005/ALL/att/testManual_AnUnopenableRouteLinkIsNotALink/manual-link-landed-on-rooms_0_*.png`).
-    /// The handler cannot have run — it collapses the levels before it
-    /// navigates (``ManualView/act(_:in:)``), so a run of it is visible
-    /// whatever `openSettingsTab` then does. The same case passed in trains
-    /// I002 and I004, where every level was drawn by the route's own screen
+    /// The handler cannot have run **past its guard** — once it has a link
+    /// and a model it collapses the levels before it navigates
+    /// (``ManualView/act(_:in:)``), so a run that gets that far is visible
+    /// whatever `openSettingsTab` then does. The two branches that do move
+    /// nothing are excluded by the link itself: the first line's
+    /// `guard let link = manualLink(of: url), let manual else` (`:221`) is
+    /// about a URL this file did not mint, and `act`'s `.nothing` arm
+    /// (`:475`) about a route the document names and does not define. The
+    /// same case passed in trains I002 and I004 with the same minting and
+    /// parsing code, where every level was drawn by the route's own screen
     /// and the action was in scope.
     ///
     /// Without it a link is a control that cannot do what it says, which is

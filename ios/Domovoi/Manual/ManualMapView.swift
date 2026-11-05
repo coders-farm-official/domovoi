@@ -610,16 +610,23 @@ struct ManualMapNode: View {
                         //     (`'one room, end to end   preview '`,
                         //     `frame=(25.0, 461.3, 99.7, 30.3)`).
                         //
-                        // The contrast with the wires in ``ManualMapStage``
-                        // is what makes this a rule and not a run of bad
-                        // luck: that `Canvas` carries the same modifier,
-                        // outside any `Button`, and is absent from the same
-                        // tree. Inside a `Button`'s label SwiftUI keeps the
-                        // leaves and drops what was said about them —
+                        // Inside a `Button`'s label SwiftUI keeps the leaves
+                        // and drops what was said about them —
                         // `ios/Domovoi/News/NewsPeopleChipRow.swift:94` has
                         // the app-wide measurement, including that
                         // `accessibilityElement(children: .ignore)` only adds
-                        // a wrapper around the control.
+                        // a wrapper around the control. That, and the three
+                        // witnesses in this one tree, are what the claim
+                        // rests on.
+                        //
+                        // It was written here that the wires in
+                        // ``ManualMapStage`` were a fourth witness — same
+                        // modifier, outside any `Button`, absent from the
+                        // same tree. They are not: ``ManualMapStage``'s
+                        // `wires(_:size:)` is a bare `Canvas` with no
+                        // accessibility content of its own, so it is absent
+                        // from an XCUITest tree with the modifier and
+                        // without it. Its absence says nothing either way.
                         //
                         // **Why it stays.** Between I004 and I005 this
                         // element's frame went back from the whole
@@ -775,10 +782,14 @@ struct ManualMapNode: View {
     ///
     /// ### Why there is a seam here at all
     ///
-    /// The scramble's whole point is that the drawn glyphs are **nobody's**
-    /// label and nobody's value (see ``ManualScrambleName``), so nothing in
-    /// the accessibility tree carries them and no UI case can assert that the
-    /// effect is running. The review's finding was the consequence:
+    /// The scramble's whole point is that the drawn glyphs are not the
+    /// **control's** label and not its value (see ``ManualScrambleName``):
+    /// the card reads as the node's real name throughout, so nothing a UI
+    /// case can reach the card by says whether the effect is running. (A
+    /// *leaf* under the card does carry the glyph run — train I005 measured
+    /// `'Domovo9'` there — but it is a decoration's frame, 216 ms old and
+    /// gone, and a case that waited on one would be waiting on `Random`.)
+    /// The review's finding was the consequence:
     /// `testManual_ANodeIsNamedWhileItsNameScrambles` passed with
     /// ``ManualScrambleName`` deleted outright, because the label it checks
     /// predates the effect. A case that cannot fail is not a test.
@@ -964,8 +975,11 @@ enum ManualFloatClock {
 ///
 /// — the laid-out name and the glyph overlay, in the tree together, with the
 /// overlay's own `.accessibilityHidden(true)` not having removed it. So the
-/// drawn glyphs *were* an element's label, which is the half of answer 30
-/// Kamron named out loud ("leaving the accessibility label alone"). The same
+/// drawn glyphs *are* a leaf's label — train I005 measured the same thing
+/// again (`['Domovoi', 'Domovo9', 'your home']`) — and what answer 30's half
+/// ("leaving the accessibility label alone") is kept by is the control's
+/// label, not the leaves: see the section below, and DECISIONS D-HX2 for why
+/// there is nothing to remove them with. The same
 /// audit returned two `Contrast failed` findings it could not attribute to any
 /// element.
 ///
@@ -997,8 +1011,8 @@ enum ManualFloatClock {
 /// which has carried `.accessibilityHidden(true)` since long before any of
 /// this. Inside a `Button`'s label SwiftUI keeps the leaves and drops what
 /// was said about them; ``ManualMapNode``'s second line has the three
-/// witnesses and the one that cuts the other way (the wires `Canvas`, same
-/// modifier, outside a `Button`, absent from the same tree).
+/// witnesses in that one tree, and `NewsPeopleChipRow.swift:94` the app-wide
+/// measurement.
 ///
 /// So the reading is ``ManualMapNode``'s label and nothing else, and that is
 /// enough for answer 30's half: a `Button` is **one** VoiceOver stop, so what
@@ -1007,8 +1021,12 @@ enum ManualFloatClock {
 /// is the right thing to say about a decoration, and it would matter the day
 /// this name is drawn outside a control — but nothing rests on it, and no
 /// case asserts it works. What the two counting cases hold now is the thing
-/// that *can* be wrong: no leaf under a card carries anything but the card's
-/// own words.
+/// that *can* be wrong: no leaf under a card carries a word the card does not
+/// draw. Mid-scramble that allows one frame of the name's own glyph run,
+/// because I005 measured it in the tree and no modifier takes it out
+/// (`StubHouseUITests+Manual.swift`'s `manualIsAScrambleFrame(_:of:)`); at
+/// rest it allows nothing but the card's two words, where a glyph run means
+/// the effect never settled.
 ///
 /// It stays in the **layout** and in the picture: `.accessibilityHidden` is
 /// not `.hidden()`, so the card is still measured by the real name and the
