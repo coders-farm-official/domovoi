@@ -223,6 +223,26 @@ internal fun WebEditorHost(app: AppContainer, relPath: String, kind: WebEditorKi
                         // rule is Apple-only and is dropped by this engine.
                         // Only the editor, never the print copy below: a
                         // printed page is paper and keeps the page's sizes.
+                        //
+                        // Know what this does, because it is NOT what the
+                        // iOS half does: textZoom is a page-wide multiplier
+                        // on every computed text size, so the toolbar, the
+                        // note strip and the pop-ups scale with the writing
+                        // here, while on WebKit only the writing moves. It
+                        // cannot be scoped to one selector from the host.
+                        // Measured at fontScale 2.0 (the Android maximum)
+                        // nothing clips and the toolbar still scrolls
+                        // sideways, but the fixed-height controls are
+                        // cramped: the 13px .de-btn label becomes 26px in a
+                        // height: 32px box and .de-select truncates inside
+                        // max-width: 150px. That is a recorded limit (see
+                        // the matching comment in web/static/doc_editor.jsx).
+                        // Capping the zoom was rejected: asking for 200% and
+                        // silently getting 150% is a misleading control.
+                        // fontScale is read once in this factory, and no
+                        // activity in AndroidManifest.xml lists fontScale in
+                        // configChanges, so a change while the app runs lands
+                        // by activity recreation rather than live.
                         settings.textZoom = (100f * ctx.resources.configuration.fontScale).roundToInt()
                         setBackgroundColor(android.graphics.Color.TRANSPARENT)
                         // The page handles every gesture itself (the sheet scrolls

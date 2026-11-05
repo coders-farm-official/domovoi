@@ -457,8 +457,8 @@
 .de-paper a { color: #1a5fb4; text-decoration: underline; cursor: text; }
 .de-paper blockquote { margin: 1em 0; padding: .2em 0 .2em 1em; border-left: 3px solid #c8c8c8; color: #555; }
 /* .875em, not 14px: at the page's own 16px this is the same 14px it always
-   was, and on a phone it follows the writing size with everything else
-   (owner answer 72). Headings, code spans and quotes were already em. */
+   was, and on a touch screen it follows the writing size with everything
+   else (owner answer 72). Headings, code spans and quotes were already em. */
 .de-paper pre { background: #f5f5f4; border-radius: 6px; padding: 12px 14px; overflow-x: auto; font: .875em/1.5 ui-monospace, "JetBrains Mono", Consolas, monospace; color: #1d1d1f; }
 .de-paper code { font-family: ui-monospace, "JetBrains Mono", Consolas, monospace; font-size: .92em; background: #f1f1ef; border-radius: 4px; padding: .1em .3em; }
 .de-paper pre code { background: none; padding: 0; font-size: inherit; }
@@ -525,34 +525,67 @@
   .de-paper .ProseMirror { min-height: 60vh; }
   .de-fig[data-align="left"], .de-fig[data-align="right"] { float: none; margin: 1em auto; }
 }
-/* The document's writing follows the platform's text-size setting on a phone
-   (owner answer 72, under his rule 2). The phone app shows THIS page in a
-   web view rather than a native editor (answer 21), so the size has to come
-   from here or the two editors drift apart.
+/* The document's writing follows the platform's text-size setting on a touch
+   screen (owner answer 72, under his rule 2). The phone app shows THIS page in
+   a web view rather than a native editor (answer 21), so the size has to come
+   from here or the two editors drift apart. Only the writing was stuck: the
+   chrome around it already grew with the setting.
 
    font: -apple-system-body is the mechanism WKWebView honours: it resolves to
    the current Dynamic Type body size and re-resolves when the setting changes
    while the editor is open, with no host code and no bridge message. It
    carries the system family with it, so the family is put straight back to
    the document's own stack on the next line (a document's text must not
-   change shape with a phone setting) and the line height back to 1.6. On
-   every non-Apple engine -apple-system-body is an invalid value, so the whole
-   shorthand is dropped and the 16px rule above still stands -- which is why
-   Android's half of this is textZoom in the host (WebEditorHost.kt) and not
-   more CSS.
+   change shape with a phone setting) and the line height back to 1.6.
 
-   Gated on pointer: coarse as well as the width, because -apple-system-body
-   on macOS is 13px: a desktop Safari window dragged narrow would otherwise
-   SHRINK the text. Only a touch screen under 700px gets this, so a desktop
-   browser at any size is untouched.
+   WHAT EACH ENGINE DOES -- the two halves of this feature are NOT the same
+   behaviour, and the difference is the thing to know before touching either:
 
-   Only the writing scales. The toolbar, the note strip and the pop-ups keep
-   their fixed sizes (they already set their own px) and the toolbar keeps
-   scrolling sideways, so a bigger document does not cost the controls.
+   * WebKit (iPhone, iPad). The rule below is the only one added, so ONLY the
+     writing scales: the toolbar, the note strip and the pop-ups keep the px
+     they set for themselves. Two consequences worth knowing. The size
+     re-resolves live, mid-edit. And -apple-system-body is 17px at the DEFAULT
+     content size category, so an iPhone renders a document at 17px where a
+     desktop browser renders it at 16px -- the two platforms no longer match
+     at their defaults.
+   * Chromium (Android WebView). -apple-system-body is an invalid value there,
+     so the whole shorthand is dropped and the 16px rule above still stands.
+     That is why Android's half is WebSettings.textZoom in the host
+     (WebEditorHost.kt) and not more CSS -- and textZoom is a PAGE-WIDE
+     multiplier on every computed text size, so on Android the CHROME scales
+     with the writing. It cannot be scoped to one selector from the host.
+     Measured in Chromium at 375x812 with this stylesheet, label sizes scaled
+     by hand to stand in for textZoom 200 (fontScale 2.0, the Android
+     maximum): the .de-btn label goes 13px -> 26px inside its fixed
+     height: 32px (line box about 31px, so it fits by a pixel), .de-pop input
+     the same, .de-fig-bar button 12px -> 24px inside height: 30px, .de-select
+     at 26px truncates the style name inside its max-width: 150px, and .de-note
+     grows from 28px to 40px tall. Nothing clips, and .de-toolbar still
+     computes overflow-x: auto, so every control stays reachable -- but those
+     fixed-height controls are CRAMPED at that setting. That is a recorded
+     limit, not an oversight. Capping the zoom was the alternative and was
+     rejected: someone who asks for 200% text and silently gets 150% is the
+     misleading-control shape Kamron ruled out.
+     Two more Android-only facts: the host reads fontScale in the AndroidView
+     factory, and none of the activities in AndroidManifest.xml lists
+     fontScale in configChanges, so a change made while the app is running
+     does land -- but by activity recreation, not live like WebKit. And
+     Configuration.fontScale is the LINEAR scale, so at Android 14's largest
+     settings this text grows more than native text does elsewhere in the app.
+
+   Gated on pointer: coarse, and deliberately NOT on a width. The gate is
+   needed because -apple-system-body on macOS is 13px, so a desktop Safari
+   window dragged narrow would otherwise SHRINK the text. A width was wrong
+   because the app ships on iPad as well (project.yml
+   TARGETED_DEVICE_FAMILY "1,2"): a max-width would have left an iPad's
+   document stuck at 16px while an Android tablet, whose textZoom is
+   unconditional, scaled. A desktop browser has a fine pointer and so is
+   untouched at every window size; a touch Chromium matches this query and
+   still gets nothing, because the declaration is dropped there.
 
    NOTE: no backticks in here. This whole stylesheet is a JS template
    literal, and one in a comment ends the string. */
-@media (max-width: 700px) and (pointer: coarse) {
+@media (pointer: coarse) {
   .de-paper .ProseMirror { font: -apple-system-body;
     font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; line-height: 1.6; }
 }
