@@ -11,8 +11,12 @@ tokens, and is announced as a status, or as an alert when it is an error.
 
 Inside a plugin's frame the brand tokens are the plugin's accent, never
 amber, so the frame also hands an inverted toast its OTHER-theme accent
-(--inv-*, PluginPageFrame), which styles.css maps back onto the brand
-tokens there.
+(PluginToastAccent, PluginPageFrame), which the toast's group sets inline.
+
+One stack for everything (owner, 2026-11-05: "as uniform as possible"):
+index.html's static #toast-host takes every hook's toasts, the shell's
+"plugins changed" notice (ToastNotice) and the "Domovoi has been updated"
+bar, so they stack instead of overlapping; notices sit above the toasts.
 
 Static checks on the sources, the token maths of test_web_contrast.py, and
 the real hook driven by jsx_interact_harness.js. No DB.
@@ -55,13 +59,14 @@ def _rule(css: str, selector: str) -> str:
 
 
 def test_the_stack_sits_at_the_top_under_the_topbar_and_the_guard_banner() -> None:
-    toast = _use_toast()
-    assert "top: 'calc(var(--topbar-h, 52px) + var(--guard-banner-h, 0px) + 12px)'" in toast
-    assert "bottom:" not in toast
+    assert "bottom:" not in _use_toast()
+    css = _src("styles.css")
+    stack = _rule(css, ".toast-stack")
+    assert "top: calc(var(--topbar-h, 52px) + var(--guard-banner-h, 0px) + 12px);" in stack
+    assert "position: fixed;" in stack and "z-index: 111;" in stack and "bottom" not in stack
     # The viewport less a 16px gutter a side (no sideways scroll on a 375px
     # phone), clicks passing through between toasts.
-    assert "left: 16, right: 16," in toast and "pointerEvents: 'none'" in toast
-    css = _src("styles.css")
+    assert "left: 16px; right: 16px;" in stack and "pointer-events: none;" in stack
     toast_rule = _rule(css, ".toast-stack .toast")
     assert "pointer-events: auto;" in toast_rule
     assert "max-width: min(100%, 600px);" in toast_rule
@@ -148,14 +153,39 @@ def test_an_inverted_toast_stands_out_from_the_page(page: str) -> None:
 
 
 def test_a_plugin_frame_hands_the_toast_its_other_theme_accent() -> None:
-    css = _src("styles.css")
-    rule = _rule(css, ":root .plugin-frame[data-accent-inverse] .theme-invert")
-    for name in ("brand", "brand-hover", "brand-press", "brand-fg", "fg-on-brand",
-                 "brand-soft", "brand-halo", "brand-ring", "brand-ink"):
-        assert f"--{name}: var(--inv-{name});" in rule, name
+    # The toast is drawn in the shared stack, outside the frame's DOM, so
+    # the frame passes the accent down the React tree and the toast's group
+    # sets it inline (no stylesheet rule re-points --brand).
     comps = _src("components.jsx")
     frame = comps[comps.index("const PluginPageFrame"):comps.index("/* One nav row's classes.")]
-    assert "data-accent-inverse={inverse ? '' : undefined}" in frame
+    assert "<PluginToastAccent.Provider value={inverse}>" in frame
+    assert '<div className="toast-group" style={accent || undefined}>' in _use_toast()
+    assert ".toast-group { display: contents; }" in _src("styles.css")
+
+
+# ─── one stack for every toast and notice ────────────────────────────────
+
+
+def test_the_shell_has_one_static_host_and_every_notice_uses_it() -> None:
+    html = _src("index.html")
+    assert html.count('<div id="toast-host" class="toast-stack theme-invert"></div>') == 1
+    assert html.count('id="toast-host"') == 1
+    # "plugins changed": the shared notice, not a box of its own.
+    stale = html[html.index("{pluginsStale && ("):]
+    stale = stale[:stale.index(")}") + 2]
+    assert "<ToastNotice " in stale and "position: 'fixed'" not in stale
+    assert "label: 'reload'" in stale
+    # "Domovoi has been updated": the toast markup, into the host.
+    bar = html[html.index("function show()"):html.index("function check()")]
+    assert "bar.className = 'toast toast-stay toast-notice';" in bar
+    assert "bar.setAttribute('role', 'status');" in bar
+    assert "document.getElementById('toast-host')" in bar and "host.appendChild(bar);" in bar
+    assert "position:fixed" not in bar and "bottom" not in bar
+    assert "'btn btn-primary'" in bar and "'not now'" in bar
+    # Notices sit above the fading toasts in the column-reverse stack.
+    css = _src("styles.css")
+    assert "order: 1;" in _rule(css, ".toast-stack .toast-notice")
+    assert "flex-direction: column-reverse;" in _rule(css, ".toast-stack")
 
 
 # ─── the hook, driven ────────────────────────────────────────────────────
@@ -194,8 +224,37 @@ return { light: inv(__ACCENT__, false), dark: inv(__ACCENT__, true),
 
 RADIO_ACCENT = acc.resolve_accent("#146859").as_dict()
 
+ACCENTED = ("(PluginToastAccent && (PluginToastAccent._value = { '--brand': '#146859', '--brand-ink': '#146859' }),"
+            + PROBE + ")")
+
+GROUP = r"""
+h.render();
+h.global('window').__toast.fire('saved');
+h.rerender(); await h.settle();
+const g = h.find((el) => String((el.props && el.props.className) || '') === 'toast-group');
+return { style: g.props.style || null };
+"""
+
+NOTICE = ("(() => () => React.createElement(ToastNotice, { text: 'plugins changed — reload to get the new pages',"
+          " actions: [{ label: 'reload', onClick: () => { window.__reloaded = (window.__reloaded || 0) + 1; } }] }))()")
+
+NOTICE_SCRIPT = r"""
+h.render();
+const cls = (el) => String((el.props && el.props.className) || '');
+const box = h.find((el) => cls(el).includes('toast-notice'));
+const stack = h.find((el) => cls(el).includes('toast-stack'));
+const text = h.find((el) => cls(el) === 'toast-stay-text').text;
+const close = h.find({ title: 'dismiss' });
+await h.click({ type: 'button', text: 'reload' });
+return { cls: cls(box), role: box.props.role, tone: box.props['data-tone'], stack: cls(stack), text,
+         close: !!close, reloaded: h.global('window').__reloaded || 0 };
+"""
+
 SCENARIOS = {
     "fire": {"files": ["web/static/components.jsx"], "component": PROBE, "script": FIRE},
+    "group-plain": {"files": ["web/static/components.jsx"], "component": PROBE, "script": GROUP},
+    "group-accented": {"files": ["web/static/components.jsx"], "component": ACCENTED, "script": GROUP},
+    "notice": {"files": ["web/static/components.jsx"], "component": NOTICE, "script": NOTICE_SCRIPT},
     "inverse": {"files": ["web/static/components.jsx"],
                 "component": "(window.__inv = pluginAccentInverseStyle, () => null)",
                 "script": INVERSE.replace("__ACCENT__", json.dumps(RADIO_ACCENT))},
@@ -218,11 +277,10 @@ def driven() -> dict:
 
 
 def test_the_hook_renders_the_stack_inverted_at_the_top(driven) -> None:
+    # No #toast-host here (no document): the hook draws its own stack, the
+    # same class the host carries.
     o = driven["fire"]
     assert o["stackClass"] == "toast-stack theme-invert"
-    style = o["stackStyle"]
-    assert style["position"] == "fixed" and style["zIndex"] == 111
-    assert "bottom" not in style and "--topbar-h" in style["top"]
 
 
 def test_tones_roles_and_keyed_replacement(driven) -> None:
@@ -242,9 +300,24 @@ def test_the_inverse_accent_is_the_other_themes_and_all_or_nothing(driven) -> No
     o = driven["inverse"]
     light_page, dark_page = o["light"], o["dark"]
     # On a light page the toast is dark: it gets the accent's dark values.
-    assert light_page["--inv-brand"] == RADIO_ACCENT["dark"]["brand"]
-    assert dark_page["--inv-brand"] == RADIO_ACCENT["light"]["brand"]
-    assert dark_page["--inv-brand-ink"] == RADIO_ACCENT["light"]["brand_ink"]
-    assert dark_page["--inv-fg-on-brand"] == RADIO_ACCENT["light"]["brand_fg"]
+    assert light_page["--brand"] == RADIO_ACCENT["dark"]["brand"]
+    assert dark_page["--brand"] == RADIO_ACCENT["light"]["brand"]
+    assert dark_page["--brand-ink"] == RADIO_ACCENT["light"]["brand_ink"]
+    assert dark_page["--fg-on-brand"] == RADIO_ACCENT["light"]["brand_fg"]
     assert len(light_page) == 9
     assert o["partial"] is None and o["none"] is None
+
+
+def test_a_toast_inside_a_plugin_frame_carries_its_accent(driven) -> None:
+    assert driven["group-plain"]["style"] is None
+    assert driven["group-accented"]["style"] == {"--brand": "#146859", "--brand-ink": "#146859"}
+
+
+def test_a_notice_looks_like_a_toast_and_stays_until_acted_on(driven) -> None:
+    o = driven["notice"]
+    assert o["cls"] == "toast toast-stay toast-notice"
+    assert (o["role"], o["tone"]) == ("status", "info")
+    assert o["stack"] == "toast-stack theme-invert"
+    assert o["text"] == "plugins changed — reload to get the new pages"
+    assert o["close"] is False          # no dismiss given: it stays until reloaded
+    assert o["reloaded"] == 1

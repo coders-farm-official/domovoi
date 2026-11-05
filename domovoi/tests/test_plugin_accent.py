@@ -111,21 +111,15 @@ def test_surfaces_match_the_token_file() -> None:
 
 def test_core_amber_is_still_cores_alone() -> None:
     # The token file keeps amber; nothing in the shared stylesheet re-points
-    # --brand (only the plugin frame does, inline, on its own wrapper), save
-    # the one rule that hands an inverted toast inside a plugin's frame the
-    # plugin's own other-theme accent (--inv-*, set by the frame).
+    # --brand (only the plugin frame does, inline, on its own wrapper, and
+    # a toast fired inside it, inline, on its toast group).
     css = TOKENS_CSS.read_text(encoding="utf-8")
     light = _css_block(css, "/* ---- BASE TOKENS — light (default) -------------------------- */\n:root")
     dark = _css_block(css, ":root[data-theme='dark']")
     assert light["brand"].strip() == "oklch(0.78 0.16 75)"
     assert dark["brand"].strip() == "oklch(0.80 0.16 75)"
     styles = (REPO_ROOT / "web" / "static" / "styles.css").read_text(encoding="utf-8")
-    frame_rule = re.search(r":root \.plugin-frame\[data-accent-inverse\] \.theme-invert \{([^}]*)\}", styles)
-    assert frame_rule
-    for name, value in re.findall(r"--((?:brand|fg-on-brand)[\w-]*)\s*:\s*([^;]+);", frame_rule.group(1)):
-        assert value.strip() == f"var(--inv-{name})", name
-    rest = styles.replace(frame_rule.group(0), "")
-    assert not re.search(r"--brand(-[a-z]+)?\s*:", rest)
+    assert not re.search(r"--brand(-[a-z]+)?\s*:", styles)
 
 
 # ─── deriving the tokens ─────────────────────────────────────────────────

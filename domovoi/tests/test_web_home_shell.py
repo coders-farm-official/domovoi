@@ -468,14 +468,15 @@ def test_toasts_clear_the_phone_strip_and_the_docked_player() -> None:
     lifted by the strip alone they still covered the docked player's play
     button (measured at 375px: three "queued" toasts over the bar). Since
     2026-11-05 the toasts sit at the top instead (test_web_toast_top.py),
-    clear of both; the bottom-edge notices below still lift."""
+    clear of both."""
     lifted = "bottom: 'calc(var(--dock-bottom, 0px) + var(--player-h, 0px) + 24px)'"
     comps = _src("components.jsx")
     toast = comps[comps.index("const useToast"):comps.index("/* ---- Tabs")]
     assert "bottom:" not in toast
+    # The shell's notices ("plugins changed", "Domovoi has been updated")
+    # moved into the same top stack too (test_web_toast_top.py).
     html = _src("index.html")
-    assert lifted in html                                            # "plugins changed"
-    assert "bottom:calc(var(--dock-bottom, 0px) + var(--player-h, 0px) + 24px)" in html  # "Domovoi has been updated"
+    assert lifted not in html and "bottom:calc(" not in html
     # --player-h is the bar's own height, and only while the bar shows.
     css = _src("styles.css")
     assert re.search(r"^html\.mp-docked \{ --player-h: 64px; \}", css, re.M)

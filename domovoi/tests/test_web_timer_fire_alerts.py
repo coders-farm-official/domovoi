@@ -628,8 +628,9 @@ def test_the_stack_sits_above_the_dock_and_under_the_dialogs_and_toasts() -> Non
     block = comps[comps.index("const TimerFireAlerts = "):comps.index("/* expose to other Babel scripts */")]
     assert "bottom: 'calc(var(--dock-bottom, 0px) + var(--player-h, 0px) + 24px)'" in block
     assert "zIndex: 85" in block
-    toast = comps[comps.index("const useToast"):comps.index("/* ---- Tabs")]
-    assert "zIndex: 111" in toast
+    css_toast = (REPO_ROOT / "web" / "static" / "styles.css").read_text(encoding="utf-8")
+    stack = css_toast[css_toast.index(".toast-stack {"):]
+    assert "z-index: 111;" in stack[:stack.index("}")]
     confirm = comps[comps.index("const DeleteConfirmDialog"):comps.index("const DeleteConfirmDialog") + 600]
     assert "zIndex: 90" in confirm
     css = (REPO_ROOT / "web" / "static" / "styles.css").read_text(encoding="utf-8")
