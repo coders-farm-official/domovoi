@@ -91,8 +91,9 @@ SCENARIOS = {
                          blocked_reason="Pair this phone to change a room that isn't playing")},
         "script": SNAP + (
             "h.render(); const before = snap(); const pairBefore = h.global('__pair');"
-            " await h.click({ type: 'button', text: 'pair this phone' });"
-            " return { before, pairBefore, pairAfter: h.global('__pair') };"
+            " await h.click({ type: 'button', text: 'connect this browser' });"
+            " const ca = h.global('window').ConnectAsk;"
+            " return { before, pairBefore, pairAfter: h.global('__pair') + (ca && ca.wanted ? 1 : 0) };"
         ),
     },
     "guest_room_stopped_meanwhile": {
@@ -238,7 +239,7 @@ def test_a_guest_on_a_room_that_isnt_playing_is_told_and_offered_pairing(driven)
     text = out["before"]["text"]
     assert "office isn't playing" in text
     assert "Pair this phone to change a room that isn't playing" in text
-    assert "pair this phone" in out["before"]["buttons"]
+    assert "connect this browser" in out["before"]["buttons"]
     # Nothing prompted until the person pressed it.
     assert out["pairBefore"] == 0 and out["pairAfter"] == 1
     assert _count(out["before"]["titles"], "move up") == 0
@@ -275,7 +276,7 @@ def test_a_guests_room_card_has_no_stop_and_no_favorite(driven) -> None:
     # The quiet den offers pairing, not a "play something" that could only
     # be answered with the pairing prompt.
     assert "play something" not in before["buttons"]
-    assert "pair this phone to start music here" in before["text"]
+    assert "connect this browser to start music here" in before["text"]
 
 
 def test_a_guests_refusal_is_said_in_words_and_the_queue_reread(driven) -> None:

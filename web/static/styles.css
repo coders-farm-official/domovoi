@@ -1284,6 +1284,9 @@ textarea.cal-inp { resize: vertical; min-height: 64px; line-height: 1.4; }
 }
 .first-run-token-missing { font-size: 12px; color: var(--fg-muted); }
 .first-run-mine-acts { display: flex; gap: 8px; justify-content: flex-end; }
+/* Home's "Connect this browser" for an unpaired browser on a claimed house. */
+.home-connect { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 8px; }
+.home-connect-why { font-size: 12px; color: var(--fg-muted); }
 /* The pair-this-browser modal's two ways in. The sign-in is the way out
    for someone who has never heard of the household token, so it gets the
    full width of the modal; "or paste the household token" is the fork to

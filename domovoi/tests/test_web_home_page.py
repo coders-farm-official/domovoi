@@ -55,7 +55,7 @@ FILES = [
     "web/static/satellites.jsx", "web/static/calendar.jsx", "web/static/health.jsx", "web/static/home.jsx",
 ]
 COMPONENT = ("(window.__Auth = Auth, window.__DI = DeviceIdentity,"
-             " window.__rows = HomeAttentionRows, window.__FR = FirstRun, HomePage)")
+             " window.__rows = HomeAttentionRows, window.__FR = FirstRun, window.__CA = ConnectAsk, HomePage)")
 
 NOW = 1790330400000          # fri 25 sep 2026, 10:00 UTC
 MIN = 60 * 1000
@@ -300,11 +300,24 @@ SCENARIOS["unpaired"] = scenario(
                  {"room_id": "office", "state": "stop", "song": None},
              ]}),
     "const before = w.__snap(h);"
-    "await h.click({ type: 'button', text: 'pair this phone' });"
-    "const pairAfterClick = w.__Auth.pairModalOpen;"
+    "await h.click({ type: 'button', text: 'Connect this browser' });"
+    "const pairAfterClick = w.__CA.wanted;"
     "await h.click({ type: 'button', title: \"kitchen's queue\" });"
     "return { before, pairAfterClick, hash: w.location.hash,"
     " queueRoom: w.RoomQueueIntent ? w.RoomQueueIntent.take() : null };",
+)
+# A guest whose calendar read is refused: told what opens it, not that it
+# is broken (owner, 2026-11-04: the page looked half broken).
+SCENARIOS["guest_calendar_refused"] = scenario(
+    house(**{"GET /api/satellites": {"__status": 401,
+                                     "__body": {"detail": "X-Device-Token or admin session required"}},
+             "GET /api/calendar/events": {"__status": 401,
+                                          "__body": {"detail": "X-Device-Token or admin session required"}}}),
+    SNAP,
+)
+SCENARIOS["paired_calendar_failed"] = scenario(
+    house(**{"GET /api/calendar/events": {"__status": 502, "__body": {"detail": "core down"}}}),
+    SNAP, ls=PAIRED_LS,
 )
 # A guest presses pause on the playing room just as it stopped: the
 # server refuses (the core's idle sentence names the device token, which
@@ -963,7 +976,10 @@ def test_unpaired_landing_issues_no_admin_read_and_opens_no_prompt(driven) -> No
 def test_unpaired_sees_the_house_and_a_way_to_pair(driven) -> None:
     out = driven["unpaired"]
     snap = out["before"]
-    assert any("pair this phone for live updates and controls" in b["text"] for b in snap["buttons"])
+    # A clear button, in device-neutral words (owner, 2026-11-04).
+    assert any(b["text"] == "Connect this browser" for b in snap["buttons"])
+    assert "for live updates, the calendar and every control" in snap["text"]
+    assert not any("phone" in b["text"] for b in snap["buttons"] if "Connect" in b["text"])
     assert snap["live"] == "not live · updates every 30s"
     # A guest: the rooms that are PLAYING, from now-playing — not
     # "couldn't load rooms" for the household read it was refused.
@@ -980,7 +996,9 @@ def test_unpaired_sees_the_house_and_a_way_to_pair(driven) -> None:
     # rows the household attention card, sign-in hint included, stays away).
     assert snap["attention"] == []
     assert "couldn't check" not in snap["text"]
-    # The pair link is the only thing that opens the prompt.
+    # The connect button is the only thing that opens a prompt: the connect
+    # prompt (components.jsx ConnectAsk), not the bare pair modal.
+    assert snap["pair"] is False
     assert out["pairAfterClick"] is True
     # The queue button opens Music's Room queue tab (its own address since
     # 2026-10-12) on that room.
@@ -992,7 +1010,7 @@ def test_paired_phone_is_live_with_no_pair_link_and_no_admin_rows(driven) -> Non
     out = driven["paired"]
     before, after = out["before"], out["after"]
     assert not _fetched(after) & ADMIN_PATHS
-    assert not any("pair this phone" in b["text"] for b in after["buttons"])
+    assert not any("Connect this browser" in b["text"] for b in after["buttons"])
     assert before["live"] == "not live · updates every 30s"
     assert after["live"] == "live"
     assert {r["key"] for r in after["attention"]} == {"offline"}
@@ -1012,7 +1030,7 @@ def test_admin_gets_the_admin_rows_from_admin_reads(driven) -> None:
     assert texts["disk"].startswith("home disk is 93% full")
     assert all(r["href"] for r in snap["attention"])
     assert not any("sign in for approvals" in b["text"] for b in snap["buttons"])
-    assert not any("pair this phone" in b["text"] for b in snap["buttons"])
+    assert not any("Connect this browser" in b["text"] for b in snap["buttons"])
 
 
 def test_admin_all_clear_only_after_every_source_answered(driven) -> None:
@@ -1036,7 +1054,7 @@ def test_unclaimed_box_says_so_first_and_offers_the_claim(driven) -> None:
     assert "#manual" in snap["links"]
     # The pre-setup grace opens every read, the admin ones included.
     assert ADMIN_PATHS <= _fetched(snap)
-    assert not any("pair this phone" in b["text"] for b in snap["buttons"])
+    assert not any("Connect this browser" in b["text"] for b in snap["buttons"])
     assert snap["modal"] is False
     # "claim it" opens the first-run welcome, which holds the claim form
     # (components.jsx FirstRun; test_web_first_run_welcome.py), past a
@@ -1710,3 +1728,12 @@ def test_a_guests_refused_pause_is_said_not_prompted(driven) -> None:
     after = out["after"]
     assert after["modal"] is False and after["pair"] is False
     assert "pause: that room isn't playing, so a guest can't use its queue" in " ".join(after["text"])
+
+
+def test_a_guests_refused_calendar_says_how_to_connect(driven) -> None:
+    guest = driven["guest_calendar_refused"]
+    assert "connect this browser to see the calendar" in guest["text"]
+    assert "calendar unavailable" not in guest["text"]
+    assert guest["modal"] is False and guest["pair"] is False
+    # A household reader's failed read is still "unavailable".
+    assert "calendar unavailable" in driven["paired_calendar_failed"]["text"]

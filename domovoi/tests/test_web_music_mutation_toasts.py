@@ -397,7 +397,7 @@ def test_a_guests_refused_press_is_told_in_words_not_prompted(outcomes) -> None:
     assert len(_posts(o, "/api/music/pause/office")) == 1, o["net"]
     assert o["prompts"] == NO_PROMPTS, o["prompts"]
     assert o["toastTexts"] == [
-        "pause: guests can only change a room that's playing — pair this phone to do more",
+        "pause: guests can only change a room that's playing — connect this browser to do more",
     ], o["toastTexts"]
 
 

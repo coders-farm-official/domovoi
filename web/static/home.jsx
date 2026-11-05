@@ -5,7 +5,7 @@
  * approved 2026-09-26). On a phone, top to bottom:
  *
  *   status line      household name, date, "3 online · 1 offline · 2 playing
- *                    · 1 timer", the live dot, "pair this phone"
+ *                    · 1 timer", the live dot, "Connect this browser"
  *   needs attention  one line per problem, collapsed by kind
  *   timers           every timer and reminder in the house, counting down
  *   rooms            one row per room: pause / resume / stop / play
@@ -363,9 +363,13 @@ const HomeHeader = ({ name, nowMs, line, lineReady, live, viewer, onPair }) => {
           </button>
         </div>
         {unpaired && (
-          <button type="button" className="home-link" onClick={() => { onPair(); }}>
-            pair this phone for live updates and controls
-          </button>
+          // A clear button, not a faint link (owner, 2026-11-04): it opens
+          // the connect prompt (components.jsx ConnectPrompt) again after
+          // its "Not now". "This browser": a Mac's is not a phone.
+          <span className="home-connect">
+            <Button variant="primary" icon="link" onClick={() => { onPair(); }}>Connect this browser</Button>
+            <span className="home-connect-why">for live updates, the calendar and every control</span>
+          </span>
         )}
         {explain && <div className="home-explain">{why}</div>}
       </div>
@@ -797,7 +801,7 @@ const HomeGuestRefusal = (verb, e) => {
   if (e && e.status === 429) return `${verb}: too many changes from this phone — try again in a minute`;
   const said = e && e.detail && typeof e.detail.detail === 'string' ? e.detail.detail : null;
   if ((e && e.status === 401) || (said && /x-device-token|admin session required/i.test(said))) {
-    return `${verb}: guests can only change a room that's playing — pair this phone to do more`;
+    return `${verb}: guests can only change a room that's playing — connect this browser to do more`;
   }
   return `${verb}: ${said || apiErrorText(e)}`;
 };
@@ -866,7 +870,7 @@ const HomeGuestRooms = ({ np, busy, onAct }) => {
  * one is running. Never the description. A shared screen gets the times
  * and "busy" only. Read from local midnight, because the server filters
  * on starts_at and an event already under way must still show. */
-const HomeToday = ({ events, answered, failed, now, shared }) => {
+const HomeToday = ({ events, answered, failed, now, shared, guest = false }) => {
   const list = Array.isArray(events) ? events : [];
   const d1 = HomeDayStart(now, 1);
   const d2 = HomeDayStart(now, 2);
@@ -879,6 +883,9 @@ const HomeToday = ({ events, answered, failed, now, shared }) => {
   let content;
   if (!answered) {
     content = <div className="home-att-quiet">checking…</div>;
+  } else if (failed && guest) {
+    // A guest's read is refused, not broken: say what opens it.
+    content = <div className="home-att-quiet">connect this browser to see the calendar</div>;
   } else if (failed) {
     content = <div className="home-att-quiet">calendar unavailable</div>;
   } else if (!shown.length) {
@@ -1280,7 +1287,12 @@ const HomePage = ({ counts, badges }) => {
     }
   };
 
-  const onPair = () => { try { Auth.requestPairing(); } catch {} };
+  // The connect prompt (components.jsx ConnectAsk), past its "Not now";
+  // the bare pair prompt where it isn't loaded.
+  const onPair = () => {
+    try { if (typeof ConnectAsk !== 'undefined') { ConnectAsk.open(); return; } } catch { /* below */ }
+    try { Auth.requestPairing(); } catch {}
+  };
   const onSignIn = () => { try { Auth.requestLogin(); } catch {} };
   // "claim it": the first-run welcome again (components.jsx FirstRun),
   // which holds the claim form, even after its "Not now".
@@ -1311,7 +1323,7 @@ const HomePage = ({ counts, badges }) => {
             <HomeTimers active={active} done={done} now={now} shared={shared}
                         onlineRooms={onlineRooms} cancelling={cancelling} onCancel={onCancel}/>
             <HomeToday events={cal.data} answered={HomeAnswered(cal)}
-                       failed={HomeAnswered(cal) && !HomeOk(cal)} now={now} shared={shared}/>
+                       failed={HomeAnswered(cal) && !HomeOk(cal)} now={now} shared={shared} guest={guest}/>
           </div>
         </div>
         <div className="home-col">
