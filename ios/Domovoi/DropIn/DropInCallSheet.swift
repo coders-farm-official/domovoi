@@ -153,11 +153,31 @@ struct DropInCallSheet: View {
             )
             .font(.subheadline)
             .fixedSize(horizontal: false, vertical: true)
+            // **The same measurement as ``RoomsDropInRow``'s control**, taken
+            // off this sheet's own screenshot: `.buttonStyle(.bordered)` with
+            // `.tint(Color.brandInk)` drew `#975800` on `#ECE1D1`, **4.38:1**
+            // (`I005/ALL/att/testRooms_DropInFromThisPhoneIsHeardAndHungUp/
+            // rooms-27-dropin-live….png`, this button's frame
+            // `{{95.7, 495.0}, {82.3, 58.0}}`), under the 4.5:1 its
+            // subheadline needs. The caption below it measures 7.43:1 in the
+            // same picture, so this is the one pairing on the sheet under the
+            // threshold.
+            //
+            // Android's is an `OutlinedButton` too (`PhoneDropinCall.kt:168`),
+            // so the label belongs on the sheet's white canvas, where
+            // ``Color/brandInk`` is 5.66:1. `hang up` beside it is unchanged:
+            // it is ``Color/dangerFg`` on ``Color/danger`` and the same
+            // picture measures it at 5.93:1.
+            .foregroundStyle(Color.brandInk)
+            .padding(.horizontal, 12)
             .frame(minHeight: 44)
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(Color.brandInk.opacity(0.45), lineWidth: 1)
+            )
             .contentShape(.rect)
         }
-        .buttonStyle(.bordered)
-        .tint(Color.brandInk)
+        .buttonStyle(.plain)
     }
 
     /// `hang up` while the call is on, `close` once it is over — one button,
