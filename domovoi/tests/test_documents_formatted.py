@@ -584,3 +584,64 @@ def test_the_page_is_paper_in_every_theme_and_a_tap_anywhere_types():
     assert "view.focus();" in jsx and "Selection.atEnd(doc)" in jsx
     assert "t.closest('.de-fig, a, button, input, label, select, textarea, .de-pop')" in jsx
     assert "!editor.isEditable" in jsx
+
+
+def test_the_documents_writing_follows_the_phones_text_size_setting():
+    """Owner answer 72 (2026-11-04, under his rule 2): the phone's document
+    editor IS this page (answer 21 chose that shape so there is one editor),
+    and its writing did not follow the phone's large-text setting - only the
+    chrome around it grew.
+
+    The two halves are pinned here because they are one feature in two
+    engines, and each is invisible in the other's source:
+
+    * WKWebView resolves ``-apple-system-body`` to the live Dynamic Type body
+      size, so iOS needs no host code at all. The family is put straight back
+      afterwards - a document's text must not change shape with a phone
+      setting.
+    * Every non-Apple engine drops that shorthand as invalid, so Android's
+      half is ``textZoom`` in ``WebEditorHost.kt`` from the system font scale,
+      on the editor only and never on the print copy.
+
+    The gate is ``pointer: coarse`` as well as the width: ``-apple-system-body``
+    is 13px on macOS, so a desktop Safari window dragged under 700px would
+    SHRINK the text instead. A desktop browser at any width is untouched, and
+    the 16px rule above still states the page's own size.
+    """
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    jsx = (root / "web" / "static" / "doc_editor.jsx").read_text(encoding="utf-8")
+
+    # the page's own size is still the desktop size, unconditionally
+    assert ".de-paper .ProseMirror { outline: none; flex: 1 1 auto; min-height: 900px; font: 16px/1.6" in jsx
+
+    # ...and a touch screen under 700px follows the platform setting instead
+    assert "@media (max-width: 700px) and (pointer: coarse) {" in jsx
+    assert ".de-paper .ProseMirror { font: -apple-system-body;" in jsx
+    # the family and line height come back, so only the SIZE follows the setting
+    assert (
+        'font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; line-height: 1.6; }'
+        in jsx
+    )
+    # a code block scales with the writing instead of staying at 14px.
+    # Scoped to the editor's own rule: PRINT_CSS keeps 14px on purpose, because
+    # a printed page is paper and does not follow a phone setting.
+    assert ".de-paper pre {" in jsx and "font: .875em/1.5 ui-monospace" in jsx
+    editor_css = jsx.split("const PRINT_CSS", 1)[0]
+    assert "font: 14px/1.5 ui-monospace" not in editor_css
+
+    # the toolbar, the note strip and the pop-ups keep their own fixed sizes,
+    # so a document at AX5 does not push the controls off the screen
+    assert ".de-btn { display: inline-flex;" in jsx and "height: 32px;" in jsx
+    assert ".de-toolbar::-webkit-scrollbar { height: 4px; }" in jsx
+
+    kt = (
+        root / "android" / "app" / "src" / "main" / "java" / "com" / "domovoi"
+        / "app" / "ui" / "screens" / "documents" / "WebEditorHost.kt"
+    ).read_text(encoding="utf-8")
+    assert "settings.textZoom = (100f * ctx.resources.configuration.fontScale).roundToInt()" in kt
+    assert "import kotlin.math.roundToInt" in kt
+    # the print copy (javaScript = false) is paper: it never takes the zoom
+    body = kt.split("private fun lockDown(", 1)[1]
+    assert "textZoom" not in body, "the shared lock-down must not zoom the print copy"
