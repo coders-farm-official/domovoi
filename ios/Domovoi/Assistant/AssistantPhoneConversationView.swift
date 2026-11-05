@@ -526,7 +526,15 @@ struct AssistantPhoneConversationView: View {
                 // one thing and do another — three screens shipped that, and a
                 // Simulator run on 2026-11-02 watched it swallow a message.
                 // The button beside it is what sends.
-                TextField(ChatStrings.composerHint, text: $typed, axis: .vertical)
+                TextField(
+                    ChatStrings.composerHint,
+                    text: $typed,
+                    // Owner answer 65's vertical leg: a vertical-axis hint is
+                    // not a `UITextField` placeholder, so it needs the
+                    // prompt (`ShellHintPrompt` carries train I005's 1.70:1).
+                    prompt: ShellHintPrompt.text(ChatStrings.composerHint),
+                    axis: .vertical
+                )
                     .textFieldStyle(.roundedBorder)
                     .lineLimit(1...5)
                     .accessibilityLabel(ChatStrings.composerHint)

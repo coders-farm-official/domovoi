@@ -986,7 +986,13 @@ struct ManualTopBar: View {
             fallback: ManualStrings.Fallback.searchPlaceholder
         )
         if typeSize.isAccessibilitySize {
-            TextField(placeholder, text: query, axis: .vertical)
+            TextField(
+                placeholder,
+                text: query,
+                // Owner answer 65's vertical leg (`ShellHintPrompt`).
+                prompt: ShellHintPrompt.text(placeholder),
+                axis: .vertical
+            )
                 .lineLimit(2...)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 10)

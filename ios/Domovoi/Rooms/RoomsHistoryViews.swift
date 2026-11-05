@@ -233,7 +233,13 @@ struct RoomsConversationsView: View {
     private var search: some View {
         let text = Binding(get: { reads.searchDraft }, set: { reads.searchDraft = $0 })
         if typeSize.isAccessibilitySize {
-            TextField(RoomsStrings.searchThisRoom, text: text, axis: .vertical)
+            TextField(
+                RoomsStrings.searchThisRoom,
+                text: text,
+                // Owner answer 65's vertical leg (`ShellHintPrompt`).
+                prompt: ShellHintPrompt.text(RoomsStrings.searchThisRoom),
+                axis: .vertical
+            )
                 .lineLimit(2...)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 10)

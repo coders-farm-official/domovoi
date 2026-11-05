@@ -55,8 +55,13 @@ import UIKit
 /// until train I004 measured the hint at **1.72:1** with the proxy in —
 /// `UIColor.placeholderText` to the integer, so the proxy reached nothing,
 /// because `UITextField` colours its own placeholder label and an explicit set
-/// beats a proxy. `ShellHintInkAppearance` is the mechanism now and carries
-/// the readings. **The hint stays the field's own
+/// beats a proxy. There are **two** mechanisms now, split by what each can
+/// reach, and each carries its own readings: `ShellHintInkAppearance` routes
+/// `UITextField`'s plain placeholder setter through the attributed one (train
+/// I005: 7.43:1 on a single-line field), and `ShellHintPrompt` supplies the
+/// `prompt:` of every `TextField(axis: .vertical)` — the leg the swap cannot
+/// reach, which the same train measured at 1.70:1, Apple's grey to the
+/// integer, with the swap in place. **The hint stays the field's own
 /// `prompt`** — `XCUIElement.placeholderValue` keeps working, which cases
 /// read, and VoiceOver keeps the one element it had. The alternative, an
 /// overlay `Text` in place of the placeholder, is what

@@ -292,6 +292,10 @@ struct ChatMoreDraftCanvasView: View {
             TextField(
                 ChatMoreStrings.edit,
                 text: Binding(get: { editing }, set: { model.setEditedText($0) }),
+                // Owner answer 65's vertical leg: a vertical-axis hint is not a
+                // `UITextField` placeholder, so it needs the prompt
+                // (`ShellHintPrompt` carries train I005's 1.70:1 reading).
+                prompt: ShellHintPrompt.text(ChatMoreStrings.edit),
                 axis: .vertical
             )
             .textFieldStyle(.roundedBorder)

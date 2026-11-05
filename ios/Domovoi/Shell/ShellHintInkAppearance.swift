@@ -42,15 +42,17 @@ import UIKit
 /// the field's own prompt, which is the half of answer 65's instruction that
 /// an overlay `Text` would break.
 ///
-/// ### Why not the 39 call sites
+/// ### Why not the 35 single-line call sites
 ///
-/// `TextField(…, prompt: Text(hint).foregroundColor(.fgMuted))` is SwiftUI's
-/// own way to colour a prompt and is what this file would be replaced by if
-/// the shape below is ever unwanted. It costs an edit in **39 files**, none of
-/// which this unit owns, and it is silent about the fortieth: a field written
-/// next month gets Apple's grey again. The instruction is kept in
-/// `design-notes/ios/batch-2026-11-03/gx-shell/REPORT.md` so that the choice
-/// stays reversible rather than forgotten.
+/// `TextField(…, prompt: Text(hint).foregroundStyle(.fgMuted))` is SwiftUI's
+/// own way to colour a prompt. It costs an edit per call site and is silent
+/// about the next one: a single-line field written next month gets Apple's
+/// grey again, where the swap below inks it with no edit at all. So the two
+/// mechanisms split by what each can reach — this one every `UITextField`
+/// placeholder in the process, ``ShellHintPrompt`` the 16 vertical-axis
+/// fields this one cannot reach (see directly below), 14 of which carry the
+/// prompt today and two of which are another unit's files
+/// (`hx-shell/REPORT.md`).
 ///
 /// ### What is deliberately not here
 ///
@@ -58,13 +60,19 @@ import UIKit
 ///   property's setter and `attributedPlaceholder` is public; nothing here
 ///   names `_placeholderLabel` or any other underscored selector, which is the
 ///   recipe this one exists to avoid.
-/// * **No `UITextView` leg.** A `UITextView` has no placeholder of its own,
-///   and the field the vertical-axis case reads is a `UITextField` anyway:
-///   train I004's hierarchy for
-///   `testShell_TheHintInkIsReadableOnAVerticalField` has
-///   `TextField … placeholderValue: 'search title, artist, album, path…'` at
-///   AX5, where `MusicView.searchField` is `axis: .vertical`. One class covers
-///   both legs, and the `UITextView` line that was here covered neither.
+/// * **No vertical-axis leg, and the reading that settled it.** This file
+///   used to argue that one class covered both legs, from train I004's
+///   hierarchy: the AX5 element is reported as
+///   `TextField … placeholderValue: 'search title, artist, album, path…'`,
+///   therefore a `UITextField`. **Train I005 measured that it is not.** With
+///   both setters swapped and the single-line field reading 7.43:1 in the
+///   same run, the vertical-axis one read `rgb(188, 188, 193)` on
+///   `rgb(242, 242, 247)` — **1.70:1**, `UIColor.placeholderText` to the
+///   integer. An accessibility element's reported type is what SwiftUI says
+///   it is, not which UIKit class draws it, and this file read the first for
+///   the second. ``ShellHintPrompt`` is the vertical leg now, at those call
+///   sites, because SwiftUI's `prompt:` is the only place the colour of a
+///   prompt SwiftUI draws itself can be chosen.
 /// * **No sweep of existing windows.** ``install()`` runs in `DomovoiApp.init`,
 ///   before a view exists; a field built later is built through the setter.
 ///
@@ -163,15 +171,36 @@ extension UITextField {
     }
 
     /// The same for the attributed setter: whatever is handed in keeps its
-    /// text and its other attributes and gets ``HintInk/ink``.
+    /// text and its other attributes, and the runs that carry **no**
+    /// `.foregroundColor` get ``HintInk/ink``.
     ///
-    /// **It overrides a colour a call site chose, and no call site chooses
-    /// one**: `grep -rn "prompt:" ios/Domovoi/ --include=*.swift` returns one
-    /// line and it is a function parameter in `AssistantEngineHost`, not a
-    /// `TextField`'s. If one ever does, this is where it would be lost, so the
-    /// fix then is to leave an existing `.foregroundColor` alone rather than
-    /// to delete this leg — the 39 fields that set no colour are why it is
-    /// here.
+    /// **A colour a call site chose is left alone**, because call sites now
+    /// choose one. Counted over `ios/Domovoi`, skipping comment lines and
+    /// matching each `TextField(` to its closing paren: 51 `TextField` call
+    /// sites, 16 of them `axis: .vertical`, and 14 pass
+    /// `prompt: ShellHintPrompt.text(…)`. All 14 are `axis: .vertical`, and
+    /// **one of them is measured**: train I005 read Music's AX5 search box
+    /// (`Music/MusicView.swift:704`) at `rgb(188, 188, 193)`, Apple's
+    /// placeholder grey, with both setters already swapped — so that one is
+    /// not a `UITextField` placeholder and does not reach this setter. The
+    /// other 13 are unmeasured here. Two of them are `.roundedBorder`
+    /// (`Chat/ChatConversationView.swift:919`,
+    /// `Assistant/AssistantPhoneConversationView.swift:535`), which is a
+    /// `UITextField` style, so those two may well reach this setter; nothing
+    /// in this tree says either way. The run-wise write is what makes the
+    /// paragraph's claim hold without needing to know: whichever of the 14
+    /// arrive here keep the colour they passed, and so does the next
+    /// single-line field to pass a `prompt:` colour, which the earlier
+    /// version of this paragraph said could not exist ("no call site chooses
+    /// one") while the same commit added 14.
+    ///
+    /// Nothing measured moves either way, which is why this is a comment
+    /// correction with a one-line behaviour change behind it and not a fix to
+    /// a reading: every colour a call site passes today is `Color.fgMuted`,
+    /// which *is* ``HintInk/ink`` (`DomovoiApp.swift:336`), so a run that
+    /// keeps its own colour and a run that is overwritten end the same
+    /// pixels. The 35 single-line fields that pass no colour at all are why
+    /// this leg is still here.
     ///
     /// The recursion is bounded by the same flag: this calls the **original**
     /// attributed setter by name (the implementations are exchanged), so it
@@ -185,11 +214,19 @@ extension UITextField {
         shellHintInkIsApplying = true
         defer { shellHintInkIsApplying = false }
         let inked = NSMutableAttributedString(attributedString: text)
-        inked.addAttribute(
+        // The ranges are collected first and written after: a mutation inside
+        // `enumerateAttribute` is only documented to be safe within the range
+        // handed to it, and a hint colour is not worth depending on that.
+        var uncoloured: [NSRange] = []
+        inked.enumerateAttribute(
             .foregroundColor,
-            value: HintInk.ink,
-            range: NSRange(location: 0, length: inked.length)
-        )
+            in: NSRange(location: 0, length: inked.length)
+        ) { colour, range, _ in
+            if colour == nil { uncoloured.append(range) }
+        }
+        for range in uncoloured {
+            inked.addAttribute(.foregroundColor, value: HintInk.ink, range: range)
+        }
         shellHintInkSetAttributedPlaceholder(inked)
     }
 }
