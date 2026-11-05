@@ -1,5 +1,6 @@
 package com.domovoi.app.ui.screens.images
 
+import com.domovoi.app.net.ApiClient
 import com.domovoi.app.testing.Bytecode
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -23,9 +24,13 @@ import java.io.File
  * wrong:
  *
  *  * the **compiled** screen writes nothing — no `post`, `delete`, `put`,
- *    `patch` or `upload` on `ApiClient` from any method of `ImagesScreenKt`
- *    or its lambdas. That is the thing that matters, and it cannot be
- *    satisfied by renaming a string.
+ *    `patch`, `upload` or `raw` on `ApiClient` from any method of
+ *    `ImagesScreenKt` or its lambdas, counting the synthetic `…$default`
+ *    bridges the compiler emits for a call that omits the optional body
+ *    (see [writeNames], and [the write names catch a body-less write] which
+ *    proves it on code compiled in this very file). That is the thing that
+ *    matters, and it cannot be satisfied by renaming a string or by
+ *    spelling the path from pieces.
  *  * the **code** has no control for them, so a button is not re-added
  *    pointing at a route that happens to be reached some other way.
  *
@@ -42,6 +47,40 @@ class ImagesReadOnlyTest {
 
     private val facade = "com.domovoi.app.ui.screens.images.ImagesScreenKt"
     private val apiClient = "com/domovoi/app/net/ApiClient"
+
+    /**
+     * Every name a write on [ApiClient] can be invoked under.
+     *
+     * The plain name is not enough. Each of these takes an optional body
+     * (`ApiClient.kt:312-362`: `suspend fun post(path: String, body:
+     * JsonElement? = null)`), so a call that omits it — which is how two of
+     * the three controls removed here were written (a one-argument
+     * `api.post(".../jobs/<id>/cancel")`) — does not invoke
+     * `post` at all; it invokes the synthetic static bridge
+     * `ApiClient.post` + `$default`. A set of plain names is blind to exactly
+     * the calls this test exists to forbid. `upload` has no optional
+     * parameter and so no bridge, but it costs nothing to list, and `raw`
+     * is here because it is public: it is the one way to reach POST or
+     * DELETE without naming either.
+     */
+    private val writeNames: Set<String> =
+        listOf("post", "delete", "put", "patch", "upload", "raw")
+            .flatMap { listOf(it, it + '$' + "default") }
+            .toSet()
+
+    /**
+     * Not called. It exists so that [the write names catch a body-less write]
+     * has real compiler output to check [writeNames] against: these four
+     * calls omit the body, so this file's own bytecode holds the bridge
+     * spelling, whatever the Kotlin version does with it.
+     */
+    @Suppress("unused")
+    private suspend fun bodylessWrites(api: ApiClient) {
+        api.post("/x")
+        api.delete("/x")
+        api.put("/x")
+        api.patch("/x")
+    }
 
     private fun moduleFile(rel: String): File =
         listOf(File(rel), File("app/$rel")).firstOrNull { it.isFile }
@@ -70,10 +109,27 @@ class ImagesReadOnlyTest {
     }
 
     @Test
-    fun `the compiled screen makes no write of any kind`() {
-        val writes = Bytecode.callers(
-            facade, apiClient, setOf("post", "delete", "put", "patch", "upload"),
+    fun `the write names catch a body-less write`() {
+        // The positive control for [writeNames] itself. [bodylessWrites]
+        // makes four writes with no body; if the set only held the plain
+        // names this would find none of them, and the assertion below would
+        // be satisfied by a screen full of cancel buttons.
+        val mine = Bytecode.callers(
+            "com.domovoi.app.ui.screens.images.ImagesReadOnlyTest", apiClient, writeNames,
         )
+        assertEquals(
+            "writeNames misses the compiler's spelling of a body-less write: $mine",
+            listOf(Bytecode.Call("ImagesReadOnlyTest", "bodylessWrites")),
+            mine.distinct(),
+        )
+        // One per call, so a set that caught only some of the four would
+        // still be reported here.
+        assertEquals("all four body-less writes are seen: $mine", 4, mine.size)
+    }
+
+    @Test
+    fun `the compiled screen makes no write of any kind`() {
+        val writes = Bytecode.callers(facade, apiClient, writeNames)
         assertEquals(
             "Images is read-only from a phone (decision 67): $writes",
             emptyList<Bytecode.Call>(), writes,
