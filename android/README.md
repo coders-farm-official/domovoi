@@ -404,6 +404,16 @@ one credential the app has. The rules, all unit-tested under
   Household token on this server's dashboard." A `429` counts the wait down
   with the button off. A `503` or no answer says "Couldn't check it with
   the server — try again" and saves nothing. Nothing retries by itself.
+- **A Domovoi nobody has claimed** (`ui/shell/UnclaimedServer.kt`,
+  2026-11-04): before first-run admin setup the server's LAN grace lets
+  every read through, so the app used to show a full workspace for a house
+  with no admin. When the open `GET /api/auth/status` says
+  `setup_complete: false`, the app shows one screen in place of the
+  workspace instead, **This Domovoi isn't set up yet** ("Open its dashboard
+  in a web browser and claim it, then come back."), with **Check again**,
+  **open the dashboard**, **use this phone's media** (the local shell) and
+  **use a different server**. The read is asked again whenever the app
+  comes back on screen; a missing or failed answer never blocks the house.
 - **A refused token** (`net/TokenHealth.kt`, `ui/shell/TokenTroubleScreen.kt`):
   the server answers "no token" and "wrong token" with the same `401`,
   but the app knows whether it sent one. A device-tier `401`/`403` to a

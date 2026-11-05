@@ -50,6 +50,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -94,6 +95,7 @@ import com.domovoi.app.ui.screens.settings.PairingScreen
 import com.domovoi.app.ui.shell.player.DockedPlayer
 import com.domovoi.app.ui.theme.Domovoi
 import com.domovoi.app.ui.theme.ThemeMode
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 
 @Composable
@@ -159,6 +161,35 @@ fun AppShell() {
             if (toasts.isNotEmpty()) toasts.removeAt(0)
         }
     }
+
+    // Whether the active server has been claimed (UnclaimedServer.kt): the
+    // open status read, asked when the server is picked, when its socket
+    // comes or goes, every time the app comes back on screen (the owner
+    // claimed it in a browser and switched back), and on "Check again".
+    // Once claimed it is not asked again for that server. A read that
+    // fails keeps what was known: a doubtful answer never blocks the house.
+    var setupComplete by remember(serverUrl) { mutableStateOf<Boolean?>(null) }
+    var claimChecks by remember(serverUrl) { mutableIntStateOf(0) }
+    var checkingClaim by remember(serverUrl) { mutableStateOf(false) }
+    LaunchedEffect(serverUrl, connected, unreachable, claimChecks, shellLifecycle) {
+        if (serverUrl.isBlank() || unreachable || setupComplete == true) return@LaunchedEffect
+        shellLifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            if (setupComplete == true) return@repeatOnLifecycle
+            checkingClaim = true
+            val read = try {
+                setupCompleteOf(app.api.getUntracked("/api/auth/status"))
+            } catch (e: CancellationException) {
+                checkingClaim = false
+                throw e
+            } catch (e: Exception) {
+                null
+            }
+            checkingClaim = false
+            if (read != null) setupComplete = read
+            if (claimChecks > 0 && read == false) toast(UNCLAIMED_STILL)
+        }
+    }
+    val unclaimed = showsUnclaimed(serverUrl, setupComplete)
 
     // "Out of reach" has three faces: nothing answered; something answered
     // at the saved address that is NOT the Domovoi this phone paired with —
@@ -228,7 +259,9 @@ fun AppShell() {
                 ShellMode.Local -> OfflineShell(choice, activeVerdict)
                 // Kept in a saveable slot so a trip through local media
                 // (server out of reach) returns to the same screen.
-                ShellMode.Workspace -> workspaceState.SaveableStateProvider(serverUrl) { ShellContent(trouble) }
+                ShellMode.Workspace -> workspaceState.SaveableStateProvider(serverUrl) {
+                    ShellContent(trouble, unclaimed, checkingClaim, onCheckAgain = { claimChecks += 1 })
+                }
             }
             // Toasts overlay. This Column is a SIBLING of the shells, so the
             // shells' own consumption of WindowInsets.ime cannot reach it —
@@ -266,8 +299,19 @@ fun AppShell() {
 }
 
 @Composable
-private fun ShellContent(trouble: TokenTrouble?) {
+private fun ShellContent(
+    trouble: TokenTrouble?,
+    unclaimed: Boolean = false,
+    checkingClaim: Boolean = false,
+    onCheckAgain: () -> Unit = {},
+) {
     val app = LocalApp.current
+    // Nobody has claimed this Domovoi yet: one screen that says to claim it
+    // on the dashboard, before anything else (UnclaimedServer.kt).
+    if (unclaimed) {
+        UnclaimedServerScreen(checking = checkingClaim, onCheckAgain = onCheckAgain)
+        return
+    }
     // The server will not take the token this phone holds (refused, or a
     // wait after wrong ones): one card, with pair again, and no panel behind
     // it asking the server for anything (TokenTroubleScreen.kt).
