@@ -420,65 +420,6 @@ extension StubHouseUITests {
         return true
     }
 
-    /// Move the page's content **up** by `points` (negative moves it down),
-    /// with no momentum — the vertical sibling of ``roomsDrag(_:by:)``, for a
-    /// few points rather than a tab's width.
-    ///
-    /// Written for the drop-in case's audit position (train I006), where the
-    /// whole move is 3.7 points plus one, and the numbers are the ones this
-    /// suite has already measured rather than new ones:
-    ///
-    /// * **`withVelocity: .slow` and a hold before the lift.** The
-    ///   two-argument `press(forDuration:thenDragTo:)` ends in a flick —
-    ///   train R002 measured a drag asked for 143 points moving a page by
-    ///   294 (``musicMoreDrag(_:by:vertical:)``'s doc comment) — and lifting a
-    ///   stationary finger is what stops the content where the finger did.
-    /// * **No gesture under 24 points.** Less than a scroll view's pan slop is
-    ///   not a pan but a long press on whatever is under the finger. A move
-    ///   smaller than that is made as **two** pans, 24 points the other way
-    ///   and then 24 plus the move this way, so each gesture is a real pan
-    ///   and the net is the move asked for. The caller re-measures, so what
-    ///   the two pans actually moved is a reading, not an assumption.
-    /// * **Down the left margin**, `dx: 0.03` (x ≈ 12) as in
-    ///   ``printingDrag(_:by:)``: every row on a room's page starts at x = 16,
-    ///   so the finger hit-tests to the scroll view and holds no control, and
-    ///   the tab strip (x 16–377) never takes the pan.
-    /// * At most 80% of the page's height per gesture, starting near the edge
-    ///   the finger travels away from, so the whole gesture stays on the page.
-    ///
-    /// Answers false when nothing was asked for or the page is too short to
-    /// pan, so the caller can say that no gesture was made.
-    @MainActor
-    @discardableResult
-    func roomsDragVertically(_ page: XCUIElement, contentUpBy points: CGFloat) -> Bool {
-        let height = page.frame.height
-        guard points != 0, height > 80 else { return false }
-        let leastTravel: CGFloat = 24
-        /// One pan; `finger` is negative for a finger moving up.
-        func pan(_ finger: CGFloat) {
-            let travel = max(-height * 0.8, min(height * 0.8, finger))
-            let near: CGFloat = travel < 0 ? 0.9 : 0.1
-            let from = page.coordinate(withNormalizedOffset: CGVector(dx: 0.03, dy: near))
-            from.press(
-                forDuration: 0.4,
-                thenDragTo: from.withOffset(CGVector(dx: 0, dy: travel)),
-                withVelocity: .slow,
-                thenHoldForDuration: 0.4
-            )
-        }
-        // The finger moves the opposite way to the reading: content up is a
-        // finger moving up, which is a negative dy.
-        let finger = -points
-        if abs(finger) >= leastTravel {
-            pan(finger)
-        } else {
-            let away: CGFloat = finger < 0 ? 1 : -1
-            pan(away * leastTravel)
-            pan(finger - away * leastTravel)
-        }
-        return true
-    }
-
     /// Pick one of the seven tabs by its word.
     ///
     /// Scrolls the strip until the word is wholly inside it (``roomsBring``),
@@ -1363,6 +1304,14 @@ extension StubHouseUITests {
                 + "from this phone"
         )
         evidence(app, "rooms-27-dropin-control")
+        // **The room drawn whole, before anything scrolls it.** The room
+        // opens at the head of its page, where the configuration rows sit
+        // wholly between the bar and the foot (`registry default` at about
+        // y 504), so this shot and picture are what
+        // ``roomsBarEdgeMeasured(_:straddlingOn:drawnWholeOn:picture:window:)``
+        // reads a straddling row's own ink off after the audit below.
+        let openShot = roomsWindowShot(app)
+        let openPicture = app.screenshot().image.cgImage
         drop.tap()
         // The sheet, by the line that is only on it.
         XCTAssertTrue(
@@ -1634,74 +1583,65 @@ extension StubHouseUITests {
             // ``roomsContrastWithNoPixels(_:on:after:)`` is where the
             // measurement that separates the two is written.
             //
-            // **And no row may straddle the bar's lower edge** (train I006).
-            // That classifier excuses an element wholly under the bar and
-            // keeps one with any pixels showing, so a row *across* the edge
-            // is kept — and the 14 points the drop-in control lost moved the
-            // automatic scroll by 14, which put `registry default` at
-            // 123.0–141.0 against a bar ending at 137.3: 3.7 points of
-            // descenders under the hairline, the label's own ink 21:1, and a
-            // `Contrast failed` the classifier was right to keep. So the page
-            // is moved up by the largest overlap across that edge plus a
-            // point, measured, and then **asserted** to have nothing across
-            // it, so the next row-height change fails here loudly instead of
-            // flipping the excuse in silence. The drop-in control (726–770)
-            // moves by the same few points and must still be wholly on the
-            // window, because it is what this audit sits at the foot to read.
+            // **The page is left where XCUITest put it, on purpose.** That
+            // position is the one deterministic thing here: I006, I008 and
+            // I010 all logged `registry default` at 123.0–141.0 against a bar
+            // ending at 137.33, overlap 3.67 to the hundredth. The I006 fix
+            // moved the page off the edge with press-and-drag pans, and the
+            // same pans from the same position went opposite ways: I008's
+            // 24-down/28.7-up pair netted the 4.7 points asked for, and
+            // I010's identical pair netted about **128 points down**
+            // (`now playing`, at -8.0 before it, at 119.9 after), a second
+            // pair took the drop-in control to y=852, off the window, and the
+            // viewport assertion failed. Slop does not explain a 128-point
+            // error, and nothing in this file can measure what does without a
+            // Simulator, so no pan is trusted to place this page.
+            //
+            // Instead the one row that lands across the bar's lower edge is
+            // handled by a **measured allowance** (Kamron's rule 3, in the
+            // shape of ``roomsClippedFootMeasured``):
+            // ``roomsBarEdgeMeasured(_:straddlingOn:drawnWholeOn:picture:window:)``
+            // lets a contrast finding through only on an element that crosses
+            // that edge with at most ``roomsBarEdgeSliver`` points showing
+            // below it, and only when the same element, drawn whole in the
+            // shot taken when the room opened, measures 4.5:1 or better off
+            // that picture. I006's `registry default`: 3.7 points of
+            // descenders under the hairline, and `#000000` on `#FFFFFF` whole.
+            //
+            // What stays asserted, because this audit sits at the foot to read
+            // it: the drop-in control is wholly inside the page's viewport.
             if let page = roomsScrollView(app, strip: false) {
                 let bar = app.navigationBars.firstMatch
                 let edge = bar.exists ? bar.frame.maxY : 0
-                /// The page's labelled elements an edge at `edge` runs
-                /// through, with half a point of slack, as `(label, frame)`.
-                /// UIKit's scroll indicators are not the page's content.
-                func acrossTheBar() -> [(label: String, frame: CGRect)] {
-                    Self.roomsLabelled(page.descendants(matching: .any)).filter { one in
-                        !one.label.contains("scroll bar")
-                            && Self.crosses(edge, one.frame)
-                    }
-                }
                 if edge <= 0 { evidence(app, "rooms-27-dropin-no-navigation-bar") }
                 XCTAssertGreaterThan(
                     edge, 0,
-                    "no navigation bar over the room's page, so no edge to clear (tree printed above)"
+                    "no navigation bar over the room's page, so no edge to read (tree printed above)"
                 )
-                for _ in 0..<3 {
-                    let across = acrossTheBar()
-                    guard let overlap = across.map({ $0.frame.maxY - edge }).max() else { break }
-                    print(
-                        "ROOMS dropin-after: \(across.count) element(s) across the bar's "
-                            + "edge at \(edge), largest overlap \(overlap) — moving the page up "
-                            + "\(overlap + 1): \(across.map { "'\($0.label)' \($0.frame)" })"
-                    )
-                    guard roomsDragVertically(page, contentUpBy: overlap + 1) else { break }
+                let across = Self.roomsLabelled(page.descendants(matching: .any)).filter {
+                    !$0.label.contains("scroll bar") && Self.crosses(edge, $0.frame)
                 }
-                let still = acrossTheBar()
-                if !still.isEmpty { evidence(app, "rooms-27-dropin-across-the-bar") }
-                XCTAssertTrue(
-                    still.isEmpty,
-                    "the page still has element(s) across the navigation bar's lower edge at "
-                        + "\(edge) after measured drags, so the audit would sample a row "
-                        + "that is part bar and part page (I006's `registry default`): "
-                        + "\(still.map { "'\($0.label)' \($0.frame)" }) — tree printed above"
+                print(
+                    "ROOMS dropin-after: \(across.count) element(s) across the bar's edge at "
+                        + "\(edge), left in place: "
+                        + "\(across.map { "'\($0.label)' \($0.frame) showing \($0.frame.maxY - edge)" })"
                 )
                 let control = app.buttons[RoomsStringsUnderTest.dropInFromThisPhone].firstMatch
                 let dropFrame = control.exists ? control.frame : .zero
-                if !(roomsInside(dropFrame, page.frame, vertical: true)
-                    && app.frame.contains(dropFrame) && dropFrame.height > 0) {
-                    evidence(app, "rooms-27-dropin-control-off-the-window")
-                }
+                let whole = dropFrame.height > 0
+                    && roomsInside(dropFrame, page.frame, vertical: true)
+                    && app.frame.contains(dropFrame)
+                if !whole { evidence(app, "rooms-27-dropin-control-off-the-window") }
                 XCTAssertTrue(
-                    dropFrame.height > 0
-                        && roomsInside(dropFrame, page.frame, vertical: true)
-                        && app.frame.contains(dropFrame),
+                    whole,
                     "`drop in from this phone` is at \(dropFrame), not wholly inside the "
-                        + "page's viewport \(page.frame) on the window, after moving the page "
-                        + "off the bar's edge — the audit below would not read the control it "
-                        + "sits at the foot of the page to read (tree printed above)"
+                        + "page's viewport \(page.frame) on the window, where XCUITest's own "
+                        + "scroll to tap it left it — the audit below would not read the "
+                        + "control it sits at the foot of the page to read (tree printed above)"
                 )
             } else {
                 print(app.debugDescription)
-                XCTFail("no page scroll view on the room's screen to clear the bar's edge on")
+                XCTFail("no page scroll view on the room's screen")
             }
             let shot = roomsWindowShot(app)
             let bare = try auditIssues(app, "rooms-dropin-after")
@@ -1709,10 +1649,18 @@ extension StubHouseUITests {
             let stillThere = bareSplit.rest.filter(Self.roomsAnonymousUnderAPresentation)
             let named = bareSplit.rest.filter { !stillThere.contains($0) }
             let seen = roomsContrastWithNoPixels(named, on: shot, after: app)
+            let atTheEdge = roomsBarEdgeMeasured(
+                seen.measured,
+                straddlingOn: shot,
+                drawnWholeOn: openShot,
+                picture: openPicture,
+                window: app.frame
+            )
             print(
                 "ROOMS AUDIT dropin-after floor=\(bareSplit.floor) "
                     + "rest=\(bareSplit.rest.count) anonymous=\(stillThere.count) "
-                    + "no-pixels=\(seen.noPixels.count) ours=\(seen.measured.count) "
+                    + "no-pixels=\(seen.noPixels.count) bar-edge=\(atTheEdge.allowed.count) "
+                    + "ours=\(atTheEdge.kept.count) "
                     + "(under the sheet it was \(underTheSheet.count))"
             )
             XCTAssertEqual(
@@ -1733,12 +1681,14 @@ extension StubHouseUITests {
             // off that run's own screenshot, under the 4.5:1 its subheadline
             // needs, and `RoomsDropInRow.swift` no longer draws a fill behind
             // it. That one had to fail, and it is why the classifier excuses
-            // nothing an element shows.
+            // nothing an element shows — the bar-edge allowance above takes
+            // only a sliver of at most ``roomsBarEdgeSliver`` points, and only
+            // with its whole ink measured.
             XCTAssertEqual(
-                [], seen.measured,
+                [], atTheEdge.kept,
                 "an opened room with nothing over it has an audit finding of "
                     + "its own, against an element the window was showing:\n"
-                    + seen.measured.joined(separator: "\n")
+                    + atTheEdge.kept.joined(separator: "\n")
             )
         }
         // The house was **told**, rather than the socket being dropped: the
@@ -2648,8 +2598,10 @@ extension StubHouseUITests {
     ///    (`att/…/rooms-27-dropin-ended-tree…:47-49`). (Train I006: the
     ///    control is 14 points shorter, the scroll 380.6, and
     ///    `registry default` came to rest *across* the bar's edge, which this
-    ///    classifier rightly keeps — so the case now moves the page off that
-    ///    edge and asserts nothing straddles it before its window shot.)
+    ///    classifier rightly keeps. Pans that moved the page off it went the
+    ///    wrong way by ~128 points in I010, so the page now stays put and
+    ///    ``roomsBarEdgeMeasured(_:straddlingOn:drawnWholeOn:picture:window:)``
+    ///    measures that sliver instead.)
     ///  * The same case's health sentence at `y=840.3`, 70 points **past the
     ///    scroll view's foot at 770** and behind the phone bar.
     ///
@@ -3041,6 +2993,113 @@ extension StubHouseUITests {
                 "ROOMS AUDIT roster clipped-foot, measured :: \(line) — clipped at "
                     + "\(clipped.map { "\($0.frame)" }.joined(separator: ", ")) by the page's foot "
                     + "at \(edge); drawn whole at \(at.frame) before the audit: \(summary)"
+            )
+            allowed.append(line)
+        }
+        return (allowed, kept)
+    }
+
+    /// How many points of a row may show below the navigation bar's lower
+    /// edge for ``roomsBarEdgeMeasured(_:straddlingOn:drawnWholeOn:picture:window:)``
+    /// to call it a sliver. I006/I008/I010's `registry default` shows 3.67;
+    /// five is that plus room for a point of layout rounding, and well under
+    /// the 14.3-point half of an 18-point line, so a row a person could
+    /// actually read across the edge is never in it.
+    static let roomsBarEdgeSliver: CGFloat = 5
+
+    /// The drop-in case's **measured allowance**, by geometry and ink:
+    /// a contrast finding on a row the navigation bar's lower edge cuts,
+    /// with no more than a sliver of it on the window.
+    ///
+    /// Why it exists: XCUITest's own scroll to tap `drop in from this phone`
+    /// leaves the room's page at the same offset every train, with
+    /// `registry default` at 123.0–141.0 against a bar ending at 137.33 —
+    /// 3.67 points of descenders under the hairline, the rest under the
+    /// bar's material. Apple's contrast check samples that frame and reads
+    /// bar material against a cut-off strip of glyph tails. No pan moved the
+    /// page off it deterministically (I010: the same pans as I008 netted
+    /// about 128 points the wrong way), so the position stays and this
+    /// measures the row instead. The shape is ``roomsClippedFootMeasured``'s,
+    /// at the bar's edge rather than the page's foot.
+    ///
+    /// A line is allowed only when **all** of these hold, and each verdict is
+    /// printed:
+    ///  * its headline is one of the two contrast headlines, and it names a
+    ///    label;
+    ///  * in `settled` (taken just before the audit), every page element
+    ///    with that label **crosses** the bar's lower edge, and shows no more
+    ///    than ``roomsBarEdgeSliver`` points below it;
+    ///  * in `drawnWholeOn`, taken with `picture` when the room opened, at
+    ///    least one element with that label is wholly inside the page and
+    ///    below the bar;
+    ///  * and **every** such whole drawing measures 4.5:1 or better off
+    ///    `picture` (``roomsLeafInk(_:window:frame:)``).
+    ///
+    /// Everything else is kept, so it fails the case: a finding on a whole
+    /// element, on a row showing more than a sliver, on a label that has no
+    /// whole drawing to read, or on one whose whole ink is under the floor.
+    @MainActor
+    func roomsBarEdgeMeasured(
+        _ lines: [String],
+        straddlingOn settled: RoomsWindowShot,
+        drawnWholeOn whole: RoomsWindowShot,
+        picture: CGImage?,
+        window: CGRect
+    ) -> (allowed: [String], kept: [String]) {
+        var allowed: [String] = []
+        var kept: [String] = []
+        let edge = settled.bar.maxY
+        for line in lines {
+            guard line.hasPrefix(Self.roomsContrastFailed) || line.hasPrefix(Self.roomsNearlyPassed),
+                  let label = Self.roomsLabel(in: line), edge > 0
+            else {
+                kept.append(line)
+                continue
+            }
+            let cut = settled.pageElements.filter { $0.label == label }
+            let sliver = !cut.isEmpty && cut.allSatisfy {
+                Self.crosses(edge, $0.frame) && $0.frame.maxY - edge <= Self.roomsBarEdgeSliver
+            }
+            let drawn = whole.pageElements.filter {
+                $0.label == label && whole.page.contains($0.frame)
+                    && $0.frame.minY >= whole.bar.maxY - 0.5
+            }
+            let geometry = "cut at \(cut.map { "\($0.frame)" }.joined(separator: ", ")) by the "
+                + "bar's edge at \(edge); drawn whole at "
+                + "\(drawn.map { "\($0.frame)" }.joined(separator: ", "))"
+            guard sliver, let picture, !drawn.isEmpty else {
+                print(
+                    "ROOMS AUDIT dropin-after bar-edge NOT allowed :: \(line) — sliver=\(sliver), "
+                        + "picture=\(picture != nil); \(geometry)"
+                )
+                kept.append(line)
+                continue
+            }
+            var readings: [String] = []
+            var under = false
+            for at in drawn {
+                guard let reading = Self.roomsLeafInk(picture, window: window, frame: at.frame) else {
+                    readings.append("\(at.frame) holds only its paper")
+                    under = true
+                    continue
+                }
+                readings.append(
+                    "\(at.frame) ink \(reading.ink) on \(reading.paper) "
+                        + String(format: "%.2f", reading.ratio) + ":1"
+                )
+                if reading.ratio < Self.roomsContrastFloor { under = true }
+            }
+            guard !under else {
+                print(
+                    "ROOMS AUDIT dropin-after bar-edge NOT allowed, measured "
+                        + "\(readings.joined(separator: "; ")) :: \(line) — \(geometry)"
+                )
+                kept.append(line)
+                continue
+            }
+            print(
+                "ROOMS AUDIT dropin-after bar-edge, measured :: \(line) — \(geometry); "
+                    + readings.joined(separator: "; ")
             )
             allowed.append(line)
         }
