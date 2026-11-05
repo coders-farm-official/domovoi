@@ -170,7 +170,8 @@ struct BrandFillButtonStyle: ButtonStyle {
 /// `ShellFoldTests`). The text token flips with the theme because white on
 /// the dark fill is 2.99:1 (``DangerInk/whiteOnTheDarkFillRatio``).
 ///
-/// **Android's two red buttons are not this pair, and neither clears 4.5:1.**
+/// **Android's two red buttons are not this pair, and neither clears 4.5:1 in
+/// both themes.**
 /// Its filled `hang up` is white on `colors.err` (`PhoneDropinCall.kt:180-183`,
 /// `#EA3C3F`: **4.03:1** light, 2.98:1 dark) and its `forget` is `brandFg` on
 /// the same red (`ForgetServer.kt:103`: **4.33:1** light, 6.33:1 dark). The
