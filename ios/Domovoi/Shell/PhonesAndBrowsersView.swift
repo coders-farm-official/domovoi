@@ -195,7 +195,18 @@ struct PhonesAndBrowsersPanel: View {
             // arrive rather than at save time: `normalise(_:)` would see a
             // broken address, and the person would see their own typing
             // silently altered later instead of never accepting the newline.
-            TextField(ShellStrings.serverURLPlaceholder, text: $typedURL, axis: .vertical)
+            TextField(
+                ShellStrings.serverURLPlaceholder,
+                text: $typedURL,
+                // Owner answer 65's vertical leg. The one vertical-axis field
+                // train I005 measured drew its hint at 1.70:1 and
+                // `ShellHintInkAppearance`'s swap did not reach it, so the
+                // hint is passed as a prompt instead; the same string goes to
+                // the title, which keeps the accessibility label and
+                // `placeholderValue` exactly what they were.
+                prompt: ShellHintPrompt.text(ShellStrings.serverURLPlaceholder),
+                axis: .vertical
+            )
                 .onChange(of: typedURL) { _, new in
                     if new.contains(where: \.isNewline) {
                         typedURL = new.filter { !$0.isNewline }

@@ -283,6 +283,13 @@ struct MusicPlaylistSheet: View {
                 TextField(
                     MusicMoreStrings.descriptionPlaceholder,
                     text: $draftDescription,
+                    // Owner answer 65's vertical leg. The one vertical-axis
+                    // field train I005 measured drew its hint at 1.70:1 and
+                    // `ShellHintInkAppearance`'s swap did not reach it, so
+                    // the hint is passed as a prompt instead; the same string
+                    // goes to the title, which keeps the accessibility label
+                    // and `placeholderValue` exactly what they were.
+                    prompt: ShellHintPrompt.text(MusicMoreStrings.descriptionPlaceholder),
                     axis: .vertical
                 )
                 .lineLimit(2...)

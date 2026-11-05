@@ -158,7 +158,7 @@ extension StubHouseUITests {
         mode: String = StubHouseUITests.ordinaryTypeSize,
         port: Int = 6601
     ) -> XCUIApplication {
-        let app = XCUIApplication()
+        let app = freshApp()
         app.launchArguments = [
             "-domovoi-server", "127.0.0.1:\(port)",
             "-domovoi-token", Self.token,

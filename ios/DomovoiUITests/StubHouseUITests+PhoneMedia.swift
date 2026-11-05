@@ -70,7 +70,7 @@ extension StubHouseUITests {
         server: Bool = true,
         port: Int = 6601
     ) -> XCUIApplication {
-        let app = XCUIApplication()
+        let app = freshApp()
         app.launchArguments = server ? ["-domovoi-server", "127.0.0.1:\(port)"] : []
         if server { app.launchArguments += ["-domovoi-token", Self.token] }
         app.launchArguments += ["-domovoi-phone-media", media]

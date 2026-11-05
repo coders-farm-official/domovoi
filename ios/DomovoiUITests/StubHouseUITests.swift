@@ -227,58 +227,50 @@ final class StubHouseUITests: XCTestCase {
     /// rather than to anything this repository calls. **Whether it reaches
     /// the subsystem is not verified here and cannot be from Windows**: it is
     /// read by `libsystem_trace` as the process starts, the tests set no
-    /// `launchEnvironment` at all today, and the only instrument that can
-    /// answer is the byte count of the next train's simlog.
+    /// `launchEnvironment` at all in any train measured so far (I005
+    /// included), and the only instrument that can answer is the byte count
+    /// of the next train's simlog.
     ///
-    /// ### What it quietens is most of the launches, not the session
+    /// ### What it quietens: every launch but two
     ///
-    /// Only what ``launch(mode:paired:server:port:strip:push:pushDelay:args:)``
-    /// starts. **Eleven** other sites build their own `XCUIApplication`, in
-    /// **nine** files outside this unit's list, and still launch at
-    /// `OS_ACTIVITY_MODE=info`: `+AiSettings:132`, `+Alerts:136`,
-    /// `+Assistant:161`, `+Audiobooks:103`, `+ChatMore:440` and `:482`,
-    /// `+PhoneMedia:73`, `+Player:203`, `+Screens:571`, `LaunchUITests:32`
-    /// and `:48` (`grep -rn "XCUIApplication()" ios/DomovoiUITests` returns
-    /// twelve lines; the twelfth is this helper). Two further files reach
-    /// those launchers across a file boundary: `+Chat:788` and `:872` call
-    /// `assistantLaunch`, `+Transfers:682` calls `phoneLaunch`.
+    /// When this helper was written it reached only what
+    /// ``launch(mode:paired:server:port:strip:push:pushDelay:args:)`` starts,
+    /// and **eleven** other sites in nine files outside that unit's list
+    /// built their own `XCUIApplication` and still launched at
+    /// `OS_ACTIVITY_MODE=info`. Counted case by case over
+    /// `overnight-trains/I005/ALL/*.log`, that was 69 of the train's 522 app
+    /// opens (13.2%) untreated.
     ///
-    /// Counted case by case over `overnight-trains/I005/ALL/*.log` — `Launch
-    /// org.codersfarm.domovoi.dev.kamron` per case log, each case attributed
-    /// to the file that declares it, cross-checked against which launcher
-    /// each case calls — **69 of that train's 522 app opens (13.2%) are
-    /// untreated**, and they are named rather than bounded. Fifty-nine are
-    /// whole files, where every open comes from the file's own launcher:
-    /// `+AiSettings` 7, `+Alerts` 10, `+Assistant` 18, `+PhoneMedia` 24. The
-    /// other ten are one open each, in cases whose file is otherwise
-    /// treated: `testChatMore_TheCanvasShowsChangesForAVersionNotSeenHere`,
-    /// `testChatMore_AHandEditSavesAsTheNextVersionAndA409SaysSo`,
-    /// `testChatMore_ATalkTurnPutsBothRowsInTheThread`,
-    /// `testChatMore_ATurnTooLongSaysTheServersSentence`,
-    /// `testScreens_EachWarnAgainAnnouncesItsKind`,
-    /// `testAudiobooks_AFreshBookGoesStraightToPlay`,
-    /// `testPlayer_ThereIsNoHiddenHarnessScreen`,
-    /// `testChat_TheHousesConversationSaysItsPlaceInItsHeader`,
-    /// `testChat_ThePlaceIsInTheHeaderAtTheLargestTypeSize` and
-    /// `testTransfers_ABigPhoneFileGoesThroughTheStreamedDoor`.
-    /// `LaunchUITests`'s two sites contributed nothing: neither of its cases
-    /// has a log in that train.
+    /// **The batch integration routed nine of those eleven through this
+    /// helper** — `+AiSettings:132`, `+Alerts:136`, `+Assistant:161`,
+    /// `+Audiobooks:103`, `+ChatMore:440` and `:482`, `+PhoneMedia:73`,
+    /// `+Player:203`, `+Screens:571` — so all 69 of those opens are now
+    /// treated, the two `+Chat` cases and the one `+Transfers` case that
+    /// reached those launchers across a file boundary with them.
     ///
-    /// So the prediction here is about **the 453 opens this helper starts**,
-    /// not about the session: those processes should write far less, and a
-    /// session should take correspondingly longer to reach the quarantine
-    /// threshold — but an eighth of the opens is untreated, so a quiet train
-    /// would not on its own prove the lever reached the subsystem, and a
-    /// quarantined one would not on its own prove it did not.
+    /// The two that remain are `LaunchUITests:32` and `:48`, and they are
+    /// **not** a one-line change: `LaunchUITests` is a separate `XCTestCase`
+    /// subclass, so this `@MainActor` member of `StubHouseUITests` is not in
+    /// its scope. They also contributed nothing to the measurement — neither
+    /// of its cases has a log in I005 — so the residue is zero opens, not
+    /// 13.2% and not two.
     ///
-    /// **The internal control is those sixty-nine opens, by case and not by
-    /// file.** If the lever works, their per-pid byte counts stay where I005
-    /// left them while the other 453 fall. Splitting the train by file
-    /// instead marks three processes wrongly — the two `+Chat` cases and the
-    /// one `+Transfers` case above are untreated in files a reader would
-    /// otherwise put on the treated side. Routing every site through this
-    /// helper is in this unit's REPORT.md under `for_others`: a one-line
-    /// change per site, in nine files this unit may not edit.
+    /// ### What that costs the next train as an instrument
+    ///
+    /// The internal control the trace recommended — watch the untreated
+    /// processes' per-pid byte counts stay where I005 left them while the
+    /// others fall — **is gone with the residue it depended on**. Nothing in
+    /// the session is now untreated, so the only reading left is the whole
+    /// session's: the simlog's byte count, and whether
+    /// `QUARANTINED DUE TO HIGH LOGGING VOLUME` appears in it at all.
+    ///
+    /// That is a weaker instrument in one specific way. If the next train is
+    /// quiet, the lever worked; but if it is **not**, that no longer
+    /// distinguishes "`OS_ACTIVITY_MODE` does not reach
+    /// `com.apple.dt.xctest`" from "an untreated eighth of the opens carried
+    /// the session over the mark anyway", because there is no untreated
+    /// eighth left to blame. A loud train now means the launch variable is
+    /// not the lever, and the next step is the device setting below.
     ///
     /// *What it costs, if it works:* the app process's own log lines — the
     /// `Beginning first match sequence` / `Current tree:` / `Fetching AX
@@ -289,9 +281,12 @@ final class StubHouseUITests: XCTestCase {
     /// the trace back on for a targeted re-run of one case.
     ///
     /// The device-wide `log config --subsystem com.apple.dt.xctest --mode
-    /// level:off` is the trace's first recommendation and the surer one, but
-    /// it belongs to `stub_run.sh`, which is outside this unit's files: it is
-    /// in this unit's REPORT.md under `for_others`.
+    /// level:off` is the trace's first recommendation and the surer one — it
+    /// is checked in-process rather than at capture, so it removes the 95.9%
+    /// at source. It belongs to `stub_run.sh`, which is not in this
+    /// repository at all (it is on the Mac, `~/domovoi-ios/stub_run.sh`), so
+    /// no branch in this batch could carry it: it is the train runner's to
+    /// add, after `simctl bootstatus` and before `xcodebuild test`.
     @MainActor
     func freshApp() -> XCUIApplication {
         let app = XCUIApplication()

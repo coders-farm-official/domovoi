@@ -129,7 +129,7 @@ extension StubHouseUITests {
     /// a whole branch from a train (NIGHT-RULES §2).
     @MainActor
     fileprivate func aiSettingsLaunch(seed: String, mode: String = StubHouseUITests.ordinaryTypeSize) -> XCUIApplication {
-        let app = XCUIApplication()
+        let app = freshApp()
         app.launchArguments = [
             "-domovoi-server", "127.0.0.1:6601",
             "-domovoi-token", Self.token,

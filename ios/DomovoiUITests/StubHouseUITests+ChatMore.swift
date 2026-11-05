@@ -437,7 +437,7 @@ extension StubHouseUITests {
         setChatAI(on: true)
         setChatFail(nil)
         chatMoreReset()
-        let app = XCUIApplication()
+        let app = freshApp()
         app.launchArguments = [
             "-domovoi-server", "127.0.0.1:6601",
             "-domovoi-token", StubHouseUITests.token,
@@ -479,7 +479,7 @@ extension StubHouseUITests {
         setChatFail(nil)
         chatMoreReset()
         if let voice { chatMoreControl("{\"voice\":\"\(voice)\"}") }
-        let app = XCUIApplication()
+        let app = freshApp()
         app.launchArguments = [
             "-domovoi-server", "127.0.0.1:6601",
             "-domovoi-token", StubHouseUITests.token,
