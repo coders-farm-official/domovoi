@@ -514,6 +514,15 @@ from domovoi.turn_timings import (
     whisper_block,
 )
 from domovoi.log_privacy import said
+from domovoi import turn_history, turn_watchdog
+from domovoi.turn_watchdog import (
+    STAGE_IDENTIFY,
+    STAGE_REPLY,
+    STAGE_SECOND_HEARING,
+    STAGE_STT,
+    STAGE_STT_SLOT,
+    TurnStalled,
+)
 
 log = logging.getLogger(__name__)
 
@@ -1666,6 +1675,13 @@ class StreamSession:
         # This room's Whisper call in flight, speculative or not: the next
         # one waits for it, so a room never runs two at once.
         self._decode_inflight: asyncio.Future[str] | None = None
+        # When (time.monotonic) the call in the decode slot started: how
+        # long it has held the slot (`_one_at_a_time`'s bound).
+        self._decode_started_at: float | None = None
+        # The running turn's reply guard (`_process_utterance_turn`): the
+        # turn's task and its asyncio.timeout, disarmed by the first reply
+        # frame (`_reply_started`).
+        self._reply_guard: tuple[asyncio.Task[Any] | None, Any] | None = None
         # When the utterance's messages and frames arrived, against the pace
         # it was spoken at (see _CaptureClock), and the latest pause: when
         # it reached the server and what the satellite's clock said on it.
@@ -2198,12 +2214,33 @@ class StreamSession:
         clients run in a worker thread (``asyncio.to_thread``), which a
         cancel can't stop, so a cancelled caller (a discarded copy, a
         barge-in) must leave ``_decode_inflight`` pending until the thread
-        is really done — otherwise the next call would start beside it."""
+        is really done — otherwise the next call would start beside it.
+
+        The wait is bounded (incident 2026-11-09, the turn watchdog): a
+        call that has held the slot for ``voice_stt_timeout_max_sec`` is
+        stuck — its thread can't be stopped — and every later call here
+        raises :class:`TurnStalled` (``STAGE_STT_SLOT``) instead of waiting
+        behind it for good; at once, once the holder is that old. Nothing
+        starts beside it: a stuck decode most likely holds what the next
+        one would need."""
+        limit = max(0.1, float(settings.voice_stt_timeout_max_sec))
         while (prev := self._decode_inflight) is not None and not prev.done():
-            await asyncio.wait({prev})
+            since = getattr(self, "_decode_started_at", None)
+            held = time.monotonic() - since if since is not None else 0.0
+            if held >= limit:
+                raise TurnStalled(STAGE_STT_SLOT, limit)
+            waiting = asyncio.timeout(limit - held)
+            try:
+                async with waiting:
+                    await asyncio.wait({prev})
+            except TimeoutError:
+                if waiting.expired():
+                    raise TurnStalled(STAGE_STT_SLOT, limit) from None
+                raise
         fut = asyncio.ensure_future(start())
         fut.add_done_callback(_consume_outcome)
         self._decode_inflight = fut
+        self._decode_started_at = time.monotonic()
         return await asyncio.shield(fut)
 
     async def _whisper_call(
@@ -3747,20 +3784,22 @@ class StreamSession:
         trigger: str | None,
         reuse: _Speculation | None,
         speculations: list[_Speculation],
+        stt_deadline: float | None = None,
     ) -> _Heard | None:
         """The transcribe half of a turn: the speculative transcript when
         it covers the whole capture (``reuse``, already checked frame by
         frame), else Whisper on the whole buffer. Records the STT stages.
         None when speech recognition is unavailable — the turn has been
-        answered already."""
+        answered already.
+
+        ``stt_deadline`` (loop time): the speech-recognition budget
+        (turn_watchdog.stt_cap). Past it — a speculative copy, the room's
+        decode slot or the decode itself that never came back — raises
+        :class:`TurnStalled` (``STAGE_STT``)."""
         wait_t0 = time.perf_counter()
         heard: _Heard | None = None
-        if reuse is not None and reuse.task is not None:
-            # Shielded: a barge-in cancelling this turn must not take the
-            # room's decode bookkeeping down with it.
-            heard = await asyncio.shield(reuse.task)
-        reused = heard is not None
-        if heard is None:
+        whisper: Any = None
+        if reuse is None or reuse.task is None:
             try:
                 whisper = get_whisper_client()
             except SttUnavailableError as e:
@@ -3768,8 +3807,30 @@ class StreamSession:
                 # turn; the helper sends its own response_end.
                 await self._respond_stt_unavailable(e, trigger=trigger)
                 return None
-            marks: dict[str, Any] = {}
-            text, stt_ms, window = await self._whisper_call(whisper, pcm_bytes, marks=marks)
+        marks: dict[str, Any] = {}
+        budget = asyncio.timeout_at(stt_deadline)
+        try:
+            async with budget:
+                if reuse is not None and reuse.task is not None:
+                    # Shielded: a barge-in cancelling this turn must not take
+                    # the room's decode bookkeeping down with it.
+                    heard = await asyncio.shield(reuse.task)
+                if heard is None and whisper is None:
+                    try:
+                        whisper = get_whisper_client()
+                    except SttUnavailableError as e:
+                        await self._respond_stt_unavailable(e, trigger=trigger)
+                        return None
+                if heard is None:
+                    text, stt_ms, window = await self._whisper_call(
+                        whisper, pcm_bytes, marks=marks,
+                    )
+        except TimeoutError:
+            if budget.expired():
+                raise TurnStalled(STAGE_STT, _elapsed_ms(wait_t0) / 1000) from None
+            raise
+        reused = heard is not None
+        if heard is None:
             if "wait_ms" in marks:
                 # Behind a copy of this capture still decoding or being
                 # embedded (or a cancelled turn's call): part of
@@ -3978,6 +4039,7 @@ class StreamSession:
         greeting_played: bool,
         greeting_clip: str | None,
         ack_before_capture: bool,
+        stt_deadline: float | None = None,
     ) -> tuple[_Heard, str]:
         """The second hearing (``_wants_second_hearing``): the whole capture
         on faster-whisper's 30 s path, in the room's decode slot, screened
@@ -3985,18 +4047,51 @@ class StreamSession:
         one, or the first when the second can't be had, fails, or hears
         nothing usable (the first did hear speech). Records it on the turn:
         ``stt_rechecked``, ``stt_recheck_ms``, the window the text came
-        from, and the extra wait in ``stt_ms`` / ``stt_wait_ms``."""
+        from, and the extra wait in ``stt_ms`` / ``stt_wait_ms``.
+
+        It gets what is left of the turn's speech-recognition budget
+        (``stt_deadline``): past it, the first hearing is routed — the
+        turn watchdog notes the stall, the room still gets its answer."""
         try:
             whisper = get_whisper_client()
         except SttUnavailableError:
             return heard, transcript
         if not can_decode_full_window(whisper):
             return heard, transcript
-        t0 = time.perf_counter()
-        try:
-            text, recheck_ms, _window = await self._whisper_call(
-                whisper, pcm_bytes, full_window=True,
+        if stt_deadline is not None and stt_deadline - asyncio.get_running_loop().time() < 1.0:
+            log.info(
+                "stream %s: no time left for the second hearing; routing the first",
+                self.room_id,
             )
+            return heard, transcript
+        t0 = time.perf_counter()
+        budget = asyncio.timeout_at(stt_deadline)
+        try:
+            async with budget:
+                text, recheck_ms, _window = await self._whisper_call(
+                    whisper, pcm_bytes, full_window=True,
+                )
+        except TimeoutError as e:
+            if not budget.expired():
+                log.warning(
+                    "stream %s: the second hearing failed; routing the first: %s",
+                    self.room_id, e,
+                )
+                return heard, transcript
+            turn_watchdog.note_stall(STAGE_SECOND_HEARING, self.room_id)
+            log.warning(
+                "stream %s: voice turn timed out after %.0f s while %s; "
+                "routing the first hearing",
+                self.room_id, _elapsed_ms(t0) / 1000, STAGE_SECOND_HEARING,
+            )
+            return heard, transcript
+        except TurnStalled as e:
+            turn_watchdog.note_stall(e.stage, self.room_id)
+            log.warning(
+                "stream %s: the second hearing %s; routing the first",
+                self.room_id, e,
+            )
+            return heard, transcript
         except Exception as e:  # noqa: BLE001 — the first hearing stands
             log.warning(
                 "stream %s: the second hearing failed; routing the first: %s",
@@ -4030,6 +4125,193 @@ class StreamSession:
             cleaned,
         )
 
+    # ── The turn watchdog and the turn's history entry ──────────────────
+
+    def _reply_started(self) -> None:
+        """The running turn's first reply frame went out (a response_start
+        or its audio, sent by the turn's own task): its reply guard
+        (``voice_reply_timeout_sec``) is done. An announcement sent to the
+        room meanwhile, from another task, doesn't count."""
+        guard = getattr(self, "_reply_guard", None)
+        if guard is None:
+            return
+        try:
+            current = asyncio.current_task()
+        except RuntimeError:  # no running loop
+            return
+        task, timeout = guard
+        if task is not current:
+            return
+        self._reply_guard = None
+        try:
+            timeout.reschedule(None)
+        except RuntimeError:
+            pass  # already expired, or the turn has left it
+
+    def _track_history_write(self, coro: Any) -> None:
+        """Run a history write in a task of its own (a barge-in cancelling
+        the turn must not cancel it), held until done."""
+        task = asyncio.create_task(coro, name=f"history:{self.room_id}")
+        _TIMING_WRITES.add(task)
+        task.add_done_callback(_TIMING_WRITES.discard)
+
+    async def _await_history(
+        self, task: asyncio.Task[Any] | None,
+    ) -> turn_history.HistoryEntry | None:
+        """The pending history row the transcript wrote, once written.
+        Shielded: a cancelled turn leaves the write running, and closes the
+        row from its own handler."""
+        if task is None:
+            return None
+        return await asyncio.shield(task)
+
+    def _close_history_later(
+        self,
+        task: asyncio.Task[Any] | None,
+        entry: turn_history.HistoryEntry | None,
+        reason: str,
+    ) -> None:
+        """The turn ended with no reply: its still-pending row says why."""
+        if task is None and entry is None:
+            return
+
+        async def _close() -> None:
+            e = entry
+            if e is None and task is not None:
+                try:
+                    e = await task
+                except BaseException:  # noqa: BLE001 — nothing to close
+                    return
+            await turn_history.close_entry(e, reason, room_id=self.room_id)
+
+        self._track_history_write(_close())
+
+    def _settle_history_later(
+        self,
+        task: asyncio.Task[Any] | None,
+        entry: turn_history.HistoryEntry | None,
+        response: Any,
+    ) -> None:
+        """A turn that ended normally whose record never took the pending
+        row (the record failed): the row gets what was said, or "no answer"
+        when there is nothing to show. Nothing to do in the usual case."""
+        if entry is None or entry.taken:
+            return
+        text_said = getattr(response, "text", None) if response is not None else None
+        self._track_history_write(
+            turn_history.settle_entry(entry, text_said, room_id=self.room_id)
+        )
+
+    async def _end_stalled_turn(
+        self,
+        stage: str,
+        waited: float,
+        *,
+        trigger: str | None,
+        timings: TurnTimings,
+        response: Any,
+        history_task: asyncio.Task[Any] | None,
+        history: turn_history.HistoryEntry | None,
+        audio_ms: int,
+        turn_at: datetime,
+    ) -> None:
+        """A stage of this turn ran past its limit (domovoi/turn_watchdog.py):
+        one line naming the room and the stage, the stall noted for
+        /v1/health, the history entry closed ("no answer — timed out", or
+        "couldn't make out what was said" when speech recognition never
+        produced a transcript), and the room told — a short spoken apology,
+        or ``error`` + ``response_end`` when it can't be said — so the
+        satellite leaves its "thinking" ring and listens again."""
+        turn_watchdog.note_stall(stage, self.room_id)
+        log.warning(
+            "stream %s: voice turn timed out after %.1f s while %s: no reply; "
+            "ending the turn (if this keeps happening, restart Domovoi — the "
+            "Health page says when speech recognition is stuck)",
+            self.room_id, waited, stage,
+        )
+        if history_task is None and history is None:
+            if trigger != "barge_in":
+                self._track_history_write(turn_history.record_unheard(
+                    room_id=self.room_id, session_id=self.session_id, trigger=trigger,
+                    audio_ms=audio_ms, reason=turn_history.TIMED_OUT, at=turn_at,
+                ))
+        else:
+            self._close_history_later(history_task, history, turn_history.TIMED_OUT)
+        await self._tell_turn_failed(f"no reply: timed out while {stage}", trigger=trigger)
+        timing_write = self._finish_turn_timings(timings, trigger=trigger, response=response)
+        if timing_write is not None:
+            await asyncio.shield(timing_write)
+
+    async def _tell_turn_failed(self, message: str, *, trigger: str | None) -> None:
+        """End a turn that has no reply so the satellite recovers: the
+        apology, spoken (response_start … response_end), within
+        turn_watchdog.APOLOGY_TTS_SEC; else ``error`` + ``response_end``
+        (the satellite's error frame shows red briefly and listens again;
+        it says nothing). A barge-in turn gets no apology: its capture may
+        be the speaker's own echo (see `_respond_stt_unavailable`)."""
+        if trigger != "barge_in":
+            try:
+                async with asyncio.timeout(turn_watchdog.APOLOGY_TTS_SEC):
+                    if await self._speak_system_line(
+                        turn_watchdog.APOLOGY_TEXT, matched_handler="turn_timeout",
+                    ):
+                        return
+            except TimeoutError:
+                log.warning("stream %s: the apology could not be said in time", self.room_id)
+        await self._safe_send_text({"type": "error", "message": message})
+        await self._safe_send_text({
+            "type": "response_end",
+            "interrupted": True,
+            "expect_followup": False,
+        })
+
+    async def _fail_turn(
+        self,
+        e: BaseException,
+        *,
+        timings: TurnTimings,
+        trigger: str | None,
+        response: Any,
+        history_task: asyncio.Task[Any] | None,
+        history: turn_history.HistoryEntry | None,
+        stage: str,
+        audio_ms: int,
+        turn_at: datetime,
+    ) -> None:
+        """The turn raised: error + response_end, the history entry closed
+        ("no answer — something went wrong"; a request that never got a
+        transcript is recorded as not made out), what got done timed."""
+        log.error("stream %s: response task failed", self.room_id, exc_info=e)
+        await self._safe_send_text({"type": "error", "message": str(e)})
+        # Pair the error with a terminal response_end so the
+        # satellite's mic thread unblocks `_await_response_with_barge`
+        # and returns to wake-word listen. Without this pairing the
+        # Pi can hang on a single backend hiccup (DB unreachable
+        # mid-turn, handler exception, etc.); see the 2026-05-08
+        # 19:09 incident — DB went down, sat got `error` only, mic
+        # stayed parked until the WS dropped. `interrupted=True`
+        # because the user didn't get a real response.
+        await self._safe_send_text({
+            "type": "response_end",
+            "interrupted": True,
+            "expect_followup": False,
+        })
+        if history_task is None and history is None:
+            if stage == STAGE_STT and trigger != "barge_in":
+                self._track_history_write(turn_history.record_unheard(
+                    room_id=self.room_id, session_id=self.session_id, trigger=trigger,
+                    audio_ms=audio_ms, reason=turn_history.ERROR, at=turn_at,
+                ))
+        else:
+            self._close_history_later(history_task, history, turn_history.ERROR)
+        # A turn can fail after its row committed (TTS down): record
+        # how far it got.
+        timing_write = self._finish_turn_timings(
+            timings, trigger=trigger, response=response,
+        )
+        if timing_write is not None:
+            await asyncio.shield(timing_write)
+
     async def _process_utterance(self, pcm_bytes: bytes, **kw: Any) -> None:
         """One utterance's turn, marked in progress for its whole length
         (domovoi/voice_activity.py): a document job on the home server
@@ -4057,6 +4339,25 @@ class StreamSession:
         interrupted = False
         response = None
         transcript = ""
+        # The turn watchdog (domovoi/turn_watchdog.py; incident 2026-11-09,
+        # every room "thinking" for good behind a wedged speech recognition).
+        # Speech recognition gets turn_watchdog.stt_cap() of the recording's
+        # length; the whole turn up to its first reply frame (the reply, or
+        # the interim line before a cold model load) gets
+        # voice_reply_timeout_sec — disarmed by that frame
+        # (`_reply_started`). `stage` is where the turn is, for the line
+        # that names a stage that never returned.
+        audio_seconds = len(pcm_bytes) / (16_000 * 2)
+        audio_ms = int(round(audio_seconds * 1000))
+        turn_at = datetime.now(timezone.utc)
+        stage = STAGE_STT
+        stt_deadline = asyncio.get_running_loop().time() + turn_watchdog.stt_cap(audio_seconds)
+        reply_guard = asyncio.timeout(max(0.1, float(settings.voice_reply_timeout_sec)))
+        self._reply_guard = (asyncio.current_task(), reply_guard)
+        # This turn's row in the room's history (domovoi/turn_history.py),
+        # written pending as soon as the transcript exists.
+        history_task: asyncio.Task[Any] | None = None
+        history: turn_history.HistoryEntry | None = None
         # Per-stage stopwatch (domovoi/turn_timings.py). `received_at` is the
         # utterance_end arrival (or the early commit); a direct call starts
         # the clock now.
@@ -4072,207 +4373,269 @@ class StreamSession:
                 timings.stages["early_commit_hold_ms"] = hold_ms
             await self._safe_send_text({"type": "end_capture", "utt": early_commit.utt})
         try:
-            # ── Transcribe and clean ─────────────────────────────────────
-            heard = await self._transcribe_turn(
-                pcm_bytes, timings=timings, trigger=trigger,
-                reuse=reuse, speculations=speculations or [],
-            )
-            if capture_clock is not None:
-                # When the capture's frames, its pause and its decode
-                # happened against the pace it was spoken at — the copy the
-                # turn used, else the latest one (turn_timings).
-                timings.flags.update(capture_clock.flags(
-                    reuse or (speculations[-1] if speculations else None)
-                ))
-            if heard is None:
-                return
-            transcript = await self._clean_transcript(
-                heard.text, greeting_played=greeting_played, trigger=trigger,
-                audio_bytes=len(pcm_bytes), greeting_clip=greeting_clip,
-                ack_before_capture=ack_before_capture,
-            )
-            if transcript is None:
-                return
-            if self._wants_second_hearing(
-                heard, transcript, early_commit=early_commit is not None,
-            ):
-                heard, transcript = await self._hear_again(
-                    pcm_bytes, heard, transcript, timings=timings, trigger=trigger,
-                    greeting_played=greeting_played, greeting_clip=greeting_clip,
+            async with reply_guard:
+                # ── Transcribe and clean ─────────────────────────────────────
+                heard = await self._transcribe_turn(
+                    pcm_bytes, timings=timings, trigger=trigger,
+                    reuse=reuse, speculations=speculations or [],
+                    stt_deadline=stt_deadline,
+                )
+                if capture_clock is not None:
+                    # When the capture's frames, its pause and its decode
+                    # happened against the pace it was spoken at — the copy the
+                    # turn used, else the latest one (turn_timings).
+                    timings.flags.update(capture_clock.flags(
+                        reuse or (speculations[-1] if speculations else None)
+                    ))
+                if heard is None:
+                    # Speech recognition is off (it didn't load at boot): the
+                    # room heard why; the history says it too.
+                    if trigger != "barge_in":
+                        self._track_history_write(turn_history.record_unheard(
+                            room_id=self.room_id, session_id=self.session_id,
+                            trigger=trigger, audio_ms=audio_ms,
+                            reason=turn_history.SPEECH_OFF, at=turn_at,
+                        ))
+                    return
+                transcript = await self._clean_transcript(
+                    heard.text, greeting_played=greeting_played, trigger=trigger,
+                    audio_bytes=len(pcm_bytes), greeting_clip=greeting_clip,
                     ack_before_capture=ack_before_capture,
                 )
+                if transcript is None:
+                    return
+                if self._wants_second_hearing(
+                    heard, transcript, early_commit=early_commit is not None,
+                ):
+                    stage = STAGE_SECOND_HEARING
+                    heard, transcript = await self._hear_again(
+                        pcm_bytes, heard, transcript, timings=timings, trigger=trigger,
+                        greeting_played=greeting_played, greeting_clip=greeting_clip,
+                        ack_before_capture=ack_before_capture, stt_deadline=stt_deadline,
+                    )
 
-            # ── Respond ──────────────────────────────────────────────────
-            await self._safe_send_text({"type": "transcript", "text": transcript})
+                # ── Respond ──────────────────────────────────────────────────
+                # The history shows what was said from now on, the reply
+                # pending; written alongside voice identification, so it
+                # adds no wait.
+                history_task = asyncio.create_task(
+                    turn_history.open_entry(
+                        room_id=self.room_id, session_id=self.session_id,
+                        user_text=transcript, trigger=trigger,
+                        audio_ms=audio_ms, at=turn_at,
+                    ),
+                    name=f"history-open:{self.room_id}",
+                )
+                await self._safe_send_text({"type": "transcript", "text": transcript})
 
-            probe: ConnectivityProbe = self.ws.app.state.probe
+                probe: ConnectivityProbe = self.ws.app.state.probe
 
-            # Pre-router voice identification: embed the utterance, look
-            # up a matching `people` row, compute the presence tier so
-            # downstream handlers and audit queries know who's talking
-            # and how aggressively to prompt for identity. Best-effort —
-            # any failure leaves person_id=None / presence_tier="high"
-            # rather than blocking the response cycle. A speculative
-            # transcript brings the embedding of its copy, computed right
-            # after its decode; the matching (and its last_seen and
-            # per-room learning) runs here, once per turn, either way.
-            from domovoi.voice_identifier import identify
-            stage_t0 = time.perf_counter()
-            try:
-                await self._copy_embedding(heard)
-                if heard.embedded:
-                    ident = await identify(
-                        pcm_bytes, embedding=heard.embedding, room_id=self.room_id,
+                # Pre-router voice identification: embed the utterance, look
+                # up a matching `people` row, compute the presence tier so
+                # downstream handlers and audit queries know who's talking
+                # and how aggressively to prompt for identity. Best-effort —
+                # any failure leaves person_id=None / presence_tier="high"
+                # rather than blocking the response cycle. A speculative
+                # transcript brings the embedding of its copy, computed right
+                # after its decode; the matching (and its last_seen and
+                # per-room learning) runs here, once per turn, either way.
+                from domovoi.voice_identifier import identify
+                stage = STAGE_IDENTIFY
+                stage_t0 = time.perf_counter()
+                id_limit = max(0.1, float(settings.voice_identify_timeout_sec))
+                id_budget = asyncio.timeout(id_limit)
+                try:
+                    async with id_budget:
+                        await self._copy_embedding(heard)
+                        if heard.embedded:
+                            ident = await identify(
+                                pcm_bytes, embedding=heard.embedding, room_id=self.room_id,
+                            )
+                        else:
+                            ident = await identify(pcm_bytes, room_id=self.room_id)
+                except TimeoutError as e:
+                    if not id_budget.expired():
+                        log.warning("voice identification failed: %s", e)
+                    else:
+                        # Best-effort, like a failure: the turn goes on
+                        # unidentified. Noted for the Health page — the
+                        # embedder shares the speech workers.
+                        turn_watchdog.note_stall(STAGE_IDENTIFY, self.room_id)
+                        log.warning(
+                            "stream %s: voice turn timed out after %.0f s while %s; "
+                            "going on unidentified", self.room_id, id_limit, STAGE_IDENTIFY,
+                        )
+                    ident = None
+                except Exception as e:
+                    log.warning("voice identification failed: %s", e)
+                    ident = None
+                timings.stage("identify_ms", stage_t0)
+                stage = STAGE_REPLY
+                history = await self._await_history(history_task)
+
+                person_id = ident.person_id if ident else None
+                presence_tier = ident.presence_tier if ident else None
+                embedding_bytes: bytes | None = None
+                if ident is not None and ident.embedding is not None:
+                    embedding_bytes = ident.embedding.astype("float32").tobytes()
+
+                # Stamp the most-recent WiFi self-report from this room's Pi
+                # into the Context so WifiHandler's diagnostic path can
+                # answer "how's your wifi" without another round-trip. Empty
+                # dict when the Pi hasn't pushed yet (first 60 s after connect).
+                wifi_status = self.ws.app.state.wifi_status.get(self.room_id, {})
+                # Same for the satellite's current output volume, so a relative
+                # "turn it up" bumps against the real level (None until the Pi
+                # reports via volume_status on connect).
+                satellite_volume = self.ws.app.state.satellite_volume.get(self.room_id)
+                # The voice this room reports speaking in (None until the Pi
+                # pushes voice_status, or if it never sets one → registry
+                # default). VoiceHandler reads it via Context.voice to answer
+                # "what voice are you using".
+                satellite_voice = self.ws.app.state.satellite_voice.get(self.room_id)
+                # Lets the router say a line before a slow stage (a cold model
+                # load) instead of leaving the room silent through it.
+                interim = _InterimSpeech(self, satellite_voice)
+                ctx = Context(
+                    room_id=self.room_id,
+                    session_id=self.session_id,
+                    online=probe.online,
+                    bot_name=settings.bot_name,
+                    person_id=person_id,
+                    presence_tier=presence_tier,
+                    embedding_bytes=embedding_bytes,
+                    voice_candidates=list(getattr(ident, "candidates", ()) or ()),
+                    trigger=trigger,
+                    wifi_status=wifi_status,
+                    satellite_volume=satellite_volume,
+                    voice=satellite_voice,
+                    app=self.ws.app,
+                    timings=timings,
+                    history_entry=history,
+                    speak_interim=interim.say,
+                    stream_qa=True,
+                )
+                intent = Intent(
+                    transcript=transcript,
+                    room_id=self.room_id,
+                    session_id=self.session_id,
+                )
+
+                # ── Conversational chat-mode bypass (Feature 8) ──────────────
+                # BEFORE running the command-mode router, check whether this
+                # session is in conversational chat mode (set by ChatModeHandler
+                # into sessions.context). If so, this turn does NOT route through
+                # the handler registry at all — it either ends the chat (exit
+                # phrase) or goes to the Letta agent. Command mode is completely
+                # untouched: when not in chat mode, `conversational_mode` is
+                # falsey and we fall straight through to the normal route() path,
+                # so the only added cost on a command turn is one cheap
+                # session-context read.
+                if self.session_id is not None:
+                    async with session_scope() as s:
+                        chat_ctx = await SessionRepository(s).get_context(
+                            self.session_id
+                        )
+                    # Refresh the in-memory mirror from the authoritative DB flag
+                    # (covers a reconnect that re-bound this session mid-chat).
+                    self.conversational_mode = bool(chat_ctx.get("conversational_mode"))
+                    if chat_ctx.get("conversational_mode"):
+                        await self._run_chat_turn(
+                            transcript=transcript,
+                            ctx=ctx,
+                            session_id=self.session_id,
+                            # AI features turned off mid-chat: the chat ends
+                            # (its goodbye), as if asked to — nothing may ask
+                            # the model now (domovoi/ai_features.py).
+                            exiting=_is_chat_exit(transcript) or ai_features.turned_off(),
+                        )
+                        # The chat row carries the pre-route stages (see
+                        # _persist_chat_turn); nothing to merge afterwards.
+                        self._log_turn_timings(timings, trigger=trigger, matched_path="chat")
+                        # Its record writes the history row; if that failed,
+                        # the row says no answer was recorded.
+                        self._settle_history_later(history_task, history, None)
+                        return
+
+                # Shadow only (domovoi/fast_lane.py): what the streaming fast lane
+                # would have done, against what Whisper heard, logged and noted
+                # on the timings. The routing below is untouched.
+                self._fastlane = fast_lane.settle(self._fastlane, transcript, timings)
+
+                stage_t0 = time.perf_counter()
+                async with session_scope() as s:
+                    response = await route(intent, ctx, s)
+                    streamed = getattr(response, "qa_stream", None) is not None
+                    if not streamed:
+                        # A streamed answer is recorded once it has been said
+                        # (_speak_streamed_answer); these hooks run with it.
+                        await self._voice_profile_hooks(
+                            s, response=response, ctx=ctx, ident=ident,
+                            person_id=person_id, transcript=transcript,
+                            audio_seconds=audio_seconds,
+                        )
+                self.session_id = response.session_id
+
+                if streamed:
+                    # A Q&A answer: its first sentence is spoken while the model
+                    # is still writing the rest. route_ms ends at that sentence.
+                    response = await self._speak_streamed_answer(
+                        response, ctx=ctx, ident=ident, person_id=person_id,
+                        transcript=transcript, audio_seconds=audio_seconds,
+                        timings=timings, stage_t0=stage_t0, interim=interim,
+                        satellite_voice=satellite_voice,
                     )
                 else:
-                    ident = await identify(pcm_bytes, room_id=self.room_id)
-            except Exception as e:
-                log.warning("voice identification failed: %s", e)
-                ident = None
-            timings.stage("identify_ms", stage_t0)
-
-            person_id = ident.person_id if ident else None
-            presence_tier = ident.presence_tier if ident else None
-            embedding_bytes: bytes | None = None
-            if ident is not None and ident.embedding is not None:
-                embedding_bytes = ident.embedding.astype("float32").tobytes()
-
-            # Stamp the most-recent WiFi self-report from this room's Pi
-            # into the Context so WifiHandler's diagnostic path can
-            # answer "how's your wifi" without another round-trip. Empty
-            # dict when the Pi hasn't pushed yet (first 60 s after connect).
-            wifi_status = self.ws.app.state.wifi_status.get(self.room_id, {})
-            # Same for the satellite's current output volume, so a relative
-            # "turn it up" bumps against the real level (None until the Pi
-            # reports via volume_status on connect).
-            satellite_volume = self.ws.app.state.satellite_volume.get(self.room_id)
-            # The voice this room reports speaking in (None until the Pi
-            # pushes voice_status, or if it never sets one → registry
-            # default). VoiceHandler reads it via Context.voice to answer
-            # "what voice are you using".
-            satellite_voice = self.ws.app.state.satellite_voice.get(self.room_id)
-            # Lets the router say a line before a slow stage (a cold model
-            # load) instead of leaving the room silent through it.
-            interim = _InterimSpeech(self, satellite_voice)
-            ctx = Context(
-                room_id=self.room_id,
-                session_id=self.session_id,
-                online=probe.online,
-                bot_name=settings.bot_name,
-                person_id=person_id,
-                presence_tier=presence_tier,
-                embedding_bytes=embedding_bytes,
-                voice_candidates=list(getattr(ident, "candidates", ()) or ()),
-                trigger=trigger,
-                wifi_status=wifi_status,
-                satellite_volume=satellite_volume,
-                voice=satellite_voice,
-                app=self.ws.app,
-                timings=timings,
-                speak_interim=interim.say,
-                stream_qa=True,
-            )
-            intent = Intent(
-                transcript=transcript,
-                room_id=self.room_id,
-                session_id=self.session_id,
-            )
-            audio_seconds = len(pcm_bytes) / (16_000 * 2)
-
-            # ── Conversational chat-mode bypass (Feature 8) ──────────────
-            # BEFORE running the command-mode router, check whether this
-            # session is in conversational chat mode (set by ChatModeHandler
-            # into sessions.context). If so, this turn does NOT route through
-            # the handler registry at all — it either ends the chat (exit
-            # phrase) or goes to the Letta agent. Command mode is completely
-            # untouched: when not in chat mode, `conversational_mode` is
-            # falsey and we fall straight through to the normal route() path,
-            # so the only added cost on a command turn is one cheap
-            # session-context read.
-            if self.session_id is not None:
-                async with session_scope() as s:
-                    chat_ctx = await SessionRepository(s).get_context(
-                        self.session_id
+                    # The whole routing transaction, commit included.
+                    timings.stage("route_ms", stage_t0)
+                    await self._speak_response(
+                        response, timings=timings, interim=interim,
+                        satellite_voice=satellite_voice,
                     )
-                # Refresh the in-memory mirror from the authoritative DB flag
-                # (covers a reconnect that re-bound this session mid-chat).
-                self.conversational_mode = bool(chat_ctx.get("conversational_mode"))
-                if chat_ctx.get("conversational_mode"):
-                    await self._run_chat_turn(
-                        transcript=transcript,
-                        ctx=ctx,
-                        session_id=self.session_id,
-                        # AI features turned off mid-chat: the chat ends
-                        # (its goodbye), as if asked to — nothing may ask
-                        # the model now (domovoi/ai_features.py).
-                        exiting=_is_chat_exit(transcript) or ai_features.turned_off(),
-                    )
-                    # The chat row carries the pre-route stages (see
-                    # _persist_chat_turn); nothing to merge afterwards.
-                    self._log_turn_timings(timings, trigger=trigger, matched_path="chat")
-                    return
-
-            # Shadow only (domovoi/fast_lane.py): what the streaming fast lane
-            # would have done, against what Whisper heard, logged and noted
-            # on the timings. The routing below is untouched.
-            self._fastlane = fast_lane.settle(self._fastlane, transcript, timings)
-
-            stage_t0 = time.perf_counter()
-            async with session_scope() as s:
-                response = await route(intent, ctx, s)
-                streamed = getattr(response, "qa_stream", None) is not None
-                if not streamed:
-                    # A streamed answer is recorded once it has been said
-                    # (_speak_streamed_answer); these hooks run with it.
-                    await self._voice_profile_hooks(
-                        s, response=response, ctx=ctx, ident=ident,
-                        person_id=person_id, transcript=transcript,
-                        audio_seconds=audio_seconds,
-                    )
-            self.session_id = response.session_id
-
-            if streamed:
-                # A Q&A answer: its first sentence is spoken while the model
-                # is still writing the rest. route_ms ends at that sentence.
-                response = await self._speak_streamed_answer(
-                    response, ctx=ctx, ident=ident, person_id=person_id,
-                    transcript=transcript, audio_seconds=audio_seconds,
-                    timings=timings, stage_t0=stage_t0, interim=interim,
-                    satellite_voice=satellite_voice,
-                )
-            else:
-                # The whole routing transaction, commit included.
-                timings.stage("route_ms", stage_t0)
-                await self._speak_response(
-                    response, timings=timings, interim=interim,
-                    satellite_voice=satellite_voice,
-                )
         except asyncio.CancelledError:
             interrupted = True
-        except Exception as e:
-            log.exception("stream %s: response task failed", self.room_id)
-            await self._safe_send_text({"type": "error", "message": str(e)})
-            # Pair the error with a terminal response_end so the
-            # satellite's mic thread unblocks `_await_response_with_barge`
-            # and returns to wake-word listen. Without this pairing the
-            # Pi can hang on a single backend hiccup (DB unreachable
-            # mid-turn, handler exception, etc.); see the 2026-05-08
-            # 19:09 incident — DB went down, sat got `error` only, mic
-            # stayed parked until the WS dropped. `interrupted=True`
-            # because the user didn't get a real response.
-            await self._safe_send_text({
-                "type": "response_end",
-                "interrupted": True,
-                "expect_followup": False,
-            })
-            # A turn can fail after its row committed (TTS down): record
-            # how far it got.
-            timing_write = self._finish_turn_timings(
-                timings, trigger=trigger, response=response,
-            )
-            if timing_write is not None:
-                await asyncio.shield(timing_write)
+            # Talked over before an answer was recorded: the history says
+            # so (an answer recorded meanwhile wins — a streamed one is
+            # recorded even when cut short).
+            self._close_history_later(history_task, history, turn_history.INTERRUPTED)
+        except (TurnStalled, TimeoutError) as e:
+            if isinstance(e, TurnStalled):
+                await self._end_stalled_turn(
+                    e.stage, e.limit_s, trigger=trigger, timings=timings,
+                    response=response, history_task=history_task, history=history,
+                    audio_ms=audio_ms, turn_at=turn_at,
+                )
+            elif reply_guard.expired():
+                await self._end_stalled_turn(
+                    stage, float(settings.voice_reply_timeout_sec), trigger=trigger,
+                    timings=timings, response=response, history_task=history_task,
+                    history=history, audio_ms=audio_ms, turn_at=turn_at,
+                )
+            else:
+                # A TimeoutError of somebody else's (a client's own limit):
+                # an ordinary failure.
+                await self._fail_turn(
+                    e, timings=timings, trigger=trigger, response=response,
+                    history_task=history_task, history=history,
+                    stage=stage, audio_ms=audio_ms, turn_at=turn_at,
+                )
             return
+        except Exception as e:
+            await self._fail_turn(
+                e, timings=timings, trigger=trigger, response=response,
+                history_task=history_task, history=history,
+                stage=stage, audio_ms=audio_ms, turn_at=turn_at,
+            )
+            return
+        finally:
+            guard = getattr(self, "_reply_guard", None)
+            if guard is not None and guard[1] is reply_guard:
+                self._reply_guard = None
+
+        # A reply that was spoken but whose record failed: the pending row
+        # takes what was said rather than staying "waiting for an answer".
+        if not interrupted:
+            self._settle_history_later(history_task, history, response)
 
         # The turn's timings, before anything below can be cancelled: the
         # log line now, and the post-route write in a task of its own that
@@ -5398,6 +5761,7 @@ class StreamSession:
                     presence_tier=ctx.presence_tier,
                     online=ctx.online,
                     latency_ms=latency_ms,
+                    history_entry=ctx.history_entry,
                 )
                 await SessionRepository(s).record_exchange(
                     session_id,
@@ -5437,6 +5801,7 @@ class StreamSession:
         the drop-in relay, which is a live call on another session."""
         if nbytes <= 0 or sample_rate <= 0:
             return
+        self._reply_started()
         if now is None:
             now = time.monotonic()
         self._playout_until = max(now, self._playout_until) + nbytes / (2 * sample_rate)
@@ -6128,6 +6493,8 @@ class StreamSession:
         # silently disarm the guard for that path.
         if payload.get("type") == "response_start":
             self._last_spoken_text = str(payload.get("text") or "")
+            # The turn's first reply frame: its reply guard is done.
+            self._reply_started()
         if payload.get("type") in ("music_start", "music_stop"):
             # Whatever music this room gets now supersedes a start held for
             # it (`hold_music_start`) — dropped BEFORE the send, so the held

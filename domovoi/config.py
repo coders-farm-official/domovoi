@@ -644,6 +644,53 @@ class Settings(BaseSettings):
     loop_watchdog_probe_failures: int = 3
     loop_watchdog_startup_sec: float = 900.0
 
+    # ─── The voice turn watchdog (domovoi/turn_watchdog.py) ─────────────
+    # Incident 2026-11-09: speech recognition wedged and every room sat in
+    # its "thinking" ring for good — no reply, no error, no history entry,
+    # because nothing between the end of a request and its reply had a
+    # time limit. These are those limits. On expiry the room hears a short
+    # apology (or gets error + response_end when that can't be said), the
+    # log names the room and the stage, the history entry says "no
+    # answer", and the Health page's speech recognition row says so.
+    #
+    # Speech recognition for one request (the wait for the room's previous
+    # decode, the decode itself, a speculative copy's result):
+    # max(voice_stt_timeout_min_sec, voice_stt_timeout_audio_factor ×
+    # the recording's length), never more than voice_stt_timeout_max_sec.
+    # faster-whisper runs well under real time even on a CPU (a 7 s request
+    # decodes in ~1-3 s on the slowest supported box), so three times the
+    # recording is "something is wrong", not "slow". The max keeps the
+    # whole stage, second hearing included, under the satellite's own
+    # reply deadline (satellite `[listen] response_deadline_sec`, 60 s):
+    # 40 s, plus an apology whose speech is capped at 10 s
+    # (turn_watchdog.APOLOGY_TTS_SEC), is answered before the satellite
+    # gives up.
+    voice_stt_timeout_min_sec: float = 20.0
+    voice_stt_timeout_audio_factor: float = 3.0
+    voice_stt_timeout_max_sec: float = 40.0
+    # Voice identification (who is speaking). Best-effort: on expiry the
+    # turn goes on unidentified, as when it fails.
+    voice_identify_timeout_sec: float = 10.0
+    # The whole turn up to its first reply frame (the reply, or the "waking
+    # up my language model" line before a cold model load). Longer than
+    # ollama_timeout_sec (120 s), so a slow model's own timeout and the
+    # handler's fallback answer always come first; this is the backstop for
+    # a stage that never returns.
+    voice_reply_timeout_sec: float = 150.0
+    # A speech worker busy on one call for this long is stuck: no decode or
+    # voice embedding takes minutes. The Health page then says speech
+    # recognition is stuck and to restart Domovoi.
+    voice_speech_stuck_after_sec: float = 120.0
+    # Automatic recovery: when speech recognition has been stuck this long
+    # house-wide (every speech worker stuck, or one stuck with no decode
+    # finishing since and a request timed out in speech recognition), the
+    # loop watchdog writes every thread's stack to its retained log and
+    # exits the core with status 70 for the service manager to start again
+    # — only under systemd (the shipped unit, also inside the Windows
+    # installer's Linux system), where something does start it again.
+    # 0 turns the automatic restart off; the Health row stays.
+    voice_speech_restart_after_sec: float = 600.0
+
     timer_watcher_interval_sec: float = 1.0
 
     # ─── Timers & reminders: house-wide delivery (V018) ────────────────

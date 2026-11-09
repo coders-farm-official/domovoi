@@ -364,8 +364,14 @@ class LoopWatchdog:
         report_file: Path | None = None,
         last_file: Path | None = None,
         out_fd: int | None = None,
+        speech_check: Callable[[], str | None] | None = None,
     ) -> None:
         self.limits = limits
+        # Speech recognition stuck house-wide (domovoi/turn_watchdog.py,
+        # restart_reason): a reason to restart like a frozen loop, asked
+        # only while all else is well. None: not watched (install() gives
+        # it only under a service manager, which starts the core again).
+        self._speech_check = speech_check
         self._probe = probe
         self._notifier = notifier or Notifier(None)
         self._exit = exit_fn
@@ -520,6 +526,10 @@ class LoopWatchdog:
         reason = self._check_probe(loop, now)
         if reason is not None:
             return reason
+        if self._speech_check is not None:
+            reason = self._speech_check()
+            if reason is not None:
+                return reason
         self._keepalive(now)
         return None
 
@@ -749,7 +759,19 @@ def install(settings: Any) -> LoopWatchdog | None:
             _ACTIVE = LoopWatchdog(Limits(detect=False), notifier=notifier, backstop=lambda s: None)
             _ACTIVE.start()
         return _ACTIVE
-    _ACTIVE = LoopWatchdog(Limits.from_settings(settings), notifier=Notifier.from_env())
+    notifier = Notifier.from_env()
+    # Speech recognition stuck house-wide (incident 2026-11-09): restart
+    # only where something starts the core again — under systemd (the
+    # shipped unit; also inside the Windows installer's Linux system). Off
+    # it the Health page says to restart, and nothing exits.
+    speech_check = None
+    if notifier.enabled and float(getattr(settings, "voice_speech_restart_after_sec", 0) or 0) > 0:
+        from domovoi import turn_watchdog
+
+        speech_check = turn_watchdog.restart_reason
+    _ACTIVE = LoopWatchdog(
+        Limits.from_settings(settings), notifier=notifier, speech_check=speech_check,
+    )
     _ACTIVE.start()
     return _ACTIVE
 

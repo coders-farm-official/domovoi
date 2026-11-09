@@ -112,6 +112,12 @@ class Context(BaseModel):
     # Typed Any (like `app`) so pydantic carries the object as-is: model_copy
     # is shallow, and every copy the router makes must share this one.
     timings: Any = None
+    # A satellite's turn's pending conversation_log row
+    # (domovoi.turn_history.HistoryEntry), written when its transcript
+    # existed; router._persist_turn fills in that row instead of inserting
+    # another. None everywhere else. Typed Any and shared across the
+    # router's shallow copies, like `timings`.
+    history_entry: Any = None
     # ``async (text) -> None`` that speaks a short line on the satellite
     # right away, as the start of this turn's reply, while a slow stage is
     # still running — the router uses it to say the language model is

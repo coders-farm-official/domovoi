@@ -16,7 +16,7 @@ import os
 import re
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import AsyncIterator
+from typing import Any, AsyncIterator
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -526,6 +526,7 @@ async def health(challenge: str | None = None) -> HealthResponse:
     core_ok = False
     core_alive: bool | None = None
     stt: str | None = None
+    speech: dict[str, Any] | None = None
     identity: dict[str, str] | None = None
     import httpx
     domovoi_url = os.environ.get("DOMOVOI_URL", "http://localhost:6370")
@@ -545,6 +546,11 @@ async def health(challenge: str | None = None) -> HealthResponse:
                 doc = r.json()
                 if isinstance(doc, dict) and isinstance(doc.get("stt"), str):
                     stt = doc["stt"]
+                # The turn watchdog's speech-recognition block (ok / slow /
+                # stalled), for the Health page's row; absent from an older
+                # core.
+                if isinstance(doc, dict) and isinstance(doc.get("speech"), dict):
+                    speech = doc["speech"]
                 if isinstance(doc, dict):
                     identity = core_identity_block(doc.get("identity"))
     except Exception:
@@ -567,6 +573,7 @@ async def health(challenge: str | None = None) -> HealthResponse:
         db_reachable=db_ok,
         domovoi_reachable=core_ok,
         stt=stt,
+        speech=speech,
         identity=identity,
         core_alive=core_alive,
     )

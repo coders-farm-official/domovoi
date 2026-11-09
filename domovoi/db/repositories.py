@@ -362,8 +362,35 @@ class ConversationLogRepository:
         online: bool | None,
         latency_ms: int | None,
         trigger: str | None = None,
+        history_entry: Any = None,
     ) -> None:
+        """One routed turn's row. ``history_entry`` (a voice turn's
+        :class:`domovoi.turn_history.HistoryEntry`): the row was written
+        pending when the transcript existed, and is filled in here instead
+        of a second one being inserted — still one row per turn. Taken once:
+        a second write in the same turn inserts, as it always did."""
         with_trigger = await _has_utterance_trigger(self.s)
+        params: dict[str, Any] = {
+            "session_id": str(session_id) if session_id else None,
+            "room_id": room_id,
+            "person_id": person_id,
+            "user_text": user_text,
+            "assistant_text": assistant_text,
+            "matched_handler": matched_handler,
+            "matched_path": matched_path,
+            "presence_tier": presence_tier,
+            "online": online,
+            "latency_ms": latency_ms,
+            **({"trigger": trigger} if with_trigger else {}),
+        }
+        pending_id = history_entry.take() if history_entry is not None else None
+        from domovoi import turn_history
+
+        if pending_id is not None and await turn_history.complete_row(
+            self.s, pending_id, params, with_trigger=with_trigger,
+        ):
+            return
+        with_status = await turn_history.has_status_columns(self.s)
         cols = (
             "presence_tier, online, latency_ms, utterance_trigger"
             if with_trigger
@@ -374,6 +401,9 @@ class ConversationLogRepository:
             if with_trigger
             else ":presence_tier, :online, :latency_ms"
         )
+        if with_status:
+            cols += ", turn_status"
+            vals += ", 'answered'"
         await self.s.execute(
             text(
                 f"""
@@ -387,19 +417,7 @@ class ConversationLogRepository:
                      {vals})
                 """
             ),
-            {
-                "session_id": str(session_id) if session_id else None,
-                "room_id": room_id,
-                "person_id": person_id,
-                "user_text": user_text,
-                "assistant_text": assistant_text,
-                "matched_handler": matched_handler,
-                "matched_path": matched_path,
-                "presence_tier": presence_tier,
-                "online": online,
-                "latency_ms": latency_ms,
-                **({"trigger": trigger} if with_trigger else {}),
-            },
+            params,
         )
 
 

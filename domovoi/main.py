@@ -42,6 +42,7 @@ from domovoi import git_version  # noqa: E402
 from domovoi import self_restart  # noqa: E402
 from domovoi import local_peer, windows_side  # noqa: E402
 from domovoi import voice_activity  # noqa: E402
+from domovoi import turn_watchdog  # noqa: E402
 from domovoi import server_identity  # noqa: E402
 from domovoi.container_guard import freeze as container_freeze  # noqa: E402
 from domovoi.admin_auth import (  # noqa: E402
@@ -679,6 +680,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from domovoi import voice_history
 
     voice_history.use_retained_log(app.state.satellite_retained_log)
+    # Voice turns the last run left "waiting for an answer" in the history
+    # (V043, domovoi/turn_history.py) say the core restarted instead. No
+    # turn of this run exists yet. Bounded, and never blocks a start.
+    from domovoi import turn_history
+
+    await turn_history.sweep_pending()
     app.state.log_push_limiter = satellite_health.LogPushLimiter()
     # A phone room's battery (domovoi/room_battery.py, V040): its last
     # report and the 20 % / 10 % low-battery warnings, spoken in the room
@@ -1304,6 +1311,12 @@ async def health(
         "bot_name": settings.bot_name,
         "use_stubs": "true" if settings.use_stubs else "false",
         "stt": stt_status()["state"],
+        # The turn watchdog's view of speech recognition
+        # (domovoi/turn_watchdog.py): ok / slow (a request timed out in the
+        # last 15 minutes) / stalled (a speech worker stuck: only a restart
+        # frees it), stuck workers of how many, the last timeout's stage
+        # and time. No room names: this answer is open.
+        "speech": turn_watchdog.speech_health(),
     }
     global _UNBOUND_CHALLENGE_SEEN
     if challenge is not None and len(challenge) > server_identity.CHALLENGE_MAX_LEN:

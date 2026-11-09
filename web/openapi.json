@@ -5357,6 +5357,7 @@
           "satellites"
         ],
         "summary": "List Conversations",
+        "description": "The room's voice turns, newest first. Since V043 every turn of a\nsatellite is here from the moment its transcript exists: ``status``\nsays whether the reply is pending, answered, never came\n(``no_answer`` + ``no_answer_reason``) or speech recognition never\nmade the request out (``unheard``, with ``audio_ms``).",
         "operationId": "list_conversations_api_satellites__room_id__conversations_get",
         "parameters": [
           {
@@ -19089,6 +19090,33 @@
               }
             ],
             "title": "Utterance Trigger"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "default": "answered"
+          },
+          "no_answer_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "No Answer Reason"
+          },
+          "audio_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Audio Ms"
           }
         },
         "type": "object",
@@ -20291,6 +20319,18 @@
               }
             ],
             "title": "Stt"
+          },
+          "speech": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Speech"
           },
           "identity": {
             "anyOf": [
