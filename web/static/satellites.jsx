@@ -261,12 +261,14 @@ const SatSessionRow = ({ session, turns }) => {
                 <div key={c.id} style={{ padding: '10px 0', borderTop: '1px solid var(--border-soft)' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
                     <span className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)' }}>{relTime(c.at)}</span>
-                    <Pill tone={c.matched_handler ? 'live' : 'idle'}>{c.matched_handler || 'qa'}</Pill>
+                    <SatTurnPill c={c}/>
                     <span className="mono" style={{ fontSize: 10, color: 'var(--fg-faint)' }}>{c.matched_path}</span>
                   </div>
-                  <div style={{ fontSize: 13 }}>“{c.user_text}”</div>
+                  <SatTurnSaid c={c}/>
                   <div style={{ fontSize: 12, color: 'var(--fg-muted)', marginTop: 3, display: 'flex', alignItems: 'flex-start', gap: 6 }}>
-                    <DomovoiGlyph size={12}/><span>{c.assistant_text}</span>
+                    <DomovoiGlyph size={12}/>{SatTurnUnanswered(c)
+                      ? <span style={{ fontStyle: 'italic' }}>{SatTurnUnanswered(c)}</span>
+                      : <span>{c.assistant_text}</span>}
                   </div>
                 </div>
               ))}
@@ -287,16 +289,75 @@ const TRIGGER_PILL = {
   push_to_talk: { label: 'push-to-talk', tone: 'idle' },
 };
 
+/* Where a voice turn got to (V043; GET /api/satellites/{room}/conversations
+ * `status`): every turn of a room is in its history from the moment its
+ * transcript exists. "answered" (and rows from older servers, which have no
+ * status) shows the reply; the others say plainly that there is none, or
+ * none yet. */
+const SAT_NO_ANSWER_WHY = {
+  timed_out: 'timed out',
+  error: 'something went wrong',
+  interrupted: 'interrupted',
+  restarted: 'Domovoi restarted',
+  speech_off: 'speech recognition is off',
+};
+const satTurnStatus = (c) => (c && c.status) || 'answered';
+// The reply line's words when there is no reply to show, else null.
+const SatTurnUnanswered = (c) => {
+  const st = satTurnStatus(c);
+  if (st === 'pending') return 'waiting for an answer…';
+  if (st === 'no_answer' || st === 'unheard') {
+    const why = SAT_NO_ANSWER_WHY[c.no_answer_reason];
+    return why ? `no answer — ${why}` : 'no answer';
+  }
+  return null;
+};
+const satSeconds = (ms) => `${(ms / 1000).toFixed(1)} s`;
+// What was said: the transcript, or that speech recognition never made it out.
+const SatTurnSaid = ({ c }) => {
+  if (satTurnStatus(c) === 'unheard') {
+    return (
+      <div style={{ fontSize: 13, marginBottom: 4, fontStyle: 'italic', color: 'var(--fg-muted)' }}>
+        couldn’t make out what was said{typeof c.audio_ms === 'number' ? ` · ${satSeconds(c.audio_ms)} recording` : ''}
+      </div>
+    );
+  }
+  return <div style={{ fontSize: 13, marginBottom: 4 }}>“{c.user_text}”</div>;
+};
+// The turn's pill: who answered it, or that nothing has (yet).
+const SatTurnPill = ({ c }) => {
+  const st = satTurnStatus(c);
+  if (st === 'pending') return <Pill tone="idle" live>waiting</Pill>;
+  if (st === 'no_answer' || st === 'unheard') return <Pill tone="warn">no answer</Pill>;
+  return <Pill tone={c.matched_handler ? 'live' : 'idle'}>{c.matched_handler || 'qa'}</Pill>;
+};
+/* While a turn in the list is still waiting for its answer, read the list
+ * again every few seconds (there is no live channel for the history), and
+ * stop once nothing is pending. */
+const SAT_PENDING_POLL_MS = 3000;
+const useSatPendingRefresh = (items, refresh) => {
+  const pending = (items || []).some((c) => satTurnStatus(c) === 'pending');
+  React.useEffect(() => {
+    if (!pending || !refresh) return undefined;
+    const t = setInterval(() => {
+      try { if (document.hidden) return; } catch { /* no document */ }
+      refresh();
+    }, SAT_PENDING_POLL_MS);
+    return () => clearInterval(t);
+  }, [pending, refresh]);
+};
+
 const SatConversationTurn = ({ c }) => {
   const long = (c.assistant_text || '').length > 140;
   const [more, setMore] = React.useState(false);
   const txt = c.assistant_text || '';
   const shown = long && !more ? txt.slice(0, 130).trimEnd() + '…' : txt;
+  const unanswered = SatTurnUnanswered(c);
   return (
-    <div style={{ padding: '12px 16px', borderTop: '1px solid var(--border-soft)' }}>
+    <div style={{ padding: '12px 16px', borderTop: '1px solid var(--border-soft)' }} data-turn-status={satTurnStatus(c)}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 5 }}>
         <span className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)' }}>{relTime(c.at)}</span>
-        <Pill tone={c.matched_handler ? 'live' : 'idle'}>{c.matched_handler || 'qa'}</Pill>
+        <SatTurnPill c={c}/>
         {TRIGGER_PILL[c.utterance_trigger] && (
           <Pill tone={TRIGGER_PILL[c.utterance_trigger].tone}>
             {TRIGGER_PILL[c.utterance_trigger].label}
@@ -304,16 +365,16 @@ const SatConversationTurn = ({ c }) => {
         )}
         <span className="mono" style={{ fontSize: 10, color: 'var(--fg-faint)', marginLeft: 'auto' }}>#{c.id}</span>
       </div>
-      <div style={{ fontSize: 13, marginBottom: 4 }}>“{c.user_text}”</div>
+      <SatTurnSaid c={c}/>
       <div style={{ fontSize: 12, color: 'var(--fg-muted)', display: 'flex', alignItems: 'flex-start', gap: 6 }}>
         <DomovoiGlyph size={12}/>
-        <span>{shown}{long && (
+        {unanswered ? <span style={{ fontStyle: 'italic' }}>{unanswered}</span> : <span>{shown}{long && (
           <button onClick={() => setMore(m => !m)}
                   style={{ font: 'inherit', fontSize: 12, marginLeft: 4, background: 'none', border: 'none',
                            color: 'var(--brand-ink)', cursor: 'pointer', padding: 0 }}>
             {more ? 'less' : 'more'}
           </button>
-        )}</span>
+        )}</span>}
       </div>
     </div>
   );
@@ -563,7 +624,8 @@ const SatHealthCard = ({ room, online }) => {
                                .filter(Boolean).join(' · ')}
                          tone={s.wifi ? wifiTone(s.wifi) : 'idle'}/>
           <SatHealthStat label="microphone" value={s.mic_expected === false ? 'off' : s.mic_fps == null ? '—' : `${s.mic_fps.toFixed(1)} fps`}
-                         sub={s.wake_loop_age_s == null ? 'wake loop not armed' : `wake loop ${s.wake_loop_age_s.toFixed(1)}s ago · queue ${s.mic_q == null ? '—' : s.mic_q}`}
+                         sub={(s.wake_loop_age_s == null ? 'wake loop not armed' : `wake loop ${s.wake_loop_age_s.toFixed(1)}s ago · queue ${s.mic_q == null ? '—' : s.mic_q}`)
+                              + (s.awaiting_response_s > 0 ? ` · waiting ${Math.round(s.awaiting_response_s)}s for the server` : '')}
                          tone={s.mic_expected === false ? 'idle' : s.mic_fps == null ? 'idle' : s.mic_fps > 20 ? 'ok' : s.mic_fps > 0 ? 'warn' : 'err'}/>
           <SatHealthStat label="reachability" value={s.gateway_ok == null ? '—' : s.gateway_ok ? 'gateway answers' : 'gateway silent'}
                          sub={`core ${s.core_ok == null ? '?' : s.core_ok ? 'reachable' : 'unreachable'} · ws ${s.ws || '—'}${s.ws_down_for_s ? ` for ${satHealthUptime(s.ws_down_for_s)}` : ''}`}
@@ -1536,7 +1598,8 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
 
 const RoomSessionsBody = ({ room }) => {
   const { items: sessions, loading } = useApiList(`/api/satellites/${room}/sessions?limit=100`);
-  const { items: convos } = useApiList(`/api/satellites/${room}/conversations?limit=300`);
+  const { items: convos, refresh } = useApiList(`/api/satellites/${room}/conversations?limit=300`);
+  useSatPendingRefresh(convos, refresh);
   if (loading && sessions.length === 0)
     return <div style={{ padding: 40, textAlign: 'center', fontSize: 12, color: 'var(--fg-muted)' }}>loading sessions…</div>;
   if (sessions.length === 0) return <Empty glyph="sleeping" title="no sessions in this room"/>;
@@ -1547,7 +1610,8 @@ const RoomSessionsBody = ({ room }) => {
 
 const RoomConversationsBody = ({ room }) => {
   const [q, setQ] = React.useState('');
-  const { items: all, loading, error } = useApiList(`/api/satellites/${room}/conversations?limit=300`);
+  const { items: all, loading, error, refresh } = useApiList(`/api/satellites/${room}/conversations?limit=300`);
+  useSatPendingRefresh(all, refresh);
   const filtered = all.filter(c => !q || ((c.user_text || '') + ' ' + (c.assistant_text || '')).toLowerCase().includes(q.toLowerCase()));
   if (loading && all.length === 0)
     return <div style={{ padding: 40, textAlign: 'center', fontSize: 12, color: 'var(--fg-muted)' }}>loading conversations…</div>;
