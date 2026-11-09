@@ -17,6 +17,9 @@
 //   6a. tell the Linux side which Windows side runs it (WindowsSide.cs:
 //      /var/lib/domovoi-windows/side.json, written as root at every
 //      bring-up), for the dashboard's Version card;
+//   6b. copy the core's journal out to logs\core.log for "Save logs"
+//      (CoreLog.cs, CoreJournal.cs): once ready, every 10 minutes, and on
+//      the helper's request;
 //   7. with the start parameter "unregister": unregister the distro, end
 //      this account's own WSL session (wsl --shutdown as domovoi-svc, which
 //      leaves every other account's WSL alone), and stop (the uninstaller's
@@ -58,6 +61,10 @@ namespace Domovoi.Windows.Host
         bool canStopBeforeStart;
         DateTime lastStatusWrite = DateTime.MinValue;
         string lastJobError;
+        // logs\core.log: when the periodic copy is next due, and the last
+        // failure logged (one host.log line per change, not every 10 min).
+        DateTime coreLogNext = DateTime.MinValue;
+        string coreLogLastError;
 
         public Host(ManualResetEvent stop)
         {
@@ -213,6 +220,7 @@ namespace Domovoi.Windows.Host
                         WriteStatus(false);
                 }
                 ProcessRequests(ready);
+                if (ready) PeriodicCoreLog();
                 if (DateTime.UtcNow - lastStatusWrite > TimeSpan.FromSeconds(10)) WriteStatus(true);
                 if (Sleep(1000)) break;
             }
@@ -786,6 +794,7 @@ namespace Domovoi.Windows.Host
                     if (verb == "setup-code") AnswerSetupCode(Json.Str(d, "public_key"), ready, resp);
                     else if (verb == "ai-features") AnswerAiFeatures(ready, resp);
                     else if (verb == "linux-update") AnswerLinuxUpdate(ready, resp);
+                    else if (verb == CoreLog.Verb) AnswerCoreLog(resp);
                     else { resp["ok"] = false; resp["error"] = "unknown request"; }
                 }
                 catch (FormatException e) { resp["ok"] = false; resp["error"] = "bad request: " + e.Message; }
@@ -882,6 +891,47 @@ namespace Domovoi.Windows.Host
             foreach (string k in new[] { "ok", "started", "nothing_new", "error", "from_sha", "to_sha" })
                 if (a.ContainsKey(k)) resp[k] = a[k];
             log.Write("linux-update request: " + (Json.Bool(a, "started") == true ? "the update unit is running" : Json.Bool(a, "nothing_new") == true ? "nothing new" : "refused: " + (Json.Str(a, "error") ?? "no reason")));
+        }
+
+        // -- the core's log (CoreLog.cs) ---------------------------------
+
+        // A fresh logs\core.log; null, or why not. Only while the holder
+        // keeps the distro up: a wsl.exe -d call would start a stopped one,
+        // and a distro that isn't up has no journal to give.
+        string RefreshCoreLog()
+        {
+            if (holder == null || SafeExited(holder)) return "Domovoi's Linux system is not running";
+            return CoreJournal.Refresh(
+                delegate (IEnumerable<string> args, int timeoutMs, int maxOutput) { return Wsl.Run(args, timeoutMs, null, maxOutput); },
+                Paths.CoreLogFile, DateTime.UtcNow);
+        }
+
+        void NoteCoreLog(string why)
+        {
+            if (why == coreLogLastError) return;
+            log.Write(why == null ? "copied the core's journal to " + Paths.CoreLogFile : "could not copy the core's journal: " + why);
+            coreLogLastError = why;
+        }
+
+        // At the first ready pass, then every 10 minutes (bounded by
+        // CoreLog.TimeoutMs, so a wedged WSL holds this loop 15 s at most).
+        void PeriodicCoreLog()
+        {
+            if (DateTime.UtcNow < coreLogNext) return;
+            coreLogNext = DateTime.UtcNow + CoreLog.Every;
+            NoteCoreLog(RefreshCoreLog());
+        }
+
+        // The helper's copy-logs, right before it copies: a fresh core.log.
+        // Ready or not (a failed start is when it matters most).
+        void AnswerCoreLog(Dictionary<string, object> resp)
+        {
+            string why = RefreshCoreLog();
+            coreLogLastError = why;
+            if (why == null) coreLogNext = DateTime.UtcNow + CoreLog.Every;
+            resp["ok"] = why == null;
+            if (why != null) resp["error"] = why;
+            log.Write("core-log request: " + (why == null ? "answered" : why));
         }
 
         // -- stopping and unregistering ---------------------------------
