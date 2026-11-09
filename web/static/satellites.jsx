@@ -333,7 +333,8 @@ const SatTurnPill = ({ c }) => {
 };
 /* While a turn in the list is still waiting for its answer, read the list
  * again every few seconds (there is no live channel for the history), and
- * stop once nothing is pending. */
+ * stop once nothing is pending. `reread` is the quiet read: an expired
+ * credential never opens a prompt from this poll. */
 const SAT_PENDING_POLL_MS = 3000;
 const useSatPendingRefresh = (items, refresh) => {
   const pending = (items || []).some((c) => satTurnStatus(c) === 'pending');
@@ -1598,8 +1599,8 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
 
 const RoomSessionsBody = ({ room }) => {
   const { items: sessions, loading } = useApiList(`/api/satellites/${room}/sessions?limit=100`);
-  const { items: convos, refresh } = useApiList(`/api/satellites/${room}/conversations?limit=300`);
-  useSatPendingRefresh(convos, refresh);
+  const { items: convos, reread } = useApiList(`/api/satellites/${room}/conversations?limit=300`);
+  useSatPendingRefresh(convos, reread);
   if (loading && sessions.length === 0)
     return <div style={{ padding: 40, textAlign: 'center', fontSize: 12, color: 'var(--fg-muted)' }}>loading sessions…</div>;
   if (sessions.length === 0) return <Empty glyph="sleeping" title="no sessions in this room"/>;
@@ -1610,8 +1611,8 @@ const RoomSessionsBody = ({ room }) => {
 
 const RoomConversationsBody = ({ room }) => {
   const [q, setQ] = React.useState('');
-  const { items: all, loading, error, refresh } = useApiList(`/api/satellites/${room}/conversations?limit=300`);
-  useSatPendingRefresh(all, refresh);
+  const { items: all, loading, error, reread } = useApiList(`/api/satellites/${room}/conversations?limit=300`);
+  useSatPendingRefresh(all, reread);
   const filtered = all.filter(c => !q || ((c.user_text || '') + ' ' + (c.assistant_text || '')).toLowerCase().includes(q.toLowerCase()));
   if (loading && all.length === 0)
     return <div style={{ padding: 40, textAlign: 'center', fontSize: 12, color: 'var(--fg-muted)' }}>loading conversations…</div>;

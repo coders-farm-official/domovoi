@@ -1181,7 +1181,9 @@ const useApiList = (path, { eventTypes = [], pickItems = (x) => x, quiet = false
     });
   }, [refresh, eventTypes.join(',')]);
 
-  return { items, loading, error, refresh, setItems };
+  // `reread`: the same read, never opening a sign-in prompt (a background
+  // poll must not prompt every few seconds on an expired credential).
+  return { items, loading, error, refresh, reread, setItems };
 };
 
 // One-shot single-resource fetch (e.g. /api/config). Same shape as

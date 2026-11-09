@@ -163,6 +163,15 @@ const healthChecks = ({ viewer, health, rooms, plugins, pluginErrors, acq,
       add({ ...c, tone: 'warn', at: lastTimeout.at, fix: '#settings/about', fixLabel: 'restart',
             text: `a spoken request timed out while ${lastTimeout.stage || 'being answered'} · if it keeps happening, restart Domovoi` });
     } else add({ ...c, tone: 'ok', text: stt ? 'ready' : 'not reported by this server' });
+    // A request that timed out later, while its answer was being worked
+    // out: a slow or loading model, most likely — not speech recognition,
+    // and nothing a restart fixes. Shown only while recent (15 minutes).
+    const reply = speech && speech.last_reply_timeout;
+    if (health && !waits && reply) {
+      add({ key: 'answers', part: 'server', label: 'answers', scope: 'open', order: 4.5,
+            tone: 'warn', at: reply.at,
+            text: 'a spoken request got no answer in time · the language model may be slow or still loading' });
+    }
   }
   {
     const c = { key: 'disk', part: 'server', label: 'disk space', scope: 'admin', order: 15,
