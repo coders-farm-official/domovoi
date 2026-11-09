@@ -13,22 +13,32 @@ history showed nothing. Now:
 - **Every stage before a reply has a time limit**
   ([LINUX_HOST.md](LINUX_HOST.md#the-voice-turn-watchdog)). Speech
   recognition gets three times the recording's length, between 20 and
-  40 s. The whole turn up to its first reply gets 150 s; a cold model
-  load is announced first and isn't cut off. When a limit is reached the
+  40 s. The turn gets 150 s up to the start of routing; once routing
+  starts, a cold model load plus two model calls (570 s by default), so a
+  slow but working model is never cut off. Chat mode is outside it. When a limit is reached the
   room says *"Sorry, that took too long and I lost track of it. Please
   try again."* and listens again. The log names the room and the stage.
 - **Settings → System → Health** says *speech recognition is stuck* when
   a speech worker hasn't come back for 2 minutes, and warns for 15
-  minutes after a request times out. If speech recognition stays stuck
-  house-wide for 10 minutes, the core restarts itself under systemd (the
-  Linux install, and the Linux system inside the Windows installer), and
-  writes every thread's stack to `core-watchdog.log` first.
-  `VOICE_SPEECH_RESTART_AFTER_SEC=0` turns that restart off.
+  minutes after a request times out in speech recognition. A request
+  that timed out while its answer was being worked out gets a row of its
+  own ("the language model may be slow or still loading"). If speech
+  recognition stays stuck for 10 minutes, the core restarts itself under
+  systemd (the Linux install, and the Linux system inside the Windows
+  installer): the dashboard's graceful restart, else an exit for systemd,
+  with every thread's stack written to `core-watchdog.log` first. Never
+  while a restart, an update or a plugin install is under way, and at
+  most once an hour. `VOICE_SPEECH_RESTART_AFTER_SEC=0` turns that
+  restart off.
 - **Satellites stop waiting on their own.** If the server sends nothing
-  at all within 60 s of a request, the satellite shows red, says *"Sorry,
-  I didn't get an answer from the server"*, and listens for the wake word
-  again. That works with an older core too. The limit is the room setting
-  **Reply deadline** (`[listen] response_deadline_sec`, 0 turns it off).
+  at all within 75 s of a request, or goes silent for 240 s part-way
+  through a turn (time playing a reply or music, or in a call or chat,
+  doesn't count; the server says it is still working every 30 s), the
+  satellite shows red, says *"Sorry, I didn't get an answer from the
+  server"*, and listens for the wake word again. That works with an older
+  core too. The limits are the room settings **Reply deadline**
+  (`[listen] response_deadline_sec`) and **Reply backstop**
+  (`[listen] response_backstop_sec`); 0 turns either off.
   The room's Health card shows how long it has been waiting, and a new
   self-check flags a satellite that is connected but hasn't listened for
   its wake word for over 2 minutes. Rooms get this with **Upgrade

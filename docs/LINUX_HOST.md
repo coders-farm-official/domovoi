@@ -1001,16 +1001,20 @@ Now every stage before the reply has one (`domovoi/turn_watchdog.py`):
 |---|---|---|
 | Speech recognition (the wait for the room's previous decode, the decode itself, a speculative copy's result, the second hearing) | 3 × the recording, at least 20 s, at most 40 s | `VOICE_STT_TIMEOUT_MIN_SEC`, `VOICE_STT_TIMEOUT_AUDIO_FACTOR`, `VOICE_STT_TIMEOUT_MAX_SEC` |
 | Voice identification | 10 s (the turn then goes on unidentified) | `VOICE_IDENTIFY_TIMEOUT_SEC` |
-| Everything up to the first reply frame (the reply, or the "waking up my language model" line before a cold model load) | 150 s | `VOICE_REPLY_TIMEOUT_SEC` |
+| The turn up to the start of routing | 150 s | `VOICE_REPLY_TIMEOUT_SEC` |
+| Routing, up to the first reply frame (the reply, or the "waking up my language model" line before a cold model load) | `OLLAMA_LOAD_TIMEOUT_SEC` + 2 × `OLLAMA_TIMEOUT_SEC` + 30 s (570 s by default) from the start of routing | derived |
 
 Why these numbers: faster-whisper runs well under real time even on a
 CPU, so three times the recording means something is wrong, not slow; the
-40 s ceiling (plus a 10 s cap on the apology's speech) stays under the
-satellite's own 60 s reply deadline, so the server always speaks first.
-The reply limit is longer than a slow model's own timeout
-(`OLLAMA_TIMEOUT_SEC`, 120 s), so that timeout and its fallback answer
-come first; a cold model load is announced with a line before it starts,
-and that line ends the limit.
+40 s ceiling (plus a 10 s cap on the apology's speech) stays well under
+the satellite's own 75 s reply deadline, so the server always speaks
+first. Once routing starts, the limit outlasts a cold model load plus two
+model calls (the tool model's routing, then the answer's first sentence),
+so a slow but working model always answers, or fails with its own error
+and fallback answer, first; only a stage that never returns runs into it.
+The first reply frame ends the limit, and chat mode is outside it (its
+chat service has its own timeout). Until that first frame the server
+sends the satellite a `working` frame every 30 s.
 
 On expiry the room hears *"Sorry, that took too long and I lost track of
 it. Please try again."* (or, if that can't be said, gets `error` +
@@ -1025,23 +1029,33 @@ without a name.
 `VOICE_SPEECH_STUCK_AFTER_SEC` (120 s) is stuck. Settings → System →
 Health then says *speech recognition is stuck · the rooms can't understand
 anyone until Domovoi restarts*; a request that merely timed out shows a
-warning there for 15 minutes. When speech recognition has been stuck
-house-wide for `VOICE_SPEECH_RESTART_AFTER_SEC` (600 s) — every speech
-worker stuck, or one stuck with no decode finishing since and a request
-timed out on it — the loop watchdog above ends the core with status 70,
-with every thread's stack (the stuck one's included) in
-`core-watchdog.log`, and systemd starts it again. That happens only under
-systemd (the shipped unit, and the Linux system inside the Windows
-installer); anywhere else nothing exits and the Health row says to
-restart. `VOICE_SPEECH_RESTART_AFTER_SEC=0` turns the automatic restart
-off.
+warning there for 15 minutes. A request that timed out later, while its
+answer was being worked out, gets its own row (*a spoken request got no
+answer in time · the language model may be slow or still loading*), with
+no advice to restart. When speech recognition has been stuck for
+`VOICE_SPEECH_RESTART_AFTER_SEC` (600 s) — every speech worker stuck, or
+one stuck with no decode finishing since and a request timed out on it
+(which is also what one wedged room in a quiet house looks like) — the
+loop watchdog above writes every thread's stack (the stuck one's
+included) to `core-watchdog.log`, notes it in `core-watchdog-last.json`,
+and asks for the dashboard's graceful restart; only when that can't be
+had does it end the core with status 70 for systemd to start again. It
+waits while a restart, an update or a plugin install is under way, and
+restarts for this at most once an hour (after that the Health row carries
+it). That happens only under systemd (the shipped unit, and the Linux
+system inside the Windows installer); anywhere else nothing restarts and
+the Health row says to. `VOICE_SPEECH_RESTART_AFTER_SEC=0` turns the
+automatic restart off.
 
-The satellite has its own limit too: `[listen] response_deadline_sec`
-(60 s, set per room in the dashboard). If the server sends nothing at
-all — no transcript, no reply, no error — that long after a request, the
+The satellite has its own limits too, set per room in the dashboard:
+`[listen] response_deadline_sec` (75 s), if the server sends nothing at
+all (no transcript, no `working`, no reply, no error) that long after a
+request; and `[listen] response_backstop_sec` (240 s), if the server has
+sent something and then nothing more for that long, not counting time
+spent playing a reply or music, or in a call or a chat. Either way the
 satellite shows red, plays "Sorry, I didn't get an answer from the
-server", and listens for the wake word again. It works with older cores
-as well.
+server", and listens for the wake word again. Both work with older cores
+too.
 
 ### Internet or not
 
