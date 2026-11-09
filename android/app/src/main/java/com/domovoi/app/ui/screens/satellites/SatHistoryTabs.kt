@@ -35,6 +35,9 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import com.domovoi.app.LocalApp
 import com.domovoi.app.LocalToast
 import com.domovoi.app.net.LocalCapabilities
@@ -221,14 +224,19 @@ private fun TurnCard(c: SatTurn, showId: Boolean) {
 }
 
 /** While a turn is still waiting for its answer, read the history again
- *  every few seconds (there is no live event for it); stops once none is. */
+ *  every few seconds (there is no live event for it); stops once none is,
+ *  and while the app is in the background (lifecycle below STARTED). */
 @Composable
 private fun RefreshWhilePending(turns: List<SatTurn>?, refresh: () -> Unit) {
     val pending = satAnyPending(turns)
-    LaunchedEffect(pending) {
-        while (pending) {
-            delay(SAT_PENDING_POLL_MS)
-            refresh()
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(pending, lifecycle) {
+        if (!pending) return@LaunchedEffect
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) {
+                delay(SAT_PENDING_POLL_MS)
+                refresh()
+            }
         }
     }
 }
