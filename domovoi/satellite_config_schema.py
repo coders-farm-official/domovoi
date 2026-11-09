@@ -192,6 +192,16 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "steps.",
         "int", section="advanced", min=90, max=600, unit="ms",
     ),
+    FieldSpec(
+        "listen.response_deadline_sec", "Reply deadline", "Listening",
+        "How long the room device waits, after you stop talking, for the "
+        "server's first answer (what it heard, the reply, or an error) before "
+        "it gives up on the request, shows red and listens for the wake word "
+        "again. Once the server has answered anything, a slow reply is never "
+        "cut off. Default 60; 0 turns it off. Below about 50 it can cut off "
+        "the server's own apology when speech recognition is slow.",
+        "float", min=0.0, max=600.0, unit="sec",
+    ),
 
     # ─── Noise gate ────────────────────────────────────────────────────
     FieldSpec(

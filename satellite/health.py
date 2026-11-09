@@ -983,6 +983,21 @@ class CheckInput:
     wifi_mismatch_retry: float = 5 * 60.0
     mic_silence_limit: float = 30.0
     heartbeat_limit: float = 60.0
+    # The wake stall (check 2b): seconds the socket to the core has been up
+    # with the wake word not listened for and the turn holding it not
+    # moving — no capture open, nothing playing, no call, chat or
+    # recording, and no frame for the turn — measured from the later of
+    # the wake loop's last heartbeat and the turn's last progress; None
+    # when it does not apply (the socket is down, the mic is off, or one
+    # of those is under way). What a satellite looks like when the core
+    # never answers a request (2026-11-09: the yellow ring in every room).
+    wake_stall_for: float | None = None
+    wake_stall_limit: float = 120.0
+    # Seconds the reply to the last request has been awaited (the health
+    # sample's `awaiting_response_s`), for the message only.
+    awaiting_response: float = 0.0
+    # When the wake stall was last flagged (None: not during this stall).
+    last_wake_stall_note: float | None = None
 
 
 @dataclass(frozen=True)
@@ -999,6 +1014,8 @@ class Decision:
 
 #: Actions that end this process (the restart budget applies to them).
 TERMINAL_ACTIONS = frozenset({"exit", "reboot"})
+#: A wake stall that goes on is flagged again this often (seconds).
+WAKE_STALL_RENOTE_S = 10 * 60.0
 
 
 def gateway_silent(ci: CheckInput) -> bool:
@@ -1095,6 +1112,31 @@ def decide(ci: CheckInput) -> list[Decision]:
                 "exit",
                 f"the wake loop has not ticked for {age:.0f}s while idle",
                 check="wake_loop",
+            ))
+        # 2b: connected, but not listening for the wake word, and the turn
+        # in the way is going nowhere. Only flagged (logged, written to
+        # last-health.json): the reply deadline is what ends such a turn,
+        # and a long answer, a follow-up or a call never gets here (the
+        # client leaves the stall None while any of them is under way).
+        stall = ci.wake_stall_for
+        if (
+            stall is not None and stall >= ci.wake_stall_limit
+            and (
+                ci.last_wake_stall_note is None
+                or ci.now - ci.last_wake_stall_note >= WAKE_STALL_RENOTE_S
+            )
+        ):
+            waiting = (
+                f"; it has waited {ci.awaiting_response:.0f}s for the server to "
+                "answer the last request"
+                if ci.awaiting_response > 0 else ""
+            )
+            out.append(Decision(
+                "flag",
+                f"connected to the server, but not listening for the wake word "
+                f"for {stall:.0f}s: no capture, nothing playing and nothing "
+                f"from the server for the turn in progress{waiting}",
+                check="wake_stall",
             ))
 
     # 3: memory while idle.
