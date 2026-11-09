@@ -70,10 +70,11 @@ SERVER_SEARCH = ("sweep", "names", "address")
 #: plugin_payloads (they run as root on a Pi), wifi, mic_gain, leds,
 #: display, time_sync (a laptop keeps its own clock), chat_mode and
 #: full_duplex (unless [device] full_duplex says a speakerphone cancels
-#: its own echo).
+#: its own echo). turn_progress: the core's `working` frames while a turn
+#: is still being worked out (they keep the reply backstop from firing).
 PC_SUPPORTS: tuple[str, ...] = (
     "restart", "code_sync", "config", "logs", "wake_clips", "wake_models",
-    "sounds", "voice",
+    "sounds", "voice", "turn_progress",
 )
 #: Settings the core may never change on a laptop, whatever it sends: the
 #: identity it is pinned to, the permission the person chose, and the

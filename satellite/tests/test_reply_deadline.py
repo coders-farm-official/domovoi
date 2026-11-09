@@ -6,7 +6,7 @@ on the yellow "thinking" ring after its next wake word: the capture ended,
 `_await_response_with_barge` for a `response_end` that never came. Nothing
 but a dropped socket or a restart brought the room back.
 
-`[listen] response_deadline_sec` (60 s by default, 0 = off) bounds that
+`[listen] response_deadline_sec` (75 s by default, 0 = off) bounds that
 wait: if NOTHING for the turn — transcript, response_start, reply audio,
 response_end, error — arrives within it of the closing frame, the satellite
 logs a warning, shows the error ring, plays the core's "no answer" line if
@@ -81,12 +81,14 @@ def quick(monkeypatch, tmp_path):
     monkeypatch.setattr(client, "_resolve_sound", lambda rel: tmp_path / "sounds" / rel)
 
 
-def turn_sat(loop, *, deadline: float = DEADLINE, wake_barge: bool = False):
+def turn_sat(loop, *, deadline: float = DEADLINE, wake_barge: bool = False,
+             backstop: float = 30.0):
     """A satellite with a session up, ready to run a turn and its wait."""
     sat = receiver_sat()
     sat.loop = loop
     sat.send_q = asyncio.Queue()
     sat.cfg.response_deadline_sec = deadline
+    sat.cfg.response_backstop_sec = backstop
     sat.cfg.barge_in = False
     sat.cfg.barge_in_require_wake_word = wake_barge
     sat.cfg.vad_aggressiveness_during_tts = 3
@@ -446,7 +448,7 @@ def _cfg(**listen):
 
 
 def test_the_setting_defaults_to_sixty_and_takes_zero_for_off():
-    assert _cfg().response_deadline_sec == 60.0
+    assert _cfg().response_deadline_sec == 75.0
     assert _cfg(response_deadline_sec=0).response_deadline_sec == 0.0
     assert _cfg(response_deadline_sec=90).response_deadline_sec == 90.0
     assert _cfg().health_wake_stall_sec == 120.0
@@ -461,9 +463,194 @@ def test_a_bad_setting_fails_loud(bad):
 def test_the_setting_is_documented_reported_and_settable():
     example = Path(client.__file__).resolve().parent / "config.toml.example"
     text = example.read_text(encoding="utf-8")
-    assert "# response_deadline_sec = 60" in text
+    assert "# response_deadline_sec = 75" in text
+    assert "# response_backstop_sec = 240" in text
     assert tomllib.loads(text)["health"]["wake_stall_sec"] == 120
     assert "listen.response_deadline_sec" in remote_config.SETTABLE
     sat = object.__new__(client.Satellite)
     sat.cfg = _cfg(response_deadline_sec=45)
     assert sat._config_report()["listen.response_deadline_sec"] == 45.0
+
+
+def test_the_backstop_setting_defaults_to_240_and_takes_zero_for_off():
+    assert _cfg().response_backstop_sec == 240.0
+    assert _cfg(response_backstop_sec=0).response_backstop_sec == 0.0
+    assert _cfg(response_backstop_sec=900).response_backstop_sec == 900.0
+    for bad in (-1, 901, "later", True):
+        with pytest.raises(ValueError):
+            _cfg(response_backstop_sec=bad)
+    assert "listen.response_backstop_sec" in remote_config.SETTABLE
+    sat = object.__new__(client.Satellite)
+    sat.cfg = _cfg(response_backstop_sec=300)
+    assert sat._config_report()["listen.response_backstop_sec"] == 300.0
+
+
+# ─── a reconnect forgets the abandoned turn ───────────────────────────────
+
+
+def test_after_a_core_restart_the_next_blank_captures_end_is_not_swallowed(loop):
+    """The deadline fires, then the core restarts: the old session can
+    never send that turn's late end, so the new session's first blank
+    capture — ended by a bare response_end — must end its wait."""
+    sat = abandon_a_turn(loop)
+    assert sat._abandoned_mark is not None
+    receive(sat, _announcement("Reminder."))      # counters move before the restart
+    sat._abandoned_mark = sat._response_starts   # (as if abandoned after it)
+    sat._on_session_ended()                       # the core went away
+    assert sat._abandoned_mark is None
+    assert sat._response_starts == sat._turn_mark == 0
+    sat.send_q = asyncio.Queue()                  # a new session is accepted
+    start_turn(sat)
+    receive(sat, [_end(interrupted=True)])
+    assert sat.response_done.is_set()
+
+
+# ─── the backstop, once the core has answered something ───────────────────
+
+BACKSTOP = 0.3
+
+
+def test_the_backstop_fires_after_silence_following_a_transcript(loop, caplog):
+    sat = turn_sat(loop, backstop=BACKSTOP)
+    start_turn(sat)
+    receive(sat, [json.dumps({"type": "transcript", "text": "tell me a story"})])
+    caplog.set_level(logging.WARNING)
+    assert wait_bounded(sat) == "done"
+    assert sat._leds.states[-2:] == ["error", "idle"]
+    assert sat.response_done.is_set()
+    assert sat._abandoned_mark == sat._response_starts
+    msgs = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("stopped part-way through a turn" in m and "backstop" in m for m in msgs), msgs
+    # The abandoned turn's late end does not end the next turn's wait.
+    start_turn(sat)
+    receive(sat, [_end(interrupted=True)])
+    assert not sat.response_done.is_set()
+
+
+def test_the_backstop_plays_the_no_answer_clip(loop, tmp_path):
+    sounds = tmp_path / "sounds"
+    sounds.mkdir()
+    (sounds / client.NO_ANSWER_CLIP).write_bytes(b"ID3")
+    sat = turn_sat(loop, backstop=BACKSTOP)
+    start_turn(sat)
+    receive(sat, [json.dumps({"type": "transcript", "text": "hi"})])
+    assert wait_bounded(sat) == "done"
+    assert sat._played == [(client.NO_ANSWER_CLIP, "no-answer")]
+
+
+@pytest.mark.parametrize("busy", ["playing", "draining", "music", "chat", "dropin", "wake_recording"])
+def test_the_backstop_never_fires_while_the_room_is_busy(loop, busy):
+    sat = turn_sat(loop, backstop=BACKSTOP)
+    start_turn(sat)
+    receive(sat, [json.dumps({"type": "transcript", "text": "play something"})])
+    if busy == "playing":
+        sat.playback_active.set()
+    elif busy == "draining":
+        sat._playback_idle.clear()
+    elif busy == "music":
+        sat._is_music_playing = lambda: True
+    elif busy == "chat":
+        sat.chat_active.set()
+    elif busy == "dropin":
+        sat.dropin_active.set()
+    else:
+        sat.wake_recording.set()
+    th, out = wait_in_thread(sat)
+    th.join(BACKSTOP * 4)
+    assert th.is_alive(), f"the backstop cut off a wait while {busy}"
+    assert "error" not in sat._leds.states
+    # Busy time never counts: once the room is quiet the full backstop runs.
+    t0 = time.monotonic()
+    sat.playback_active.clear()
+    sat._playback_idle.set()
+    sat._is_music_playing = lambda: False
+    sat.chat_active.clear()
+    sat.dropin_active.clear()
+    sat.wake_recording.clear()
+    th.join(5.0)
+    assert not th.is_alive() and out["outcome"] == "done"
+    # (Busy time is stamped once per wait pass, ~0.1 s apart.)
+    assert time.monotonic() - t0 >= BACKSTOP * 0.5
+
+
+def test_each_frame_starts_the_backstop_again(loop):
+    sat = turn_sat(loop, backstop=BACKSTOP)
+    start_turn(sat)
+    receive(sat, [json.dumps({"type": "transcript", "text": "a long one"})])
+    th, out = wait_in_thread(sat)
+    t_end = time.monotonic() + BACKSTOP * 4
+    while time.monotonic() < t_end:
+        time.sleep(BACKSTOP / 3)
+        receive(sat, [json.dumps({"type": "transcript", "text": "still going"})])
+    assert th.is_alive(), "a turn the core keeps answering is not given up"
+    th.join(5.0)
+    assert out["outcome"] == "done"
+
+
+def test_a_backstop_of_zero_is_off(loop):
+    sat = turn_sat(loop, backstop=0)
+    start_turn(sat)
+    receive(sat, [json.dumps({"type": "transcript", "text": "hello"})])
+    th, out = wait_in_thread(sat)
+    th.join(1.0)
+    assert th.is_alive()
+    sat.shutdown_event.set()
+    th.join(2.0)
+    assert out["outcome"] == "shutdown"
+    assert "error" not in sat._leds.states
+
+
+def test_the_first_deadline_does_not_wait_for_the_backstop(loop):
+    """Before any frame, only response_deadline_sec applies."""
+    sat = turn_sat(loop, deadline=DEADLINE, backstop=30.0)
+    start_turn(sat)
+    t0 = time.monotonic()
+    assert wait_bounded(sat) == "done"
+    assert time.monotonic() - t0 < 5.0
+
+
+# ─── the core's `working` frames ──────────────────────────────────────────
+
+
+def _working(stage: str = "thinking it over") -> str:
+    return json.dumps({"type": "working", "stage": stage})
+
+
+def test_a_working_frame_is_the_cores_first_answer(loop):
+    sat = turn_sat(loop)
+    start_turn(sat)
+    receive(sat, [_working("transcribing")])
+    assert sat._reply_heard
+    time.sleep(DEADLINE * 1.5)
+    assert not sat._reply_deadline_due()
+    assert sat._awaiting_response_s(time.monotonic()) == 0.0
+
+
+def test_working_frames_keep_the_backstop_off(loop):
+    sat = turn_sat(loop, backstop=BACKSTOP)
+    start_turn(sat)
+    receive(sat, [json.dumps({"type": "transcript", "text": "plan my week"})])
+    th, out = wait_in_thread(sat)
+    t_end = time.monotonic() + BACKSTOP * 4
+    while time.monotonic() < t_end:
+        time.sleep(BACKSTOP / 3)
+        receive(sat, [_working("asking the model")])
+    assert th.is_alive(), "a core that says it is still working is not given up on"
+    th.join(5.0)          # then it goes silent: the backstop fires
+    assert out["outcome"] == "done"
+
+
+def test_a_working_frame_is_quiet_and_clears_the_abandoned_mark(loop, caplog):
+    sat = abandon_a_turn(loop)
+    caplog.set_level(logging.INFO)
+    start_turn(sat)
+    receive(sat, [_working(), _end(interrupted=True)])
+    assert sat.response_done.is_set(), "the end after `working` is this turn's"
+    assert not [r for r in caplog.records
+                if r.levelno >= logging.INFO and "working" in r.getMessage()]
+
+
+def test_a_laptop_declares_turn_progress():
+    from satellite import pc_engine
+
+    assert "turn_progress" in pc_engine.PC_SUPPORTS

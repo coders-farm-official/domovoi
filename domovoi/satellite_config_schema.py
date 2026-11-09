@@ -195,12 +195,25 @@ EDITABLE_FIELDS: list[FieldSpec] = [
     FieldSpec(
         "listen.response_deadline_sec", "Reply deadline", "Listening",
         "How long the room device waits, after you stop talking, for the "
-        "server's first answer (what it heard, the reply, or an error) before "
-        "it gives up on the request, shows red and listens for the wake word "
-        "again. Once the server has answered anything, a slow reply is never "
-        "cut off. Default 60; 0 turns it off. Below about 50 it can cut off "
-        "the server's own apology when speech recognition is slow.",
+        "server's first answer (what it heard, that it is still working, the "
+        "reply, or an error) before it gives up on the request, shows red and "
+        "listens for the wake word again. Once the server has answered "
+        "anything, this deadline is off and the reply backstop takes over. "
+        "Default 75; 0 turns it off. Below about 60 it can cut off the "
+        "server's own apology when speech recognition is slow.",
         "float", min=0.0, max=600.0, unit="sec",
+    ),
+    FieldSpec(
+        "listen.response_backstop_sec", "Reply backstop", "Listening",
+        "Once the server has answered something, the longest the room "
+        "device waits after the last thing it sent for the request (what it "
+        "heard, that it is still working, part of the reply, an error) for "
+        "the next, before it gives up, shows red and listens for the wake "
+        "word again. Time spent playing a reply or music, or in a call or a "
+        "chat, never counts, and the server says it is still working every "
+        "30 s, so this only catches a server that has gone completely "
+        "silent. Default 240; 0 turns it off.",
+        "float", min=0.0, max=900.0, unit="sec",
     ),
 
     # ─── Noise gate ────────────────────────────────────────────────────

@@ -119,25 +119,45 @@ SPEECH_PAUSE_FRAMES_MAX = 20
 # FIRST answer to it — a `transcript`, `response_start`, reply audio,
 # `response_end` or `error` — before it gives up on the turn, shows the
 # error ring and listens for the wake word again (`_reply_deadline_expired`).
-# 0 turns it off. Why 60 s: a current core caps the whole stage before the
-# transcript at 40 s (speech recognition gets max(20 s, 3 x the capture's
-# length), clamped to 40 s) and then speaks an apology whose speech is
-# capped at about 10 s, so a current core always sends a frame within about
-# 50 s; 60 s outlasts it, so this only fires when the core never answers
+# 0 turns it off. Why 75 s: a current core caps speech recognition at 40 s
+# (max(20 s, 3 x the capture's length), clamped to 40 s), counted from when
+# the turn starts on the core, and then speaks an apology whose speech
+# synthesis is capped at 10 s: 50 s, plus the network and any queueing on
+# the core before the turn starts. 75 s leaves a wide margin over that
+# (60 s left too little), so this only fires when the core never answers
 # (2026-11-09: speech recognition wedged and every room sat on the yellow
 # ring). A cold language-model load happens AFTER the transcript has gone
 # out, and the core says an interim line before it, so it never runs into
-# this deadline: once anything has arrived for the turn the deadline is off
-# for the rest of it.
-RESPONSE_DEADLINE_SEC_DEFAULT = 60.0
+# this deadline: once anything has arrived for the turn, this deadline is
+# off and the backstop below takes over.
+RESPONSE_DEADLINE_SEC_DEFAULT = 75.0
 RESPONSE_DEADLINE_SEC_MAX = 600.0
+# `[listen] response_backstop_sec`: once the core HAS answered something for
+# the turn, the longest the satellite waits after the LAST frame of the
+# turn (any transcript, response_start, reply audio, response_end or error)
+# for the next one, before it gives the turn up the same way. Not counted
+# while a reply is playing or draining, during a chat, a call or a wake
+# recording, or while music plays: only silence from the core with nothing
+# going on in the room counts. 0 turns it off. 240 s is far past every cap
+# the core puts on a turn (speech recognition 40 s, the answer's own
+# watchdog, an apology of at most 10 s), so it only catches a core that
+# stopped part-way through a turn and never said so. A current core also
+# sends `working` every 30 s while it works a turn out (its own limit once
+# routing has started is about 570 s: a cold model load plus two model
+# calls can be silent for longer than 240 s), and each one restarts this
+# count, so the backstop fires only when the core has gone completely
+# silent: a dead or wedged core, or an older core that never sends
+# `working`.
+RESPONSE_BACKSTOP_SEC_DEFAULT = 240.0
+RESPONSE_BACKSTOP_SEC_MAX = 900.0
 # How long the error ring shows when the deadline fires and there is no
 # clip to play (the clip, when there is one, holds it while it plays).
 REPLY_DEADLINE_ERROR_HOLD_SEC = 1.5
 # The canned line played when the deadline fires, if the core has rendered
-# one and this satellite has synced it (`_resolve_sound`). No core renders
-# it yet: until one does the satellite plays nothing (the network clip says
-# to move the unit closer to the router, which is wrong advice here).
+# one and this satellite has synced it (`_resolve_sound`; the core renders
+# it per voice, domovoi/canned_sounds.py `_CANNED`). An older core does not:
+# the satellite then plays nothing rather than the network clip, which says
+# to move the unit closer to the router, wrong advice here.
 NO_ANSWER_CLIP = "server_no_answer.mp3"
 
 # openWakeWord's `Model.reset()` refills its feature buffer by running the
@@ -688,6 +708,8 @@ class Config:
     speech_pause_ms: int = SPEECH_PAUSE_FRAMES * FRAME_MS
     # [listen] response_deadline_sec: see RESPONSE_DEADLINE_SEC_DEFAULT.
     response_deadline_sec: float = RESPONSE_DEADLINE_SEC_DEFAULT
+    # [listen] response_backstop_sec: see RESPONSE_BACKSTOP_SEC_DEFAULT.
+    response_backstop_sec: float = RESPONSE_BACKSTOP_SEC_DEFAULT
     # [health]: the telemetry sampler, the last-health sidecar and the
     # self-checks (satellite/health.py). Defaulted so a Config built without
     # the section keeps working; the example config documents each key.
@@ -1031,6 +1053,10 @@ class Config:
             early_commit=bool(listen.get("early_commit", True)),
             speech_pause_ms=speech_pause_ms,
             response_deadline_sec=_response_deadline_sec(listen.get("response_deadline_sec")),
+            response_backstop_sec=_seconds_setting(
+                listen.get("response_backstop_sec"), "response_backstop_sec",
+                RESPONSE_BACKSTOP_SEC_DEFAULT, RESPONSE_BACKSTOP_SEC_MAX,
+            ),
             # Health telemetry and self-checks — see [health] in the example
             # config for what each one guards.
             health_enabled=bool(healthc.get("enabled", True)),
@@ -1076,20 +1102,25 @@ def _speech_pause_ms(value: Any) -> int:
     return frames * FRAME_MS
 
 
+def _seconds_setting(value: Any, key: str, default: float, maximum: float) -> float:
+    """A `[listen]` number of seconds from 0 (off) to `maximum`; absent
+    means `default`. Anything else fails loud, like speech_pause_ms — the
+    dashboard's own range keeps an edit from getting here."""
+    if value is None:
+        return default
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"[listen] {key} must be a number of seconds, not {value!r}")
+    if not 0 <= value <= maximum:
+        raise ValueError(f"[listen] {key} {value!r} is outside 0-{maximum:.0f} s")
+    return float(value)
+
+
 def _response_deadline_sec(value: Any) -> float:
     """`[listen] response_deadline_sec`: 0 (off) to
-    RESPONSE_DEADLINE_SEC_MAX seconds; absent means the default (60).
-    Anything else fails loud, like speech_pause_ms — the dashboard's own
-    range keeps an edit from getting here."""
-    if value is None:
-        return RESPONSE_DEADLINE_SEC_DEFAULT
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ValueError(f"[listen] response_deadline_sec must be a number of seconds, not {value!r}")
-    if not 0 <= value <= RESPONSE_DEADLINE_SEC_MAX:
-        raise ValueError(
-            f"[listen] response_deadline_sec {value!r} is outside 0-{RESPONSE_DEADLINE_SEC_MAX:.0f} s"
-        )
-    return float(value)
+    RESPONSE_DEADLINE_SEC_MAX seconds; absent means the default (75)."""
+    return _seconds_setting(
+        value, "response_deadline_sec", RESPONSE_DEADLINE_SEC_DEFAULT, RESPONSE_DEADLINE_SEC_MAX,
+    )
 
 
 def _music_buffer_sec(value: Any) -> float:
@@ -2129,6 +2160,7 @@ class Satellite(pc_engine.SpareDeviceEngine):
         # when this capture's closing frame goes out).
         self._reply_wait_since = None
         self._reply_heard = False
+        self._reply_activity_at = None
         self._turn_progress_at = self._utt_started
         msg: dict[str, Any] = {
             "type": "utterance_start", "trigger": trigger, "utt": self._utt_seq,
@@ -4708,6 +4740,7 @@ class Satellite(pc_engine.SpareDeviceEngine):
             "listen.early_commit": c.early_commit,
             "listen.speech_pause_ms": c.speech_pause_ms,
             "listen.response_deadline_sec": c.response_deadline_sec,
+            "listen.response_backstop_sec": c.response_backstop_sec,
             "greeting.funny_chance": c.greeting_funny_chance,
             "sounds.sync_enabled": c.sounds_sync_enabled,
             "playback.tts_prebuffer_sec": c.tts_prebuffer_sec,
@@ -6142,6 +6175,7 @@ class Satellite(pc_engine.SpareDeviceEngine):
         the core's first answer to it counts from now (monotonic)."""
         now = time.monotonic()
         self._reply_wait_since = now
+        self._reply_activity_at = now
         self._turn_progress_at = now
 
     def _note_reply_frame(self, kind: str) -> None:
@@ -6151,9 +6185,12 @@ class Satellite(pc_engine.SpareDeviceEngine):
         the utterance_end). Anything else counts only once the capture is
         closed: while it is still open, a response or its audio is an
         announcement or the reply this capture talked over."""
-        self._turn_progress_at = time.monotonic()
-        if kind == "transcript" or not getattr(self, "_turn_capturing", False):
+        now = time.monotonic()
+        self._turn_progress_at = now
+        if kind in ("transcript", "working") or not getattr(self, "_turn_capturing", False):
             self._reply_heard = True
+            # Every frame of the turn starts the backstop's count again.
+            self._reply_activity_at = now
 
     def _reply_deadline_due(self) -> bool:
         """Whether the wait for this capture's reply has run out: armed,
@@ -6165,6 +6202,46 @@ class Satellite(pc_engine.SpareDeviceEngine):
             return False
         return time.monotonic() - since >= limit
 
+    def _reply_wait_busy(self) -> bool:
+        """Whether the wait is legitimately long right now: a reply playing
+        or still draining out of the speaker, music, a call, a chat or a
+        wake recording. The backstop does not count such time."""
+        if self.playback_active.is_set():
+            return True
+        idle_out = getattr(self, "_playback_idle", None)
+        if idle_out is not None and not idle_out.is_set():
+            return True
+        if (
+            self.chat_active.is_set()
+            or self.dropin_active.is_set()
+            or self.wake_recording.is_set()
+        ):
+            return True
+        try:
+            return self._is_music_playing()
+        except AttributeError:
+            # A satellite built without the music player (tests).
+            return False
+
+    def _reply_backstop_due(self) -> bool:
+        """Whether the backstop has run out: the core has answered
+        something for this turn, the wait is still on, nothing in the room
+        is legitimately busy, and `[listen] response_backstop_sec` (not 0)
+        has gone by since the later of the turn's last frame and the last
+        busy moment."""
+        limit = getattr(self.cfg, "response_backstop_sec", RESPONSE_BACKSTOP_SEC_DEFAULT)
+        if not limit or self._reply_wait_since is None or not self._reply_heard:
+            return False
+        now = time.monotonic()
+        if self._reply_wait_busy():
+            self._reply_activity_at = now
+            return False
+        last = self._reply_activity_at
+        if last is None:
+            self._reply_activity_at = now
+            return False
+        return now - last >= limit
+
     def _awaiting_response_s(self, now: float) -> float:
         """For the health sample: seconds since the closing frame of a
         capture whose reply has not started yet; 0 at every other time
@@ -6174,9 +6251,10 @@ class Satellite(pc_engine.SpareDeviceEngine):
             return 0.0
         return round(max(0.0, now - since), 1)
 
-    def _reply_deadline_expired(self, oww) -> str:
-        """The core never answered this capture: give the turn up, say so,
-        and go back to listening for the wake word. Mic thread only; returns
+    def _reply_deadline_expired(self, oww, *, backstop: bool = False) -> str:
+        """The core never answered this capture (or, `backstop`, stopped
+        part-way through answering it): give the turn up, say so, and go
+        back to listening for the wake word. Mic thread only; returns
         the wait's outcome ('done', or 'shutdown').
 
         Leaves the state as the receiver's `error` branch does: playback
@@ -6188,15 +6266,29 @@ class Satellite(pc_engine.SpareDeviceEngine):
         asked for it, and hearing it late is less surprising than having it
         vanish — and its own response_end then ends it as usual."""
         since = self._reply_wait_since
-        waited = time.monotonic() - since if since is not None else 0.0
+        now = time.monotonic()
+        waited = now - since if since is not None else 0.0
+        if backstop:
+            last = self._reply_activity_at
+            log.warning(
+                "the server stopped part-way through a turn: nothing more from "
+                "it for %.0fs after its last frame (backstop [listen] "
+                "response_backstop_sec = %.0fs; %.0fs since the end of the "
+                "request); giving up on this turn and listening for the wake "
+                "word again",
+                now - last if last is not None else 0.0,
+                getattr(self.cfg, "response_backstop_sec", RESPONSE_BACKSTOP_SEC_DEFAULT),
+                waited,
+            )
+        else:
+            log.warning(
+                "no reply from the server %.0fs after the end of the request: the "
+                "server never answered (no transcript, reply or error within "
+                "[listen] response_deadline_sec = %.0fs); giving up on this turn "
+                "and listening for the wake word again",
+                waited, getattr(self.cfg, "response_deadline_sec", RESPONSE_DEADLINE_SEC_DEFAULT),
+            )
         self._reply_wait_since = None
-        log.warning(
-            "no reply from the server %.0fs after the end of the request: the "
-            "server never answered (no transcript, reply or error within "
-            "[listen] response_deadline_sec = %.0fs); giving up on this turn "
-            "and listening for the wake word again",
-            waited, getattr(self.cfg, "response_deadline_sec", RESPONSE_DEADLINE_SEC_DEFAULT),
-        )
         self._abandoned_mark = getattr(self, "_response_starts", 0)
         self.stop_playback.set()
         self._drain_playback_q()
@@ -6248,6 +6340,8 @@ class Satellite(pc_engine.SpareDeviceEngine):
                 return "done"
             if self._reply_deadline_due():
                 return self._reply_deadline_expired(oww)
+            if self._reply_backstop_due():
+                return self._reply_deadline_expired(oww, backstop=True)
             try:
                 frame = self.raw_q.get(timeout=0.1)
             except queue.Empty:
@@ -6311,6 +6405,8 @@ class Satellite(pc_engine.SpareDeviceEngine):
                 return "done"
             if self._reply_deadline_due():
                 return self._reply_deadline_expired(oww)
+            if self._reply_backstop_due():
+                return self._reply_deadline_expired(oww, backstop=True)
             try:
                 frame = self.raw_q.get(timeout=0.1)
             except queue.Empty:
@@ -7169,10 +7265,16 @@ class Satellite(pc_engine.SpareDeviceEngine):
     # has sent something for this capture since — a transcript at any point
     # (an early commit can produce one before the utterance_end), reply
     # audio, response_start/_end or an error once the capture is closed —
-    # which takes the deadline off for the rest of the turn. Reset by
+    # which takes the deadline off for the rest of the turn and hands it to
+    # the backstop (`_reply_backstop_due`). Reset by
     # `_begin_utterance`; set by the receiver.
     _reply_wait_since: float | None = None
     _reply_heard: bool = False
+    # The backstop's clock (`[listen] response_backstop_sec`): the later of
+    # the turn's last frame and the last moment the wait was legitimately
+    # busy (a reply playing or draining, music, a call, a chat, a wake
+    # recording). Written by both threads; a float store is atomic.
+    _reply_activity_at: float | None = None
     # A turn the deadline gave up on: the `_response_starts` count when it
     # did (None when there is none). The core's late response_end for it —
     # one with no transcript or response_start since — is that turn's, and
@@ -7270,6 +7372,19 @@ class Satellite(pc_engine.SpareDeviceEngine):
                 self._sync_time_with_server()
             finally:
                 self._note_session_accepted()
+        elif t == "working":
+            # The core is still working the turn out (`turn_progress`): sent
+            # every 30 s from the start of the turn until its first reply
+            # frame, with a plain-text `stage`. Counts as the core's answer
+            # for the reply deadline, like a transcript, and starts the
+            # backstop's count again, like every frame of the turn. Quiet on
+            # purpose: it comes every 30 s for as long as a turn takes. An
+            # older core never sends it.
+            log.debug("server still working on the turn: %s", payload.get("stage"))
+            self._note_reply_frame("working")
+            # As for a transcript: a turn is being answered, so the next
+            # response_end is its own.
+            self._abandoned_mark = None
         elif t == "transcript":
             log.info("heard: %s", payload.get("text"))
             # The core is answering: the reply deadline is off for this turn
@@ -8069,6 +8184,17 @@ class Satellite(pc_engine.SpareDeviceEngine):
         self.playback_active.clear()
         self.stop_playback.set()
         self._drain_playback_q()
+        # Nothing the old session owed this satellite can arrive on the next
+        # one: a turn the reply deadline gave up on will never send its late
+        # response_end, so the mark that would swallow it must go, or the
+        # next blank capture's bare response_end — its only end — would be
+        # ignored. The reply counters restart with the session, both
+        # together so "no response_start since the capture opened"
+        # (`_turn_mark` == `_response_starts`) still reads true for a turn
+        # opened before the first reply of the new session.
+        self._abandoned_mark = None
+        self._response_starts = 0
+        self._turn_mark = 0
         # Best-effort: a wake-clip recording (Feature #5) is server-driven, so
         # a dropped WS means no more frames will be consumed by the server.
         # Clear the state so the mic thread leaves `_wake_recording_loop` and
