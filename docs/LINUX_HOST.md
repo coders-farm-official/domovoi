@@ -988,6 +988,61 @@ cat ~domovoi/.domovoi/logs/core-watchdog.log        # every stall report, newest
 sudo kill -USR1 "$(systemctl show -p MainPID --value domovoi-core)"   # every stack into ~/.domovoi/logs/core-faulthandler.log; it carries on
 ```
 
+### The voice turn watchdog
+
+On 2026-11-09 speech recognition on the server wedged and every room sat
+in its yellow "thinking" ring for good: the satellite had sent its
+request, and the core never said what it heard, never answered and never
+sent an error. Nothing between the end of a request and its reply had a
+time limit, and a speech thread that never returns can't be stopped.
+Now every stage before the reply has one (`domovoi/turn_watchdog.py`):
+
+| Stage | Limit | Setting |
+|---|---|---|
+| Speech recognition (the wait for the room's previous decode, the decode itself, a speculative copy's result, the second hearing) | 3 × the recording, at least 20 s, at most 40 s | `VOICE_STT_TIMEOUT_MIN_SEC`, `VOICE_STT_TIMEOUT_AUDIO_FACTOR`, `VOICE_STT_TIMEOUT_MAX_SEC` |
+| Voice identification | 10 s (the turn then goes on unidentified) | `VOICE_IDENTIFY_TIMEOUT_SEC` |
+| Everything up to the first reply frame (the reply, or the "waking up my language model" line before a cold model load) | 150 s | `VOICE_REPLY_TIMEOUT_SEC` |
+
+Why these numbers: faster-whisper runs well under real time even on a
+CPU, so three times the recording means something is wrong, not slow; the
+40 s ceiling (plus a 10 s cap on the apology's speech) stays under the
+satellite's own 60 s reply deadline, so the server always speaks first.
+The reply limit is longer than a slow model's own timeout
+(`OLLAMA_TIMEOUT_SEC`, 120 s), so that timeout and its fallback answer
+come first; a cold model load is announced with a line before it starts,
+and that line ends the limit.
+
+On expiry the room hears *"Sorry, that took too long and I lost track of
+it. Please try again."* (or, if that can't be said, gets `error` +
+`response_end`, which shows red briefly), the log says which room and
+which stage (`stream office: voice turn timed out after 20.0 s while
+recognising speech: no reply; …`), and the room's history entry says
+"no answer — timed out". A second hearing that runs out of time routes
+the first hearing instead, and slow voice identification just goes on
+without a name.
+
+**Stuck speech workers.** A speech worker on one call for
+`VOICE_SPEECH_STUCK_AFTER_SEC` (120 s) is stuck. Settings → System →
+Health then says *speech recognition is stuck · the rooms can't understand
+anyone until Domovoi restarts*; a request that merely timed out shows a
+warning there for 15 minutes. When speech recognition has been stuck
+house-wide for `VOICE_SPEECH_RESTART_AFTER_SEC` (600 s) — every speech
+worker stuck, or one stuck with no decode finishing since and a request
+timed out on it — the loop watchdog above ends the core with status 70,
+with every thread's stack (the stuck one's included) in
+`core-watchdog.log`, and systemd starts it again. That happens only under
+systemd (the shipped unit, and the Linux system inside the Windows
+installer); anywhere else nothing exits and the Health row says to
+restart. `VOICE_SPEECH_RESTART_AFTER_SEC=0` turns the automatic restart
+off.
+
+The satellite has its own limit too: `[listen] response_deadline_sec`
+(60 s, set per room in the dashboard). If the server sends nothing at
+all — no transcript, no reply, no error — that long after a request, the
+satellite shows red, plays "Sorry, I didn't get an answer from the
+server", and listens for the wake word again. It works with older cores
+as well.
+
 ### Internet or not
 
 The internet answer needs nothing from the units. Saving it in Settings →

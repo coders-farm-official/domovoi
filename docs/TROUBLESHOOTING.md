@@ -428,7 +428,7 @@ poaches it is the deterministic fix. Re-run the corpus after either.
 | Satellite health | Settings → Rooms & devices → Rooms → room → Overview → Health; `GET /api/satellites/<room>/health`; the core log's `satellite health room=…` lines (one per ten samples) and `reports an outage from its previous life` warnings | Memory, CPU, temperature and throttling, uptime, mic rate, link, reachability — one sample a minute, 24 h kept; and what the previous process life left behind |
 | MPD (per room) | `docker logs domovoi-mpd-<room>` | Library scan, stream/decoder errors for that room |
 | Postgres / SearXNG / Letta | `docker logs domovoi-postgres` etc. | Infrastructure containers |
-| The Windows installer | `C:\ProgramData\Domovoi\logs` (administrators only): `install.log`, `host.log`, `provision.log`; the tray icon's **Save logs for support...** copies them | What Setup and the DomovoiHost service did, and what `provision.sh` printed, with the failing unit's last journal lines when the start fails. Passwords, tokens and setup codes are blanked as far as Setup can recognise them: look through a copy before you share it |
+| The Windows installer | `C:\ProgramData\Domovoi\logs` (administrators only): `install.log`, `host.log`, `provision.log`, and `core.log` (the core's and the dashboard's journal from inside the distro, last 24 hours); the tray icon's **Save logs for support...** copies them | What Setup and the DomovoiHost service did, and what `provision.sh` printed, with the failing unit's last journal lines when the start fails. Passwords, tokens and setup codes are blanked as far as Setup can recognise them: look through a copy before you share it |
 
 ---
 

@@ -539,6 +539,7 @@ the uninstaller names it:
 | `host.log` | DomovoiHost: the import, the holder (`wsl.exe -d domovoi --exec sleep infinity`), restarts, requests, the ports it waited for. |
 | `provision.log` | Everything `provision.sh` printed, including its `@@DOMOVOI` progress lines. When the start fails it also holds `systemctl status` of `domovoi-db`, `domovoi-core` and `domovoi-web` and their last 200 journal lines, so it names the real cause (a port already taken, a migration that failed); when the database is the cause, also the Postgres container's state and its last 100 log lines (passwords blanked). |
 | `host-status.json` | (in the copy) What DomovoiHost last reported to Setup. |
+| `core.log` | The journal of `domovoi-core` and `domovoi-web` inside the distro: the last 24 hours, at most 5000 lines each (the newest 2 MB of each). DomovoiHost copies it out to `logs\core.log` once Domovoi is ready and every 10 minutes after; Setup's **Copy logs** and the icon's **Save logs for support...** ask it for a fresh copy first and wait up to 20 seconds. When it can't give one (Domovoi's Linux system isn't running, WSL doesn't answer within 15 seconds) the copy starts with a `NOTE:` line saying why and when the last copy was made; with no copy at all, the file is that one line. The uninstaller's copy takes the last copy as it is. |
 
 Setup's own record of the changes it made is `C:\ProgramData\Domovoi\state\install.log`
 (administrators only; `domovoi-svc` can't write there).
