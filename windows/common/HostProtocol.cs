@@ -5,7 +5,8 @@
 //   * host\in\job.json        what the host should bring up; written by the
 //                             installer; the account can read, not write
 //   * host\in\req-<id>.json   a one-off request (the setup code; the
-//                             household's AI_FEATURES); same ACL
+//                             household's AI_FEATURES; a Linux update; a
+//                             fresh logs\core.log, CoreLog.cs); same ACL
 //   * host\in\<image>, provision.sh   the pinned downloads; same ACL, so
 //                             the account (and the distro) can't change them
 //   * host\out\status.json    what the host is doing; written by the host
@@ -58,6 +59,8 @@ namespace Domovoi.Windows
         public static string InstallLog { get { return Path.Combine(State, "install.log"); } }
         public static string HostLog { get { return Path.Combine(Logs, "host.log"); } }
         public static string ProvisionLog { get { return Path.Combine(Logs, "provision.log"); } }
+        // The core's journal, copied out by DomovoiHost (CoreLog.cs).
+        public static string CoreLogFile { get { return Path.Combine(Logs, CoreLog.FileName); } }
         public static string SwapFile { get { return Path.Combine(Wsl, "swap.vhdx"); } }
         public static string DistroDisk { get { return Path.Combine(Distro, "ext4.vhdx"); } }
 

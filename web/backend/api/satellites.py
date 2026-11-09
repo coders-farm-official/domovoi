@@ -924,23 +924,44 @@ async def list_sessions(
 async def list_conversations(
     room_id: str, limit: int = Query(default=50, ge=1, le=500)
 ) -> list[ConversationTurn]:
+    """The room's voice turns, newest first. Since V043 every turn of a
+    satellite is here from the moment its transcript exists: ``status``
+    says whether the reply is pending, answered, never came
+    (``no_answer`` + ``no_answer_reason``) or speech recognition never
+    made the request out (``unheard``, with ``audio_ms``)."""
     async with session_scope() as s:
+        with_status = await _has_turn_status(s)
+        extra = (
+            ", turn_status, no_answer_reason, audio_ms, "
+            "(at < NOW() - make_interval(secs => :stale))"
+            if with_status else ""
+        )
         rows = await s.execute(
             text(
-                """
+                f"""
                 SELECT id, session_id::text, at, room_id, user_text,
                        assistant_text, matched_handler, matched_path,
-                       utterance_trigger
+                       utterance_trigger{extra}
                 FROM conversation_log
                 WHERE room_id = :room_id
                 ORDER BY at DESC
                 LIMIT :limit
                 """
             ),
-            {"room_id": room_id, "limit": limit},
+            {"room_id": room_id, "limit": limit,
+             **({"stale": PENDING_STALE_SEC} if with_status else {})},
         )
-        return [
-            ConversationTurn(
+        out: list[ConversationTurn] = []
+        for r in rows.all():
+            status, reason, audio_ms = "answered", None, None
+            if with_status:
+                status = r[9] or "answered"
+                reason, audio_ms = r[10], r[11]
+                if status == "pending" and r[12]:
+                    # Its turn never finished (the core stopped mid-turn
+                    # and hasn't started again yet): not "waiting" for ever.
+                    status, reason = "no_answer", None
+            out.append(ConversationTurn(
                 id=int(r[0]),
                 session_id=r[1],
                 at=r[2],
@@ -950,9 +971,32 @@ async def list_conversations(
                 matched_handler=r[6],
                 matched_path=r[7],
                 utterance_trigger=r[8],
-            )
-            for r in rows.all()
-        ]
+                status=status,
+                no_answer_reason=reason,
+                audio_ms=int(audio_ms) if audio_ms is not None else None,
+            ))
+        return out
+
+
+# A pending turn older than this has outlived every limit the core puts on
+# a turn (domovoi/turn_watchdog.py: 150 s up to routing, routing_cap() —
+# 570 s by default — after it) — it never finished.
+PENDING_STALE_SEC = 600
+
+# Whether conversation_log has V043's columns; probed once per process (a
+# dashboard started before Flyway ran keeps showing the history).
+_HAS_TURN_STATUS: bool | None = None
+
+
+async def _has_turn_status(s: Any) -> bool:
+    global _HAS_TURN_STATUS
+    if _HAS_TURN_STATUS is None:
+        row = (await s.execute(text(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_name = 'conversation_log' AND column_name = 'turn_status'"
+        ))).first()
+        _HAS_TURN_STATUS = row is not None
+    return _HAS_TURN_STATUS
 
 
 @router.get(

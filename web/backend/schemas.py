@@ -423,6 +423,20 @@ class ConversationTurn(BaseModel):
     # never came from a satellite mic. Surfaced so a turn that looks wrong
     # can be traced to its origin without inferring it from timestamps.
     utterance_trigger: str | None = None
+    # Where the turn got to (V043, domovoi/turn_history.py): "answered";
+    # "pending" (said, the reply still being worked out); "no_answer" (it
+    # ended with none: see `no_answer_reason`); "unheard" (speech
+    # recognition failed or timed out — `user_text` is "" and `audio_ms`
+    # says how long the recording was). Rows from before V043 read
+    # "answered". A pending row older than PENDING_STALE_SEC reads
+    # "no_answer" with no reason: its turn never finished.
+    status: str = "answered"
+    # For no_answer / unheard: "timed_out" | "error" | "interrupted" |
+    # "restarted" | "speech_off"; None otherwise.
+    no_answer_reason: str | None = None
+    # The request's recording length in milliseconds (a satellite's turns
+    # from V043 on); None otherwise.
+    audio_ms: int | None = None
 
 
 class RecentlyPlayed(BaseModel):
@@ -1055,6 +1069,12 @@ class HealthResponse(BaseModel):
     # one), "unavailable" (nothing loaded), "stub" (tests) or "not_loaded".
     # None when the core did not answer. Never makes `status` degraded.
     stt: str | None = None
+    # The core's turn watchdog on speech recognition (domovoi/turn_watchdog.py
+    # speech_health): `state` ok | slow | stalled, `workers`,
+    # `stuck_workers`, `stuck_for_s`, `last_timeout` ({stage, at} or null).
+    # None when the core did not answer or predates it. Never makes
+    # `status` degraded.
+    speech: dict[str, Any] | None = None
     # The core's identity block from the same /v1/health ping, verbatim:
     # `algorithm`, `public_key`, `fingerprint` and — when the request carried
     # `?challenge=` — `challenge` and `signature` over it. Public by

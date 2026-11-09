@@ -364,8 +364,24 @@ class LoopWatchdog:
         report_file: Path | None = None,
         last_file: Path | None = None,
         out_fd: int | None = None,
+        speech_check: Callable[[], str | None] | None = None,
+        speech_restart: Callable[[], Awaitable[dict]] | None = None,
+        speech_hold: Callable[[], str | None] | None = None,
     ) -> None:
         self.limits = limits
+        # Speech recognition stuck house-wide (domovoi/turn_watchdog.py,
+        # restart_reason): a reason to restart like a frozen loop, asked
+        # only while all else is well. None: not watched (install() gives
+        # it only under a service manager, which starts the core again).
+        self._speech_check = speech_check
+        # How a speech restart is asked for first: the dashboard's graceful
+        # restart (domovoi/self_restart.py, run on the loop), falling back
+        # to the exit when it can't; and what holds one back (a restart or
+        # update under way, a plugin install, one already within the hour).
+        self._speech_restart = speech_restart
+        self._speech_hold = speech_hold if speech_hold is not None else _speech_hold
+        self._speech_restarted_at: float | None = None
+        self._speech_hold_said: str | None = None
         self._probe = probe
         self._notifier = notifier or Notifier(None)
         self._exit = exit_fn
@@ -520,6 +536,10 @@ class LoopWatchdog:
         reason = self._check_probe(loop, now)
         if reason is not None:
             return reason
+        if self._speech_check is not None:
+            reason = self._check_speech(loop, now)
+            if reason is not None:
+                return reason
         self._keepalive(now)
         return None
 
@@ -569,6 +589,49 @@ class LoopWatchdog:
             except RuntimeError:  # the loop closed under us
                 self._drop_probe()
         return None
+
+    def _check_speech(self, loop: asyncio.AbstractEventLoop, now: float) -> str | None:
+        """Speech recognition stuck house-wide (turn_watchdog.restart_reason):
+        ask for the graceful restart; a reason to exit only when that can't
+        be had. Its own try/except: a bug here must never stop the
+        keep-alive below it."""
+        try:
+            reason = self._speech_check() if self._speech_check is not None else None
+            if reason is None:
+                self._speech_hold_said = None
+                return None
+            if (self._speech_restarted_at is not None
+                    and now - self._speech_restarted_at < SPEECH_RESTART_EVERY_SEC):
+                return None
+            held = self._speech_hold()
+            if held is not None:
+                if held != self._speech_hold_said:
+                    self._speech_hold_said = held
+                    self._say("WARNING", f"loop watchdog: {reason}; not restarting: {held}")
+                return None
+            self._speech_restarted_at = now
+            report = self.report(reason)
+            self._retain(report)
+            self._note_last(reason)
+            if self._speech_restart is not None:
+                try:
+                    fut = asyncio.run_coroutine_threadsafe(self._speech_restart(), loop)
+                    answer = fut.result(timeout=SPEECH_RESTART_ASK_SEC)
+                except Exception as e:  # noqa: BLE001
+                    answer = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+                if isinstance(answer, dict) and answer.get("ok"):
+                    self._say("ERROR", f"loop watchdog: {reason}; restarting Domovoi "
+                              "(every thread's stack is in the retained log)")
+                    return None
+                if isinstance(answer, dict) and answer.get("in_progress"):
+                    return None
+                self._say("WARNING", "loop watchdog: the graceful restart could not be had "
+                          f"({(answer or {}).get('error') if isinstance(answer, dict) else answer}); "
+                          f"exiting with {EXIT_CODE} instead")
+            return reason
+        except Exception as e:  # noqa: BLE001 — the watchdog must not die quietly
+            self._say("WARNING", f"loop watchdog: the speech check raised {type(e).__name__}: {e}")
+            return None
 
     def _keepalive(self, now: float) -> None:
         wd = self._notifier.watchdog_sec
@@ -713,6 +776,44 @@ def _open_fault_file() -> Any:
         return None
 
 
+# A speech-recognition restart (turn_watchdog.restart_reason) happens at
+# most once an hour, counted from this process's own and from the last one
+# noted in core-watchdog-last.json; until then the Health page carries it.
+SPEECH_RESTART_EVERY_SEC = 3600.0
+SPEECH_RESTART_PREFIX = "speech recognition is stuck"
+# How long the watchdog waits for the graceful restart to be accepted.
+SPEECH_RESTART_ASK_SEC = 20.0
+
+
+def _speech_hold() -> str | None:
+    """Why a speech restart must wait, or None: a restart or update already
+    under way, a plugin install/upgrade holding the installer's lock, or a
+    speech restart within the hour (core-watchdog-last.json)."""
+    last = last_stall()
+    if last and str(last.get("reason", "")).startswith(SPEECH_RESTART_PREFIX):
+        try:
+            at = datetime.fromisoformat(str(last.get("at")))
+            if (datetime.now(timezone.utc) - at).total_seconds() < SPEECH_RESTART_EVERY_SEC:
+                return "it already restarted for this within the hour"
+        except ValueError:
+            pass
+    try:
+        from domovoi import self_restart
+
+        if self_restart.underway():
+            return "a restart or update is already under way"
+    except Exception:  # noqa: BLE001 — unknown is not "under way"
+        pass
+    try:
+        from domovoi.plugins_runtime import installer
+
+        if any(lock.locked() for lock in list(installer._LIFECYCLE_LOCKS.values())):  # noqa: SLF001
+            return "a plugin is being installed or upgraded"
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
 def install(settings: Any) -> LoopWatchdog | None:
     """Start the watchdog for this process (``main()``, before uvicorn),
     unless ``loop_watchdog_enabled`` is off. Moves the run before's
@@ -749,7 +850,22 @@ def install(settings: Any) -> LoopWatchdog | None:
             _ACTIVE = LoopWatchdog(Limits(detect=False), notifier=notifier, backstop=lambda s: None)
             _ACTIVE.start()
         return _ACTIVE
-    _ACTIVE = LoopWatchdog(Limits.from_settings(settings), notifier=Notifier.from_env())
+    notifier = Notifier.from_env()
+    # Speech recognition stuck house-wide (incident 2026-11-09): restart
+    # only where something starts the core again — under systemd (the
+    # shipped unit; also inside the Windows installer's Linux system). Off
+    # it the Health page says to restart, and nothing exits.
+    speech_check = None
+    if notifier.enabled and float(getattr(settings, "voice_speech_restart_after_sec", 0) or 0) > 0:
+        from domovoi import turn_watchdog
+
+        speech_check = turn_watchdog.restart_reason
+    from domovoi import self_restart
+
+    _ACTIVE = LoopWatchdog(
+        Limits.from_settings(settings), notifier=notifier, speech_check=speech_check,
+        speech_restart=self_restart.restart,
+    )
     _ACTIVE.start()
     return _ACTIVE
 

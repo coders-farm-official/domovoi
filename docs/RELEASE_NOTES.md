@@ -4,6 +4,61 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-11-09 — no more rooms stuck "thinking"
+
+When speech recognition on the Domovoi server got stuck, every room sat
+in its yellow "thinking" ring until someone restarted things, and the
+history showed nothing. Now:
+
+- **Every stage before a reply has a time limit**
+  ([LINUX_HOST.md](LINUX_HOST.md#the-voice-turn-watchdog)). Speech
+  recognition gets three times the recording's length, between 20 and
+  40 s. The turn gets 150 s up to the start of routing; once routing
+  starts, a cold model load plus two model calls (570 s by default), so a
+  slow but working model is never cut off. Chat mode is outside it. When a limit is reached the
+  room says *"Sorry, that took too long and I lost track of it. Please
+  try again."* and listens again. The log names the room and the stage.
+- **Settings → System → Health** says *speech recognition is stuck* when
+  a speech worker hasn't come back for 2 minutes, and warns for 15
+  minutes after a request times out in speech recognition. A request
+  that timed out while its answer was being worked out gets a row of its
+  own ("the language model may be slow or still loading"). If speech
+  recognition stays stuck for 10 minutes, the core restarts itself under
+  systemd (the Linux install, and the Linux system inside the Windows
+  installer): the dashboard's graceful restart, else an exit for systemd,
+  with every thread's stack written to `core-watchdog.log` first. Never
+  while a restart, an update or a plugin install is under way, and at
+  most once an hour. `VOICE_SPEECH_RESTART_AFTER_SEC=0` turns that
+  restart off.
+- **Satellites stop waiting on their own.** If the server sends nothing
+  at all within 75 s of a request, or goes silent for 240 s part-way
+  through a turn (time playing a reply or music, or in a call or chat,
+  doesn't count; the server says it is still working every 30 s), the
+  satellite shows red, says *"Sorry, I didn't get an answer from the
+  server"*, and listens for the wake word again. That works with an older
+  core too. The limits are the room settings **Reply deadline**
+  (`[listen] response_deadline_sec`) and **Reply backstop**
+  (`[listen] response_backstop_sec`); 0 turns either off.
+  The room's Health card shows how long it has been waiting, and a new
+  self-check flags a satellite that is connected but hasn't listened for
+  its wake word for over 2 minutes. Rooms get this with **Upgrade
+  satellite**.
+- **The history records every turn.** What was said shows up in the
+  room's history as soon as it has been heard, marked *waiting for an
+  answer…*. The same entry then gets the reply, or *no answer — timed
+  out* (or *something went wrong*, *interrupted*, *Domovoi restarted*). A
+  request that speech recognition never made out shows as *couldn't make
+  out what was said*, with its time and recording length. The dashboard's
+  room drawer and the Android app refresh while an entry is waiting.
+  **Database migration V043** adds the columns. Apps and scripts that
+  read `GET /api/satellites/<room>/conversations` get three new fields
+  (`status`, `no_answer_reason`, `audio_ms`), and `user_text` is `""` on
+  an *unheard* row.
+- **Windows: Save logs includes the core's own log.** The bundle now has
+  `core.log`: the last 24 hours of `domovoi-core` and `domovoi-web`
+  (up to 5000 lines each), redacted like the other logs. Until now nobody
+  on a Windows install could read it. This needs the new Windows build.
+
 ## 2026-11-05 — a song you don't have, by an artist you do
 
 "Play <song> by <artist>" for a song the library doesn't have, by an

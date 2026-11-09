@@ -518,6 +518,9 @@ async def _persist_turn(
         trigger=ctx.trigger,
         online=ctx.online,
         latency_ms=latency_ms,
+        # A satellite's turn wrote its row pending when the transcript
+        # existed (domovoi/turn_history.py): this fills in that same row.
+        history_entry=ctx.history_entry,
     )
     await SessionRepository(session).record_exchange(
         session_id,

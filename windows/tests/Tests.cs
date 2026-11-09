@@ -93,6 +93,7 @@ static partial class Tests
         PortGateTests();
         ProfileCleanup();
         LogCopies();
+        CoreLogCopies();
         UninstallTexts();
         LeftoverProfileTests();
         TrayTests();
@@ -1571,19 +1572,19 @@ static partial class Tests
                 System.IO.File.WriteAllText(tmpLog, "2099-12-31 23:59:59 helper uninstall\r\nleaked acorn-apple-arrow-autumn-badge-baker-basil-beach\r\nurl postgresql://u:pw@h/db\r\n");
                 var o = new Domovoi.Windows.Helper.Output(null);
                 string dest = System.IO.Path.Combine(root, "Domovoi logs");
-                Domovoi.Windows.Helper.Logs.Copy(o, dest, "uninstall", tmpLog);
+                Domovoi.Windows.Helper.Logs.Copy(o, dest, "uninstall", UninstallLogOnly(tmpLog), NoCoreLog, null, DateTime.Now);
                 var made = System.IO.Directory.GetDirectories(dest);
                 Eq(1, made.Length, "one new folder");
                 True(System.IO.Path.GetFileName(made[0]).StartsWith("uninstall-", StringComparison.Ordinal), "named for the uninstall: " + made[0]);
                 string copy = System.IO.File.ReadAllText(System.IO.Path.Combine(made[0], "domovoi-uninstall-20991231-235959.log"));
                 True(copy.Contains("helper uninstall") && !copy.Contains("acorn-apple") && !copy.Contains(":pw@") && copy.Contains("[hidden]"), "redacted: " + copy);
                 True(System.IO.File.Exists(System.IO.Path.Combine(made[0], "README.txt")), "a README");
-                Domovoi.Windows.Helper.Logs.Copy(o, dest, "uninstall", tmpLog);
+                Domovoi.Windows.Helper.Logs.Copy(o, dest, "uninstall", UninstallLogOnly(tmpLog), NoCoreLog, null, DateTime.Now);
                 Eq(2, System.IO.Directory.GetDirectories(dest).Length, "a second copy goes to a second folder");
 
                 string link = System.IO.Path.Combine(root, "linked logs");
                 Junction(link, victim);
-                Throws<InvalidOperationException>(delegate { Domovoi.Windows.Helper.Logs.Copy(o, link, "install", null); }, "a link as the folder");
+                Throws<InvalidOperationException>(delegate { Domovoi.Windows.Helper.Logs.Copy(o, link, "install", NoSources(), NoCoreLog, null, DateTime.Now); }, "a link as the folder");
                 Eq(0, System.IO.Directory.GetFileSystemEntries(victim).Length, "nothing written through it");
             }
             finally
@@ -1638,12 +1639,12 @@ static partial class Tests
                 string dest = System.IO.Path.Combine(root, "Domovoi logs");
                 System.IO.Directory.CreateDirectory(dest);
                 Junction(System.IO.Path.Combine(dest, "install-20991231-235959"), victim);
-                Domovoi.Windows.Helper.Logs.Copy(new Domovoi.Windows.Helper.Output(null), dest, "install", null, at);
+                Domovoi.Windows.Helper.Logs.Copy(new Domovoi.Windows.Helper.Output(null), dest, "install", NoSources(), NoCoreLog, null, at);
                 Eq(0, System.IO.Directory.GetFileSystemEntries(victim).Length, "nothing written through the link");
                 True(System.IO.File.Exists(System.IO.Path.Combine(dest, "install-20991231-235959-2", "README.txt")), "the copy went to the next name");
                 string readme = System.IO.File.ReadAllText(System.IO.Path.Combine(dest, "install-20991231-235959-2", "README.txt"));
                 True(readme.Contains("copied by Domovoi Setup on") && readme.Contains("as far as Setup can recognise them"), "README: " + readme);
-                Domovoi.Windows.Helper.Logs.Copy(new Domovoi.Windows.Helper.Output(null), dest, "uninstall", null, at);
+                Domovoi.Windows.Helper.Logs.Copy(new Domovoi.Windows.Helper.Output(null), dest, "uninstall", NoSources(), NoCoreLog, null, at);
                 True(System.IO.File.ReadAllText(System.IO.Path.Combine(dest, "uninstall-20991231-235959", "README.txt")).Contains("copied by Domovoi's uninstaller on"), "the uninstaller's wording (review item 8)");
             }
             finally
@@ -1673,6 +1674,239 @@ static partial class Tests
             Throws<ArgumentException>(delegate { Domovoi.Windows.Helper.Logs.Sources(@"C:\Windows\System32\config\SAM"); }, "another file");
             Throws<ArgumentException>(delegate { Domovoi.Windows.Helper.Logs.Sources(@"C:\Users\Public\domovoi-uninstall-20261012-133801.log"); }, "another folder");
             True(Domovoi.Windows.Helper.Logs.Sources(null).Any(s => s.Value == "provision.log"), "provision.log is among them");
+        });
+    }
+
+    // The copy's inputs for tests that aren't about them: nothing from the
+    // PC's own C:\ProgramData\Domovoi, and no request to its DomovoiHost.
+    static readonly string NoCoreLog = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "domovoi-tests-no-such-folder", "core.log");
+
+    static List<KeyValuePair<string, string>> NoSources() { return new List<KeyValuePair<string, string>>(); }
+
+    static List<KeyValuePair<string, string>> UninstallLogOnly(string tmpLog)
+    {
+        string name = System.IO.Path.GetFileName(tmpLog);
+        return Domovoi.Windows.Helper.Logs.Sources(tmpLog).Where(s => s.Value == name).ToList();
+    }
+
+    // The copy's core.log, from a copy made with the given core.log and refresh.
+    static string CopyWithCoreLog(string root, string coreLog, Func<string> refresh, string kind)
+    {
+        string dest = System.IO.Path.Combine(root, "Domovoi logs");
+        Domovoi.Windows.Helper.Logs.Copy(new Domovoi.Windows.Helper.Output(null), dest, kind, NoSources(), coreLog, refresh, DateTime.Now);
+        var made = System.IO.Directory.GetDirectories(dest);
+        Eq(1, made.Length, "one new folder");
+        string copy = System.IO.Path.Combine(made[0], "core.log");
+        True(System.IO.File.Exists(copy), "the copy has a core.log");
+        return System.IO.File.ReadAllText(copy);
+    }
+
+    static Domovoi.Windows.Host.WslResult Wsl(int exit, bool timedOut, string stdout, string stderr)
+    {
+        var r = new Domovoi.Windows.Host.WslResult();
+        r.ExitCode = exit; r.TimedOut = timedOut; r.Stdout = stdout; r.Stderr = stderr;
+        return r;
+    }
+
+    const string JournalOut = "==== domovoi-core (journalctl --since -24h, at most 5000 lines)\n"
+        + "2026-11-09T03:12:44+0000 domovoi python[812]: INFO turn started room=kitchen\n"
+        + "2026-11-09T03:12:45+0000 domovoi python[812]: INFO 192.168.1.41:5123 - \"GET /v1/stream?token=s3cr3tT0ken HTTP/1.1\" 101\n"
+        + "==== domovoi-web (journalctl --since -24h, at most 5000 lines)\n"
+        + "2026-11-09T03:12:46+0000 domovoi python[901]: WARNING Authorization: Bearer eyJhbGciOi.abc.def rejected\n";
+
+    static void CoreLogCopies()
+    {
+        Run("core log: the journal command (units, 24 h, lines, newest bytes, as root, no shell from outside)", delegate
+        {
+            string[] a = CoreLog.WslArgs(Paths.DistroName);
+            SeqEq(new[] { "-d", "domovoi", "-u", "root", "--cd", "/", "--exec", "/bin/sh", "-c" }, a.Take(9), "wsl.exe arguments");
+            Eq(10, a.Length, "one script argument");
+            string s = a[9];
+            Eq(CoreLog.Script(), s, "the fixed script");
+            True(s.StartsWith("for u in domovoi-core domovoi-web; do ", StringComparison.Ordinal), "both units: " + s);
+            True(s.Contains("/usr/bin/journalctl -u \"$u\" --since=-24h -n 5000 --no-pager -o short-iso 2>&1 | /usr/bin/tail -c 2097152"), "bounded: " + s);
+            True(s.Contains("echo \"==== $u "), "a header per unit");
+            True(CoreLog.TimeoutMs <= 15000 && CoreLog.HelperWaitSec * 1000 > CoreLog.TimeoutMs, "the helper waits longer than the host's read");
+            True(CoreLog.MaxOutputChars > 2 * CoreLog.BytesPerUnit, "the output backstop is above both units' cut");
+        });
+        Run("core log: rendered with a header, every line redacted, long lines cut", delegate
+        {
+            string why;
+            string longLine = "2026-11-09T03:00:00+0000 domovoi python[812]: " + new string('x', 9000);
+            string t = CoreLog.Render(0, false, JournalOut + longLine + "\n", "", new DateTime(2026, 11, 9, 3, 13, 0), out why);
+            True(t != null, "rendered: " + why);
+            True(t.StartsWith("# Domovoi's core log: journalctl of domovoi-core and domovoi-web, the last 24 hours, at most 5000 lines each, read by DomovoiHost at 2026-11-09 03:13:00 UTC\r\n", StringComparison.Ordinal), "header: " + t.Substring(0, 200));
+            True(t.Contains("turn started room=kitchen\r\n") && t.Contains("==== domovoi-web"), "the lines, CRLF");
+            True(!t.Contains("s3cr3tT0ken") && t.Contains("?token=[hidden]"), "a token in a URL");
+            True(!t.Contains("eyJhbGciOi") && t.Contains("Authorization: Bearer [hidden]"), "an Authorization header");
+            True(t.Contains(new string('x', 100) + " [cut]") && !t.Contains(new string('x', CoreLog.MaxLineChars + 1)), "a long line is cut");
+            True(!t.Contains("\n\n") && t.EndsWith("\r\n", StringComparison.Ordinal) && !t.Replace("\r\n", "").Contains("\n"), "CRLF only");
+        });
+        Run("core log: a timeout, a failed wsl.exe or no output gives no file and says why", delegate
+        {
+            string why;
+            True(CoreLog.Render(-1, true, JournalOut, "", DateTime.UtcNow, out why) == null, "timed out");
+            Eq("journalctl did not answer within 15 s", why, "timeout reason");
+            True(CoreLog.Render(1, false, "", "There is no distribution with the supplied name.\n", DateTime.UtcNow, out why) == null, "failed");
+            Eq("wsl.exe exit 1: There is no distribution with the supplied name.", why, "failure reason");
+            True(CoreLog.Render(0, false, "", "", DateTime.UtcNow, out why) == null, "empty");
+            Eq("the journal read printed nothing", why, "empty reason");
+            True(CoreLog.Render(0, false, "==== domovoi-core (x)\n-- No entries --\n==== domovoi-web (x)\n-- No entries --\n", "", DateTime.UtcNow, out why) != null, "an empty journal is still a file that says so");
+        });
+        Run("core log: DomovoiHost's writer (the arguments, the bounds, a failed read keeps the last copy)", delegate
+        {
+            string root = Scratch();
+            try
+            {
+                string path = System.IO.Path.Combine(root, "core.log");
+                IEnumerable<string> gotArgs = null; int gotTimeout = 0, gotMax = 0;
+                string why = Domovoi.Windows.Host.CoreJournal.Refresh(delegate (IEnumerable<string> args, int timeoutMs, int maxOutput)
+                {
+                    gotArgs = args.ToList(); gotTimeout = timeoutMs; gotMax = maxOutput;
+                    return Wsl(0, false, JournalOut, "");
+                }, path, new DateTime(2026, 11, 9, 3, 13, 0));
+                True(why == null, "written: " + why);
+                SeqEq(CoreLog.WslArgs("domovoi"), gotArgs, "the arguments");
+                Eq(CoreLog.TimeoutMs, gotTimeout, "the timeout");
+                Eq(CoreLog.MaxOutputChars, gotMax, "the output bound");
+                string first = System.IO.File.ReadAllText(path);
+                True(first.Contains("turn started") && !first.Contains("s3cr3tT0ken"), "redacted on the way in: " + first);
+                Eq(0, System.IO.Directory.GetFiles(root, ".core.log.*").Length, "no temporary file left");
+
+                why = Domovoi.Windows.Host.CoreJournal.Refresh(delegate { return Wsl(-1, true, "", ""); }, path, DateTime.UtcNow);
+                Eq("journalctl did not answer within 15 s", why, "a timeout");
+                Eq(first, System.IO.File.ReadAllText(path), "the last copy stays");
+                why = Domovoi.Windows.Host.CoreJournal.Refresh(delegate { throw new System.ComponentModel.Win32Exception(2); }, path, DateTime.UtcNow);
+                True(why != null && why.StartsWith("wsl.exe could not be started: ", StringComparison.Ordinal), "wsl.exe missing: " + why);
+                Eq(first, System.IO.File.ReadAllText(path), "still the last copy");
+                why = Domovoi.Windows.Host.CoreJournal.Refresh(delegate { return Wsl(0, false, JournalOut, ""); }, System.IO.Path.Combine(root, "gone", "core.log"), DateTime.UtcNow);
+                True(why != null && why.StartsWith("can't write ", StringComparison.Ordinal), "an unwritable place: " + why);
+            }
+            finally { Domovoi.Windows.Helper.Folders.DeleteTree(root); }
+        });
+        Run("core log: copy logs takes a fresh copy, redacted", delegate
+        {
+            string root = Scratch();
+            try
+            {
+                string core = System.IO.Path.Combine(root, "core.log");
+                System.IO.File.WriteAllText(core, "2026-11-09T03:12:45+0000 x: GET /v1/stream?token=leakme HTTP/1.1\r\ncode acorn-apple-arrow-autumn-badge-baker-basil-beach\r\nturn ok\r\n");
+                int asked = 0;
+                string copy = CopyWithCoreLog(root, core, delegate { asked++; return null; }, "install");
+                Eq(1, asked, "asked DomovoiHost once");
+                True(copy.StartsWith("2026-11-09T03:12:45", StringComparison.Ordinal), "no note on a fresh copy: " + copy);
+                True(copy.Contains("turn ok") && !copy.Contains("leakme") && !copy.Contains("acorn-apple"), "redacted: " + copy);
+            }
+            finally { Domovoi.Windows.Helper.Folders.DeleteTree(root); }
+        });
+        Run("core log: no fresh copy, the last one with a note saying why and when", delegate
+        {
+            string root = Scratch();
+            try
+            {
+                string core = System.IO.Path.Combine(root, "core.log");
+                System.IO.File.WriteAllText(core, "older line\r\n");
+                System.IO.File.SetLastWriteTime(core, new DateTime(2026, 11, 9, 2, 50, 0));
+                string copy = CopyWithCoreLog(root, core, delegate { return "DomovoiHost did not answer within 20 s"; }, "install");
+                Eq("NOTE: a fresh copy of Domovoi's core log could not be read (DomovoiHost did not answer within 20 s); this is DomovoiHost's last copy, from 2026-11-09 02:50:00.\r\nolder line\r\n", copy, "stale note");
+            }
+            finally { Domovoi.Windows.Helper.Folders.DeleteTree(root); }
+            root = Scratch();
+            try
+            {
+                string core = System.IO.Path.Combine(root, "core.log");
+                System.IO.File.WriteAllText(core, "older line\r\n");
+                System.IO.File.SetLastWriteTime(core, new DateTime(2026, 11, 9, 2, 50, 0));
+                string copy = CopyWithCoreLog(root, core, null, "uninstall");
+                Eq("NOTE: this is DomovoiHost's last copy of Domovoi's core log, from 2026-11-09 02:50:00.\r\nolder line\r\n", copy, "the uninstaller's copy");
+            }
+            finally { Domovoi.Windows.Helper.Folders.DeleteTree(root); }
+        });
+        Run("core log: none at all, a note line and the copy goes on", delegate
+        {
+            string root = Scratch();
+            try
+            {
+                string core = System.IO.Path.Combine(root, "core.log");
+                string copy = CopyWithCoreLog(root, core, delegate { return "Domovoi's Linux system is not running"; }, "install");
+                True(copy.StartsWith("NOTE: Domovoi's core log (the journal of domovoi-core and domovoi-web) could not be read: DomovoiHost has not written ", StringComparison.Ordinal), copy);
+                True(copy.TrimEnd().EndsWith("; asking DomovoiHost for a fresh one: Domovoi's Linux system is not running", StringComparison.Ordinal), copy);
+                Eq(1, copy.Replace("\r\n", "\n").TrimEnd('\n').Split('\n').Length, "one line");
+                var made = System.IO.Directory.GetDirectories(System.IO.Path.Combine(root, "Domovoi logs"));
+                True(System.IO.File.Exists(System.IO.Path.Combine(made[0], "README.txt")), "the copy finished");
+            }
+            finally { Domovoi.Windows.Helper.Folders.DeleteTree(root); }
+        });
+        Run("core log: a huge core.log is cut at 8 MB", delegate
+        {
+            string root = Scratch();
+            try
+            {
+                string core = System.IO.Path.Combine(root, "core.log");
+                var line = new string('y', 1023) + "\n";
+                using (var w = new System.IO.StreamWriter(core, false, new System.Text.UTF8Encoding(false)))
+                    for (int i = 0; i < 9 * 1024; i++) w.Write(line);
+                string copy = CopyWithCoreLog(root, core, delegate { return null; }, "install");
+                True(copy.EndsWith("NOTE: core.log is larger than 8 MB; the rest is left out.\r\n", StringComparison.Ordinal), "a cut note");
+                True(copy.Length < CoreLog.MaxCopyBytes + 64 * 1024, "bounded: " + Inv.S(copy.Length));
+                True(copy.Length > CoreLog.MaxCopyBytes - 64 * 1024, "the first 8 MB are there: " + Inv.S(copy.Length));
+            }
+            finally { Domovoi.Windows.Helper.Folders.DeleteTree(root); }
+        });
+        Run("core log: a core.log through a link, or with a second name, is refused like the others", delegate
+        {
+            string root = Scratch(), victim = Scratch();
+            try
+            {
+                System.IO.File.WriteAllText(System.IO.Path.Combine(victim, "core.log"), "NOT-FOR-THE-COPY\r\n");
+                string link = System.IO.Path.Combine(root, "logs");
+                Junction(link, victim);
+                string copy = CopyWithCoreLog(root, System.IO.Path.Combine(link, "core.log"), delegate { return null; }, "install");
+                True(!copy.Contains("NOT-FOR-THE-COPY"), "nothing read through the junction");
+                True(copy.StartsWith("NOTE: Domovoi's core log (the journal of domovoi-core and domovoi-web) could not be read: not copying it: ", StringComparison.Ordinal), copy);
+            }
+            finally
+            {
+                Domovoi.Windows.Helper.Folders.DeleteTree(root);
+                if (System.IO.Directory.Exists(victim)) System.IO.Directory.Delete(victim, true);
+            }
+            root = Scratch(); victim = Scratch();
+            try
+            {
+                string x = System.IO.Path.Combine(victim, "secret.txt");
+                System.IO.File.WriteAllText(x, "NOT-FOR-THE-COPY\r\n");
+                string logs = System.IO.Path.Combine(root, "logs");
+                System.IO.Directory.CreateDirectory(logs);
+                string hard = System.IO.Path.Combine(logs, "core.log");
+                var psi = new System.Diagnostics.ProcessStartInfo(System.IO.Path.Combine(Environment.SystemDirectory, "cmd.exe"),
+                    "/c mklink /H " + CommandLine.Quote(hard) + " " + CommandLine.Quote(x));
+                psi.UseShellExecute = false; psi.CreateNoWindow = true; psi.RedirectStandardOutput = true;
+                using (var pr = System.Diagnostics.Process.Start(psi)) { pr.StandardOutput.ReadToEnd(); pr.WaitForExit(); }
+                True(System.IO.File.Exists(hard), "made a hard link");
+                string copy = CopyWithCoreLog(root, hard, delegate { return null; }, "install");
+                True(!copy.Contains("NOT-FOR-THE-COPY") && copy.Contains("names (hard links)"), copy);
+            }
+            finally
+            {
+                Domovoi.Windows.Helper.Folders.DeleteTree(root);
+                if (System.IO.Directory.Exists(victim)) System.IO.Directory.Delete(victim, true);
+            }
+        });
+        Run("redact: journal-style lines (access logs, JSON, headers)", delegate
+        {
+            Eq("INFO 192.168.1.41:5123 - \"GET /v1/stream?token=[hidden] HTTP/1.1\" 101", Redact.Line("INFO 192.168.1.41:5123 - \"GET /v1/stream?token=abc123def HTTP/1.1\" 101"), "a token in a query string");
+            Eq("GET /api/x?a=1&device_token=[hidden] 200", Redact.Line("GET /api/x?a=1&device_token=zz9 200"), "a *_token parameter");
+            Eq("body {\"device_token\": \"[hidden]\"}", Redact.Line("body {\"device_token\": \"abc\"}"), "a JSON token");
+            Eq("X-Domovoi-Token: [hidden]", Redact.Line("X-Domovoi-Token: abc123"), "a token header");
+            Eq("headers authorization=Bearer [hidden]", Redact.Line("headers authorization=Bearer abcdefghij"), "authorization=");
+            Eq("2026-11-09T03:12:44+0000 domovoi python[812]: setup code is [hidden]", Redact.Line("2026-11-09T03:12:44+0000 domovoi python[812]: setup code is acorn-apple-arrow-autumn-badge-baker-basil-beach"), "a setup code");
+            foreach (string keep in new[]
+            {
+                "2026-11-09T03:12:44+0000 domovoi python[812]: INFO turn started room=kitchen",
+                "2026-11-09T03:12:44+0000 domovoi systemd[1]: Started domovoi-core.service - Domovoi core.",
+                "-- No entries --",
+            })
+                Eq(keep, Redact.Line(keep), "kept: " + keep);
         });
     }
 

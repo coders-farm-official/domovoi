@@ -317,6 +317,27 @@ early_commit = true
 # 90-600.
 # speech_pause_ms = 240
 
+# Seconds to wait, after you stop talking, for the server's first answer
+# (what it heard, the reply, or an error). If nothing at all comes back in
+# time, the satellite gives up on that request: the ring shows red, a
+# short "no answer" line plays if the server has provided one, and it
+# listens for the wake word again instead of sitting on the yellow ring.
+# Once the server has answered anything, this deadline is off (the
+# backstop below takes over). A current server always answers within about
+# 50 s (it gives up on speech recognition after at most 40 s and says sorry
+# in at most 10 s), so 75 leaves room for that plus the network; 0 turns
+# the deadline off. 0-600.
+# response_deadline_sec = 75
+
+# Once the server has answered something, the longest to wait after the
+# last thing it sent for the request (what it heard, part of the reply, an
+# error) for the next, before giving up the same way. Time spent playing a
+# reply or music, or in a call or a chat, never counts, so a long answer is
+# never cut off, and a current server says it is still working every 30 s,
+# which starts the count again: this only catches a server that has gone
+# completely silent part-way through. 0 turns it off. 0-900.
+# response_backstop_sec = 240
+
 [barge_in]
 # Off by default: nothing interrupts Domovoi while he is talking. Turn on to
 # cut him off mid-sentence - with the wake word (require_wake_word below, on
@@ -641,6 +662,15 @@ reboot_backoff_cap_min = 60
 # client last became idle (it does not tick during a turn, chat or call).
 mic_silence_sec = 30
 heartbeat_stale_sec = 60
+
+# Self-check 2b: seconds the satellite may be connected to the server but
+# not listening for the wake word, while the request in the way goes
+# nowhere (nothing being recorded, nothing playing, nothing from the
+# server), before it says so in the log and in last-health.json (floor 30).
+# A long answer, a follow-up question, music, a call or a chat never count.
+# It only reports: the reply deadline ([listen] response_deadline_sec) is
+# what ends a request the server never answers.
+wake_stall_sec = 120
 
 # How often last-health.json is written when nothing is wrong (seconds),
 # and how often buffered log lines are pushed to a core that lists

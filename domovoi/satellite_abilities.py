@@ -69,6 +69,7 @@ ABILITIES: dict[str, str] = {
     "full_duplex": "echo cancellation: drop-in calls (`dropin_start` / `dropin_end`), and chat mode with chat_mode",
     "speech_pause": "the device reports `speech_pause` / `speech_resume` and its last voiced frame",
     "capture_control": "`end_capture` (early commit; also needs speech_pause)",
+    "turn_progress": "the `working` frame every 30 s while a request is still being worked out (keeps the device's reply backstop from giving up on a slow but working server)",
 }
 
 #: The boolean hello keys from before ``supports``, and the ability each is.

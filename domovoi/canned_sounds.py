@@ -127,6 +127,17 @@ _CANNED: list[tuple[str, str, str]] = [
             "check on me later."
         ),
     ),
+    # Played by a satellite that sent a request and heard nothing back from
+    # the server within its reply deadline ([listen] response_deadline_sec;
+    # incident 2026-11-09, speech recognition wedged on the server).
+    (
+        "server_no_answer.mp3",
+        "server_no_answer.voice",
+        (
+            "Sorry, I didn't get an answer from the server. "
+            "Please try again in a moment."
+        ),
+    ),
 ]
 
 

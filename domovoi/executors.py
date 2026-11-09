@@ -32,7 +32,9 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import functools
+import itertools
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, TypeVar
 
@@ -96,13 +98,51 @@ def pool(name: str) -> ThreadPoolExecutor:
     return ex
 
 
+# What each pool's threads are running right now: pool -> {call id: the
+# moment (time.monotonic) its thread started it}; and when each pool last
+# finished a call. A thread that never returns can't be stopped, so this is
+# how the core sees one (domovoi/turn_watchdog.py: the Health page's
+# "speech recognition is stuck", the automatic restart).
+_running: dict[str, dict[int, float]] = {}
+_last_done: dict[str, float] = {}
+_track_lock = threading.Lock()
+_call_ids = itertools.count(1)
+
+
+def _tracked(name: str, call: Callable[[], T]) -> T:
+    key = next(_call_ids)
+    with _track_lock:
+        _running.setdefault(name, {})[key] = time.monotonic()
+    try:
+        return call()
+    finally:
+        with _track_lock:
+            _running.get(name, {}).pop(key, None)
+            _last_done[name] = time.monotonic()
+
+
 async def run(name: str, func: Callable[..., T], /, *args: Any, **kwargs: Any) -> T:
     """Run ``func(*args, **kwargs)`` in the pool called ``name`` and return
     its result: :func:`asyncio.to_thread`, in a bounded pool of its own."""
     loop = asyncio.get_running_loop()
     ctx = contextvars.copy_context()
     call = functools.partial(ctx.run, func, *args, **kwargs)
-    return await loop.run_in_executor(pool(name), call)
+    return await loop.run_in_executor(pool(name), functools.partial(_tracked, name, call))
+
+
+def running_ages(name: str, *, now: float | None = None) -> list[float]:
+    """How long (seconds) each call a thread of pool ``name`` is running
+    has been running, oldest first. Queued calls are not counted."""
+    t = time.monotonic() if now is None else now
+    with _track_lock:
+        starts = list(_running.get(name, {}).values())
+    return sorted((max(0.0, t - s) for s in starts), reverse=True)
+
+
+def last_finished(name: str) -> float | None:
+    """When (time.monotonic) a call in pool ``name`` last finished, or None."""
+    with _track_lock:
+        return _last_done.get(name)
 
 
 def busy() -> dict[str, dict[str, int]]:

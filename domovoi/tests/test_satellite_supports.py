@@ -208,7 +208,7 @@ def test_a_hello_without_supports_allows_exactly_what_the_core_always_sent(fd, p
     assert ab.declared is False and ab.declared_list() is None
     for name in ("restart", "code_sync", "plugin_payloads", "config", "wifi", "mic_gain",
                  "leds", "display", "logs", "wake_clips", "wake_models", "sounds", "voice",
-                 "time_sync", "chat_mode"):
+                 "time_sync", "chat_mode", "turn_progress"):
         assert ab.allows(name), name
     # Announcements go out whether or not the flag is there (the WARNING
     # for a satellite without it is today's, tested in test_streaming).

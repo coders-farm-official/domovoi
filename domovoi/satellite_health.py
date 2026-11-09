@@ -240,7 +240,8 @@ SAMPLE_FIELDS: dict[str, Any] = {
     "nm_state": _nm, "gateway": lambda v: _str(v, 64),
     "gateway_ok": _bool, "core_ok": _bool, "core_host_ok": _bool, "default_route": _bool,
     "mic_expected": _bool, "mic_fps": _num, "mic_q": _int, "playback_q": _int,
-    "send_q": _int, "wake_loop_age_s": _num, "idle": _bool,
+    "send_q": _int, "wake_loop_age_s": _num,
+    "awaiting_response_s": _num, "idle": _bool,
     "ws": lambda v: _str(v, 8), "ws_down_for_s": _num, "reconnects": _int,
     "wifi": _wifi, "log_ring": _counts, "log_spool": _counts,
     # Spare-device satellites (S0, 2026-10-12): a laptop's or a phone's

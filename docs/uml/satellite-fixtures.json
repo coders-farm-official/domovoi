@@ -105,6 +105,11 @@
       "unlocks": "`end_capture` (early commit; also needs speech_pause)",
       "assumed_without_supports": false,
       "hello_key": "capture_control"
+    },
+    "turn_progress": {
+      "unlocks": "the `working` frame every 30 s while a request is still being worked out (keeps the device's reply backstop from giving up on a slow but working server)",
+      "assumed_without_supports": true,
+      "hello_key": null
     }
   },
   "always_sent": [
@@ -226,6 +231,7 @@
           "sounds",
           "speech_pause",
           "time_sync",
+          "turn_progress",
           "voice",
           "wake_clips",
           "wake_models",
@@ -418,6 +424,7 @@
           "sounds",
           "speech_pause",
           "time_sync",
+          "turn_progress",
           "voice",
           "wake_clips",
           "wake_models",
@@ -581,7 +588,8 @@
           "wake_clips",
           "wake_models",
           "sounds",
-          "voice"
+          "voice",
+          "turn_progress"
         ]
       },
       "ready": {
@@ -608,6 +616,7 @@
           "restart",
           "sounds",
           "speech_pause",
+          "turn_progress",
           "voice",
           "wake_clips",
           "wake_models"
@@ -623,6 +632,7 @@
           "restart",
           "sounds",
           "speech_pause",
+          "turn_progress",
           "voice",
           "wake_clips",
           "wake_models"
@@ -785,7 +795,8 @@
           "wake_clips",
           "wake_models",
           "sounds",
-          "voice"
+          "voice",
+          "turn_progress"
         ]
       },
       "ready": {
@@ -812,6 +823,7 @@
           "restart",
           "sounds",
           "speech_pause",
+          "turn_progress",
           "voice",
           "wake_clips",
           "wake_models"
@@ -827,6 +839,7 @@
           "restart",
           "sounds",
           "speech_pause",
+          "turn_progress",
           "voice",
           "wake_clips",
           "wake_models"
@@ -1030,6 +1043,7 @@
           "plugin_payloads",
           "restart",
           "time_sync",
+          "turn_progress",
           "voice",
           "wake_clips",
           "wifi"

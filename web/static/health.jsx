@@ -144,13 +144,34 @@ const healthChecks = ({ viewer, health, rooms, plugins, pluginErrors, acq,
     const c = { key: 'stt', part: 'server', label: 'speech recognition', scope: 'open', order: 4,
                 fix: '#settings/models', fixLabel: 'models' };
     const stt = health && health.stt;
+    // The turn watchdog (core /v1/health `speech`, 2026-11-09): a speech
+    // worker stuck on one request (only a restart frees it), or a request
+    // that timed out lately.
+    const speech = health && health.speech && typeof health.speech === 'object' ? health.speech : null;
+    const lastTimeout = speech && speech.last_timeout;
     if (!health) add(unread(c));
     else if (waits) add(wait(c));
-    else if (stt === 'unavailable') {
+    else if (speech && speech.state === 'stalled') {
+      const mins = Math.max(1, Math.round((speech.stuck_for_s || 0) / 60));
+      add({ ...c, tone: 'err', fix: '#settings/about', fixLabel: 'restart',
+            text: `speech recognition is stuck (for ${mins} min) · the rooms can't understand anyone until Domovoi restarts` });
+    } else if (stt === 'unavailable') {
       add({ ...c, tone: 'err', text: "speech recognition is off · the rooms can't understand anyone" });
     } else if (stt === 'fallback') {
       add({ ...c, tone: 'warn', text: 'speech recognition is on its slower fallback model' });
+    } else if (speech && speech.state === 'slow' && lastTimeout) {
+      add({ ...c, tone: 'warn', at: lastTimeout.at, fix: '#settings/about', fixLabel: 'restart',
+            text: `a spoken request timed out while ${lastTimeout.stage || 'being answered'} · if it keeps happening, restart Domovoi` });
     } else add({ ...c, tone: 'ok', text: stt ? 'ready' : 'not reported by this server' });
+    // A request that timed out later, while its answer was being worked
+    // out: a slow or loading model, most likely — not speech recognition,
+    // and nothing a restart fixes. Shown only while recent (15 minutes).
+    const reply = speech && speech.last_reply_timeout;
+    if (health && !waits && reply) {
+      add({ key: 'answers', part: 'server', label: 'answers', scope: 'open', order: 4.5,
+            tone: 'warn', at: reply.at,
+            text: 'a spoken request got no answer in time · the language model may be slow or still loading' });
+    }
   }
   {
     const c = { key: 'disk', part: 'server', label: 'disk space', scope: 'admin', order: 15,

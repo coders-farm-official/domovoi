@@ -157,7 +157,46 @@ data class SatTurn(
     val matched_path: String? = null,
     val user_text: String? = null,
     val assistant_text: String? = null,
+    // Where the turn got to (server V043, 2026-11-09): "answered",
+    // "pending" (said, the reply still being worked out), "no_answer"
+    // (see no_answer_reason) or "unheard" (speech recognition never made
+    // it out; user_text is "" and audio_ms is the recording's length). An
+    // older server sends none of these: the turn reads as answered.
+    val status: String? = null,
+    val no_answer_reason: String? = null,
+    val audio_ms: Long? = null,
 )
+
+/** The reply line's words when a turn has no reply to show, else null
+ *  (web satellites.jsx SatTurnUnanswered). */
+fun satTurnUnanswered(c: SatTurn): String? = when (c.status ?: "answered") {
+    "pending" -> "waiting for an answer…"
+    "no_answer", "unheard" -> when (c.no_answer_reason) {
+        "timed_out" -> "no answer — timed out"
+        "error" -> "no answer — something went wrong"
+        "interrupted" -> "no answer — interrupted"
+        "restarted" -> "no answer — Domovoi restarted"
+        "speech_off" -> "no answer — speech recognition is off"
+        else -> "no answer"
+    }
+    else -> null
+}
+
+/** What was said: the transcript in quotes, or that speech recognition
+ *  never made it out (with the recording's length when known). */
+fun satTurnSaid(c: SatTurn): String =
+    if (c.status == "unheard") {
+        "couldn’t make out what was said" +
+            (c.audio_ms?.let { " · " + String.format(java.util.Locale.ROOT, "%.1f", it / 1000.0) + " s recording" } ?: "")
+    } else {
+        "“${c.user_text ?: ""}”"
+    }
+
+/** Whether any turn in the list is still waiting for its answer: the
+ *  history is read again every few seconds until none is. */
+fun satAnyPending(turns: List<SatTurn>?): Boolean = turns?.any { it.status == "pending" } == true
+
+const val SAT_PENDING_POLL_MS = 3_000L
 
 @Serializable
 data class SatNote(
