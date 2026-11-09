@@ -31,6 +31,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -68,6 +69,7 @@ fun SatSessionsTab(room: String) {
     }
     val sessions = sessionsState.data
     val convos = convosState.data ?: emptyList()
+    RefreshWhilePending(convosState.data, convosState.refresh)
     when {
         sessionsState.loading && sessions == null -> LoadingState()
         sessions == null -> ErrorState(sessionsState.error ?: "request failed", sessionsState.refresh)
@@ -162,7 +164,11 @@ private fun TurnCard(c: SatTurn, showId: Boolean) {
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Text(relTime(c.at), style = MaterialTheme.typography.labelSmall, color = Domovoi.colors.fgFaint)
-            Pill(c.matched_handler ?: "qa", if (c.matched_handler != null) Tone.Brand else Tone.Idle)
+            when (c.status) {
+                "pending" -> Pill("waiting", Tone.Idle)
+                "no_answer", "unheard" -> Pill("no answer", Tone.Warn)
+                else -> Pill(c.matched_handler ?: "qa", if (c.matched_handler != null) Tone.Brand else Tone.Idle)
+            }
             if (showId) {
                 Spacer(Modifier.weight(1f))
                 Text("#${c.id}", style = MaterialTheme.typography.labelSmall, color = Domovoi.colors.fgFaint)
@@ -175,12 +181,15 @@ private fun TurnCard(c: SatTurn, showId: Boolean) {
                 )
             }
         }
+        val unheard = c.status == "unheard"
         Text(
-            "“${c.user_text ?: ""}”",
+            satTurnSaid(c),
             style = MaterialTheme.typography.bodyMedium,
-            color = Domovoi.colors.fg,
+            fontStyle = if (unheard) FontStyle.Italic else null,
+            color = if (unheard) Domovoi.colors.fgMuted else Domovoi.colors.fg,
             modifier = Modifier.padding(top = 4.dp),
         )
+        val unanswered = satTurnUnanswered(c)
         Row(
             Modifier.padding(top = 3.dp),
             verticalAlignment = Alignment.Top,
@@ -188,8 +197,17 @@ private fun TurnCard(c: SatTurn, showId: Boolean) {
         ) {
             DomovoiGlyph(size = 12)
             Column {
-                Text(shown, style = MaterialTheme.typography.bodySmall, color = Domovoi.colors.fgMuted)
-                if (long) {
+                if (unanswered != null) {
+                    Text(
+                        unanswered,
+                        style = MaterialTheme.typography.bodySmall,
+                        fontStyle = FontStyle.Italic,
+                        color = Domovoi.colors.fgMuted,
+                    )
+                } else {
+                    Text(shown, style = MaterialTheme.typography.bodySmall, color = Domovoi.colors.fgMuted)
+                }
+                if (long && unanswered == null) {
                     Text(
                         if (more) "less" else "more",
                         style = MaterialTheme.typography.labelSmall,
@@ -198,6 +216,19 @@ private fun TurnCard(c: SatTurn, showId: Boolean) {
                     )
                 }
             }
+        }
+    }
+}
+
+/** While a turn is still waiting for its answer, read the history again
+ *  every few seconds (there is no live event for it); stops once none is. */
+@Composable
+private fun RefreshWhilePending(turns: List<SatTurn>?, refresh: () -> Unit) {
+    val pending = satAnyPending(turns)
+    LaunchedEffect(pending) {
+        while (pending) {
+            delay(SAT_PENDING_POLL_MS)
+            refresh()
         }
     }
 }
@@ -211,6 +242,7 @@ fun SatConversationsTab(room: String) {
         it.api.get("/api/satellites/$room/conversations?limit=300").decode<List<SatTurn>>()
     }
     val all = state.data
+    RefreshWhilePending(all, state.refresh)
     when {
         state.loading && all == null -> LoadingState()
         all == null -> ErrorState(state.error ?: "request failed", state.refresh)
