@@ -88,6 +88,7 @@ def fast_limits(monkeypatch):
     monkeypatch.setattr(settings, "voice_stt_timeout_max_sec", 0.3)
     monkeypatch.setattr(settings, "voice_reply_timeout_sec", 0.6)
     monkeypatch.setattr(settings, "voice_identify_timeout_sec", 0.3)
+    monkeypatch.setattr(turn_watchdog, "routing_cap", lambda: 0.6)
     turn_watchdog.reset()
     yield
     turn_watchdog.reset()
@@ -282,7 +283,9 @@ async def test_a_router_that_never_returns_ends_in_no_answer(
     seen_pending: list[dict] = []
 
     async def _route(intent, ctx, session):
-        # The history already shows what was said, the reply pending.
+        # Routing doesn't wait for the pending row (the record does); once
+        # written, the history shows what was said, the reply pending.
+        assert await ctx.history_entry.row_id() is not None
         seen_pending.extend(await _rows("wd-kitchen"))
         await asyncio.Event().wait()
 
@@ -546,3 +549,136 @@ async def test_every_worker_stuck_restarts_without_further_evidence(monkeypatch)
     finally:
         release.set()
         await asyncio.gather(*jobs)
+
+
+# ── review round 1 ───────────────────────────────────────────────────
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_routing_gets_the_longer_limit(
+    monkeypatch, fast_limits, no_identify, db_session,
+) -> None:
+    """The 150 s limit (0.6 here) holds only until routing starts; a slow
+    but working model (a tool call, a cold load) then gets routing_cap()
+    (2 s here) — the router's own failure comes first, not a timeout."""
+    monkeypatch.setattr(settings, "voice_reply_timeout_sec", 0.3)
+    monkeypatch.setattr(turn_watchdog, "routing_cap", lambda: 2.0)
+    monkeypatch.setattr(streaming, "get_whisper_client", lambda: _Whisper("what is on the calendar"))
+
+    async def _route(intent, ctx, session):
+        await asyncio.sleep(0.8)   # past voice_reply_timeout_sec, inside routing_cap
+        raise RuntimeError("tool model failed")
+
+    monkeypatch.setattr(streaming, "route", _route)
+    ws = _FakeWS()
+    sess = StreamSession(ws, "wd-route")  # type: ignore[arg-type]
+    await asyncio.wait_for(sess._process_utterance(PCM_1S, trigger="wake_word"), 10)
+    await _drain_history_writes()
+    errors = [f for f in ws.sent_text if f.get("type") == "error"]
+    assert errors and errors[0]["message"] == "tool model failed"
+    assert turn_watchdog.last_stall() is None
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_slow_turn_tells_the_satellite_it_is_still_working(
+    monkeypatch, fast_limits, no_identify, db_session,
+) -> None:
+    monkeypatch.setattr(streaming, "WORKING_EVERY_SEC", 0.1)
+    monkeypatch.setattr(turn_watchdog, "routing_cap", lambda: 5.0)
+    monkeypatch.setattr(streaming, "get_whisper_client", lambda: _Whisper("how far is the moon"))
+
+    async def _route(intent, ctx, session):
+        await asyncio.sleep(0.45)
+        raise RuntimeError("stop here")
+
+    monkeypatch.setattr(streaming, "route", _route)
+    ws = _FakeWS()
+    sess = StreamSession(ws, "wd-beat")  # type: ignore[arg-type]
+    await asyncio.wait_for(sess._process_utterance(PCM_1S, trigger="wake_word"), 10)
+    beats = [f for f in ws.sent_text if f.get("type") == "working"]
+    assert len(beats) >= 2 and beats[-1]["stage"] == STAGE_REPLY
+    n = len(beats)
+    await asyncio.sleep(0.3)
+    assert len([f for f in ws.sent_text if f.get("type") == "working"]) == n, "the beat stops with the turn"
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_turn_without_an_answer_is_forgotten_with_its_speaker(
+    monkeypatch, fast_limits, db_session,
+) -> None:
+    """Privacy: a pending or unanswered row carries the identified speaker,
+    so "forget what this person said" deletes it too."""
+    from domovoi import voice_identifier
+    from domovoi.voice_history import delete_person_history
+
+    await db_session.execute(text("INSERT INTO people (id, name) VALUES (7, 'Alex')"))
+    await db_session.commit()
+
+    async def _identify(*a, **kw):
+        return types.SimpleNamespace(person_id=7, presence_tier="high", embedding=None,
+                                     candidates=(), denylisted=False, ambiguous=False)
+
+    monkeypatch.setattr(voice_identifier, "identify", _identify)
+    monkeypatch.setattr(streaming, "get_whisper_client", lambda: _Whisper("remind me to call the bank"))
+
+    async def _route(intent, ctx, session):
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(streaming, "route", _route)
+    sess = StreamSession(_FakeWS(), "wd-privacy")  # type: ignore[arg-type]
+    await asyncio.wait_for(sess._process_utterance(PCM_1S, trigger="wake_word"), 10)
+    await _drain_history_writes()
+    async with session_scope() as s:
+        pid = (await s.execute(text(
+            "SELECT person_id FROM conversation_log WHERE room_id = 'wd-privacy'"))).scalar()
+    assert pid == 7
+    async with session_scope() as s:
+        await delete_person_history(s, 7)
+    assert await _rows("wd-privacy") == []
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_an_empty_reply_reads_no_answer(db_session) -> None:
+    """A chat reply talked over before its first word is recorded (the
+    audit row) but reads "no answer — interrupted", not an empty answer."""
+    from datetime import datetime, timezone
+
+    from domovoi.db.repositories import ConversationLogRepository
+
+    entry = turn_history.start_entry(
+        room_id="wd-chat", session_id=None, user_text="tell me about owls",
+        trigger="wake_word", audio_ms=1200, at=datetime.now(timezone.utc),
+    )
+    async with session_scope() as s:
+        await ConversationLogRepository(s).record_turn(
+            session_id=None, room_id="wd-chat", person_id=None, user_text="tell me about owls",
+            assistant_text="", matched_handler="chat_mode", matched_path="chat",
+            presence_tier=None, online=True, latency_ms=3, history_entry=entry,
+        )
+    await turn_history.mark_unanswered(entry, turn_history.INTERRUPTED, room_id="wd-chat")
+    rows = await _rows("wd-chat")
+    assert [(r["turn_status"], r["no_answer_reason"]) for r in rows] == [("no_answer", "interrupted")]
+
+
+def test_reply_stage_timeouts_are_reported_apart_from_speech() -> None:
+    turn_watchdog.reset()
+    try:
+        turn_watchdog.note_stall(STAGE_REPLY, "wd-r")
+        doc = turn_watchdog.speech_health()
+        assert doc["state"] == "ok" and doc["last_timeout"] is None
+        assert doc["last_reply_timeout"]["stage"] == STAGE_REPLY
+        turn_watchdog.note_stall(STAGE_STT, "wd-r")
+        doc = turn_watchdog.speech_health()
+        assert doc["state"] == "slow" and doc["last_timeout"]["stage"] == STAGE_STT
+    finally:
+        turn_watchdog.reset()
+
+
+def test_routing_cap_outlasts_a_cold_load_and_two_model_calls(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "ollama_load_timeout_sec", 300.0)
+    monkeypatch.setattr(settings, "ollama_timeout_sec", 120.0)
+    assert turn_watchdog.routing_cap() == 570.0

@@ -566,3 +566,23 @@ async def test_a_client_that_answers_a_stream_in_one_piece_still_speaks() -> Non
     c._keep_alive, c._send_keep_alive = "24h", False
     answer = SpokenAnswer(lambda: c.stream_voice_answer("Tell me a joke."))
     assert [s async for s in answer.sentences()] == ["What do you call a fake noodle?", "An impasta!"]
+
+
+@pytest.mark.asyncio
+async def test_a_reply_limit_before_the_first_sentence_records_no_answer(monkeypatch) -> None:
+    """Review round 1 (wf/turn-watchdog): the reply limit runs out while
+    the model hasn't finished its first sentence. Nothing was said, so
+    nothing is recorded as the answer (finish() would record the fixed
+    no-answer line the room never heard); the room gets the apology."""
+    from domovoi import turn_watchdog
+
+    gate = asyncio.Event()   # never set: the model stalls mid-sentence
+    seen = _streamed_turn(monkeypatch, ["Well", " let", " me", " think", " about", " it."], gate=gate)
+    monkeypatch.setattr(turn_watchdog, "routing_cap", lambda: 0.3)
+    ws = _FakeWS()
+    sess = streaming.StreamSession(ws, "office")  # type: ignore[arg-type]
+    await asyncio.wait_for(sess._process_utterance(b"\x00" * 32_000, trigger="wake_word"), 10)
+    assert seen["finished"] == []
+    starts = [f for kind, f in ws.frames if kind == "text" and f["type"] == "response_start"]
+    assert [s["matched_handler"] for s in starts] == ["turn_timeout"]
+    assert ws.frames[-1][1]["type"] == "response_end"

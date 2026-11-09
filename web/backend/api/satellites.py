@@ -979,8 +979,8 @@ async def list_conversations(
 
 
 # A pending turn older than this has outlived every limit the core puts on
-# a turn (domovoi/turn_watchdog.py: 150 s before its first reply frame, a
-# cold model load after the interim line) — it never finished.
+# a turn (domovoi/turn_watchdog.py: 150 s up to routing, routing_cap() —
+# 570 s by default — after it) — it never finished.
 PENDING_STALE_SEC = 600
 
 # Whether conversation_log has V043's columns; probed once per process (a

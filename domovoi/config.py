@@ -661,7 +661,7 @@ class Settings(BaseSettings):
     # decodes in ~1-3 s on the slowest supported box), so three times the
     # recording is "something is wrong", not "slow". The max keeps the
     # whole stage, second hearing included, under the satellite's own
-    # reply deadline (satellite `[listen] response_deadline_sec`, 60 s):
+    # reply deadline (satellite `[listen] response_deadline_sec`, 75 s):
     # 40 s, plus an apology whose speech is capped at 10 s
     # (turn_watchdog.APOLOGY_TTS_SEC), is answered before the satellite
     # gives up.
@@ -671,24 +671,31 @@ class Settings(BaseSettings):
     # Voice identification (who is speaking). Best-effort: on expiry the
     # turn goes on unidentified, as when it fails.
     voice_identify_timeout_sec: float = 10.0
-    # The whole turn up to its first reply frame (the reply, or the "waking
-    # up my language model" line before a cold model load). Longer than
-    # ollama_timeout_sec (120 s), so a slow model's own timeout and the
-    # handler's fallback answer always come first; this is the backstop for
-    # a stage that never returns.
+    # The turn up to the start of routing (speech recognition, voice
+    # identification, the chat-mode check). Once routing starts, the limit
+    # moves to turn_watchdog.routing_cap() from then: ollama_load_timeout_sec
+    # + 2 × ollama_timeout_sec + 30 s (570 s by default) — a cold model load
+    # with no line said before it, then a tool-model call and the answer's
+    # first sentence — so a slow but working model always answers, or fails
+    # with its own error and fallback, first. Either is only the backstop
+    # for a stage that never returns. The first reply frame (the reply, or
+    # the "waking up my language model" line) ends the limit; chat mode is
+    # outside it (Letta has its own timeout).
     voice_reply_timeout_sec: float = 150.0
     # A speech worker busy on one call for this long is stuck: no decode or
     # voice embedding takes minutes. The Health page then says speech
     # recognition is stuck and to restart Domovoi.
     voice_speech_stuck_after_sec: float = 120.0
     # Automatic recovery: when speech recognition has been stuck this long
-    # house-wide (every speech worker stuck, or one stuck with no decode
-    # finishing since and a request timed out in speech recognition), the
-    # loop watchdog writes every thread's stack to its retained log and
-    # exits the core with status 70 for the service manager to start again
-    # — only under systemd (the shipped unit, also inside the Windows
-    # installer's Linux system), where something does start it again.
-    # 0 turns the automatic restart off; the Health row stays.
+    # (every speech worker stuck, or one stuck with no decode finishing
+    # since and a request timed out on it — also one wedged room in a quiet
+    # house), the loop watchdog writes every thread's stack to its retained
+    # log and asks for the dashboard's graceful restart; when that can't be
+    # had it exits the core with status 70 for the service manager to start
+    # again. Only under systemd (the shipped unit, also inside the Windows
+    # installer's Linux system); never while a restart, an update or a
+    # plugin install is under way; at most once an hour (then the Health
+    # row carries it). 0 turns the automatic restart off.
     voice_speech_restart_after_sec: float = 600.0
 
     timer_watcher_interval_sec: float = 1.0

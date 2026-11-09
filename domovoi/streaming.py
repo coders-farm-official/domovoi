@@ -584,6 +584,9 @@ _pairing_table_warned = False
 # Each runs outside its turn's task so a barge-in can't cancel it; held
 # here until done, because the event loop keeps only weak references.
 _TIMING_WRITES: set[asyncio.Task[None]] = set()
+# How often a turn still being worked out says so to its satellite (the
+# `working` frame; StreamSession._start_working_beat).
+WORKING_EVERY_SEC = 30.0
 # Same for opted-in rooms' command recordings (StreamSession._keep_capture).
 _CAPTURE_WRITES: set[asyncio.Task[str | None]] = set()
 # Same for the music restart that follows an announcement
@@ -1682,6 +1685,8 @@ class StreamSession:
         # turn's task and its asyncio.timeout, disarmed by the first reply
         # frame (`_reply_started`).
         self._reply_guard: tuple[asyncio.Task[Any] | None, Any] | None = None
+        # The `working` heartbeat of the running turn (`_start_working_beat`).
+        self._working_task: asyncio.Task[None] | None = None
         # When the utterance's messages and frames arrived, against the pace
         # it was spoken at (see _CaptureClock), and the latest pause: when
         # it reached the server and what the satellite's clock said on it.
@@ -4143,10 +4148,64 @@ class StreamSession:
         if task is not current:
             return
         self._reply_guard = None
+        self._stop_working_beat()
         try:
             timeout.reschedule(None)
         except RuntimeError:
             pass  # already expired, or the turn has left it
+
+    def _reply_guard_expired(self) -> bool:
+        """Whether the running turn's reply limit has fired (it is being
+        cancelled for it), from inside the turn's own task."""
+        guard = getattr(self, "_reply_guard", None)
+        if guard is None:
+            return False
+        try:
+            return guard[0] is asyncio.current_task() and guard[1].expired()
+        except RuntimeError:
+            return False
+
+    def _start_working_beat(self, stage_of: Callable[[], str]) -> None:
+        """Send ``{"type": "working", "stage"}`` every WORKING_EVERY_SEC
+        until the turn's first reply frame or its end — only to a device
+        that takes it (``turn_progress``: every Pi; a laptop that lists
+        it). An older satellite ignores a frame type it doesn't know."""
+        self._stop_working_beat()
+        if not self.abilities.allows("turn_progress"):
+            return
+
+        async def _beat() -> None:
+            while True:
+                await asyncio.sleep(WORKING_EVERY_SEC)
+                await self._safe_send_text({"type": "working", "stage": stage_of()})
+
+        self._working_task = asyncio.create_task(_beat(), name=f"working:{self.room_id}")
+
+    def _stop_working_beat(self) -> None:
+        task = getattr(self, "_working_task", None)
+        if task is not None:
+            self._working_task = None
+            task.cancel()
+
+    @staticmethod
+    def _release_reply_guard(guard: Any) -> None:
+        try:
+            guard.reschedule(None)
+        except RuntimeError:
+            pass  # expired already
+
+    @staticmethod
+    def _extend_reply_guard(guard: Any) -> None:
+        """Routing starts: the reply limit becomes
+        turn_watchdog.routing_cap() from now (unless the first reply frame
+        already disarmed it)."""
+        try:
+            if guard.when() is not None:
+                guard.reschedule(
+                    asyncio.get_running_loop().time() + turn_watchdog.routing_cap()
+                )
+        except RuntimeError:
+            pass
 
     def _track_history_write(self, coro: Any) -> None:
         """Run a history write in a task of its own (a barge-in cancelling
@@ -4155,40 +4214,18 @@ class StreamSession:
         _TIMING_WRITES.add(task)
         task.add_done_callback(_TIMING_WRITES.discard)
 
-    async def _await_history(
-        self, task: asyncio.Task[Any] | None,
-    ) -> turn_history.HistoryEntry | None:
-        """The pending history row the transcript wrote, once written.
-        Shielded: a cancelled turn leaves the write running, and closes the
-        row from its own handler."""
-        if task is None:
-            return None
-        return await asyncio.shield(task)
-
     def _close_history_later(
         self,
-        task: asyncio.Task[Any] | None,
         entry: turn_history.HistoryEntry | None,
         reason: str,
     ) -> None:
         """The turn ended with no reply: its still-pending row says why."""
-        if task is None and entry is None:
+        if entry is None:
             return
-
-        async def _close() -> None:
-            e = entry
-            if e is None and task is not None:
-                try:
-                    e = await task
-                except BaseException:  # noqa: BLE001 — nothing to close
-                    return
-            await turn_history.close_entry(e, reason, room_id=self.room_id)
-
-        self._track_history_write(_close())
+        self._track_history_write(turn_history.close_entry(entry, reason, room_id=self.room_id))
 
     def _settle_history_later(
         self,
-        task: asyncio.Task[Any] | None,
         entry: turn_history.HistoryEntry | None,
         response: Any,
     ) -> None:
@@ -4210,7 +4247,6 @@ class StreamSession:
         trigger: str | None,
         timings: TurnTimings,
         response: Any,
-        history_task: asyncio.Task[Any] | None,
         history: turn_history.HistoryEntry | None,
         audio_ms: int,
         turn_at: datetime,
@@ -4229,18 +4265,35 @@ class StreamSession:
             "Health page says when speech recognition is stuck)",
             self.room_id, waited, stage,
         )
-        if history_task is None and history is None:
+        if history is None:
             if trigger != "barge_in":
                 self._track_history_write(turn_history.record_unheard(
                     room_id=self.room_id, session_id=self.session_id, trigger=trigger,
                     audio_ms=audio_ms, reason=turn_history.TIMED_OUT, at=turn_at,
                 ))
         else:
-            self._close_history_later(history_task, history, turn_history.TIMED_OUT)
+            self._close_history_later(history, turn_history.TIMED_OUT)
         await self._tell_turn_failed(f"no reply: timed out while {stage}", trigger=trigger)
+        await self._resume_music_after_failed_turn(trigger)
         timing_write = self._finish_turn_timings(timings, trigger=trigger, response=response)
         if timing_write is not None:
             await asyncio.shield(timing_write)
+
+    async def _resume_music_after_failed_turn(self, trigger: str | None) -> None:
+        """The music the wake word stopped comes back, as after any turn
+        that wasn't about music (the auto-resume in `_process_utterance_turn`)
+        — not after a barge-in (an interrupted turn never resumes) and not
+        during a call. Best-effort."""
+        if trigger == "barge_in" or self.dropin_peer is not None:
+            return
+        try:
+            resumable = getattr(self.ws.app.state, "resumable_music", None) or {}
+            url = resumable.get(self.room_id)
+            if url:
+                await send_music_start(self.ws.app, self, self.room_id, url)
+        except Exception as e:  # noqa: BLE001
+            log.warning("stream %s: resuming music after a timed-out turn failed: %s",
+                        self.room_id, e)
 
     async def _tell_turn_failed(self, message: str, *, trigger: str | None) -> None:
         """End a turn that has no reply so the satellite recovers: the
@@ -4272,7 +4325,6 @@ class StreamSession:
         timings: TurnTimings,
         trigger: str | None,
         response: Any,
-        history_task: asyncio.Task[Any] | None,
         history: turn_history.HistoryEntry | None,
         stage: str,
         audio_ms: int,
@@ -4296,14 +4348,14 @@ class StreamSession:
             "interrupted": True,
             "expect_followup": False,
         })
-        if history_task is None and history is None:
+        if history is None:
             if stage == STAGE_STT and trigger != "barge_in":
                 self._track_history_write(turn_history.record_unheard(
                     room_id=self.room_id, session_id=self.session_id, trigger=trigger,
                     audio_ms=audio_ms, reason=turn_history.ERROR, at=turn_at,
                 ))
         else:
-            self._close_history_later(history_task, history, turn_history.ERROR)
+            self._close_history_later(history, turn_history.ERROR)
         # A turn can fail after its row committed (TTS down): record
         # how far it got.
         timing_write = self._finish_turn_timings(
@@ -4350,13 +4402,17 @@ class StreamSession:
         audio_seconds = len(pcm_bytes) / (16_000 * 2)
         audio_ms = int(round(audio_seconds * 1000))
         turn_at = datetime.now(timezone.utc)
+        turn_t0 = time.perf_counter()
         stage = STAGE_STT
         stt_deadline = asyncio.get_running_loop().time() + turn_watchdog.stt_cap(audio_seconds)
         reply_guard = asyncio.timeout(max(0.1, float(settings.voice_reply_timeout_sec)))
         self._reply_guard = (asyncio.current_task(), reply_guard)
+        # Until the first reply frame: `working` every WORKING_EVERY_SEC,
+        # so the satellite's long reply backstop knows a slow turn (a cold
+        # model load, a slow tool call) is still alive.
+        self._start_working_beat(lambda: stage)
         # This turn's row in the room's history (domovoi/turn_history.py),
         # written pending as soon as the transcript exists.
-        history_task: asyncio.Task[Any] | None = None
         history: turn_history.HistoryEntry | None = None
         # Per-stage stopwatch (domovoi/turn_timings.py). `received_at` is the
         # utterance_end arrival (or the early commit); a direct call starts
@@ -4416,15 +4472,12 @@ class StreamSession:
 
                 # ── Respond ──────────────────────────────────────────────────
                 # The history shows what was said from now on, the reply
-                # pending; written alongside voice identification, so it
-                # adds no wait.
-                history_task = asyncio.create_task(
-                    turn_history.open_entry(
-                        room_id=self.room_id, session_id=self.session_id,
-                        user_text=transcript, trigger=trigger,
-                        audio_ms=audio_ms, at=turn_at,
-                    ),
-                    name=f"history-open:{self.room_id}",
+                # pending. Written in a task of its own: nothing waits for
+                # it but the turn's record (router._persist_turn).
+                history = turn_history.start_entry(
+                    room_id=self.room_id, session_id=self.session_id,
+                    user_text=transcript, trigger=trigger,
+                    audio_ms=audio_ms, at=turn_at,
                 )
                 await self._safe_send_text({"type": "transcript", "text": transcript})
 
@@ -4471,9 +4524,15 @@ class StreamSession:
                     ident = None
                 timings.stage("identify_ms", stage_t0)
                 stage = STAGE_REPLY
-                history = await self._await_history(history_task)
 
                 person_id = ident.person_id if ident else None
+                if person_id is not None and history is not None:
+                    # The pending row names its speaker now, so "forget what
+                    # this person said" finds it even if no answer comes.
+                    history.person_id = person_id
+                    self._track_history_write(
+                        turn_history.set_person(history, room_id=self.room_id)
+                    )
                 presence_tier = ident.presence_tier if ident else None
                 embedding_bytes: bytes | None = None
                 if ident is not None and ident.embedding is not None:
@@ -4540,6 +4599,10 @@ class StreamSession:
                     # (covers a reconnect that re-bound this session mid-chat).
                     self.conversational_mode = bool(chat_ctx.get("conversational_mode"))
                     if chat_ctx.get("conversational_mode"):
+                        # Chat mode is outside the reply limit: Letta has
+                        # its own timeout, and the chat turn swallows a
+                        # cancel to record what was said.
+                        self._release_reply_guard(reply_guard)
                         await self._run_chat_turn(
                             transcript=transcript,
                             ctx=ctx,
@@ -4554,7 +4617,7 @@ class StreamSession:
                         self._log_turn_timings(timings, trigger=trigger, matched_path="chat")
                         # Its record writes the history row; if that failed,
                         # the row says no answer was recorded.
-                        self._settle_history_later(history_task, history, None)
+                        self._settle_history_later(history, None)
                         return
 
                 # Shadow only (domovoi/fast_lane.py): what the streaming fast lane
@@ -4563,6 +4626,12 @@ class StreamSession:
                 self._fastlane = fast_lane.settle(self._fastlane, transcript, timings)
 
                 stage_t0 = time.perf_counter()
+                # Routing has started: from here the models' own limits
+                # govern (a tool-model call, a cold load, the first
+                # sentence of an answer), so the reply limit moves out to
+                # outlast all of them; it stays only as the backstop for a
+                # stage that never returns.
+                self._extend_reply_guard(reply_guard)
                 async with session_scope() as s:
                     response = await route(intent, ctx, s)
                     streamed = getattr(response, "qa_stream", None) is not None
@@ -4597,18 +4666,18 @@ class StreamSession:
             # Talked over before an answer was recorded: the history says
             # so (an answer recorded meanwhile wins — a streamed one is
             # recorded even when cut short).
-            self._close_history_later(history_task, history, turn_history.INTERRUPTED)
+            self._close_history_later(history, turn_history.INTERRUPTED)
         except (TurnStalled, TimeoutError) as e:
             if isinstance(e, TurnStalled):
                 await self._end_stalled_turn(
                     e.stage, e.limit_s, trigger=trigger, timings=timings,
-                    response=response, history_task=history_task, history=history,
+                    response=response, history=history,
                     audio_ms=audio_ms, turn_at=turn_at,
                 )
             elif reply_guard.expired():
                 await self._end_stalled_turn(
-                    stage, float(settings.voice_reply_timeout_sec), trigger=trigger,
-                    timings=timings, response=response, history_task=history_task,
+                    stage, time.perf_counter() - turn_t0, trigger=trigger,
+                    timings=timings, response=response,
                     history=history, audio_ms=audio_ms, turn_at=turn_at,
                 )
             else:
@@ -4616,14 +4685,14 @@ class StreamSession:
                 # an ordinary failure.
                 await self._fail_turn(
                     e, timings=timings, trigger=trigger, response=response,
-                    history_task=history_task, history=history,
+                    history=history,
                     stage=stage, audio_ms=audio_ms, turn_at=turn_at,
                 )
             return
         except Exception as e:
             await self._fail_turn(
                 e, timings=timings, trigger=trigger, response=response,
-                history_task=history_task, history=history,
+                history=history,
                 stage=stage, audio_ms=audio_ms, turn_at=turn_at,
             )
             return
@@ -4631,11 +4700,12 @@ class StreamSession:
             guard = getattr(self, "_reply_guard", None)
             if guard is not None and guard[1] is reply_guard:
                 self._reply_guard = None
+            self._stop_working_beat()
 
         # A reply that was spoken but whose record failed: the pending row
         # takes what was said rather than staying "waiting for an answer".
         if not interrupted:
-            self._settle_history_later(history_task, history, response)
+            self._settle_history_later(history, response)
 
         # The turn's timings, before anything below can be cancelled: the
         # log line now, and the post-route write in a task of its own that
@@ -5119,6 +5189,16 @@ class StreamSession:
             # A barge-in cancelled the turn, or TTS / the socket failed:
             # stop the model, make sure what was said is recorded, then let
             # the turn end the way it would have.
+            if not said and self._reply_guard_expired():
+                # The reply limit ran out before a word was said: there is
+                # no answer to record (finish() would record its fixed
+                # line, which the room never heard). The turn's handler
+                # closes the history entry as timed out.
+                try:
+                    await sentences.aclose()
+                except BaseException:  # noqa: BLE001 — never mask the original
+                    pass
+                raise
             try:
                 await sentences.aclose()
                 final, _rest = await record()
@@ -5544,6 +5624,7 @@ class StreamSession:
         # STILL record the (possibly cut-short) turn below, so the audit row
         # always lands — matching the command path's "log even on interrupt".
         full_text = ""
+        no_reply_reason: str | None = None
         try:
             full_text = await self._stream_chat_reply(
                 client, agent_id=agent_id, user_text=transcript,
@@ -5551,8 +5632,10 @@ class StreamSession:
             )
         except asyncio.CancelledError:
             log.debug("chat: turn barged-in on room=%s", self.room_id)
+            no_reply_reason = turn_history.INTERRUPTED
         except Exception:
             log.exception("chat: Letta stream failed for room=%s", self.room_id)
+            no_reply_reason = turn_history.ERROR
 
         # Audit: exactly one intents_log + conversation_log row, matched_path
         # "chat", regardless of interruption (we still consumed a turn).
@@ -5563,6 +5646,13 @@ class StreamSession:
             session_id=session_id,
             latency_ms=int((time.monotonic() - t0) * 1000),
         )
+        if not (full_text or "").strip():
+            # Nothing was said back: the history says no answer (and why),
+            # not an empty answer.
+            await turn_history.mark_unanswered(
+                ctx.history_entry, no_reply_reason or turn_history.ERROR,
+                room_id=self.room_id,
+            )
 
     async def _stream_chat_reply(
         self,

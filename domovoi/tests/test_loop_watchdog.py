@@ -49,7 +49,7 @@ class Harness:
     """A loop on its own thread, and a watchdog on it whose exit records."""
 
     def __init__(self, tmp_path: Path, limits: Limits = FAST, probe=None, watchdog_usec=None,
-                 speech_check=None):
+                 speech_check=None, speech_restart=None, speech_hold=lambda: None):
         self.loop = asyncio.new_event_loop()
         self.thread = threading.Thread(target=self.loop.run_forever, daemon=True)
         self.exited = threading.Event()
@@ -72,7 +72,7 @@ class Harness:
             limits, probe=probe or ok_probe, notifier=self.notifier, exit_fn=exit_fn,
             backstop=self.backstops.append, report_file=tmp_path / "core-watchdog.log",
             last_file=tmp_path / "core-watchdog-last.json", out_fd=self.out_w,
-            speech_check=speech_check,
+            speech_check=speech_check, speech_restart=speech_restart, speech_hold=speech_hold,
         )
         self.tmp_path = tmp_path
 
@@ -139,12 +139,73 @@ def test_speech_recognition_stuck_house_wide_restarts_the_core(tmp_path) -> None
         return "speech recognition is stuck: all 8 speech workers have been on one call for 700 s or more" if len(asked) > 3 else None
 
     with Harness(tmp_path, speech_check=speech_check) as h:
-        assert h.exited.wait(10), "a stuck speech recognition never restarted the core"
+        assert h.exited.wait(10), "a stuck speech recognition never restarted the core: " + h.output()[-2000:]
         out = h.output()
     assert h.code == EXIT_CODE
     assert "speech recognition is stuck" in out
     last = json.loads((tmp_path / "core-watchdog-last.json").read_text(encoding="utf-8"))
     assert "speech recognition is stuck" in last["reason"]
+
+
+STUCK = "speech recognition is stuck: all 8 speech workers have been on one call for 700 s or more"
+
+
+def test_a_speech_restart_prefers_the_graceful_restart_and_keeps_systemd_fed(tmp_path) -> None:
+    """Review round 1: the dashboard's restart first (no exit), with the
+    stacks retained and the restart noted; at most once (an hour); and the
+    keep-alive carries on meanwhile."""
+    asked: list[int] = []
+
+    async def graceful() -> dict:
+        asked.append(1)
+        return {"ok": True}
+
+    with Harness(tmp_path, watchdog_usec=400_000, speech_check=lambda: STUCK,
+                 speech_restart=graceful) as h:
+        time.sleep(1.5)
+        assert not h.exited.is_set(), "a graceful restart was accepted: no exit"
+    assert asked == [1], "one speech restart, not one per look: " + h.output()[-2000:]
+    assert h.notifier.sent.count("WATCHDOG=1") >= 3
+    retained = (tmp_path / "core-watchdog.log").read_text(encoding="utf-8")
+    assert STUCK in retained and "--- thread" in retained
+    last = json.loads((tmp_path / "core-watchdog-last.json").read_text(encoding="utf-8"))
+    assert last["reason"] == STUCK
+
+
+def test_a_speech_restart_waits_for_whatever_holds_it(tmp_path) -> None:
+    asked: list[int] = []
+
+    async def graceful() -> dict:
+        asked.append(1)
+        return {"ok": True}
+
+    with Harness(tmp_path, speech_check=lambda: STUCK, speech_restart=graceful,
+                 speech_hold=lambda: "a plugin is being installed or upgraded") as h:
+        time.sleep(0.8)
+        assert not h.exited.is_set()
+        out = h.output()
+    assert asked == []
+    assert out.count("not restarting: a plugin is being installed") == 1
+
+
+def test_a_broken_speech_check_never_stops_the_keepalive(tmp_path) -> None:
+    def broken():
+        raise ValueError("bug")
+
+    with Harness(tmp_path, watchdog_usec=400_000, speech_check=broken) as h:
+        time.sleep(1.5)
+        assert not h.exited.is_set()
+    assert h.notifier.sent.count("WATCHDOG=1") >= 3
+
+
+def test_the_hourly_limit_reads_the_last_note(tmp_path, monkeypatch) -> None:
+    note = tmp_path / "last.json"
+    monkeypatch.setattr(loop_watchdog, "last_stall_path", lambda: note)
+    loop_watchdog.note_last_stall(STUCK, pid=1, path=note)
+    assert "within the hour" in (loop_watchdog._speech_hold() or "")
+    loop_watchdog.note_last_stall("the event loop has not run for 31 s", pid=1, path=note)
+    held = loop_watchdog._speech_hold()
+    assert held is None or "within the hour" not in held
 
 
 def test_install_watches_speech_only_under_a_service_manager(tmp_path, monkeypatch) -> None:

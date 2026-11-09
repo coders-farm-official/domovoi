@@ -38,7 +38,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
@@ -101,22 +100,44 @@ def _forget_probe() -> None:
     _HAS_STATUS = None
 
 
-@dataclass
 class HistoryEntry:
-    """A pending conversation_log row of one voice turn. Shared by
-    reference across the turn's Context copies (``Context.history_entry``;
-    pydantic's model_copy is shallow), so whichever write uses it first
-    takes it."""
+    """A voice turn's pending conversation_log row, being written.
 
-    row_id: int
-    taken: bool = False
+    Created the moment the transcript exists (:func:`start_entry`): the
+    write runs in a task of its own, so routing never waits for it; the
+    router's record (``record_turn``, via :meth:`take`) and every other
+    write here await it. Shared by reference across the turn's Context
+    copies (``Context.history_entry``; pydantic's model_copy is shallow),
+    so whichever record uses it first takes it. ``person_id``: who spoke,
+    once voice identification has said — written onto the row so "forget
+    what this person said" finds a turn that never got its answer too."""
 
-    def take(self) -> int | None:
+    def __init__(self, task: "asyncio.Future[int | None]") -> None:
+        self._task = task
+        self.taken = False
+        self.person_id: int | None = None
+
+    async def row_id(self) -> int | None:
+        """The row's id once written; None when it couldn't be."""
+        try:
+            return await asyncio.shield(self._task)
+        except asyncio.CancelledError:
+            if self._task.cancelled():
+                return None
+            raise
+        except Exception:  # noqa: BLE001 — _open_row never raises; belt and braces
+            return None
+
+    async def take(self) -> int | None:
         """The row to fill in with the routed turn — once; None after."""
         if self.taken:
             return None
         self.taken = True
-        return self.row_id
+        return await self.row_id()
+
+
+# The open-row writes in flight (the loop keeps only weak references).
+_OPENING: set[asyncio.Task] = set()
 
 
 async def _bounded(coro, what: str, room: str | None):
@@ -129,7 +150,7 @@ async def _bounded(coro, what: str, room: str | None):
         return None
 
 
-async def open_entry(
+async def _open_row(
     *,
     room_id: str | None,
     session_id: UUID | None,
@@ -137,12 +158,10 @@ async def open_entry(
     trigger: str | None,
     audio_ms: int | None,
     at: datetime,
-) -> HistoryEntry | None:
-    """Write the turn's row now, reply pending; None when that can't be
-    done (no V043, the database didn't answer)."""
+) -> int | None:
     from domovoi.db.session import session_scope
 
-    async def _write() -> HistoryEntry | None:
+    async def _write() -> int | None:
         async with session_scope() as s:
             if not await has_status_columns(s):
                 return None
@@ -169,33 +188,86 @@ async def open_entry(
                     },
                 )
             ).first()
-            return HistoryEntry(int(row[0])) if row is not None else None
+            return int(row[0]) if row is not None else None
 
     return await _bounded(_write(), "opening the history entry", room_id)
 
 
-async def close_entry(entry: HistoryEntry | None, reason: str, *, room_id: str | None) -> None:
-    """The turn ended with no reply: a still-pending row says so. Leaves an
-    answered row alone."""
+def start_entry(**kw) -> HistoryEntry:
+    """Start writing the turn's row, reply pending (the arguments of
+    :func:`_open_row`), and return at once."""
+    task = asyncio.create_task(_open_row(**kw), name=f"history-open:{kw.get('room_id')}")
+    _OPENING.add(task)
+    task.add_done_callback(_OPENING.discard)
+    return HistoryEntry(task)
+
+
+async def open_entry(**kw) -> HistoryEntry | None:
+    """:func:`start_entry`, waited for; None when the row couldn't be
+    written (no V043, the database didn't answer)."""
+    entry = start_entry(**kw)
+    return entry if await entry.row_id() is not None else None
+
+
+async def _update(entry: HistoryEntry | None, sql: str, params: dict, what: str,
+                  room_id: str | None) -> None:
     if entry is None:
         return
-    row_id = entry.row_id
+    row_id = await entry.row_id()
+    if row_id is None:
+        return
     from domovoi.db.session import session_scope
 
     async def _write() -> None:
         async with session_scope() as s:
-            await s.execute(
-                text(
-                    """
-                    UPDATE conversation_log
-                    SET turn_status = 'no_answer', no_answer_reason = :reason
-                    WHERE id = :id AND turn_status = 'pending'
-                    """
-                ),
-                {"id": row_id, "reason": reason},
-            )
+            await s.execute(text(sql), {**params, "id": row_id, "pid": entry.person_id})
 
-    await _bounded(_write(), "closing the history entry", room_id)
+    await _bounded(_write(), what, room_id)
+
+
+async def set_person(entry: HistoryEntry | None, *, room_id: str | None) -> None:
+    """Voice identification named the speaker: the pending row carries it
+    from now on (privacy: "forget what this person said" deletes by
+    person_id)."""
+    if entry is None or entry.person_id is None:
+        return
+    await _update(
+        entry,
+        "UPDATE conversation_log SET person_id = :pid WHERE id = :id AND person_id IS NULL",
+        {}, "naming the speaker on the history entry", room_id,
+    )
+
+
+async def close_entry(entry: HistoryEntry | None, reason: str, *, room_id: str | None) -> None:
+    """The turn ended with no reply: a still-pending row says so (and who
+    spoke, when known). Leaves an answered row alone."""
+    await _update(
+        entry,
+        """
+        UPDATE conversation_log
+        SET turn_status = 'no_answer', no_answer_reason = :reason,
+            person_id = COALESCE(person_id, :pid)
+        WHERE id = :id AND turn_status = 'pending'
+        """,
+        {"reason": reason}, "closing the history entry", room_id,
+    )
+
+
+async def mark_unanswered(
+    entry: HistoryEntry | None, reason: str, *, room_id: str | None,
+) -> None:
+    """A turn whose record went in with no reply text at all (a chat reply
+    talked over before its first word, a chat stream that failed): the
+    row says "no answer" and why instead of showing an empty answer."""
+    await _update(
+        entry,
+        """
+        UPDATE conversation_log
+        SET turn_status = 'no_answer', no_answer_reason = :reason
+        WHERE id = :id AND COALESCE(assistant_text, '') = ''
+        """,
+        {"reason": reason}, "marking the history entry unanswered", room_id,
+    )
 
 
 async def settle_entry(
@@ -204,37 +276,23 @@ async def settle_entry(
     """A turn that ended normally but whose record never filled in its
     pending row (that write failed): the row gets what was said, or "no
     answer — something went wrong" when there is nothing to show."""
-    if entry is None:
-        return
-    row_id = entry.row_id
-    from domovoi.db.session import session_scope
-
-    async def _write() -> None:
-        async with session_scope() as s:
-            if assistant_text:
-                await s.execute(
-                    text(
-                        """
-                        UPDATE conversation_log
-                        SET turn_status = 'answered', assistant_text = :t
-                        WHERE id = :id AND turn_status = 'pending'
-                        """
-                    ),
-                    {"id": row_id, "t": assistant_text},
-                )
-            else:
-                await s.execute(
-                    text(
-                        """
-                        UPDATE conversation_log
-                        SET turn_status = 'no_answer', no_answer_reason = 'error'
-                        WHERE id = :id AND turn_status = 'pending'
-                        """
-                    ),
-                    {"id": row_id},
-                )
-
-    await _bounded(_write(), "settling the history entry", room_id)
+    if assistant_text:
+        sql = """
+            UPDATE conversation_log
+            SET turn_status = 'answered', assistant_text = :t,
+                person_id = COALESCE(person_id, :pid)
+            WHERE id = :id AND turn_status = 'pending'
+        """
+        params = {"t": assistant_text}
+    else:
+        sql = """
+            UPDATE conversation_log
+            SET turn_status = 'no_answer', no_answer_reason = 'error',
+                person_id = COALESCE(person_id, :pid)
+            WHERE id = :id AND turn_status = 'pending'
+        """
+        params = {}
+    await _update(entry, sql, params, "settling the history entry", room_id)
 
 
 async def record_unheard(

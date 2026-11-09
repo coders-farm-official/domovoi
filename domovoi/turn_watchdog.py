@@ -17,9 +17,13 @@ So (``domovoi/streaming.py`` applies them):
   left of the same budget, and on expiry the first hearing is routed.
 * **Voice identification**: ``voice_identify_timeout_sec`` (10 s); on
   expiry the turn goes on unidentified.
-* **The whole turn up to its first reply frame**:
-  ``voice_reply_timeout_sec`` (150 s), longer than a slow model's own
-  timeout so that one, and its fallback answer, always comes first.
+* **The turn up to the start of routing**: ``voice_reply_timeout_sec``
+  (150 s). Once routing starts the limit moves to :func:`routing_cap`
+  from then (a cold model load plus two model calls plus a margin, 570 s
+  by default), so a slow but working model always answers, or fails with
+  its own error and fallback, first. The first reply frame (the reply, or
+  the line said before a cold model load) ends the limit, and chat mode
+  is outside it (Letta has its own timeout).
 
 On expiry the turn raises :class:`TurnStalled` naming the stage; the
 streaming layer says a short apology (or sends ``error`` + ``response_end``
@@ -32,11 +36,14 @@ started its current call. One busy for ``voice_speech_stuck_after_sec``
 (120 s) is stuck — no decode or embedding takes minutes — and
 :func:`speech_health` says so (the Health page: "speech recognition is
 stuck · restart Domovoi"). :func:`restart_reason` is the loop watchdog's
-question (domovoi/loop_watchdog.py): stuck house-wide for
+question (domovoi/loop_watchdog.py): stuck for
 ``voice_speech_restart_after_sec`` (600 s) — every worker stuck, or one
-stuck with no speech call finishing since and a request timed out in
-speech recognition meanwhile — and only then does the core exit to be
-started again, with every thread's stack in the retained log.
+stuck with no speech call finishing since and a request timed out on it
+meanwhile (also what one wedged room in a quiet house looks like) — and
+only then does the core restart: the dashboard's graceful restart, else
+the exit for systemd to start it again, with every thread's stack in the
+retained log first. Not while a restart, an update or a plugin install is
+under way, and at most once an hour.
 """
 
 from __future__ import annotations
@@ -61,7 +68,7 @@ STAGE_REPLY = "working out the reply"
 
 # The spoken apology's own cap: its speech synthesis must not hold a turn
 # that is being ended for holding too long. 40 s of speech recognition plus
-# this stays under the satellite's 60 s reply deadline.
+# this (50 s) stays well under the satellite's 75 s reply deadline.
 APOLOGY_TTS_SEC = 10.0
 
 APOLOGY_TEXT = "Sorry, that took too long and I lost track of it. Please try again."
@@ -103,6 +110,23 @@ def stt_cap(audio_seconds: float) -> float:
     return min(hi, max(lo, want))
 
 
+def routing_cap() -> float:
+    """The reply limit once routing has started (seconds from then): a
+    cold model load (``ollama_load_timeout_sec``) plus two model calls
+    (``ollama_timeout_sec`` each: the tool model's routing, then the
+    answer's first sentence), plus a margin — so a slow but working model
+    always answers, or fails with its own error and fallback, first. Only
+    a stage that never returns runs into it."""
+    return (
+        float(settings.ollama_load_timeout_sec)
+        + 2 * float(settings.ollama_timeout_sec)
+        + ROUTING_MARGIN_SEC
+    )
+
+
+ROUTING_MARGIN_SEC = 30.0
+
+
 def note_stall(stage: str, room: str | None = None, *, now: float | None = None) -> None:
     """Record a turn that timed out in ``stage`` (for /v1/health and the
     automatic restart's evidence)."""
@@ -120,12 +144,23 @@ def last_stall() -> Stall | None:
         return _stalls[-1] if _stalls else None
 
 
+SPEECH_STAGES = frozenset({STAGE_STT, STAGE_STT_SLOT, STAGE_SECOND_HEARING, STAGE_IDENTIFY})
+
+
 def _speech_stalls_since(mono: float) -> int:
     with _lock:
         return sum(
             1 for s in _stalls
             if s.mono >= mono and s.stage in (STAGE_STT, STAGE_STT_SLOT, STAGE_SECOND_HEARING)
         )
+
+
+def _last_where(pred) -> Stall | None:
+    with _lock:
+        for s in reversed(_stalls):
+            if pred(s.stage):
+                return s
+    return None
 
 
 def reset() -> None:
@@ -142,14 +177,18 @@ def speech_health(*, now: float | None = None) -> dict[str, Any]:
     one call for ``voice_speech_stuck_after_sec`` or more: only a restart
     frees it). ``stuck_workers`` / ``workers``: how many of the speech
     pool's threads are stuck, of how many. ``stuck_for_s``: the longest.
-    ``last_timeout``: the last request that timed out — its stage and when
-    (no room: /v1/health is open, and which room spoke when is a household
-    read)."""
+    ``last_timeout``: the last request that timed out in speech
+    recognition or voice identification — its stage and when (no room:
+    /v1/health is open, and which room spoke when is a household read).
+    ``last_reply_timeout``: the last one that timed out later, while its
+    answer was being worked out (a slow or loading model, most likely —
+    not a speech problem, so it never makes ``state`` slow)."""
     t = time.monotonic() if now is None else now
     threshold = max(1.0, float(settings.voice_speech_stuck_after_sec))
     ages = executors.running_ages(SPEECH_POOL, now=t)
     stuck = [a for a in ages if a >= threshold]
-    last = last_stall()
+    last = _last_where(lambda st: st in SPEECH_STAGES)
+    reply = _last_where(lambda st: st not in SPEECH_STAGES)
     doc: dict[str, Any] = {
         "state": "ok",
         "workers": executors.POOL_SIZES.get(SPEECH_POOL, 0),
@@ -157,6 +196,10 @@ def speech_health(*, now: float | None = None) -> dict[str, Any]:
         "stuck_for_s": int(stuck[0]) if stuck else 0,
         "last_timeout": (
             {"stage": last.stage, "at": last.at} if last is not None else None
+        ),
+        "last_reply_timeout": (
+            {"stage": reply.stage, "at": reply.at}
+            if reply is not None and t - reply.mono <= RECENT_STALL_SEC else None
         ),
     }
     if stuck:
@@ -170,7 +213,11 @@ def restart_reason(*, now: float | None = None) -> str | None:
     """Why the core should restart itself for speech recognition, or None.
     Asked by the loop watchdog's thread (it only acts on it under a
     service manager). Conservative on purpose: one room's decode stuck
-    while the others still decode is a Health warning, not a restart."""
+    while the others still decode is a Health warning, not a restart. But
+    a single stuck decode IS a reason when nothing has decoded since it
+    began and a request has timed out on it — which is also what one room
+    wedged in a quiet house looks like: then that room's turns all fail,
+    and the restart is what frees it."""
     after = float(settings.voice_speech_restart_after_sec)
     if after <= 0:
         return None

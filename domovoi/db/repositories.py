@@ -383,7 +383,7 @@ class ConversationLogRepository:
             "latency_ms": latency_ms,
             **({"trigger": trigger} if with_trigger else {}),
         }
-        pending_id = history_entry.take() if history_entry is not None else None
+        pending_id = await history_entry.take() if history_entry is not None else None
         from domovoi import turn_history
 
         if pending_id is not None and await turn_history.complete_row(
