@@ -1,3 +1,4 @@
+import Observation
 import XCTest
 @testable import DomovoiKit
 
@@ -60,7 +61,7 @@ final class SystemSettingsLayoutRedrawTests: XCTestCase {
         let layout = SystemSettingsLayoutModel(
             store: store,
             visibility: shell.visibility,
-            afterWrite: { [shell] in shell.refresh() }
+            afterWrite: { [shell] in shell.phoneBarSaved() }
         )
         XCTAssertTrue(layout.canEdit, "the cast to the writer has to succeed, or no control is drawn")
         XCTAssertTrue(layout.spare.contains(.files))
@@ -91,7 +92,7 @@ final class SystemSettingsLayoutRedrawTests: XCTestCase {
         let layout = SystemSettingsLayoutModel(
             store: store,
             visibility: shell.visibility,
-            afterWrite: { [shell] in shell.refresh() }
+            afterWrite: { [shell] in shell.phoneBarSaved() }
         )
         layout.edit(.remove, .videos)
         XCTAssertEqual([.home, .music, .chat], shell.phoneBar)
@@ -100,4 +101,56 @@ final class SystemSettingsLayoutRedrawTests: XCTestCase {
         XCTAssertEqual([.home, .music, .videos, .chat], shell.phoneBar)
         shell.stop()
     }
+
+    /// **The redraw itself** (train I015): a save through the panel
+    /// invalidates whatever read ``ShellModel/phoneBar``.
+    ///
+    /// `withObservationTracking` is what SwiftUI does around a view's body —
+    /// it records the tracked properties the body reads and fires once one of
+    /// them changes. Before the fix `phoneBar` touched only the store, which
+    /// Observation cannot see, so this never fired and the bottom bar kept its
+    /// old tabs: `testNav_ASavedPeopleTabOpensSettingsPeople` saved a People
+    /// tab, the panel's preview line said `… · people`, and the bar under it
+    /// still read home · music · videos · chat.
+    func testASaveInvalidatesWhatReadTheBar() {
+        let (shell, store) = shell()
+        let layout = SystemSettingsLayoutModel(
+            store: store,
+            visibility: shell.visibility,
+            afterWrite: { [shell] in shell.phoneBarSaved() }
+        )
+        let fired = FiredFlag()
+        withObservationTracking {
+            _ = shell.phoneBar
+        } onChange: {
+            fired.set()
+        }
+        XCTAssertFalse(fired.value, "nothing was saved yet")
+        layout.edit(.add, .people)
+        XCTAssertTrue(
+            fired.value,
+            "saving the bar invalidated nothing that read `ShellModel.phoneBar` — the bottom bar would keep its old tabs"
+        )
+        XCTAssertEqual([.home, .music, .videos, .chat, .people], shell.phoneBar)
+
+        // And `default`, through the same path.
+        let again = FiredFlag()
+        withObservationTracking {
+            _ = shell.phoneBar
+        } onChange: {
+            again.set()
+        }
+        layout.restoreDefault()
+        XCTAssertTrue(again.value, "`default` invalidated nothing that read `ShellModel.phoneBar`")
+        XCTAssertEqual([.home, .music, .videos, .chat], shell.phoneBar)
+        shell.stop()
+    }
+}
+
+/// A flag an Observation `onChange` (which is `@Sendable`) can set.
+private final class FiredFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var fired = false
+    var value: Bool { lock.withLock { fired } }
+    func set() { lock.withLock { fired = true } }
 }

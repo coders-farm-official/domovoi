@@ -482,8 +482,31 @@ public final class ShellModel {
 
     /// This phone's bar, filtered for this server and this install — every
     /// time it is drawn, never at save time (map §1.7).
+    ///
+    /// **It reads ``phoneBarRevision`` first**, and that read is the whole
+    /// redraw. The saved list lives in a store Observation cannot see, so
+    /// before this a write in Settings → App layout changed the data and
+    /// invalidated nothing: `PhoneBarView` kept its old tabs until the shell
+    /// was next drawn (the second "Needs a shared change" in
+    /// `design-notes/ios/overnight/systemsettings/DECISIONS.md`, measured on
+    /// trains S002/S005/S008 and again on I015, where a People tab saved by
+    /// `testNav_ASavedPeopleTabOpensSettingsPeople` never reached the bar).
+    /// Android's bar follows its `Prefs.phoneBar` StateFlow the moment it is
+    /// written; this is the same, through a tracked property.
     public var phoneBar: [Route] {
-        PhoneBar.routes(saved: PhoneBar.decode(container.store.phoneBar), visibility: visibility)
+        _ = phoneBarRevision
+        return PhoneBar.routes(saved: PhoneBar.decode(container.store.phoneBar), visibility: visibility)
+    }
+
+    /// Bumped by ``phoneBarSaved()``: the tracked stand-in for the store's
+    /// untracked `phoneBar`, so every view that read ``phoneBar`` (the bottom
+    /// bar, Home's grid) is invalidated by a save.
+    private var phoneBarRevision = 0
+
+    /// The saved bar was just written (Settings → App layout): redraw
+    /// everything drawn from it.
+    public func phoneBarSaved() {
+        phoneBarRevision &+= 1
     }
 
     /// Home's "everything" grid: what is not on the bar.
