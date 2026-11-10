@@ -654,3 +654,43 @@ def test_a_laptop_declares_turn_progress():
     from satellite import pc_engine
 
     assert "turn_progress" in pc_engine.PC_SUPPORTS
+
+
+# ─── an ignored turn, and the cooldown after a turn that went wrong ──────
+# (false wakes, 2026-11-09: satellite/wake_gate.py, domovoi/overheard.py)
+
+
+def test_an_ignored_turn_goes_back_to_idle_cleanly_and_asks_for_the_cooldown(loop):
+    """The core ignored the capture as background talk: a bare response_end
+    marked `ignored`. The ring goes back to idle with no error and no clip,
+    the reply deadline is satisfied, and the next wake waits out
+    [wake] cooldown_sec."""
+    sat = turn_sat(loop)
+    start_turn(sat)
+    receive(sat, [json.dumps({"type": "response_end", "interrupted": True,
+                              "expect_followup": False, "ignored": True})])
+    assert wait_bounded(sat) == "done"
+    assert sat._leds.states[-1] == "idle" and "error" not in sat._leds.states
+    assert sat._played == []
+    assert not sat._reply_deadline_due()
+    assert sat._quiet_next_wake is True
+
+
+def test_an_answered_turn_asks_for_no_cooldown(loop):
+    sat = turn_sat(loop)
+    start_turn(sat)
+    receive(sat, [_end(interrupted=True)])
+    assert wait_bounded(sat) == "done"
+    assert sat._quiet_next_wake is False
+
+
+def test_an_error_or_no_reply_asks_for_the_cooldown(loop):
+    sat = turn_sat(loop)
+    start_turn(sat)
+    receive(sat, [json.dumps({"type": "error", "message": "boom"})])
+    assert sat._quiet_next_wake is True
+
+    sat = turn_sat(loop)
+    start_turn(sat)
+    assert wait_bounded(sat) == "done"          # the deadline gave up on it
+    assert sat._quiet_next_wake is True

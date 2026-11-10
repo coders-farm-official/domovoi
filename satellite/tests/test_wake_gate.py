@@ -56,6 +56,51 @@ def test_patience_one_wakes_on_the_first_chunk_as_before() -> None:
     assert gate.feed(0.5, 1.1) is False            # at the threshold is not over it
 
 
+def test_a_far_field_wake_at_a_raised_threshold_still_wakes() -> None:
+    # S6: threshold 0.8 (what the house set). The run counts against the
+    # floor max(0.3, 0.8 x 0.6) = 0.48; the peak must clear 0.8.
+    gate = WakeGate(0.8, patience=2, cooldown_sec=0)
+    assert gate.floor == pytest.approx(0.48)
+    assert [gate.feed(s, i * 0.08) for i, s in enumerate([0.1, 0.6, 0.85, 0.6])] == [
+        False, False, True, False]
+    assert (gate.last_peak, gate.last_run) == (0.85, 2)
+    # Peak first, then a neighbour over the floor: wakes on the neighbour.
+    gate = WakeGate(0.8, patience=2, cooldown_sec=0)
+    assert [gate.feed(s, i * 0.08) for i, s in enumerate([0.85, 0.6])] == [False, True]
+
+
+def test_a_lone_blip_at_a_raised_threshold_does_not_wake() -> None:
+    gate = WakeGate(0.8, patience=2, cooldown_sec=0)
+    assert not any(gate.feed(s, i * 0.08) for i, s in enumerate([0.1, 0.85, 0.15, 0.1]))
+    assert gate.take_short_run() == (0.85, 1)
+
+
+def test_a_run_over_the_floor_that_never_reaches_the_threshold_does_not_wake() -> None:
+    gate = WakeGate(0.8, patience=2, cooldown_sec=0)
+    assert not any(gate.feed(0.7, i * 0.08) for i in range(10))
+    assert gate.take_short_run() is None          # nothing reached the threshold
+
+
+def test_the_floor_never_sits_above_the_threshold() -> None:
+    assert wake_gate.floor_for(0.5) == 0.3
+    assert wake_gate.floor_for(0.2) == 0.2
+    assert wake_gate.floor_for(1.0) == pytest.approx(0.6)
+
+
+def test_a_reset_breaks_the_run() -> None:
+    gate = WakeGate(0.5, patience=2, cooldown_sec=0)
+    gate.feed(0.9, 1.0)
+    gate.reset()                                   # a failed prediction between
+    assert gate.feed(0.9, 1.16) is False
+    assert gate.feed(0.9, 1.24) is True
+
+
+def test_a_zero_cooldown_quiets_nothing() -> None:
+    gate = WakeGate(0.5, patience=1, cooldown_sec=2.0)
+    gate.quiet_for(10.0, 0.0)                      # after an ordinary answered turn
+    assert gate.feed(0.9, 10.0) is True
+
+
 def test_nothing_wakes_in_the_cooldown_and_the_swallowed_score_is_kept() -> None:
     gate = WakeGate(0.5, patience=2, cooldown_sec=2.0)
     gate.quiet_for(10.0)
@@ -164,8 +209,10 @@ def test_the_wake_loop_ignores_the_word_right_after_a_turn(monkeypatch, caplog) 
 
     monkeypatch.setattr(client, "time", _Time())
     caplog.set_level(logging.INFO, logger="satellite")
-    # The media says the word again at once (0.99 on the first chunks), then
-    # a person says it 3 s later.
+    # The last turn was ignored as background talk (or cut off at the cap,
+    # or failed): the media says the word again at once (0.99 on the first
+    # chunks), then a person says it 3 s later.
+    sat._quiet_next_wake = True
     scores = [0.99, 0.99, 0.99] + [0.0] * 35 + [0.9]
     try:
         assert sat._wait_for_wake(_Oww(scores)) is True
@@ -173,9 +220,59 @@ def test_the_wake_loop_ignores_the_word_right_after_a_turn(monkeypatch, caplog) 
     finally:
         loop.close()
     assert start["wake_score"] == 0.9
+    assert sat._quiet_next_wake is False             # read once
     lines = [r.getMessage() for r in caplog.records]
     assert any("wake word ignored in the 2.0s after the last turn (peak score 0.990" in m
                for m in lines)
+
+
+def test_after_an_ordinary_turn_the_wake_word_works_at_once(monkeypatch) -> None:
+    # S5: "hey Jarvis" right after a reply still wakes.
+    sat, loop = _sat(monkeypatch, "none", [])
+    sat.cfg.wake_patience_frames = 1
+    sat.cfg.wake_cooldown_sec = 2.0
+    sat._quiet_next_wake = False
+    try:
+        assert sat._wait_for_wake(_ScriptedOww([0.99])) is True
+        start = _start_frame(sat, loop)
+    finally:
+        loop.close()
+    assert start["wake_score"] == 0.99
+
+
+def test_a_failed_prediction_breaks_the_run(monkeypatch) -> None:
+    sat, loop = _sat(monkeypatch, "none", [])
+    sat.cfg.wake_patience_frames = 2
+    sat.cfg.wake_cooldown_sec = 0.0
+
+    class _Flaky(_ScriptedOww):
+        def predict(self, chunk):
+            if self.scores and self.scores[0] is None:
+                self.scores.pop(0)
+                raise RuntimeError("onnx hiccup")
+            return super().predict(chunk)
+
+    try:
+        # 0.9, a failed chunk, 0.9 is not two in a row; the later pair is.
+        assert sat._wait_for_wake(_Flaky([0.9, None, 0.9, 0.0, 0.9, 0.95])) is True
+        start = _start_frame(sat, loop)
+    finally:
+        loop.close()
+    assert start["wake_score"] == 0.95
+
+
+def test_a_capture_cut_off_at_the_cap_asks_for_the_cooldown() -> None:
+    from satellite.tests.test_capture_endpointing import FRAME, capture, make_sat
+    import asyncio
+
+    loop = asyncio.new_event_loop()
+    try:
+        sat = make_sat(loop, max_record_seconds=0.3)        # 10 frames
+        sat._quiet_next_wake = False
+        capture(sat, loop, [FRAME] * 20)
+    finally:
+        loop.close()
+    assert sat._quiet_next_wake is True
 
 
 def test_no_score_no_field(monkeypatch) -> None:

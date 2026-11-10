@@ -6,17 +6,23 @@ ended, so a one-chunk blip from the TV woke the room, and media that kept
 saying the wake word re-woke it seconds after every turn. Two rules now,
 both defaults with no setup:
 
-* **Patience** (``[wake] patience_frames``, default 2): the score must be
-  over the threshold on that many chunks IN A ROW. A real wake word keeps
-  the model's score high for several chunks (its features span about a
-  second of audio), so it still wakes; a single-chunk blip does not. The
-  cost is the extra chunks: 80 ms per chunk past the first (2 = +80 ms).
-* **Cooldown** (``[wake] cooldown_sec``, default 2.0): no wake for that long
-  after the satellite goes back to listening for the wake word, i.e. after
-  every turn. The room's own reply tail, and media repeating the word right
-  after a turn, can't re-wake it. A person rarely says the wake word within
-  two seconds of the reply ending (the word itself takes most of a second
-  to say, and its score peaks at its end).
+* **Patience** (``[wake] patience_frames``, default 2): the score must stay
+  up on that many chunks IN A ROW and reach the threshold on at least one
+  of them. "Up" is a floor below the threshold, ``max(0.3, threshold x
+  0.6)`` (never above the threshold), so a far-field wake word whose peak
+  just clears a raised threshold (0.85 between two chunks of 0.6, at a
+  threshold of 0.8) still wakes, while a lone blip (0.85 between chunks
+  under 0.2) does not. A real wake word keeps the score raised for several
+  chunks (the model's features span about a second); the cost is 80 ms per
+  chunk of patience past the first (2 = +80 ms). Only the main wake loop
+  uses it: a wake word said to interrupt a reply (barge-in) or during a
+  drop-in call still wakes on one chunk.
+* **Cooldown** (``[wake] cooldown_sec``, default 2.0): after a turn that
+  went wrong — the core ignored it as background talk, the capture was cut
+  off at the recording cap, or it ended in an error or no reply — no wake
+  for that long, so media repeating the word can't start the next one at
+  once. After an ordinary answered turn there is none: "hey Jarvis" right
+  after a reply still works.
 
 :class:`WakeGate` is pure (no audio, no clock of its own), so both rules are
 unit-tested; the mic thread feeds it each chunk's score and the time.
@@ -64,18 +70,27 @@ def cooldown_setting(value: Any) -> float:
     return min(COOLDOWN_SEC_MAX, max(0.0, s))
 
 
+def floor_for(threshold: float) -> float:
+    """The score a chunk must keep to count toward the patience run:
+    ``max(0.3, threshold x 0.6)``, never above the threshold."""
+    t = float(threshold)
+    return min(t, max(0.3, t * 0.6))
+
+
 class WakeGate:
     """Decides, chunk by chunk, whether the wake word was said.
 
     ``feed(score, now)`` is True on the chunk that completes a run of
-    ``patience`` chunks over ``threshold`` outside the cooldown; the run's
-    peak score and length are then in :attr:`last_peak` / :attr:`last_run`.
-    A run that ended short of the patience is kept in
+    ``patience`` chunks over the floor (:func:`floor_for`) whose peak is
+    over ``threshold``, outside the cooldown; the run's peak score and
+    length are then in :attr:`last_peak` / :attr:`last_run`. A run that
+    reached the threshold but ended short of the patience is kept in
     :attr:`last_short_run` (peak, length) once, for the log."""
 
     def __init__(self, threshold: float, patience: int = PATIENCE_DEFAULT,
                  cooldown_sec: float = COOLDOWN_SEC_DEFAULT) -> None:
         self.threshold = float(threshold)
+        self.floor = floor_for(self.threshold)
         self.patience = patience_setting(patience)
         self.cooldown_sec = cooldown_setting(cooldown_sec)
         self._quiet_until = 0.0
@@ -88,17 +103,18 @@ class WakeGate:
         #: (None: nothing over the threshold), for the log.
         self.cooldown_peak: float | None = None
 
-    def quiet_for(self, now: float) -> None:
-        """The satellite is back to listening for the wake word (a turn just
-        ended): no wake until the cooldown has passed."""
-        self._quiet_until = now + self.cooldown_sec
+    def quiet_for(self, now: float, seconds: float | None = None) -> None:
+        """No wake until ``seconds`` (default: the cooldown) from ``now``."""
+        span = self.cooldown_sec if seconds is None else max(0.0, float(seconds))
+        self._quiet_until = now + span
         self.cooldown_peak = None
-        self._reset_run()
+        self.reset()
 
     def in_cooldown(self, now: float) -> bool:
         return now < self._quiet_until
 
-    def _reset_run(self) -> None:
+    def reset(self) -> None:
+        """Forget the run in progress (a failed prediction, a cooldown)."""
         self._run = 0
         self._peak = 0.0
 
@@ -110,24 +126,25 @@ class WakeGate:
         if self.in_cooldown(now):
             if score > self.threshold:
                 self.cooldown_peak = max(self.cooldown_peak or 0.0, score)
-            self._reset_run()
+            self.reset()
             return False
-        if score > self.threshold:
+        if score > self.floor or score > self.threshold:
             self._run += 1
             self._peak = max(self._peak, score)
-            if self._run >= self.patience:
+            if self._run >= self.patience and self._peak > self.threshold:
                 self.last_peak = self._peak
                 self.last_run = self._run
-                self._reset_run()
+                self.reset()
                 return True
             return False
-        if self._run:
+        if self._run and self._peak > self.threshold:
             self.last_short_run = (self._peak, self._run)
-        self._reset_run()
+        self.reset()
         return False
 
     def take_short_run(self) -> tuple[float, int] | None:
-        """The last run that stayed short of the patience, once."""
+        """The last run that reached the threshold but stayed short of the
+        patience, once."""
         short, self.last_short_run = self.last_short_run, None
         return short
 

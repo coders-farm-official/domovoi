@@ -5677,15 +5677,18 @@ class Satellite(pc_engine.SpareDeviceEngine):
         self._stop_ack()
         _reset_wake_model(oww)
         # Patience and cooldown (satellite/wake_gate.py): the score must stay
-        # over the threshold for `patience_frames` chunks in a row, and for
-        # `cooldown_sec` from now (a turn just ended) nothing wakes the room.
+        # up for `patience_frames` chunks in a row and reach the threshold;
+        # and after a turn that went wrong (ignored as background talk, cut
+        # off at the recording cap, an error or no reply) nothing wakes the
+        # room for `cooldown_sec`. After an ordinary turn, no cooldown.
         gate = wake_gate.WakeGate(
             self._wake_threshold,
             getattr(self.cfg, "wake_patience_frames", wake_gate.PATIENCE_DEFAULT),
             getattr(self.cfg, "wake_cooldown_sec", wake_gate.COOLDOWN_SEC_DEFAULT),
         )
-        gate.quiet_for(time.monotonic())
-        cooldown_logged = gate.cooldown_sec <= 0
+        quiet, self._quiet_next_wake = self._quiet_next_wake, False
+        gate.quiet_for(time.monotonic(), None if quiet else 0.0)
+        cooldown_logged = not quiet or gate.cooldown_sec <= 0
         log.info("listening for wake word %r in room %r", self._wake_word, self.cfg.room_id)
         # openwakeword's predict() requires chunks that are multiples of 80 ms
         # (1280 samples at 16 kHz). Mic frames are 30 ms (480 samples), so we
@@ -5748,6 +5751,8 @@ class Satellite(pc_engine.SpareDeviceEngine):
                     pred = oww.predict(chunk)
                 except Exception as e:
                     log.warning("wake-word predict failed: %s", e)
+                    # A gap in the scores: a run across it is not "in a row".
+                    gate.reset()
                     continue
                 chunk_at = time.monotonic()
                 fired = gate.feed(pred.get(self._wake_word, 0.0), chunk_at)
@@ -5826,6 +5831,7 @@ class Satellite(pc_engine.SpareDeviceEngine):
                             _reset_wake_model(oww)
                             self._drain_mic()
                             self._turn_open = False
+                            # No server: a turn that went wrong.
                             gate.quiet_for(time.monotonic())
                             cooldown_logged = gate.cooldown_sec <= 0
                             continue  # back to listening
@@ -6140,6 +6146,10 @@ class Satellite(pc_engine.SpareDeviceEngine):
                     return False
         if self.shutdown_event.is_set():
             exit_reason = "shutdown"
+        if exit_reason == "max_record_seconds":
+            # Speech that never paused: media, most likely. The next wake
+            # waits out [wake] cooldown_sec (satellite/wake_gate.py).
+            self._quiet_next_wake = True
 
         if self.shutdown_event.is_set() and not speaking:
             return False
@@ -6382,6 +6392,8 @@ class Satellite(pc_engine.SpareDeviceEngine):
                 waited, getattr(self.cfg, "response_deadline_sec", RESPONSE_DEADLINE_SEC_DEFAULT),
             )
         self._reply_wait_since = None
+        # No reply: the next wake waits out the cooldown.
+        self._quiet_next_wake = True
         self._abandoned_mark = getattr(self, "_response_starts", 0)
         self.stop_playback.set()
         self._drain_playback_q()
@@ -7351,6 +7363,10 @@ class Satellite(pc_engine.SpareDeviceEngine):
     _woke_at: float | None = None
     # Its peak wake score (`wake_score`, satellite/wake_gate.py).
     _wake_score: float | None = None
+    # The last turn went wrong (ignored as background talk, cut off at the
+    # recording cap, an error, no reply): the next wake waits out
+    # [wake] cooldown_sec (satellite/wake_gate.py). Read once.
+    _quiet_next_wake: bool = False
     # The capture `_stream_capture` is running, by number, while it runs
     # (None between captures). An `end_capture` for any other number is
     # stale — the capture it meant already ended on its own — and must not
@@ -7595,6 +7611,10 @@ class Satellite(pc_engine.SpareDeviceEngine):
                 )
                 return
             self._note_reply_frame("response_end")
+            if payload.get("ignored"):
+                # The core took the capture for background talk: the next
+                # wake waits out [wake] cooldown_sec (satellite/wake_gate.py).
+                self._quiet_next_wake = True
             # Set expect_followup BEFORE response_done so the mic thread
             # always observes both flags consistently — without this
             # ordering, the mic could wake on response_done, check
@@ -7785,6 +7805,8 @@ class Satellite(pc_engine.SpareDeviceEngine):
                 log.warning("set_config: no changes in payload; ignoring")
         elif t == "error":
             self._note_reply_frame("error")
+            # A turn that went wrong: the next wake waits out the cooldown.
+            self._quiet_next_wake = True
             # For the offline diagnosis of a session that ends before
             # `ready`: which refusal it was.
             self._last_server_error = str(

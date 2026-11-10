@@ -97,19 +97,24 @@ EDITABLE_FIELDS: list[FieldSpec] = [
     FieldSpec(
         "wake.patience_frames", "Wake confirmation", "Wake word",
         "How long the wake word must be heard before the room wakes, in "
-        "80 ms steps. Default 2 (adds 80 ms): a blip from the TV or a phone "
-        "no longer wakes the room, a wake word said in the room still does. "
-        "Raise to 3 if the room still wakes on background noise; 1 wakes on "
-        "the first blip, as before.",
+        "80 ms steps: the score has to stay up that many steps in a row and "
+        "reach the wake sensitivity on at least one. Default 2 (adds 80 ms): "
+        "a blip from the TV or a phone no longer wakes the room, a wake word "
+        "said across the room still does. Raise to 3 if the room still wakes "
+        "on background noise; 1 wakes on the first blip, as before. A wake "
+        "word said to interrupt a reply (barge-in) or during a drop-in call "
+        "still counts on the first step.",
         "int", min=1, max=5, step=1, widget="slider",
         slider_labels=("wakes on the first blip", "fewer false wakes"),
     ),
     # Tuned once, if ever: advanced, a number box.
     FieldSpec(
         "wake.cooldown_sec", "Wake pause after a turn", "Wake word",
-        "Seconds after each answer during which the wake word is ignored, "
-        "so the room's own voice or a TV repeating the word can't wake it "
-        "straight away. Default 2; 0 turns it off.",
+        "Seconds the wake word is ignored after a turn that went wrong: one "
+        "Domovoi ignored as background talk, one cut off at Max command "
+        "length, or one that ended in an error or with no reply, so a TV "
+        "repeating the word can't start the next one at once. After an "
+        "ordinary answered turn there is no pause. Default 2; 0 turns it off.",
         "float", section="advanced", min=0.0, max=10.0, unit="sec", step=0.5,
     ),
     FieldSpec(
