@@ -169,6 +169,20 @@ wake_word = "hey_jarvis"
 # Detection threshold (0–1). Lower = more sensitive, more false positives.
 threshold = 0.5
 
+# How many 80 ms chunks in a row the score must stay over the threshold
+# before the room wakes (1-5). 2, the default, adds 80 ms: a one-chunk blip
+# from a TV or a phone no longer wakes the room; a wake word said in the
+# room keeps the score up for several chunks and still does. 1 = as before.
+# patience_frames = 2
+
+# Seconds after each turn during which the wake word is ignored (0-10, 0 =
+# off), so the room's own reply or media repeating the word can't re-wake it
+# at once. If ~/.domovoi/wake_threshold exists (left by a model pushed from
+# the dashboard) it overrides `threshold` above; the dashboard's room
+# health shows the threshold in effect, and setting the sensitivity from the
+# dashboard removes that file.
+# cooldown_sec = 2.0
+
 # How the satellite acknowledges its wake word before it listens for your
 # command:
 #   "greeting" — a short spoken line from the greeting bank ("Yes?", "What's

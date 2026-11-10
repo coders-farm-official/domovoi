@@ -47,7 +47,7 @@ MAX_CHANGES = 40
 #: and the satellite's own config report (client._config_report) name the
 #: same keys; satellite/tests/test_remote_config.py holds all three equal.
 SETTABLE: frozenset[str] = frozenset({
-    "wake.threshold", "wake.ack_mode",
+    "wake.threshold", "wake.ack_mode", "wake.patience_frames", "wake.cooldown_sec",
     "barge_in.enabled", "barge_in.require_wake_word", "barge_in.min_speech_ms",
     "barge_in.vad_aggressiveness_during_tts",
     "listen.vad_aggressiveness", "listen.silence_timeout", "listen.max_record_seconds",

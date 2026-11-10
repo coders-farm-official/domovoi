@@ -205,6 +205,10 @@ def _sat(
     sat.cfg.greeting_funny_chance = 0.2
     sat.cfg.noise_gate_recalibrate_interval_sec = 3600.0
     sat._wake_word, sat._wake_threshold = "hey_jarvis", 0.5
+    # One wake chunk wakes, at once: the patience and the cooldown
+    # (satellite/wake_gate.py, test_wake_gate.py) are not what is tested here.
+    sat.cfg.wake_patience_frames = 1
+    sat.cfg.wake_cooldown_sec = 0.0
     sat._ack_lock = threading.Lock()
     sat._ack_proc = None
     sat._greeting_clip_name = None
@@ -555,7 +559,8 @@ def test_a_greeting_turn_reports_the_clip_and_that_it_came_first(monkeypatch):
     clock = ("sat_ms", "backlog_ms", "wake_ms")
     for msg in (start, pause, end):
         assert all(type(msg.pop(k, 0)) is int for k in clock)
-    assert start == {"type": "utterance_start", "trigger": "wake_word", "utt": 1}
+    # The wake's peak score (satellite/wake_gate.py): the fake model's 1.0.
+    assert start == {"type": "utterance_start", "trigger": "wake_word", "utt": 1, "wake_score": 1.0}
     fields = {"greeting_played": True, "greeting_clip": CLIP, "ack_before_capture": True}
     assert {k: pause[k] for k in fields} == fields
     assert pause["type"] == "speech_pause" and pause["last_voiced_frame"] == 9

@@ -92,6 +92,26 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "float", min=0.0, max=1.0, step=0.05, widget="slider",
         slider_labels=("more sensitive", "fewer false wakes"),
     ),
+    # False wakes, 2026-11-09: a household with the TV on reaches for this
+    # one next to the sensitivity, so it is a common slider.
+    FieldSpec(
+        "wake.patience_frames", "Wake confirmation", "Wake word",
+        "How long the wake word must be heard before the room wakes, in "
+        "80 ms steps. Default 2 (adds 80 ms): a blip from the TV or a phone "
+        "no longer wakes the room, a wake word said in the room still does. "
+        "Raise to 3 if the room still wakes on background noise; 1 wakes on "
+        "the first blip, as before.",
+        "int", min=1, max=5, step=1, widget="slider",
+        slider_labels=("wakes on the first blip", "fewer false wakes"),
+    ),
+    # Tuned once, if ever: advanced, a number box.
+    FieldSpec(
+        "wake.cooldown_sec", "Wake pause after a turn", "Wake word",
+        "Seconds after each answer during which the wake word is ignored, "
+        "so the room's own voice or a TV repeating the word can't wake it "
+        "straight away. Default 2; 0 turns it off.",
+        "float", section="advanced", min=0.0, max=10.0, unit="sec", step=0.5,
+    ),
     FieldSpec(
         "wake.ack_mode", "Wake acknowledgement", "Wake word",
         "What the room does when it hears the wake word, before it "
