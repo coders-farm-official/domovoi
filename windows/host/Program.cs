@@ -1,5 +1,6 @@
 // DomovoiHost.exe: the Windows service Setup registers to run as the
-// hidden account domovoi-svc (Automatic, depends on WSLService). See
+// hidden account domovoi-svc (Automatic, no service dependency: it waits for
+// WSL itself, common/WslOutage.cs; Windows restarts it if it fails). See
 // Host.cs for what it does and docs/WINDOWS_HOST.md for the whole picture.
 
 using System;

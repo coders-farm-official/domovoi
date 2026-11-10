@@ -34,6 +34,7 @@ The installer runs the server inside a private Linux (WSL2) that belongs to a hi
 | Setup stopped halfway | Run Setup again: it carries on where it stopped |
 | The setup code expired, or you lost it before claiming the admin account | Run Setup again: it restarts Domovoi, which writes a fresh code, and shows it on its last page |
 | The browser shows an old dashboard, or claiming the admin account says "X-Requested-With header required" | Use **Open Domovoi** on Setup's last page: its address gets past the old dashboard's cached copy |
+| The icon says *Domovoi stopped: Windows updated WSL, starting again…* | Nothing: Domovoi starts again by itself once the update finishes ([WINDOWS_HOST.md](WINDOWS_HOST.md#when-something-goes-wrong), *Windows updated WSL*). On an install from before 2026-11-10, use **Restart Domovoi**, and run the newest Setup over it |
 | Windows is short of memory while Domovoi runs | Settings → System → Health → **memory** shows what inside Domovoi uses it; see [The server's memory looks full](#the-servers-memory-looks-full) |
 
 More: [When something goes wrong](WINDOWS_HOST.md#when-something-goes-wrong).

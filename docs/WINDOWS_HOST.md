@@ -232,7 +232,7 @@ signature, before it runs it.
 | Its sign-in screen entry: DWORD `domovoi-svc = 0` in `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\SpecialAccounts\UserList` (Setup makes the `SpecialAccounts` and `UserList` keys if they are missing). | The value is deleted; the keys too if Setup made them and they are empty. |
 | Account rights through LSA: `SeServiceLogonRight`, and `SeDenyInteractiveLogonRight`, `SeDenyRemoteInteractiveLogonRight`, `SeDenyNetworkLogonRight`. Run `DomovoiSetup.exe /nodenylogon=1` to leave the three deny rights out, on a first install or over an existing one (it takes back ones granted before). | Every right of the account's SID is removed, with its entry in the policy. |
 | Its profile, made by Windows when the service first signs in: `C:\Users\domovoi-svc`, or `C:\Users\domovoi-svc.<PC name>` if a folder of that name is already there (the service writes its `.wslconfig` into whichever it is, and the uninstaller finds it by the account's SID); it holds the account's `.wslconfig` (mirrored networking, `instanceIdleTimeout=-1`, memory cap, swap in `C:\ProgramData\Domovoi\wsl`) and its WSL registration. | Deleted. Right after unregistering the distro the service ends that account's own WSL session (`wsl --shutdown` run as `domovoi-svc`, see below), then the uninstaller waits up to two minutes for Windows to let go of the profile. This comes after the account is deleted; if Windows still holds the profile then, a one-time startup task, **`DomovoiRemoveProfile`** (runs as SYSTEM), deletes it at the next restart and then deletes itself. It touches only that profile, only once its account is gone, and if it can't tell (or the profile is in use) it waits for the next boot. |
-| Service **`DomovoiHost`** (Automatic, runs as `.\domovoi-svc`, depends on `WSLService`, restarts after 10, 30 and 60 s on failure), binary `C:\Program Files\Domovoi\DomovoiHost.exe`. | Stopped (it stops Domovoi's units in the distro first), then deleted. |
+| Service **`DomovoiHost`** (Automatic, runs as `.\domovoi-svc`, depends on no other service: it waits for WSL itself, see *Windows updated WSL* under [When something goes wrong](#when-something-goes-wrong); restarted by Windows after any failure, after 10 s, 30 s, then every 60 s), binary `C:\Program Files\Domovoi\DomovoiHost.exe`. | Stopped (it stops Domovoi's units in the distro first), then deleted. |
 | WSL distro **`domovoi`** of `domovoi-svc` (Ubuntu 26.04.1 plus everything `provision.sh` installs), disk in `C:\ProgramData\Domovoi\distro`. Once imported, the service never deletes or re-imports over that disk, even if WSL stops listing it. Your own distros and `.wslconfig` are not touched. | Unregistered by the service, as its owner, first. Until that has worked (or the disk is gone), nothing else that could strand it is touched: not the service, the account, its profile or rights, nor ProgramData. If it fails, the uninstaller stops, says why, and stays installed for another try. A disk WSL no longer lists is deleted or kept aside, see [Uninstalling](#uninstalling). |
 | Hyper-V firewall rules for WSL's VM creator (`{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}`), inbound TCP from your subnet only: `Domovoi-Dashboard-6369`, `Domovoi-Core-6370`, `Domovoi-MPD-8050-8099`, `Domovoi-Jellyfin-8096`, `Domovoi-RomM-7676`, `Domovoi-Kiwix-9467`. They apply to **every WSL VM on the PC**, your own WSL distros and Docker Desktop's included: anything of yours that listens on those ports in a mirrored-mode distro becomes reachable from your home network too. None if the PC has no private (RFC 1918) address. | Every `Domovoi-` rule for WSL's VM creator is removed (and listing them again must work, or the uninstaller says so). |
 | `C:\ProgramData\Domovoi` (`distro`, `wsl`, `backups`, `logs`, `state`, `host`): SYSTEM and Administrators only, with `domovoi-svc` allowed where it needs it. Household accounts can't open it. Setup only uses this folder if it made it. | Made administrators-only again, then deleted, only if Setup made it (files still in use are deleted at the next restart). |
@@ -611,6 +611,25 @@ you share them.
 - **Setup stopped partway:** run Setup again; it carries on, and
   `provision.sh` resumes where it stopped. Or uninstall, which undoes a
   half-finished setup too.
+- **Windows updated WSL** (the icon says *Domovoi stopped: Windows updated
+  WSL, starting again…*; or *WSL stopped, starting again…*): Windows
+  Update installs new WSL versions by itself, and the install stops every
+  WSL virtual machine and WSL's own service. Nothing to do: DomovoiHost
+  keeps running, waits for WSL, and starts Domovoi's Linux system again
+  (the `.wslconfig`, the distro, the health check), usually within a minute
+  or two of the install finishing; rooms and phones reconnect by
+  themselves. While an install runs it doesn't touch `wsl.exe` at all (it
+  sees Windows Installer's busy flag), then looks again after 5, 10, 20, 30
+  seconds and every minute after; `host.log` says *WSL went away* and *WSL
+  answers again*. On 2026-11-10 at 00:25 the update to WSL 3.0.5.0 left
+  Domovoi down until someone noticed: until then DomovoiHost depended on
+  WSLService, so Windows stopped it along with WSL and never started it
+  again. Since the Windows Setup built that day it depends on no other
+  service, and Windows restarts it after any failure (10 s, 30 s, then
+  every minute, an exit with an error code included). An older install
+  gets this when you run the newer Setup over it (a repair). Until then,
+  after a WSL update: **Restart Domovoi** in the icon's menu, or
+  `Restart-Service DomovoiHost` from an administrator PowerShell.
 - **Pull says `index.lock`: File exists** (Settings > System > About & updates, on a
   build from before the fix below): an earlier update was cut off (a
   Windows restart or shutdown in the middle of one, say) and git left its

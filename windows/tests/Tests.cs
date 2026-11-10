@@ -661,6 +661,7 @@ static partial class Tests
             Eq(32, WslConfig.MemoryCapGb(256 * gib), "256 GB");
         });
         HardwareLimitsTests();
+        WslOutageTests();
         Run("wslconfig: the file", delegate
         {
             var o = new WslConfigOptions();
@@ -684,6 +685,53 @@ static partial class Tests
             Throws<ArgumentException>(delegate { WslConfig.Render(o); }, "a newline in a path");
             o.SwapFile = @"C:\x"; o.MemoryGb = 0;
             Throws<ArgumentException>(delegate { WslConfig.Render(o); }, "no memory");
+        });
+    }
+
+    static void WslOutageTests()
+    {
+        Run("wsl outage: wait while an MSI installs, wsl.exe is gone or WSLService stops; never ask wsl.exe then", delegate
+        {
+            var msi = new WslFacts { MsiBusy = true, Service = WslService.Running, Answers = true };
+            True(!WslOutage.MayAsk(msi), "no wsl.exe call during an install (it would start WSLService mid-update)");
+            Eq(WslProbe.Wait, WslOutage.Decide(msi), "an install: wait, even with an answer");
+            Eq(WslProbe.Wait, WslOutage.Decide(new WslFacts { ExeExists = false, Answers = true }), "no wsl.exe: wait");
+            Eq(WslProbe.Wait, WslOutage.Decide(new WslFacts { Service = WslService.Stopping, Answers = true }), "WSLService stopping: wait");
+            Eq(WslProbe.Wait, WslOutage.Decide(new WslFacts { Service = WslService.Running }), "not asked yet: wait");
+            Eq(WslProbe.Wait, WslOutage.Decide(new WslFacts { Service = WslService.Running, Answers = false }), "no answer: wait");
+            Eq(WslProbe.Recover, WslOutage.Decide(new WslFacts { Service = WslService.Running, Answers = true }), "it answers: bring Domovoi up");
+            // A stopped WSLService starts on demand: wsl.exe may be asked.
+            True(WslOutage.MayAsk(new WslFacts { Service = WslService.Stopped }), "stopped (not updating): ask, which starts it");
+            Eq(WslProbe.Recover, WslOutage.Decide(new WslFacts { Service = WslService.Stopped, Answers = true }), "and it answered");
+        });
+        Run("wsl outage: the backoff between looks", delegate
+        {
+            SeqEq(new[] { "5", "10", "20", "30", "60", "60", "60" },
+                  Enumerable.Range(0, 7).Select(i => Inv.S((int)WslOutage.Delay(i).TotalSeconds)), "5, 10, 20, 30, then every minute");
+            Eq(5, (int)WslOutage.Delay(-3).TotalSeconds, "never negative");
+        });
+        Run("wsl outage: gone or only the distro stopped", delegate
+        {
+            True(!WslOutage.Gone(new WslFacts { Service = WslService.Running, Answers = true }), "WSL answers: only the distro stopped");
+            True(WslOutage.Gone(new WslFacts { Service = WslService.Running, Answers = false }), "no answer");
+            True(WslOutage.Gone(new WslFacts { Service = WslService.Stopped }), "WSLService stopped");
+            True(WslOutage.Gone(new WslFacts { MsiBusy = true, Service = WslService.Running, Answers = true }), "an install");
+            True(WslOutage.Gone(new WslFacts { ExeExists = false }), "no wsl.exe");
+            True(WslOutage.Gone(null), "nothing known");
+        });
+        Run("wsl outage: the words", delegate
+        {
+            Eq("Domovoi stopped: Windows updated WSL, starting again\u2026", WslOutage.Message(new WslFacts { MsiBusy = true }, "2.7.14.0"), "an install");
+            Eq(WslOutage.UpdatedMessage, WslOutage.Message(new WslFacts { Version = "3.0.5.0", Service = WslService.Running }, "2.7.14.0"), "a new version since Domovoi ran");
+            Eq(WslOutage.UpdatedMessage, WslOutage.Message(new WslFacts { ExeExists = false }, "2.7.14.0"), "wsl.exe gone");
+            Eq("Domovoi stopped: WSL stopped, starting again\u2026", WslOutage.Message(new WslFacts { Version = "2.7.14.0", Service = WslService.Stopped }, "2.7.14.0"), "same version");
+            Eq(WslOutage.StoppedMessage, WslOutage.Message(new WslFacts { Version = "3.0.5.0" }, null), "no version known from before");
+        });
+        Run("service: no dependency on WSLService, restarted on any failure", delegate
+        {
+            Eq("", Domovoi.Windows.Helper.HostService.NoDependencies, "an empty list (\"\" removes dependencies; null keeps them)");
+            SeqEq(new[] { "10000", "30000", "60000" }, Domovoi.Windows.Helper.HostService.RestartDelaysMs.Select(d => Inv.S(d)), "10 s, 30 s, then 60 s repeating");
+            Eq(86400, Domovoi.Windows.Helper.HostService.FailureResetSec, "counted afresh after a day");
         });
     }
 

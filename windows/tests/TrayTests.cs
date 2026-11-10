@@ -535,6 +535,29 @@ static partial class Tests
                     True(v.Line.Length > 0 && v.Line.Length <= 63, "tooltip fits: " + v.Line);
                 }
         });
+        Run("status: WSL went away (an update of WSL): the icon says so and waits", delegate
+        {
+            var updating = new WslFacts { MsiBusy = true, Version = "2.7.14.0", Service = WslService.Stopped };
+            Verdict v = decide(new Facts { Service = ServiceFact.Running, Wsl = updating, WslVersionWhenUp = "2.7.14.0" }, now.AddHours(-1));
+            Eq(TrayState.Starting, v.State, "waiting, never 'a problem', however long the install");
+            Eq("Domovoi stopped: Windows updated WSL, starting again\u2026", v.Line, "the words");
+            True(v.Line.Length <= 63, "fits a tooltip");
+            // The incident: the old registration let the SCM stop the host too.
+            Eq(WslOutage.UpdatedMessage, decide(new Facts { Service = ServiceFact.Stopped, Wsl = updating }, now).Line, "host stopped by the update: Windows restarts it");
+            // A new wsl.exe, back up: still coming back, for twice the grace.
+            var back = new WslFacts { Version = "3.0.5.0", Service = WslService.Running };
+            Eq(WslOutage.UpdatedMessage, decide(new Facts { Service = ServiceFact.Running, Wsl = back, WslVersionWhenUp = "2.7.14.0" }, now.AddMinutes(-15)).Line, "coming back");
+            Eq(TrayState.Problem, decide(new Facts { Service = ServiceFact.Running, Wsl = back, WslVersionWhenUp = "2.7.14.0" }, now.AddMinutes(-25)).State, "past twice the grace: a problem again");
+            // WSLService stopped without an update.
+            var stopped = new WslFacts { Version = "2.7.14.0", Service = WslService.Stopped };
+            Eq(WslOutage.StoppedMessage, decide(new Facts { Service = ServiceFact.Running, Wsl = stopped, WslVersionWhenUp = "2.7.14.0" }, now.AddHours(-1)).Line, "WSL stopped");
+            // A host someone stopped, WSL not updated: plainly stopped.
+            Eq("Domovoi is stopped", decide(new Facts { Service = ServiceFact.Stopped, Wsl = stopped, WslVersionWhenUp = "2.7.14.0" }, now).Line, "stopped by hand");
+            // WSL fine: the usual words.
+            var fine = new WslFacts { Version = "2.7.14.0", Service = WslService.Running };
+            Eq(TrayState.Problem, decide(new Facts { Service = ServiceFact.Running, Wsl = fine, WslVersionWhenUp = "2.7.14.0" }, now.AddHours(-1)).State, "WSL fine: a problem past the grace");
+            Eq(TrayState.Running, decide(new Facts { Service = ServiceFact.Running, Web = WebFact.Ok, Wsl = updating }, now).State, "answering wins");
+        });
         Run("status: the grace counts from the first poll that saw it up but not ready", delegate
         {
             var clock = new ReadyClock();

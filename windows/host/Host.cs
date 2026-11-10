@@ -213,38 +213,130 @@ namespace Domovoi.Windows.Host
             Status("starting", HostProgress.PhaseConfig, 0, "Starting");
             int lastGen = -1, lastAttempt = -1;
             bool ready = false;
+            HostJob job = null;
             while (!Stopping)
             {
-                HostJob job = ReadJob();
-                if (job == null)
+                // WSL went away (WslOutage.cs): never exit, wait for it and
+                // bring Domovoi up again.
+                try
                 {
-                    if (status.State != "waiting") Status("waiting", HostProgress.PhaseConfig, 0, "Waiting for Setup");
-                    if (Sleep(5000)) break;
-                    continue;
+                    if (wslDown)
+                    {
+                        if (job != null && WaitForWsl(job)) ready = true;
+                        if (Sleep(1000)) break;
+                        continue;
+                    }
+                    job = ReadJob();
+                    if (job == null)
+                    {
+                        if (status.State != "waiting") Status("waiting", HostProgress.PhaseConfig, 0, "Waiting for Setup");
+                        if (Sleep(5000)) break;
+                        continue;
+                    }
+                    lock (statusGate) { status.Generation = job.Generation; status.Attempt = job.Attempt; }
+                    bool newJob = job.Generation != lastGen || job.Attempt != lastAttempt;
+                    if (newJob)
+                    {
+                        lastGen = job.Generation;
+                        lastAttempt = job.Attempt;
+                        ready = false;
+                        lock (statusGate) status.Percent = 0;
+                        ready = BringUp(job);
+                        if (ready) wslVersionUp = WslOutage.ExeVersion(Paths.WslExe);
+                    }
+                    else
+                    {
+                        // The holder ended while Domovoi ran: only the distro
+                        // stopped (the holder's restart starts it again), or
+                        // WSL itself went away (an update of WSL, say).
+                        if (ready && holder != null && SafeExited(holder) && WslGoneNow())
+                        {
+                            ready = false;
+                            WslLost("the holder ended and WSL isn't answering");
+                            continue;
+                        }
+                        KeepHolder();
+                        if (ready && holder != null && SafeExited(holder))
+                            WriteStatus(false);
+                    }
+                    ProcessRequests(ready);
+                    if (ready) PeriodicCoreLog();
+                    if (ready) ready = PollLimits(job);
                 }
-                lock (statusGate) { status.Generation = job.Generation; status.Attempt = job.Attempt; }
-                bool newJob = job.Generation != lastGen || job.Attempt != lastAttempt;
-                if (newJob)
-                {
-                    lastGen = job.Generation;
-                    lastAttempt = job.Attempt;
-                    ready = false;
-                    lock (statusGate) status.Percent = 0;
-                    ready = BringUp(job);
-                }
-                else
-                {
-                    KeepHolder();
-                    if (ready && holder != null && SafeExited(holder))
-                        WriteStatus(false);
-                }
-                ProcessRequests(ready);
-                if (ready) PeriodicCoreLog();
-                if (ready) ready = PollLimits(job);
+                catch (System.ComponentModel.Win32Exception e) { ready = false; WslLost("wsl.exe could not be run: " + e.Message); }
+                catch (IOException e) { ready = false; WslLost("WSL failed: " + e.Message); }
+                catch (InvalidOperationException e) { ready = false; WslLost("WSL failed: " + e.Message); }
                 if (DateTime.UtcNow - lastStatusWrite > TimeSpan.FromSeconds(10)) WriteStatus(true);
                 if (Sleep(1000)) break;
             }
             log.Write("DomovoiHost stopping");
+        }
+
+        // -- WSL going away (WslOutage.cs) --------------------------------
+
+        bool wslDown;
+        int wslAttempts;
+        DateTime wslNextLook = DateTime.MinValue;
+        // wsl.exe's version when Domovoi last came up: another one after an
+        // outage means Windows updated WSL.
+        string wslVersionUp;
+
+        // Whether WSL itself is in trouble: the reads first, wsl.exe only
+        // when asking it can't get in an update's way.
+        bool WslGoneNow()
+        {
+            WslFacts f = WslOutage.Look(Paths.WslExe);
+            if (WslOutage.MayAsk(f)) f.Answers = AskWsl();
+            return WslOutage.Gone(f);
+        }
+
+        bool? AskWsl()
+        {
+            try { return Wsl.Registered() != null; }
+            catch (System.ComponentModel.Win32Exception) { return false; }
+            catch (IOException) { return false; }
+        }
+
+        void WslLost(string why)
+        {
+            KillHolder();
+            if (!wslDown) log.Write("WSL went away (" + why + "); waiting for it, then starting Domovoi again");
+            wslDown = true;
+            wslAttempts = 0;
+            wslNextLook = DateTime.UtcNow + WslOutage.Delay(0);
+            WslFacts f = WslOutage.Look(Paths.WslExe);
+            Status("waiting", HostProgress.PhaseConfig, 0, WslOutage.Message(f, wslVersionUp));
+        }
+
+        // One look, when it is due. True once Domovoi is up again.
+        bool WaitForWsl(HostJob job)
+        {
+            if (DateTime.UtcNow < wslNextLook) return false;
+            WslFacts f = WslOutage.Look(Paths.WslExe);
+            if (WslOutage.MayAsk(f)) f.Answers = AskWsl();
+            string message = WslOutage.Message(f, wslVersionUp);
+            if (WslOutage.Decide(f) == WslProbe.Wait)
+            {
+                wslNextLook = DateTime.UtcNow + WslOutage.Delay(++wslAttempts);
+                if (status.Message != message) Status("waiting", HostProgress.PhaseConfig, 0, message);
+                return false;
+            }
+            log.Write("WSL answers again" + (f.Version != null ? " (wsl.exe " + f.Version + ")" : "") + "; starting Domovoi again");
+            holderNext = DateTime.MinValue;
+            holderBackoffSec = 5;
+            limitsNext = DateTime.MinValue;
+            coreLogNext = DateTime.MinValue;
+            bool up = BringUp(job);
+            if (up)
+            {
+                wslDown = false;
+                wslVersionUp = f.Version;
+                log.Write("Domovoi is running again after WSL went away");
+                return true;
+            }
+            // BringUp said why (status.json); look again later.
+            wslNextLook = DateTime.UtcNow + WslOutage.Delay(++wslAttempts);
+            return false;
         }
 
         HostJob ReadJob()
