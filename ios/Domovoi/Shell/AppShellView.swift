@@ -89,6 +89,19 @@ struct AppShellView: View {
 
     @ViewBuilder
     private var content: some View {
+        // A Domovoi nobody has claimed: one screen in place of the whole
+        // workspace side — before the token card and the pairing screen, as
+        // Android's `ShellContent` returns early for it (`AppShell.kt:317-322`).
+        // The decision is ``unclaimedReplaces(_:blocks:)``, in the package.
+        if unclaimedReplaces(model.screen, blocks: model.unclaimed.blocks) {
+            UnclaimedServerView(model: model)
+        } else {
+            shellScreen
+        }
+    }
+
+    @ViewBuilder
+    private var shellScreen: some View {
         switch model.screen {
         case .localMedia:
             LocalShellView(model: model)
