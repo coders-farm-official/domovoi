@@ -261,9 +261,14 @@ def test_a_failed_prediction_breaks_the_run(monkeypatch) -> None:
     assert start["wake_score"] == 0.95
 
 
-def test_a_capture_cut_off_at_the_cap_asks_for_the_cooldown() -> None:
-    from satellite.tests.test_capture_endpointing import FRAME, capture, make_sat
+def test_a_capture_cut_off_at_the_cap_asks_for_the_cooldown(monkeypatch) -> None:
+    from satellite.tests.test_capture_endpointing import FRAME, FakeVad, capture, make_sat
     import asyncio
+    import types
+
+    # The real webrtcvad is a satellite-only dependency; a dev box may not
+    # have it (test_capture_endpointing fakes it the same way).
+    monkeypatch.setattr(client, "webrtcvad", types.SimpleNamespace(Vad=FakeVad))
 
     loop = asyncio.new_event_loop()
     try:
