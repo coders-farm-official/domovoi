@@ -81,13 +81,14 @@ final class ShellNavigationTests: XCTestCase {
     /// bar, or anything else that navigates to People, opens Settings on it —
     /// and the request is left for Settings to take even when Settings is the
     /// screen already open, which is the case the view's `onChange` is for.
-    func testPeopleOpensSettingsOnPeople() {
+    func testPeopleOpensSettingsOnPeople() throws {
         var state = NavigationState()
         state.navigate(.people)
         XCTAssertEqual(.settings, state.route)
         XCTAssertEqual("people", state.settingsTab)
         XCTAssertFalse(state.path.contains(.people))
-        XCTAssertEqual(.section(SettingsSection.named("people")!), settingsPlace(of: state.takeSettingsTab()))
+        let people = try XCTUnwrap(SettingsSection.named("people"))
+        XCTAssertEqual(.section(people), settingsPlace(of: state.takeSettingsTab()))
 
         // From inside Settings: no second push, and the request is waiting.
         state.navigate(.people)

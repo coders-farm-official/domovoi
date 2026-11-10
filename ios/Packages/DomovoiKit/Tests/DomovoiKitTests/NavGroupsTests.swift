@@ -65,6 +65,23 @@ final class NavGroupsTests: XCTestCase {
         XCTAssertTrue(tree.contains(.item(.images)))
     }
 
+    /// A plugin page whose manifest names a `nav_group` no group has
+    /// (anything but `media` or `tools`) is top level, at its position — the
+    /// web's rule ("any other value is top level").
+    func testAnUnknownPluginNavGroupIsTopLevel() throws {
+        let media = try XCTUnwrap(info("media"))
+        let tools = try XCTUnwrap(info("tools"))
+        XCTAssertEqual(
+            [
+                .item(.chat),
+                .group(media, [.music, .podcasts, .audiobooks, .videos, .images]),
+                .item(.stations),
+                .group(tools, [.news, .calendar, .files]),
+            ],
+            navTree(visible(both, shared: false), pluginGroups: [.stations: "foo", .images: "media"])
+        )
+    }
+
     /// `aGroupWithOneVisibleItemIsThatItemFlatAndAnEmptyOneGoes`
     func testAGroupWithOneVisibleItemIsThatItemFlatAndAnEmptyOneGoes() {
         XCTAssertEqual([.item(.chat), .item(.music), .item(.files)], navTree([.chat, .music, .files]))

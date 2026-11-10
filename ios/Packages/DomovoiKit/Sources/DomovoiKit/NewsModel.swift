@@ -121,8 +121,8 @@ public final class NewsModel {
     /// with the dashboard the moment the server's rule changed, and the order
     /// the chips appear in is the same order.
     ///
-    /// A person who is picked and then **leaves the roster** — removed on the
-    /// People page — is not re-picked, which is Android's behaviour too: the
+    /// A person who is picked and then **leaves the roster** — removed under
+    /// People in Settings — is not re-picked, which is Android's behaviour too: the
     /// pane falls to `"pick a person"` rather than silently showing somebody
     /// else's news. That is the one place this differs from Files, whose
     /// ejected library *is* replaced, and the reason is that a library is a

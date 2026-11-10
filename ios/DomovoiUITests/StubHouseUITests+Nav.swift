@@ -182,11 +182,14 @@ extension StubHouseUITests {
     @MainActor
     func testNav_SettingsHouseholdHoldsItsFourSections() throws {
         let app = launch(push: "Settings", pushDelay: 2)
-        XCTAssertFalse(
-            app.buttons["Rooms & devices"].waitForExistence(timeout: 5),
-            "the index still offers Rooms & devices"
-        )
-        XCTAssertTrue(navTap(app, NavUnderTest.household, timeout: 30), "no Household group on the index")
+        // The index drawn first, so the absence below is measured on it.
+        guard app.buttons[NavUnderTest.household].waitForExistence(timeout: 30) else {
+            print("=== NO HOUSEHOLD ON THE INDEX — tree follows ===")
+            print(app.debugDescription)
+            return XCTFail("no Household group on the index")
+        }
+        XCTAssertFalse(app.buttons["Rooms & devices"].exists, "the index still offers Rooms & devices")
+        XCTAssertTrue(navTap(app, NavUnderTest.household), "no Household group on the index")
         XCTAssertTrue(navHouseholdIsUp(app))
         evidence(app, "nav-household")
         XCTAssertTrue(navTap(app, NavUnderTest.allSettings))
@@ -230,11 +233,19 @@ extension StubHouseUITests {
     // MARK: - People, through Settings
 
     /// A People tab on the bar opens **Settings → People** — from Home (a
-    /// fresh Settings) and from inside Settings (the request taken by the open
-    /// page). The bar is put back with `default` before the case ends.
+    /// second Settings pushed over Home) and from inside Settings (the request
+    /// taken by the open page). The bar is put back with `default` before the
+    /// case ends, and by a teardown block in a fresh launch if the case stopped
+    /// before it could, so a failure here cannot leave a People tab on the bar
+    /// for the cases after it.
     @MainActor
     func testNav_ASavedPeopleTabOpensSettingsPeople() throws {
         control("reset-fixtures", "{}", port: 6601, what: "the people fixture")
+        let restored = NavRestored()
+        addTeardownBlock { @MainActor [weak self] in
+            guard let self, !restored.done else { return }
+            self.navRestoreTheBarInAFreshLaunch()
+        }
         let app = launch(push: "Settings", pushDelay: 2)
         XCTAssertTrue(systemSettingsReach(app, group: .system, section: .appLayout))
         guard systemSettingsSettledBar(app) != nil else {
@@ -265,7 +276,8 @@ extension StubHouseUITests {
         XCTAssertTrue(onPeople("from the Settings index"), "the People tab did not open Settings → People")
         evidence(app, "nav-people-tab-from-settings")
 
-        // From Home: a fresh Settings, opened on People.
+        // From Home: a second Settings pushed over Home (the stack is
+        // settings, home, settings), opened on People by `.onAppear`.
         XCTAssertTrue(navTap(app, "Home"))
         XCTAssertTrue(houseName(in: app).waitForExistence(timeout: 20), "the Home tab did not go home")
         XCTAssertTrue(navTap(app, "People"))
@@ -276,6 +288,19 @@ extension StubHouseUITests {
         XCTAssertTrue(navTap(app, NavUnderTest.backToHousehold))
         XCTAssertTrue(navTap(app, NavUnderTest.allSettings))
         XCTAssertTrue(systemSettingsReach(app, group: .system, section: .appLayout))
+        systemSettingsRestoreTheBar(app)
+        restored.done = systemSettingsBarLine(app) == SystemSettingsStringsUnderTest.defaultLine
+    }
+
+    /// The teardown half of the case above: a fresh launch into App layout,
+    /// and `default`.
+    @MainActor
+    func navRestoreTheBarInAFreshLaunch() {
+        print("NAV TEARDOWN putting the phone bar back in a fresh launch")
+        let app = launch(push: "Settings", pushDelay: 2)
+        guard systemSettingsReach(app, group: .system, section: .appLayout),
+              systemSettingsSettledBar(app) != nil
+        else { return print("NAV TEARDOWN could not reach App layout — the bar may still hold People") }
         systemSettingsRestoreTheBar(app)
     }
 
@@ -294,4 +319,10 @@ extension StubHouseUITests {
         XCTAssertTrue(navTap(app, NavUnderTest.backToHousehold), "the section has no foot back to Household")
         XCTAssertTrue(navHouseholdIsUp(app))
     }
+}
+
+/// Whether the People-tab case put the bar back itself. A class, so the
+/// teardown block reads what the case body wrote.
+final class NavRestored: @unchecked Sendable {
+    var done = false
 }

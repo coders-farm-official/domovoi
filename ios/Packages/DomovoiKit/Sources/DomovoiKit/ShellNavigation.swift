@@ -49,9 +49,9 @@ public struct NavigationState: Equatable, Sendable {
     /// A Settings section a link asked for and Settings has not taken yet
     /// (`AppShell.kt:305`, Android's `settingsTab`). It is a **key**, not a
     /// section, because that is what a link carries and
-    /// ``SettingsSection/named(_:)`` is what resolves it — including through
-    /// the alias table, which is how a pre-regroup `"connection"` or
-    /// `"satellites"` link still lands.
+    /// ``settingsPlace(of:sharedScreen:)`` is what resolves it — including
+    /// through the alias tables, which is how a pre-regroup `"connection"`,
+    /// `"satellites"` or `"rooms-and-devices"` link still lands.
     public private(set) var settingsTab: String?
 
     public init(path: [Route] = [], settingsTab: String? = nil) {

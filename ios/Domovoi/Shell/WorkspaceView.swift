@@ -494,7 +494,7 @@ struct SidebarList: View {
                         ) {
                             ForEach(routes, id: \.self) { route in row(route) }
                         } label: {
-                            Label(group.label, systemImage: group.systemImage)
+                            groupHeader(group, open: NavGroupsOpen.isOpen(group, open), routes: routes)
                         }
                     }
                 }
@@ -503,10 +503,27 @@ struct SidebarList: View {
                 ForEach(sections.system, id: \.self) { route in row(route) }
             }
         }
-        // Arriving on a screen opens the group that holds it
-        // (`NavGroupsOpen.openedFor`, Android's `LaunchedEffect(route, tree)`).
+        // Arriving on a screen opens the group that holds it, and so does
+        // the tree changing under the open screen — a plugin arriving makes a
+        // one-item group a real one (`NavGroupsOpen.openedFor`, Android's
+        // `LaunchedEffect(route, tree)`, keyed on both).
         .onAppear { openGroupHolding(model.navigation.route) }
         .onChange(of: model.navigation.route) { _, route in openGroupHolding(route) }
+        .onChange(of: tree) { _, _ in openGroupHolding(model.navigation.route) }
+    }
+
+    /// A group's header. **Shut while it holds the open page, it is lit**, as
+    /// that page's row would be (`NavGroupHeader`, `NavGroupsUi.kt:72-90`):
+    /// the brand ink and the selected trait. Android also washes the row in
+    /// `brandSoft`; this app has no such token and a new fill would be a
+    /// colour nobody has measured, so the ink carries it — ``Color/brandInk``
+    /// is the measured text ink.
+    private func groupHeader(_ group: NavGroupInfo, open: Bool, routes: [Route]) -> some View {
+        let lit = !open && routes.contains(model.navigation.route)
+        return Label(group.label, systemImage: group.systemImage)
+            .foregroundStyle(lit ? Color.brandInk : Color.primary)
+            .fontWeight(lit ? .semibold : .regular)
+            .accessibilityAddTraits(lit ? .isSelected : [])
     }
 
     private func row(_ route: Route) -> some View {

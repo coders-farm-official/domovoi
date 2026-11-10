@@ -232,7 +232,7 @@ struct ScreenPlaceholder: View {
 /// — lands on that section, which is ``settingsPlace(of:)`` resolving it
 /// through the alias table.
 ///
-/// The three levels, the search and the fourteen panels are a later batch's.
+/// The three levels, the search and the fifteen panels are a later batch's.
 /// What this draws is where the request landed, and takes it, so coming back
 /// to Settings later starts at the index.
 ///

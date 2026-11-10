@@ -114,8 +114,8 @@ public let pluginNavGroups: [Route: String] = [
 ]
 
 /// A person's own sidebar, the web's JSON `{groups:[{id,label,items}],
-/// top:[...]}`; items are ``navKeys`` values. Nothing edits it yet, on any
-/// platform (`NavOverride`).
+/// top:[...]}`; items are ``navKeys`` values. Nothing edits it yet
+/// (`NavOverride`).
 public struct NavOverride: Equatable, Sendable {
     public let groups: [NavOverrideGroup]
     public let top: [String]

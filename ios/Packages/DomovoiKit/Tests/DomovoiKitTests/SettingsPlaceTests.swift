@@ -129,7 +129,7 @@ final class SettingsPlaceTests: XCTestCase {
     }
 
     /// `theOldGroupKeyStillLands`
-    func testTheOldGroupKeyStillLands() {
+    func testTheOldGroupKeyStillLands() throws {
         XCTAssertEqual("household", SettingsGroup.household.key)
         XCTAssertEqual(.group(.household), settingsPlace(of: "group:rooms-and-devices"))
         XCTAssertEqual(.group(.household), settingsPlace(of: "group:household"))
@@ -137,7 +137,7 @@ final class SettingsPlaceTests: XCTestCase {
         XCTAssertEqual(.group(.household), settingsPlace(of: "household"))
         XCTAssertEqual(.household, SettingsGroup.named("rooms-and-devices"))
         // A section's old key still wins over a group of the same name.
-        XCTAssertEqual(.section(SettingsSection.named("voices")!), settingsPlace(of: "voice"))
+        XCTAssertEqual(.section(try XCTUnwrap(SettingsSection.named("voices"))), settingsPlace(of: "voice"))
         XCTAssertEqual("group:household", settingsPlace(of: "group:rooms-and-devices").key)
     }
 }

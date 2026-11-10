@@ -59,7 +59,7 @@ struct HomeEverythingView: View {
                 //
                 // This was `LazyVGrid(columns:)`, and it cost Home **six**
                 // `Dynamic Type font sizes are partially unsupported`
-                // findings, one per tile. Thirteen tiles at most and no fetch
+                // findings, one per tile. Twelve tiles at most and no fetch
                 // behind any of them (map §7.6), so the laziness was never
                 // earning its place; plain rows are both the fix and the
                 // simpler shape.

@@ -2445,7 +2445,7 @@ extension StubHouseUITests {
             "Apple's audit has findings against the Rooms roster beyond the "
                 + "measured floor: " + rosterRest.joined(separator: " / ")
                 + " — an unattributed `Hit area is too small` here is "
-                + "`back to Rooms & devices` (RouteScreen.swift:413, "
+                + "`back to Household` (RouteScreen.swift's section foot, "
                 + "192.3 x 20.3), the shell's section foot, and its three "
                 + "siblings at :387, :395 and :398 are the same shape; see "
                 + "this case's comment for the elimination"

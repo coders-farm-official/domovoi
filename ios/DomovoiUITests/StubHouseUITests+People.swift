@@ -1236,7 +1236,7 @@ extension StubHouseUITests {
     /// |---|---|---|
     /// | `unverified` | **4.12:1** | 5.72:1 |
     /// | `  live` | **4.15:1** | 7.43:1 |
-    /// | `domovoi / people` | — | 7.43:1 |
+    /// | `domovoi / people` (now `domovoi / settings`: People is a Settings section) | — | 7.43:1 |
     /// | `127.0.0.1:6601` | — | 15.47:1 |
     ///
     /// The two that fail fail at the banner's own grey timestamp — `now`,
