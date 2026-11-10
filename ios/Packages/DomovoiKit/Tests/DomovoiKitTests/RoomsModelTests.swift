@@ -51,20 +51,36 @@ final class RoomsModelTests: XCTestCase {
         var sleeper: @Sendable (Int64) async throws -> Void {
             { [requested, budget, opened] ms in
                 requested.mutate { $0.append(ms) }
-                for _ in 0..<settleYieldLimit {
-                    // Cancellation **before** the budget: the other way round,
-                    // a debounce the next drag had already cancelled wakes up
-                    // and spends the allowance meant for its successor — the
-                    // rig committing the bug the test is about.
+                // Whether this wait may end now — cancellation **before** the
+                // budget: the other way round, a debounce the next drag had
+                // already cancelled wakes up and spends the allowance meant
+                // for its successor — the rig committing the bug the test is
+                // about.
+                @Sendable func through() throws -> Bool {
                     try Task.checkCancellation()
-                    if opened.current.contains(ms) { return }
-                    let through = budget.mutate { left -> Bool in
+                    if opened.current.contains(ms) { return true }
+                    return budget.mutate { left -> Bool in
                         guard let have = left[ms], have > 0 else { return false }
                         left[ms] = have - 1
                         return true
                     }
-                    if through { return }
+                }
+                for _ in 0..<settleYieldLimit {
+                    if try through() { return }
                     await Task.yield()
+                }
+                // **Then keep looking, on a clock, for a bounded while.** This
+                // closure is not main-actor code, so its yields can run out in
+                // a few milliseconds while the test is still inside its own
+                // `nothingHappens()` — and it used to fall straight into the
+                // hour below, where a later `open` or `allow` was never seen.
+                // That was `testADragSendsOneLevelAndItIsTheLastOne`'s flake
+                // (red alone 1 run in 5 at ccd418e4, and most runs once this
+                // file's poll cases were added). A wait with no budget still
+                // never ends, so no negative assertion changes.
+                for _ in 0..<2_500 {
+                    if try through() { return }
+                    try await Task.sleep(for: .milliseconds(2))
                 }
                 try await Task.sleep(for: .seconds(3_600))
             }
