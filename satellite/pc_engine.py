@@ -348,7 +348,7 @@ class SpareDeviceEngine:
             return "off"
         led = getattr(getattr(self, "_leds", None), "state", "idle")
         busy = (
-            led in ("listening", "dropin")
+            led in ("listening", "dropin", "recording")
             or getattr(getattr(self, "wake_recording", None), "is_set", lambda: False)()
             or getattr(getattr(self, "chat_active", None), "is_set", lambda: False)()
             or getattr(getattr(self, "dropin_active", None), "is_set", lambda: False)()

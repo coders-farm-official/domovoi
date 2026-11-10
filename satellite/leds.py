@@ -47,6 +47,10 @@ COLOR_SPEAKING = (0, 255, 80)    # green — TTS playing
 COLOR_ERROR = (255, 0, 0)        # red — server error frame
 COLOR_DROPIN = (255, 0, 0)       # solid red — live two-way drop-in call
 COLOR_OFF = (0, 0, 0)
+# Steady white while a wake-word training clip records (one clip per light-up;
+# off between clips), so each clip is visible, unlike the sound-following
+# listening look (2026-11-10).
+COLOR_RECORDING = (200, 200, 200)
 
 # ── XVF3800 WS2812 ring palette (whole-ring effects via xvf_host) ──────────
 # The XVF chip only does whole-ring effects (off/breath/rainbow/single/DoA) —
@@ -206,6 +210,7 @@ class _WS2812XvfDriver:
         "music":     {"effect": 2, "speed": XVF_SPEED_RAINBOW},                # rotating rainbow
         "error":     {"effect": 3, "color": COLOR_ERROR},                      # solid red
         "dropin":    {"effect": 3, "color": COLOR_DROPIN},                     # solid red — live call
+        "recording": {"effect": 3, "color": COLOR_RECORDING},                  # steady white — training clip
     }
 
     def __init__(self, brightness: int, xvf_host_path: str) -> None:
@@ -485,6 +490,9 @@ class LEDController:
             elif state == "dropin":
                 # Solid red for the duration of a live drop-in call.
                 self._solid(COLOR_DROPIN)
+                self._changed.wait()
+            elif state == "recording":
+                self._solid(COLOR_RECORDING)
                 self._changed.wait()
             elif state == "thinking":
                 self._tick_thinking()

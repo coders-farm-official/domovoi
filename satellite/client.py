@@ -6989,8 +6989,10 @@ class Satellite(pc_engine.SpareDeviceEngine):
             for _ in range(target):
                 if not self.wake_recording.is_set() or self.shutdown_event.is_set():
                     break
-                # Visual cue that we're recording this clip.
-                self._leds.set_state("listening")
+                # Visual cue: steady white while THIS clip records, off in the
+                # gap, so each clip is visible (the sound-following listening
+                # look hid where clips start and stop).
+                self._leds.set_state("recording")
                 buf: list[bytes] = []
                 while (
                     len(buf) < frames_per_clip
@@ -7024,7 +7026,11 @@ class Satellite(pc_engine.SpareDeviceEngine):
             self.wake_recording.clear()
             self._wake_rec_params = None
             self._drain_mic()
-            self._leds.set_state_unless("listening", "idle")
+            # Unconditionally idle: a Stop lands mid-clip, while the ring shows
+            # the clip's light, and "idle unless listening" left the ring stuck
+            # in the capture look after the take ended (2026-11-10). Nothing
+            # else drives the ring while this loop owns the mic.
+            self._leds.set_state("idle")
         log.info("exiting wake-recording loop: %d/%d clips sent", recorded, target)
 
     def _apply_wake_switch(self, slug: str | None, threshold: float | None = None) -> None:
