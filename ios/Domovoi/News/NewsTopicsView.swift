@@ -257,9 +257,11 @@ struct NewsCategoryChip: View {
                 // This is **not** the ten `Contrast failed` train R001
                 // reported against these nine chips and the `saved feed`
                 // heading: those were measured at 5.07:1 and 18.60:1 off that
-                // same screenshot and are the integration build's app-wide
-                // audit sweep (`integration/news.md`, round 2). This is a
-                // defect that diagnosis turned up on its way past.
+                // same screenshot, and train I018 showed they come from Apple's
+                // audit judging the page after moving it 40 points (the foot
+                // pass in `StubHouseUITests+News.swift` measures them where
+                // they settle). This is a defect that diagnosis turned up on
+                // its way past.
                 .overlay(
                     Capsule().stroke(
                         on ? Color.brandFg : Color.fgMuted.opacity(0.7),
