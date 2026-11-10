@@ -201,6 +201,35 @@ extension StubHouseUITests {
 
     /// Apple's audit on the grid with its headings in view, classified by
     /// signature (``floorAndRest(_:)``): an attributed finding fails.
+    ///
+    /// ### The audit moves this page, so it is judged the way Rooms is
+    ///
+    /// Train I016 failed this case on seven `Contrast failed` findings spread
+    /// over the whole screen — `10:30am`, `call Mum`, `Podcasts`, `News`,
+    /// `Calendar`, `Manual`, and the Today card's `calendar` link — while
+    /// `testHomePassesApplesAccessibilityAudit` passed the same inks on the
+    /// unscrolled Home. Every finding's frame sat **41.3 points below** the
+    /// same element in the tree attached just before the audit (`Podcasts`
+    /// 422.0 → 463.3, `News` 608.3 → 649.7, `10:30am` 221.0 → 262.3,
+    /// `calendar` 22.0 → 63.3): the case scrolls Home to its foot to bring
+    /// the grid in, and the audit's re-layout left the page 41.3 points
+    /// higher in its content. Sampled off the case's own picture, each
+    /// element measures where it is drawn — `10:30am` and `call Mum`
+    /// `#000000` on `#F1F1F2` 18.60:1, the four tile labels `#975800` on
+    /// `#F2F2F7` 5.07:1 — and at the finding's frame the picture holds only
+    /// card fill, 1.01:1 to 1.13:1. `calendar` was not on the page at all:
+    /// it was scrolled away above it, and the finding put it across the
+    /// page's top edge.
+    ///
+    /// So this is the Rooms roster's judgement (`testRooms_Audit`, I008),
+    /// with its own helpers: when the audit moved the page, every
+    /// pixel-sampled finding's element is read off the picture where it was
+    /// drawn and **fails under 4.5:1** (``roomsAssertOwnInk``), and the
+    /// pixel-sampled findings are retaken at the settled position, which must
+    /// not move again. A retaken finding against an element the page clips at
+    /// its top or foot is measured by bringing that element wholly into view
+    /// and reading its ink (``navClippedMeasured(_:_:on:)``); everything else
+    /// fails.
     @MainActor
     func testNav_TheGroupedGridAudits() throws {
         let app = launch()
@@ -211,13 +240,125 @@ extension StubHouseUITests {
         }
         XCTAssertTrue(navReach(app, app.buttons["Manual"]), "the grid's foot never came into view")
         evidence(app, "nav-grid-audit")
-        let (floor, rest) = Self.floorAndRest(try auditIssues(app, "nav-grid"))
-        print("NAV GRID AUDIT floor=\(floor) rest=\(rest.count)")
+        let before = roomsWindowShot(app)
+        let picture = app.screenshot().image.cgImage
+        let first = try auditIssues(app, "nav-grid")
+        let firstSplit = Self.floorAndRest(first)
+        let settled = roomsWindowShot(app)
+        let moves = Self.roomsPageMoves(from: before, to: settled)
+        let other = firstSplit.rest.filter { !Self.roomsSamplesPixels($0) }
+        var pixelLines = firstSplit.rest.filter(Self.roomsSamplesPixels)
+        var judgedOn = before
+        if moves.isEmpty {
+            print("NAV GRID AUDIT: the audit left the page where it was — one pass is the measurement")
+        } else {
+            print(
+                "NAV GRID AUDIT: the audit moved the page — "
+                    + moves.prefix(6).map { "'\($0.label)' by \($0.dy)" }.joined(separator: ", ")
+                    + " — so its \(pixelLines.count) pixel-sampled finding(s) are read where drawn and retaken"
+            )
+            roomsAssertOwnInk(
+                pixelLines,
+                on: before,
+                picture: picture,
+                window: app.frame,
+                name: "nav-grid"
+            )
+            evidence(app, "nav-grid-audit-settled")
+            let retake = try auditIssues(app, "nav-grid-settled")
+            let movedAgain = Self.roomsPageMoves(from: settled, to: roomsWindowShot(app))
+            XCTAssertTrue(
+                movedAgain.isEmpty,
+                "the retaken grid audit moved the page as well — "
+                    + movedAgain.prefix(6).map { "'\($0.label)' by \($0.dy)" }.joined(separator: ", ")
+                    + " — so its contrast findings are not a measurement either"
+            )
+            let retakeSplit = Self.floorAndRest(retake)
+            for line in retakeSplit.rest where !Self.roomsSamplesPixels(line) {
+                print("NAV GRID AUDIT retake (judged in the first pass) :: \(line)")
+            }
+            pixelLines = retakeSplit.rest.filter(Self.roomsSamplesPixels)
+            judgedOn = settled
+        }
+        let clipped = navClippedMeasured(app, pixelLines, on: judgedOn)
+        let rest = other + clipped.kept
+        print(
+            "NAV GRID AUDIT floor=\(firstSplit.floor) rest=\(firstSplit.rest.count) "
+                + "moved=\(!moves.isEmpty) clipped-measured=\(clipped.allowed.count) ours=\(rest.count)"
+        )
         XCTAssertTrue(
             rest.isEmpty,
             "Apple's audit has \(rest.count) attributed finding(s) on the grouped grid: "
                 + rest.joined(separator: " | ")
         )
+    }
+
+    /// A pixel-sampled finding against an element the page **clips** — every
+    /// one of its page twins in `shot` crosses the page's top or its foot —
+    /// is measured rather than believed: the element is brought wholly into
+    /// the page (``navReach(_:_:inPage:flicks:)``), photographed, and its ink
+    /// read with ``roomsLeafInk(_:window:frame:)``. Under 4.5:1 fails, with
+    /// the reading. At or over it, the line is allowed and printed with the
+    /// reading. Any other line — no label, no twin, a twin wholly inside or
+    /// wholly outside the page — is kept, so it fails its case.
+    ///
+    /// The page's edges are the measurement's, not the element's: half a
+    /// control against whatever is past the clip is not a reading of the
+    /// control (D57, `testRooms_Audit`). Home is a root, so there is no
+    /// navigation bar over its top edge for ``roomsContrastWithNoPixels``
+    /// to reason about; this asks the page frame alone.
+    @MainActor
+    func navClippedMeasured(
+        _ app: XCUIApplication,
+        _ lines: [String],
+        on shot: RoomsWindowShot
+    ) -> (allowed: [String], kept: [String]) {
+        let page = shot.page
+        var allowed: [String] = []
+        var kept: [String] = []
+        for line in lines {
+            guard !page.isEmpty, let label = Self.roomsLabel(in: line) else {
+                kept.append(line)
+                continue
+            }
+            let twins = shot.pageElements.filter { $0.label == label }
+            let clippedTwins = twins.filter {
+                $0.frame.intersects(page)
+                    && ($0.frame.minY < page.minY - 0.5 || $0.frame.maxY > page.maxY + 0.5)
+            }
+            guard !twins.isEmpty, clippedTwins.count == twins.count else {
+                kept.append(line)
+                continue
+            }
+            let element = app.descendants(matching: .any)
+                .matching(NSPredicate(format: "label == %@", label))
+                .firstMatch
+            guard navReach(app, element) else {
+                print("NAV GRID AUDIT clipped '\(label)' could not be brought whole — kept :: \(line)")
+                kept.append(line)
+                continue
+            }
+            let frame = element.frame
+            evidence(app, "nav-grid-clipped-\(label)")
+            guard let picture = app.screenshot().image.cgImage,
+                  let reading = Self.roomsLeafInk(picture, window: app.frame, frame: frame)
+            else {
+                print("NAV GRID AUDIT clipped '\(label)' at \(frame) has no ink to read — kept :: \(line)")
+                kept.append(line)
+                continue
+            }
+            let said = "'\(label)' clipped at " + clippedTwins.map { "\($0.frame)" }.joined(separator: ", ")
+                + " by the page \(page); drawn whole at \(frame) it reads \(reading.ink) on \(reading.paper) "
+                + String(format: "%.2f", reading.ratio) + ":1"
+            XCTAssertGreaterThanOrEqual(
+                reading.ratio,
+                Self.roomsContrastFloor,
+                "nav-grid: \(said) — under 4.5:1 where it is drawn whole, so the colour is the defect"
+            )
+            print("NAV GRID AUDIT clipped, measured :: \(said) :: \(line)")
+            allowed.append(line)
+        }
+        return (allowed, kept)
     }
 
     // MARK: - Settings → Household
