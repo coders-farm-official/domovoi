@@ -33,7 +33,7 @@ doesn't wear out its battery.
 
 ## How a spare device joins
 
-1. In the dashboard, as admin: **Settings → Rooms & devices → Rooms → add a spare
+1. In the dashboard, as admin: **Settings → Household → Rooms → add a spare
    device**. Type the room's name ("Kid's Room") and press **make the
    code**. The page shows the room id it will connect as
    (`kids_room`), a **one-line install command** for Linux, a **Setup to
@@ -52,7 +52,7 @@ doesn't wear out its battery.
 3. The device finds your server, checks it is *your* server (it must prove
    it holds the key behind the fingerprint), and asks to join. It shows a
    six-digit **approval code** on its screen.
-4. Back in **Settings → Rooms & devices → Rooms**, the device is under **waiting for
+4. Back in **Settings → Household → Rooms**, the device is under **waiting for
    approval**: type its code and press **approve**. That is the moment it
    becomes a room.
 
@@ -87,7 +87,7 @@ user account just for the satellite while you're at it.
 
 ### 1. Make the command
 
-As above: **Settings → Rooms & devices → Rooms → add a spare device**, the room's
+As above: **Settings → Household → Rooms → add a spare device**, the room's
 name, **make the code**, **copy the command**. It looks like this (one
 line):
 
@@ -367,7 +367,7 @@ on, the tray, the power settings it made, all from root's own record) and
 nothing else; `--purge` removes the satellite's own files from
 `~/.domovoi`, never a Domovoi server's, and on a headless box the
 `domovoi-sat` account. Then **retire
-the room in the dashboard** once it shows offline (Settings → Rooms & devices → Rooms →
+the room in the dashboard** once it shows offline (Settings → Household → Rooms →
 the room → **Retire room**): that frees the name and removes the room's
 music player, which the container guard would otherwise keep expecting.
 
@@ -405,8 +405,8 @@ Raspberry Pi satellite. It runs inside the normal Domovoi Android app as
 | The Domovoi app | From your own server: the QR code's page downloads it from there. The server gets the release named in its `android/release.json` from the project's GitHub release once, when you press **Download the app to this server** on the card (about 130 MB; the first download is never by itself, and until the app is on the server the card shows that step instead of the phone's QR code), or you **upload an APK** of that release on the card when internet access is off; it hands out a file only when it is exactly that release's, signed by the project's release key. After an update brings a newer release, the release already on the server keeps serving until the new one is here, and a server whose internet answer is **Yes, always** fetches it by itself, once per start with retries; under **Sometimes**, **No** or no answer it waits for an admin's press. Until the first app release is published, the card and the page say "no app release yet". |
 | Its charger | A room listens all day. Turn on the phone's battery-protection (charge limit) setting if it has one, and never use a phone whose battery has swollen. |
 | Your home Wi-Fi | Room mode uses Wi-Fi (or a wired dock) only, never mobile data: with no Wi-Fi it is offline. |
-| The server's wake-word models | The phone runs the same openWakeWord models as a Pi, fetched from your server. On the dashboard, **Settings → Rooms & devices → Rooms → prepare a room's SD card → Refresh caches** once (it downloads them; it needs the internet that one time). A Pi you prepared already did this. |
-| A room code | On the dashboard, **Settings → Rooms & devices → Rooms → add a spare device**: a QR code (a link to your server's join page with the code in it) and a line of text that starts `domovoi-room:1?…`. It names your server, the server's key and the room. It holds no secret. |
+| The server's wake-word models | The phone runs the same openWakeWord models as a Pi, fetched from your server. On the dashboard, **Settings → Household → Rooms → prepare a room's SD card → Refresh caches** once (it downloads them; it needs the internet that one time). A Pi you prepared already did this. |
+| A room code | On the dashboard, **Settings → Household → Rooms → add a spare device**: a QR code (a link to your server's join page with the code in it) and a line of text that starts `domovoi-room:1?…`. It names your server, the server's key and the room. It holds no secret. |
 
 ### Setting it up (about ten minutes)
 
@@ -424,7 +424,7 @@ Raspberry Pi satellite. It runs inside the normal Domovoi Android app as
 3. Back on the page, press **open as this room**. It opens **Domovoi
    Room** with the room code filled in. (Or open **Domovoi Room** from the
    home screen and scan the code there; on a phone that already uses the
-   app with your household: Settings → Rooms & devices → Rooms → **Use this device as
+   app with your household: Settings → Household → Rooms → **Use this device as
    a room**.)
 4. Read the explainer to the end and press **Start room mode**. It says
    what room mode means: always listening, a shared device, power and
@@ -436,14 +436,14 @@ Raspberry Pi satellite. It runs inside the normal Domovoi Android app as
    its key: compare the key with the dashboard's Settings → System → About & updates. Change
    the room name if you like, then press **Become this room**.
 7. The room screen shows **waiting for approval** and a six-digit code. On
-   the dashboard, Settings → Rooms & devices → Rooms shows an approval card for the
+   the dashboard, Settings → Household → Rooms shows an approval card for the
    room: type the code the phone shows and approve. Within about half a
    minute the phone says **Say "Hey Jarvis"** (press **check now** to skip
    the wait).
 8. Say "Hey Jarvis, what time is it?".
 
 A household phone (not a room) gets the app the same way: **Settings →
-Rooms & devices → Phones & browsers → get the Domovoi app** shows a QR code and a link to the same
+Household → Phones & browsers → get the Domovoi app** shows a QR code and a link to the same
 page without a room code; open it on the phone, install, then open
 Domovoi, which finds your server on the Wi-Fi.
 
@@ -559,7 +559,7 @@ You can turn your own phone into a room for a while. Then:
 | Not listening: … needs a screen lock | This phone is also paired with your household. Set a PIN, pattern or password; the room starts again. |
 | Another device is already waiting for approval as this room | Reject the other request on the dashboard, or wait three minutes. |
 | …this is a different server… / …would not sign for… | The address in the room code answered with a different key, or something is relaying it. Make a new room code on the right server. A server reached through a name or a forwarded port needs that name in its `TRUSTED_HOSTS`. |
-| The server has no wake-word models yet | Dashboard: Settings → Rooms & devices → Rooms → prepare a room's SD card → Refresh caches. |
+| The server has no wake-word models yet | Dashboard: Settings → Household → Rooms → prepare a room's SD card → Refresh caches. |
 | The server does not hand wake-word models to phones yet | Update the Domovoi server. |
 | waiting for Wi-Fi | The phone has no Wi-Fi. Room mode never uses mobile data. |
 | (on the room code screen) … is not on the home network | The room code names a server outside your home network. A room only talks to a server at a private address (10.x, 172.16-31.x, 192.168.x, IPv6 fc00::/7 or fe80::/10) or a name ending in `.local`, `.home.arpa`, `.lan` or `.internal`; not loopback, not 100.64.x (carrier NAT), not 169.254.x. |
@@ -629,7 +629,7 @@ a one-line PowerShell command. Both install exactly the same thing.
 
 ### 1. Get the Setup
 
-**Settings → Rooms & devices → Rooms → add a spare device**, the room's name, **make
+**Settings → Household → Rooms → add a spare device**, the room's name, **make
 the code**. Under **windows laptop or pc** the card shows:
 
 - a **setup code**, like `K7M4-QX2P-9TRA`, and your **server**'s address.
@@ -949,7 +949,7 @@ better room.
 
 ### 1. Prepare the stick
 
-**Settings → Rooms & devices → Rooms → add a spare device**, name the room, **make the
+**Settings → Household → Rooms → add a spare device**, name the room, **make the
 code**, then under **old computer (usb stick)** press **Prepare the
 stick**. The first time, the server downloads Debian's netinst image from
 Debian (it uses it only if its size and SHA-256 are the ones Domovoi pins);
@@ -1043,7 +1043,7 @@ itself. **Take the stick out once it restarts.**
 At its first start the computer installs the satellite (a few more minutes;
 its screen says what it is doing, and why if it can't reach your server),
 then shows the room's **six-digit code in large digits**, and says it
-through its speaker if one works. Type it in **Settings → Rooms & devices → Rooms**,
+through its speaker if one works. Type it in **Settings → Household → Rooms**,
 under **waiting for approval**. The screen says "This computer is now the
 room …" and turns off a minute later.
 
@@ -1127,7 +1127,7 @@ way.
 
 The room is the whole computer. To use it for something else, install
 another system over it (or start it from a new stick for another room).
-Retire the room in the dashboard too (**Settings → Rooms & devices → Rooms → the room →
+Retire the room in the dashboard too (**Settings → Household → Rooms → the room →
 Retire room**).
 
 ### When it doesn't work

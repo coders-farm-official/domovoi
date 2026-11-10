@@ -173,17 +173,26 @@ def _src(name: str) -> str:
 
 def _phone_block(css: str) -> str:
     """The body of the ``@media (max-width: 760px)`` block that lays the
-    shell out for a phone (the first one in styles.css)."""
-    start = css.index("@media (max-width: 760px) {")
-    depth = 0
-    for i in range(start, len(css)):
-        if css[i] == "{":
-            depth += 1
-        elif css[i] == "}":
-            depth -= 1
-            if depth == 0:
-                return css[start:i + 1]
-    raise AssertionError("unterminated 760px block")
+    shell out for a phone: the one with the ``.app`` grid. (It used to be
+    the first such block; since wf/config-steps a small settings-slider
+    block comes earlier in styles.css.)"""
+    at = 0
+    while True:
+        start = css.index("@media (max-width: 760px) {", at)
+        depth = 0
+        for i in range(start, len(css)):
+            if css[i] == "{":
+                depth += 1
+            elif css[i] == "}":
+                depth -= 1
+                if depth == 0:
+                    break
+        else:
+            raise AssertionError("unterminated 760px block")
+        block = css[start:i + 1]
+        if "grid-template-areas" in block and ".sidebar" in block:
+            return block
+        at = i + 1
 
 
 # ─── the route is reserved everywhere ────────────────────────────────────
@@ -334,10 +343,11 @@ def test_exactly_the_default_bar_is_marked_primary(driven) -> None:
 
 def test_the_desktop_sidebar_keeps_every_page_but_hides_the_home_row(driven) -> None:
     rows = _classes(driven, "sidebar_on_music")
-    assert set(rows) >= PRIMARY | {"podcasts", "audiobooks", "calendar", "news", "people",
+    assert set(rows) >= PRIMARY | {"podcasts", "audiobooks", "calendar", "news",
                                    "files", "plugins", "radio"}
-    # Satellites left the sidebar for Settings (2026-10-11).
-    assert "satellites" not in rows
+    # Satellites left the sidebar for Settings (2026-10-11), People for
+    # Settings → Household (2026-11-09; test_web_nav_groups.py).
+    assert "satellites" not in rows and "people" not in rows
     assert [r for r, cls in rows.items() if "brand-link" in cls] == ["home"]
     css = _src("styles.css")
     phone = _phone_block(css)
@@ -400,8 +410,11 @@ def test_main_keeps_room_for_the_player_on_a_phone() -> None:
 def test_the_everything_grid_lists_every_page_off_the_strip(driven) -> None:
     tiles = driven["home_everything"]["tiles"]
     assert "#radio" in tiles and "#settings" in tiles and "#manual" in tiles
-    for r in ("podcasts", "audiobooks", "calendar", "news", "people", "files", "plugins"):
+    for r in ("podcasts", "audiobooks", "calendar", "news", "files", "plugins"):
         assert f"#{r}" in tiles
+    # People is a Settings section since 2026-11-09, reached through the
+    # Settings tile like Satellites.
+    assert "#people" not in tiles
     for r in PRIMARY:
         assert f"#{r}" not in tiles, f"#{r} is a strip tab, not an everything tile"
     # Satellites is a Settings tab, reached through the Settings tile.
@@ -427,8 +440,9 @@ def test_a_shared_screen_drops_personal_pages_from_the_sidebar_and_the_strip(dri
     assert {r for r, cls in rows.items() if "primary" in cls} == PRIMARY - {"chat"}
     assert {"podcasts", "videos", "plugins", "radio"} <= set(rows)
     assert not set(_classes(driven, "sidebar_shared_not_known_yet")) & PERSONAL
-    assert PERSONAL <= set(_classes(driven, "sidebar_unpaired_not_known"))
-    assert PERSONAL <= set(_classes(driven, "sidebar_on_music"))
+    # (People is on no launcher anywhere since 2026-11-09: Settings → People.)
+    assert PERSONAL - {"people"} <= set(_classes(driven, "sidebar_unpaired_not_known"))
+    assert PERSONAL - {"people"} <= set(_classes(driven, "sidebar_on_music"))
 
 
 def test_a_shared_screen_drops_the_same_pages_from_the_everything_grid(driven) -> None:

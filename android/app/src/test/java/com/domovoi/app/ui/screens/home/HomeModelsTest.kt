@@ -4,6 +4,7 @@ import com.domovoi.app.net.CAP_STATIONS
 import com.domovoi.app.net.Capabilities
 import com.domovoi.app.net.CapabilityPlugin
 import com.domovoi.app.ui.components.Tone
+import com.domovoi.app.ui.shell.DefaultNav
 import com.domovoi.app.ui.shell.Route
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
@@ -542,11 +543,11 @@ class HomeModelsTest {
 
     @Test fun everythingGridHidesPersonalScreensOnASharedScreen() {
         // The default bar (home · music · videos · chat) is not on the grid;
-        // Calendar, off the bar since 2026-10-11, is. No Satellites: it is a
-        // Settings tab.
+        // Calendar, off the bar since 2026-10-11, is. No Satellites or
+        // People: they are Settings sections.
         val all = everythingTiles(Capabilities.EMPTY, shared = false)
         assertEquals(
-            listOf(Route.Podcasts, Route.Audiobooks, Route.News, Route.People, Route.Calendar, Route.Files,
+            listOf(Route.Podcasts, Route.Audiobooks, Route.News, Route.Calendar, Route.Files,
                 Route.Settings, Route.Manual),
             all,
         )
@@ -556,6 +557,31 @@ class HomeModelsTest {
         )
         val radio = Capabilities(plugins = listOf(CapabilityPlugin(slug = "radio", androidCapabilities = listOf(CAP_STATIONS))))
         assertTrue(Route.Stations in everythingTiles(radio, shared = true))
+    }
+
+    @Test fun theGridIsGroupedAsTheDrawerIs() {
+        // The default bar takes Music and Videos: Media keeps Podcasts and
+        // Audiobooks under its heading, Tools keeps all three; Settings and
+        // the manual close it, unheaded.
+        val media = DefaultNav.groups.first { it.id == "media" }
+        val tools = DefaultNav.groups.first { it.id == "tools" }
+        assertEquals(
+            listOf(
+                TileRun(media, listOf(Route.Podcasts, Route.Audiobooks)),
+                TileRun(tools, listOf(Route.News, Route.Calendar, Route.Files)),
+                TileRun(null, listOf(Route.Settings, Route.Manual)),
+            ),
+            tileRuns(everythingTiles(Capabilities.EMPTY, shared = false)),
+        )
+        // A lone tile left of a group joins the unheaded run beside it.
+        assertEquals(
+            listOf(
+                TileRun(null, listOf(Route.Chat, Route.Music)),
+                TileRun(tools, listOf(Route.News, Route.Files)),
+                TileRun(null, listOf(Route.Settings)),
+            ),
+            tileRuns(listOf(Route.Chat, Route.Music, Route.News, Route.Files, Route.Settings)),
+        )
     }
 
     @Test fun theGridHoldsWhatThisPhonesBarDoesNot() {

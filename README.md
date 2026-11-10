@@ -100,7 +100,7 @@ We build Domovoi in public. Here's where it stands.
   ([Linux host](docs/LINUX_HOST.md) · [CPU host](docs/CPU_HOST.md)). If its
   core ever freezes, it ends itself and systemd starts it again, and an
   admin can restart a core that has stopped answering from the dashboard;
-  the Rooms page (Settings → Rooms & devices → Rooms) then says the core is
+  the Rooms page (Settings → Household → Rooms) then says the core is
   down instead of showing every room offline ([the loop watchdog](docs/LINUX_HOST.md#the-loop-watchdog)).
   Its journal never holds the household token, and what people say shows
   up there only as a word count unless you turn on debug logging
@@ -109,9 +109,10 @@ We build Domovoi in public. Here's where it stands.
   disk once made that fail), and when Postgres can't start, its own last
   lines go to the journal and the install log, passwords blanked.
 - **Voice history is kept 90 days** by default, not for ever: what people
-  say to Domovoi and what it answered. People → Voice history sets 30
-  days, 90 days, a year or forever, and an admin can delete all of it.
-  "Forget me" (after a yes) and forgetting a person on the People page
+  say to Domovoi and what it answered. Settings → Household → People →
+  Voice history sets 30 days, 90 days, a year or forever, and an admin can
+  delete all of it. "Forget me" (after a yes) and forgetting a person in
+  Settings → Household → People
   delete what that person said too
   ([voice history](docs/SECURITY_PRIVACY.md#voice-history-whats-kept-for-how-long)).
 - **AI chat and questions are optional.** Settings → Chat & AI → Models
@@ -121,15 +122,18 @@ We build Domovoi in public. Here's where it stands.
   app keeps only the chats on the phone itself). Both installers ask once
   whether to include it, with the download size. A server installed
   before stays as it was, with AI on.
-- **Settings in five groups, with search and one Health page.** Rooms &
-  devices, Voice, Chat & AI, Privacy and System, with a search box
+- **A shorter sidebar.** Chat, then **Media** (Music, Podcasts,
+  Audiobooks, Videos and plugin pages such as Stations) and **Tools**
+  (News, Calendar, Files), each opening in place, then Plugins. People
+  moved into Settings → Household; `#people` still opens it.
+- **Settings in groups, with search and one Health page.** Household (Rooms, People, Phones & browsers, Printers & scanners), Voice, Chat & AI, Privacy and System (App layout lives here), with a search box
   ("wake", "token"); the app's Settings uses the same groups and names, and
   old bookmarks still land. System → Health lists every check, green or
   not (server, updates, rooms, plugins, internet, containers), and Home's
   "needs attention" rows open their part of it.
 - **Printing and scanning on network printers,** with no drivers: any
   printer or scanner that works with AirPrint, IPP Everywhere or Mopria
-  (eSCL, "AirScan", for scanning). Settings → Rooms & devices → Printers &
+  (eSCL, "AirScan", for scanning). Settings → Household → Printers &
   scanners finds them, adds one by name or address and prints a test page;
   Print sits on PDFs, pictures, text, markdown and spreadsheets in Files
   and Documents, Scan (several pages into one PDF) in Documents → Scans,
@@ -368,8 +372,7 @@ they have been tried on fewer devices than the rest, aren't yet held to
   and a processor from before about 2009 is turned away before anything
   is downloaded. A phone room changes its voice like any room ("switch to
   Kristin's voice"); the server keeps the choice for it. An admin can also
-  pick any room's voice in its drawer on the dashboard (Settings → Rooms &
-  devices → Rooms). A phone room warns before its battery runs out: off its
+  pick any room's voice in its drawer on the dashboard (Settings → Household → Rooms). A phone room warns before its battery runs out: off its
   charger, at 20 % and again at 10 %, the dashboard's Home and Health and
   the app on the household's phones say so, and the room says it aloud
   unless it is in its quiet hours; each room can turn the spoken and the
@@ -642,11 +645,10 @@ Domovoi will have internet ([above](#will-your-domovoi-have-internet)).
 ### 3. Add your first satellite
 
 However a room starts, it ends the same way: the device shows or says a
-six-digit approval code, and you type that code into **Settings → Rooms &
-devices → Rooms** on the dashboard (as admin) to make it a room. Three routes:
+six-digit approval code, and you type that code into **Settings → Household → Rooms** on the dashboard (as admin) to make it a room. Three routes:
 
 - **A Raspberry Pi.** Flash stock Raspberry Pi OS Lite (64-bit), put the
-  card in the server, and use **Settings → Rooms & devices → Rooms → prepare a room's
+  card in the server, and use **Settings → Household → Rooms → prepare a room's
   SD card** (on the Windows installer, which can't see SD cards, download the
   zip and unzip it onto the card). On its first boot the Pi raises its own
   setup Wi-Fi (`Domovoi-Setup-<id>`): join it from a phone, pick your home
@@ -654,7 +656,7 @@ devices → Rooms** on the dashboard (as admin) to make it a room. Three routes:
   Hardware list, the two mic boards, and the by-hand route (installing the
   satellite client and pointing it at `ws://<server>:6370` yourself) are in
   the [Satellite hardware guide](docs/SATELLITE_HARDWARE.md).
-- **A spare Linux or Windows laptop or PC** (preview). **Settings → Rooms & devices → Rooms → add
+- **A spare Linux or Windows laptop or PC** (preview). **Settings → Household → Rooms → add
   a spare device**: type the room's name, press **make the code**, and run
   the one-line command it shows on that computer (an older Linux, or
   Fedora, openSUSE or Arch, gets the satellite's own Python). The computer
@@ -840,8 +842,8 @@ The differences are deliberate:
   plugin and a Stations screen appears; remove it and the screen goes away.
   Server administration (greetings, voices, wake words, models,
   configuration) stays on the dashboard: the app's Settings keeps what
-  belongs to the phone (Rooms, Phones & browsers, Printers & scanners, App
-  layout, Voices, About & updates, Health), and the sections only the
+  belongs to the phone (Rooms, People, Phones & browsers, Printers &
+  scanners, App layout, Voices, About & updates, Health), and the sections only the
   dashboard changes open the dashboard.
   From a satellite's page it can also **drop into that room** — your phone
   joins the room's live two-way audio bridge directly, so you can talk to

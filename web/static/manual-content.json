@@ -125,12 +125,6 @@
     "screen": "News"
    }
   },
-  "people": {
-   "dashboard": "#people",
-   "app": {
-    "screen": "People"
-   }
-  },
   "calendar": {
    "dashboard": "#calendar",
    "app": {
@@ -168,6 +162,13 @@
    "app": {
     "screen": "Settings",
     "tab": "rooms"
+   }
+  },
+  "settings/people": {
+   "dashboard": "#settings/people",
+   "app": {
+    "screen": "Settings",
+    "tab": "people"
    }
   },
   "settings/greetings": {
@@ -375,7 +376,7 @@
      "dashboard",
      "app"
     ],
-    "text": "**Add your first room**: [Settings → Rooms & devices → Rooms](route:settings/rooms). See [A Raspberry Pi room](node:pi-room)."
+    "text": "**Add your first room**: [Settings → Household → Rooms](route:settings/rooms). See [A Raspberry Pi room](node:pi-room)."
    },
    {
     "id": "wake-word",
@@ -410,9 +411,9 @@
     "platforms": [
      "dashboard"
     ],
-    "app_text": "**Pair this phone**: [Settings → Rooms & devices → Phones & browsers](route:app/connection) → **Household token**.",
+    "app_text": "**Pair this phone**: [Settings → Household → Phones & browsers](route:app/connection) → **Household token**.",
     "app_done_when": "this_phone_paired",
-    "text": "**Put the app on your phones**: [Settings → Rooms & devices → Phones & browsers → Get the Domovoi app](route:settings/phones-and-browsers)."
+    "text": "**Put the app on your phones**: [Settings → Household → Phones & browsers → Get the Domovoi app](route:settings/phones-and-browsers)."
    }
   ]
  },
@@ -896,7 +897,10 @@
        "text": "The **app** brings the everyday pages to your phone, with its own music player and Chat. Chat holds your chats on the home server and chats that run on the phone itself, with no server."
       },
       {
-       "text": "**Settings** is in five groups: Rooms & devices, Voice, Chat & AI, Privacy, and System. The search box at the top finds a setting by name: try \"wake\", \"voice history\" or \"token\"."
+       "text": "The dashboard's sidebar: **Chat**, then **Media** (Music, Podcasts, Audiobooks, Videos, and pages plugins add there, like Stations) and **Tools** (News, Calendar, Files), each opening in place, then **Plugins**. On a phone, Home's \"everything\" grid has the same groups."
+      },
+      {
+       "text": "**Settings** is in groups: Household (Rooms, People, Phones & browsers, Printers & scanners), Voice, Chat & AI, Privacy, and System (with App layout). The search box at the top finds a setting by name: try \"wake\", \"voice history\" or \"token\"."
       }
      ]
     }
@@ -998,7 +1002,7 @@
     },
     {
      "type": "p",
-     "text": "Your timers show on [Home](route:home) and in each room's **Timers** tab ([Settings → Rooms & devices → Rooms](route:settings/rooms))."
+     "text": "Your timers show on [Home](route:home) and in each room's **Timers** tab ([Settings → Household → Rooms](route:settings/rooms))."
     },
     {
      "type": "p",
@@ -1409,7 +1413,7 @@
     },
     {
      "type": "p",
-     "text": "Notes show in each room's **Notes** tab ([Settings → Rooms & devices → Rooms](route:settings/rooms)). Memories show on [People](route:people), under each person's **Memory** tab."
+     "text": "Notes show in each room's **Notes** tab ([Settings → Household → Rooms](route:settings/rooms)). Memories show on [Settings → Household → People](route:settings/people), under each person's **Memory** tab."
     }
    ],
    "more": {
@@ -2418,7 +2422,7 @@
     },
     {
      "type": "p",
-     "text": "After the short answer, Domovoi asks \"Want me to send the steps to your phone?\" Say yes, and they arrive as a chat called \"Help: …\" on the phones marked as yours ([Settings → Rooms & devices → Phones & browsers](route:app/connection), **This phone belongs to**, in the app). If Domovoi doesn't know your voice, it asks who to send them to. It never sends them to every phone."
+     "text": "After the short answer, Domovoi asks \"Want me to send the steps to your phone?\" Say yes, and they arrive as a chat called \"Help: …\" on the phones marked as yours ([Settings → Household → Phones & browsers](route:app/connection), **This phone belongs to**, in the app). If Domovoi doesn't know your voice, it asks who to send them to. It never sends them to every phone."
     },
     {
      "type": "label",
@@ -3144,7 +3148,7 @@
      "ordered": false,
      "items": [
       {
-       "text": "[Settings → Rooms & devices → Printers & scanners](route:settings/printers) shows the printers Domovoi can see. Press **Add** on yours, name it, then **Test page**. Not listed? Press **Look for printers** (**Look again** once it has looked), or type its address under **Add by address**. The address is on the printer's own screen or settings page."
+       "text": "[Settings → Household → Printers & scanners](route:settings/printers) shows the printers Domovoi can see. Press **Add** on yours, name it, then **Test page**. Not listed? Press **Look for printers** (**Look again** once it has looked), or type its address under **Add by address**. The address is on the printer's own screen or settings page."
       },
       {
        "text": "**Default for the house** makes one printer the house's. A room can have its own (**Default in rooms**): voice from that room prints there."
@@ -3314,7 +3318,7 @@
      "ordered": true,
      "items": [
       {
-       "text": "On the dashboard, [Settings → Rooms & devices → Phones & browsers → Get the Domovoi app](route:settings/phones-and-browsers) shows a QR code. If it says the app isn't on the server yet, ask whoever set up Domovoi to press **Download the app to this server**."
+       "text": "On the dashboard, [Settings → Household → Phones & browsers → Get the Domovoi app](route:settings/phones-and-browsers) shows a QR code. If it says the app isn't on the server yet, ask whoever set up Domovoi to press **Download the app to this server**."
       },
       {
        "text": "Scan the code with the phone's camera and install. Android asks you to allow installs from your browser once."
@@ -3323,13 +3327,13 @@
        "text": "Open Domovoi. Tap **connect** at the top, pick your server (it scans your Wi-Fi), and press **trust this server**. Can't see it? Use **add manually** with the dashboard's address."
       },
       {
-       "text": "**pair this phone**: type the household token. An admin finds it in [Settings → Rooms & devices → Phones & browsers → Household token](route:settings/phones-and-browsers)."
+       "text": "**pair this phone**: type the household token. An admin finds it in [Settings → Household → Phones & browsers → Household token](route:settings/phones-and-browsers)."
       }
      ]
     },
     {
      "type": "p",
-     "text": "Switch or forget a server from the server name at the top, or in [Settings → Rooms & devices → Phones & browsers](route:app/connection).",
+     "text": "Switch or forget a server from the server name at the top, or in [Settings → Household → Phones & browsers](route:app/connection).",
      "only": "app"
     },
     {
@@ -3743,7 +3747,7 @@
      "ordered": false,
      "items": [
       {
-       "text": "[Settings → Rooms & devices → App layout](route:settings/app-layout): pick 2 to 5 tabs for the bottom of the screen. Home always comes first."
+       "text": "[Settings → System → App layout](route:settings/app-layout): pick 2 to 5 tabs for the bottom of the screen. Home always comes first."
       },
       {
        "text": "[Settings → Voice → Voices](route:app/voice): how this phone speaks."
@@ -3787,7 +3791,7 @@
     },
     {
      "type": "p",
-     "text": "Each room is one listening device: a Raspberry Pi, a spare laptop, or a phone. [Settings → Rooms & devices → Rooms](route:settings/rooms) lists them. Each card shows:"
+     "text": "Each room is one listening device: a Raspberry Pi, a spare laptop, or a phone. [Settings → Household → Rooms](route:settings/rooms) lists them. Each card shows:"
     },
     {
      "type": "list",
@@ -3859,7 +3863,7 @@
     },
     {
      "type": "p",
-     "text": "[Settings → Rooms & devices → Rooms](route:settings/rooms) shows the same rooms.",
+     "text": "[Settings → Household → Rooms](route:settings/rooms) shows the same rooms.",
      "only": "app"
     },
     {
@@ -3946,7 +3950,7 @@
        "text": "Put Raspberry Pi OS Lite (64-bit) on a microSD card, and put the card in the server's card reader."
       },
       {
-       "text": "[Settings → Rooms & devices → Rooms](route:settings/rooms) → **prepare a room's SD card**. Choose **wi-fi setup portal**, then **write to** the card's drive, and press **Prepare**."
+       "text": "[Settings → Household → Rooms](route:settings/rooms) → **prepare a room's SD card**. Choose **wi-fi setup portal**, then **write to** the card's drive, and press **Prepare**."
       },
       {
        "text": "**On the Windows install**, which can't see SD cards: choose **download for the card helper**, then write the card with the tray icon's **Prepare a room's SD card**. It fills in the setup Wi-Fi password by itself. You'll still need that password for your phone: **show setup details** shows it."
@@ -4004,7 +4008,7 @@
      "ordered": true,
      "items": [
       {
-       "text": "[Settings → Rooms & devices → Rooms](route:settings/rooms) → **add a spare device**. Type the room's name, then press **make the code**."
+       "text": "[Settings → Household → Rooms](route:settings/rooms) → **add a spare device**. Type the room's name, then press **make the code**."
       },
       {
        "text": "**Windows:** on that PC, signed in as the account it should use, press **Download the Windows Setup** (or type the short address the card shows into that PC's browser). The setup code and your server are in the file's name, so there is nothing to type."
@@ -4078,7 +4082,7 @@
      "ordered": true,
      "items": [
       {
-       "text": "{admin} once: [Settings → Rooms & devices → Rooms](route:settings/rooms) → **prepare a room's SD card** → **Refresh caches**. This gives phones the wake word."
+       "text": "{admin} once: [Settings → Household → Rooms](route:settings/rooms) → **prepare a room's SD card** → **Refresh caches**. This gives phones the wake word."
       },
       {
        "text": "{admin} **add a spare device**, name the room, then **make the code**. A QR code appears. If the card says the app isn't on the server yet, press **Download the app to this server** on that card first."
@@ -4096,7 +4100,7 @@
     },
     {
      "type": "p",
-     "text": "A phone that already has the app can do this from [Settings → Rooms & devices → Rooms](route:settings/rooms) → **Use this device as a room**, or from the **Domovoi Room** icon. A phone you also use every day needs a screen lock, and while it's a room, the rest of the app is locked.",
+     "text": "A phone that already has the app can do this from [Settings → Household → Rooms](route:settings/rooms) → **Use this device as a room**, or from the **Domovoi Room** icon. A phone you also use every day needs a screen lock, and while it's a room, the rest of the app is locked.",
      "only": "app"
     },
     {
@@ -4412,7 +4416,7 @@
        "text": "Teach a new room your voice: say \"my name is …\" there. It asks \"Is that you?\"; say yes."
       },
       {
-       "text": "[People](route:people) shows everyone, when they were last heard, and their memories."
+       "text": "[Settings → Household → People](route:settings/people) shows everyone, when they were last heard, and their memories."
       },
       {
        "text": "{admin} **rename**, **forget person**, or delete one wrong voice sample."
@@ -4426,7 +4430,7 @@
     },
     {
      "type": "p",
-     "text": "Two people with the same name: an admin renames one on [People](route:people)."
+     "text": "Two people with the same name: an admin renames one on [Settings → Household → People](route:settings/people)."
     }
    ],
    "more": {
@@ -4519,7 +4523,7 @@
    "blocks": [
     {
      "type": "p",
-     "text": "[Settings → Rooms & devices → Phones & browsers](route:settings/phones-and-browsers):"
+     "text": "[Settings → Household → Phones & browsers](route:settings/phones-and-browsers):"
     },
     {
      "type": "list",
@@ -4648,13 +4652,13 @@
        "text": "\"forget me\", in your own voice: deletes your profile, voice samples, memories and everything you said to Domovoi."
       },
       {
-       "text": "{admin} [People](route:people) → **Voice history** → **Keep voice history**: 30 days, 90 days (the default), 1 year or Forever. Older turns are deleted every day. It's also in [Settings → System → Advanced](route:settings/advanced) → **show the settings** → **Privacy**."
+       "text": "{admin} [Settings → Household → People](route:settings/people) → **Voice history** → **Keep voice history**: 30 days, 90 days (the default), 1 year or Forever. Older turns are deleted every day. It's also in [Settings → System → Advanced](route:settings/advanced) → **show the settings** → **Privacy**."
       },
       {
        "text": "{admin} **Delete all voice history**, on the same page, deletes it all at once. People, voice samples, memories, notes, timers and chats stay."
       },
       {
-       "text": "{admin} **forget person** on [People](route:people) does what \"forget me\" does, for anyone: it deletes only what that person said."
+       "text": "{admin} **forget person** on [Settings → Household → People](route:settings/people) does what \"forget me\" does, for anyone: it deletes only what that person said."
       },
       {
        "text": "\"never save my voice\": Domovoi stops learning it."
@@ -4930,7 +4934,7 @@
     },
     {
      "type": "p",
-     "text": "**If every room is offline but the dashboard opens**, the server's core has stopped answering. It restarts itself within about a minute. If it doesn't, an admin presses **Restart the core**. It's on [Home](route:home), on [Settings → Rooms & devices → Rooms](route:settings/rooms), on [Settings → System → About & updates](route:settings/about), and on the Domovoi server row of [Settings → System → Health](route:settings/health). The app says the core isn't answering, and reconnects by itself."
+     "text": "**If every room is offline but the dashboard opens**, the server's core has stopped answering. It restarts itself within about a minute. If it doesn't, an admin presses **Restart the core**. It's on [Home](route:home), on [Settings → Household → Rooms](route:settings/rooms), on [Settings → System → About & updates](route:settings/about), and on the Domovoi server row of [Settings → System → Health](route:settings/health). The app says the core isn't answering, and reconnects by itself."
     },
     {
      "type": "label",

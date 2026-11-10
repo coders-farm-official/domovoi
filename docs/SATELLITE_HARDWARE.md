@@ -56,7 +56,7 @@ Buy one full kit first, get it working end-to-end, then provision the rest.
 A **video satellite** adds a screen: it plays music like any satellite and
 renders a fullscreen now-playing page (cover art, progress, touch
 transport) in a kiosk browser, with its controls in a type-gated block on
-the room's drawer in the dashboard's Settings → Rooms & devices → Rooms. Reference
+the room's drawer in the dashboard's Settings → Household → Rooms. Reference
 hardware is the **Radxa Zero 3W** (RK3566, ≥2 GB RAM recommended) with an
 HDMI screen or DSI touch panel; voice is optional per device (`[mic]
 enabled`) — the default video build has no mic and adds one later by
@@ -70,7 +70,7 @@ mini PC**, a **Windows laptop or PC**, an old **phone or tablet** (room mode
 in the Android app) or an old computer booted from a **USB stick** your
 server makes can be a room, with the same approval code and the same
 features as a Pi. They are a preview in 1.0: tried on fewer devices than a
-Pi. In the dashboard: **Settings → Rooms & devices → Rooms → add a spare
+Pi. In the dashboard: **Settings → Household → Rooms → add a spare
 device**. A Windows PC gets a Setup to double-click. It is not code-signed
 yet, so Windows SmartScreen stops it once ("Windows protected your PC"):
 press **More info**, then **Run anyway**. Everything about these devices,
@@ -125,7 +125,7 @@ or a `.local` name and nothing else, refuses a form body over 8 KB without
 reading it, and shows the address it resolved on the confirmation page so a
 typo is visible before the setup network closes.
 
-Choose the route when you prepare the card: **Settings → Rooms & devices →
+Choose the route when you prepare the card: **Settings → Household →
 Rooms → prepare a room's SD card → wi-fi setup portal** (the default) or **usb
 adoption**.
 
@@ -142,14 +142,14 @@ password. The zip's `README.txt` keeps the steps by hand (below).
 
 Skip most of the manual steps below: flash **stock Raspberry Pi OS Lite
 (64-bit)** with any tool (no pre-configure needed), re-insert the card
-into the Domovoi server, and use **Settings → Rooms & devices → Rooms →
+into the Domovoi server, and use **Settings → Household → Rooms →
 prepare a room's SD card**. The dashboard writes a first-boot overlay + a
 fully-offline payload (all Python wheels, packages, the satellite code from
 this machine, and any plugin payloads) onto the card's boot partition. Then
 boot the device. With the default Wi-Fi setup portal, join its
 `Domovoi-Setup-<id>` network from a phone and finish there (above). With
 USB adoption, plug it into the server's USB port and adopt it from
-Settings → Rooms & devices → Rooms (name + Wi-Fi, done). Everything below
+Settings → Household → Rooms (name + Wi-Fi, done). Everything below
 remains the manual path, still the reference for custom setups and
 debugging.
 
@@ -352,8 +352,7 @@ it's the real reference. The map:
 | `[playback]`, `[music]` | TTS pre-buffering, TTS make-up gain (important on the XVF3800's quiet line-level jack), and the ALSA device + priming handshake for music streaming. |
 | `[leds]`, `[wifi]`, `[log]` | LED backend/brightness, the Wi-Fi self-heal watchdog, log level. |
 
-Most settings can also be edited from the dashboard: **Settings → Rooms &
-devices → Rooms → (your room) → Settings**. Saving there rewrites the Pi's `config.toml` in place —
+Most settings can also be edited from the dashboard: **Settings → Household → Rooms → (your room) → Settings**. Saving there rewrites the Pi's `config.toml` in place —
 preserving your comments, keeping a `.bak` — and restarts the satellite to
 apply (that's what the self-restart sudoers entry is for).
 
@@ -454,7 +453,7 @@ trusted. You never scp `.onnx` files around.
 
 ## Self-upgrade
 
-You also never scp *code* around. From the dashboard's Settings → Rooms & devices → Rooms (or
+You also never scp *code* around. From the dashboard's Settings → Household → Rooms (or
 `POST /v1/admin/satellite/upgrade` — admin-gated, since it makes a Pi
 execute freshly-synced code; see
 [SECURITY_PRIVACY.md](SECURITY_PRIVACY.md#what-the-admin-password-actually-gates)),

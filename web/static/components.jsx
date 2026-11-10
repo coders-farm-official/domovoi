@@ -409,8 +409,9 @@ const currentRoute = () => {
  * lives in Settings, Rooms since 2026-10-21; the old #satellites (a
  * bookmark, a link in the docs) still lands there. The container guard's
  * page (#containers: a phone's notification, an old bookmark) is part of
- * Settings → System → Health since 2026-10-21. */
-const SETTINGS_TAB_ROUTES = { satellites: ['rooms'], containers: ['health', 'containers'] };
+ * Settings → System → Health since 2026-10-21. People is Settings →
+ * Household → People since 2026-11-09 (#people/… keeps what follows). */
+const SETTINGS_TAB_ROUTES = { satellites: ['rooms'], containers: ['health', 'containers'], people: ['people'] };
 
 /* The route an address means, tidied: no '#', no empty segments, lower
  * case; an old route of a Settings tab (#satellites, and anything after
@@ -1589,7 +1590,10 @@ const NavItem = ({ icon, label, badge, active, onClick }) => (
  *
  * Satellites is not here: since 2026-10-11 it is part of Settings
  * (Settings → Rooms since 2026-10-21), and the old #satellites still lands
- * on it (SETTINGS_TAB_ROUTES below). */
+ * on it (SETTINGS_TAB_ROUTES below). People is not a sidebar page either
+ * since 2026-11-09: it is Settings → Household → People (#people opens
+ * it), and only a phone bar someone set up with it still carries it
+ * (`barOnly`, below). */
 const CORE_NAV_ITEMS = [
   { route: 'home',       icon: 'house',       label: 'Home',       order: 1, brandLink: true },
   { route: 'chat',       icon: 'message-square', label: 'Chat',    order: 8 },
@@ -1600,11 +1604,139 @@ const CORE_NAV_ITEMS = [
   // order 16 is deliberately free — the Image Generation plugin's Images
   // page slots there (nav_order 16 in its manifest) when installed.
   { route: 'news',       icon: 'newspaper',   label: 'News',       order: 18 },
-  { route: 'people',     icon: 'users',       label: 'People',     order: 20, countKey: 'people' },
+  // A Settings section since 2026-11-09, on no launcher but the phone bar,
+  // and there only when someone here picked it (Settings → App layout):
+  // a bar saved with People keeps its tab, which opens Settings → People.
+  { route: 'people',     icon: 'users',       label: 'People',     order: 20, countKey: 'people', barOnly: true },
   { route: 'calendar',   icon: 'calendar',    label: 'Calendar',   order: 40, countKey: 'calendar' },
   { route: 'files',      icon: 'folder',      label: 'Files',      order: 45 },
   { route: 'plugins',    icon: 'blocks',      label: 'Plugins',    order: 95 },
 ];
+
+/* The sidebar's groups (owner design, 2026-11-09): Home · Chat · Media ▸ ·
+ * Tools ▸ · Plugins, and a plugin page with no group stays a top-level row.
+ * THE one table for a group's name and its core pages: renaming "Media" is
+ * this label. A plugin page joins a group by its manifest's `nav_group`
+ * (one of these ids; domovoi/plugins_runtime/manifest.py NAV_GROUPS keeps
+ * the same list). `open`: open on a browser that never toggled it, so Music
+ * is one click from a cold load. resolveNavTree turns this, the plugins'
+ * groups and a household's own layout into what every launcher draws. */
+const NAV_GROUPS = [
+  { id: 'media', label: 'Media', icon: 'circle-play', open: true,
+    routes: ['music', 'podcasts', 'audiobooks', 'videos'] },
+  { id: 'tools', label: 'Tools', icon: 'wrench', open: false,
+    routes: ['news', 'calendar', 'files'] },
+];
+
+/* The nav tree a launcher draws, from three inputs:
+ *   items    — the pages this screen may show, in nav order (navItemsFor:
+ *              core and plugin, already filtered for a shared screen and
+ *              the AI switch); a plugin page's manifest group rides on it
+ *              as `navGroup`;
+ *   override — a household's own layout, or null for the defaults:
+ *              { groups: [{ id, label, items: [route, …] }], top: [route, …] }
+ *              (for the Settings → App layout editor still to come);
+ *   groups   — the default table (NAV_GROUPS).
+ * Returns [{ kind: 'item', item } | { kind: 'group', id, label, icon, open,
+ * items }] in sidebar order.
+ *
+ * Rules. Without an override every page sits in its default group (core:
+ * the table; plugin: its nav_group), else at the top level. With one, the
+ * groups are the override's, with its labels (a default group it leaves
+ * out is gone); a page it lists in a group goes there, in the listed
+ * order, one it lists in `top` is a top-level row; the first mention wins,
+ * and a route this screen doesn't offer (unknown, a removed plugin, hidden
+ * here) is ignored. A page it doesn't mention keeps its default group when
+ * that group still exists, after the listed ones, else goes to the top
+ * level. Rows and groups sort by nav order, a group at its first page.
+ * Last, the shape: a group with exactly one page is that page's row (no
+ * group around one item), and an empty group is not drawn. Home (the
+ * brand row) and bar-only pages are never part of it. Pure. */
+const resolveNavTree = (items, override = null, groups = NAV_GROUPS) => {
+  const list = (items || []).filter((it) => it && !it.brandLink && !it.barOnly);
+  const byRoute = new Map();
+  list.forEach((it) => { if (!byRoute.has(it.route)) byRoute.set(it.route, it); });
+  const pos = new Map([...byRoute.keys()].map((r, i) => [r, i]));
+  const table = Array.isArray(groups) ? groups : [];
+  const defaultGroup = (it) => {
+    if (!it.core) return typeof it.navGroup === 'string' ? it.navGroup : null;
+    const g = table.find((x) => (x.routes || []).includes(it.route));
+    return g ? g.id : null;
+  };
+  const ov = override && typeof override === 'object' && !Array.isArray(override) ? override : null;
+  const routesOf = (v) => (Array.isArray(v) ? v.filter((r) => typeof r === 'string') : []);
+  let out;   // the groups: { id, label, icon, open, listed }
+  if (ov && Array.isArray(ov.groups)) {
+    const seen = new Set();
+    out = ov.groups.filter((g) => g && typeof g.id === 'string' && g.id && !seen.has(g.id) && seen.add(g.id))
+      .map((g) => {
+        const base = table.find((x) => x.id === g.id) || {};
+        const label = typeof g.label === 'string' && g.label.trim() ? g.label.trim() : (base.label || g.id);
+        return { id: g.id, label, icon: base.icon || 'folder', open: !!base.open, listed: routesOf(g.items) };
+      });
+  } else {
+    out = table.map((g) => ({ id: g.id, label: g.label, icon: g.icon, open: !!g.open, listed: [] }));
+  }
+  const ids = new Set(out.map((g) => g.id));
+  const placed = new Map();   // route → group id, or null for the top level
+  out.forEach((g) => g.listed.forEach((r) => { if (byRoute.has(r) && !placed.has(r)) placed.set(r, g.id); }));
+  if (ov) routesOf(ov.top).forEach((r) => { if (byRoute.has(r) && !placed.has(r)) placed.set(r, null); });
+  byRoute.forEach((it, r) => {
+    if (placed.has(r)) return;
+    const g = defaultGroup(it);
+    placed.set(r, ids.has(g) ? g : null);
+  });
+  const members = new Map(out.map((g) => [g.id, []]));
+  out.forEach((g) => g.listed.forEach((r) => {
+    const m = members.get(g.id);
+    if (placed.get(r) === g.id && !m.includes(r)) m.push(r);
+  }));
+  byRoute.forEach((it, r) => {
+    const g = placed.get(r);
+    if (g != null && !members.get(g).includes(r)) members.get(g).push(r);
+  });
+  const entries = [];
+  byRoute.forEach((it, r) => { if (placed.get(r) == null) entries.push({ at: pos.get(r), e: { kind: 'item', item: it } }); });
+  out.forEach((g) => {
+    const its = members.get(g.id).map((r) => byRoute.get(r));
+    if (!its.length) return;
+    const at = Math.min(...its.map((it) => pos.get(it.route)));
+    entries.push({ at, e: its.length === 1
+      ? { kind: 'item', item: its[0] }
+      : { kind: 'group', id: g.id, label: g.label, icon: g.icon, open: g.open, items: its } });
+  });
+  return entries.sort((a, b) => a.at - b.at).map((x) => x.e);
+};
+
+/* Which sidebar groups are open, in this browser (localStorage, a
+ * per-device convenience: { <group id>: true | false }). A group never
+ * toggled here is its table default. Storage that can't read or keep it
+ * keeps it for the visit. */
+const NAV_GROUPS_KEY = 'domovoi-nav-groups';
+const NavGroupsStore = (() => {
+  let memory = {};
+  const subs = new Set();
+  const get = () => {
+    try {
+      const v = JSON.parse(localStorage.getItem(NAV_GROUPS_KEY) || 'null');
+      if (v && typeof v === 'object' && !Array.isArray(v)) return { ...memory, ...v };
+    } catch { /* blocked or junk: this visit's memory */ }
+    return { ...memory };
+  };
+  const set = (id, open) => {
+    const next = { ...get(), [id]: !!open };
+    memory = next;
+    try { localStorage.setItem(NAV_GROUPS_KEY, JSON.stringify(next)); } catch { /* kept for the visit */ }
+    subs.forEach((fn) => { try { fn(); } catch { /* one bad subscriber */ } });
+  };
+  return { get, set, subscribe(fn) { subs.add(fn); return () => { subs.delete(fn); }; } };
+})();
+
+const useNavGroupsOpen = () => {
+  const [state, setState] = React.useState(() => NavGroupsStore.get());
+  React.useEffect(() => NavGroupsStore.subscribe(() => setState(NavGroupsStore.get())), []);
+  return state;
+};
 
 /* Pages a shared screen (an admin marks the device in Settings → Phones & browsers;
  * the kitchen tablet) leaves off EVERY launcher — the sidebar, the phone
@@ -1663,6 +1795,8 @@ const buildNavItems = (manifest) => {
     items.push({
       route: pg.route, label: pg.nav_label || pg.route,
       iconSrc: pg.nav_icon, iconSrcDark: pg.nav_icon_dark || null, order: pg.nav_order ?? 50,
+      // The sidebar group its manifest asked for (resolveNavTree), or none.
+      navGroup: typeof pg.nav_group === 'string' ? pg.nav_group : null,
       core: false, slug: p.slug,
     });
   }));
@@ -2070,6 +2204,7 @@ const navItemClass = (it, route, primaryRoutes) => [
   route === it.route ? 'active' : '',
   primaryRoutes.has(it.route) ? 'primary' : '',
   it.brandLink ? 'brand-link' : '',
+  it.barOnly ? 'bar-only' : '',
   it.brandLink && route !== it.route && !primaryRoutes.has(route) ? 'more-active' : '',
 ].filter(Boolean).join(' ');
 
@@ -2084,6 +2219,42 @@ const Sidebar = ({ route, setRoute, counts, manifest, badges: given }) => {
   const items = navItemsFor(manifest, { shared, ai });
   const strip = phoneBarRoutes(items, usePhoneBar());
   const primaryRoutes = new Set(strip);
+  // Groups (resolveNavTree; no household layout yet: null). The phone
+  // strip is these same rows: at 760px and below the groups dissolve
+  // (display: contents) and only the bar's rows show, in the bar's order.
+  const tree = resolveNavTree(items, null);
+  const stored = useNavGroupsOpen();
+  const activeGroup = (tree.find((e) => e.kind === 'group' && e.items.some((it) => it.route === route)) || {}).id || null;
+  // Folding the group of the page on screen holds until the next page.
+  const [foldedAt, setFoldedAt] = useState(null);
+  const isOpen = (g) => (g.id === activeGroup && foldedAt !== route)
+    || (typeof stored[g.id] === 'boolean' ? stored[g.id] : !!g.open);
+  const toggle = (g) => {
+    const open = isOpen(g);
+    if (open && g.id === activeGroup) setFoldedAt(route);
+    if (!open) setFoldedAt(null);
+    NavGroupsStore.set(g.id, !open);
+  };
+  const badgeOf = (it) => (it.core
+    ? (it.countKey ? counts[it.countKey] : null)
+    : badges[it.route]);
+  const row = (it) => (
+    <a key={it.route} href={`#${it.route}`}
+       className={navItemClass(it, route, primaryRoutes)}
+       aria-current={route === it.route ? 'page' : undefined}
+       // The phone strip's left-to-right order (styles.css reads
+       // it only at 760px and below).
+       style={primaryRoutes.has(it.route) ? { '--strip-order': strip.indexOf(it.route) + 1 } : undefined}
+       onClick={(e) => { if (e && e.preventDefault) e.preventDefault(); setRoute(it.route); }}>
+      {it.core
+        ? <Icon name={it.icon} className="ico" size={16}/>
+        : <PluginNavIcon src={it.iconSrc} srcDark={it.iconSrcDark}/>}
+      <span>{it.label}</span>
+      {badgeOf(it) != null && <span className="badge">{badgeOf(it)}</span>}
+    </a>
+  );
+  // Home and a bar-only page (People) are rows for the phone strip only.
+  const stripOnly = items.filter((it) => it.brandLink || (it.barOnly && primaryRoutes.has(it.route)));
   return (
     <aside className="sidebar">
       {/* The way home on a desktop. An anchor, not an onClick div, so it
@@ -2099,24 +2270,30 @@ const Sidebar = ({ route, setRoute, counts, manifest, badges: given }) => {
 
       <div className="nav-wrap">
         <div className="nav-section">workspace</div>
-        <nav className="nav">
-          {items.map((it) => (
-            <div key={it.route}
-                 className={navItemClass(it, route, primaryRoutes)}
-                 // The phone strip's left-to-right order (styles.css reads
-                 // it only at 760px and below).
-                 style={primaryRoutes.has(it.route) ? { '--strip-order': strip.indexOf(it.route) + 1 } : undefined}
-                 onClick={() => setRoute(it.route)}>
-              {it.core
-                ? <Icon name={it.icon} className="ico" size={16}/>
-                : <PluginNavIcon src={it.iconSrc} srcDark={it.iconSrcDark}/>}
-              <span>{it.label}</span>
-              {it.core && it.countKey && counts[it.countKey] != null
-                && <span className="badge">{counts[it.countKey]}</span>}
-              {!it.core && badges[it.route] != null
-                && <span className="badge">{badges[it.route]}</span>}
-            </div>
-          ))}
+        <nav className="nav" aria-label="pages">
+          {stripOnly.map(row)}
+          {tree.map((e) => {
+            if (e.kind === 'item') return row(e.item);
+            const open = isOpen(e);
+            // A folded group shows a quiet dot when a page in it has a count.
+            const dot = !open && e.items.some((it) => { const b = badgeOf(it); return b != null && b !== 0 && b !== '0'; });
+            return (
+              <div key={`group:${e.id}`} className={`nav-group${open ? ' open' : ''}${e.id === activeGroup ? ' has-active' : ''}`}
+                   data-group={e.id}>
+                <button type="button" className="nav-group-head"
+                        aria-expanded={open} aria-controls={`nav-group-${e.id}`}
+                        onClick={() => toggle(e)}>
+                  <Icon name={e.icon} className="ico" size={16}/>
+                  <span>{e.label}</span>
+                  {dot && <span className="nav-group-dot" aria-hidden="true"/>}
+                  <span className="nav-group-chev"><Icon name="chevron-right" size={14}/></span>
+                </button>
+                <div className="nav-group-items" id={`nav-group-${e.id}`} role="group" aria-label={e.label}>
+                  {e.items.map(row)}
+                </div>
+              </div>
+            );
+          })}
         </nav>
       </div>
 
@@ -3426,7 +3603,7 @@ const FirstRunAllSet = () => {
               <div className="first-run-token-missing">
                 Couldn’t load it just now.{' '}
                 <button type="button" className="home-link" onClick={load}>try again</button>
-                {' '}· It’s always in Settings → Rooms & devices → Phones & browsers → Household token.
+                {' '}· It’s always in Settings → Household → Phones & browsers → Household token.
               </div>
             ) : (
               <div className="first-run-token-missing">loading…</div>
@@ -3500,7 +3677,7 @@ const FirstRunAllSet = () => {
  * now" is per server, as the welcome's. */
 const CONNECT_DISMISS_KEY = 'domovoi-connect-dismissed';
 const CONNECT_REFUSED_TEXT = "that isn't this home's household token — check it with whoever set up Domovoi and try again";
-const CONNECT_WHERE_TEXT = 'Ask whoever set up Domovoi — it’s in Settings → Rooms & devices → Phones & browsers → Household token.';
+const CONNECT_WHERE_TEXT = 'Ask whoever set up Domovoi — it’s in Settings → Household → Phones & browsers → Household token.';
 
 const ConnectAsk = (() => {
   let wanted = false;     // Home's "Connect this browser"
@@ -4343,7 +4520,7 @@ const DeviceTokenNotice = () => {
 Object.assign(window, {
   Icon, DomovoiGlyph, SleepingDomovoi, HeadphonesDomovoi, StatusDot, Pill, PreviewTag, PREVIEW_MEANS, RoomChip, Avatar,
   Card, Empty, Button, IconButton, Sidebar, Topbar, PageHeader, Stat, useToast, Tabs,
-  CORE_NAV_ITEMS, buildNavItems, navItemsFor, CapabilitiesStore, useAiFeatures, aiFeaturesOn, AI_ONLY_ROUTES, PluginNavIcon, useDarkTheme, usePluginBadges,
+  CORE_NAV_ITEMS, NAV_GROUPS, resolveNavTree, NavGroupsStore, buildNavItems, navItemsFor, CapabilitiesStore, useAiFeatures, aiFeaturesOn, AI_ONLY_ROUTES, PluginNavIcon, useDarkTheme, usePluginBadges,
   PluginPageFrame, pluginAccentStyle, ToastNotice,
   SHARED_SCREEN_HIDDEN, useSharedScreen,
   PHONE_BAR_DEFAULT, PHONE_BAR_MAX, PHONE_BAR_MIN, PhoneBarStore, usePhoneBar, phoneBarRoutes, phoneBarEdit,

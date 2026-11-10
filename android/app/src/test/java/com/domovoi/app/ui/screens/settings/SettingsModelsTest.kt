@@ -2,6 +2,7 @@ package com.domovoi.app.ui.screens.settings
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -13,22 +14,48 @@ import org.junit.Test
 class SettingsModelsTest {
 
     @Test fun settingsHasTheDashboardsGroupsAndNames() {
-        // The web's regroup (2026-10-21): the same five groups, the same
-        // plain names, in the same order.
+        // The web's regroup (2026-10-21), and the nav regroup: "Rooms &
+        // devices" is Household and holds People; App layout is in System.
         assertEquals(
-            listOf("Rooms & devices", "Voice", "Chat & AI", "Privacy", "System"),
+            listOf("Household", "Voice", "Chat & AI", "Privacy", "System"),
             SettingsGroup.entries.map { it.label },
         )
         assertEquals(
             listOf(
-                listOf("Rooms", "Phones & browsers", "Printers & scanners", "App layout"),
+                listOf("Rooms", "People", "Phones & browsers", "Printers & scanners"),
                 listOf("Wake words", "Voices", "Greetings"),
                 listOf("Models", "Chat"),
                 listOf("Internet", "Voice history"),
-                listOf("About & updates", "Health", "Advanced"),
+                listOf("About & updates", "Health", "App layout", "Advanced"),
             ),
             SettingsGroup.entries.map { g -> sectionsOf(g).map { it.label } },
         )
+    }
+
+    @Test fun aSharedScreenLeavesPeopleOutOfSettingsToo() {
+        assertEquals(
+            listOf("Rooms", "Phones & browsers", "Printers & scanners"),
+            sectionsOf(SettingsGroup.Household, shared = true).map { it.label },
+        )
+        assertEquals(SettingsSection.People, searchSettings("people").first())
+        assertTrue(SettingsSection.People !in searchSettings("people", shared = true))
+        // A link to People on the kitchen tablet opens Household, without it.
+        assertEquals(SettingsPlace.Section(SettingsSection.People), placeOf("people"))
+        assertEquals(SettingsPlace.Group(SettingsGroup.Household), placeOf("people", shared = true))
+        // Every other section is shown on a shared screen as before.
+        SettingsGroup.entries.filter { it != SettingsGroup.Household }
+            .forEach { assertEquals(sectionsOf(it), sectionsOf(it, shared = true)) }
+    }
+
+    @Test fun theOldGroupKeyStillLands() {
+        assertEquals("household", SettingsGroup.Household.key)
+        assertEquals(SettingsPlace.Group(SettingsGroup.Household), placeOf("group:rooms-and-devices"))
+        assertEquals(SettingsPlace.Group(SettingsGroup.Household), placeOf("group:household"))
+        assertEquals(SettingsPlace.Group(SettingsGroup.Household), placeOf("rooms-and-devices"))
+        assertEquals(SettingsPlace.Group(SettingsGroup.Household), placeOf("household"))
+        // A section's old key still wins over a group of the same name.
+        assertEquals(SettingsPlace.Section(SettingsSection.Voices), placeOf("voice"))
+        assertEquals("group:household", placeOf("group:rooms-and-devices").key)
     }
 
     @Test fun whatOnlyTheDashboardChangesOpensItThereInWordsEveryDashboardKnows() {
@@ -52,6 +79,7 @@ class SettingsModelsTest {
         val routeKey = { r: com.domovoi.app.ui.shell.Route -> com.domovoi.app.ui.shell.settingsTabFor(r) }
         assertEquals(SettingsSection.Rooms, SettingsSection.named(routeKey(com.domovoi.app.ui.shell.Route.Satellites)))
         assertEquals(SettingsSection.Health, SettingsSection.named(routeKey(com.domovoi.app.ui.shell.Route.Containers)))
+        assertEquals(SettingsSection.People, SettingsSection.named(routeKey(com.domovoi.app.ui.shell.Route.People)))
         assertEquals(SettingsSection.AppLayout, SettingsSection.named("app-layout"))
         assertEquals(SettingsSection.AppLayout, SettingsSection.named("phonebar"))
         assertEquals(SettingsSection.Rooms, SettingsSection.named("satellites"))

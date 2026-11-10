@@ -577,6 +577,7 @@ nav_label = "Stations"
 nav_icon = "web/static/icon.svg"
 # nav_icon_dark = "web/static/icon-dark.svg"   # optional: an icon drawn for the dark theme
 nav_order = 50
+nav_group = "media"                             # optional: "media" or "tools"; leave out for a top-level row
 badge = { endpoint = "/api/plugins/radio/badge", key = "favorites" }
 
 [[web.player_sources]]
@@ -610,6 +611,18 @@ stream_url_template = "/api/plugins/radio/stations/{id}/stream"
   registry; `nav_order` slots among core pages (core publishes its own
   orders; default 50); `badge` polls an endpoint and renders `payload[key]`
   as a count.
+* `nav_group` — optional: the sidebar group the page sits in. The
+  dashboard's sidebar is Home · Chat · **Media** (Music, Podcasts,
+  Audiobooks, Videos) · **Tools** (News, Calendar, Files) · Plugins, each
+  group opening in place. `"media"` is for things you play or look at
+  (stations, pictures, games), `"tools"` for things you use; leave the key
+  out and the page is a top-level row, as before. Inside a group pages
+  sort by `nav_order` with the core ones. Any other value refuses the
+  load (`web.pages.nav_group must be one of 'media', 'tools'`). A group
+  showing a single page shows it as a plain row, and Home's "everything"
+  grid on a phone uses the same groups. A household may later rearrange
+  the sidebar itself; your `nav_group` is where the page starts. The
+  Android app has no plugin pages and ignores the key.
 * `nav_icon` — the page's icon in the sidebar, the phone bar and Home's
   grid: a file under `web/static/` (a path outside it, `..` or a URL is
   ignored, with a warning in the load log). Draw it like the dashboard's

@@ -644,7 +644,7 @@ _RADIO = {"plugins": [{"slug": "radio", "pages": [
 SCENARIOS["phone_launcher"] = scenario(
     house(**{"GET /api/plugins/radio/badge": {"live": 3}}),
     "await w.__flush(h); return w.__snap(h);",
-    ls=PAIRED_LS, phone=True, counts={"people": 4, "music": 9}, manifest=_RADIO,
+    ls=PAIRED_LS, phone=True, counts={"people": 4, "music": 9, "calendar": 5}, manifest=_RADIO,
 )
 # App's one badge poll, handed down: the grid shows it and polls nothing.
 SCENARIOS["phone_launcher_given_badges"] = scenario(
@@ -1137,7 +1137,8 @@ def test_the_same_house_unshared_shows_titles_places_and_reminder_text(driven) -
     assert "SECRET DESCRIPTION" not in blob     # descriptions never, shared or not
     standup = next(e for e in snap["events"] if "Standup" in e["text"])
     assert "now" in standup["text"]
-    assert "#people" in {t["href"] for t in snap["tiles"]}
+    # (People is a Settings section since 2026-11-09, on no grid at all.)
+    assert "#files" in {t["href"] for t in snap["tiles"]}
 
 
 def test_an_admin_marking_the_device_masks_the_page_without_a_reload(driven) -> None:
@@ -1386,15 +1387,15 @@ def test_today_shows_six_and_a_phone_three(driven) -> None:
 
 def test_the_phone_launcher_lists_every_page_off_the_strip_with_badges(driven) -> None:
     tiles = {t["href"]: t["text"] for t in driven["phone_launcher"]["tiles"]}
-    for r in ("podcasts", "audiobooks", "calendar", "news", "people", "files", "plugins",
+    for r in ("podcasts", "audiobooks", "calendar", "news", "files", "plugins",
               "radio", "settings", "manual"):
         assert f"#{r}" in tiles, r
     # The default phone bar (home · music · videos · chat) is not on the
-    # grid, and Satellites is a Settings tab, not a page of its own.
-    for r in ("home", "music", "videos", "chat", "satellites"):
+    # grid, and Satellites and People are Settings sections, not pages.
+    for r in ("home", "music", "videos", "chat", "satellites", "people"):
         assert f"#{r}" not in tiles, r
     assert tiles["#radio"] == "Radio3"               # the plugin's own badge
-    assert tiles["#people"] == "People4"             # App's counts, handed down
+    assert tiles["#calendar"] == "Calendar5"         # App's counts, handed down
 
 
 def test_the_grid_uses_the_shells_badges_and_polls_none_itself(driven) -> None:

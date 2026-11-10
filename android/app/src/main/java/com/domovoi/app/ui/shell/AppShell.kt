@@ -360,7 +360,8 @@ private fun ShellContent(
         go(Route.Settings)
     }
     val settingsRequest = remember(settingsTab) { SettingsTabRequest(settingsTab) { settingsTab = null } }
-    // A route that is a Settings tab (Satellites) opens Settings on it.
+    // A route that is a Settings tab (Satellites, People, Containers) opens
+    // Settings on it: a bar saved with People still opens People there.
     val navigate: (Route) -> Unit = { r ->
         val tab = settingsTabFor(r)
         if (tab != null) openSettingsTab(tab) else go(r)
@@ -873,7 +874,9 @@ private fun CompactShell(route: Route, navigate: (Route) -> Unit, counts: Sideba
 }
 
 // ---------------------------------------------------------------------------
-// Medium: navigation rail with all workspace routes + settings.
+// Medium: navigation rail with all workspace routes + settings. Too narrow
+// for group headers, so it stays flat, in the drawer's grouped order, with
+// a hairline around each group ([navTree]).
 // ---------------------------------------------------------------------------
 @Composable
 private fun RailShell(route: Route, navigate: (Route) -> Unit, counts: SidebarCounts) {
@@ -894,7 +897,7 @@ private fun RailShell(route: Route, navigate: (Route) -> Unit, counts: SidebarCo
             ) { DomovoiGlyph(24) }
             Column(Modifier.verticalScroll(rememberScrollState()).weight(1f)) {
                 // Home leads the rail, as it leads the phone's bottom bar.
-                (listOf(Route.Home) + WorkspaceRoutes.filter { it.visibleOn(caps, shared) } + Route.Settings).forEach { r ->
+                val railItem: @Composable (Route) -> Unit = { r ->
                     NavigationRailItem(
                         selected = route == r,
                         onClick = { navigate(r) },
@@ -902,6 +905,30 @@ private fun RailShell(route: Route, navigate: (Route) -> Unit, counts: SidebarCo
                         label = { Text(r.label.lowercase(), style = MaterialTheme.typography.labelSmall) },
                     )
                 }
+                val railDivider: @Composable () -> Unit = {
+                    androidx.compose.material3.HorizontalDivider(
+                        Modifier.padding(horizontal = 16.dp, vertical = 4.dp).width(48.dp),
+                        color = Domovoi.colors.borderSoft,
+                    )
+                }
+                railItem(Route.Home)
+                var afterGroup = false
+                navTree(WorkspaceRoutes.filter { it.visibleOn(caps, shared) }).forEach { e ->
+                    when (e) {
+                        is NavEntry.Item -> {
+                            if (afterGroup) railDivider()
+                            afterGroup = false
+                            railItem(e.route)
+                        }
+                        is NavEntry.Group -> {
+                            railDivider()
+                            e.routes.forEach { railItem(it) }
+                            afterGroup = true
+                        }
+                    }
+                }
+                if (afterGroup) railDivider()
+                railItem(Route.Settings)
             }
         }
         Column(Modifier.weight(1f).windowInsetsPadding(shellContentInsets)) {
@@ -949,8 +976,11 @@ private fun DrawerShell(route: Route, navigate: (Route) -> Unit, counts: Sidebar
                     color = Domovoi.colors.fgSubtle,
                     modifier = Modifier.padding(top = 18.dp, bottom = 6.dp, start = 4.dp),
                 )
-                WorkspaceRoutes.filter { it.visibleOn(caps, shared) }
-                    .forEach { r -> SidebarItem(r, route == r, counts) { navigate(r) } }
+                // Grouped as the web sidebar is: Chat, Media, Tools
+                // (NavGroupsUi.kt, navTree); People is in Settings.
+                GroupedWorkspace(route, WorkspaceRoutes.filter { it.visibleOn(caps, shared) }) { r ->
+                    SidebarItem(r, route == r, counts) { navigate(r) }
+                }
                 Text(
                     "system",
                     style = MaterialTheme.typography.labelSmall,

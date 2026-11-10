@@ -187,6 +187,12 @@ class SystemRequirement:
     help: str = ""
 
 
+# The dashboard's sidebar groups a plugin page may join ([[web.pages]]
+# nav_group). Kept in step with web/static/components.jsx NAV_GROUPS and
+# web/backend/plugin_host.py (test_plugin_nav_group.py holds them together).
+NAV_GROUPS: tuple[str, ...] = ("media", "tools")
+
+
 @dataclass(frozen=True)
 class WebPageDecl:
     route: str
@@ -198,6 +204,10 @@ class WebPageDecl:
     # paints the icon's shape in the theme's text colour.
     nav_icon_dark: str | None = None
     nav_order: int = 50
+    # Optional sidebar group (2026-11-09): one of NAV_GROUPS ("media",
+    # "tools"); None = a top-level row, as before. The dashboard draws the
+    # page inside that group (components.jsx resolveNavTree).
+    nav_group: str | None = None
     badge: dict[str, str] | None = None
 
 
@@ -591,6 +601,13 @@ def parse_manifest(toml_text: str) -> PluginManifest:
         nav_order = p.get("nav_order", 50)
         if not isinstance(nav_order, int) or isinstance(nav_order, bool):
             raise ManifestError("web.pages.nav_order must be an integer")
+        nav_group = p.get("nav_group")
+        if nav_group is not None and nav_group not in NAV_GROUPS:
+            raise ManifestError(
+                "web.pages.nav_group must be one of "
+                + ", ".join(repr(g) for g in NAV_GROUPS)
+                + " (leave it out for a top-level page)"
+            )
         web_pages.append(
             WebPageDecl(
                 route=_req_str(p, "route", "web.pages"),
@@ -599,6 +616,7 @@ def parse_manifest(toml_text: str) -> PluginManifest:
                 nav_icon=_opt_str(p, "nav_icon", "web.pages"),
                 nav_icon_dark=_opt_str(p, "nav_icon_dark", "web.pages"),
                 nav_order=nav_order,
+                nav_group=nav_group,
                 badge=badge,
             )
         )

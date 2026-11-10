@@ -19,7 +19,7 @@ FAQ, the troubleshooting guide, plugins' help files —
      free-text choice); a name the household knows sends it there, and
      anything else, or no answer at all, sends nothing;
    * recognised but no phone marked as theirs → said plainly, with where
-     to set it (the app's Settings → Rooms & devices → Phones & browsers →
+     to set it (the app's Settings → Household → Phones & browsers →
      "This phone belongs to"); nothing is guessed;
    * never a broadcast: there is no "everyone" here.
 

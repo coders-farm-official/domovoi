@@ -150,7 +150,10 @@
       audiobooks: () => window.AudiobooksPage,
       videos: () => window.VideosPage,
       news: () => window.NewsPage,
-      people: () => window.PeoplePage,
+      // Settings → Household → People since 2026-11-09: the shell turns
+      // #people into #settings/people first (settingsTabRoute). Kept a core
+      // route, so no plugin can take the old address.
+      people: () => window.SettingsPage,
       // A Settings tab since 2026-10-11 (Rooms since 2026-10-21): the
       // shell turns #settings/rooms into Settings → Rooms before it gets here
       // (settingsTabRoute, components.jsx). The route stays a core one, so
