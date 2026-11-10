@@ -1634,9 +1634,13 @@ const NAV_GROUPS = [
  *              the AI switch); a plugin page's manifest group rides on it
  *              as `navGroup`;
  *   override — a household's own layout, or null for the defaults:
- *              { groups: [{ id, label, items: [route, …] }], top: [route, …] }
- *              (for the Settings → App layout editor still to come);
- *   groups   — the default table (NAV_GROUPS).
+ *              { groups: [{ id, label, items: [route, …] }], top: [route, …],
+ *                order: [route | 'group:<id>', …] }
+ *              (Settings → System → App layout's menu editor keeps it on
+ *              the server: GET /api/nav-layout, NavLayoutStore below);
+ *   groups   — the default table (NAV_GROUPS);
+ *   opts     — { raw: true } for the editor: every group the layout has,
+ *              empty and one-page ones too, never flattened.
  * Returns [{ kind: 'item', item } | { kind: 'group', id, label, icon, open,
  * items }] in sidebar order.
  *
@@ -1648,11 +1652,16 @@ const NAV_GROUPS = [
  * and a route this screen doesn't offer (unknown, a removed plugin, hidden
  * here) is ignored. A page it doesn't mention keeps its default group when
  * that group still exists, after the listed ones, else goes to the top
- * level. Rows and groups sort by nav order, a group at its first page.
+ * level. Rows and groups sort by nav order, a group at its first page;
+ * with an override that has `order`, the top level follows it instead (a
+ * top-level page by its route, a group as 'group:<id>'), and whatever it
+ * doesn't name (a plugin page installed since) follows in nav order.
  * Last, the shape: a group with exactly one page is that page's row (no
- * group around one item), and an empty group is not drawn. Home (the
- * brand row) and bar-only pages are never part of it. Pure. */
-const resolveNavTree = (items, override = null, groups = NAV_GROUPS) => {
+ * group around one item), and an empty group is not drawn (both kept in
+ * raw mode). Home (the brand row) and bar-only pages are never part of
+ * it. Pure. */
+const resolveNavTree = (items, override = null, groups = NAV_GROUPS, opts = null) => {
+  const raw = !!(opts && opts.raw);
   const list = (items || []).filter((it) => it && !it.brandLink && !it.barOnly);
   const byRoute = new Map();
   list.forEach((it) => { if (!byRoute.has(it.route)) byRoute.set(it.route, it); });
@@ -1696,16 +1705,184 @@ const resolveNavTree = (items, override = null, groups = NAV_GROUPS) => {
     if (g != null && !members.get(g).includes(r)) members.get(g).push(r);
   });
   const entries = [];
-  byRoute.forEach((it, r) => { if (placed.get(r) == null) entries.push({ at: pos.get(r), e: { kind: 'item', item: it } }); });
+  byRoute.forEach((it, r) => { if (placed.get(r) == null) entries.push({ at: pos.get(r), key: r, e: { kind: 'item', item: it } }); });
   out.forEach((g) => {
     const its = members.get(g.id).map((r) => byRoute.get(r));
-    if (!its.length) return;
-    const at = Math.min(...its.map((it) => pos.get(it.route)));
-    entries.push({ at, e: its.length === 1
+    if (!its.length && !raw) return;
+    const at = its.length ? Math.min(...its.map((it) => pos.get(it.route))) : Infinity;
+    entries.push({ at, key: `group:${g.id}`, e: its.length === 1 && !raw
       ? { kind: 'item', item: its[0] }
       : { kind: 'group', id: g.id, label: g.label, icon: g.icon, open: g.open, items: its } });
   });
-  return entries.sort((a, b) => a.at - b.at).map((x) => x.e);
+  const rank = new Map();
+  if (ov && Array.isArray(ov.order)) {
+    ov.order.forEach((t) => { if (typeof t === 'string' && !rank.has(t)) rank.set(t, rank.size); });
+  }
+  const rankOf = (x) => (rank.has(x.key) ? rank.get(x.key) : Infinity);
+  return entries.sort((a, b) => {
+    const ra = rankOf(a);
+    const rb = rankOf(b);
+    if (ra !== rb) return ra < rb ? -1 : 1;
+    if (a.at === b.at) return 0;
+    return a.at < b.at ? -1 : 1;
+  }).map((x) => x.e);
+};
+
+/* ---- the household's menu (Settings → System → App layout) ----------
+ * The layout an admin saved for every browser on this Domovoi (GET
+ * /api/nav-layout, open like the plugin manifest; web/backend/api/
+ * nav_layout.py), or null for the default. Read before the first render
+ * (index.html's bootstrap), then kept current: `nav_layout.changed` on
+ * /ws/state when a save or reset lands (a browser holding a household
+ * credential), and a re-read whenever the tab comes back into view (any
+ * browser, a guest's too). The Android app has its own layout and never
+ * reads this. */
+const NavLayoutStore = (() => {
+  let layout = null;
+  let limits = null;
+  let loaded = false;
+  let asking = null;
+  const subs = new Set();
+  const tell = () => subs.forEach((fn) => { try { fn(); } catch { /* one bad subscriber */ } });
+  const take = (v) => {
+    const next = v && typeof v === 'object' && !Array.isArray(v) ? v : null;
+    if (JSON.stringify(next) === JSON.stringify(layout) && loaded) return;
+    layout = next;
+    loaded = true;
+    tell();
+  };
+  const load = () => {
+    if (asking) return asking;
+    asking = Promise.resolve()
+      .then(() => apiGet('/api/nav-layout', { quiet: true }))
+      .then((r) => {
+        if (r && typeof r === 'object') {
+          if (r.limits && typeof r.limits === 'object') limits = r.limits;
+          take(r.layout);
+        }
+      })
+      .catch(() => { /* unknown: keep what we had (the default on a cold load) */ })
+      .then(() => { asking = null; return layout; });
+    return asking;
+  };
+  let watching = false;
+  const watch = () => {
+    if (watching) return;
+    watching = true;
+    try {
+      if (typeof stateBus !== 'undefined' && stateBus.subscribe) {
+        stateBus.subscribe((ev) => { if (ev && ev.type === 'nav_layout.changed') take(ev.data); });
+      }
+    } catch { /* no realtime here */ }
+    try {
+      document.addEventListener('visibilitychange', () => { if (!document.hidden) load(); });
+    } catch { /* no document (a test sandbox) */ }
+  };
+  return {
+    get: () => layout,
+    limits: () => limits,
+    isLoaded: () => loaded,
+    load,
+    // What a save or reset answered: shown here at once, before the socket.
+    set: (v) => take(v),
+    subscribe(fn) { watch(); subs.add(fn); return () => { subs.delete(fn); }; },
+  };
+})();
+
+/* The household's menu layout, or null for the default; re-renders when
+ * it changes. */
+const useNavLayout = () => {
+  const [v, setV] = React.useState(() => NavLayoutStore.get());
+  React.useEffect(() => {
+    const sync = () => setV(NavLayoutStore.get());
+    const off = NavLayoutStore.subscribe(sync);
+    sync();
+    if (!NavLayoutStore.isLoaded()) NavLayoutStore.load();
+    return off;
+  }, []);
+  return v;
+};
+
+/* The editor's working copy: every page and group of `layout` (null = the
+ * default) made explicit — { groups: [{ id, label, items }], top, order }
+ * — over `items` (buildNavItems: every page this server has, nothing
+ * hidden, so a save never drops a page this screen happens to hide). */
+const navLayoutFull = (items, layout) => {
+  const tree = resolveNavTree(items, layout, NAV_GROUPS, { raw: true });
+  return {
+    groups: tree.filter((e) => e.kind === 'group')
+      .map((e) => ({ id: e.id, label: e.label, items: e.items.map((it) => it.route) })),
+    top: tree.filter((e) => e.kind === 'item').map((e) => e.item.route),
+    order: tree.map((e) => (e.kind === 'group' ? `group:${e.id}` : e.item.route)),
+  };
+};
+
+/* A new group's id from its name: lowercase letters, digits and dashes,
+ * unique in `layout` (web/backend/api/nav_layout.py GROUP_ID_RE). */
+const navGroupId = (layout, label) => {
+  let base = String(label || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 24);
+  if (!/^[a-z]/.test(base)) base = `group${base ? `-${base}` : ''}`.slice(0, 24);
+  const taken = new Set(((layout && layout.groups) || []).map((g) => g.id));
+  let id = base;
+  for (let n = 2; taken.has(id); n += 1) id = `${base}-${n}`;
+  return id;
+};
+
+/* One edit of a full layout (navLayoutFull), returning a new one; the
+ * input is never changed. Pure.
+ *   'rename'       { id, label }
+ *   'add-group'    { id, label }          appended at the end
+ *   'delete-group' { id }                 its pages go to the top level, where it was
+ *   'move'         { route, to }          to: a group id, or null for the top level (at the end)
+ *   'up' / 'down'  { token }              a top-level page or 'group:<id>' along the top
+ *                                         level; a page in a group, within its group */
+const navLayoutEdit = (layout, op, a = {}) => {
+  const L = {
+    groups: (layout.groups || []).map((g) => ({ ...g, items: [...(g.items || [])] })),
+    top: [...(layout.top || [])],
+    order: [...(layout.order || [])],
+  };
+  const swap = (list, i, j) => {
+    if (i < 0 || j < 0 || i >= list.length || j >= list.length) return;
+    const t = list[i]; list[i] = list[j]; list[j] = t;
+  };
+  const groupOf = (route) => L.groups.find((g) => g.items.includes(route)) || null;
+  const takeOut = (route) => {
+    const g = groupOf(route);
+    if (g) g.items = g.items.filter((r) => r !== route);
+    L.top = L.top.filter((r) => r !== route);
+    L.order = L.order.filter((t) => t !== route);
+  };
+  if (op === 'rename') {
+    const g = L.groups.find((x) => x.id === a.id);
+    if (g) g.label = String(a.label == null ? '' : a.label);
+  } else if (op === 'add-group') {
+    if (!a.id || L.groups.some((g) => g.id === a.id)) return L;
+    L.groups.push({ id: a.id, label: String(a.label || 'New group'), items: [] });
+    L.order.push(`group:${a.id}`);
+  } else if (op === 'delete-group') {
+    const g = L.groups.find((x) => x.id === a.id);
+    if (!g) return L;
+    const at = L.order.indexOf(`group:${a.id}`);
+    L.groups = L.groups.filter((x) => x.id !== a.id);
+    L.top.push(...g.items);
+    if (at >= 0) L.order.splice(at, 1, ...g.items);
+    else L.order.push(...g.items);
+  } else if (op === 'move') {
+    if (!a.route) return L;
+    const dest = a.to == null ? null : L.groups.find((g) => g.id === a.to);
+    if (a.to != null && !dest) return L;
+    takeOut(a.route);
+    if (dest) dest.items.push(a.route);
+    else { L.top.push(a.route); L.order.push(a.route); }
+  } else if (op === 'up' || op === 'down') {
+    const step = op === 'up' ? -1 : 1;
+    const g = typeof a.token === 'string' && !a.token.startsWith('group:') ? groupOf(a.token) : null;
+    const list = g ? g.items : L.order;
+    const i = list.indexOf(a.token);
+    if (i >= 0) swap(list, i, i + step);
+  }
+  return L;
 };
 
 /* Which sidebar groups are open, in this browser (localStorage, a
@@ -2219,10 +2396,14 @@ const Sidebar = ({ route, setRoute, counts, manifest, badges: given }) => {
   const items = navItemsFor(manifest, { shared, ai });
   const strip = phoneBarRoutes(items, usePhoneBar());
   const primaryRoutes = new Set(strip);
-  // Groups (resolveNavTree; no household layout yet: null). The phone
-  // strip is these same rows: at 760px and below the groups dissolve
-  // (display: contents) and only the bar's rows show, in the bar's order.
-  const tree = resolveNavTree(items, null);
+  // Groups (resolveNavTree over the household's menu layout, null for the
+  // default: Settings → App layout). The phone strip is these same rows:
+  // at 760px and below the groups dissolve (display: contents) and only
+  // the bar's rows show, in the bar's order. `items` is already cut for a
+  // shared screen and the AI switch, so a hidden page never shows,
+  // wherever the layout puts it.
+  const layout = useNavLayout();
+  const tree = resolveNavTree(items, layout);
   const stored = useNavGroupsOpen();
   const activeGroup = (tree.find((e) => e.kind === 'group' && e.items.some((it) => it.route === route)) || {}).id || null;
   // Folding the group of the page on screen holds until the next page.
@@ -4520,7 +4701,8 @@ const DeviceTokenNotice = () => {
 Object.assign(window, {
   Icon, DomovoiGlyph, SleepingDomovoi, HeadphonesDomovoi, StatusDot, Pill, PreviewTag, PREVIEW_MEANS, RoomChip, Avatar,
   Card, Empty, Button, IconButton, Sidebar, Topbar, PageHeader, Stat, useToast, Tabs,
-  CORE_NAV_ITEMS, NAV_GROUPS, resolveNavTree, NavGroupsStore, buildNavItems, navItemsFor, CapabilitiesStore, useAiFeatures, aiFeaturesOn, AI_ONLY_ROUTES, PluginNavIcon, useDarkTheme, usePluginBadges,
+  CORE_NAV_ITEMS, NAV_GROUPS, resolveNavTree, NavGroupsStore,
+  NavLayoutStore, useNavLayout, navLayoutFull, navGroupId, navLayoutEdit, buildNavItems, navItemsFor, CapabilitiesStore, useAiFeatures, aiFeaturesOn, AI_ONLY_ROUTES, PluginNavIcon, useDarkTheme, usePluginBadges,
   PluginPageFrame, pluginAccentStyle, ToastNotice,
   SHARED_SCREEN_HIDDEN, useSharedScreen,
   PHONE_BAR_DEFAULT, PHONE_BAR_MAX, PHONE_BAR_MIN, PhoneBarStore, usePhoneBar, phoneBarRoutes, phoneBarEdit,

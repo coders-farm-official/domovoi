@@ -183,6 +183,12 @@ A graphics card is optional everywhere. [More detail](docs/WINDOWS_HOST.md#which
   Audiobooks, Videos, and pages plugins add there, like Stations) and
   **Tools** (News, Calendar, Files), each opening in place, then
   **Plugins**. On a phone, Home's "everything" grid has the same groups.
+- That menu is the same in every browser, and an admin can change it in
+  [Settings → System → App layout](route:settings/app-layout) → **Menu**:
+  rename the groups, add or delete one, move any page into a group or to
+  the top, and put things in another order. **Reset to default** brings
+  the usual menu back. Nothing needs changing there; the phone app keeps
+  its own layout.
 - **Settings** is in groups: Household (Rooms, People, Phones &
   browsers, Printers & scanners), Voice, Chat & AI, Privacy, and System
   (with App layout). The search box at the top finds a setting by name:

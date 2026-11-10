@@ -984,7 +984,8 @@ const HomeEverything = ({ counts, badges: given, shared }) => {
   // The sidebar's groups (resolveNavTree, components.jsx) over what the bar
   // leaves: a group with one tile left is a plain tile, like the sidebar's
   // one-page group. Runs of plain tiles share a heading-less grid.
-  const tree = resolveNavTree(items.filter((it) => !onBar.has(it.route)), null);
+  // The household's menu layout (Settings → App layout), as the sidebar.
+  const tree = resolveNavTree(items.filter((it) => !onBar.has(it.route)), useNavLayout());
   const blocks = [];
   const plain = (it) => {
     const last = blocks[blocks.length - 1];

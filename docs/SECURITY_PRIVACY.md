@@ -1882,6 +1882,21 @@ and migration V018.
 | **The dashboard's alert** | A card per fire in the corner of every open dashboard page, until dismissed (dismissals are per browser, kept in its own storage) or 30 minutes on. No browser notification and no sound: a plain-http LAN page is not a secure context, and Web Push would need a third-party push service. |
 | **What it sends anywhere** | Nothing new. No Web Push, no FCM: the phone learns of a fire over its existing socket to the Domovoi server while the app is open, from a background check it makes to that same server about every 15 minutes while it is not (two reads with the household token, from an alarm, not a service), or from its own alarm. **The background check goes only over Wi-Fi or Ethernet**: it sends the household token, usually as plain http to the server's private address, and off Wi-Fi it asks nothing (the timers already on the phone still ring). **On any network, the token goes out only after the server at the saved address has proved its identity** — a token-less `GET /api/health?challenge=` whose signed answer must match the key this phone pinned (see "Trusting a server before talking to it"): on a foreign Wi-Fi that reuses the home subnet, or a hotspot redirecting the port, whatever answers there gets that probe and, failing it, nothing — not from the background check, not from the open app's socket and reachability loop, not from a ringing alarm's confirm (which has no Wi-Fi gate and so used to send the token over mobile data too). Before 2026-10-08 the token went to whatever held the address, and the phone did not remember which network it was paired on. |
 
+## The web menu layout (house-wide, admin)
+
+Settings → System → App layout → **Menu** lets an admin rename the
+sidebar's groups, add and delete groups, and move or reorder pages for every
+browser on this Domovoi (`web/backend/api/nav_layout.py`, migration V045
+`household_settings`).
+
+| | |
+|---|---|
+| **Who changes it** | An admin: `PUT` / `DELETE /api/nav-layout` take `require_admin_mutation` (an admin Bearer plus the `X-Requested-With` header every write needs; the dashboard cookie alone is `403`, the household token `401`). Like the other daily-surface admin writes it keeps the pre-setup grace: on a box nobody has claimed yet, anyone on the LAN can change it, as they can everything else then. |
+| **Who reads it** | Anyone who can open the dashboard: `GET /api/nav-layout` is open, like the plugin manifest the shell reads beside it before anyone signs in, and the `nav_layout.changed` push carries the same value to sockets that hold a household credential. It holds group names and page addresses only: no person, device or usage. Don't put anything private in a group's name. |
+| **What a layout can't do** | Show a page the screen would hide: the shared-screen rule (People, Chat, Files, News off a marked device) and the AI switch are applied in the browser after the layout, so a page the household hid never appears, whichever group it is in. Move Home (the brand row is fixed). Grant access to anything: a page's own tier is unchanged, the layout only says where its link sits. |
+| **What it stores** | One JSON object, validated by the server before it is kept: at most 8 KB, 12 groups, 40 pages per group, 60 top-level pages; group ids `^[a-z][a-z0-9-]{0,31}$`, unique; names plain text, 1 to 24 characters, no `<`, `>` or control characters (and drawn escaped anyway); routes in the manifest's route charset. The table itself refuses anything but a JSON object of at most 32 KB. A stored layout that no longer validates is read as the default. |
+| **The phone app** | Keeps its own layout on the phone and never reads this. |
+
 ## Lyrics (household tier only)
 
 Owner decision 2026-10-03: the players show the words of what is playing —

@@ -56,6 +56,7 @@ from web.backend.api import music as music_api
 from web.backend.api import music_aliases as music_aliases_api
 from web.backend.api import lyrics as lyrics_api
 from web.backend.api import music_queue as music_queue_api
+from web.backend.api import nav_layout as nav_layout_api
 from web.backend.api import news as news_api
 from web.backend.api import playlists as playlists_api
 from web.backend.api import people as people_api
@@ -390,6 +391,9 @@ app.include_router(auth_api.router)
 # matchers in plugins_api.
 app.include_router(plugin_host.router)
 app.include_router(plugins_api.router)
+# The household's web menu (Settings → System → App layout): an open read
+# beside the manifest, admin writes (V045 household_settings).
+app.include_router(nav_layout_api.router)
 app.include_router(capabilities_api.router)
 app.include_router(acquisitions_api.router)
 app.include_router(music_api.router)
