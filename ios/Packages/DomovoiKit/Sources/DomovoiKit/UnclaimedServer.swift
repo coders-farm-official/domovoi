@@ -23,6 +23,26 @@ public enum UnclaimedServerStrings {
     /// `UNCLAIMED_TITLE` (`UnclaimedServer.kt:63`).
     public static let title = "This Domovoi isn't set up yet"
 
+    /// What VoiceOver says for the address line under the title — **not**
+    /// what is drawn, which stays the bare address so it can be typed into a
+    /// browser character for character.
+    ///
+    /// Train I014: Apple's audit failed the blocker with "Label not
+    /// human-readable" against `127.0.0.1:6606`, the address as a line of
+    /// text by itself. That is the third time the app has met this finding
+    /// on a bare address, and the route is the one the first two took: the
+    /// forget-server card (``forgetServerAddressLabel(_:)``, 2026-10-30) and
+    /// the phone-source switch's server segment
+    /// (``PhoneMediaStrings/serverSideLabel(_:)``, train S006) both keep the
+    /// visible text and give VoiceOver `the server at <address>`. This is
+    /// that wording, from the same function, so the three cannot drift.
+    ///
+    /// **iOS-only**: Android's `Text(address)` (`UnclaimedServer.kt:104-108`)
+    /// has no content description and TalkBack reads it raw.
+    public static func addressLabel(_ address: String) -> String {
+        forgetServerAddressLabel(address)
+    }
+
     /// `unclaimedText(address)` (`UnclaimedServer.kt:66-69`): the explanation,
     /// with the address to open.
     public static func text(address: String) -> String {
