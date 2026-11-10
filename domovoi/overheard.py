@@ -40,25 +40,25 @@ What a turn becomes:
   1. A leading address ("Domovoi, ...", "hey Domo, ...") and a leading
      stock wake phrase ("hey Jarvis", which the media says itself) are set
      aside.
-  2. A **command at the start** — the first of: the first sentence, its
-     first clause (cut at the first comma or "and"), then ever shorter
-     word prefixes of it (at most :data:`HEAD_MAX_WORDS`, 15, words, at
-     least two) that
-     the router's fast tiers take (``router.plan_route``: "play some jazz in
+  2. A **command at the start** — the first sentence (at most
+     :data:`HEAD_MAX_WORDS`, 15, words), else its first clause cut at the
+     first comma or "and" (2 to 15 words), when the router's fast tiers
+     take it (``router.plan_route``: "play some jazz in
      the kitchen", a yes/no to a parked question, a reply to a parked
      choice on a follow-up). That command is routed alone; the chatter after
      it is dropped (it stays in the log). A command is said first, right
      after the wake word; the TV that kept the capture open is what follows.
      Whisper's punctuation is not needed: "play some jazz in the kitchen
      and in other news tonight..." plays.
-  3. Else, **a question**: addressed by name, or any sentence a clear
-     question to the assistant ("can you ...", "tell me how ...", "how do
-     I ...", or a question about the world such as "Which river is the
-     longest?"). Answered without the tool model (nothing overheard can
-     act through it; a fast path the question itself is, "what time is
-     it?", still answers): the first sentences up to
-     :data:`ANSWER_MAX_WORDS` (40) words when the question opens the
-     capture, else that sentence.
+  3. Else, **a question**: addressed by name, or the FIRST sentence a
+     clear question to the assistant ("can you ...", "tell me how ...",
+     "how do I ...", or a question about the world such as "Which river is
+     the longest?"). A question later in the capture doesn't count: in TV
+     dialogue "Can you believe it?" and "Will you marry me?" are the TV
+     talking. Answered without the tool model (nothing overheard can act
+     through it; a fast path the question itself is, "what time is it?",
+     still answers): the first sentences up to :data:`ANSWER_MAX_WORDS`
+     (40) words.
   4. Else **ignored**: no answer, no action, no follow-up, a history row
      that says "ignored: sounded like background talk".
 
@@ -274,23 +274,17 @@ def _command_handler(text: str, *, pending: Any, trigger: str | None) -> str | N
 
 def _head_candidates(rest: str) -> list[str]:
     """What a command at the start of ``rest`` may be, in the order tried:
-    the first sentence, its first clause, then ever shorter word prefixes
-    of it — each at most HEAD_MAX_WORDS words."""
+    the first sentence (at most HEAD_MAX_WORDS words), then its first
+    clause, cut at the first comma or "and" (2 to HEAD_MAX_WORDS words).
+    No shorter word prefixes: in TV dialogue they find "go back", "turn it
+    down", "shuffle", "stop"."""
     head = first_sentence(rest)
     out: list[str] = []
     if head and words(head) <= HEAD_MAX_WORDS:
         out.append(head)
     clause = _CLAUSE_RE.split(head, maxsplit=1)[0].strip() if head else ""
-    if clause and clause != head and words(clause) <= HEAD_MAX_WORDS:
+    if clause and clause != head and 2 <= words(clause) <= HEAD_MAX_WORDS:
         out.append(clause)
-    toks = head.split()
-    # Down to two words: a one-word prefix ("Next time I saw him...",
-    # "Stop it!") is TV far more often than a command, and a person's
-    # one-word command comes back from Whisper as a sentence of its own.
-    for n in range(min(HEAD_MAX_WORDS, len(toks)), 1, -1):
-        prefix = " ".join(toks[:n]).rstrip(",;:")
-        if prefix and prefix not in out:
-            out.append(prefix)
     return out
 
 
@@ -323,9 +317,7 @@ def screen(
         return Verdict(ANSWER, first_sentences(rest, ANSWER_MAX_WORDS), long=True, capped=True,
                        why="addressed to the assistant" if addressed
                        else "a question to the assistant")
-    for part in parts[1:]:
-        if is_clear_question(part):
-            return Verdict(ANSWER, part, long=True, capped=True,
-                           why="a question to the assistant in it")
+    # Only the FIRST sentence: later in TV dialogue, "Can you believe it?",
+    # "Will you marry me?" are the TV talking.
     return Verdict(IGNORE, transcript, long=True, capped=True,
                    why="cut off at the recording cap, no command or question in it")

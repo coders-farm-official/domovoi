@@ -151,14 +151,26 @@ def test_a_command_with_no_punctuation_is_found_at_the_start() -> None:
     assert (v.action, v.text) == (COMMAND, "Play some jazz in the kitchen")
 
 
-def test_a_command_found_by_its_word_prefix() -> None:
-    # No comma, no "and" before the chatter: the longest prefix of at most
-    # 15 words the fast paths take.
+@pytest.mark.parametrize("text", [
+    "Go back to the house and get the keys before your father notices they are gone, "
+    "and do not let anybody see you leave this time, I mean it",
+    "Turn it down a notch, buddy, nobody needs to hear that much bass at two in the "
+    "morning, the neighbours already called twice tonight",
+    "Shuffle the deck and then deal everybody five cards, aces are high and jokers are "
+    "wild, and nobody looks at their hand until I say so",
+    "Stop, stop, you're going to hurt yourself on that thing, get down from there right "
+    "now before your mother sees what you are doing",
+], ids=["go-back", "turn-it-down", "shuffle", "stop-stop"])
+def test_tv_lines_that_start_like_a_command_are_ignored_on_a_capped_capture(text) -> None:
+    # No word-prefix search (review round 2): only the first sentence and
+    # its first clause count, and these are neither a command.
+    assert _screen(text).action == IGNORE
+
+
+def test_a_bare_word_prefix_is_no_longer_a_command() -> None:
     text = ("set a timer for ten minutes she said the whole time we were in the car "
             "she would not stop talking about it")
-    v = _screen(text)
-    assert v.action == COMMAND and v.text.startswith("set a timer for ten minutes")
-    assert overheard.words(v.text) <= overheard.HEAD_MAX_WORDS
+    assert _screen(text).action == IGNORE
 
 
 @pytest.mark.parametrize("text", [
@@ -212,15 +224,21 @@ def test_a_clear_question_at_the_start_is_answered() -> None:
     assert _screen("What is the capital of France? " + TV_DIALOGUE).action == ANSWER
 
 
-def test_a_question_later_in_a_capped_capture_is_answered_alone() -> None:
-    # S4: the question at the end, or in the middle, of a capped capture.
-    v = _screen("My son and I have been arguing about this all afternoon. He says it is the "
-                "Nile and I say it is the Amazon. Which river is the longest in the world? "
-                + TV_DIALOGUE)
-    assert (v.action, v.text) == (ANSWER, "Which river is the longest in the world?")
-    v = _screen("I'm cooking dinner for eight people tonight. How long do I roast a twelve "
-                "pound turkey? " + TV_DIALOGUE)
-    assert (v.action, v.text) == (ANSWER, "How long do I roast a twelve pound turkey?")
+@pytest.mark.parametrize("question", [
+    "Can you believe it?",
+    "Will you marry me?",
+    "Can you set a timer for ten minutes?",
+    "Which river is the longest in the world?",
+], ids=["believe-it", "marry-me", "set-a-timer", "world-question"])
+def test_a_question_later_in_a_capped_capture_is_the_tv(question) -> None:
+    # Review round 2: only the FIRST sentence may be the question. Mid-way
+    # through 30 s of TV dialogue, a question is the TV talking.
+    text = ("My son and I have been arguing about this all afternoon. "
+            f"{question} " + TV_DIALOGUE)
+    v = _screen(text)
+    assert (v.action, v.capped) == (IGNORE, True)
+    # The same question first is still answered (or, a command, routed).
+    assert _screen(f"{question} " + TV_DIALOGUE).action in (ANSWER, COMMAND)
 
 
 # ─── Background talk is ignored ─────────────────────────────────────────
